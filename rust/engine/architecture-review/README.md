@@ -25,7 +25,7 @@ git show 97d8de25:rust/engine/ironhorse-vm/src/interp.rs | sed -n '10938,10960p'
 
 | Published | Reviewed commit | Last revised | Scope | Findings | Review |
 |---|---|---|---|---|---|
-| 2026-09-06 | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) | **2026-09-16** against [`7753a4b9`](https://github.com/endojs/endo-but-for-bots/commit/7753a4b9): 172 fixed, 15 partial, 4 open ([open-findings index](2026-09-06/OPEN-FINDINGS.md)). Earlier: 2026-09-08 against [`1b130df7`](https://github.com/endojs/endo-but-for-bots/commit/1b130df7) (83 / 47 / 61); 2026-09-08 against [`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3) (51 / 39 / 101); 2026-09-07 against [`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b) (37 / 32 / 122); 2026-09-06 against [`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4) (10 / 11 / 170) | `rust/engine`, plus `rust/endo/ironhorse-store-sqlite` and `rust/endo/src/ironhorse_engine.rs` | 191 verified: 6 critical, 57 high, 73 medium, 55 low | [2026-09-06](2026-09-06/ARCHITECTURE-REVIEW.md) |
+| 2026-09-06 | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) | **2026-09-17** against [`0b25cdba9`](https://github.com/endojs/endo-but-for-bots/commit/0b25cdba9): a RESOLUTION pass — nine of the nineteen findings open at `7753a4b9` were fixed rather than re-verified — leaving 181 fixed, 8 partial, 2 open ([open-findings index](2026-09-06/OPEN-FINDINGS.md)). Earlier: 2026-09-16 against [`7753a4b9`](https://github.com/endojs/endo-but-for-bots/commit/7753a4b9) (172 / 15 / 4); 2026-09-08 against [`1b130df7`](https://github.com/endojs/endo-but-for-bots/commit/1b130df7) (83 / 47 / 61); 2026-09-08 against [`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3) (51 / 39 / 101); 2026-09-07 against [`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b) (37 / 32 / 122); 2026-09-06 against [`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4) (10 / 11 / 170) | `rust/engine`, plus `rust/endo/ironhorse-store-sqlite` and `rust/endo/src/ironhorse_engine.rs` | 191 verified: 6 critical, 57 high, 73 medium, 55 low | [2026-09-06](2026-09-06/ARCHITECTURE-REVIEW.md) |
 
 ## What a review directory contains
 
@@ -59,6 +59,17 @@ open.
 Keep the original analysis, claims and line numbers as written; add the new
 status alongside them, and note the revision date and base commit in the
 review's metadata, in its Revision history, and in the Reviews table above.
+
+A revision and a **resolution pass** are different things, and a review that
+carries both should say which it is recording.
+A revision re-verifies findings against a commit the engine reached on its
+own; a resolution pass sets out to close them, so its statuses describe work
+done in response to the review rather than work it found already done. A
+resolution pass owes two things a revision does not: every status names the
+test that holds its claim, and where a fix is narrower than the finding's own
+recommendation, it says so in its own words rather than reporting closure.
+A resolution pass that only reports its successes is the failure mode these
+reviews keep finding.
 
 Two rules make a revision trustworthy.
 Keep the severities the original verification settled on, changing them only
