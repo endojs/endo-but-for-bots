@@ -140,6 +140,21 @@ def git_output(arguments, cwd=REPOSITORY_ROOT):
     return subprocess.check_output(["git", *arguments], cwd=cwd, text=True).strip()
 
 
+def resolve_revision(revision):
+    for candidate in (revision, f"origin/{revision}", f"ebfb/{revision}"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"],
+            cwd=REPOSITORY_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    raise ValueError(f"cannot resolve revision {revision}")
+
+
 def build_driver(source_root, target_directory, environment):
     command = [
         "cargo",
@@ -399,8 +414,8 @@ def main():
     if generation.stdout.strip() != digest:
         raise ValueError("generator and runner fixture digests differ")
 
-    parent_commit = git_output(["rev-parse", args.parent])
-    candidate_commit = git_output(["rev-parse", args.candidate])
+    parent_commit = resolve_revision(args.parent)
+    candidate_commit = resolve_revision(args.candidate)
     xs_commit = git_output(["-C", "c/moddable", "rev-parse", "HEAD"])
     environment = os.environ.copy()
     environment["CARGO_INCREMENTAL"] = "0"
