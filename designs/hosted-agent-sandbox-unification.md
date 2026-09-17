@@ -10,7 +10,66 @@
 
 ## Implementation status
 
-Latest increment, 2026-09-17: Codex now uses the same daemon session owner,
+### Current UA deployment — 2026-09-17
+
+Tokyo is deployed at `50d036bc7dbf3cea072ff587229141e66e3ed5dd` from PR #1248
+and available for user acceptance testing.
+The design remains **In Progress**; the historical increment notes below are
+chronological evidence, not a current list of unimplemented adapter wiring.
+
+- `c8ff7b57e`: shared rootfs parsing with adapter image defaults.
+- `f388c66b6` and `369664476`: stop by session identity, durable Floot Settings
+  emergency stop, and explicit resume without deleting workspace/history.
+  Live Codex acceptance stopped an observed foreground `sleep 300`, confirmed
+  process/container/mount removal, preserved uncertainty, and verified stopped
+  history across daemon restart plus workspace-preserving resume.
+- `cd589619e`: journal validation prepares a transition without copying the entire
+  session on every append; targeted reads avoid full-history copies at completion.
+- `11bfb2feb`: uncertain historical effects remain visible without blocking
+  unrelated UI/mail work or being automatically replayed/resolved.
+  Storage poison, unresolved legacy imports, emergency stop, and failed native
+  containment remain independent barriers.
+  Failed interruption quarantines even when a broken stream, rather than user
+  cancellation, initiated cleanup.
+- `50d036bc7`: all three hosted adapters use the credit-aware bounded push reader
+  in `packages/exo-stream/bounded-channel.js`.
+  Consumed events release queue charges, overflow explicitly fails delivery and
+  requests cancellation, and terminal delivery has reserved capacity.
+  OpenCode no longer treats reader closure as producer-stop acknowledgement.
+  Accounting, terminal/pump/prefetch overhead, and limitations are documented in
+  `packages/floot/BACKEND-DESIGN.md`; this is not a whole-session heap guarantee.
+
+The latest Tokyo smoke acceptance completed mediated Endo tools, native shell
+calls, durable replies, and matched transcript tool results on Codex Sol, Claude
+Haiku, and OpenCode/OpenRouter DeepSeek.
+Codex and Claude also recalled the previous shell output in tool-free follow-ups.
+OpenCode's follow-up was not run after an approval-service interruption.
+Claude's first undefined-workspace error was visible and it recovered with lookup.
+All three disposable sessions were deleted; final container and 9P inventories
+were empty and Endo/Forgejo were active.
+This proves normal live delivery, not live overflow or final conformance.
+Automated suites passed: 180 stream, 251 Codex, 194 Claude, 259 OpenCode;
+the preceding Floot/UI slice passed 294 Floot, 38 selected chat, and 24 space tests.
+Affected lint/type checks passed; root docs still fails package discovery from
+the temporary worktree, so that gate is not claimed green.
+
+Host quota-helper retirement is complete in endo-host (`564700d`): Codex now uses
+shared directory storage without the former kernel quota guarantee.
+The offline old XFS image was retained, not reused as active state.
+
+**Still outstanding:** bounded journal replay/retention and large-content storage;
+remaining retained maps, transcript buffers, and UI delivery allocations before
+removing cumulative ceilings; consolidation of effects recording and transport
+admission/cancellation; remaining mechanical wrapper cleanup; runtime probe/anchor
+simplification only after replacement checks prove its invariants; and final
+all-backend rootless-Podman conformance plus obsolete-code/security-document audit.
+The existing cumulative output and journal lifetime caps remain deliberately in
+place until their specific replacement bounds are implemented.
+The UA deployment does not close Phases 4 or 5.
+
+### Earlier increments
+
+Earlier increment, 2026-09-17: Codex now uses the same daemon session owner,
 supervisor, scoped native runtime, provider grants, and state-storage operations.
 Its volume registry, quota host/worker, and lease subsystem are deleted.
 Host checkpoints stay separate from the guest-writable `cli_homes` subtree.
@@ -26,8 +85,8 @@ and 9P mount inventories were empty. This followed three live boundary fixes:
 empty thinking selection, oversized Unix socket names, and the policy-incompatible
 `.cli` path. Controller tests now invoke the real shared request validator.
 Codex's 249 tests and the 9P server's 95 tests pass; the fixes received adversarial
-review before commit. Host quota configuration retirement, mechanical cleanup,
-transport/journal simplification, and final conformance remain; this is not a
+review before commit. At that point host quota configuration retirement, mechanical
+cleanup, transport/journal simplification, and final conformance remained; this is not a
 claim that the entire design is implemented.
 
 Previous increment, 2026-09-17: Claude and OpenCode now compose one
@@ -2779,8 +2838,8 @@ than a judgement.
    Both host-record and guest-home leaves and the private projection directory
    disappeared on owner removal; the external workspace remained until Floot
    deleted its own session. Old test leases/volumes were explicitly retired
-   before replacement. The operational NixOS quota helper is being retired
-   separately; persistent directory storage does not inherit its quota guarantee.
+   before replacement. The operational NixOS quota helper was retired in
+   endo-host `564700d`; persistent directory storage does not inherit its quota guarantee.
 
 4. **Move Codex onto the supervisor and the shared broker scopes,** retiring
    `broker-launch.js`. The review expects this to be the hard step, because
@@ -2803,6 +2862,9 @@ than a judgement.
    want to export only their mounts tables. Cheap, and deliberately last: done
    first it is churn that conflicts with every step above, done last it is a
    tidy-up over a settled shape.
+
+   Shared rootfs parsing landed in `c8ff7b57e` and is deployed on Tokyo.
+   Remaining wrapper cleanup is not claimed complete.
 
 ### What this plan does not do
 

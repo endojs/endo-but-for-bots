@@ -310,7 +310,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-17 | In Progress |
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-17 | In Progress — Tokyo UA at `50d036bc7`; shared queues/emergency stop deployed; bounded history/storage and final conformance pending |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
