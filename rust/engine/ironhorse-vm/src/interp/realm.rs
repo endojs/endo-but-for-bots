@@ -621,36 +621,6 @@ impl Interp {
         names.sort();
         names.dedup();
         machine.link_intrinsics(&names);
-        // Step 2 of the lockdown operation, BEFORE the harden below and before
-        // the root enumeration, so the constructor properties it writes are in
-        // place when the graph is frozen.
-        //
-        // Freezing is step 5. On its own it makes the primordials immutable and
-        // leaves `Function.prototype.constructor` pointing at the real
-        // evaluator, so `({}).constructor.constructor('return 1')()` compiles
-        // source in every compartment of a machine that reports
-        // `is_locked_down()` -- past `global_names`, which
-        // `CompartmentOptions` documents as unable to close that route. A
-        // machine that freezes at construction therefore has to perform BOTH
-        // steps at construction; this is the one place a `Machine` can, because
-        // the guest `lockdown()` it would otherwise need meets step 1's
-        // idempotence check and is refused.
-        //
-        // `freeze == false` deliberately skips it. That machine is built for
-        // the SES shim, which repairs intrinsics before freezing them and
-        // installs its own inert constructors while doing so
-        // (`tame-function-constructors.js`); poisoning first would hand
-        // `repairIntrinsics` a graph it does not expect. Such a machine does
-        // not bind the engine's `lockdown` either -- see below -- so the two
-        // halves stay together.
-        //
-        // No re-assert afterwards: no guest code can run here. The harden below
-        // is `expect`-ed as infallible precisely because the graph is pristine,
-        // which is the same premise that says no Proxy trap can fire.
-        if freeze {
-            let minted = machine.poison_function_constructors();
-            debug_assert_eq!(minted.len(), machine.locked_down_prototypes().len());
-        }
         // Before guest execution every allocated instance is primordial, except
         // the host global and the engine's writable tagged-template cache.
         // Enumerating the arena also includes non-global async/generator and
@@ -663,6 +633,56 @@ impl Interp {
             .filter(|&root| machine.slots.get(root).kind == Kind::Instance)
             .collect();
         if freeze {
+            // Step 2 of the lockdown operation, AFTER the enumeration above and
+            // before the harden below.
+            //
+            // Freezing is step 5. On its own it makes the primordials immutable
+            // and leaves `Function.prototype.constructor` pointing at the real
+            // evaluator, so `({}).constructor.constructor('return 1')()`
+            // compiles source in every compartment of a machine that reports
+            // `is_locked_down()` -- past `global_names`, which
+            // `CompartmentOptions` documents as unable to close that route. A
+            // machine that freezes at construction therefore has to perform
+            // BOTH steps at construction; this is the one place a `Machine` can,
+            // because the guest `lockdown()` it would otherwise need meets step
+            // 1's idempotence check and is refused.
+            //
+            // **After the enumeration, and that ordering is load-bearing.**
+            // `force_locked_down_constructor` materializes each prototype's own
+            // surface first, which installs one lazily-held member and so
+            // allocates ONE instance -- at an arena index that depends on how
+            // many property slots `install_intrinsic_bindings` wrote, which
+            // `global_names` changes. `Interp::restore_shared_machine` validates
+            // a snapshot's stored `intrinsic_roots` against a reference machine
+            // built by `new_shared_realm_machine()`, with NO global names, on
+            // the premise that construction-time instance indices do not depend
+            // on them. Enumerating after step 2 put that instance in the roots
+            // and broke the premise: a `PersistentMachine` opened with
+            // `global_names` snapshotted roots ending at 1544 where the
+            // reference ended at 1602, and the reopen failed with
+            // `Corrupt("restore session did not validate")` /
+            // `shared primordial profile mismatch`
+            // (`rust/endo/tests/ironhorse_runtime_compiler.rs`, and
+            // `shared_machine.rs::a_machine_with_global_names_survives_a_snapshot_round_trip`
+            // now pins it inside this workspace).
+            //
+            // Leaving it out of `roots` costs nothing: it hangs off a prototype
+            // that IS a root, and `do_harden` is transitive.
+            //
+            // `freeze == false` deliberately skips step 2 altogether. That
+            // machine is built for the SES shim, which repairs intrinsics before
+            // freezing them and installs its own inert constructors while doing
+            // so (`tame-function-constructors.js`); poisoning first would hand
+            // `repairIntrinsics` a graph it does not expect. Such a machine does
+            // not bind the engine's `lockdown` either -- see below -- so the two
+            // halves stay together.
+            //
+            // No re-assert afterwards: no guest code can run here. The harden
+            // below is `expect`-ed as infallible precisely because the graph is
+            // pristine, which is the same premise that says no Proxy trap can
+            // fire.
+            let minted = machine.poison_function_constructors();
+            debug_assert_eq!(minted.len(), machine.locked_down_prototypes().len());
             for &root in &roots {
                 machine
                     .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))

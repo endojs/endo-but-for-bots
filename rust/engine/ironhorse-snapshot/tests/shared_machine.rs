@@ -160,6 +160,51 @@ fn host_roots_reacquire_after_source_drop_and_collection() {
     assert!(b.define_global_value("foreign", &root).is_err());
 }
 
+/// A machine built with `global_names` snapshots and restores.
+///
+/// `Interp::restore_shared_machine` validates a snapshot's stored
+/// `intrinsic_roots` against a reference machine built by
+/// `new_shared_realm_machine()` — with **no** global names — on the premise that
+/// construction-time instance indices do not depend on them. Every other test in
+/// this file uses `Machine::new()`, so none of them can see that premise break.
+///
+/// It broke. Running lockdown step 2 before the root enumeration materialized
+/// one lazily-held prototype member, and that single instance landed at an arena
+/// index downstream of the property slots `install_intrinsic_bindings` writes —
+/// which `global_names` changes. The stored roots ended at 1544 where the
+/// reference ended at 1602, and the reopen failed with
+/// `Corrupt("restore session did not validate")`. The only thing that caught it
+/// was `rust/endo/tests/ironhorse_runtime_compiler.rs`, in the OUTER cargo
+/// workspace, which the engine's own `cargo test --workspace` does not build.
+///
+/// So this test exists to keep that failure inside this workspace. It asserts
+/// the round trip AND, in the same breath, that lockdown step 2 did run — the
+/// two are in tension, and pinning only one of them is how this got through.
+#[test]
+fn a_machine_with_global_names_survives_a_snapshot_round_trip() {
+    let m = Machine::with_start_global_names(Some(&[
+        "Object".to_string(),
+        "JSON".to_string(),
+        "TypeError".to_string(),
+    ]));
+    let c = m.new_compartment();
+    eval(&c, "var answer = 42; 0");
+    let cid = c.snapshot_id().unwrap();
+    let restored = roundtrip(&m);
+    let c = restored.claim_compartment(cid).unwrap();
+    assert_eq!(eval(&c, "answer"), "42");
+    assert_eq!(
+        eval(
+            &c,
+            "try { ({}).constructor.constructor('return 1')(); 'REACHED' } \
+             catch (e) { e.name + ': ' + e.message }"
+        ),
+        "TypeError: secure mode",
+        "step 2 must survive the round trip; a restored machine that reports \
+         is_locked_down() with a live evaluator is the bug this pairs with"
+    );
+}
+
 fn empty_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
     MachineRestorePolicy {
         host_callables: Default::default(),
