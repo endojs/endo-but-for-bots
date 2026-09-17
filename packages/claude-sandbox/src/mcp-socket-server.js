@@ -13,19 +13,7 @@
 // that the provisioner bind-mounts read-only into the slice. `close()` stops
 // the listener and unlinks the socket; the caller removes the directory.
 
-import {
-  DEFAULT_MAX_FRAME_LENGTH,
-  listenMcpSocket,
-} from '@endo/hosted-agent/mcp-socket.js';
-
-import { mkdir, copyFile, rm, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-
-/** @import net from 'node:net' */
-
-const STDIO_BRIDGE_SPECIFIER = new URL(
-  import.meta.resolve('@endo/hosted-agent/mcp-stdio-bridge.js'),
-);
+import { makeHostedMcpSocketServer } from '@endo/hosted-agent/mcp-server.js';
 
 export const DEFAULT_SOCKET_NAME = 'mcp.sock';
 export const STDIO_BRIDGE_NAME = 'mcp-stdio-bridge.mjs';
@@ -61,102 +49,33 @@ export const buildMcpConfig = ({ innerDir, socketName, serverName }) =>
 harden(buildMcpConfig);
 
 /**
- * Start a per-session MCP socket server.
- *
- * @param {object} options
- * @param {string} options.socketDir - host directory to hold the socket, the
- *   stdio relay, and the MCP config. Created if absent. This whole directory is
- *   what the provisioner bind-mounts read-only into the slice.
- * @param {{ handleMessage: (message: any) => Promise<object | undefined> }} options.bridge
- * @param {number} [options.maxFrameLength] - longest frame accepted before the
- *   connection is dropped (default `DEFAULT_MAX_FRAME_LENGTH`).
- * @param {string} [options.socketName] - socket file name (default `mcp.sock`).
- * @param {string} [options.innerDir] - slice path the dir mounts at (default
- *   `/endo-mcp`); paths baked into the emitted `mcp.json` use it.
- * @param {string} [options.serverName] - MCP server key (default `endo`).
- * @param {typeof net} [options.netModule] - injectable for tests.
- * @param {(specifier: URL, destination: string) => Promise<void>} [options.installBridge]
- *   - copies the stdio relay into `socketDir`; injectable for tests.
- * @param {(destination: string, contents: string) => Promise<void>} [options.writeConfig]
- *   - writes the MCP config into `socketDir`; injectable for tests.
- * @returns {Promise<{
- *   socketDir: string,
- *   socketPath: string,
- *   socketName: string,
- *   stdioBridgeName: string,
- *   configFileName: string,
- *   innerDir: string,
- *   innerConfigPath: string,
- *   close: () => Promise<void>,
- * }>}
+ * Retained owner; the session supervisor keeps it before start can acquire.
+ * @param {Omit<Parameters<typeof makeHostedMcpSocketServer>[0], 'buildConfig'>} options
  */
-export const startMcpSocketServer = async ({
-  socketDir,
-  bridge,
-  maxFrameLength = DEFAULT_MAX_FRAME_LENGTH,
-  socketName = DEFAULT_SOCKET_NAME,
-  innerDir = DEFAULT_INNER_DIR,
-  serverName = DEFAULT_SERVER_NAME,
-  netModule,
-  installBridge = async (specifier, destination) => {
-    await copyFile(specifier, destination);
-  },
-  writeConfig = async (destination, contents) => {
-    await writeFile(destination, contents);
-  },
-}) => {
-  await mkdir(socketDir, { recursive: true });
-  const socketPath = path.join(socketDir, socketName);
-  // A stale socket from a previous boot would make listen() throw EADDRINUSE.
-  await rm(socketPath, { force: true });
-  await installBridge(
-    STDIO_BRIDGE_SPECIFIER,
-    path.join(socketDir, STDIO_BRIDGE_NAME),
-  );
-  await writeConfig(
-    path.join(socketDir, CONFIG_NAME),
-    `${JSON.stringify(
-      buildMcpConfig({ innerDir, socketName, serverName }),
-      null,
-      2,
-    )}\n`,
-  );
+export const makeMcpSocketServer = options =>
+  makeHostedMcpSocketServer({ ...options, buildConfig: buildMcpConfig });
+harden(makeMcpSocketServer);
 
-  const listener = await listenMcpSocket({
-    socketPath,
-    bridge,
-    maxFrameLength,
-    netModule,
-  });
-
-  // Idempotent: a lifecycle retry that already stopped the listener must not
-  // trip over `server.close()` refusing a server that is not running.
-  /** @type {Promise<void> | undefined} */
-  let closing;
-  const close = () => {
-    if (!closing) {
-      closing = (async () => {
-        await listener.close();
-        await rm(socketPath, { force: true });
-      })().catch(error => {
-        // Retry failed filesystem cleanup, but keep a successful close cached:
-        // an old owner must never unlink a successor using this socket path.
-        closing = undefined;
-        throw error;
-      });
+/**
+ * Convenience for callers that do not retain partial startup. Native session
+ * owners use makeMcpSocketServer directly so failed cleanup stays retryable.
+ * @param {Parameters<typeof makeMcpSocketServer>[0]} options
+ */
+export const startMcpSocketServer = async options => {
+  const server = makeMcpSocketServer(options);
+  try {
+    await server.start();
+    return server;
+  } catch (error) {
+    try {
+      await server.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Hosted MCP startup and cleanup failed',
+      );
     }
-    return closing;
-  };
-
-  return harden({
-    socketDir,
-    socketPath,
-    socketName,
-    stdioBridgeName: STDIO_BRIDGE_NAME,
-    configFileName: CONFIG_NAME,
-    innerDir,
-    innerConfigPath: `${innerDir}/${CONFIG_NAME}`,
-    close,
-  });
+    throw error;
+  }
 };
 harden(startMcpSocketServer);

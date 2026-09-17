@@ -26,12 +26,12 @@ import path from 'node:path';
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
 import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 import {
   assertPublicNetworkEvidence,
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
+import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
 import {
   makeDefaultMounter,
@@ -41,7 +41,6 @@ import {
   HOSTED_SLICE_RESOURCES,
   sliceWritableBytes,
 } from '@endo/hosted-agent/hosted-agent-policy.js';
-import { M } from '@endo/patterns';
 import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
 
 import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
@@ -54,7 +53,7 @@ import {
 } from './claude-hosted-policy.js';
 import { writeClaudeTranscript } from './claude-transcript-writer.js';
 import { makeTranscriptResume } from './claude-transcripts.js';
-import { startMcpSocketServer } from './mcp-socket-server.js';
+import { makeMcpSocketServer } from './mcp-socket-server.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 
 /**
@@ -83,14 +82,6 @@ const CONFIG_PATH = '/claude-config';
  * to the listener, which never forwards it upstream.
  */
 const CREDENTIAL_PLACEHOLDER = 'claude-broker-placeholder';
-
-const ControllerInterface = M.interface('ClaudeNativeController', {
-  activate: M.call(M.string(), M.remotable()).returns(M.promise()),
-  send: M.call(M.string()).optional(M.record()).returns(M.promise()),
-  interrupt: M.call().returns(M.promise()),
-  status: M.call().returns(M.promise()),
-  terminate: M.call(M.string(), M.remotable()).returns(M.promise()),
-});
 
 /**
  * Inert composition for one dedicated native worker. Resolver capabilities
@@ -121,7 +112,7 @@ const ControllerInterface = M.interface('ClaudeNativeController', {
  * @param {typeof makeMcpBridgeForToolSet} [powers.makeBridge]
  * @param {typeof reclaimRecordedMount} [powers.reclaimMount] Reclaims a lost
  *   worker's recorded kernel mount. Never mounts anything.
- * @param {typeof startMcpSocketServer} [powers.startMcp]
+ * @param {typeof makeMcpSocketServer} [powers.makeMcp]
  * @param {typeof makeClaudeClient} [powers.makeClient]
  * @param {typeof makeTranscriptResume} [powers.makeResume]
  * @param {Record<string,string>} [powers.env] Trusted native runner configuration.
@@ -133,90 +124,43 @@ export const makeClaudeNativeController = ({
   makeFilesystem,
   makeBridge = makeMcpBridgeForToolSet,
   reclaimMount = reclaimRecordedMount,
-  startMcp = startMcpSocketServer,
+  makeMcp = makeMcpSocketServer,
   makeClient = makeClaudeClient,
   makeResume = makeTranscriptResume,
   env = {},
   context,
   reportError = error => console.error('Claude native cleanup pending', error),
 } = {}) => {
-  let stopping = false;
-  let stopped = false;
-  /** @type {string | undefined} */
-  let originalText;
-  /** @type {Promise<void> | undefined} */
-  let activating;
-  /** @type {Promise<void> | undefined} */
-  let closing;
-  /** @type {any} */
-  let sandboxScope;
-  /** @type {any} */
-  let brokerScope;
-  /** @type {ReturnType<typeof makeWorkspaceProjection> | undefined} */
-  let mounter;
-  /** @type {Awaited<ReturnType<typeof startMcpSocketServer>> | undefined} */
-  let mcp;
-  /** @type {ReturnType<typeof makeClaudeClient> | undefined} */
-  let client;
-  const assertOpen = () => {
-    !stopping || Fail`Claude native controller is stopping`;
-  };
-
-  // This operation must be reachable while activation is waiting for a native
-  // acquisition. Parents are released only after the sandbox acknowledges
-  // stop; the broker grant is revoked beside them so a failed release of
-  // either is retained for a later terminate. The client's own terminate is
-  // best-effort by contract, so this owner never routes its release through
-  // it: a failure here rejects, and a later terminate re-invokes every
-  // release, each idempotent on success.
-  const closeResources = async () => {
-    const sandboxClosed = sandboxScope
-      ? E(sandboxScope).close()
-      : Promise.resolve();
-    const results = await Promise.allSettled([
-      sandboxClosed.then(() => mounter?.close()),
-      brokerScope ? E(brokerScope).revoke() : Promise.resolve(),
-      mcp?.close(),
-    ]);
-    const failures = results.flatMap(result =>
-      result.status === 'rejected' ? [result.reason] : [],
-    );
-    if (failures.length)
-      throw AggregateError(failures, 'Claude native cleanup pending');
-  };
-  const closeIfStopping = () => {
-    if (stopping) void closeResources().catch(() => {});
-    assertOpen();
-  };
-  /**
-   * @param {string} text
-   * @param {any} resolver
-   */
-  const activate = (text, resolver) => {
-    assertOpen();
-    if (activating) {
-      text === originalText || Fail`Native controller plan cannot change`;
-      return activating;
-    }
-    originalText = text;
-    activating = (async () => {
-      const approved = readClaudeSessionPlan(text);
+  return makeHostedSessionSupervisor({
+    name: 'Claude',
+    readPlan: readClaudeSessionPlan,
+    env,
+    context,
+    reclaimMount,
+    reportError,
+    start: async (approved, resolver, { own, assertOpen }) => {
       const sandbox = await E(resolver).get('sandboxService');
       assertOpen();
-      sandboxScope = await E(sandbox).provideScope(approved.sandboxSessionId);
-      closeIfStopping();
+      const sandboxScope = own(
+        'sandbox',
+        await E(sandbox).provideScope(approved.sandboxSessionId),
+      );
+      assertOpen();
       const broker = await E(resolver).get('brokerService');
       assertOpen();
-      brokerScope = await E(broker).provideScope(
-        approved.sandboxSessionId,
-        harden({
-          providerOrigin: ANTHROPIC_ORIGIN,
-          accountRef: CLAUDE_BROKER_ACCOUNT,
-          networkPolicy: approved.networkPolicy,
-          ...(approved.model ? { model: approved.model } : {}),
-        }),
+      const brokerScope = own(
+        'broker',
+        await E(broker).provideScope(
+          approved.sandboxSessionId,
+          harden({
+            providerOrigin: ANTHROPIC_ORIGIN,
+            accountRef: CLAUDE_BROKER_ACCOUNT,
+            networkPolicy: approved.networkPolicy,
+            ...(approved.model ? { model: approved.model } : {}),
+          }),
+        ),
       );
-      closeIfStopping();
+      assertOpen();
       await E(brokerScope).start();
       assertOpen();
       const [attestation, evidence] = await Promise.all([
@@ -249,26 +193,30 @@ export const makeClaudeNativeController = ({
       // Exactly one of the two is recorded; the parser enforces it.
       // Retained before it is established, so a failed mount is still
       // closed by this owner's ordinary cleanup.
-      mounter = makeWorkspaceProjection(
-        {
-          workspaceRootPath:
-            approved.workspaceHostPath ??
-            /** @type {string} */ (approved.workspaceDir),
-          workspaceMountPoint: approved.workspaceMountPoint,
-          mounterSocketDir: approved.mounterSocketDir,
-          ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
-        },
-        { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
+      const mounter = own(
+        'mounter',
+        makeWorkspaceProjection(
+          {
+            workspaceRootPath:
+              approved.workspaceHostPath ??
+              /** @type {string} */ (approved.workspaceDir),
+            workspaceMountPoint: approved.workspaceMountPoint,
+            mounterSocketDir: approved.mounterSocketDir,
+            ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
+          },
+          { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
+        ),
       );
-      closeIfStopping();
+      assertOpen();
       await mounter.mount();
       assertOpen();
       const tools = await E(resolver).get('tools');
       assertOpen();
       const bridge = await makeBridge(tools);
       assertOpen();
-      mcp = await startMcp({ socketDir: approved.mcpDir, bridge });
-      closeIfStopping();
+      const mcp = own('mcp', makeMcp({ socketDir: approved.mcpDir, bridge }));
+      await mcp.start();
+      assertOpen();
       // The attested mount table. The workspace is the 9P projection this
       // controller just established, so the sandbox can prove the slice sees
       // a projection rather than host data; the CLI's own home and the MCP
@@ -388,16 +336,16 @@ export const makeClaudeNativeController = ({
           ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
         },
       );
-      closeIfStopping();
+      assertOpen();
       const resume = makeResume(state.directory, {
         debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),
       });
-      client = makeClient({
+      return makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
-        // The client disposes the slice on its terminate; every other owner
-        // is released by this controller afterwards, never through the
-        // client's best-effort mount handle.
+        // The client stops its protocol and disposes its slice. The shared
+        // supervisor independently closes the scope and withdraws authority;
+        // its mount-release proof does not rely on best-effort client cleanup.
         slice,
         workspaceMountPoint: approved.workspaceMountPoint,
         workspacePath: WORKSPACE_PATH,
@@ -421,8 +369,8 @@ export const makeClaudeNativeController = ({
         detectPriorConversation: resume.detectPriorConversation,
         resolveResumeSessionId: resume.resolveResumeSessionId,
         describeTranscripts: resume.describeTranscripts,
-        // A new incarnation with an empty store restores what the stack
-        // holds. Claude Code names a conversation's file for its session id
+        // A new incarnation restores what the stack holds, even when the CLI
+        // store survived. Claude Code names a conversation's file for its session id
         // and its directory for the cwd it ran in, so both are derived rather
         // than discovered — the same records must always land in the same
         // place, or a retried revival writes a second conversation beside the
@@ -452,125 +400,7 @@ export const makeClaudeNativeController = ({
           return sessionUuid;
         },
       });
-      // No initialPrompt: only foreground sends may initiate recorded turns.
-    })();
-    return activating;
-  };
-  /**
-   * @param {string} text
-   * @param {any} resolver
-   */
-  const terminate = (text, resolver) => {
-    stopping = true;
-    if (originalText !== undefined)
-      text === originalText || Fail`Cleanup must use the original native plan`;
-    else {
-      originalText = text;
-    }
-    if (closing) return closing;
-    closing = (async () => {
-      if (!activating) {
-        // Recovery only. Never create substitutes for an earlier owner.
-        const recoveredPlan = readClaudeSessionPlan(text);
-        // Reaching the shared services is best effort, and never proof either
-        // way: a service revived to answer this call holds no scopes from the
-        // lost incarnation, and one that cannot be reached cannot be asked.
-        // A scope still live in THIS incarnation is found here and closed
-        // below, which is the case worth trying for. A slice left behind by a
-        // lost runtime is reconciled by the driver's own label sweep, so a
-        // failure here is reported, not raised: raising it is what used to
-        // leave a session permanently unstoppable whenever a superseded
-        // service formula refused to revive.
-        const recovered = await Promise.allSettled([
-          (async () => {
-            if (sandboxScope) return;
-            const sandbox = await E(resolver).get('sandboxService');
-            sandboxScope = await E(sandbox).lookupScope(
-              recoveredPlan.sandboxSessionId,
-            );
-          })(),
-          (async () => {
-            if (brokerScope) return;
-            const broker = await E(resolver).get('brokerService');
-            brokerScope = await E(broker).lookupScope(
-              recoveredPlan.sandboxSessionId,
-            );
-          })(),
-        ]);
-        // The kernel mount outlives every process that knew about it, so it
-        // is the one thing this owner must establish. Both run before either
-        // is judged: a failed scope close must not skip the unmount.
-        const released = await Promise.allSettled([
-          closeResources(),
-          // Compose the mounter settings exactly as activation does: the
-          // operator's are this worker's trusted configuration and the plan's
-          // recorded overrides sit on top. Reading only the plan would run a
-          // bare `umount` on a host whose mounts go through a privilege
-          // helper, and refuse every reclamation with EPERM.
-          reclaimMount({
-            ...recoveredPlan,
-            mounterEnv: { ...env, ...recoveredPlan.mounterEnv },
-          }),
-        ]);
-        const failures = released.flatMap(result =>
-          result.status === 'rejected' ? [result.reason] : [],
-        );
-        const diagnosed = recovered.flatMap(result =>
-          result.status === 'rejected' ? [result.reason] : [],
-        );
-        if (failures.length) {
-          throw AggregateError(
-            [...diagnosed, ...failures],
-            'Original local 9P/MCP cleanup ownership is unavailable',
-          );
-        }
-        for (const error of diagnosed) reportError(error);
-        stopped = true;
-        return;
-      }
-      // Fence a still-pending activation by releasing what it has acquired
-      // so far; a completed activation is released once, after the client
-      // has disposed its slice.
-      const early = client ? undefined : closeResources();
-      await Promise.allSettled([activating, early]);
-      if (client) await E(client).terminate();
-      await closeResources();
-      stopped = true;
-    })().catch(error => {
-      closing = undefined;
-      throw error;
-    });
-    return closing;
-  };
-  if (context !== undefined) {
-    const lost = () => {
-      stopping = true;
-      // Lost context fences now, even if an acquisition is waiting for close.
-      // Its rejection is diagnostic; it is never converted to release proof.
-      void (
-        client ? E(client).terminate().then(closeResources) : closeResources()
-      ).catch(reportError);
-    };
-    void E(context).whenCancelled().then(lost, lost);
-  }
-  return makeExo('ClaudeNativeController', ControllerInterface, {
-    activate,
-    send: async (prompt, options = {}) => {
-      assertOpen();
-      if (client === undefined)
-        throw Fail`Claude native controller is not active`;
-      return E(client).send(prompt, options);
     },
-    interrupt: async () => {
-      if (client) await E(client).interrupt();
-    },
-    status: async () =>
-      harden({
-        ...(client ? await E(client).status() : {}),
-        stopping,
-        stopped,
-      }),
-    terminate,
   });
 };
 harden(makeClaudeNativeController);

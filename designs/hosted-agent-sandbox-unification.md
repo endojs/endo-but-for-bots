@@ -3,12 +3,27 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-16 |
+| **Updated** | 2026-09-17 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
+
+Latest increment, 2026-09-17: Claude and OpenCode now compose one
+`makeHostedSessionSupervisor` in `@endo/hosted-agent/session-supervisor.js`.
+It owns plan identity, activation fencing, retained resources, recovery lookup,
+native stop acknowledgement, and failed-release retry.
+Clients dispose their own slices but no longer own the controller's broker/MCP
+cleanup algorithm; revocation and MCP closure start independently of client stop.
+Mount release still requires sandbox closure.
+Successful releases are cached; an explicit stop can retry failed revocation even
+while another owner is still pending, without claiming that native stop completed.
+Both adapters use the shared inert MCP server owner, retained before startup.
+The controller suites and three affected package suites pass; this extraction's
+live Tokyo acceptance is pending, and Codex is not yet on this supervisor.
+Earlier entries below record the increments that led here, not current claims
+that the now-extracted Claude/OpenCode lifecycle is still duplicated.
 
 The first implementation increment replaces mandatory inference leases with revocable
 session grants and simultaneous-request admission in the shared broker.
@@ -2658,11 +2673,23 @@ than a judgement.
    than falling back, and it has no surviving store to prefer, so there was
    nothing to close. Its suite is unchanged and green.
 
-   **1c. Deploy and re-run the live check — next.** It now means something
+   **1c. Deploy and re-run the live check — done, 2026-09-17.** It means something
    stronger than before: all three answer with their stores *present* and the
    records authoritative, rather than only with the store destroyed.
    *Gate: the unit tests pin the decision for each adapter — done, see
    below — and the live run answers on all three.*
+
+   Tokyo at `6b4983932` passed all three through Floot: each recalled the test
+   word after daemon restart, with native stores preserved and the completed
+   turns/transcript independently read back. Codex reconciled its inherited
+   thread and answered on a new thread with the prior messages restored.
+   The offline unblock also required reclaiming its stale 9P workspace mount:
+   the old source worker was gone and stat returned EIO; clearing the lease
+   alone caused startup to reserve another lease and fail projection cleanup.
+   With the daemon stopped and the exact test container reaped, normal unmount
+   and removal of the empty mountpoint, followed by test-only lease clearing,
+   let restoration run without a source patch or deletion of native state.
+   These operational repairs do not establish clean automatic restart.
 
    **Where 1b landed.** Suites green at the counts the base had, which is the
    check that matters here because the change rewrote test expectations:
@@ -2681,7 +2708,7 @@ than a judgement.
    seventeen further tests behind a file timeout; running the suite at `HEAD`
    as a control is what showed it was mine.
 
-2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode.** Two
+2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode — done.** Two
    adapters, one algorithm, before adding a third. Its acceptance test is the
    pair from step 0 and item 2 above: one release path, so that whether a
    grant is revoked and a lease released is answerable by reading one
@@ -2689,6 +2716,15 @@ than a judgement.
    *Gate: both adapters pass their existing suites against the shared
    lifecycle, and the terminate-with-live-client test from step 0 still
    asserts exactly one revocation.*
+
+   The common lifecycle and inert MCP server now live in `@endo/hosted-agent`.
+   Adapter callbacks construct their CLI configuration and client while
+   transferring partial acquisitions to the supervisor before using them.
+   The full suites pass: hosted-agent 318, Claude 190, OpenCode 255.
+   Four shared regressions cover late client acquisition, hung-client stop,
+   independent revocation retry, and preserving mounts until sandbox closure.
+   Adversarial review found the hung-cleanup retry case; the regression and
+   narrow re-review close it. Live acceptance of this increment remains pending.
 
 3. **Move Codex's state onto `session-state-storage.js`,** deleting the volume
    subsystem and the lease with it. Now that the supervisor exists, this is

@@ -144,6 +144,9 @@ const fixture = (t, { realClient = false } = {}) => {
         assertCopyData(options);
         events.push(['slice', id, options]);
         return Far('NativeSlice', {
+          async dispose() {
+            events.push(`dispose slice ${id}`);
+          },
           async policy() {
             return sliceAttestationFor(requested);
           },
@@ -330,8 +333,9 @@ const fixture = (t, { realClient = false } = {}) => {
       makeClient(options) {
         clients.push(options);
         if (realClient) return makeOpencodeClient(options);
-        const cleanup = options.cleanupProvision;
-        if (cleanup === undefined) throw Error('Missing cleanup owner');
+        t.false(Object.hasOwn(options, 'cleanupProvision'));
+        const { slice } = options;
+        if (slice === undefined) throw Error('Missing slice');
         return Far('Client', {
           async send(prompt) {
             events.push(['send', prompt]);
@@ -360,7 +364,7 @@ const fixture = (t, { realClient = false } = {}) => {
             });
           },
           async terminate() {
-            await cleanup();
+            await E(slice).dispose();
           },
           async destroy() {
             throw Error('Controller must not delete durable state');
@@ -643,7 +647,7 @@ test('rejected initial plan is an observed activation, not lost cleanup ownershi
   t.true((await E(controller).status()).stopped);
 });
 
-test('real eager client delegates cleanup and never starts the discarded initial prompt', async t => {
+test('real eager client disposes its slice and never starts the discarded initial prompt', async t => {
   const f = fixture(t, { realClient: true });
   const controller = f.makeController();
   const text = JSON.stringify(planFor('a'));
@@ -660,15 +664,9 @@ test('terminating a session that has a live client revokes its grant', async t =
   // indefinite access. Terminate must revoke it on the ordinary path — a
   // session that activated successfully and still holds its client.
   //
-  // How it is revoked differs from Claude's controller, and the asymmetry
-  // reads like a bug until the makeClient call sites are compared. Here the
-  // client is constructed with `cleanupProvision: closeResources`, so the
-  // client's own terminate runs the whole release; the controller's
-  // `else await closeResources()` is therefore correct rather than a missing
-  // branch. Claude passes no cleanupProvision — its client disposes the slice
-  // and nothing else — so its controller closes unconditionally afterwards.
-  // Both end revoked; neither closes twice. This test pins the outcome so the
-  // wiring can change without the guarantee moving.
+  // Both adapters now delegate lifecycle ownership to the shared supervisor.
+  // The client disposes its slice, and cannot withhold the supervisor's grant
+  // revocation by failing or hanging during its own shutdown.
   const f = fixture(t, { realClient: true });
   const controller = f.makeController();
   const text = JSON.stringify(planFor('a'));
