@@ -2372,6 +2372,34 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `4658b8adc7bdd428` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 7-byte input
+    /// `7e 69 2d ed 7e ed b4` folds into
+    /// `((((377487360 - 1056964608) * (true && 377487360)) * ((true && 377487360)
+    /// && (1509949440 && true))) + (~((true * true) * (~1988100096))))`, whose
+    /// IEEE-754 double value is the exactly-representable `-256494070539485184`.
+    /// XS's `fx_dtoa` prints that exact 18-digit integer, whereas ironhorse —
+    /// like V8/Node and ECMA-262 §6.1.6.1.20's shortest-round-tripping rule —
+    /// prints `-256494070539485200`. Both parse to the identical double, so the
+    /// engines agree on the value and diverge only on decimal spelling; the same
+    /// class as `d99d263fcf6ca7a7` / `7277b0fc4a72d8d6` / `7152c1a9960a0688` /
+    /// `284de587e16bce32`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_4658b8adc7bdd428_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 81ca826d13cee1bdf7d448ba16c41fae2d8079f4e94ec7c18510dfc21196945b).
+        let data: &[u8] = &[0x7e, 0x69, 0x2d, 0xed, 0x7e, 0xed, 0xb4];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program is
+        // the large-integer sum whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 4658b8adc7bdd428 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
