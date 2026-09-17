@@ -4,6 +4,7 @@ import '@endo/init';
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
+import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
 
 import { makeCodexClient } from '../src/codex-client.js';
 
@@ -461,6 +462,7 @@ const makeQueue = () => {
  *   existingTurnIds?: string[],
  *   turnCounterStart?: number,
  *   announceTurns?: boolean,
+ *   closeFailures?: number,
  * }} [options]
  */
 const makeFixture = ({
@@ -485,6 +487,7 @@ const makeFixture = ({
   // not available again.
   turnCounterStart = existingTurnIds.length,
   announceTurns = true,
+  closeFailures = 0,
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
@@ -647,6 +650,10 @@ const makeFixture = ({
     close: async () => {
       transportClosed = true;
       queue.close();
+      if (closeFailures > 0) {
+        closeFailures -= 1;
+        throw Error('transient transport close failure');
+      }
     },
   };
   const client = makeCodexClient({
@@ -675,6 +682,171 @@ const drain = async reader => {
 // Everything the fixture does is microtask-driven, so one trip through the
 // timer queue is enough to know that nothing else is going to happen.
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const supervise = async client => {
+  const events = [];
+  const controller = makeHostedSessionSupervisor({
+    name: 'CodexTest',
+    readPlan: () => ({
+      sandboxSessionId: 'test',
+      workspaceMountPoint: '/test/mount',
+      mounterSocketDir: '/test/socket',
+    }),
+    start: async (_plan, _resolver, { own }) => {
+      own(
+        'sandbox',
+        Far('Sandbox', {
+          async close() {
+            events.push('sandbox-close');
+          },
+        }),
+      );
+      own(
+        'broker',
+        Far('Broker', {
+          async fence() {
+            events.push('fence');
+          },
+          async revoke() {
+            events.push('revoke');
+          },
+        }),
+      );
+      return client;
+    },
+    reportError: () => {},
+  });
+  const resolver = Far('Resolver', {});
+  await controller.activate('{}', resolver);
+  return {
+    controller,
+    events,
+    stop: () => controller.terminate('{}', resolver),
+  };
+};
+
+test('supervisor retries real Codex client transport cleanup', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({ closeFailures: 1 });
+  const owner = await supervise(fixture.client);
+  await owner.controller.models();
+  await t.throwsAsync(owner.stop, { message: /cleanup pending/ });
+  t.true(owner.events.includes('fence'));
+  t.true(owner.events.includes('sandbox-close'));
+  t.false((await owner.controller.status()).stopped);
+  await owner.stop();
+  t.true((await owner.controller.status()).stopped);
+  t.is(owner.events.filter(event => event === 'sandbox-close').length, 1);
+});
+
+test('supervisor fences promptly but drains an admitted Codex send checkpoint write', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(() => release());
+  let writing = false;
+  let persisted = false;
+  const fixture = makeFixture({
+    clientOptions: {
+      saveThreadState: async () => {
+        writing = true;
+        await held;
+        persisted = true;
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  const sending = owner.controller.send('hello');
+  void sending.catch(() => {});
+  while (!writing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  let stopped = false;
+  const stopping = owner.stop().then(() => {
+    stopped = true;
+  });
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.false(stopped);
+  release();
+  await Promise.allSettled([sending]);
+  await stopping;
+  t.true(persisted);
+  t.true(stopped);
+});
+
+for (const event of ['turn-terminal', 'server-request-denied', 'tool-intent']) {
+  test(`Codex shutdown drains and retains failed ${event} writes`, async t => {
+    t.timeout(5000);
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    t.teardown(() => release());
+    let hold = false;
+    let writing = false;
+    const fixture = makeFixture({
+      clientOptions: {
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'lookup',
+            description: 'Test tool.',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+        callTool: async () => 'ok',
+        auditEvent: async kind => {
+          if (hold && kind === event) {
+            writing = true;
+            await held;
+            throw Error('settlement audit failed');
+          }
+        },
+      },
+    });
+    const owner = await supervise(fixture.client);
+    await owner.controller.send('hello');
+    hold = true;
+    fixture.push(
+      event === 'turn-terminal'
+        ? {
+            method: 'turn/completed',
+            params: {
+              threadId: fixture.activeThreadId(),
+              turn: { id: 'turn-1', status: 'completed' },
+            },
+          }
+        : {
+            id: 90,
+            method:
+              event === 'tool-intent' ? 'item/tool/call' : 'unsupported/action',
+            params: {
+              threadId: fixture.activeThreadId(),
+              turnId: 'turn-1',
+              callId: 'call-1',
+              tool: 'lookup',
+              arguments: {},
+            },
+          },
+    );
+    while (!writing) {
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+    const stopping = owner.stop();
+    void stopping.catch(() => {});
+    await flush();
+    t.true(writing);
+    t.false((await owner.controller.status()).stopped);
+    release();
+    await t.throwsAsync(() => stopping, { message: /cleanup pending/ });
+    await t.throwsAsync(owner.stop, { message: /cleanup pending/ });
+  });
+}
 
 const STARTED_TURN_1 = harden({
   method: 'turn/started',
@@ -1801,6 +1973,54 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   t.true(audit.some(entry => entry.kind === 'tool-outcome-unknown'));
   t.true(audit.some(entry => entry.kind === 'tool-late-settled'));
   await fixture.client.terminate();
+});
+
+test('a failed late tool audit remains a shutdown failure after the tool settles', async t => {
+  t.timeout(5000);
+  let rejectTool = () => {};
+  const operation = new Promise((_resolve, reject) => {
+    rejectTool = () => reject(Error('late tool failure'));
+  });
+  void operation.catch(() => {});
+  t.teardown(rejectTool);
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 10,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'wait',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: () => operation,
+      auditEvent: async kind => {
+        if (kind === 'tool-late-settled') throw Error('late audit failed');
+      },
+    },
+  });
+  const reader = await fixture.client.send('first');
+  fixture.push({
+    id: 952,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'wait-1',
+      tool: 'wait',
+      arguments: {},
+    },
+  });
+  await drain(reader);
+  rejectTool();
+  await flush();
+  await t.throwsAsync(() => fixture.client.terminate(), {
+    message: /late audit failed/,
+  });
+  await t.throwsAsync(() => fixture.client.terminate(), {
+    message: /late audit failed/,
+  });
 });
 
 test('late non-JSON tool fulfillments remain call-correlated unknowns', async t => {

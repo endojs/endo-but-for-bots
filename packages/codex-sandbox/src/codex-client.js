@@ -215,8 +215,30 @@ export const makeCodexClient = ({
   let ready;
   /** @type {Promise<void> | undefined} */
   let shutdown;
+  let shutdownFailed = false;
+  let transportClosed = false;
   /** @type {Promise<void> | undefined} */
   let sessionFailureAudit;
+  /** @type {Promise<void> | undefined} */
+  let failureSettlement;
+  /** @type {unknown} */
+  let messageFailure;
+  // Admitted message handlers can still be writing host records after their
+  // process has stopped. Keep them until their writes settle.
+  /** @type {Set<Promise<unknown>>} */
+  const hostWrites = new Set();
+  /**
+   * @template T
+   * @param {Promise<T>} operation
+   */
+  const trackHostWrite = operation => {
+    hostWrites.add(operation);
+    void operation.then(
+      () => hostWrites.delete(operation),
+      () => hostWrites.delete(operation),
+    );
+    return operation;
+  };
   let terminated = false;
   let closing = false;
   let closeDeferredAudited = false;
@@ -236,7 +258,17 @@ export const makeCodexClient = ({
    */
   const detachedRequests = new Set();
   const audit = async (kind, payload = {}) => {
-    await auditEvent(kind, harden({ sessionId, ...payload }));
+    try {
+      await trackHostWrite(
+        Promise.resolve(auditEvent(kind, harden({ sessionId, ...payload }))),
+      );
+    } catch (auditError) {
+      // A failed required write during shutdown cannot be hidden by the
+      // pump's admission fence. Ordinary protocol errors and a timed-out tool
+      // that later settles are not themselves outstanding host writes.
+      if (closing || terminated) messageFailure = auditError;
+      throw auditError;
+    }
   };
   const recordCleanupFailure = error => {
     const failure = error instanceof Error ? error : Error(`${error}`);
@@ -426,27 +458,27 @@ export const makeCodexClient = ({
     signalTermination(failure);
     turnReserved = false;
     rejectPending(failure);
-    if (active) {
+    if (active && !failureSettlement) {
       const failedTurn = active;
-      const finish = () => {
-        void settleTurn(failedTurn, {
+      const finish = async () => {
+        await settleTurn(failedTurn, {
           type: 'failed',
           reason: failure.message,
         });
       };
-      if (sessionFailureAudit) {
-        sessionFailureAudit.then(finish, finish);
-      } else {
-        finish();
-      }
+      failureSettlement = sessionFailureAudit
+        ? sessionFailureAudit.then(finish, finish)
+        : finish();
+      failureSettlement.catch(() => undefined);
     }
     if (!shutdown) {
       shutdown = (async () => {
         await null;
         const failures = [];
-        if (transport) {
+        if (transport && !transportClosed) {
           try {
             await transport.close();
+            transportClosed = true;
           } catch (closeError) {
             failures.push(closeError);
           }
@@ -469,6 +501,20 @@ export const makeCodexClient = ({
             failures.push(auditError);
           }
         }
+        if (failureSettlement) {
+          try {
+            await failureSettlement;
+          } catch (settlementError) {
+            failures.push(settlementError);
+          }
+        }
+        while (hostWrites.size > 0) {
+          // Writers can admit subsequent writes before settling. Drain to a
+          // fixed point after protocol admission has closed.
+          // eslint-disable-next-line no-await-in-loop
+          await Promise.allSettled([...hostWrites]);
+        }
+        if (messageFailure) failures.push(messageFailure);
         if (failures.length > 0) {
           if (failures.length === 1) throw failures[0];
           throw new AggregateError(failures, 'Codex session shutdown failed');
@@ -477,7 +523,12 @@ export const makeCodexClient = ({
       // Automatic protocol-failure paths have no caller awaiting shutdown.
       // Preserve the rejecting promise for explicit terminate(), while also
       // making teardown failure visible to the provisioner.
-      shutdown.catch(recordCleanupFailure);
+      shutdown.catch(shutdownError => {
+        recordCleanupFailure(shutdownError);
+        // The admission fence stays closed. Only unfinished cleanup retries;
+        // required audit/settlement failures remain retained above.
+        shutdownFailed = true;
+      });
     }
     return shutdown;
   };
@@ -750,48 +801,53 @@ export const makeCodexClient = ({
         // The Endo call cannot be assumed cancelled. Poison the session so no
         // successor can overlap it, and keep observing the late settlement for
         // the operator journal instead of reporting a false tool failure.
-        operation
-          .then(
-            async lateResult => {
-              try {
-                const lateProjected = projectToolResult(lateResult);
-                await audit('tool-late-settled', {
+        trackHostWrite(
+          operation
+            .then(
+              async lateResult => {
+                try {
+                  const lateProjected = projectToolResult(lateResult);
+                  await audit('tool-late-settled', {
+                    threadId: params.threadId,
+                    turnId: params.turnId,
+                    callId: params.callId,
+                    tool: params.tool,
+                    success: true,
+                    result: auditProjection(lateProjected),
+                  });
+                } catch (lateProjectionError) {
+                  await audit('tool-late-outcome-unknown', {
+                    threadId: params.threadId,
+                    turnId: params.turnId,
+                    callId: params.callId,
+                    tool: params.tool,
+                    reason: brief(
+                      lateProjectionError instanceof Error
+                        ? lateProjectionError.message
+                        : `${lateProjectionError}`,
+                      maxToolResultChars,
+                    ),
+                  });
+                }
+              },
+              lateError =>
+                audit('tool-late-settled', {
                   threadId: params.threadId,
                   turnId: params.turnId,
                   callId: params.callId,
                   tool: params.tool,
-                  success: true,
-                  result: auditProjection(lateProjected),
-                });
-              } catch (lateProjectionError) {
-                await audit('tool-late-outcome-unknown', {
-                  threadId: params.threadId,
-                  turnId: params.turnId,
-                  callId: params.callId,
-                  tool: params.tool,
+                  success: false,
                   reason: brief(
-                    lateProjectionError instanceof Error
-                      ? lateProjectionError.message
-                      : `${lateProjectionError}`,
+                    lateError instanceof Error ? lateError.message : lateError,
                     maxToolResultChars,
                   ),
-                });
-              }
-            },
-            lateError =>
-              audit('tool-late-settled', {
-                threadId: params.threadId,
-                turnId: params.turnId,
-                callId: params.callId,
-                tool: params.tool,
-                success: false,
-                reason: brief(
-                  lateError instanceof Error ? lateError.message : lateError,
-                  maxToolResultChars,
-                ),
-              }),
-          )
-          .catch(recordCleanupFailure);
+                }),
+            )
+            .catch(lateAuditError => {
+              messageFailure = lateAuditError;
+              recordCleanupFailure(lateAuditError);
+            }),
+        );
         failSession(timeoutFailure);
         throw timeoutFailure;
       }
@@ -1126,6 +1182,7 @@ export const makeCodexClient = ({
     await null;
     try {
       for await (const message of transport.messages) {
+        if (terminated) break;
         if ('id' in message && !('method' in message)) {
           const responseId = /** @type {number} */ (
             typeof message.id === 'number' ? message.id : Number.NaN
@@ -1173,10 +1230,15 @@ export const makeCodexClient = ({
               () => detachedRequests.delete(handled),
             );
           } else {
-            await handleServerRequest(message);
+            await trackHostWrite(handleServerRequest(message));
           }
         } else if ('method' in message) {
-          await onNotification(message);
+          await trackHostWrite(
+            onNotification(message).catch(error => {
+              messageFailure = error;
+              throw error;
+            }),
+          );
         }
       }
       if (!terminated) failSession(Error('Codex app-server stdout closed'));
@@ -1806,6 +1868,10 @@ export const makeCodexClient = ({
           needsRollback: ledger.status().needsReconciliation,
         });
         closeRequestedAudited = true;
+      }
+      if (shutdownFailed) {
+        shutdown = undefined;
+        shutdownFailed = false;
       }
       const done = failSession(Error('Codex session terminated'), false);
       await done;

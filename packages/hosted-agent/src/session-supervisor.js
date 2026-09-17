@@ -149,8 +149,8 @@ export const makeHostedSessionSupervisor = ({
   };
   const owner = harden({ own, assertOpen });
   /**
-   * @param {'models' | 'acknowledge'} method
-   * @param {string[]} args
+   * @param {'send' | 'models' | 'acknowledge' | 'interrupt'} method
+   * @param {any[]} args
    */
   const callProtocol = (method, args) => {
     assertOpen();
@@ -263,19 +263,10 @@ export const makeHostedSessionSupervisor = ({
   }
   return makeExo(`${name}NativeController`, SupervisorInterface, {
     activate,
-    send: async (prompt, options = {}) => {
-      assertOpen();
-      const client = /** @type {NativeClient<Reply> | undefined} */ (
-        resources.get('client')?.value
-      );
-      if (client === undefined) {
-        throw Fail`${q(name)} native controller is not active`;
-      }
-      return E(client).send(prompt, options);
-    },
+    send: (prompt, options = {}) => callProtocol('send', [prompt, options]),
     interrupt: async () => {
       const client = resources.get('client')?.value;
-      if (client) await E(client).interrupt();
+      if (client) await callProtocol('interrupt', []);
     },
     models: () => callProtocol('models', []),
     acknowledge: checkpoint => callProtocol('acknowledge', [checkpoint]),

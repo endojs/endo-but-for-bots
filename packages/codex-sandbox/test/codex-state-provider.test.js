@@ -2,7 +2,14 @@
 import '@endo/init';
 
 import test from 'ava';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+  symlink,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -46,6 +53,43 @@ test('locate answers without creating anything', async t => {
   t.deepEqual(await provider.locateSessionDirectory('codex-abc'), {
     directory: path.join(root, 'codex-abc'),
   });
+});
+
+test('CLI home is separate from host records and both are removed together', async t => {
+  const root = path.join(await makeTmp(t), 'state');
+  const provider = makeCodexStateProvider({ stateRoot: root });
+  const records = await provider.prepareSessionDirectory('codex-abc');
+  const home = await provider.prepareCliDirectory('codex-abc');
+  t.is(home.directory, path.join(root, '.cli', 'codex-abc'));
+  t.false(home.directory.startsWith(`${records.directory}/`));
+  t.false(records.directory.startsWith(`${home.directory}/`));
+  await writeFile(path.join(records.directory, 'checkpoint'), 'host record');
+  await writeFile(path.join(home.directory, 'config.toml'), 'guest config');
+  t.deepEqual(await provider.prepareCliDirectory('codex-abc'), home);
+  await provider.removeSessionDirectory('codex-abc');
+  await t.throwsAsync(stat(home.directory), { code: 'ENOENT' });
+  await t.throwsAsync(stat(records.directory), { code: 'ENOENT' });
+  await provider.removeSessionDirectory('codex-abc');
+});
+
+test('CLI home symlink is refused before host records are removed', async t => {
+  const root = path.join(await makeTmp(t), 'state');
+  const provider = makeCodexStateProvider({ stateRoot: root });
+  const records = await provider.prepareSessionDirectory('codex-abc');
+  const home = await provider.prepareCliDirectory('codex-abc');
+  await writeFile(path.join(records.directory, 'checkpoint'), 'retained');
+  await rm(home.directory, { recursive: true });
+  await symlink(records.directory, home.directory);
+  await t.throwsAsync(provider.prepareCliDirectory('codex-abc'), {
+    message: /symbolic|state directory/,
+  });
+  await t.throwsAsync(provider.removeSessionDirectory('codex-abc'), {
+    message: /symbolic/,
+  });
+  t.is(
+    await readFile(path.join(records.directory, 'checkpoint'), 'utf8'),
+    'retained',
+  );
 });
 
 test('remove takes the directory and its marker, and repeats safely', async t => {

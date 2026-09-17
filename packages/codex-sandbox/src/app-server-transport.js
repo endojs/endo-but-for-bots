@@ -122,7 +122,25 @@ export const startAppServerTransport = async ({
     let closed = false;
     /** @type {Promise<void> | undefined} */
     let closeP;
+    // A deadline ends observation, not the underlying native operation.
+    // Retain in-flight and successful stages; retry only a rejected stage.
+    /** @type {Map<string, Promise<unknown>>} */
+    const closeStages = new Map();
+    /**
+     * @param {string} label
+     * @param {() => Promise<unknown>} operation
+     */
+    const closeStage = (label, operation) => {
+      let flight = closeStages.get(label);
+      if (!flight) {
+        flight = Promise.resolve().then(operation);
+        closeStages.set(label, flight);
+        void flight.catch(() => closeStages.delete(label));
+      }
+      return withDeadline(flight, label, teardownTimeoutMs);
+    };
     let stderrTail = '';
+    let stdinCloseFailed = false;
 
     stderrDone = (async () => {
       const decoder = new TextDecoder();
@@ -172,20 +190,27 @@ export const startAppServerTransport = async ({
           await null;
           const failures = [];
           const [inputResult, killResult] = await Promise.allSettled([
-            withDeadline(input.return(), 'stdin close', teardownTimeoutMs),
-            withDeadline(E(proc).kill(), 'kill', teardownTimeoutMs),
+            closeStage('stdin close', () => input.return()),
+            closeStage('kill', () => E(proc).kill()),
           ]);
-          if (inputResult.status === 'rejected')
-            failures.push(inputResult.reason);
+          let processReaped = false;
           if (killResult.status === 'rejected')
             failures.push(killResult.reason);
           try {
-            await withDeadline(reaped(), 'process reap', teardownTimeoutMs);
+            await closeStage('process reap', reaped);
+            processReaped = true;
           } catch (error) {
             failures.push(error);
           }
+          if (inputResult.status === 'rejected') {
+            stdinCloseFailed = true;
+            // The stream writer caches a terminal return rejection. Once the
+            // native process is reaped, that dead channel is diagnostic, not
+            // outstanding native authority. Until then retain its failure.
+            if (!processReaped) failures.push(inputResult.reason);
+          }
           try {
-            await withDeadline(stderrDone, 'stderr drain', teardownTimeoutMs);
+            await closeStage('stderr drain', () => stderrDone);
           } catch (error) {
             failures.push(error);
           }
@@ -196,7 +221,9 @@ export const startAppServerTransport = async ({
             );
           }
         })();
-        closeP.catch(() => undefined);
+        closeP.catch(() => {
+          closeP = undefined;
+        });
       }
       return closeP;
     };
@@ -209,7 +236,9 @@ export const startAppServerTransport = async ({
       close,
       wait: () => E(proc).wait(),
       diagnostics: () =>
-        reapNote === '' ? stderrTail : `${stderrTail}\n[process: ${reapNote}]`,
+        `${stderrTail}${reapNote === '' ? '' : `\n[process: ${reapNote}]`}${
+          stdinCloseFailed ? '\n[stdin close failed]' : ''
+        }`,
     });
   } catch (error) {
     const failures = [error];

@@ -160,25 +160,19 @@ test.serial('mints both host formulas with null powers', async t => {
   // The owner label is derived from the host identity, reproducing what the
   // backend caplet computed while it still held `@agent` to ask.
   t.regex(native.options.env.ENDO_SANDBOX_OWNER_ID, /^codex-[0-9a-f]{56}$/);
-  // The quota bridge travels with the runtime, resolved defaults and all.
-  t.is(native.options.env.ENDO_CODEX_SUDO_PATH, '/usr/bin/sudo');
+  t.false('ENDO_CODEX_SUDO_PATH' in native.options.env);
+  t.false('ENDO_CODEX_QUOTA_COMMAND' in native.options.env);
   t.is(state.options.env.ENDO_CODEX_STATE_DIR, path.join(base, 'state'));
 });
 
-test.serial(
-  'a missing quota bridge is refused by name, before any mint',
-  async t => {
-    await baseEnv(t);
-    withEnv(t, { ENDO_CODEX_QUOTA_COMMAND: undefined });
-    const fake = makeFakeHost();
-    await t.throwsAsync(main(fake.host), {
-      message: /ENDO_CODEX_QUOTA_COMMAND/,
-    });
-    t.deepEqual(fake.mints, []);
-    // Nothing was created either: the sandbox directory is still absent.
-    t.false(fake.bindings.has(key('codex-sandbox')));
-  },
-);
+test.serial('the common native service needs no quota bridge', async t => {
+  await baseEnv(t);
+  withEnv(t, { ENDO_CODEX_QUOTA_COMMAND: undefined });
+  const fake = makeFakeHost();
+  await main(fake.host);
+  t.is(fake.mints.length, 2);
+  t.true(fake.mints.some(mint => mint.specifier === nativeSandboxSpecifier));
+});
 
 test.serial(
   'a runtime directory that still holds an ownership marker is refused',
@@ -198,10 +192,10 @@ test.serial(
 );
 
 test.serial(
-  'the runtime directory must be disjoint from the volume root',
+  'the runtime directory must be disjoint from session state',
   async t => {
     const { runtime } = await baseEnv(t);
-    withEnv(t, { ENDO_CODEX_VOLUME_ROOT: path.join(runtime, 'volumes') });
+    withEnv(t, { ENDO_CODEX_STATE_DIR: path.join(runtime, 'state') });
     const fake = makeFakeHost();
     await t.throwsAsync(main(fake.host), {
       message: /disjoint from Codex guest storage roots/,
