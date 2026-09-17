@@ -153,7 +153,57 @@ target, a missing USE_CLOSURE bit, and a reversed resource/disposal pair.
 These controls mutate test data only; no production failure path is weakened.
 The finite matrix supports the ordering arguments above; it does not prove all source total.
 
-## Remaining forty-three explicit sites
+## Scoper receipts: twenty-two more sites examined
+
+This pass follows the completed scoper's maps into the coder at `de138db59`.
+The contracts below assume the parser's node layouts, including symbol children,
+null reserved class-init children and constructor/static-member flags.
+Those AST construction obligations are part of the remaining shape audit, not
+established by the mere presence of a receipt.
+The maps are immutable while coding, and failed scoping never starts the coder.
+No assertion is removed or weakened, and no new source-triggered panic was found.
+
+| Sites | Producer and consumer argument |
+|---|---|
+| `resolution_of` (1) | Every reader selects Access, Arg/Var/Let/Const/Using/Define, PrivateMember or PrivateIdentifier, including reference, assignment, delete and receiver-aware call paths. The matching bind routines insert a row for the node's symbol. An unresolved ordinary access is a stored `None`, not an absent row. Binding patterns recurse into their declarations/references; Define separately binds its initializer. Export specifiers use linkage records, not `resolution_of`. |
+| `private_index` (1) | Both private tokens go through `bind_private_member`. An unresolved brand reports a Syntax error before a tree can reach coding; the root strict-eval scope does not synthesize a brand. A valid private row therefore contains a declaration, not `None`. |
+| `scope_of` (1) | Its coder callers select Program, Module, Block, Body, Function/Generator, For/ForIn/ForOf/ForAwaitOf, Class, Switch or Catch. Each has a matching hoist insertion keyed by the same stable node ID. Class field values, computed keys and private method values must retain the hoist/bind/coder traversal agreement described below. |
+| `scope_secondary` (2) | Only parameter-bearing catches read it. `hoist_catch` inserts both parameter and statement scopes when child 0 is a node; parameterless catches have a null child and read the primary scope instead. Binding and coding preserve that distinction. |
+| Four frame-count reads | Program, Module, Function/Generator and synthetic field functions each finish binding by inserting their frame count. Nested functions save/reset/restore the counters but do not remove earlier map entries. Field scopes come from the class's completed initializer-scope maps, not from a node ID guessed by the coder. |
+| Class member receipts (4) | Hoisting inserts `at` for computed data fields and `symbol` for every private member, plus `value` for private methods/accessors. Public methods take a separate coder branch and do not read these receipts. Class member coding uses the same token/flag partition. |
+| Class initializer receipts (4) | Instance data and instance private methods/accessors require instance initialization. Static data, static private methods/accessors and Body require static initialization. These are exactly the coder's nonempty field lists. Hoisting creates the instance closure and both applicable function scopes; binding fills the corresponding initializer maps before coding. A private-method-only class still needs a field function, even though its field-value hoist list is empty. |
+| Field member receipt and three plan aliases (4) | Binding inserts a `class_member_fi` row for every field-list member except Body, including an empty row for plain Property. The required class slots have non-null symbols. Looking them up from the strict synthetic function reaches its immediate class parent and creates/reuses a capture. The coder retrieves that same function before mapping the row to a plan, then zips plans with the unchanged field list. |
+| Base-constructor capture (1) | Class hoisting creates the instance closure before the constructor. Binding stages the class ID around the constructor, and the BASE branch installs its capture. Coding stages the same class's instance target around child 5 and searches that constructor's scope. Nested classes save/restore the staged context in both passes. |
+
+The class traversal is split, not generic recursive visitation.
+Heritage runs before entry into the class-body scope.
+Computed data keys and private method bodies are hoisted, bound and coded in the class
+definition context; data initializers run in the synthetic instance/static function.
+Private methods/accessors precede data fields in both the binding and coding field lists.
+Static blocks visit their statements directly in the static function: their Body nodes
+have neither a separate ordinary Body scope nor a member-alias row.
+Non-alias declarations directly in a static field function remain the explicit Unsupported
+boundary in `code_field_init_function`; this audit does not claim to implement that fold.
+
+Getter/setter pairs deserve a separate alias rule.
+Their two class brand declarations share a name, and `scope_lookup` chooses the first
+declaration of that name, so both field aliases refer to that canonical declaration.
+Requiring each alias to target its own member's distinct brand ID would be false.
+Computed-key and private-method-value symbols are anonymous and unique.
+
+`coder/scope_receipt_invariants.rs` walks the AST independently of coder dispatch and
+requires the applicable resolution, scope, frame and class receipts before compilation.
+Its 1,920-case matrix crosses twelve member sets, four constructor forms, eight nesting
+positions and five goal modes; another 82 cases cover binding/reference forms, generators,
+async iteration, catches, with, eval, disposal and module linkage.
+Every positive must compile successfully, and witness counters require resolved and
+unresolved paths, private accesses, field aliases, shared brands, base captures and static blocks.
+Thirteen damaged-tree controls exercise absent tables/counts, a missing catch secondary
+scope, an unresolved private brand, an empty computed-field plan, a missing constructor
+capture and an incorrect initializer parent.
+These alter test data only and do not stand in for a proof of all source totality.
+
+## Remaining twenty-one explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.
 These need the fuller parser/scoper/coder producer-and-consumer argument, especially child
@@ -162,7 +212,6 @@ traversal and AST construction; this pass does not claim to have discharged them
 | Family | Count | Consumers |
 |---|---|---|
 | AST shapes | 21 | `node_of` (1), `code` (1), `code_node_inner` (5), `symbol_of` (1), `code_class` reserved children/Host/member kinds (5), `code_field` kind (1), `code_params_binding` (2), `code_object_binding_assign` (1), `code_object` (1), `code_assign` (2), `code_template` (1) |
-| Scoper receipts | 22 | `resolution_of` (1), `scope_of` (1), `scope_secondary` (2), four scope-count reads, `private_index` (1), `code_class` member/initializer receipts (8), field-member receipt (1), `code_field` aliases (3), base-constructor capture (1) |
 
 The related scoper producer arguments are recorded in [F063-SCOPER-AUDIT.md](F063-SCOPER-AUDIT.md).
 They do not on their own prove that every coder consumer follows the same child traversal.
@@ -192,6 +241,7 @@ Run the compiler tests from the repository root and the VM tests with the engine
 cargo test --locked -p ironhorse-compile --test coder_totality_matrix
 cargo test --locked -p ironhorse-compile --lib coder::target_invariants
 cargo test --locked -p ironhorse-compile --lib coder::declaration_invariants
+cargo test --locked -p ironhorse-compile --lib coder::scope_receipt_invariants
 cargo test --manifest-path rust/engine/Cargo.toml --locked -p ironhorse-vm \
   --test logical_assignment_control_flow --test logical_assignment_names
 ```

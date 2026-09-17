@@ -323,12 +323,14 @@ pub struct ScopeTree {
     /// private method values bind in the class scope and are captured as aliases.
     /// Keyed with `node_id`.
     pub class_field_init_inst: NodeTable<usize>,
-    /// A class **member** node ID (`PropertyAt` / `PrivateProperty`) →
+    /// A class **field member** node ID (`Property`, `PropertyAt`, or
+    /// `PrivateProperty`) →
     /// the **field-init function scope** use-closure alias declares its
     /// `atAccess` / `symbolAccess` / `valueAccess` resolve to (XS's
     /// `fxFieldNodeBind` looking each access up from inside the `instanceInit`
     /// function scope). Present only for a member bound inside a real
-    /// field-init scope ([`ScopeTree::class_field_init_inst`]); the coder
+    /// instance or static field-init scope; plain properties have an empty
+    /// receipt and static blocks have no receipt. The coder
     /// reads these to emit the field body's `GET_CLOSURE` / `NEW_PRIVATE`
     /// with the function-frame retrieve slot (not the class-scope index). A
     /// get/set accessor pair shares one brand slot (the `symbolAccess`
@@ -1175,9 +1177,9 @@ impl Scoper<'_> {
 
     /// `fxClassNodeHoist` — create the class's block scopes: a `symbolScope`
     /// binding the class name (a `const` closure visible in the body) when
-    /// named, and the class body scope. The private / computed-key / field
-    /// declares that populate the body scope are deferred; the method-only
-    /// surface adds none. Children `[symbol, heritage, items, constructorInit,
+    /// named, and the class body scope holding private brands, computed field
+    /// keys, private method values and the instance initializer closure.
+    /// Children `[symbol, heritage, items, constructorInit,
     /// instanceInit, constructor]`.
     fn hoist_class(&mut self, node: &Node) -> Result<(), ParseError> {
         let former = self.class_node;
@@ -2103,9 +2105,9 @@ impl Scoper<'_> {
     /// `fxClassNodeBind` — reserve the two frame slots the class coder uses
     /// for its prototype and constructor temporaries (so the enclosing
     /// scope's frame count includes them), then bind the heritage,
-    /// constructor, and members. The class/symbol scopes (fields, private
-    /// members, a named-class binding) are the deferred class-hoisting fold;
-    /// a base class with methods needs only the two-slot reservation.
+    /// constructor, and members. Hoisting already created the class/symbol
+    /// scopes and any instance/static initializer function scopes; binding
+    /// fills their capture and frame-count receipts for the coder.
     fn bind_class(&mut self, node: &Node) -> Result<(), ParseError> {
         let former = self.class_node;
         self.push_variables(2);
@@ -2434,11 +2436,11 @@ impl Scoper<'_> {
     /// `fxPrivateMemberNodeBind` — a private member access (`obj.#x`,
     /// `obj.#m()`) and the `#x in obj` brand check (`PrivateIdentifier`)
     /// share this bind. The node's own `symbol` (child 0, the `#name`)
-    /// resolves through the class-scope closures the declaration slice
-    /// installed (`symbolAccess`), with the `is_private_member` flag set so a
-    /// strict `eval` scope synthesizes the brand declare (mirroring
-    /// `fxScopeLookup`'s `XS_TOKEN_PRIVATE_MEMBER` branch); an unresolved
-    /// `#name` is XS's "invalid private identifier". The reference (child 1)
+    /// resolves through the class-scope closures hoisting installed
+    /// (`symbolAccess`). An unresolved `#name` is an early error, including
+    /// at the root strict-eval scope: this entry has no enclosing private
+    /// environment from which a missing brand could be supplied.
+    /// The reference (child 1)
     /// binds after the lookup, matching `fxPrivateMemberNodeDistribute`.
     fn bind_private_member(&mut self, node: &Node) -> Result<(), ParseError> {
         // A private member accessed on `super` (`super.#x`, `super.#m()`)

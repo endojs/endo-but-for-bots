@@ -94,11 +94,15 @@ unwraps and examines 24 local/control-flow sites.
 A subsequent declaration audit examines ten more, accounting for all 29 frame-slot
 reads and the distinct function-capture, module-indirection and disposal-pair contracts.
 It adds 2,240 successful generated cases, 34 boundary cases, and three damaged-tree controls.
-The inventory now leaves 43 AST-shape and scoper-receipt sites for follow-up.
+The scope-receipt follow-up examines another 22 sites, with 1,920 nested-class cases,
+82 boundary cases and 13 damaged-tree controls.
+It checks resolution presence versus unresolved names, frame counts, catch scopes,
+class field plans, shared private brands and base-constructor captures.
+The inventory now leaves 21 AST-shape sites for follow-up.
 Five checked-in matrices require all 17,534 generated compilations to succeed;
 180 runtime cases separately pin the changed logical-assignment behavior.
 This supplies reproducible evidence without relying on the earlier unpublished
-generated-source sweep, but does not discharge the 43 remaining sites or close F063.
+generated-source sweep, but does not discharge the 21 remaining sites or close F063.
 
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a

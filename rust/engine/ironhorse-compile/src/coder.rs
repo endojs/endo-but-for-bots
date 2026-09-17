@@ -6809,6 +6809,9 @@ mod target_invariants;
 mod declaration_invariants;
 
 #[cfg(test)]
+mod scope_receipt_invariants;
+
+#[cfg(test)]
 mod symbol_hash_tests {
     use super::SymbolTable;
 
