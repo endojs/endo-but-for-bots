@@ -99,6 +99,12 @@ The scope-receipt follow-up examines another 22 sites, with 1,920 nested-class c
 It checks resolution presence versus unresolved names, frame counts, catch scopes,
 class field plans, shared private brands and base-constructor captures.
 The inventory now leaves 21 AST-shape sites for follow-up.
+The in-progress AST audit has already found and repaired two more reachable panics:
+member references used as arrow parameters and spread inside an ordinary grouped expression.
+Both now report Syntax in the parser; nested invalid parameter targets are rejected too.
+The regression suite checks 300 invalid and 270 valid compilations, and 16 runtime cases
+verify catchable SyntaxErrors through the real compiler adapter.
+These repairs do not yet discharge the remaining 21-site inventory.
 Five checked-in matrices require all 17,534 generated compilations to succeed;
 180 runtime cases separately pin the changed logical-assignment behavior.
 This supplies reproducible evidence without relying on the earlier unpublished

@@ -4719,6 +4719,16 @@ Its 1,920 nested-class cases and 82 boundary cases inspect the scoper's complete
 receipts and must compile successfully; 13 damaged-tree controls are rejected.
 The remaining inventory is 21 AST-shape sites, including the parser layout and
 flag preconditions used by the cross-pass arguments.
+The next AST pass found two more reachable panics: member-reference arrow parameters
+reach `code_params_binding`'s kind assertion, and `(...items)` reaches general coding
+with an unsupported Spread node.
+Parser fixes distinguish binding targets from assignment references recursively and
+reject spread after ruling out the arrow/async-call interpretations of a parenthesized form.
+Both regressions were reproduced before fixing them.
+The new cover-grammar suite requires 300 invalid cases to report Syntax and 270 valid
+controls to compile; 16 eval/Function cases use the production compiler adapter and
+require catchable SyntaxErrors rather than invariant or unsupported halts.
+The 21-site AST audit remains in progress; the repairs are not a claim of totality.
 The new deterministic matrices check 17,534 successful compilations and the
 logical-assignment runtime matrix checks 180 result/evaluation-count cases.
 Two independent mutations fail the new tests: dropping finalizer alias origins
