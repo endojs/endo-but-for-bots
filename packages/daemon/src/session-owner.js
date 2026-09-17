@@ -507,6 +507,14 @@ export const makeSessionOwner = ({
         const models = await E(value).models();
         assertOpen();
         assertCopyData(models);
+        // The guard promises an array, and `assertCopyData` alone admits any
+        // pure data -- including `undefined`. Refuse here rather than at the
+        // exo boundary, so the message names the backend rather than a guard.
+        // Written as a statement rather than `Array.isArray(models) || Fail`
+        // because only control flow narrows the value for the return below.
+        if (!Array.isArray(models)) {
+          throw Fail`Session backend did not answer with a model list`;
+        }
         return models;
       },
       acknowledge: async checkpoint => {

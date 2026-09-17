@@ -459,6 +459,7 @@ const makeQueue = () => {
  *   network?: any,
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
+ *   turnCounterStart?: number,
  *   announceTurns?: boolean,
  * }} [options]
  */
