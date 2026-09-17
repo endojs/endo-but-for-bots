@@ -733,15 +733,30 @@ IronHorse is missing.
       in a compartment. `src/worker-peer.js` implements its
       `evaluate(source, endowments)` facet as `new Compartment()`,
       `Object.assign(compartment.globalThis, {E, Far, harden})` and
-      `compartment.evaluate(source)` — the isolation is the point, since
-      evaluated source must see only those three names. A native-lockdown start
-      compartment supplies `harden`, an extensible `globalThis` and a working
-      `eval`/`Function`, but no second global to confine them to and no
-      attenuated `Date`/`Math`. Dropping the shim before the compartment
-      environment exists would evaluate guest source against the SHARED
-      `globalThis` with a real clock: a confinement regression, not a migration.
-      So this item is downstream of the `Compartment` item below, and should not
-      be attempted before it.
+      `compartment.evaluate(source)`, and the isolation is the point: evaluated
+      source must see only those three names.
+      **The isolation does not have to come from a GUEST `Compartment`.** An
+      earlier revision of this item called the migration blocked on
+      `fx_Compartment`; that was too pessimistic. Measured end to end in
+      `native_lockdown.rs::a_host_made_compartment_confines_guest_source_after_a_native_lockdown`,
+      the whole shape works today on a `Machine`: a pre-lockdown shim evaluates
+      in the (unfrozen) start compartment, the start compartment calls the
+      native `lockdown()`, and guest source then runs in a compartment the HOST
+      made. The start realm's globals do not reach that guest and its globals do
+      not reach back, it shares the frozen intrinsic graph, and
+      `({}).constructor.constructor` is a `TypeError` inside it — step 2 closes
+      the reach realm-wide, so a compartment inherits it.
+      What the worker would change is therefore its architecture, not its
+      dependency on a missing primitive: it runs on a bare `Interp::new()`
+      today, and `Machine::unfrozen_with_start_global_names`' doc comment
+      already anticipates the move ("`packages/thixotrope` already runs that
+      shape on a bare `Interp`; this offers it a `Machine`").
+      What is genuinely still missing is ATTENUATION, not isolation: a host-made
+      compartment's `Date.now()` answers from the real clock instead of the NaN
+      an `fx_lockdown` compartment global would give, and `Math` is likewise
+      unsecured. That is steps 3 and 4 — a narrower gap than a guest
+      `Compartment` constructor, and the one to close if guest source must not
+      read a clock.
 - [ ] **Native `lockdown()` and the SES shim are alternatives, not layers, and
       the failure mode is ugly.** SES guards a second lockdown with
       `seemsToBeLockedDown()`, whose sixth term calls
