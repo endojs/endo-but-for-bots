@@ -1652,9 +1652,12 @@ export const makeCodexClient = ({
                 threadId: currentThreadId,
                 items,
               });
-            } catch (error) {
+            } catch (cause) {
+              // The app-server's own words are the useful part of this: a
+              // schema refusal and an unavailable method read very
+              // differently, and only one of them is worth retrying.
               const failure = makeError(
-                X`Codex app-server refused ${q(items.length)} restored items for a new thread; this session's ${q(records.length)} records cannot be handed over, and answering without them would be answering a different question.`,
+                X`Codex app-server refused ${q(items.length)} restored items for a new thread (${cause}); this session's ${q(records.length)} records cannot be handed over, and answering without them would be answering a different question.`,
               );
               failSession(failure);
               throw failure;

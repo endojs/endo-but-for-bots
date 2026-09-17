@@ -68,8 +68,7 @@ test('catalog rotation restores the conversation once and reconciles the old cat
   });
   await drain(reader);
   await fixture.client.acknowledge('turn-2');
-  const second = await fixture.client.send('next', {
-  });
+  const second = await fixture.client.send('next', {});
   t.is(
     fixture.sent.filter(message => message.method === 'turn/start').at(-1)
       .params.input.length,
@@ -120,12 +119,16 @@ test('an empty saved thread restores continuity again after a failed first turn 
     clientOptions: { savedRecovery: { baseTurnId: null } },
   });
   const first = await fixture.client.send('first', {
-    transcript: [{ kind: 'message', role: 'user', content: 'completed dialogue' }],
+    transcript: [
+      { kind: 'message', role: 'user', content: 'completed dialogue' },
+    ],
   });
   await fixture.client.interrupt();
   await drain(first);
   const second = await fixture.client.send('retry', {
-    transcript: [{ kind: 'message', role: 'user', content: 'completed dialogue' }],
+    transcript: [
+      { kind: 'message', role: 'user', content: 'completed dialogue' },
+    ],
   });
   const requests = fixture.sent.filter(
     message => message.method === 'turn/start',
@@ -156,7 +159,9 @@ test('a committed checkpoint is acknowledged under its original catalog before r
     },
   });
   const reader = await fixture.client.send('continue', {
-    transcript: [{ kind: 'message', role: 'user', content: 'completed dialogue' }],
+    transcript: [
+      { kind: 'message', role: 'user', content: 'completed dialogue' },
+    ],
     acknowledgedCheckpoint: 'turn-1',
   });
   t.false(fixture.sent.some(message => message.method === 'thread/revert'));
@@ -354,7 +359,11 @@ test('rotation refuses divergent old checkpoint history without forgetting the m
     },
   });
   await t.throwsAsync(() =>
-    fixture.client.send('continue', { transcript: [{ kind: 'message', role: 'user', content: 'prior dialogue' }] }),
+    fixture.client.send('continue', {
+      transcript: [
+        { kind: 'message', role: 'user', content: 'prior dialogue' },
+      ],
+    }),
   );
   t.false(fixture.sent.some(message => message.method === 'thread/start'));
   t.deepEqual(saved, []);

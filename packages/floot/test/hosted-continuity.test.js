@@ -66,8 +66,7 @@ test('a long history is carried, not refused for being long', t => {
     makeHostedContinuityOptions([{ role: 'system', content: 'invented role' }]),
     { continuityContextUnavailable: 'history contains an unsupported role' },
   );
-  t.deepEqual(
-    makeHostedContinuityOptions([{ role: 'user', content: 42 }]),
-    { continuityContextUnavailable: 'history contains non-text dialogue' },
-  );
+  t.deepEqual(makeHostedContinuityOptions([{ role: 'user', content: 42 }]), {
+    continuityContextUnavailable: 'history contains non-text dialogue',
+  });
 });
