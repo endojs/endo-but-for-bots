@@ -22,6 +22,12 @@ import {
   makeBytesReaderFromBytes,
   toSafeNumber,
 } from './helpers.js';
+import {
+  assertByteRange,
+  assertLineRange,
+  composeByteInterval,
+  lineRangeToByteSlice,
+} from '../../range-attenuation.js';
 
 /** @import { BlobInfo, BlobRef } from '../types.js' */
 
@@ -46,32 +52,48 @@ const textDecoder = new TextDecoder();
  *   optional backend-supplied algorithm + hash
  * @returns {BlobRef}
  */
-export const makeBlobRefExo = (bytes, help, infoOverride) => {
-  // The COPY is what makes these bytes immutable to the caller.
-  // `harden` on a typed array does not freeze its elements, so it
-  // buys nothing here beyond consistency with the rest of the file.
-  const captured = harden(new Uint8Array(bytes));
+/**
+ * Inner factory shared by the public `makeBlobRefExo` and its derived range
+ * attenuations. `captured` is the immutable source snapshot; `[start, end)` is
+ * the absolute byte interval this handle exposes over it (the source cap plus a
+ * composed interval — a range of a range intersects and can never regain
+ * authority outside its parent). A derived range drops any `infoOverride`
+ * (which named the whole source's content address) and reports the selected
+ * content's own SHA-256, so `getInfo()` always describes the bytes actually
+ * readable through the handle.
+ *
+ * @param {Uint8Array} captured
+ * @param {string | undefined} help
+ * @param {{ algorithm: string, hash: string } | undefined} infoOverride
+ * @param {number} start
+ * @param {number} end
+ * @returns {BlobRef}
+ */
+const makeBlobRefRange = (captured, help, infoOverride, start, end) => {
+  // `subarray` is an O(1) view over the shared snapshot — no fresh copy, so
+  // constructing a range neither reads nor persists bytes.
+  const view = captured.subarray(start, end);
   /** @type {BlobInfo} */
   let info;
   if (infoOverride !== undefined) {
     info = harden({
       algorithm: infoOverride.algorithm,
       hash: infoOverride.hash,
-      size: BigInt(captured.length),
+      size: BigInt(view.length),
     });
   } else {
     // `@endo/sha256` rather than `node:crypto`: this module is on the XS
     // daemon bundle's compartment graph, and a static `node:crypto` import
     // is unresolvable there (`designs/platform-neutral-hash.md`).  The
     // digest bytes are identical either way.
-    const hashBytes = sha256(captured);
+    const hashBytes = sha256(view);
     info = harden({
       algorithm: 'sha256',
       // `encodeBase64` over the raw digest bytes matches the base64 hash
       // spelling every other implementer uses, rather than the Node-only
       // `Buffer.prototype.toString('base64')`.
       hash: encodeBase64(hashBytes),
-      size: BigInt(captured.length),
+      size: BigInt(view.length),
     });
   }
 
@@ -82,18 +104,47 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
     async fetch(offset, length) {
       const off = toSafeNumber(offset, 'offset');
       const len = toSafeNumber(length, 'length');
-      const end = Math.min(off + len, captured.length);
-      const slice =
-        off >= captured.length ? EMPTY_BYTES : captured.slice(off, end);
+      const sliceEnd = Math.min(off + len, view.length);
+      const slice = off >= view.length ? EMPTY_BYTES : view.slice(off, sliceEnd);
       return makeBytesReaderFromBytes(slice);
     },
+    // Range *attenuation*: `range` returns a new `BlobRef` over the composed
+    // interval intersected with this handle's authority; `textRange` selects a
+    // line range of the current bytes and returns the corresponding byte slice.
+    // Both derive from the same shared snapshot, so nested ranges intersect.
+    range(rangeStart, rangeEnd) {
+      const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+      const composed = composeByteInterval(start, end, s, e);
+      return makeBlobRefRange(
+        captured,
+        undefined,
+        undefined,
+        composed.start,
+        /** @type {number} */ (composed.end),
+      );
+    },
+    async textRange(startLine, endLine) {
+      const { startLine: s, endLine: e } = assertLineRange(startLine, endLine);
+      if (e <= s) {
+        return makeBlobRefRange(captured, undefined, undefined, start, start);
+      }
+      const slice = lineRangeToByteSlice(view, s, e);
+      const composed = composeByteInterval(start, end, slice.start, slice.end);
+      return makeBlobRefRange(
+        captured,
+        undefined,
+        undefined,
+        composed.start,
+        /** @type {number} */ (composed.end),
+      );
+    },
     // Whole-value conveniences mirroring the daemon `EndoBlob` / lite
-    // `SnapshotBlob` surface, decoding the captured bytes as UTF-8.
+    // `SnapshotBlob` surface, decoding the selected bytes as UTF-8.
     async text() {
-      return textDecoder.decode(captured);
+      return textDecoder.decode(view);
     },
     async json() {
-      return JSON.parse(textDecoder.decode(captured));
+      return JSON.parse(textDecoder.decode(view));
     },
     help(method) {
       if (method === undefined) {
@@ -102,5 +153,14 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
       return `No documentation available for method ${q(method)}.`;
     },
   });
+};
+harden(makeBlobRefRange);
+
+export const makeBlobRefExo = (bytes, help, infoOverride) => {
+  // The COPY is what makes these bytes immutable to the caller.
+  // `harden` on a typed array does not freeze its elements, so it
+  // buys nothing here beyond consistency with the rest of the file.
+  const captured = harden(new Uint8Array(bytes));
+  return makeBlobRefRange(captured, help, infoOverride, 0, captured.length);
 };
 harden(makeBlobRefExo);

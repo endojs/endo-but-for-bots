@@ -125,6 +125,26 @@ export const rangeReadConvenienceMethodGuards = harden({
   rangeReadText: M.call(M.number(), M.number()).returns(M.promise()),
 });
 
+// Range *attenuation* (designs/readableblob-range-attenuation.md): instead of
+// reading a byte window, `range` / `textRange` return a new, ephemeral
+// `ReadableBlob` with exactly the authority to read the selected portion, so
+// ranges compose and can be handed to anything that already accepts a readable
+// blob.
+//
+// - `range(start, end) → ReadableBlob` selects the half-open byte interval
+//   `[start, end)` relative to the receiver. Construction reads no bytes, so
+//   it resolves synchronously to the derived cap; the guard requires a
+//   `ReadableBlob` remotable (not `M.any()`) so the same-interface guarantee is
+//   enforced at the CapTP boundary.
+// - `textRange(startLine, endLine) → Promise<ReadableBlob>` selects lines
+//   `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the
+//   receiver's current bytes and returns the byte slice as a `ReadableBlob`.
+//   It must read bytes to find LF boundaries, so it resolves asynchronously.
+export const rangeAttenuationMethodGuards = harden({
+  range: M.call(M.bigint(), M.bigint()).returns(M.remotable('ReadableBlob')),
+  textRange: M.call(M.number(), M.number()).returns(M.promise()),
+});
+
 // `listTree(petNamePath, options?)` is the recursive counterpart to `list`:
 // where `list` yields only the immediate child names of the sub-path,
 // `listTree` walks the whole subtree in one round-trip and returns every
@@ -184,6 +204,7 @@ export const ReadableBlobRangeReadInterface = M.interface(
     ...readableBlobMethodGuards,
     ...rangeReadMethodGuards,
     ...rangeReadConvenienceMethodGuards,
+    ...rangeAttenuationMethodGuards,
   },
 );
 harden(ReadableBlobRangeReadInterface);

@@ -27,6 +27,22 @@ export type ReadableBlobRange = ReadableBlob & {
     offset: bigint,
     length: bigint,
   ) => Promise<import('@endo/exo-stream').PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select
+   * the half-open byte interval `[start, end)` relative to the receiver and
+   * return a new `ReadableBlob` with exactly the authority to read it. Ranges
+   * compose (a range of a range intersects) and `start === end` selects an
+   * empty blob. Construction reads no bytes, so it resolves synchronously to
+   * the derived cap.
+   */
+  range: (start: bigint, end: bigint) => ReadableBlobRange;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF
+   * boundaries, CRLF preserved) of the receiver's current bytes and return the
+   * byte slice as a `ReadableBlob`. It must read bytes to find LF boundaries,
+   * so it resolves asynchronously.
+   */
+  textRange: (startLine: number, endLine: number) => Promise<ReadableBlobRange>;
 };
 
 /**

@@ -240,6 +240,20 @@ export type BlobRef = {
   fetch: (offset: bigint, length: bigint) => ERef<PassableBytesReader>;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select the
+   * half-open byte interval `[start, end)` relative to the receiver and return
+   * a new `BlobRef` over exactly those bytes. Ranges compose (a range of a
+   * range intersects) and `start === end` selects an empty blob; construction
+   * reads no bytes, so it resolves synchronously.
+   */
+  range: (start: bigint, end: bigint) => BlobRef;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF
+   * boundaries, CRLF preserved) of the captured bytes and return the byte
+   * slice as a `BlobRef`.
+   */
+  textRange: (startLine: number, endLine: number) => Promise<BlobRef>;
   help: (method?: string) => string;
 };
 
