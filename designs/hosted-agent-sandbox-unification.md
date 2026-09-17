@@ -2077,6 +2077,98 @@ to that milestone's estimate.
 Re-estimate after Phase 1 if CLI compatibility or storage work exceeds that scope.
 No new date commitment or change to the gateway critical path follows from this plan.
 
+## Plan — 2026-09-17
+
+Ordered by what is actually broken rather than by what this design was reaching for.
+Items 1 and 3 are both consequences of work already landed; item 2 is a leak that is
+running now.
+
+### 1. Rebuild OpenCode's image, from a fork branch rather than a patch
+
+**Required, not optional.** Removing the lossy fallbacks means an image whose bridge
+has no import route can no longer restore at all — it refuses the turn and says so.
+The deployed image (`959c3887b3`) is one of those, so OpenCode restoration is offline
+until this lands. That is the intended shape of the failure, and it is also a
+deadline.
+
+**Change of method: maintain the change as a branch on the fork, not as a patch file
+in this repo.** `oci/patches/0001-session-import-history.patch` is applied with
+`git apply` at build time on top of `kumavis/opencode` at
+`build/v1.18.30-opencode-patched`. The fork already exists and is already the build's
+source, so the patch is the only part that is not version-controlled where it is
+used. Committing it to a branch there:
+
+- **makes the image tag honest.** The tag is `$(OPENCODE_COMMIT | cut -c1-12)`, so
+  today two images built from the same fork commit with different patch sets get the
+  same tag. With the change in the commit, the tag covers it. The deployment pins by
+  manifest digest either way, so this is an operator papercut rather than a
+  weakened pin — but it is the papercut that makes `podman image inspect
+  localhost/opencode-sandbox:<tag>` ambiguous.
+- **removes `git apply` from the build.** A patch that no longer applies is a build
+  failure with no rebase path; a branch is rebased with the tools made for it.
+- **makes the change reviewable as a change** — history, blame, and a diff against
+  upstream — rather than a context-free hunk.
+
+Steps: commit the patch to `build/v1.18.30-endo-session-import` (branched from the
+current build ref) on `kumavis/opencode`; point `OPENCODE_REF` at it; delete
+`oci/patches/` and the `git apply` step from `Containerfile.source`; rebuild with
+`--source`; re-pin `opencodeSandbox.image` to the new digest. Pushing to the fork is
+the one step this work cannot take on its own.
+
+### 2. The Codex lease, which leaks more than it blocks
+
+Higher priority than its symptom suggested. `destroy()` refuses a leased session
+(`Cannot destroy a durably leased session`), so a session whose lease is stuck is not
+merely unopenable — it is **permanently undeletable**, and its volume and its XFS
+project ID go with it. Project IDs are never recycled by design, a host-lifetime
+budget, so each stuck session spends one forever. Observed: every cleanup run in this
+deploy ended with `DELETE_FAILED … backend did not fully clean up` on a Codex
+session, against 5 volumes and 7 session directories on a host with far fewer live
+sessions.
+
+Three explanations have already been tried and refuted by the deployment — capacity
+contention, the half-wired recovery, and a lease held by this process. What remains
+by elimination is that the lease belongs to a dead incarnation and `recoverLease` is
+not reaching it, which means the failing path does not run through the wrapped
+provisioner. The next step is instrumentation on the provisioning path, not a fourth
+reading of it.
+
+### 3. Deploy and verify what has landed
+
+The fallback removal and the store-authority change are committed and unverified on a
+deployment. The check is the one that has been discriminating all along: give a
+session a word, restart the daemon, ask for the word back, with each CLI's own store
+made unavailable. Claude's store is wiped between turns; OpenCode's is `:memory:`
+already. A refusal is now a legitimate outcome and must be read as one — OpenCode
+will refuse until item 1 lands, and that is the design working.
+
+### 4. Codex's store authority — a decision, not a task
+
+Claude's store no longer decides across incarnations; Codex's still does, because
+`replayContinuity` is false whenever a `threadId` was recorded and the thread has
+turns. Closing it means starting a fresh thread per incarnation and injecting, which
+writes a new rollout each time into a volume with a fixed `stateBytes` quota
+(268435456 — 256 MiB) while leaving the old rollout behind. A two-message
+conversation already occupies ~53 KiB of rollout, so the cost is roughly
+conversation × restarts against a fixed ceiling, and reaching the ceiling breaks the
+session.
+
+So this is a choice between: closing it and unlinking the superseded rollout (correct,
+bounded, more machinery, and discards the audit copy thread rotation deliberately
+keeps); closing it and accepting churn (worsens item 2); or leaving Codex resuming
+its own thread (inconsistent with the other two adapters). It is recorded here rather
+than chosen.
+
+### 5. Not scheduled, but named
+
+A normalized tool-call detail union, of the kind
+[`paseo-meta-harness-report.md`](paseo-meta-harness-report.md) §1.3 calls the single
+highest-leverage decision in its design. The records here restore a tool call as a
+tool call, which is what restoration needs; they do not describe it well enough for
+one view to render three harnesses. That is a presentation concern this design does
+not have yet, and the point at which it would be cheapest to adopt is before a second
+consumer of the records exists.
+
 ## Remaining design questions
 
 - Which supported CLI configurations satisfy the single guest authority domain
