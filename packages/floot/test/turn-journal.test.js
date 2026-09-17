@@ -66,7 +66,10 @@ test('targeted reads are detached snapshots and invalid transitions leave eviden
 test('prepared transitions wait for storage and serialize following reads', async t => {
   t.timeout(5000);
   const store = new Map();
-  let release;
+  // Replaced synchronously by the executor below; typed so the later call is
+  // not reading a possibly-undefined binding.
+  /** @type {(value?: any) => void} */
+  let release = () => {};
   const barrier = new Promise(resolve => {
     release = resolve;
   });

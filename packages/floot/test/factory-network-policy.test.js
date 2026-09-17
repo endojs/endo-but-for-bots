@@ -17,6 +17,15 @@ const until = async predicate => {
   throw Error('Timed out waiting for factory fixture');
 };
 
+/**
+ * Typed rather than inferred: with only `= {}` to go on, TypeScript builds the
+ * options type from the bindings that carry defaults, so `executionState` --
+ * which has none -- is not a known property and every caller passing it is an
+ * error.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {{ executionState?: string, lifecycle?: string }} [options]
+ */
 const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   t.timeout(5000);
   const inboxes = [];
@@ -217,7 +226,10 @@ test('emergency stop fences active turns, waits for cleanup, and requires explic
   world.setMode('hold');
   const turn = await E(world.session).startTurn('held');
   await until(() => world.sends.length === 1);
-  let release;
+  // The executor runs synchronously, so this is always replaced before use --
+  // but only control flow TypeScript can follow counts, so start it callable.
+  /** @type {(value?: any) => void} */
+  let release = () => {};
   const barrier = new Promise(resolve => {
     release = resolve;
   });
@@ -317,7 +329,8 @@ test('incomplete stop is retried on factory revival without starting a sandbox',
 
 test('emergency stop fences resume and reaps its late acquisition before completion', async t => {
   const world = await makeWorld(t, { executionState: 'stopped' });
-  let release = () => undefined;
+  /** @type {() => void} */
+  let release = () => {};
   const barrier = new Promise(resolve => {
     release = () => resolve(undefined);
   });
