@@ -19,4 +19,15 @@ hands the selector a `makeHardener({ traversePrototypes: false })` to adopt, so
 nothing lands in the poisoning slot and the intrinsics `lockdown()` still has to
 tame are not frozen out from under it.
 
+Two ordering constraints come with that use, and both have bitten already.
+Install it AFTER the `ses` shim's module evaluation: `makeHardener()` in
+`ses/src/make-hardener.js` adopts an existing `globalThis.harden`, and
+`ses/src/lockdown.js` calls it at module scope, so a hardener present earlier
+becomes the guest's `harden` for the life of the realm — `lockdown()` reinstalls
+it rather than replacing it, and a non-traversing one then leaves every hardened
+object's prototype extensible. And withdraw it BEFORE calling `lockdown()`: the
+shim collects the start global's own `harden` as an intrinsic and separately
+adds its own, and `ses/src/intrinsics.js` rejects the pair as `Conflicting
+definitions of harden`.
+
 Additive: no existing export or behaviour changes.
