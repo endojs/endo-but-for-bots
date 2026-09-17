@@ -1905,6 +1905,18 @@ without reprovisioning; explicit revocation still stops further access.
 Fast clock-controlled tests establish the semantic boundary; a real soak run
 checks process and resource stability.
 
+**Status, 2026-09-17: the exit holds, and the second clause is now tested.**
+An architecture review reported that OpenCode's ordinary termination never
+reaches `E(brokerScope).revoke()`, which would have made revocation
+unreachable exactly where Phase 2 traded bounded grants for revocable ones.
+Measured, it does revoke — through the client's `cleanupProvision` rather
+than through the controller's own close — and step 0 of the alignment plan
+records the measurement. The property had no test, which is why reading the
+source supported both conclusions; it has one now
+(`opencode-native-controller.test.js`). Nothing about the removal of
+`expiresAt` / `maxRequests` / `maxCostMicrounits` is reopened: this phase
+mandates it, and revocability is the replacement.
+
 ### Phase 3: shared runtime, network, and storage
 
 Converge the slice mount path onto the attested `hosted-agent-v1` policy — see
@@ -1959,6 +1971,32 @@ path as its replacement becomes usable.
 
 Exit: all three use the common grants and supervisor; no guest-visible upstream
 credentials or generic unfiltered hosted-network fallback remains.
+
+**Status, 2026-09-17: mid-phase. The mount sub-track is complete; the exit is
+not met, and is gated on the track that did not move.** Both clauses fail for
+the same reason:
+
+- **No supervisor exists.** `hosted-agent/src/session-registry.js` re-exports
+  a generic resource registry; what stands in for a shared supervisor is two
+  independent 500–600 line lifecycle implementations, which is what the
+  *Shared architecture* table above forbids in as many words.
+- **Codex is not on the common grants.** `provider-broker-service.js` has no
+  Codex consumer — Codex builds its own through `broker-launch.js` — so it
+  has no scope, no plan record, no recovery by session id, and nothing to
+  revoke. The Codex lease failure recorded in the plan below is a direct
+  consequence: its release is reachable from one call site, and there is no
+  owner above it to release it instead.
+
+**The alignment plan below is what closes this exit**, and its steps map onto
+these two clauses: step 2 builds the supervisor from the two adapters that
+already have one lifecycle shape each, step 3 removes the storage difference
+that would otherwise force an escape hatch into the supervisor's adapter
+spec, and step 4 puts Codex on both. Step 1 comes first because it proves an
+adapter behaviour — restoration from stack-owned records — that must hold
+across the reshape and is cheapest to establish before it.
+
+The phase does not exit on step 5; that step is tidy-up over the settled
+shape and is deliberately last.
 
 ### Phase 4: transport and journal simplification
 
