@@ -4587,9 +4587,43 @@ costs nothing and a define that ever appeared would be coded rather than
 asserted against, and the asserting helper has no callers and is deleted.
 The class the catch bug belonged to no longer exists, rather than resting on a
 grammar argument that the same file already disproved once.
-What is left is the bookkeeping `expect`s and all 29 scoper sites, which have
-no source-shape handle at all — for those the claim rests where it always did,
-on an invariant argument this pass neither strengthened nor undermined.
+What is left is the bookkeeping `expect`s and the scoper, and the scoper half
+is smaller and better shaped than "a wider `expect`/`unwrap` surface" has made
+it sound since the original evidence.
+Counted at `e8a03e9f6` over `expect`/`unwrap` only: 29 sites, but six are
+inside the file's own `#[cfg(test)]` modules and no guest source can reach
+them, so the production surface is 23.
+Those 23 are nine shapes, not twenty-three arguments, and fifteen of them are
+three fields: `self.scope.unwrap()` ten times, `self.body_scope.unwrap()`
+three, `self.function_scope.unwrap()` twice.
+The three fields do NOT share an invariant, which a first draft of this
+paragraph got wrong.
+`self.scope` is the one that is set on scope entry (749, 2013) and restored
+from the parent on exit (1009, 2044), so its ten readers do stand or fall
+together on one question — whether a visitor can run outside the scope that
+set it.
+`self.function_scope` is saved and restored around a function (785, 1475,
+1766) and puts two more readers on that same question.
+`self.body_scope` is the opposite: function entry CLEARS it to `None` (1439,
+1748) and the body re-establishes it (1422), so it is `None` while a scope is
+open, and its three readers are safe — if they are — by token dispatch rather
+than by scope lifetime, sitting in the non-`Token::Arg` arms of the branch at
+1580, where a `Const`/`Let`/`Using`/`Var` declarator cannot be a parameter.
+Three of the nine assignments to the two function-level fields never restore
+at all (1384, 1399, 1422).
+One argument therefore retires at most twelve of the fifteen, not all of them.
+The remaining eight shapes are the two declare-index pairs, the two
+field-scope hoists, `node_scope`'s per-node lookup and one statement scope.
+"29" also counts one syntactic shape rather than the panic surface: `node_id`
+carries a release-mode `assert_ne!` (362) reached from 39 production call
+sites, and the file additionally holds three `debug_assert`s, 57
+`self.scopes[...]` indexings and five `declare_indexes[...]`.
+That is the audit this finding still wants, now stated as a list someone can
+work rather than a surface.
+It is deliberately NOT claimed as done: nothing here establishes any of the
+invariants, and the first draft of this paragraph asserted one the code
+contradicts, which is the argument for making them per-cluster and in writing
+rather than by eye.
 Changed by `27e637606 fix(ironhorse-compile): two panics the F063 audit proved
 reachable`.
 Pinned by `the_audits_reachable_panics_return_rather_than_panic` in
