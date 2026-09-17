@@ -219,7 +219,13 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// Format 22 adds host-function recipes to the shared FUNC extension.
 /// Format 23 lets `ASYN` carry async generator instances after the
 /// activations, and the `AsyncGenerator*` reaction kinds resume.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 23;
+/// Format 24 lets `ASYN` carry the `Array.fromAsync` accumulations after the
+/// generators, and the `FromAsync*` reaction kinds resume (architecture
+/// finding F127). A payload with no accumulations is byte-identical to what
+/// format 23 wrote; one carrying accumulations but no generators writes a zero
+/// generator count as a positional placeholder, which is the only case where
+/// that count may be zero.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 24;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

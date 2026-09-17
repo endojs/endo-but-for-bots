@@ -800,6 +800,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         unhandled_rejection: None,
         async_instances: Vec::new(),
         async_generators: Vec::new(),
+        // The generator does not mint `Array.fromAsync` accumulations: each
+        // one must be anchored by a `FromAsync*` reaction on a live promise,
+        // and an unanchored row is refused by the decoder, so an arbitrary
+        // one would only ever exercise that refusal.
+        from_async: Vec::new(),
         promises: prms_promises,
         functions: prms_functions,
         guards: prms_guards,

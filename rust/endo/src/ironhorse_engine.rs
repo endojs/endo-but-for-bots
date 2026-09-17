@@ -946,6 +946,30 @@ pub mod engine {
     /// exceptions before anything runs: runtime-interned ids present
     /// (table extension would collide until the ledger's KEYS row
     /// lands), or bytecode the instruction walker cannot decode.
+    ///
+    /// What a checkpoint REFUSES (architecture finding F127's second
+    /// clause: an embedder meets this here, not only in the side-table
+    /// ledger). Beyond the quiescence gate — a crank that did not reach a
+    /// boundary is rewound rather than stored, which is the crashed-crank
+    /// contract above — the remaining refusals are about what the crank
+    /// LEFT BEHIND.
+    /// Suspended async state is no longer part of that set: `await`,
+    /// async generators and in-flight `Array.fromAsync` accumulations all
+    /// travel (formats 14, 23 and 24 respectively), so a vat parked on a
+    /// host response checkpoints and resumes.
+    /// Three things still refuse, each by name, and each is a property of
+    /// the embedding rather than of the guest program:
+    /// an active or heap-backed HOST MODULE GRAPH, because a host module's
+    /// contents are the embedder's and no atom carries them;
+    /// the test262 `$262` object, because a conformance machine is not a
+    /// persistable one;
+    /// and a stored reference to a NATIVE FUNCTION restore cannot
+    /// reconstruct, which is reachable only by minting one outside the
+    /// boot image and letting the guest keep it.
+    /// A [`MachineError`] naming one of those is a fail-closed refusal
+    /// with the store untouched, not a corrupted checkpoint: the crank's
+    /// effects are discarded and the machine rewinds, exactly as a failed
+    /// flush does.
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::SharedStoreSession>,

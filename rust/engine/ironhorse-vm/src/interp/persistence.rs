@@ -78,6 +78,17 @@ macro_rules! persist_holder {
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, iterators) => {
         $emit! { $vm.$field.values().any(|s| $index(s.iterable.0)) }
     };
+    // An `Array.fromAsync` accumulation holds the result capability, the
+    // map function and its `thisArg`, the iterator and its `next`, the
+    // array-like input, and a pending close error — and the accumulator
+    // object as a bare index no heap property mirrors, exactly as an
+    // iterator's iterated object is (architecture finding F127).
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, from_async) => {
+        $emit! { $vm.$field.iter().any(|f| $index(f.target.0)
+            || $names(&f.resolve) || $names(&f.reject) || $names(&f.mapfn)
+            || $names(&f.this_arg) || $names(&f.iterator) || $names(&f.next_method)
+            || $names(&f.array_like) || $names(&f.close_error)) }
+    };
 }
 
 macro_rules! define_persist_holders {

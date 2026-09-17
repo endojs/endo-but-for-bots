@@ -2684,6 +2684,7 @@ pub(crate) fn decode_generators(
 pub(crate) fn encode_async_section(
     instances: &[ironhorse_vm::snapshot_api::AsyncRow],
     generators: &[ironhorse_vm::snapshot_api::AsyncGeneratorRow],
+    from_async: &[ironhorse_vm::snapshot_api::FromAsyncRow],
 ) -> Vec<u8> {
     let explicit_segments = instances
         .iter()
@@ -2702,7 +2703,7 @@ pub(crate) fn encode_async_section(
         crate::slot_codec::encode_slot(&row.reject, &mut v);
         encode_saved_frame(&mut v, &row.frame, explicit_segments);
     }
-    if generators.is_empty() {
+    if generators.is_empty() && from_async.is_empty() {
         return v;
     }
     let encode_request =
@@ -2735,6 +2736,29 @@ pub(crate) fn encode_async_section(
             }
         }
     }
+    // The `Array.fromAsync` accumulations, after the generators (architecture
+    // finding F127). A payload with no accumulations is byte-identical to what
+    // format 23 wrote; one with accumulations but no generators carries a zero
+    // generator count as a positional placeholder, which is the only case where
+    // that count may be zero and the decoder enforces it.
+    if from_async.is_empty() {
+        return v;
+    }
+    v.extend_from_slice(&(from_async.len() as u32).to_be_bytes());
+    for row in from_async {
+        crate::slot_codec::encode_slot(&row.resolve, &mut v);
+        crate::slot_codec::encode_slot(&row.reject, &mut v);
+        v.extend_from_slice(&row.target.to_be_bytes());
+        v.extend_from_slice(&row.k.to_be_bytes());
+        v.extend_from_slice(&row.len.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.mapfn, &mut v);
+        crate::slot_codec::encode_slot(&row.this_arg, &mut v);
+        crate::slot_codec::encode_slot(&row.iterator, &mut v);
+        crate::slot_codec::encode_slot(&row.next_method, &mut v);
+        crate::slot_codec::encode_slot(&row.array_like, &mut v);
+        crate::slot_codec::encode_slot(&row.close_error, &mut v);
+        v.push(row.flags);
+    }
     v
 }
 
@@ -2750,6 +2774,7 @@ pub(crate) fn decode_async_section(
     (
         Vec<ironhorse_vm::snapshot_api::AsyncRow>,
         Vec<ironhorse_vm::snapshot_api::AsyncGeneratorRow>,
+        Vec<ironhorse_vm::snapshot_api::FromAsyncRow>,
     ),
     SnapshotError,
 > {
@@ -2775,84 +2800,152 @@ pub(crate) fn decode_async_section(
         });
     }
     let mut generators: Vec<ironhorse_vm::snapshot_api::AsyncGeneratorRow> = Vec::new();
+    let mut from_async: Vec<ironhorse_vm::snapshot_api::FromAsyncRow> = Vec::new();
     if c.done().is_err() {
         let count = c.u32()? as usize;
-        if count == 0 {
+        // A zero generator count is legal ONLY as the positional placeholder
+        // for a `from_async` section behind it; with nothing behind it, it is
+        // the redundant trailer the writer never emits.
+        if count == 0 && c.done().is_ok() {
             return Err(SnapshotError::Corrupt(
                 "async generators: redundant empty trailer",
             ));
         }
-        let decode_request = |c: &mut Cursor<'_>| {
-            let status = c.u8()?;
-            if status > 2 {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: invalid request status",
-                ));
-            }
-            Ok(ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow {
-                status,
-                value: c.slot()?,
-                resolve: c.slot()?,
-                reject: c.slot()?,
-            })
-        };
-        generators.reserve(count.min(p.len() / 12));
-        for _ in 0..count {
-            let owner = c.u32()?;
-            if generators.last().is_some_and(|row| owner <= row.owner) {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: owners not strictly ascending",
-                ));
-            }
-            let state = c.u8()?;
-            if state > 3 {
-                return Err(SnapshotError::Corrupt("async generators: invalid state"));
-            }
-            let frame = match c.u8()? {
-                0 => None,
-                1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
-                _ => return Err(SnapshotError::Corrupt("async generators: bad frame tag")),
-            };
-            let request_count = c.u32()? as usize;
-            let mut requests = Vec::with_capacity(request_count.min(p.len() / 12));
-            for _ in 0..request_count {
-                requests.push(decode_request(&mut c)?);
-            }
-            let active = match c.u8()? {
-                0 => None,
-                1 => Some(decode_request(&mut c)?),
-                _ => {
+        if count != 0 {
+            let decode_request = |c: &mut Cursor<'_>| {
+                let status = c.u8()?;
+                if status > 2 {
                     return Err(SnapshotError::Corrupt(
-                        "async generators: bad active request tag",
-                    ))
+                        "async generators: invalid request status",
+                    ));
                 }
+                Ok(ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow {
+                    status,
+                    value: c.slot()?,
+                    resolve: c.slot()?,
+                    reject: c.slot()?,
+                })
             };
-            let row = ironhorse_vm::snapshot_api::AsyncGeneratorRow {
-                owner,
-                state,
-                frame,
-                requests,
-                active,
-            };
-            // The row's own shape invariants, shared with the restore path
-            // and the store gate so no admission point is looser than the
-            // reader that has to accept what it writes.
-            if !row.frame_matches_state() {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: state and frame disagree",
-                ));
+            generators.reserve(count.min(p.len() / 12));
+            for _ in 0..count {
+                let owner = c.u32()?;
+                if generators.last().is_some_and(|row| owner <= row.owner) {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: owners not strictly ascending",
+                    ));
+                }
+                let state = c.u8()?;
+                if state > 3 {
+                    return Err(SnapshotError::Corrupt("async generators: invalid state"));
+                }
+                let frame = match c.u8()? {
+                    0 => None,
+                    1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
+                    _ => return Err(SnapshotError::Corrupt("async generators: bad frame tag")),
+                };
+                let request_count = c.u32()? as usize;
+                let mut requests = Vec::with_capacity(request_count.min(p.len() / 12));
+                for _ in 0..request_count {
+                    requests.push(decode_request(&mut c)?);
+                }
+                let active = match c.u8()? {
+                    0 => None,
+                    1 => Some(decode_request(&mut c)?),
+                    _ => {
+                        return Err(SnapshotError::Corrupt(
+                            "async generators: bad active request tag",
+                        ))
+                    }
+                };
+                let row = ironhorse_vm::snapshot_api::AsyncGeneratorRow {
+                    owner,
+                    state,
+                    frame,
+                    requests,
+                    active,
+                };
+                // The row's own shape invariants, shared with the restore path
+                // and the store gate so no admission point is looser than the
+                // reader that has to accept what it writes.
+                if !row.frame_matches_state() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: state and frame disagree",
+                    ));
+                }
+                if !row.requests_match_state() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: request queue disagrees with state",
+                    ));
+                }
+                if !row.start_frame_is_fresh() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: start frame is not fresh",
+                    ));
+                }
+                generators.push(row);
             }
-            if !row.requests_match_state() {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: request queue disagrees with state",
-                ));
+        }
+        // The `Array.fromAsync` accumulations (architecture finding F127).
+        if c.done().is_err() {
+            let count = c.u32()? as usize;
+            if count == 0 {
+                return Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"));
             }
-            if !row.start_frame_is_fresh() {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: start frame is not fresh",
-                ));
+            from_async.reserve(count.min(p.len() / (7 * SLOT_RECORD_BYTES + 21)));
+            for _ in 0..count {
+                let row = ironhorse_vm::snapshot_api::FromAsyncRow {
+                    resolve: c.slot()?,
+                    reject: c.slot()?,
+                    target: c.u32()?,
+                    k: u64_value(&mut c)?,
+                    len: u64_value(&mut c)?,
+                    mapfn: c.slot()?,
+                    this_arg: c.slot()?,
+                    iterator: c.slot()?,
+                    next_method: c.slot()?,
+                    array_like: c.slot()?,
+                    close_error: c.slot()?,
+                    flags: c.u8()?,
+                };
+                // An unknown bit is corrupt, the same rule every other row in
+                // this cluster applies to a non-boolean boolean byte.
+                if row.flags & !ironhorse_vm::snapshot_api::FromAsyncRow::FLAGS != 0 {
+                    return Err(SnapshotError::Corrupt("fromAsync: unknown flag bit"));
+                }
+                // `mapping` is what says `mapfn` is callable; a cleared flag
+                // with a reference in the slot is a row that would call
+                // something the writer never intended.
+                if !row.has(ironhorse_vm::snapshot_api::FromAsyncRow::MAPPING)
+                    && row.mapfn.kind == Kind::Reference
+                {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: mapfn present without the mapping flag",
+                    ));
+                }
+                // The two input paths are exclusive: an iterator, or an
+                // array-like with a length. `sync_wrapped` is a property of an
+                // iterator and means nothing without one.
+                let iterated = row.iterator.kind == Kind::Reference;
+                if !iterated
+                    && (row.next_method.kind == Kind::Reference
+                        || row.has(ironhorse_vm::snapshot_api::FromAsyncRow::SYNC_WRAPPED))
+                {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: iterator state without an iterator",
+                    ));
+                }
+                if iterated && row.len != 0 {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: an iterated accumulation carries a length",
+                    ));
+                }
+                if !iterated && row.k > row.len {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: index past the array-like length",
+                    ));
+                }
+                from_async.push(row);
             }
-            generators.push(row);
         }
     }
     c.done()?;
@@ -2867,13 +2960,13 @@ pub(crate) fn decode_async_section(
             "generator frame: redundant segment prefix",
         ));
     }
-    Ok((rows, generators))
+    Ok((rows, generators, from_async))
 }
 
 /// The activations half of [`encode_async_section`] alone.
 #[cfg(test)]
 pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::snapshot_api::AsyncRow]) -> Vec<u8> {
-    encode_async_section(rows, &[])
+    encode_async_section(rows, &[], &[])
 }
 
 /// [`decode_async_section`] for a payload with no generator trailer.
@@ -2881,8 +2974,9 @@ pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::snapshot_api::AsyncRo
 pub(crate) fn decode_async_instances(
     p: &[u8],
 ) -> Result<Vec<ironhorse_vm::snapshot_api::AsyncRow>, SnapshotError> {
-    let (rows, generators) = decode_async_section(p)?;
+    let (rows, generators, from_async) = decode_async_section(p)?;
     assert!(generators.is_empty(), "payload carries generator rows");
+    assert!(from_async.is_empty(), "payload carries fromAsync rows");
     Ok(rows)
 }
 
@@ -2945,9 +3039,10 @@ pub(crate) fn encode_promise_cluster(
 /// discipline every compound atom follows (a view names a buffer row, a
 /// generator frame names a function row):
 ///
-/// - async generators and Array.fromAsync (bytes 4–10) are refused by name —
-///   it would resume machinery no atom carries, and the persist gate
-///   refuses the machine before an honest writer can emit one; byte 11 is the
+/// - a reaction kind past 12 is refused by name: it would resume machinery no
+///   atom carries. Bytes 4–6 are the async-generator kinds, carried in `ASYN`
+///   since format 23, and bytes 7–10 the `Array.fromAsync` kinds, carried
+///   there since format 24 (architecture finding F127); byte 11 is the
 ///   resumable second half of `Promise.prototype.finally`, and byte 12 is a
 ///   synchronous combinator element callback retained by a custom `then`;
 /// - a settled promise carries no reactions (settlement drains them,
@@ -3028,10 +3123,11 @@ pub(crate) fn decode_promise_cluster_payload(
             let resolve = c.slot()?;
             let reject = c.slot()?;
             let kind = c.u8()?;
-            // 0–3, the three async-generator kinds (4–6), `FinallyAwait`
-            // and `CombineDirect` resume; the `FromAsync*` kinds (7–10)
-            // name machinery no atom carries.
-            if kind > 6 && kind != 11 && kind != 12 {
+            // 0–3, the three async-generator kinds (4–6), the four
+            // `FromAsync*` kinds (7–10, carried in `ASYN` since format 24 —
+            // architecture finding F127), `FinallyAwait` (11) and
+            // `CombineDirect` (12) all resume. 13 and up name nothing.
+            if kind > 12 {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction kind does not resume",
                 ));
@@ -3222,9 +3318,13 @@ pub(crate) fn decode_promise_cluster_payload(
                         "promise cluster: malformed direct combinator callback"
                     }));
                 }
-            } else if (3..=6).contains(&r.kind) {
-                // An `AsyncAwait` or `AsyncGenerator*` reaction carries its
-                // instance in `a` and nothing else.
+            } else if (3..=10).contains(&r.kind) {
+                // A NATIVE reaction — `AsyncAwait`, `AsyncGenerator*`, or one
+                // of the four `Array.fromAsync` steps — carries its instance
+                // or arena index in `a` and nothing else. It has no guest
+                // callbacks and no capability, because the machinery it
+                // resumes is the engine's own (architecture finding F127
+                // brought the `FromAsync*` kinds into this class).
                 if r.b != 0
                     || ![r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
                         .iter()
@@ -3279,6 +3379,9 @@ pub(crate) fn decode_promise_cluster_payload(
         combinators,
         async_instances: Vec::new(),
         async_generators: Vec::new(),
+        // `PRMS` carries none of these three; `ASYN` does, and the roster
+        // merges the two payloads into one cluster.
+        from_async: Vec::new(),
     })
 }
 
@@ -4081,6 +4184,7 @@ static EMPTY_PROMISE_CLUSTER: ironhorse_vm::snapshot_api::PromiseClusterSnapshot
         functions: Vec::new(),
         guards: Vec::new(),
         combinators: Vec::new(),
+        from_async: Vec::new(),
         async_instances: Vec::new(),
         async_generators: Vec::new(),
         unhandled_rejection: None,
@@ -8910,6 +9014,7 @@ mod generator_decoder_refusals {
                 requests: vec![],
                 active: None,
             }],
+            &[],
         );
         let mut with_trailer = |version: u32| {
             image.version.format_version = version;
@@ -8961,12 +9066,12 @@ mod generator_decoder_refusals {
         };
         // An honest trailer round-trips and is absent when empty.
         let rows = vec![completed(3), completed(7)];
-        let bytes = encode_async_section(&[], &rows);
+        let bytes = encode_async_section(&[], &rows, &[]);
         assert_eq!(
             decode_async_section(&bytes).unwrap(),
-            (vec![], rows.clone())
+            (vec![], rows.clone(), vec![])
         );
-        assert_eq!(encode_async_section(&[], &[]), 0u32.to_be_bytes());
+        assert_eq!(encode_async_section(&[], &[], &[]), 0u32.to_be_bytes());
         // Every cut after the (valid, empty) instance prefix is refused.
         for end in 5..bytes.len() {
             assert!(
@@ -8983,7 +9088,11 @@ mod generator_decoder_refusals {
             ))
         );
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[completed(5), completed(5)])),
+            decode_async_section(&encode_async_section(
+                &[],
+                &[completed(5), completed(5)],
+                &[]
+            )),
             Err(SnapshotError::Corrupt(
                 "async generators: owners not strictly ascending"
             ))
@@ -8991,7 +9100,7 @@ mod generator_decoder_refusals {
         // One frameless completed row: instances count (4), trailer count
         // (4), owner (4), state (1), frame tag (1), request count (4),
         // active tag (1).
-        let one = encode_async_section(&[], &[completed(5)]);
+        let one = encode_async_section(&[], &[completed(5)], &[]);
         assert_eq!(one.len(), 19);
         let mut bad_frame_tag = one.clone();
         bad_frame_tag[13] = 2;
@@ -9026,7 +9135,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[queued_without_active])),
+            decode_async_section(&encode_async_section(&[], &[queued_without_active], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: request queue disagrees with state"
             ))
@@ -9036,7 +9145,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[bad_status])),
+            decode_async_section(&encode_async_section(&[], &[bad_status], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: invalid request status"
             ))
@@ -9046,7 +9155,7 @@ mod generator_decoder_refusals {
             active: Some(request(1)),
             ..completed(5)
         };
-        let bytes = encode_async_section(&[], std::slice::from_ref(&returning));
+        let bytes = encode_async_section(&[], std::slice::from_ref(&returning), &[]);
         assert_eq!(decode_async_section(&bytes).unwrap().1, vec![returning]);
         // An Awaiting instance is serving a request; one with nothing
         // active would be re-encoded unreadably after its next request.
@@ -9056,7 +9165,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[awaiting_nothing])),
+            decode_async_section(&encode_async_section(&[], &[awaiting_nothing], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: request queue disagrees with state"
             ))
@@ -9070,7 +9179,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[started_mid_body])),
+            decode_async_section(&encode_async_section(&[], &[started_mid_body], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: start frame is not fresh"
             ))
@@ -9083,7 +9192,8 @@ mod generator_decoder_refusals {
         assert_eq!(
             decode_async_section(&encode_async_section(
                 &[],
-                std::slice::from_ref(&started_fresh)
+                std::slice::from_ref(&started_fresh),
+                &[]
             ))
             .unwrap()
             .1,
@@ -9449,6 +9559,155 @@ mod generator_decoder_refusals {
     }
 }
 
+/// The `Array.fromAsync` accumulation trailer's decoder (architecture
+/// finding F127), which rides behind the generators in `ASYN`.
+#[cfg(test)]
+mod from_async_decoder_refusals {
+    use super::*;
+
+    /// One in-flight `Array.fromAsync` accumulation on the array-like path,
+    /// which is the shortest honest row: no iterator, no map function.
+    fn from_async_row() -> ironhorse_vm::snapshot_api::FromAsyncRow {
+        ironhorse_vm::snapshot_api::FromAsyncRow {
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            target: 3,
+            k: 1,
+            len: 2,
+            mapfn: Slot::undefined(),
+            this_arg: Slot::undefined(),
+            iterator: Slot::undefined(),
+            next_method: Slot::undefined(),
+            array_like: Slot::undefined(),
+            close_error: Slot::undefined(),
+            flags: ironhorse_vm::snapshot_api::FromAsyncRow::TARGET_IS_ARRAY,
+        }
+    }
+
+    /// The `fromAsync` trailer is a format-24 addition (architecture finding
+    /// F127), so a container stamped older that carries one is refused by
+    /// name — the writer-side stamp bump's reader-side twin, and the reason
+    /// the carry cannot be read back into a machine built before it existed.
+    #[test]
+    fn from_async_trailer_is_tied_to_the_format_stamp() {
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let trailer = encode_async_section(&[], &[], &[from_async_row()]);
+        let mut with_trailer = |version: u32| {
+            image.version.format_version = version;
+            let bytes = write_machine_unchecked(&image);
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            assert!(parsed.find(crate::format::ASYN).is_none());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(crate::format::ASYN, &trailer).unwrap();
+            read_machine(&writer.finish().unwrap(), &signature)
+        };
+        assert_eq!(
+            with_trailer(23),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: trailer in a pre-format-24 container"
+            ))
+        );
+        // At 24 the trailer passes the stamp gate and the crafted target
+        // fails a later bounds check instead.
+        let at_24 = with_trailer(24);
+        assert!(at_24.is_err());
+        assert_ne!(
+            at_24,
+            Err(SnapshotError::Corrupt(
+                "fromAsync: trailer in a pre-format-24 container"
+            ))
+        );
+    }
+
+    /// The `ASYN` `fromAsync` trailer's byte-level refusals. The generator
+    /// count in front of it doubles as a positional placeholder, so the
+    /// arrangement itself — not just the rows — has shapes no honest encoder
+    /// emits.
+    #[test]
+    fn from_async_trailer_refusals() {
+        use ironhorse_vm::snapshot_api::FromAsyncRow;
+        let reference = |i: u32| {
+            Slot::of(
+                Kind::Reference,
+                Payload::Reference(ironhorse_vm::SlotIndex(i)),
+            )
+        };
+        // An honest trailer round-trips, and rides behind a zero generator
+        // count when the machine holds no generators.
+        let rows = vec![from_async_row()];
+        let bytes = encode_async_section(&[], &[], &rows);
+        assert_eq!(
+            decode_async_section(&bytes).unwrap(),
+            (vec![], vec![], rows.clone())
+        );
+        // Every cut after the instance and generator counts is refused.
+        for end in 9..bytes.len() {
+            assert!(
+                decode_async_section(&bytes[..end]).is_err(),
+                "fromAsync trailer truncated at {end}"
+            );
+        }
+        // A present-but-empty trailer is not an encoding of anything. Three
+        // zero counts: no instances, no generators, no accumulations.
+        let redundant = [0u32.to_be_bytes(); 3].concat();
+        assert_eq!(
+            decode_async_section(&redundant),
+            Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"))
+        );
+        let refused = |mutate: &dyn Fn(&mut FromAsyncRow)| {
+            let mut row = from_async_row();
+            mutate(&mut row);
+            decode_async_section(&encode_async_section(&[], &[], &[row])).map(|_| ())
+        };
+        assert_eq!(
+            refused(&|row| row.flags = FromAsyncRow::FLAGS + 1),
+            Err(SnapshotError::Corrupt("fromAsync: unknown flag bit"))
+        );
+        assert_eq!(
+            refused(&|row| row.mapfn = reference(4)),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: mapfn present without the mapping flag"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| row.next_method = reference(4)),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: iterator state without an iterator"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| {
+                row.iterator = reference(4);
+                row.next_method = reference(5);
+            }),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: an iterated accumulation carries a length"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| row.k = row.len + 1),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: index past the array-like length"
+            ))
+        );
+        // `k == len` is the last honest index: the walk has consumed every
+        // element and the accumulation is about to settle.
+        assert!(refused(&|row| row.k = row.len).is_ok());
+    }
+}
+
 #[cfg(test)]
 mod promise_decoder_refusals {
     use super::*;
@@ -9489,6 +9748,7 @@ mod promise_decoder_refusals {
             combinators: vec![],
             async_instances: vec![],
             async_generators: vec![],
+            from_async: vec![],
             unhandled_rejection: None,
         }
     }
@@ -9920,7 +10180,11 @@ mod promise_decoder_refusals {
                 ))
             );
         }
-        for kind in [7, 8, 9, 10, 13, 255] {
+        // 13 and up name nothing. 7-10 USED to be here: they are the
+        // `Array.fromAsync` steps, and `ASYN` has carried them since format
+        // 24 (architecture finding F127), so they decode like the other
+        // native kinds below rather than being refused.
+        for kind in [13, 14, 255] {
             let mut bad = baseline.clone();
             bad.promises[0].reactions[0].kind = kind;
             assert_eq!(
@@ -9930,9 +10194,10 @@ mod promise_decoder_refusals {
                 ))
             );
         }
-        // The async-generator kinds decode like `AsyncAwait`: the instance
-        // in `a`, nothing else; the instance itself is checked by the gate.
-        for kind in [4, 5, 6] {
+        // The async-generator and `Array.fromAsync` kinds decode like
+        // `AsyncAwait`: the index in `a`, nothing else; the row itself is
+        // checked by the gate.
+        for kind in [4, 5, 6, 7, 8, 9, 10] {
             let mut resumed = baseline.clone();
             resumed.promises[0].reactions[0].kind = kind;
             resumed.promises[0].reactions[0].b = 0;

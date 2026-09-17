@@ -2681,20 +2681,32 @@ pub struct Interp {
     /// [`ReactionKind::Combine`]'s combinator index; append-only within a run,
     /// consumed as its element reactions drain. See [`CombinatorState`].
     combinators: Tracked<Vec<CombinatorState>>,
-    #[boot_new(Vec::new())]
+    #[boot_new(Tracked::new(
+        Vec::new(),
+        snapshot_dirt.clone(),
+        SnapshotSection::AsyncInstances.mask(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
-    #[persist_refs(none)]
+    #[persist_refs(from_async)]
     #[runtime_keys(none)]
     #[gc_hook(held, mutable)]
     #[gc_chunk(from_async)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
-    #[snapshot_table(none)]
+    #[snapshot_table(FromAsync, 42, 42, Serialized, "from_async")]
     /// In-flight `Array.fromAsync` native async state machines. Append-only
     /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
     /// See [`FromAsyncData`].
-    from_async: Vec<FromAsyncData>,
+    ///
+    /// Carried in the `ASYN` payload behind the async generators since format
+    /// 24 (architecture finding F127). It was a documented SATELLITE of
+    /// `combinators` before that — riding its coverage but deliberately not
+    /// travelling, on the argument that the persist gate refused every machine
+    /// holding a live entry, so rebuilding the table empty was observationally
+    /// exact. That argument was sound and its premise is gone: the gate admits
+    /// the `FromAsync*` kinds now, so the table travels.
+    from_async: Tracked<Vec<FromAsyncData>>,
     #[boot_new(None)]
     #[gc_root(none)]
     #[quiescent(retained)]

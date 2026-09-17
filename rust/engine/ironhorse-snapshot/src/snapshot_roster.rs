@@ -2239,6 +2239,37 @@ macro_rules! snapshot_payloads {
                             ));
                         }
                     }
+                    // The `Array.fromAsync` arena is anchored the same way
+                    // (architecture finding F127): each accumulation is named
+                    // by exactly one pending `FromAsync*` reaction, and the
+                    // writer emits the arena COMPACTED, so an unreferenced row
+                    // or a second reference to one can only be crafted.
+                    let mut from_async_anchors = std::collections::BTreeSet::new();
+                    for reaction in promise_cluster
+                        .promises
+                        .iter()
+                        .flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
+                    {
+                        if !(7..=10).contains(&reaction.kind) {
+                            continue;
+                        }
+                        if reaction.a as usize >= promise_cluster.from_async.len()
+                            || !from_async_anchors.insert(reaction.a)
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "fromAsync reaction: missing or duplicate accumulation",
+                            ));
+                        }
+                    }
+                    if from_async_anchors.len() != promise_cluster.from_async.len() {
+                        return Err(SnapshotError::Corrupt(
+                            "fromAsync: accumulations not densely referenced",
+                        ));
+                    }
+                    for row in &promise_cluster.from_async {
+                        owned(row.target)?;
+                    }
                     for row in &promise_cluster.async_generators {
                         owned(row.owner)?;
                         // The row's own shape, so an in-memory image is held to
@@ -2471,26 +2502,33 @@ macro_rules! snapshot_payloads {
                 initialize: [],
                 legacy_label: "small state async section",
                 decode_legacy(state, bytes): {
-                    let (instances, generators) = if bytes.is_empty() {
+                    let (instances, generators, from_async) = if bytes.is_empty() {
                         Default::default()
                     } else {
                         crate::image::decode_async_section(bytes)?
                     };
                     state.promise_cluster.async_instances = instances;
                     state.promise_cluster.async_generators = generators;
+                    state.promise_cluster.from_async = from_async;
                 },
                 decode_container: [NameFloor, extend, (r, [version], [small]) {
-                    let (instances, generators) = match r.find(crate::format::ASYN) {
+                    let (instances, generators, from_async) = match r.find(crate::format::ASYN) {
                         Some(a) => {
                             let section = decode_async_section(a.payload)?;
-                            if section.0.is_empty() && section.1.is_empty() {
+                            if section.0.is_empty() && section.1.is_empty() && section.2.is_empty() {
                                 return Err(SnapshotError::Corrupt("ASYN atom present but empty"));
                             }
-                            // The generator trailer is a format-23 addition:
-                            // a container stamped older cannot carry one.
+                            // The generator trailer is a format-23 addition and
+                            // the fromAsync one a format-24 addition: a
+                            // container stamped older cannot carry either.
                             if !section.1.is_empty() && version.format_version < 23 {
                                 return Err(SnapshotError::Corrupt(
                                     "async generators: trailer in a pre-format-23 container",
+                                ));
+                            }
+                            if !section.2.is_empty() && version.format_version < 24 {
+                                return Err(SnapshotError::Corrupt(
+                                    "fromAsync: trailer in a pre-format-24 container",
                                 ));
                             }
                             section
@@ -2499,6 +2537,7 @@ macro_rules! snapshot_payloads {
                     };
                     small.promise_cluster.async_instances = instances;
                     small.promise_cluster.async_generators = generators;
+                    small.promise_cluster.from_async = from_async;
                 }],
                 atom: Some(crate::format::ASYN),
                 present(image): !image.promise_cluster.async_section_is_empty(),
@@ -2506,12 +2545,17 @@ macro_rules! snapshot_payloads {
                     crate::image::encode_async_section(
                         &state.promise_cluster.async_instances,
                         &state.promise_cluster.async_generators,
+                        &state.promise_cluster.from_async,
                     )
                 },
                 canonicalize(bytes): {
                     crate::image::decode_async_section(bytes)
-                        .map(|(instances, generators)| {
-                            crate::image::encode_async_section(&instances, &generators)
+                        .map(|(instances, generators, from_async)| {
+                            crate::image::encode_async_section(
+                                &instances[..],
+                                &generators[..],
+                                &from_async[..],
+                            )
                         })
                 },
                 slot_visit: shared,
