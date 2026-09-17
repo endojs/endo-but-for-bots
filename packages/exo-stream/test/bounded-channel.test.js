@@ -60,7 +60,7 @@ test('byte weight bounds large entries independently of item count', async t => 
 });
 
 test('consumed traffic releases queue charges across a long healthy stream', async t => {
-  t.timeout(10000);
+  t.timeout(10_000);
   const channel = makeBoundedReader({ ...options, maxItems: 1, maxWeight: 10 });
   const reader = iterateReader(channel.reader, { buffer: 0 });
   for (let n = 0; n < 20_000; n += 1) {
