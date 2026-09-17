@@ -45,7 +45,8 @@
 /// The pattern `ironhorse_fuzz::gen_regexp` produces from the finding's
 /// 20 bytes. Reproduced here as a byte-exact raw-string literal so the
 /// regression builds without the fuzz crate (which pulls in the oracle).
-const PATTERN: &str = r###"((a+a*|a+)a*){1,2}((a*|a*)?(?!a*[a-c0-9](a*)?|a*)|0){1,2}(a*|a*|[^a-c]*){1,2}"###;
+const PATTERN: &str =
+    r###"((a+a*|a+)a*){1,2}((a*|a*)?(?!a*[a-c0-9](a*)?|a*)|0){1,2}(a*|a*|[^a-c]*){1,2}"###;
 
 /// The generated case carries the `s` (dotAll) flag; the subject has no
 /// line terminators so `s` does not change the answer, but the flag must
