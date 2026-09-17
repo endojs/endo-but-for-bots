@@ -38,7 +38,7 @@ def fixture_digest(corpus_root=CORPUS_ROOT):
     """Digest generated JavaScript source names and bytes in manifest order."""
     manifest = json.loads((corpus_root / "manifest.json").read_text())
     digest = hashlib.sha256()
-    for fixture in manifest["fixtures"]:
+    for fixture in sorted(manifest["fixtures"], key=lambda item: item["source"]):
         relative = fixture["source"].encode()
         payload = (corpus_root / fixture["source"]).read_bytes()
         digest.update(len(relative).to_bytes(8, "big"))
