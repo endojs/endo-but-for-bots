@@ -477,26 +477,41 @@ fn to_raw_fixed(
     // sits at 10^(-max_frac) is `exponent + max_frac`. `keep` counts leading
     // significant digits to retain.
     let keep = dec.exponent + max_frac as i32 + 1;
-    let rounded = if keep <= 0 {
-        // Everything rounds away below the least place; decide carry.
+    let rounded = if keep == 0 {
+        // The cut sits exactly at the leading digit's own place, which is
+        // what `round_to_significant(_, 0, …)` is for: it compares that digit
+        // against the boundary and places any carry one decade above it.
+        round_to_significant(dec, 0, mode, negative)
+    } else if keep < 0 {
+        // The cut sits BELOW the leading digit — 0.0001 at two fraction
+        // digits, `keep == -2`. Two things differ from the case above, and
+        // getting either wrong is a silent wrong value.
         //
-        // `round_to_significant(_, 0, …)` answers "does this round up?" and
-        // places the resulting `1` one decade above the LEADING digit, which
-        // is the right place only when the cut sits exactly there
-        // (`keep == 0`). When the cut is further down — 0.0001 at two
-        // fraction digits, `keep == -3` — the carried digit belongs at
-        // `10^-max_frac`, the least place being kept, and placing it at
-        // `10^(exponent+1)` puts it below the layout's floor where it
-        // renders as zero. `$0.0001` under `roundingMode: 'expand'` was
-        // reported as `$0.00`, which is the same silent-wrong-value class as
-        // the rest of F062, one decade further down.
-        let carried = round_to_significant(dec, 0, mode, negative);
-        if carried.digits.is_empty() || keep == 0 {
-            carried
-        } else {
+        // WHERE a carry lands: at `10^-max_frac`, the least place being
+        // kept. `round_to_significant`'s carry goes one decade above the
+        // LEADING digit, which here is below the layout's floor, so it
+        // renders as zero — `$0.0001` under `roundingMode: 'expand'` was
+        // reported as `$0.00`.
+        //
+        // WHETHER it carries at all: decided at the real boundary, not at
+        // the leading digit. Every kept digit is zero and so is the first
+        // DISCARDED one, since `keep < 0` puts the whole value strictly
+        // below that place; what remains is a nonzero tail. Asking
+        // `round_to_significant(_, 0, …)` instead asks about the leading
+        // SIGNIFICANT digit, which reads 9 for 0.09 and rounds up under
+        // `halfExpand` — so `maximumFractionDigits: 0` reported 0.09 as `1`
+        // where the spec and every other engine say `0`. A nonzero tail
+        // under a zero boundary digit is a DIRECTED-mode carry only.
+        let round_up = decide_round_up(mode, negative, 0, true, 0);
+        if round_up {
             Decimal {
                 digits: vec![1],
                 exponent: -(max_frac as i32),
+            }
+        } else {
+            Decimal {
+                digits: Vec::new(),
+                exponent: dec.exponent,
             }
         }
     } else {

@@ -18,7 +18,26 @@ fn declarations(source: &str) -> String {
             // A public constant beside a row IS the row's contract: a packed
             // flag's bit position decides how a persisted byte reads, so
             // renumbering one silently changes every stored row's meaning.
-            rest.find(';').expect("row constant closes") + 1
+            //
+            // The terminator is the first `;` at BRACKET DEPTH ZERO, not the
+            // first `;` outright: an array type (`[u8; 4]`) carries one
+            // inside its brackets, and stopping there would drop the
+            // constant's whole value from the fingerprint — the quietest
+            // possible way for this gate to stop working.
+            let mut depth = 0i32;
+            let end = rest
+                .char_indices()
+                .find(|(_, c)| {
+                    match c {
+                        '[' | '(' | '{' => depth += 1,
+                        ']' | ')' | '}' => depth -= 1,
+                        _ => {}
+                    }
+                    *c == ';' && depth == 0
+                })
+                .expect("row constant closes")
+                .0;
+            end + 1
         } else {
             // Public methods live inside impls, which are not data contracts.
             assert!(
@@ -97,5 +116,15 @@ fn fingerprint_tracks_fields_and_aliases_but_ignores_docs_and_impls() {
     assert_ne!(
         declarations(&flagged),
         declarations(&flagged.replace("1 << 2", "1 << 3"))
+    );
+    // And a constant whose TYPE contains a semicolon keeps its value in the
+    // fingerprint. Stopping at the first `;` would truncate to the type and
+    // silently stop tracking the value — this is the case that proves the
+    // depth-aware scan above is doing something.
+    let tagged = format!("{baseline}\nimpl Row {{ pub const TAG: [u8; 4] = *b\"IRON\"; }}");
+    assert_ne!(
+        declarations(&tagged),
+        declarations(&tagged.replace("IRON", "NORI")),
+        "an array-typed constant's value must reach the fingerprint"
     );
 }
