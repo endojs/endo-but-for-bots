@@ -60,7 +60,10 @@ test('CLI home is separate from host records and both are removed together', asy
   const provider = makeCodexStateProvider({ stateRoot: root });
   const records = await provider.prepareSessionDirectory('codex-abc');
   const home = await provider.prepareCliDirectory('codex-abc');
-  t.is(home.directory, path.join(root, '.cli', 'codex-abc'));
+  t.is(home.directory, path.join(root, 'cli_homes', 'codex-abc'));
+  await t.throwsAsync(provider.prepareSessionDirectory('cli_homes'), {
+    message: /Invalid session id/,
+  });
   t.false(home.directory.startsWith(`${records.directory}/`));
   t.false(records.directory.startsWith(`${home.directory}/`));
   await writeFile(path.join(records.directory, 'checkpoint'), 'host record');

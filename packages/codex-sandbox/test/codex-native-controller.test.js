@@ -3,6 +3,7 @@ import '@endo/init';
 import test from 'ava';
 import { Far } from '@endo/far';
 import { makeSandboxSessionId } from '@endo/hosted-agent/session-plan.js';
+import { assertSlicePolicyRequest } from '@endo/sandbox/policy.js';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -131,6 +132,7 @@ const fixture = async (
   });
   const sandboxScope = Far('SandboxScope', {
     async make(options) {
+      assertSlicePolicyRequest(options.policy);
       sliceOptions = options;
       events.push('slice');
       return Far('Slice', {
@@ -256,7 +258,10 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
     mount => mount.role === 'codex-state',
   );
   t.is(home.kind, 'bind');
-  t.is(home.source, join(f.root, 'state', '.cli', f.plan.sandboxSessionId));
+  t.is(
+    home.source,
+    join(f.root, 'state', 'cli_homes', f.plan.sandboxSessionId),
+  );
   t.false(
     options.policy.mounts.some(mount => mount.source === records.directory),
   );

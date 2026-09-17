@@ -54,10 +54,12 @@ harden(assertCodexStateRoot);
 export const makeCodexStateProvider = ({ stateRoot }) => {
   const root = assertCodexStateRoot(stateRoot, 'stateRoot');
   const records = makeStateStorageOperations(root);
-  // The leading dot cannot be a session id. Each CLI home and its ownership
+  // The underscore cannot occur in a storage session id, while this segment
+  // remains admissible as a bind source under the shared slice policy.
+  // Each CLI home and its ownership
   // marker are separate from host audit/checkpoint files, and only the home
   // leaf may be mounted rw into a sandbox.
-  const cli = makeStateStorageOperations(`${root}/.cli`);
+  const cli = makeStateStorageOperations(`${root}/cli_homes`);
   return makeExo('CodexStateProvider', CodexStateProviderInterface, {
     prepareSessionDirectory: records.prepareSessionDirectory,
     /** @param {string} sessionId */
