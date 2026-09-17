@@ -8,13 +8,13 @@
 //! retain their existing row defaults and require no shared-state extension.
 
 /// Version of the capture/restore row declarations, distinct from wire encoding.
-pub const ROW_SCHEMA_VERSION: u32 = 4;
+pub const ROW_SCHEMA_VERSION: u32 = 5;
 
 pub use crate::interp::MAP_MIN_TABLE_LENGTH;
 pub use crate::interp::{
     AccessorRow, ArraySnapshot, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow,
     BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, DateTimeFormatData,
-    DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow, FunctionRow,
+    DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow, FromAsyncRow, FunctionRow,
     FunctionStateSnapshot, GeneratorRow, HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow,
     IntlTables, IteratorRow, ListFormatData, LocaleData, ModuleGraphSnapshot, ModuleRecordRow,
     NumberFormatData, PluralRulesData, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,

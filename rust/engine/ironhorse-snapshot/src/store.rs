@@ -99,7 +99,10 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// v34: ASYN may carry async generator instances after the activations, and
 /// the `AsyncGenerator*` reaction kinds resume. Migration is an identity
 /// restamp: an older ASYN payload has no generator trailer.
-pub const STORE_SCHEMA_VERSION: u32 = 34;
+/// v35: ASYN may carry the `Array.fromAsync` accumulations after the generator
+/// trailer, and the `FromAsync*` reaction kinds resume. Migration is an
+/// identity restamp: an older ASYN payload has no fromAsync trailer.
+pub const STORE_SCHEMA_VERSION: u32 = 35;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -2246,7 +2249,9 @@ pub fn migrate_store(
             (25, _) => migrate_v25_to_v26(store)?,
             (26, _) => migrate_v26_to_v27(store)?,
             (27, _) => migrate_v27_to_v28(store)?,
-            (28 | 29 | 30 | 31 | 32 | 33, _) => migrate_framed_schema_identity(store, schema + 1)?,
+            (28 | 29 | 30 | 31 | 32 | 33 | 34, _) => {
+                migrate_framed_schema_identity(store, schema + 1)?
+            }
             (_, Some(&(target, extra_len))) => {
                 migrate_append_small_section(store, target, extra_len)?;
             }

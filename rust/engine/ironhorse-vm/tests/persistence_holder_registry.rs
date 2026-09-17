@@ -53,6 +53,7 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("async_generators", &[".frame.as_ref().is_some_and(|f|saved_frame_contains(f,names))", "g.requests.iter().chain(g.active.as_ref()).any(|r|names(&r.value)||names(&r.resolve)||names(&r.reject))"]),
         ("promise_jobs", &["PromiseJob::Reaction{reaction:r,value,..}=>names(value)||names(&r.on_fulfilled)||names(&r.on_rejected)||names(&r.resolve)||names(&r.reject)", "PromiseJob::Thenable{then,thenable,resolve,reject}=>names(then)||names(thenable)||names(resolve)||names(reject)"]),
         ("iterators", &["index(s.iterable.0)"]),
+        ("from_async", &["index(f.target.0)", "names(&f.resolve)||names(&f.reject)||names(&f.mapfn)||names(&f.this_arg)||names(&f.iterator)||names(&f.next_method)||names(&f.array_like)||names(&f.close_error)"]),
     ];
     let active: Vec<_> = PERSIST_HOLDER_SOURCE
         .iter()
