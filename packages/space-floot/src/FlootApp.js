@@ -54,6 +54,11 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   // Pre-select the factory's default model (falling back to the first listed),
   // so picking a preset alone still creates a session with a sensible model.
   const preferred = models.find(m => m.default) || models[0];
+  const [backend, setBackend] = useState(preferred?.backendId || 'provider');
+  const backends = [...new Set(models.map(m => m.backendId || 'provider'))];
+  const backendModels = models.filter(
+    m => (m.backendId || 'provider') === backend,
+  );
   const [model, setModel] = useState(preferred ? preferred.id : '');
   const [reasoningEffort, setReasoningEffort] = useState(
     preferred?.defaultReasoningEffort || preferred?.reasoningEfforts?.[0] || '',
@@ -75,11 +80,48 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
         ? h(
             'label',
             { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Backend'),
+            h(
+              'select',
+              {
+                class: 'floot-model-select',
+                'aria-label': 'Backend',
+                value: backend,
+                onChange: (/** @type {FlootSafeEvent} */ e) => {
+                  const candidates = models.filter(
+                    m => (m.backendId || 'provider') === e.target.value,
+                  );
+                  const next = candidates.find(m => m.default) || candidates[0];
+                  setBackend(e.target.value);
+                  setModel(next?.id || '');
+                  setReasoningEffort(
+                    next?.defaultReasoningEffort ||
+                      next?.reasoningEfforts?.[0] ||
+                      '',
+                  );
+                },
+              },
+              backends.map(id =>
+                h(
+                  'option',
+                  { key: id, value: id },
+                  models.find(m => (m.backendId || 'provider') === id)
+                    ?.backendTitle || (id === 'provider' ? 'LLM API' : id),
+                ),
+              ),
+            ),
+          )
+        : null,
+      models.length
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
             h('span', { class: 'floot-modal-label' }, 'Model'),
             h(
               'select',
               {
                 class: 'floot-model-select',
+                'aria-label': 'Model',
                 value: model,
                 onChange: (/** @type {FlootSafeEvent} */ e) => {
                   const next = models.find(
@@ -93,7 +135,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   );
                 },
               },
-              models.map(m =>
+              backendModels.map(m =>
                 h(
                   'option',
                   { key: m.id, value: m.id },

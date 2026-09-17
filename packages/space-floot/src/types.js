@@ -53,6 +53,7 @@ export {};
  *   default?: boolean,
  *   defaultReasoningEffort?: string | null,
  *   backendId?: string,
+ *   backendTitle?: string,
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],

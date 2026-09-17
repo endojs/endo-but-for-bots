@@ -4836,16 +4836,39 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
       if (!openRouter && !isKnownModel(defaultModel))
         defaultModel = DEFAULT_MODEL_ID;
+      const freeModels = [
+        {
+          id: 'openrouter/free',
+          title: 'Free models (automatic)',
+          description:
+            'OpenRouter selects an available free model supporting the request. Rate limits apply.',
+        },
+        {
+          id: 'google/gemma-4-31b-it:free',
+          title: 'Gemma 4 31B (free)',
+          description:
+            'Free OpenRouter model with tool support. Availability and rate limits vary.',
+        },
+        {
+          id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+          title: 'Nemotron 3 Ultra (free)',
+          description:
+            'Free OpenRouter model with tool support. Availability and rate limits vary.',
+        },
+      ];
       const catalog = openRouter
-        ? defaultModel
-          ? [
-              {
-                id: defaultModel,
-                title: defaultModel,
-                description: 'Configured OpenRouter model',
-              },
-            ]
-          : []
+        ? [
+            ...(defaultModel && !freeModels.some(m => m.id === defaultModel)
+              ? [
+                  {
+                    id: defaultModel,
+                    title: defaultModel,
+                    description: 'Configured OpenRouter model',
+                  },
+                ]
+              : []),
+            ...freeModels,
+          ]
         : MODELS;
       const providerModels = catalog.map(({ id, title, description }) => ({
         id,

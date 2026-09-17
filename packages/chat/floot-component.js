@@ -565,7 +565,8 @@ export const flootComponent = (
    *   FlootSession
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
-   *   default: boolean }} FlootModel
+   *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
+   *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[] }} FlootModel
    */
 
   /** @type {FlootPreset[]} */
@@ -726,14 +727,21 @@ export const flootComponent = (
    * @param {string} [reasoningEffort]
    */
   const createSession = async (title, presetId, model, reasoningEffort) => {
+    const selected = models.find(candidate => candidate.id === model);
     const requiresRecordForm = Boolean(
-      reasoningEffort || (model && model.includes(':')),
+      selected?.backendId || reasoningEffort || (model && model.includes(':')),
     );
     const facet = requiresRecordForm
       ? await E(factory).createSession({
           title: title || DEFAULT_TITLE,
           ...(presetId ? { presetId } : {}),
           ...(model ? { model } : {}),
+          ...(selected?.backendId
+            ? {
+                backendId: selected.backendId,
+                modelId: selected.modelId || model,
+              }
+            : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
         })
       : await E(factory).createSession(title || DEFAULT_TITLE, presetId, model);
@@ -839,6 +847,10 @@ export const flootComponent = (
         title: m.title,
         description: m.description,
         default: m.default,
+        backendId: m.backendId,
+        backendTitle: m.backendTitle,
+        defaultReasoningEffort: m.defaultReasoningEffort,
+        reasoningEfforts: m.reasoningEfforts,
       })),
       messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
@@ -2396,15 +2408,21 @@ export const flootComponent = (
   const loadInitialSessions = async () => {
     try {
       factory = await factory;
-      const [metas, presetList, modelList] = await Promise.all([
+      const [metas, presetList, modelList, backendList] = await Promise.all([
         E(factory).listSessions(),
         E(factory)
           .listPresets()
           .catch(() => []),
         E(factory).listModels(),
+        E(factory)
+          .listBackends()
+          .catch(() => []),
       ]);
       presets = presetList;
-      models = modelList;
+      models = modelList.map(m => ({
+        ...m,
+        backendTitle: backendList.find(b => b.id === m.backendId)?.title,
+      }));
       // `listSessions()` is a remote call, so its result is unknown here;
       // retain unavailable sessions too: hiding them would hide recovery work.
       const allMetas = /** @type {any[]} */ ([...metas]);

@@ -32,6 +32,115 @@ testWindow.confirm = () => true;
 const waitFor = predicate => waitForDOM(predicate, 10, 2000);
 
 test.serial(
+  'new session filters models by backend and resets reasoning',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const created = [];
+    const facet = Far('PickerSession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = Far('PickerFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'One' }]),
+      listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+      listBackends: () =>
+        harden([
+          { id: 'provider', title: 'OpenRouter' },
+          { id: 'codex', title: 'Codex' },
+        ]),
+      listModels: () =>
+        harden([
+          {
+            id: 'openrouter/free',
+            title: 'Auto free',
+            backendId: 'provider',
+            default: true,
+          },
+          {
+            id: 'vendor/model:free',
+            title: 'Free model',
+            backendId: 'provider',
+          },
+          {
+            id: 'codex:sol',
+            modelId: 'sol',
+            title: 'Sol',
+            backendId: 'codex',
+            reasoningEfforts: ['low', 'high'],
+            defaultReasoningEffort: 'high',
+          },
+        ]),
+      getSession: () => facet,
+      createSession: (...args) => {
+        created.push(args);
+        return facet;
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() => parent.querySelector('.floot-session-item'));
+    await tick(50);
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('[aria-label="Backend"]'));
+    const select = label => {
+      const element = parent.querySelector(`select[aria-label="${label}"]`);
+      if (!(element instanceof testWindow.HTMLSelectElement)) {
+        throw Error(`Missing select: ${label}`);
+      }
+      return element;
+    };
+    const change = async (label, value) => {
+      select(label).value = value;
+      select(label).dispatchEvent(
+        new testWindow.Event('change', { bubbles: true }),
+      );
+      await tick();
+    };
+    const options = () => [...select('Model').options].map(o => o.value);
+    t.deepEqual(options(), ['openrouter/free', 'vendor/model:free']);
+    t.true(select('Backend').textContent.includes('OpenRouter'));
+    await change('Backend', 'codex');
+    t.deepEqual(options(), ['codex:sol']);
+    t.is(parent.querySelectorAll('select')[2].value, 'high');
+    await change('Backend', 'provider');
+    t.is(parent.querySelectorAll('select').length, 2);
+    t.is(select('Model').value, 'openrouter/free');
+    await change('Model', 'vendor/model:free');
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 1);
+    t.is(created[0][0].model, 'vendor/model:free');
+    t.is(created[0][0].backendId, 'provider');
+    t.false('reasoningEffort' in created[0][0]);
+    await tick();
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('[aria-label="Backend"]'));
+    await change('Backend', 'codex');
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 2);
+    t.like(created[1][0], {
+      backendId: 'codex',
+      modelId: 'sol',
+      reasoningEffort: 'high',
+    });
+  },
+);
+
+test.serial(
   'Settings keeps emergency stop available during a pending resume',
   async t => {
     t.timeout(5000);

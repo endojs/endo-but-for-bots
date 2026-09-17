@@ -33,6 +33,7 @@ test('OpenRouter round trips tool calls, reports usage, and honors cancellation'
       t.is(init.redirect, 'error');
       t.is(init.headers.Authorization, 'Bearer test-not-a-key');
       const body = JSON.parse(init.body);
+      t.false('max_tokens' in body);
       t.deepEqual(body.messages[0].tool_calls, [call]);
       t.is(body.messages[1].tool_call_id, 'call1');
       controller.abort();
@@ -62,6 +63,27 @@ test('OpenRouter round trips tool calls, reports usage, and honors cancellation'
   );
   t.deepEqual(deltas, ['Done']);
   t.deepEqual(result.usage, { inputTokens: 12, outputTokens: 3 });
+});
+
+test('OpenRouter preserves an explicit output limit', async t => {
+  const provider = makeOpenRouterProvider({
+    ...options,
+    maxTokens: 8192,
+    fetchImpl: async (_url, init) => {
+      t.is(JSON.parse(init.body).max_tokens, 8192);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: 'Done' },
+            },
+          ],
+        }),
+      );
+    },
+  });
+  await provider.chat([], []);
 });
 
 test('OpenRouter preserves tool calls and reasoning details across tool rounds', async t => {
