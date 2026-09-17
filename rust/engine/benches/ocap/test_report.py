@@ -90,6 +90,10 @@ class DriverOutput(unittest.TestCase):
         manifest = {"fixtures": [{"name": "one", "size": "small"}]}
         line = 'OCAP_SAMPLE {"fixture":"one","size":"small"}'
         self.assertEqual(list(parse_samples(line, manifest)), [("one", "small")])
+        self.assertEqual(
+            list(parse_samples(f"test ocap_workload ... {line}", manifest)),
+            [("one", "small")],
+        )
         with self.assertRaisesRegex(ValueError, "duplicate"):
             parse_samples(f"{line}\n{line}", manifest)
         with self.assertRaisesRegex(ValueError, "roster differs"):

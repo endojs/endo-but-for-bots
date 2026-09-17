@@ -55,9 +55,10 @@ def expected_keys(manifest):
 def parse_samples(output, manifest):
     samples = {}
     for line in output.splitlines():
-        if not line.startswith(SAMPLE_PREFIX):
+        marker = line.find(SAMPLE_PREFIX)
+        if marker < 0:
             continue
-        sample = json.loads(line[len(SAMPLE_PREFIX) :])
+        sample = json.loads(line[marker + len(SAMPLE_PREFIX) :])
         key = (sample.get("fixture"), sample.get("size"))
         if key in samples:
             raise ValueError(f"duplicate sample {key}")
