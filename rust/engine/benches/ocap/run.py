@@ -423,7 +423,11 @@ def main():
     retained = {arm: {key: [] for key in expected_keys(manifest)} for arm in ("parent", "candidate", "xs")}
     sample_order = []
     failures = []
-    with tempfile.TemporaryDirectory(prefix="ironhorse-ocap-") as temporary:
+    # This host mounts /tmp with noexec; keep release test binaries beside the
+    # isolated project worktree and remove them when the run ends.
+    with tempfile.TemporaryDirectory(
+        prefix="ironhorse-ocap-", dir=REPOSITORY_ROOT.parent
+    ) as temporary:
         temporary_root = Path(temporary)
         parent_root = temporary_root / "parent"
         parent_root.mkdir()
