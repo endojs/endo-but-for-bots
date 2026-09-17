@@ -2183,31 +2183,43 @@ Each turn kind also projects on its own: user → `synthetic`, assistant →
 `assistant`, tool → `assistant` (with `tool.called` and `tool.success`),
 compaction → `system`, with `step.started`/`step.ended` bracketing as written.
 
-**What is actually broken, in the patch rather than the platform.**
+**What is actually wrong: the import lands in a store the prompt never reads.**
 
-1. **The handler answers `200 true` when the import fails.** The work runs
-   after the schema check, and a failure inside it surfaced as an unhandled
-   `ServeError` while the route still reported success. This is what made a
-   broken import indistinguishable from a working one from the outside, and it
-   is the first thing to fix regardless of the rest: a route that cannot say it
-   failed cannot be debugged.
-2. **A multi-turn import fails where each turn alone succeeds.** The
-   deployment's case — user followed by assistant — is exactly this. The cause
-   is not yet pinned down.
-3. **`GET /session/:id/message` does not list synthetic messages**, which is
-   cosmetic for restoration but is why the first probe read as a total failure.
+OpenCode carries two session implementations side by side. The v2 service —
+`session.next.*` events, the projector, `SessionMessageTable` — is where this
+patch writes. The HTTP surface the bridge drives is v1: `GET /session/:id/message`
+and the prompt path both go through `Session.messages`, which reads
+`MessageTable` through `MessageV2.page`. Different tables, no delegation
+between them; the patch's own comment observed the v1 wrapper "does not
+delegate to v2" and then wrote to v2 anyway.
 
-**A caveat on the measurements.** The probe killed the server with `SIGKILL`,
-which leaves the WAL uncheckpointed, so a later run showed no rows at all for
-cases that had rows minutes earlier. Only the positive observations above are
-evidence; absence of rows in that setup proves nothing. The next probe must
-shut the server down gracefully before reading, or read through the API.
+So every observation lines up. The import commits durable v2 events and
+projects v2 messages, exactly as designed. `GET /message` returns `[]` because
+it reads v1. The model never sees the conversation because the turn runs
+through v1. The route reports success because, on its own terms, it succeeded.
 
-**The smallest change, as far as this spike can see it.** Fix the handler to
-propagate failure; re-run the multi-turn case with a real error in hand; fix
-what it names. Nothing here requires touching `Prompted`, the prompt-admission
-lifecycle, or the durable log's internals — the reason the patch chose
-`Synthetic` still holds, and `Synthetic` turns out to persist perfectly well.
+Two earlier readings in this document were measurement artifacts and are
+withdrawn: the multi-turn import does not fail — with a graceful shutdown it
+produces both a `synthetic` and an `assistant` message — and the zero-row
+results came from `SIGKILL` leaving the WAL uncheckpointed. Only positive
+observations from that probe were ever evidence.
+
+**The smallest change, with prior art.** `packages/opencode/src/cli/cmd/import.ts`
+already imports a whole conversation into the store the CLI reads: it inserts a
+`SessionTable` row, then `MessageTable` rows, then `PartTable` rows, from an
+exported session. That is an existing, upstream, supported path for exactly
+this — putting a conversation somebody else holds into a session.
+
+So the route should do what that command does, rather than publish v2 events:
+insert v1 message and part rows for the imported turns. It keeps the narrow
+`ImportedTurn` payload, so nothing capability-shaped is accepted; it never
+touches `Prompted` or prompt admission, so the hazard the patch set out to
+avoid stays avoided; and it lands where the prompt reads. It is also the more
+upstreamable shape, being the HTTP sibling of a command that already exists.
+
+Independently of that, the handler must propagate failure. It answered
+`200 true` while an unhandled `ServeError` went to the log, which is what let a
+route that writes to the wrong store look healthy.
 
 ### 1b. The image pin is read once, and then never again
 
