@@ -880,9 +880,11 @@ test('restoration goes through the structured import, or not at all', async t =>
     await waitFor(() => bridge.commands.length >= 1);
     const imported = JSON.parse(bridge.commands[0]);
     t.is(imported.op, 'import');
+    // `ModelV2.Ref`: `{ id, providerID }`. The route rejects the flat
+    // `{ modelID, providerID }` shape its neighbours use, with a bare 400.
     t.deepEqual(imported.model, {
       providerID: 'openrouter',
-      modelID: 'deepseek/v4',
+      id: 'deepseek/v4',
     });
     // A call and its result are one imported turn: splitting them would
     // record a call the store shows as never having returned.

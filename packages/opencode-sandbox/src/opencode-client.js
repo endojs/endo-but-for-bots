@@ -705,10 +705,14 @@ export const makeOpencodeClient = ({
   // model does not import — an attribution invented here would be a claim
   // about which model said what.
   const importAgent = 'build';
+  // `ModelV2.Ref`, which the import route takes: `{ id, providerID }`. Not the
+  // flat `{ modelID, providerID }` that `init` and `summarize` take — the two
+  // shapes live side by side in the same schema file, and sending the second
+  // where the first belongs is a 400 with no detail.
   const importModel = model
     ? harden({
         providerID: String(model).split('/')[0],
-        modelID: String(model).split('/').slice(1).join('/'),
+        id: String(model).split('/').slice(1).join('/'),
       })
     : undefined;
 
