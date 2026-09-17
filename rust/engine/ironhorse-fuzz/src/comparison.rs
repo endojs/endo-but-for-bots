@@ -115,6 +115,18 @@ mod tests {
         assert!(results_agree("57632001481506816", "57632001481506820"));
         // A genuine value divergence is still caught.
         assert!(!results_agree("57632001481506816", "57632001481506824"));
+        // Multi-crank CI finding 3bb7e699: no epsilon comparison. Even the
+        // immediately adjacent double must remain a divergence.
+        let finding = f64::from_bits(0x4370_7400_0000_0000);
+        assert_eq!("74098287619080190".parse::<f64>().unwrap(), finding);
+        assert_eq!("74098287619080200".parse::<f64>().unwrap(), finding);
+        assert!(results_agree("74098287619080190", "74098287619080200"));
+        for bits in [finding.to_bits() - 1, finding.to_bits() + 1] {
+            assert!(!results_agree(
+                "74098287619080190",
+                &f64::from_bits(bits).to_string()
+            ));
+        }
         assert!(!results_agree("3", "4"));
         // Non-numeric completions compare byte-for-byte.
         assert!(results_agree("true", "true"));
