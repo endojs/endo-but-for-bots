@@ -34,10 +34,19 @@ export const providePrivateTurnStorage = async (
   const readyName = `${prefix}migration-ready`;
   const resolutionName = `${prefix}migration-resolution`;
   const names = new Set(await E(host).list());
-  /** @param {unknown} name */
-  const assertEventName = name => {
-    (typeof name === 'string' && /^floot-turn-event-\d{20}$/.test(name)) ||
-      Fail`Invalid private journal event name`;
+  /**
+   * The names the journal owns: events, the content values records refer to,
+   * snapshots, and archive chunks (see `turn-journal.js`). Nothing else
+   * reaches the factory host through this facet.
+   *
+   * @param {unknown} name
+   */
+  const assertJournalName = name => {
+    (typeof name === 'string' &&
+      /^floot-turn-(event-\d{20}|content-\d{20}-[a-z]+|snapshot-\d{20}|archive-\d{20})$/.test(
+        name,
+      )) ||
+      Fail`Invalid private journal value name`;
     return /** @type {string} */ (name);
   };
   /** @type {{ names: string[], required: boolean }} */
@@ -138,19 +147,29 @@ export const providePrivateTurnStorage = async (
       serialized(async () =>
         harden(
           [...names]
-            .filter(name => name.startsWith(`${prefix}${EVENT_PREFIX}`))
+            .filter(name => name.startsWith(`${prefix}floot-turn-`))
             .map(name => name.slice(prefix.length)),
         ),
       ),
     lookup: name =>
       serialized(async () =>
-        E(host).lookup(`${prefix}${assertEventName(name)}`),
+        E(host).lookup(`${prefix}${assertJournalName(name)}`),
       ),
     storeValue: (value, name) =>
       serialized(async () => {
-        const target = `${prefix}${assertEventName(name)}`;
-        !names.has(target) || Fail`Private journal events are immutable`;
+        const target = `${prefix}${assertJournalName(name)}`;
+        !names.has(target) || Fail`Private journal values are immutable`;
         await store(value, target);
+      }),
+    // A removal is never ambiguous about the history: the journal removes
+    // only what a durable snapshot already covers, so a failure here costs a
+    // stray value and nothing else, and does not poison.
+    remove: name =>
+      serialized(async () => {
+        const target = `${prefix}${assertJournalName(name)}`;
+        names.has(target) || Fail`Unknown private journal value`;
+        await E(host).remove(target);
+        names.delete(target);
       }),
   });
   const migration = harden({

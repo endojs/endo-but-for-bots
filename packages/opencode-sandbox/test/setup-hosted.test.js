@@ -470,14 +470,16 @@ test.serial(
     }
     fake.specifiers.set('broker-service-id', brokerServiceSpecifier);
     fake.specifiers.set('session-storage-id', sessionStorageSpecifier);
-    const digest = `sha256:${'b'.repeat(64)}`;
+    // The retained broker's pins equal the configured ones; a retained broker
+    // is kept only while they do (see the pin-mismatch test below).
+    const digest = `sha256:${'a'.repeat(64)}`;
     const brokerEnv = harden({
       OPENCODE_BROKER_CONFIG: JSON.stringify({
         ownerId: 'persisted-broker',
         directory: '/persisted/broker',
         imageRef: `localhost/opencode@${digest}`,
         imageDigest: digest,
-        listenerImageRef: `localhost/listener@sha256:${'d'.repeat(64)}`,
+        listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
         models: ['anthropic/claude-sonnet-4'],
       }),
     });
@@ -537,6 +539,82 @@ test.serial(
       unsupported.mints,
       [],
       'the storage owner is read for its roots before any mint',
+    );
+  },
+);
+
+test.serial(
+  'a retained broker whose pins no longer match the configuration is refused before any mint',
+  async t => {
+    await baseEnv(t);
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const other = `sha256:${'e'.repeat(64)}`;
+    const retained = overrides =>
+      harden({
+        OPENCODE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'persisted-broker',
+          directory: '/persisted/broker',
+          imageRef: `localhost/opencode@${digest}`,
+          imageDigest: digest,
+          listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+          models: ['anthropic/claude-sonnet-4'],
+          ...overrides,
+        }),
+      });
+    const retainedHost = brokerEnv => {
+      const fake = preflightHost();
+      fake.bindings.set(key('opencode-sandbox', 'broker-service'), 'cap');
+      fake.specifiers.set('broker-service-id', brokerServiceSpecifier);
+      fake.environments.set('broker-service-id', brokerEnv);
+      return fake;
+    };
+    // The operator bumped the slice image; the retained broker still pins the
+    // old digest. Retaining it silently would leave every slice on the old
+    // image while the unit environment claims the new one.
+    await withEnv(t, {
+      ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@${other}`,
+    });
+    const bumped = retainedHost(retained());
+    await t.throwsAsync(main(bumped.host), {
+      message: new RegExp(
+        `pins OpenCode sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "opencode-sandbox/broker-service" when no session depends on it, then rerun setup`,
+      ),
+    });
+    t.deepEqual(bumped.mints, [], 'refused before the credential mint');
+    // A tag is resolved (read-only) to compare; matching the retained digest
+    // retains the broker exactly as a pinned reference would.
+    await withEnv(t, {
+      ENDO_OPENCODE_SANDBOX_IMAGE: 'oci:localhost/opencode:latest',
+    });
+    const resolvedHost = retainedHost(retained());
+    const inspected = [];
+    await main(resolvedHost.host, {
+      exec: async (file, args) => {
+        inspected.push([file, ...args]);
+        return { stdout: `${digest}\n` };
+      },
+    });
+    t.is(inspected.length, 1);
+    t.false(
+      resolvedHost.mints.some(mint => mint.specifier === brokerServiceSpecifier),
+      'the broker is retained, not re-minted',
+    );
+    // The listener image is compared the same way when the environment names
+    // one; a retained broker allows the environment to omit it.
+    await withEnv(t, {
+      ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@${digest}`,
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@${other}`,
+    });
+    const listener = retainedHost(retained());
+    await t.throwsAsync(main(listener.host), {
+      message: /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
+    });
+    t.deepEqual(listener.mints, []);
+    await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
+    const omitted = retainedHost(retained());
+    await main(omitted.host);
+    t.false(
+      omitted.mints.some(mint => mint.specifier === brokerServiceSpecifier),
     );
   },
 );

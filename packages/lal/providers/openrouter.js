@@ -15,14 +15,17 @@ import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
 export const makeOpenRouterProvider = ({
   apiKey,
   model,
-  maxTokens = 4096,
+  maxTokens,
   fetchImpl = fetch,
 }) => {
   if (!apiKey || !apiKey.trim()) throw Error('OpenRouter API key is required');
   if (!model || !model.includes('/')) {
     throw Error('OpenRouter model must include its organization prefix');
   }
-  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+  if (
+    maxTokens !== undefined &&
+    (!Number.isInteger(maxTokens) || maxTokens <= 0)
+  ) {
     throw Error('OpenRouter maxTokens must be a positive integer');
   }
 
@@ -49,7 +52,7 @@ export const makeOpenRouterProvider = ({
           model,
           messages: toOpenAICompatibleMessages(messages),
           ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
-          max_tokens: maxTokens,
+          ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
           stream: false,
         }),
       },

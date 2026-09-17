@@ -57,6 +57,16 @@ harden(UNSETTLED_TOOL_RESULT);
  */
 
 /**
+ * How much of one turn the host keeps in memory before it is committed: the
+ * answer text plus every observed call's arguments and result, in UTF-16
+ * code units. It matches the 16 Mi frame the bounded readers hold resident
+ * and the storage-value bound of the turn journal, which is where this
+ * material goes next; it is not an output ceiling on the backend, whose own
+ * queue is bounded by credit where it is delivered.
+ */
+const MAX_RETAINED_CHARS = 16 * 1024 * 1024;
+
+/**
  * Fail a turn with what the backend already did with it. A backend whose
  * continuity is its own transcript keeps the delivered prompt and whatever
  * streamed before the failure, so the caller mirrors those instead of dropping
@@ -123,7 +133,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], continuityContext?: string, continuityContextUnavailable?: string, recordToolEvent?: (event: any) => Promise<void> }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], continuityContext?: string, continuityContextUnavailable?: string, recordToolEvent?: (event: any) => Promise<void>, maxRetainedChars?: number }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -138,6 +148,7 @@ export const runHostedTurn = async ({
   continuityContext,
   continuityContextUnavailable,
   recordToolEvent,
+  maxRetainedChars = MAX_RETAINED_CHARS,
 }) => {
   const recordObservedTool = async event => {
     if (!recordToolEvent) return;
@@ -217,6 +228,22 @@ export const runHostedTurn = async ({
   /** @type {Array<{ id: string, name: string, args: string, result: string | null }>} */
   const toolCalls = [];
   const callsById = new Map();
+  // What this turn holds in memory until it is committed: the answer text and
+  // every observed call's arguments and result. This is the one place a
+  // turn's output accumulates on the host side, so it is the place the bound
+  // lives; the adapters bound what they queue for delivery, not what a turn
+  // keeps. Exceeding it fails the turn with what was retained, and the
+  // producer is interrupted like any other failed turn.
+  let retainedChars = 0;
+  /** @param {string} chunk */
+  const retain = chunk => {
+    retainedChars += chunk.length;
+    if (retainedChars > maxRetainedChars) {
+      throw Error(
+        `hosted turn exceeded its retained transcript bound of ${maxRetainedChars} characters`,
+      );
+    }
+  };
   await null;
   try {
     const readerP = E(client).send(
@@ -273,6 +300,7 @@ export const runHostedTurn = async ({
           break;
         case 'text-delta': {
           const textDelta = `${event.text || ''}`;
+          retain(textDelta);
           finalContent += textDelta;
           pendingText += textDelta;
           writer.delta(textDelta);
@@ -303,6 +331,7 @@ export const runHostedTurn = async ({
             };
             if (!call.id || callsById.has(call.id))
               throw Error('Hosted tool call requires a unique nonempty ID');
+            retain(call.args);
             toolCalls.push(call);
             callsById.set(call.id, call);
             const lastSegment = segments[segments.length - 1];
@@ -325,6 +354,7 @@ export const runHostedTurn = async ({
           const call = callsById.get(`${event.id || ''}`);
           if (!call || call.result !== null)
             throw Error('Hosted tool result has no unsettled matching call');
+          retain(result);
           if (call) call.result = result;
           if (call)
             await recordObservedTool({
@@ -344,6 +374,7 @@ export const runHostedTurn = async ({
           // summary. Recorded as a segment so it keeps its place in the turn:
           // the boundary is a position, not a fact about the turn as a whole.
           flushText();
+          retain(`${event.summary || ''}`);
           segments.push({
             type: 'compaction',
             summary: `${event.summary || ''}`,

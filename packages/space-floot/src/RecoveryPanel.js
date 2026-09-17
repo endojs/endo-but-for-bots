@@ -246,13 +246,13 @@ export const RecoveryPanel = ({ recovery, controller }) => {
     recovery.current
       ? h('p', null, 'A turn is active. Recovery is disabled until it settles.')
       : null,
-    // The journal's event ceiling is the backend's concern until it is nearly
-    // reached; then the operator has to act, so only then is it shown.
-    recovery.capacity?.nearCapacity
+    // The journal has no ceiling: settled turns beyond its retained window
+    // are archived in storage, so the list here is the retained ones.
+    recovery.capacity?.archivedTurns
       ? h(
           'p',
-          { class: 'floot-panel-note warn' },
-          `Near capacity: ${recovery.capacity.usedEvents}/${recovery.capacity.eventLimit} journal events used (${recovery.capacity.storage}). Arrange a new session before the journal fills.`,
+          { class: 'floot-panel-note' },
+          `${recovery.capacity.archivedTurns} earlier settled turns are archived; ${recovery.capacity.retainedTurns} retained (${recovery.capacity.usedEvents} journal events, ${recovery.capacity.storage} storage).`,
         )
       : null,
     recovery.status === 'ready' && !recovery.turns.length

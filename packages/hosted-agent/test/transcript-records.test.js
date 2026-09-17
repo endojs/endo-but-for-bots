@@ -7,6 +7,7 @@ import {
   encodeTranscriptRecord,
   pairToolCalls,
   parseTranscript,
+  readResponsesApiItems,
   responsesApiItems,
   splitAtLastCompaction,
 } from '../src/transcript-records.js';
@@ -229,4 +230,26 @@ test('an unsettled call still gets an output, and a compaction drops what it rep
     compacted.map(item => item.content?.[0]?.text ?? item.type),
     ['we built the page', 'now the footer'],
   );
+});
+
+test('Responses API items read back as records, skipping what the stack does not record', t => {
+  // A thread the CLI extended after restoration carries item kinds the stack
+  // has no record for; reading it back must report the conversation those
+  // items sit in rather than refuse the thread.
+  const items = [
+    ...responsesApiItems(conversation),
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'hmm' }] },
+    {
+      type: 'message',
+      role: 'assistant',
+      content: [
+        { type: 'output_text', text: 'and ' },
+        { type: 'output_text', text: 'more' },
+      ],
+    },
+  ];
+  t.deepEqual(readResponsesApiItems(items), [
+    ...conversation,
+    { kind: 'message', role: 'assistant', content: 'and more' },
+  ]);
 });

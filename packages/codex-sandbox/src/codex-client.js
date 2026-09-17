@@ -50,15 +50,12 @@ const brief = (value, limit) => {
   return `${text.slice(0, limit)}… [truncated ${text.length - limit} chars]`;
 };
 
-const auditProjection = (value, limit = 4 * 1024 * 1024) => {
-  const text =
-    typeof value === 'string'
-      ? value
-      : (JSON.stringify(value) ?? String(value));
-  const size = new TextEncoder().encode(text).byteLength;
-  if (size > limit) throw Error(`Audit payload exceeded ${limit} bytes`);
-  return text;
-};
+// The text an audit entry records for a value. Its size is the journal's
+// business: a field beyond the inline bound is stored by reference there, and
+// only a value beyond one storage value is refused — by the journal, which
+// is what makes the refusal a recording failure the client quarantines on.
+const auditProjection = value =>
+  typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
 
 /**
  * Project a successful tool fulfillment to JSON without silently collapsing
@@ -136,9 +133,6 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @property {(turnId: string) => void} resolveStarted
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
  * @property {ReturnType<typeof setTimeout>} [wallTimer]
- * @property {number} events
- * @property {number} bytes
- * @property {number} toolCalls
  * @property {Set<string>} serverRequestIds
  * @property {Set<string>} toolCallIds
  * @property {Set<string>} textItems
@@ -172,14 +166,25 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @param {{ baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string }} [options.savedRecovery]
  * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} [options.saveThreadState]
  * @param {number} [options.requestTimeoutMs]
- * @param {number} [options.maxTurnEvents]
- * @param {number} [options.maxTurnBytes]
+ * @param {number} [options.maxTurnItems] Distinct item, call and request
+ *   identities one turn may retain for deduplication; the one per-turn
+ *   allocation that grows with the stream. A turn is not bounded in events
+ *   or bytes: what it delivers is bounded by credit at the reader, and what
+ *   the host keeps of it is bounded where it is kept (Floot's hosted turn).
+ * @param {number} [options.maxEarlyEvents] Events queued for a turn the
+ *   app-server has announced before `turn/start` has answered with its id.
+ * @param {number} [options.maxEarlyBytes]
  * @param {number} [options.maxToolResultChars]
  * @param {number} [options.maxPromptBytes]
  * @param {number} [options.maxRequestBytes]
- * @param {number} [options.maxToolCalls]
- * @param {number} [options.toolCallTimeoutMs]
- * @param {number} [options.turnWallTimeoutMs]
+ * @param {number} [options.toolCallTimeoutMs] How long one Endo tool call
+ *   may run before its outcome is recorded unknown and the session poisoned
+ *   against a successor overlapping it. Off by default: a slow tool is the
+ *   user's to interrupt, and a timeout that ends the session for a build
+ *   that took three minutes is not a bound on anything the host retains.
+ *   An operator with an explicit budget sets it.
+ * @param {number} [options.turnWallTimeoutMs] Likewise for a whole turn.
+ *   Off by default; neither the Claude nor the OpenCode adapter has one.
  */
 export const makeCodexClient = ({
   start,
@@ -200,14 +205,14 @@ export const makeCodexClient = ({
   savedToolSetId,
   savedRecovery,
   requestTimeoutMs = 30_000,
-  maxTurnEvents = 10_000,
-  maxTurnBytes = 16 * 1024 * 1024,
+  maxTurnItems = 16_384,
+  maxEarlyEvents = 1024,
+  maxEarlyBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
   maxRequestBytes = 2 * 1024 * 1024,
-  maxToolCalls = 128,
-  toolCallTimeoutMs = 120_000,
-  turnWallTimeoutMs = 30 * 60_000,
+  toolCallTimeoutMs = 0,
+  turnWallTimeoutMs = 0,
 }) => {
   /** @type {AppServerTransport | undefined} */
   let transport;
@@ -695,13 +700,29 @@ export const makeCodexClient = ({
   const pushTurn = event => {
     const turn = active;
     if (!turn) return;
-    turn.events += 1;
-    turn.bytes += byteLength(event);
-    if (turn.events > maxTurnEvents || turn.bytes > maxTurnBytes) {
-      void interruptActive('Codex turn exceeded configured output bounds');
-      return;
-    }
     turn.push(harden(event));
+  };
+
+  /**
+   * Retain an identity the turn deduplicates on. The sets and the phase map
+   * are the per-turn allocations that grow with the stream, so they carry
+   * the bound; a turn that keeps naming new items past it is failed with a
+   * reason that says which allocation, not "output bounds".
+   *
+   * @param {Set<string> | Map<string, unknown>} retained
+   * @param {string} key
+   * @param {unknown} [value]
+   */
+  const retainIdentity = (retained, key, value = undefined) => {
+    if (!retained.has(key) && retained.size >= maxTurnItems) {
+      failSession(
+        Error(`Codex turn retained more than ${maxTurnItems} item identities`),
+      );
+      return false;
+    }
+    if (retained instanceof Map) retained.set(key, value);
+    else retained.add(key);
+    return true;
   };
 
   const sameTurn = params => {
@@ -753,14 +774,19 @@ export const makeCodexClient = ({
     if (typeof params.callId !== 'string' || params.callId === '') {
       throw Error('Dynamic tool call omitted its stable call id');
     }
-    if (!active || active.toolCalls >= maxToolCalls) {
-      throw Error(`Dynamic tool call limit exceeded (${maxToolCalls})`);
+    if (!active) {
+      throw Error('Dynamic tool call outside an active turn');
     }
     if (active.toolCallIds.has(params.callId)) {
       throw Error(`Dynamic tool call id was replayed: ${params.callId}`);
     }
-    active.toolCallIds.add(params.callId);
-    active.toolCalls += 1;
+    // No count of calls per turn: the ids are the one thing retained, and
+    // they are bounded with the turn's other identities.
+    if (!retainIdentity(active.toolCallIds, params.callId)) {
+      throw Error(
+        `Codex turn retained more than ${maxTurnItems} item identities`,
+      );
+    }
     await audit('tool-intent', {
       threadId: params.threadId,
       turnId: params.turnId,
@@ -774,7 +800,9 @@ export const makeCodexClient = ({
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      if (toolCallTimeoutMs > 0) {
+        timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      }
     });
     const operation = Promise.resolve().then(() =>
       callTool(params.tool, params.arguments),
@@ -937,7 +965,7 @@ export const makeCodexClient = ({
     if (active.serverRequestIds.has(requestKey)) {
       throw Error(`Codex server request id was replayed: ${id}`);
     }
-    active.serverRequestIds.add(requestKey);
+    if (!retainIdentity(active.serverRequestIds, requestKey)) return;
     if (method === 'item/tool/call') {
       const result = await runDynamicTool(params);
       await sendMessage({ id, result });
@@ -998,10 +1026,14 @@ export const makeCodexClient = ({
       active.earlyEvents += 1;
       active.earlyBytes += byteLength(message);
       if (
-        active.earlyEvents > maxTurnEvents ||
-        active.earlyBytes > maxTurnBytes
+        active.earlyEvents > maxEarlyEvents ||
+        active.earlyBytes > maxEarlyBytes
       ) {
-        failSession(Error('Codex early turn events exceeded output bounds'));
+        failSession(
+          Error(
+            `Codex queued more than ${maxEarlyEvents} events or ${maxEarlyBytes} bytes for a turn before turn/start answered`,
+          ),
+        );
         return;
       }
       const queued = active.earlyByTurn.get(`${eventTurnId}`) || [];
@@ -1022,7 +1054,7 @@ export const makeCodexClient = ({
       case 'item/agentMessage/delta':
         if (active) {
           const itemId = `${params.itemId || ''}`;
-          active.textItems.add(itemId);
+          if (!retainIdentity(active.textItems, itemId)) break;
           pushTurn({
             type:
               active.messagePhases.get(itemId) === 'commentary'
@@ -1034,10 +1066,14 @@ export const makeCodexClient = ({
         break;
       case 'item/started': {
         if (params.item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(
-            `${params.item.id || ''}`,
-            params.item.phase ?? null,
-          );
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${params.item.id || ''}`,
+              params.item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(params.item);
         if (tool) {
@@ -1065,7 +1101,14 @@ export const makeCodexClient = ({
       case 'item/completed': {
         const { item } = params;
         if (item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(`${item.id || ''}`, item.phase ?? null);
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${item.id || ''}`,
+              item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(item);
         if (tool) {
@@ -1684,9 +1727,6 @@ export const makeCodexClient = ({
         resolveTerminal,
         started,
         resolveStarted,
-        events: 0,
-        bytes: 0,
-        toolCalls: 0,
         serverRequestIds: new Set(),
         toolCallIds: new Set(),
         textItems: new Set(),
@@ -1696,13 +1736,15 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
-      turn.wallTimer = setTimeout(() => {
-        if (active === turn) {
-          void interruptActive(
-            `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
-          );
-        }
-      }, turnWallTimeoutMs);
+      if (turnWallTimeoutMs > 0) {
+        turn.wallTimer = setTimeout(() => {
+          if (active === turn) {
+            void interruptActive(
+              `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
+            );
+          }
+        }, turnWallTimeoutMs);
+      }
       channel.setOnClose(() => {
         if (active === turn) void interruptActive('Codex turn interrupted');
       });

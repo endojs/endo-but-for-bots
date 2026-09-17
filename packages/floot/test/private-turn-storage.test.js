@@ -40,7 +40,7 @@ test('private storage separates ordinary guest names, not a delegated administra
   t.deepEqual(await migration.status(), { required: false });
   t.deepEqual(await E(guest.powers).list(), [eventName(1)]);
   await t.throwsAsync(E(storage).lookup('migration-manifest'), {
-    message: /event name/,
+    message: /value name/,
   });
   await t.throwsAsync(E(storage).storeValue('overwrite', eventName(1)), {
     message: /immutable/,

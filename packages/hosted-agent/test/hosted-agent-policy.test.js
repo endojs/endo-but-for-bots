@@ -1,8 +1,11 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import {
   HOSTED_AGENT_POLICY_V1,
+  HOSTED_ANCHOR_ARGV,
   HOSTED_SLICE_RESOURCES,
   assertFixedMounts,
   makeHostedAgentPolicyVerifier,
@@ -231,3 +234,43 @@ test('the writable ceiling is a sum over the table, not a profile constant', t =
   // The profile carries no ceiling of its own: it is not a constant.
   t.false('writableBytes' in HOSTED_SLICE_RESOURCES);
 });
+
+// The argv is coreutils' `sleep infinity`, as the pinned images have it;
+// macOS's `sleep` takes only a number, so this runs where the anchors do.
+const onLinux = process.platform === 'linux' ? test : test.skip;
+
+onLinux(
+  'the anchor argv blocks, then ends on SIGTERM and takes its sleep with it',
+  async t => {
+    // What a bare `sleep infinity` as a container's PID 1 does not do: PID 1
+    // gets no signal it has not handled, so systemd's stop of the daemon
+    // waited its whole timeout on every anchor and SIGKILLed them. This runs
+    // the argv as an ordinary process, which is enough to show the handler is
+    // installed and the backgrounded sleep is what it kills.
+    const [command, ...args] = HOSTED_ANCHOR_ARGV;
+    const child = spawn(command, args, { stdio: 'ignore' });
+    const exited = new Promise(resolve => {
+      child.on('exit', (code, signal) => resolve({ code, signal }));
+    });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    t.is(child.exitCode, null, 'the anchor is still running while it is read');
+    const { stdout } = await promisify(execFile)('pgrep', [
+      '-P',
+      `${child.pid}`,
+    ]);
+    const sleeps = stdout.trim().split('\n').filter(Boolean).map(Number);
+    t.is(sleeps.length, 1, 'one backgrounded sleep');
+    child.kill('SIGTERM');
+    const outcome = await Promise.race([
+      exited,
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 5000)),
+    ]);
+    t.not(outcome, 'timeout', 'the anchor ends on SIGTERM');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    t.throws(
+      () => process.kill(sleeps[0], 0),
+      { code: 'ESRCH' },
+      'the sleep did not outlive its shell',
+    );
+  },
+);

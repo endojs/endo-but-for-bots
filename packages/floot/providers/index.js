@@ -74,7 +74,10 @@ export const createStreamingProvider = env => {
     return makeOpenRouterProvider({
       apiKey: env.FLOOT_AUTH_TOKEN || env.LAL_AUTH_TOKEN || '',
       model: env.FLOOT_MODEL || env.LAL_MODEL || '',
-      maxTokens: Number(env.FLOOT_MAX_TOKENS || env.LAL_MAX_TOKENS || 4096),
+      maxTokens:
+        env.FLOOT_MAX_TOKENS || env.LAL_MAX_TOKENS
+          ? Number(env.FLOOT_MAX_TOKENS || env.LAL_MAX_TOKENS)
+          : undefined,
     });
   }
 

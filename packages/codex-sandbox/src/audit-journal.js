@@ -9,16 +9,30 @@ import { M } from '@endo/patterns';
 
 const GENESIS_HASH = '0'.repeat(64);
 const MAX_DEPTH = 64;
-const RESERVED_LIFECYCLE_KINDS = harden([
-  'cleanup-failed',
-  'session-close-deferred',
-  'session-close-requested',
-  'session-closed',
-  'session-failed',
-  'session-provisioning-cleanup-failed',
-  'session-provisioning-failed',
-  'session-teardown-failed',
-]);
+
+/**
+ * Bounds, and what each protects. There is no lifetime ceiling on a journal:
+ * the former 16 MiB total, and the anchor store that kept every head ever
+ * written with its full entry inside it under a second such total, ended a
+ * Codex session after a few hundred audited tool calls. What they stood in
+ * for is bounded below by construction.
+ *
+ * `MAX_VALUE_BYTES` bounds one stored value — an entry or a content value —
+ * because a value is one JSON document held whole while it is encoded,
+ * hashed and written; `parseCanonicalAuditJson` refuses anything larger on
+ * the way back in. It matches the 16 Mi frame the bounded readers hold.
+ *
+ * `INLINE_BYTES` is the size above which a payload's text field is stored as
+ * its own content value and the entry carries `{ ref, bytes, preview }`
+ * instead. The chain hash covers the reference, and the reference names the
+ * content by its own hash, so the content is attested exactly as an inline
+ * field would be; an entry is bounded by construction to its fixed fields
+ * plus one inline field's worth per field. `PREVIEW_BYTES` is what an entry
+ * keeps of such a field so a reader can tell what it was without the value.
+ */
+const MAX_VALUE_BYTES = 16 * 1024 * 1024;
+const INLINE_BYTES = 64 * 1024;
+const PREVIEW_BYTES = 4 * 1024;
 
 const AuditWriterInterface = M.interface('AgentAuditWriter', {
   append: M.call(M.string()).optional(M.any()).returns(M.promise()),
@@ -27,6 +41,7 @@ const AuditWriterInterface = M.interface('AgentAuditWriter', {
 
 const AuditReaderInterface = M.interface('AgentAuditReader', {
   entries: M.call().optional(M.number(), M.number()).returns(M.promise()),
+  content: M.call(M.string()).returns(M.promise()),
   verify: M.call().returns(M.promise()),
   help: M.call().returns(M.string()),
 });
@@ -108,7 +123,7 @@ harden(canonicalAuditJson);
  * @param {number} [maxBytes]
  * @returns {unknown}
  */
-export const parseCanonicalAuditJson = (text, maxBytes = 16 * 1024 * 1024) => {
+export const parseCanonicalAuditJson = (text, maxBytes = MAX_VALUE_BYTES) => {
   typeof text === 'string' || Fail`audit data must be text`;
   new TextEncoder().encode(text).byteLength <= maxBytes ||
     Fail`audit data exceeded ${maxBytes} bytes`;
@@ -193,20 +208,20 @@ export const hashAuditEntry = value =>
 harden(hashAuditEntry);
 
 /**
+ * Verify a chain whole. Linear in the entries, and transient: nothing here is
+ * retained past the walk, and each entry is bounded by construction, so the
+ * walk is what an audit chain costs to be one rather than a ceiling on how
+ * long a session may run.
+ *
  * @param {readonly any[]} entries
- * @param {{ journalId?: string, sessionId?: string, maxEntries?: number, maxTotalBytes?: number, maxEntryBytes?: number }} [expected]
+ * @param {{ journalId?: string, sessionId?: string, maxEntryBytes?: number }} [expected]
  */
 export const verifyAuditEntries = (entries, expected = {}) => {
-  if (entries.length > (expected.maxEntries ?? Number.POSITIVE_INFINITY)) {
-    return harden({ ok: false, sequence: 0n, previousHash: GENESIS_HASH });
-  }
   let previousHash = GENESIS_HASH;
   let expectedSequence = 0n;
-  let totalBytes = 0;
   for (const entry of entries) {
     const encoded = canonicalAuditJson(entry);
     const entryBytes = new TextEncoder().encode(encoded).byteLength;
-    totalBytes += entryBytes;
     if (
       entry?.version !== 1 ||
       entry?.sequence !== expectedSequence ||
@@ -218,20 +233,14 @@ export const verifyAuditEntries = (entries, expected = {}) => {
         entry.journalId !== expected.journalId) ||
       (expected.sessionId !== undefined &&
         entry.sessionId !== expected.sessionId) ||
-      entryBytes > (expected.maxEntryBytes ?? Number.POSITIVE_INFINITY) ||
-      totalBytes > (expected.maxTotalBytes ?? Number.POSITIVE_INFINITY)
+      entryBytes > (expected.maxEntryBytes ?? MAX_VALUE_BYTES)
     ) {
       return harden({ ok: false, sequence: expectedSequence, previousHash });
     }
     previousHash = hashAuditEntry(entry);
     expectedSequence += 1n;
   }
-  return harden({
-    ok: true,
-    sequence: expectedSequence,
-    previousHash,
-    totalBytes,
-  });
+  return harden({ ok: true, sequence: expectedSequence, previousHash });
 };
 harden(verifyAuditEntries);
 
@@ -249,12 +258,19 @@ harden(verifyAuditEntries);
  * @param {(entry: any) => Promise<void>} options.appendEntry
  * @param {() => Promise<any | undefined>} options.readHead
  * @param {(head: any) => Promise<void>} options.writeHead
+ * @param {(head: any) => Promise<void>} [options.discardHead] Remove a head
+ *   a newer one has superseded. Without it the anchor store keeps every head
+ *   ever written, each with its entry inside, which is a second copy of the
+ *   journal growing beside the first.
+ * @param {(name: string, text: string) => Promise<void>} [options.storeContent]
+ *   Store a payload field too large to keep inline. Without it a field beyond
+ *   `inlineBytes` is refused, because a journal that cannot store the content
+ *   cannot attest a reference to it.
+ * @param {(name: string) => Promise<unknown>} [options.readContent]
  * @param {() => string} [options.now]
  * @param {number} [options.maxEntryBytes]
- * @param {number} [options.maxEntries]
- * @param {number} [options.maxTotalBytes]
- * @param {number} [options.reservedLifecycleEntries]
- * @param {number} [options.reservedLifecycleBytes]
+ * @param {number} [options.inlineBytes]
+ * @param {number} [options.previewBytes]
  */
 export const makeAuditJournal = ({
   journalId,
@@ -263,25 +279,19 @@ export const makeAuditJournal = ({
   appendEntry,
   readHead,
   writeHead,
+  discardHead,
+  storeContent,
+  readContent,
   now = () => new Date().toISOString(),
-  maxEntryBytes = 16 * 1024 * 1024,
-  maxEntries = 100_000,
-  maxTotalBytes = 256 * 1024 * 1024,
-  reservedLifecycleEntries = Math.min(16, maxEntries),
-  reservedLifecycleBytes = Math.min(64 * 1024, maxTotalBytes),
+  maxEntryBytes = MAX_VALUE_BYTES,
+  inlineBytes = INLINE_BYTES,
+  previewBytes = PREVIEW_BYTES,
 }) => {
-  (Number.isInteger(reservedLifecycleEntries) &&
-    reservedLifecycleEntries >= 0 &&
-    reservedLifecycleEntries <= maxEntries) ||
-    Fail`invalid audit lifecycle entry reserve`;
-  (Number.isInteger(reservedLifecycleBytes) &&
-    reservedLifecycleBytes >= 0 &&
-    reservedLifecycleBytes <= maxTotalBytes) ||
-    Fail`invalid audit lifecycle byte reserve`;
   let recovered = false;
   let tail = GENESIS_HASH;
   let nextSequence = 0n;
-  let totalBytes = 0;
+  /** @type {any} */
+  let currentHead;
   let writeChain = Promise.resolve();
 
   const makeHead = (sequence, hash, entry) =>
@@ -310,8 +320,6 @@ export const makeAuditJournal = ({
     let verification = verifyAuditEntries(loaded, {
       journalId,
       sessionId,
-      maxEntries,
-      maxTotalBytes,
       maxEntryBytes,
     });
     if (!verification.ok) {
@@ -333,8 +341,6 @@ export const makeAuditJournal = ({
       const pending = verifyAuditEntries([head.entry], {
         journalId,
         sessionId,
-        maxEntries,
-        maxTotalBytes,
         maxEntryBytes,
       });
       assertHead(head, pending, head.entry);
@@ -350,8 +356,6 @@ export const makeAuditJournal = ({
       const completed = verifyAuditEntries([...loaded, head.entry], {
         journalId,
         sessionId,
-        maxEntries,
-        maxTotalBytes,
         maxEntryBytes,
       });
       assertHead(head, completed, head.entry);
@@ -365,12 +369,9 @@ export const makeAuditJournal = ({
       assertHead(head, verification, loaded.at(-1));
     }
     recovered = true;
+    currentHead = head;
     tail = verification.previousHash;
     nextSequence = verification.sequence;
-    totalBytes =
-      'totalBytes' in verification
-        ? /** @type {number} */ (verification.totalBytes)
-        : 0;
   };
 
   /**
@@ -417,17 +418,46 @@ export const makeAuditJournal = ({
     return result;
   };
 
+  /**
+   * Replace each payload text field beyond `inlineBytes` with a reference to
+   * a content value named by the field's own hash. The content is stored
+   * before the entry that refers to it, so a crash between the two leaves an
+   * unreferenced value rather than a reference to nothing.
+   *
+   * @param {any} payload
+   */
+  const externalize = async payload => {
+    if (typeof payload !== 'object' || payload === null) return payload;
+    let result = payload;
+    const large = Object.entries(payload).flatMap(([field, value]) => {
+      if (typeof value !== 'string') return [];
+      const bytes = new TextEncoder().encode(value).byteLength;
+      return bytes > inlineBytes ? [{ field, value, bytes }] : [];
+    });
+    for (const { field, value, bytes } of large) {
+      storeContent ||
+        Fail`audit payload ${q(field)} of ${q(bytes)} bytes exceeds ${q(inlineBytes)} inline bytes and this journal stores no content`;
+      bytes <= MAX_VALUE_BYTES ||
+        Fail`audit payload ${q(field)} of ${q(bytes)} bytes exceeds the ${q(MAX_VALUE_BYTES)}-byte storage value bound`;
+      const ref = `sha256:${createHash('sha256').update(value).digest('hex')}`;
+      // eslint-disable-next-line no-await-in-loop
+      await storeContent(ref, value);
+      result = {
+        ...result,
+        [field]: {
+          ref,
+          bytes,
+          preview: value.slice(0, previewBytes),
+        },
+      };
+    }
+    return harden(result);
+  };
+
   const writer = makeExo('AgentAuditWriter', AuditWriterInterface, {
     async append(kind, payload = {}) {
       return inChainOrder(async () => {
         await recover();
-        const lifecycle = RESERVED_LIFECYCLE_KINDS.includes(kind);
-        if (!lifecycle && reservedLifecycleEntries > 0) {
-          nextSequence < BigInt(maxEntries - reservedLifecycleEntries) ||
-            Fail`audit journal entered its lifecycle reserve`;
-        }
-        nextSequence < BigInt(maxEntries) ||
-          Fail`audit journal exceeded ${maxEntries} entries`;
         const entry = harden({
           version: 1,
           journalId,
@@ -436,25 +466,21 @@ export const makeAuditJournal = ({
           at: now(),
           kind,
           previousHash: tail,
-          payload,
+          payload: await externalize(payload),
         });
         const byteLength = new TextEncoder().encode(
           canonicalAuditJson(entry),
         ).byteLength;
         byteLength <= maxEntryBytes ||
           Fail`audit entry exceeded ${maxEntryBytes} bytes`;
-        if (!lifecycle && reservedLifecycleBytes > 0) {
-          totalBytes + byteLength <= maxTotalBytes - reservedLifecycleBytes ||
-            Fail`audit journal entered its lifecycle byte reserve`;
-        }
-        totalBytes + byteLength <= maxTotalBytes ||
-          Fail`audit journal exceeded ${maxTotalBytes} bytes`;
         const nextHash = hashAuditEntry(entry);
+        const head = makeHead(nextSequence + 1n, nextHash, entry);
+        const previousHead = currentHead;
         try {
           // Authorize the exact immutable entry in the separately protected
           // anchor before exposing it to the entry store. Recovery may complete
           // this one prepared append, but never bless an unauthenticated suffix.
-          await writeHead(makeHead(nextSequence + 1n, nextHash, entry));
+          await writeHead(head);
           await appendEntry(entry);
         } catch (error) {
           // Re-read and either repair or reject the independently anchored
@@ -462,9 +488,16 @@ export const makeAuditJournal = ({
           recovered = false;
           throw error;
         }
+        currentHead = head;
         tail = nextHash;
         nextSequence += 1n;
-        totalBytes += byteLength;
+        // The head that authorized the previous entry has done its work: the
+        // entry it named is in the store and the new head names this one.
+        // Only the newest head is a witness; a failure to discard leaves a
+        // stale one that recovery already knows to read past.
+        if (discardHead && previousHead !== undefined) {
+          await discardHead(previousHead).catch(() => {});
+        }
         return harden({ sequence: entry.sequence, hash: tail });
       });
     },
@@ -484,8 +517,6 @@ export const makeAuditJournal = ({
         const verification = verifyAuditEntries(loaded, {
           journalId,
           sessionId,
-          maxEntries,
-          maxTotalBytes,
           maxEntryBytes,
         });
         verification.ok || Fail`audit journal failed verification`;
@@ -496,6 +527,16 @@ export const makeAuditJournal = ({
         return harden(loaded.slice(start, start + limit));
       });
     },
+    async content(ref) {
+      /^sha256:[0-9a-f]{64}$/.test(ref) ||
+        Fail`invalid audit content reference`;
+      readContent || Fail`this journal stores no content`;
+      const text = await readContent(ref);
+      (typeof text === 'string' &&
+        `sha256:${createHash('sha256').update(text).digest('hex')}` === ref) ||
+        Fail`audit content does not match its reference`;
+      return text;
+    },
     async verify() {
       return inChainOrder(async () => {
         await recover();
@@ -503,8 +544,6 @@ export const makeAuditJournal = ({
         const verification = verifyAuditEntries(loaded, {
           journalId,
           sessionId,
-          maxEntries,
-          maxTotalBytes,
           maxEntryBytes,
         });
         if (!verification.ok) return verification;
@@ -552,9 +591,7 @@ harden(makeAuditJournal);
  * @param {string} [options.prefix]
  * @param {() => string} [options.now]
  * @param {number} [options.maxEntryBytes]
- * @param {number} [options.maxTotalBytes]
- * @param {number} [options.maxAnchorBytes]
- * @param {number} [options.reservedAnchorBytes]
+ * @param {number} [options.inlineBytes]
  */
 export const makeStoredAuditJournal = (
   powers,
@@ -565,9 +602,7 @@ export const makeStoredAuditJournal = (
     prefix = `codex-audit-${sessionId}`,
     now,
     maxEntryBytes,
-    maxTotalBytes,
-    maxAnchorBytes = 256 * 1024 * 1024,
-    reservedAnchorBytes = Math.min(64 * 1024, maxAnchorBytes),
+    inlineBytes,
   },
 ) => {
   anchorPowers || Fail`audit journal requires independent anchor powers`;
@@ -575,15 +610,10 @@ export const makeStoredAuditJournal = (
     Fail`audit journal entry and anchor powers must be distinct`;
   /^[a-zA-Z0-9._-]+$/.test(prefix) ||
     Fail`audit journal prefix contains unsafe characters`;
-  (Number.isInteger(maxAnchorBytes) && maxAnchorBytes > 0) ||
-    Fail`invalid audit anchor byte limit`;
-  (Number.isInteger(reservedAnchorBytes) &&
-    reservedAnchorBytes >= 0 &&
-    reservedAnchorBytes <= maxAnchorBytes) ||
-    Fail`invalid audit anchor byte reserve`;
   const entryName = sequence => `${prefix}-${`${sequence}`.padStart(20, '0')}`;
   const headName = sequence =>
     `${prefix}-head-${`${sequence}`.padStart(20, '0')}`;
+  const contentName = ref => `${prefix}-content-${ref.slice('sha256:'.length)}`;
   const readEntries = async () => {
     const names = await E(powers).list();
     const selected = (Array.isArray(names) ? names : [])
@@ -609,11 +639,19 @@ export const makeStoredAuditJournal = (
     }
     await E(powers).storeValue(entry, name);
   };
-  let anchorBytes = 0;
-  const readHead = async () => {
+  const storeContent = async (ref, text) => {
+    await null;
+    const name = contentName(ref);
+    // Content is named by its hash, so an existing value of that name is
+    // this value; a repeated result costs one value, not one per entry.
+    if (await E(powers).has(name)) return;
+    await E(powers).storeValue(text, name);
+  };
+  const readContent = async ref => E(powers).lookup(contentName(ref));
+  const headNames = async () => {
     const names = await E(anchorPowers).list();
     const headPrefix = `${prefix}-head-`;
-    const selected = (Array.isArray(names) ? names : [])
+    return (Array.isArray(names) ? names : [])
       .filter(
         name =>
           typeof name === 'string' &&
@@ -621,19 +659,13 @@ export const makeStoredAuditJournal = (
           /^[0-9]{20}$/.test(name.slice(headPrefix.length)),
       )
       .sort();
+  };
+  // Only the newest head is a witness; an older one still present is the
+  // one `discardHead` did not get to, and reads past it.
+  const readHead = async () => {
+    const selected = await headNames();
     if (selected.length === 0) return undefined;
-    anchorBytes = 0;
-    let last;
-    for (const name of selected) {
-      // eslint-disable-next-line no-await-in-loop
-      last = await E(anchorPowers).lookup(name);
-      anchorBytes += new TextEncoder().encode(
-        canonicalAuditJson(last),
-      ).byteLength;
-      anchorBytes <= maxAnchorBytes ||
-        Fail`audit anchor store exceeded ${maxAnchorBytes} bytes`;
-    }
-    return last;
+    return E(anchorPowers).lookup(selected[selected.length - 1]);
   };
   const writeHead = async head => {
     const name = headName(head.sequence);
@@ -642,18 +674,10 @@ export const makeStoredAuditJournal = (
       if (canonicalAuditJson(existing) === canonicalAuditJson(head)) return;
       throw makeError(X`audit journal head already exists: ${q(name)}`);
     }
-    const headBytes = new TextEncoder().encode(
-      canonicalAuditJson(head),
-    ).byteLength;
-    const lifecycle = RESERVED_LIFECYCLE_KINDS.includes(head.entry?.kind);
-    if (!lifecycle && reservedAnchorBytes > 0) {
-      anchorBytes + headBytes <= maxAnchorBytes - reservedAnchorBytes ||
-        Fail`audit anchor store entered its lifecycle reserve`;
-    }
-    anchorBytes + headBytes <= maxAnchorBytes ||
-      Fail`audit anchor store exceeded ${maxAnchorBytes} bytes`;
     await E(anchorPowers).storeValue(head, name);
-    anchorBytes += headBytes;
+  };
+  const discardHead = async head => {
+    await E(anchorPowers).remove(headName(head.sequence));
   };
   return makeAuditJournal({
     journalId,
@@ -662,9 +686,12 @@ export const makeStoredAuditJournal = (
     appendEntry,
     readHead,
     writeHead,
+    discardHead,
+    storeContent,
+    readContent,
     ...(now ? { now } : {}),
     ...(maxEntryBytes ? { maxEntryBytes } : {}),
-    ...(maxTotalBytes ? { maxTotalBytes } : {}),
+    ...(inlineBytes ? { inlineBytes } : {}),
   });
 };
 harden(makeStoredAuditJournal);

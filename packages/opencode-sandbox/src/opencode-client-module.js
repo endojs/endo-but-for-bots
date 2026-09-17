@@ -169,7 +169,9 @@ harden(planBrokerClient);
  * The per-turn wall-clock budget handed to the in-slice bridge. The backend's
  * own value wins; a daemon-wide `ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS` (the
  * only spelling the daemon env filter forwards) is the operator-level
- * fallback, and empty lets the bridge apply its default.
+ * fallback, and empty lets the bridge apply its default — none, in a bridge
+ * built from this revision; an image built before it still applies 30
+ * minutes until it is rebuilt.
  *
  * @param {Record<string, string | undefined>} env
  * @returns {string}

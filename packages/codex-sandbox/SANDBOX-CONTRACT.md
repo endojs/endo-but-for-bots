@@ -103,17 +103,23 @@ Endo records remain outside that domain.
 - Core dumps: zero bytes.
 - Aggregate writable storage: 16 GiB.
 - Prompt: 1 MiB; outbound JSON request: 2 MiB; individual JSONL record: 1 MiB.
-- Turn: 10,000 events, 16 MiB normalized output, and 30 minutes wall time.
+- Turn: at most 16,384 distinct item, call and request identities retained
+  for deduplication. A turn is not bounded in events, bytes or wall time:
+  delivery is bounded by credit at the reader, what the host keeps of a turn
+  is bounded where it is kept (Floot's hosted turn, 16 Mi characters), and a
+  long turn is the user's to interrupt. `turnWallTimeoutMs` is an operator
+  option, off by default.
 - Process stdout: 64 MiB; stderr: 1 MiB; displayed tool result: 64 KiB.
-- Endo dynamic tools: 128 calls per turn, two minutes per call, and 4 MiB per
-  complete intent/result audit payload.
-- Audit entry: 16 MiB; audit journal: 100,000 entries, at most 256 MiB of
-  canonical entry data in the bulk store, and at most 256 MiB of canonical
-  write-ahead data in the independent anchor store.
-  Each store independently preserves a 64-KiB reserve usable only for terminal
-  lifecycle events; the bulk store also preserves 16 entries for that purpose.
-  The combined logical payload bound is therefore 512 MiB, and the production
-  stores must separately bound storage-engine metadata.
+- Endo dynamic tools: no count per turn (their ids count among the retained
+  identities above) and no time per call by default; `toolCallTimeoutMs` is
+  an operator option, and when set, a call that exceeds it is recorded as an
+  unknown outcome and poisons the session against a successor overlapping it.
+- Audit journal: no lifetime ceiling. One stored value — an entry or a
+  content value — is at most 16 MiB; a payload text field over 64 KiB is
+  stored by reference, named by its hash, with a 4 KiB preview inline. The
+  independent anchor store keeps only the newest write-ahead head. The chain
+  is verified whole at every recovery, which is linear in the entries and
+  transient.
 
 Provisioning fails when any required control is unavailable.
 The attestation must include the exact operator-approved image digest and the

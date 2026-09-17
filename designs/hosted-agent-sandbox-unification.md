@@ -57,15 +57,13 @@ Host quota-helper retirement is complete in endo-host (`564700d`): Codex now use
 shared directory storage without the former kernel quota guarantee.
 The offline old XFS image was retained, not reused as active state.
 
-**Still outstanding:** bounded journal replay/retention and large-content storage;
-remaining retained maps, transcript buffers, and UI delivery allocations before
-removing cumulative ceilings; consolidation of effects recording and transport
-admission/cancellation; remaining mechanical wrapper cleanup; runtime probe/anchor
-simplification only after replacement checks prove its invariants; and final
-all-backend rootless-Podman conformance plus obsolete-code/security-document audit.
-The existing cumulative output and journal lifetime caps remain deliberately in
-place until their specific replacement bounds are implemented.
-The UA deployment does not close Phases 4 or 5.
+**Still outstanding** (revised 2026-09-18; bounded journal replay/retention,
+large-content storage and the removal of the cumulative and lifetime ceilings
+landed — see Phase 4 below): consolidation of effects recording and transport
+admission/cancellation; remaining mechanical wrapper cleanup; runtime
+probe/anchor simplification only after replacement checks prove its invariants;
+and final all-backend rootless-Podman conformance plus obsolete-code/security-
+document audit. The UA deployment does not close Phases 4 or 5.
 
 ### Earlier increments
 
@@ -1834,22 +1832,53 @@ only thing that could have. This is the case the list below calls "restore on
 a wiped store", and running it is what separated a working restoration from a
 CLI that happened to still have its own copy.
 
-Tests that must exist before each adapter is called done:
+Tests that must exist before each adapter is called done — **all five exist
+as of 2026-09-18**, and where each lives:
 
 - **Round trip.** Journal → neutral stream → native transcript → the CLI
   reports the same turns, in order, with the same tool calls and results.
-  Shared, in the conformance suite beside `cli-cleanup-conformance.js`.
+  Shared: `hosted-agent/test/transcript-conformance.js`, driven by
+  `claude-transcript-conformance.test.js`,
+  `codex-transcript-conformance.test.js` and
+  `opencode-transcript-conformance.test.js`. Each adapter supplies its
+  translation and a read-back of the native form (`readClaudeTranscript`,
+  `readResponsesApiItems`, `readImportedTurns`), so the round trip is judged
+  rather than trusted. The "CLI reports" half is the live check below.
 - **Tool-call fidelity.** A restored tool call arrives as a tool call with its
-  result, never as flattened text. This is the property most likely to
-  regress silently.
+  result, never as flattened text. In the shared suite; the read-backs are
+  what make it checkable. Known limit: Codex's `function_call_output` has no
+  failure flag, so a `failed` result restores as an output there.
 - **Compaction round trip.** A compacted session restores with its boundary,
   and its active context is the post-compaction span rather than the whole
-  history.
+  history. In the shared suite; OpenCode's read-back models the CLI's own
+  context assembly (latest compaction onward), Claude's and Codex's carry the
+  summary as the opening message because those CLIs have no boundary row.
 - **Restore on a wiped store.** A session whose native store is gone restores
-  from the journal and reports the prior turns — the case that today has no
-  handling at all on OpenCode's resume path.
+  from the journal and reports the prior turns. Per adapter, at the client:
+  `claude-client.test.js` ("the first turn of the incarnation restores"),
+  `codex-client.test.js` ("a new thread is restored through inject_items, not
+  through its prompt"; "an app-server without inject_items refuses the turn
+  rather than degrading it"), `opencode-client.test.js` ("a new incarnation
+  restores the stack's record before its first turn"; "restoration goes
+  through the structured import, or not at all"). Live: the recall round trip
+  across a daemon restart, `ops/verify-restoration.mjs` in endo-host.
 - **Image pin bump.** Bumping any CLI image runs the round-trip conformance, so
   a private format changing under us fails loudly instead of resuming empty.
+  In endo-host: `modules/restoration-conformance.nix` refuses to evaluate a
+  configuration whose enabled `*Sandbox.image` digest has no entry in
+  `ops/restoration-conformance.json`, and warns on every switch while the
+  entry is a `candidate`; `ops/verify-restoration.mjs` is the live round
+  trip (seed a word, restart the daemon, recall it) and
+  `ops/record-restoration-conformance.mjs` promotes the entry with the
+  evidence. It cannot gate *before* the switch — a broker refuses a re-pin in
+  place, so the image has to be live to be tested — which is why the
+  candidate state warns rather than the bump being blocked outright. An
+  offline pre-deploy variant (drive each CLI in Podman with a written store
+  and read it back through the CLI, no inference) would close that gap and is
+  not scheduled.
+- `cli-cleanup-conformance.js`, which the first bullet named as the suite's
+  neighbour, has had no consumer since the adapters moved to the daemon owner
+  (db53b1040, b4767d5aa); it is dead and goes in the Phase 5 audit.
 
 ## Protection and limit justification
 
@@ -2119,8 +2148,52 @@ do not make runtime unification depend on redesigning every UI/history consumer.
 Remove the anchor/probe machinery only as replacement actual-runtime checks and
 deployment tests establish the promised properties.
 
-Exit: large and long healthy work completes with bounded resident memory and
-storage, and intentionally uncertain effects remain recoverable without replay.
+Exit: large and long healthy work completes with bounded resident memory, and
+intentionally uncertain effects remain recoverable without replay. Storage is
+deliberately not bounded: transcript content is kept until the session is
+removed in Endo and collected, so storage grows with the conversation.
+
+**Journals and ceilings — landed 2026-09-18.** Every lifetime and cumulative
+ceiling named in the status block above is gone, each replaced by a bound on
+the allocation it stood in for:
+
+- Floot's turn journal (`turn-journal.js`): no lifetime ceiling (was 10,000
+  events). Text fields over 8,192 characters are stored as their own values
+  with a preview and a `<field>Ref` in the record (`getTurnContent`); replay
+  reads the newest snapshot (every 64 events) and only the events after it;
+  settled turns beyond a window of 256 move to archive chunks read on request
+  (`getArchivedTurns`), and a turn with an unresolved outcome is never
+  archived. The journal never removes an event, content value or chunk — only
+  a superseded snapshot, which is derived. One storage value is bounded at
+  16 Mi characters, the frame the bounded readers hold; a tool result beyond
+  it fails that call, not the session.
+- Floot's hosted turn (`hosted-turn.js`): the one host-side accumulation of a
+  turn — answer text plus observed call arguments and results — is bounded
+  where it lives, `maxRetainedChars` (16 Mi). This is what the adapters'
+  per-turn byte caps had been standing in for.
+- Codex client: `maxTurnEvents`/`maxTurnBytes` gone; the per-turn identity
+  sets it deduplicates on carry `maxTurnItems` (16,384) by name, and the
+  queue of events arriving before `turn/start` answers keeps its own
+  `maxEarlyEvents`/`maxEarlyBytes`. The 128-call cap, the 30-minute wall
+  clock and the two-minute tool-call timeout that poisoned the session are
+  off by default and remain operator options.
+- OpenCode client: the 8 MiB cumulative turn budget gone (the credit-bounded
+  reader is the resident bound); the bridge's 30-minute wall clock is off by
+  default, effective once the image is rebuilt from this revision.
+- Codex audit journal: no lifetime ceiling (was 16 MiB of entries and a
+  second 16 MiB anchor store that kept every head ever written, a budget of
+  roughly 250 audited tool calls per session). Only the newest head is kept;
+  a payload text field over 64 KiB is stored by reference, named by its hash,
+  with a 4 KiB preview, and the chain hash covers the reference. The whole
+  chain is still verified at every recovery — linear, transient, over small
+  entries; that is what an audit chain costs to be one.
+
+Still named, not changed: Floot's `FLOOT_MAX_TOOL_ROUNDS` (48) for the Fae
+loop, a safety ceiling on a model that never answers, configurable; the
+network-policy audit's 4,096-entry lifetime cap, which refuses further policy
+changes rather than the session and is the same pattern as the audit journal's
+former total. Effects-recording and transport admission/cancellation
+consolidation across the three adapters is the remaining Phase 4 item.
 
 ### Phase 5: final conformance and documentation
 
@@ -2173,7 +2246,7 @@ The entries below track those boundaries and remaining adapter integration.
 | Inert construction cancellation | Before the fix, Node probes reproduced two cancelled-context dependency-registration paths that revived missing controllers, and a held worker-formula load increased worker acquisitions from two to three after cancellation. Original-context checks now fence dependency acquisition before/after the provider, formula evaluation after loading, and unconfined powers after awaiting the worker. Late dependent cancellation consults only existing controllers. The combined 16 context/formula tests pass, including worker and client formula loads and a later intentional revival. | Fresh construction now retains an inert value/cancel kit before effects and reaches cancellation outside the owner queue. Two injected-daemon tests hold successful and failed caplet persistence: original worker cancellation waits for write settlement and acquires no successor. A real Node pending-constructor test verifies PID disappearance, released worker/client references, and a usable sibling. Stalled persistence still retains ownership; prior-ready reconstruction may have native effects and still requires cleanup. Core admission fences and fresh abort do not prove whole-session stop, recovery, or native Podman containment; adapter and pinned-CLI acceptance remain pending. |
 | Worker death versus connection closure | Node termination now waits for the original child’s `close` event. The focused worker/context run passes 19 tests, including a real child that closes its CapTP pipes and ignores SIGTERM until forced termination. Cancellation is retained by the original context before acquisition, including late completion and failed acquisition; the existing grace budget escalates without treating expiry as termination. | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` still skips whenever `ENDO_BIN` is set. Its engo connection-closure comment is prior evidence about an optional execution path; the Node regression above is independently reproduced. Whole-session emergency stop, descendant containment, failed-startup storage release, record deletion, and restart acceptance remain separate requirements. |
 | Native cgroup topology | The profile observer reads controls only from the process's own cgroup. crun's source (`libcrun_cgroup_enter` calling `update_cgroup_resources(status->path)`, with its systemd driver's path ending in the `container` sub-cgroup) shows the requested limits are written to exactly that cgroup. A first review claimed the leaf reads `max` and prompted an empty `run.oci.systemd.subgroup` annotation; a second pass contradicted the claim there and the annotation was withdrawn, because crun also reports `MemorySwapMax` to systemd as the raw memory-plus-swap total, which a later systemd re-application would restore on the scope. A fixture proves an unbounded leaf beneath a limited scope is refused without reading the scope. | Verify on rootless Linux that the pinned Podman/crun place the gate in a cgroup carrying exactly the profile's `memory.max`, `memory.swap.max` of zero, `pids.max` and `cpu.max`. Refusal on mismatch is the safe outcome, not acceptance evidence; do not add ancestor resolution. |
-| Native runtime ownership across daemon restart | A Node daemon test mints the native sandbox service with slot-free null powers and opens a scope; after `restart(config)`, looking the formula up again refuses with `EEXIST` on the previous incarnation's `<owner>.owner` marker, which is still present, because the owned service opens its runtime at construction. `stop` sends termination and then escalates to killing the daemon and workers, so either graceful termination does not await the runtime's release or the worker dies first; the test does not distinguish these. The capability-based factory runtime has the same marker semantics. | This is the documented no-recovery contract: existing markers refuse startup without a probe or stale sweep. Recovery semantics remain pending work; a deployment restart currently requires operator reconciliation of the marker before either sandbox service formula can revive. Decide whether graceful daemon termination should await native release, and test that separately; do not add a sweep. |
+| Native runtime ownership across daemon restart | A Node daemon test mints the native sandbox service with slot-free null powers and opens a scope; after `restart(config)`, looking the formula up again refuses with `EEXIST` on the previous incarnation's `<owner>.owner` marker, which is still present, because the owned service opens its runtime at construction. `stop` sends termination and then escalates to killing the daemon and workers, so either graceful termination does not await the runtime's release or the worker dies first; the test does not distinguish these. The capability-based factory runtime has the same marker semantics. | This is the documented no-recovery contract: existing markers refuse startup without a probe or stale sweep. Recovery semantics remain pending work; a deployment restart currently requires operator reconciliation of the marker before either sandbox service formula can revive. **Decided 2026-09-18: it does not.** The 90 s stop observed on every Tokyo deploy since 09-16 (`State 'final-sigterm' timed out`, then SIGKILL of every slice's `conmon` and `sleep`) was not the daemon awaiting anything — node exited within 200 ms of SIGTERM — but the policy anchors: `/bin/sleep infinity` as a container's PID 1 gets no signal it has not handled, so systemd's cgroup SIGTERM was ignored until `TimeoutStopSec`. `HOSTED_ANCHOR_ARGV` in `hosted-agent-policy.js` is now a shell that traps TERM and kills its backgrounded sleep, verified against all three pinned images with `podman kill --signal TERM` (exits within a second; the bare sleep does not). The daemon exits, systemd ends the cgroup, and the runtime's exact-label orphan sweep on the next start reclaims the exited containers — the containment barrier is the cgroup either way, and awaiting release across every live slice on SIGTERM would need a bound and a failure mode of its own. `--init` (catatonit as PID 1) was the alternative and would have added an undeclared `/run/podman-init` bind that `attestMounts` refuses. The marker no-recovery contract is unchanged; do not add a sweep. |
 
 Every newly discovered compatibility issue should include its reproducer or code
 evidence, exact execution configuration, observed versus inferred behavior, affected
@@ -2414,12 +2487,28 @@ retained branch and so does not.
 
 The operational unblock is to remove `opencode-sandbox/broker-service` and let
 setup mint it again, which is what was done here. The fix is for setup to
-compare the configured pin against the persisted one and re-mint on a
-mismatch — retention exists so that a broker holding credentials and live
-grants is not rebuilt for nothing, not so that a changed pin is silently
-discarded. Until that lands, **bumping any hosted CLI image requires removing
-the adapter's broker service**, and that belongs next to the re-pin recipe in
-`hosts/common.nix` rather than in someone's memory.
+compare the configured pin against the persisted one — retention exists so that
+a broker holding credentials and live grants is not rebuilt for nothing, not so
+that a changed pin is silently discarded.
+
+**Fixed, 2026-09-18 — by refusing, not re-minting.** Both setups now pass the
+retained broker's persisted profile through
+`assertRetainedBrokerImages` in `@endo/hosted-agent/hosted-setup.js`, which
+resolves the configured slice image (a tag through Podman, read-only; a digest
+without it) and refuses before any mint when it or the listener image differs
+from what the broker was minted with, naming both digests and the retirement
+recipe. Re-minting in place was rejected: the old broker owns its directory
+marker and any live grants, and a session records the broker's pins, so a
+replacement under the same name would either fail at construction or leave
+sessions attesting against a broker that no longer exists. Refusal is also what
+Codex's setup already did for its whole retained configuration; the two
+adapters now agree on the images, which are what an operator bumps. Only the
+images are compared — a retained profile's models, flags and beta list are
+still kept as persisted, which is a narrower contract than Codex's and is left
+so deliberately. **Bumping any hosted CLI image still requires retiring the
+adapter's broker service**, but a forgotten retirement now fails the daemon's
+setup loudly instead of running the old image; the recipe sits beside the pins
+in `hosts/common.nix`.
 
 ### 2. The Codex lease — acquisition leaks it, and recovery is already spent, 2026-09-17
 

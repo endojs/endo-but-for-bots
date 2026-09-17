@@ -81,9 +81,16 @@ export const testTranscriptRestoration = ({ label, restore, readBack }) => {
       { kind: 'message', role: 'user', content: 'now the footer' },
     ]);
     const records = await readBack(await restore(compacted));
+    // A CLI with no compaction concept carries the summary as a message; one
+    // with the concept carries it as the boundary row. Either is the summary
+    // reaching the model, which is what is being judged.
     const text = records
-      .filter(record => record.kind === 'message')
-      .map(record => record.content)
+      .filter(
+        record => record.kind === 'message' || record.kind === 'compaction',
+      )
+      .map(record =>
+        record.kind === 'compaction' ? record.summary : record.content,
+      )
       .join('\n');
     t.true(text.includes('we built the page'), 'the summary is carried');
     t.true(text.includes('now the footer'), 'the live span is carried');

@@ -688,3 +688,38 @@ test('durable tool recording failure stops the producer before exposing the tool
     { id: 'one', name: 'exec', args: '{}', result: null },
   ]);
 });
+
+test('a turn that outgrows its retained transcript bound fails with what it kept, and stops the producer', async t => {
+  let interrupts = 0;
+  let pulled = 0;
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          for (;;) {
+            pulled += 1;
+            yield { type: 'text-delta', text: 'x'.repeat(100) };
+          }
+        })(),
+      ),
+    interrupt: async () => {
+      interrupts += 1;
+    },
+  });
+  const deltas = [];
+  const error = await t.throwsAsync(
+    runHostedTurn({
+      client,
+      text: 'go',
+      writer: harden({ delta: d => deltas.push(d), setPhase() {} }),
+      maxRetainedChars: 1000,
+    }),
+    { message: /retained transcript bound of 1000/ },
+  );
+  t.is(interrupts, 1, 'the producer is stopped, not left streaming');
+  t.true(pulled <= 12, 'the bound is applied as events arrive, not after');
+  const partial = hostedTurnPartialOf(error);
+  t.is(partial?.finalContent.length, 1000, 'what was retained is reported');
+  t.true(partial?.delivered);
+  t.true(partial?.outcomeUnknown, 'a failed mid-stream turn is uncertain');
+});

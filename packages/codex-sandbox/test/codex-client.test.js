@@ -2110,6 +2110,9 @@ test('late non-JSON tool fulfillments remain call-correlated unknowns', async t 
 });
 
 test('an unauditable successful Endo result quarantines instead of inviting replay', async t => {
+  // The journal, not the client, decides what it can record: here it refuses
+  // the result as one storage value, which is the recording failure the
+  // client must treat as an effect it cannot vouch for.
   const fixture = makeFixture({
     clientOptions: {
       dynamicTools: [
@@ -2120,7 +2123,14 @@ test('an unauditable successful Endo result quarantines instead of inviting repl
           inputSchema: { type: 'object' },
         },
       ],
-      callTool: async () => 'x'.repeat(4 * 1024 * 1024 + 1),
+      callTool: async () => 'mutated',
+      auditEvent: async (kind, payload) => {
+        if (kind === 'tool-result' && payload.result === 'mutated') {
+          throw Error(
+            'audit payload result of 17000000 bytes exceeds the 16777216-byte storage value bound',
+          );
+        }
+      },
     },
   });
   const reader = await fixture.client.send('mutate once');
@@ -2138,7 +2148,7 @@ test('an unauditable successful Endo result quarantines instead of inviting repl
   });
   const events = await drain(reader);
   t.is(events.at(-1).type, 'abort');
-  t.regex(events.at(-1).reason, /Audit payload exceeded/);
+  t.regex(events.at(-1).reason, /storage value bound/);
   t.falsy(fixture.sent.find(message => message.id === 952));
   t.true(fixture.isClosed());
 });
@@ -2241,36 +2251,57 @@ test('a rejected post-success audit quarantines a side-effectful Endo tool', asy
   t.true(fixture.isClosed());
 });
 
-test('turn output bounds interrupt an excessive stream', async t => {
+test('a turn is not bounded in events: a long stream on one item is delivered whole', async t => {
   const fixture = makeFixture({
     threadId: 'thread-saved',
-    clientOptions: { maxTurnEvents: 1 },
+    clientOptions: { maxTurnItems: 2 },
   });
   const reader = await fixture.client.send('first');
+  for (let i = 0; i < 500; i += 1) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId: '1',
+        delta: `${i} `,
+      },
+    });
+  }
   fixture.push({
-    method: 'item/agentMessage/delta',
+    method: 'turn/completed',
     params: {
       threadId: fixture.activeThreadId(),
-      turnId: 'turn-1',
-      itemId: '1',
-      delta: 'one',
-    },
-  });
-  fixture.push({
-    method: 'item/agentMessage/delta',
-    params: {
-      threadId: fixture.activeThreadId(),
-      turnId: 'turn-1',
-      itemId: '1',
-      delta: 'two',
+      turn: { id: 'turn-1', status: 'completed' },
     },
   });
   const events = await drain(reader);
-  t.deepEqual(events.at(-1), {
-    type: 'abort',
-    reason: 'Codex turn exceeded configured output bounds',
+  t.is(events.filter(event => event.type === 'text-delta').length, 500);
+  t.is(events.at(-1).type, 'end');
+  t.falsy(fixture.sent.find(message => message.method === 'turn/interrupt'));
+});
+
+test('the identities a turn retains for deduplication are bounded, by name', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { maxTurnItems: 2 },
   });
-  t.truthy(fixture.sent.find(message => message.method === 'turn/interrupt'));
+  const reader = await fixture.client.send('first');
+  for (const itemId of ['1', '2', '3']) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId,
+        delta: 'x',
+      },
+    });
+  }
+  const events = await drain(reader);
+  t.is(events.filter(event => event.type === 'text-delta').length, 2);
+  t.like(events.at(-1), { type: 'abort' });
+  t.regex(events.at(-1).reason, /retained more than 2 item identities/);
 });
 
 test('terminate closes the transport', async t => {

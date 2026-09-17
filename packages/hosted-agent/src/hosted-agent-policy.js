@@ -70,6 +70,43 @@ export const HOSTED_SLICE_RESOURCES = harden({
 harden(HOSTED_SLICE_RESOURCES);
 
 /**
+ * The argv every hosted slice's policy anchor runs.
+ *
+ * The anchor is a container that exists to be read: the driver attests the
+ * slice's namespaces, identity and mount table of its PID 1 and each
+ * operation joins it. It has to block, and it has to end when the daemon's
+ * cgroup is told to stop.
+ *
+ * `/bin/sleep infinity` alone does the first and not the second. A
+ * container's PID 1 receives no signal it has not installed a handler for —
+ * the kernel's rule for init — so a bare `sleep` ignores SIGTERM, and
+ * systemd's stop of `endo-daemon` waited its full `TimeoutStopSec` on every
+ * anchor before SIGKILLing them all (observed on every stop from 2026-09-16
+ * to 2026-09-18: 90 s, `Failed with result 'timeout'`). The shell installs
+ * the handler, backgrounds the sleep so it is an ordinary process the shell
+ * may kill, and `wait` is what blocks. The anchor then ends within a second
+ * of the cgroup SIGTERM, conmon exits with it, and the daemon's stop takes
+ * as long as the daemon takes.
+ *
+ * This is the whole of the decision the design recorded as open — whether
+ * graceful daemon termination should await native release. It does not: the
+ * daemon exits, systemd ends the cgroup, and the runtime's exact-label orphan
+ * sweep on the next start reclaims what the kernel left. Awaiting native
+ * release across every live slice on SIGTERM would need a bound and a
+ * failure mode of its own, and the containment barrier is the cgroup either
+ * way.
+ *
+ * Every pinned image has `/bin/sh` and `/bin/sleep`; the driver refuses an
+ * argv that does not keep the anchor running while it is read.
+ */
+export const HOSTED_ANCHOR_ARGV = harden([
+  '/bin/sh',
+  '-c',
+  'sleep infinity & trap "kill $!" TERM INT; wait',
+]);
+harden(HOSTED_ANCHOR_ARGV);
+
+/**
  * What a slice can actually write, summed over what it was given.
  *
  * A tmpfs counts twice because the anchor and an admitted operation each get

@@ -17,6 +17,7 @@ import {
   makeWorkspaceProjection,
 } from '@endo/hosted-agent/workspace-projection.js';
 import {
+  HOSTED_ANCHOR_ARGV,
   HOSTED_SLICE_RESOURCES,
   sliceWritableBytes,
 } from '@endo/hosted-agent/hosted-agent-policy.js';
@@ -248,7 +249,7 @@ export const makeOpencodeNativeController = ({
           // The parents of this session's own directories: the roots this
           // deployment owns and allocates under.
           bindRoots: [path.dirname(approved.mcpDir)],
-          attestationArgv: ['/bin/sleep', 'infinity'],
+          attestationArgv: HOSTED_ANCHOR_ARGV,
         },
         env: {
           ...makePublicNetworkEnvironment(publicNetwork),
