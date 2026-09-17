@@ -317,6 +317,51 @@ test('a failed stop is retained: successors and deletion refuse until it succeed
   t.is(names().filter(name => name === 'remove').length, 1);
 });
 
+test('factory stop reaches an unretained owner and preserves state on retry', async t => {
+  const { factory, names, failStop } = makeHarness();
+  const spec = harden({ sessionId: 'session-a' });
+  failStop('session-a');
+  await t.throwsAsync(E(factory).stop(spec), {
+    message: /native cleanup pending/,
+  });
+  t.deepEqual(
+    names(),
+    ['stop'],
+    'no create or removal to recover an absent admin',
+  );
+  failStop(undefined);
+  await E(factory).stop(spec);
+  const { admin } = await E(factory).create(spec, makeToolSet());
+  await E(factory).stop(spec);
+  await E(admin).terminate();
+  t.deepEqual(names(), ['stop', 'stop', 'provision', 'stop']);
+  await E(factory).create(spec, makeToolSet());
+  t.is(
+    names().at(-1),
+    'provision',
+    'a completed stop permits explicit restart',
+  );
+  await t.throwsAsync(E(factory).stop(harden({ sessionId: '../foreign' })));
+  t.false(names().includes('remove'));
+});
+
+test('factory stop retains failed live cleanup and fences only its successor', async t => {
+  const { factory, names, failStop } = makeHarness();
+  const spec = harden({ sessionId: 'session-a' });
+  await E(factory).create(spec, makeToolSet());
+  failStop('session-a');
+  await t.throwsAsync(E(factory).stop(spec), {
+    message: /native cleanup pending/,
+  });
+  await t.throwsAsync(E(factory).create(spec, makeToolSet()), {
+    message: /native cleanup pending/,
+  });
+  await E(factory).create(harden({ sessionId: 'session-b' }), makeToolSet());
+  failStop(undefined);
+  await E(factory).stop(spec);
+  t.deepEqual(names(), ['provision', 'stop', 'stop', 'provision', 'stop']);
+});
+
 test('destroy() stops a live session, then asks the owner to remove it; it is idempotent', async t => {
   const { factory, names } = makeHarness();
   await E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet());

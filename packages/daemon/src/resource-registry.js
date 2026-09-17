@@ -63,10 +63,15 @@ export const makeResourceRegistry = () => {
   const release = (resourceId, terminate) => {
     if (owners.get(resourceId) === terminate) owners.delete(resourceId);
   };
-  /** @param {string} resourceId */
+  /**
+   * @param {string} resourceId
+   * @returns {Promise<boolean>} Whether a retained owner was stopped.
+   */
   const stop = async resourceId => {
     const terminate = owners.get(resourceId);
-    if (terminate) await terminate();
+    if (!terminate) return false;
+    await terminate();
+    return true;
   };
   const drain = async () => {
     await Promise.all([...chains.values()]);

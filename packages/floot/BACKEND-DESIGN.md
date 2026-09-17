@@ -43,8 +43,14 @@ The provisioned backend is split into two facets:
 
 `interrupt()` is a terminal barrier: it resolves only after the backend can no
 longer emit events or mutate its opaque conversation for that turn.
-The factory-level `destroy({ sessionId })` operation is idempotent and is used
+The factory-level `stop({ sessionId })` operation reaches the durable owner even
 when lifecycle recovery has no surviving admin facet.
+It preserves workspace, transcript, and session records and is retryable after
+failed cleanup; completion means the owner's native cleanup has completed.
+It is ordered with creation and deletion for that session, not a bypass around
+an in-flight acquisition.
+The application must separately fence new work and recreation before invoking it.
+The idempotent `destroy({ sessionId })` operation additionally removes session state.
 
 Codex implements this seam in `@endo/codex-sandbox/backend-factory.js`.
 Claude Code should implement the same seam instead of adding another branch to

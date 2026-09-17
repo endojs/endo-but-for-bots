@@ -141,6 +141,14 @@ export const makeCodexBackendFactory = ({
       return catalog;
     },
     create,
+    async stop(spec) {
+      const sessionId = sessionIdFor(spec.sessionId);
+      return sessions.inOrder(sessionId, async () => {
+        // A fresh factory has no retained admin, but the daemon still owns
+        // the durable session and any outstanding native cleanup.
+        if (!(await sessions.stop(sessionId))) await stopSession(sessionId);
+      });
+    },
     async destroy(spec) {
       const sessionId = sessionIdFor(spec.sessionId);
       return sessions.inOrder(sessionId, async () => {
@@ -148,7 +156,8 @@ export const makeCodexBackendFactory = ({
         await removeSession(sessionId);
       });
     },
-    help: () => 'Codex hosted factory: describe, listModels, create, destroy.',
+    help: () =>
+      'Codex hosted factory: describe, listModels, create, stop (keeps state), destroy.',
   });
 };
 harden(makeCodexBackendFactory);

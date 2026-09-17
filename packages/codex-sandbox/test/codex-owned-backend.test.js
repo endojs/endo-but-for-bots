@@ -81,6 +81,47 @@ test('Codex factory delegates checkpoint operations and retains failed native st
   }
 });
 
+test('Codex factory stop reaches absent and failed owners without removing state', async t => {
+  const calls = [];
+  let fails = true;
+  const factory = makeCodexBackendFactory({
+    models: [model],
+    async provisionSession(id) {
+      calls.push(['start', id]);
+      return Far('Client', {});
+    },
+    async stopSession(id) {
+      calls.push(['stop', id]);
+      if (fails) throw Error('cleanup pending');
+    },
+    async removeSession(id) {
+      calls.push(['remove', id]);
+    },
+  });
+  const spec = harden({ sessionId: 'a' });
+  const tools = Far('Tools', {});
+  await t.throwsAsync(E(factory).stop(spec), { message: /cleanup pending/ });
+  t.deepEqual(calls, [['stop', 'a']]);
+  fails = false;
+  await E(factory).stop(spec);
+  const { admin } = await E(factory).create(spec, tools);
+  fails = true;
+  await t.throwsAsync(E(factory).stop(spec), { message: /cleanup pending/ });
+  await t.throwsAsync(E(factory).create(spec, tools), {
+    message: /cleanup pending/,
+  });
+  await E(factory).create(harden({ sessionId: 'b' }), tools);
+  fails = false;
+  await E(factory).stop(spec);
+  const count = calls.length;
+  await E(admin).terminate();
+  t.is(calls.length, count, 'old admin has already completed cleanup');
+  await E(factory).create(spec, tools);
+  t.deepEqual(calls.at(-1), ['start', 'a']);
+  await t.throwsAsync(E(factory).stop(harden({ sessionId: '../foreign' })));
+  t.false(calls.some(([operation]) => operation === 'remove'));
+});
+
 test('Codex factory resolves Floot empty thinking selection before provisioning', async t => {
   const requests = [];
   const factory = makeCodexBackendFactory({
@@ -89,8 +130,8 @@ test('Codex factory resolves Floot empty thinking selection before provisioning'
       requests.push(request);
       return Far('Client', {});
     },
-    async stopSession() {},
-    async removeSession() {},
+    stopSession: async () => undefined,
+    removeSession: async () => undefined,
   });
   const tools = Far('Tools', {});
   for (const spec of [

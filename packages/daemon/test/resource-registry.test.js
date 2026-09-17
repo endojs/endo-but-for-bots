@@ -52,8 +52,8 @@ test('failed cleanup retains ownership and stale release cannot remove a success
   sessions.retain('a', predecessor);
   await t.throwsAsync(() => sessions.stop('a'), { message: /still running/ });
   busy = false;
-  await sessions.stop('a');
-  await sessions.stop('a');
+  t.true(await sessions.stop('a'));
+  t.false(await sessions.stop('a'));
   t.is(attempts, 2);
   let successorStops = 0;
   const successor = async () => {

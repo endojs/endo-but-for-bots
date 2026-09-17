@@ -15,8 +15,9 @@ harden(HostedToolSetInterface);
 /**
  * Provider-neutral facets for a hosted agent backend.
  *
- * `interrupt()` is a terminal barrier. `destroy()` is idempotent for lifecycle
- * replay when no live admin facet survives.
+ * `interrupt()` is a turn-terminal barrier, not session shutdown.
+ * Factory `stop()` preserves durable state; `destroy()` removes it.
+ * Both reach the durable owner when no live admin facet survives.
  */
 export const HostedTurnBackendInterface = M.interface('HostedTurnBackend', {
   send: M.call(M.string())
@@ -49,6 +50,7 @@ export const HostedBackendFactoryInterface = M.interface(
     create: M.call(M.record(), M.remotable('HostedToolSet')).returns(
       M.promise(),
     ),
+    stop: M.call(M.record()).returns(M.promise()),
     destroy: M.call(M.record()).returns(M.promise()),
     help: M.call().returns(M.string()),
   },
