@@ -11,13 +11,13 @@
 
 Endo's LLM-driven agents (Lal and Fae) need to provide and accept a sturdy
 reference (a **sturdyref**) as a value in a tool call, without assigning it a
-**pet name** (the daemon's user-chosen, mutable namespace label for a formula,
-a path segment carried on the guest **name hub** — an agent's own directory of
-pet-name-to-formula bindings, the mutable namespace the daemon exposes to that
-guest).
-Each term of art this summary sets in bold — **pet name**, **locator**, **swiss
-number**, **formula** — is defined in full under [What is the Problem Being
-Solved?](#what-is-the-problem-being-solved).
+**pet name** (a user-chosen namespace label for a formula; defined in full
+under [What is the Problem Being
+Solved?](#what-is-the-problem-being-solved)).
+The other terms of art this design turns on (locator, swiss number, and
+formula) are likewise defined in full in that same section; this summary uses
+them before defining them and points there for the definitions rather than
+carrying the definitions inline here.
 The **daemon** here is the Endo background process that stores formulas and
 mediates every capability a confined worker can reach.
 
@@ -32,8 +32,8 @@ parent sturdyref work (PR #539 and PR #737; see [Dependencies](#dependencies)).
 A **pass style** is the marshal layer's category for a passable value, the tag
 `passStyleOf` returns, so `'sturdyref'` is a distinct kind of passable
 alongside `'remotable'`, `'string'`, and the rest.
-It is meant to be inert data, not a remotable — inertness being the **bar this
-design must clear, not a property the shipped representation already has** —
+It is meant to be inert data, not a remotable (inertness being the **bar this
+design must clear, not a property the shipped representation already has**),
 and it is **enlivened** (resolved from the opaque value into a live,
 message-able presence) only by a closely held capability the daemon holds on
 the worker's behalf.
@@ -78,7 +78,7 @@ variable across turns and re-presents it is doing genuine cross-turn retention,
 which this design defers to the retention investigation rather than admits as
 retention-free (see [Daemon provide and accept](#daemon-provide-and-accept)).
 
-This is **Design 2 of 2 of a competing sturdyref pair.** The sibling
+This is **design 1 of 2 of a competing sturdyref pair.** The sibling
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) proposes an `endor`
 `retain`/`release` worker syscall for exactly the cross-turn retention this
 document defers to an investigation.
@@ -209,9 +209,9 @@ A sturdyref differs from a locator in exactly the property this design turns
 on: a locator is self-redeeming for its holder, whereas a sturdyref is inert
 and can be turned into a presence only by a daemon facet that holds the closely
 held association capability.
-Preserving that difference across the marshalling boundary is [Open
-Questions](#open-questions) item 1, not a settled fact (see [Distributed
-confinement](#distributed-confinement)).
+Preserving that difference across the marshalling boundary is the unsettled
+transport question stated canonically in the [Summary](#summary) ([Open
+Questions](#open-questions) item 1).
 
 The relevant capability split is:
 
@@ -314,13 +314,12 @@ no marshal-level identity for the daemon to key on; (2) add a wire payload that
 which [Distributed confinement](#distributed-confinement) forbids; (3) box the
 value pass-by-reference so the daemon side gets a stable identity, and that
 reintroduces the identity-bearing remotable the 2026-07-15 review rejected.
-A fourth candidate that option (2) does not exclude: (4) add a wire payload
-that is a **daemon-minted opaque correlation token** — generated at mint time
-solely to key the daemon's own private index, carrying no derivable path to the
+Option (2) does not exclude a fourth candidate. (4) Add a wire payload that is
+a **daemon-minted opaque correlation token**, generated at mint time solely to
+key the daemon's own private index and carrying no derivable path to the
 locator or the swiss number, so a confined worker holding it cannot turn it
 into authority any more than it can the in-process render-map handle
-(`ref@7f3a`, [Tool-layer escrow](#tool-layer-escrow)): an opaque token that
-indexes a table the holder cannot use to derive authority.
+(`ref@7f3a`, [Tool-layer escrow](#tool-layer-escrow)).
 Option (4) is not, however, simply the render-map handle "pushed onto the
 wire": the render-map handle never leaves the tool-layer process, whereas a
 correlation token is in confined hands on the wire, so its safety rests on the
@@ -342,7 +341,7 @@ When `isSelfLocation(location)` is true it resolves locally through
 `secretResolver.get(secret)`, where `secretResolver` is the `@endo/ocapn` `{
 get(secret) }` resolver object (this is the parameter the shipped source spells
 `locator`; this document renames it `secretResolver` at its own boundary to
-avoid a second, unrelated sense of the word "locator", which elsewhere means
+avoid a second, unrelated sense of the word "locator," which elsewhere means
 the daemon's authority-bearing `endo://...` designator string).
 When `isSelfLocation(location)` is false it never consults `secretResolver` at
 all: it calls `provideSession(location)` and fetches the capability from that
@@ -407,6 +406,22 @@ In particular:
 - A daemon method that accepts a sturdyref resolves only the single argument it
   was handed, and only within the authority that method already carries.
   It does not turn the method into a general locator service.
+- A confined worker cannot **fabricate or enumerate** a sturdyref value (or the
+  wire token keying its resolution) that `lookupBySturdyRef` will resolve.
+  As shipped, `makeSturdyRef` returns `makeTagged('ocapn-sturdyref', undefined)`
+  (`packages/ocapn/src/client/sturdyrefs.js:56`), a tag any confined code can
+  mint for itself, so the confinement bar is not the tag's presence but the
+  daemon index's refusal of any key it did not itself issue.
+  Whatever wire representation [One passable
+  representation](#one-passable-representation) settles on, its index key must
+  be daemon-minted, unforgeable (an entropy floor), and non-enumerable, so a
+  worker submitting a fabricated or enumerated value is rejected by
+  `lookupBySturdyRef` rather than served.
+  Without this, `lookupBySturdyRef` degrades into exactly the general resolution
+  service the bullet above forbids; this exposure exists for the local index
+  branch, not only the remote branch [Open Questions](#open-questions) item 1
+  raises, and is stated as an explicit requirement here rather than left to the
+  wire representation to imply.
 
 This confinement property is a **target, not an achieved property of the
 value**.
@@ -533,7 +548,7 @@ from sharing one method with a mutable pet-name binding.
 That `lookupBy*` family coherence justifies the **daemon method** name, but it
 must not be copied through to the **model-visible tool name** unexamined.
 The daemon method's siblings (`lookupById`, `lookupByLocator`) resolve
-caller-held, arbitrarily-reusable designators drawn from a directory-like
+caller-held, arbitrarily reusable designators drawn from a directory-like
 namespace; the model-visible accept surface resolves a `ref@`-form handle that
 [Tool-layer escrow](#tool-layer-escrow) spends its length establishing is
 turn-scoped, non-enumerable, and refused outside its one pinned argument
@@ -543,13 +558,14 @@ wrong mental model for a one-render escrowed handle that is not a name and
 expires at the turn boundary.
 Because the model-visible tool name is a separate pinned constant from the
 daemon method name (a divergence seam the shared constant exists to close; see
-[Tool-layer escrow](#tool-layer-escrow)), Phase 4 must pick a model-visible
-verb that signals **redemption/consumption** — `redeemSturdyRef` or
-`acceptSturdyRef`, matching the "accept" framing used everywhere else in this
-document — rather than defaulting to the daemon method's own `lookupBy*`
-spelling.
+[Tool-layer escrow](#tool-layer-escrow)), Phase 4 pins a single model-visible
+verb that signals **redemption/consumption**: `redeemSturdyRef`, matching the
+"accept" framing used everywhere else in this document, rather than defaulting
+to the daemon method's own `lookupBy*` spelling.
+The verb is pinned as one constant, not offered as a choice, because a
+divergence-closing constant cannot itself ship as an unresolved alternative.
 The daemon method stays `lookupBySturdyRef` for family coherence with its
-siblings; the model reads the redemption verb.
+siblings; the model reads and calls `redeemSturdyRef`.
 
 **What the result is to the model, and why the accept surface is a JSON-mode
 tool.** The accept operation's result is a presence, and the shipped renderer
@@ -560,8 +576,9 @@ The render map defined below escrows *sturdyrefs* (the inputs), not presences
 enlivened presence to name in a later tool call.
 
 The accept surface is therefore a **JSON-mode tool**, not a code-mode one.
-The model calls `lookupBySturdyRef` (spelled as the pinned model-visible
-accept-tool name of [Tool-layer escrow](#tool-layer-escrow)) and the render map
+The model calls `redeemSturdyRef` (the pinned model-visible accept-tool name of
+[Tool-layer escrow](#tool-layer-escrow), which the tool layer dispatches to the
+`lookupBySturdyRef` daemon method) and the render map
 redeems the handle in that tool's pinned `sturdyRef` parameter, an argument
 position that exists in the JSON tool-schema loops both agents actually run
 (Lal `runOneRound`, `packages/lal/agent.js:126`; Fae `runAgenticLoop` over
@@ -579,22 +596,35 @@ Neither Lal nor Fae runs a code-mode loop today, so the motivating same-turn
 flow is realizable only on the JSON tool surface.
 
 What the model does with the *returned* presence is the honest limit of the
-initial surface.
-Because the presence renders with no model-carryable designator, the initial
-surface does not hand the model a re-addressable presence handle; the
-end-to-end "enliven the candidate and then act on the presence in a later
+initial surface, and it is a real limit stated plainly: because the presence
+renders with no model-carryable designator and the `storeValue` deny closes the
+pet-name fallback, the shipped increment's only model-usable outcome of an
+accept is an inspection **description** of the enlivened presence, not a handle
+the model can act on in a later call.
+The initial surface is therefore an infrastructure milestone: it removes
+namespace allocation for the same-turn handoff, but it does not yet deliver an
+end-to-end agent capability that acts on the accepted candidate.
+The end-to-end "enliven the candidate and then act on the presence in a later
 model-mediated call" flow ships only with a value-producing accept operation (a
 method that both accepts a sturdyref and acts on the enlivened presence within
 the one call), which is the future admission deferred later in this section and
 gated on its own authority review.
-Giving the model a re-addressable handle for a *returned presence* (an
-output-side render map for presences, or a pet-name binding the model can
-quote) is likewise a distinct surface out of scope here, and would carry its
-own retention question, since a model-addressable presence handle that outlives
-the turn is exactly the cross-turn hold the retention investigation governs.
+An output-side render map that gives the model a re-addressable handle for a
+returned presence is a distinct surface, also out of scope here.
+The reason it is deferred is **not** that such a handle necessarily outlives
+the turn: a *turn-scoped* presence handle minted by the same per-activation
+epoch mechanism this design specifies for the input side would expire at the
+turn boundary exactly as an input handle does, and case 1 of [Retention and
+user revocation](#retention-and-user-revocation) (the producing root stays
+reachable for the turn) applies to it unchanged, so a within-turn output handle
+carries no new retention question.
+It is deferred because it is added surface this initial increment does not
+build, and because a presence handle the model could carry *across* turns would
+be exactly the cross-turn hold the retention investigation governs.
 The input side (render a sturdyref to a handle, redeem it in a later same-turn
 call) is what this surface ships; the disposition of the output presence is
-deferred.
+deferred, and the shipped increment's only model-usable outcome is the
+inspection description named above.
 
 The method list below must be derived from authority, not from input shape.
 Each method named is an existing daemon or name-hub method
@@ -619,12 +649,20 @@ marshals `M.any()` is not the only such method and more may be added: **the
 tool layer's render map redeems a handle in exactly one argument position (the
 `sturdyRef` argument of `lookupBySturdyRef`, and any future accept method its
 own authority-review row admits) and nowhere else.** Because a handle can be
-nested, the redemption is over the whole passable graph of that one argument: a
-handle that appears anywhere *outside* the admitted `sturdyRef` argument (in
-another tool parameter, or nested inside a structured argument to a non-accept
-method) does not redeem and fails before the daemon call, so the render map
-cannot be used to smuggle a sturdyref into a persisting method even where that
-method's guard would accept the value.
+nested, the redemption is over the whole passable graph of that one argument.
+The rule that guards the *other* positions keys on identity with a live or
+recorded entry, not on the `ref@` grammar, so it does not turn ordinary content
+into a failure: a string that **equals a live or recorded handle entry**,
+appearing anywhere *outside* the admitted `sturdyRef` argument (in another tool
+parameter, or nested inside a structured argument to a non-accept method), does
+not redeem and fails before the daemon call, so the render map cannot be used to
+smuggle a live sturdyref into a persisting method even where that method's guard
+would accept the value.
+A string that merely matches the `ref@` grammar but equals no live or recorded
+entry is treated as ordinary data in a non-accept position: it passes through
+unchanged, so a file line, a grep result, a commit message, or model prose that
+happens to contain `ref@...` is not a handle the tool layer minted and neither
+redeems nor aborts the call.
 This bounds handle redemption to the single-turn accept surface by construction
 rather than by auditing every `M.any()`-guarded method for sturdyref leakage.
 It does not by itself stop confined code that already holds the `SturdyRef`
@@ -634,40 +672,47 @@ value from calling `storeValue` with it directly; that path is what the
 Two distinct admission axes meet in this section and must not be read as one
 restated rule.
 The admission *table* above governs which **daemon methods** may resolve a
-sturdyref at all — an authority question about the method.
+sturdyref at all, an authority question about the method.
 This redemption-position rule governs which **tool argument** the render map
-will turn a model-presented handle back into a value in — a question about the
+will turn a model-presented handle back into a value in, a question about the
 model-facing surface that stands above those methods.
 This paragraph is the canonical statement of the redemption-position rule;
 where the [Acceptance Criteria](#acceptance-criteria) and [Tool-layer
 escrow](#tool-layer-escrow) mention it again they restate it as a testable
 checklist item, not as a second independent rule.
 
-The security behavior (does not redeem, fails before the daemon call) is the
-same whether the out-of-position text is a fabricated string or a real, live
-handle from the current turn placed in the wrong parameter.
-The model-facing **message**, however, must not collapse those two into the
-single **unknown** reason, because the design's own principle is that failure
-reasons split by remediation ([Tool-layer escrow](#tool-layer-escrow)): "move
-the handle into the accept tool's `sturdyRef` argument" is a different
-instruction from "stop inventing handles".
+Two situations do reach a failure, and their model-facing **messages** must not
+collapse into one, because the design's own principle is that failure reasons
+split by remediation ([Tool-layer escrow](#tool-layer-escrow)): "move the
+handle into the accept tool's `sturdyRef` argument" is a different instruction
+from "stop inventing handles."
 A syntactically valid, live handle (one that *would* redeem in the admitted
-position this same turn) submitted as a tool argument in some other position is
-therefore classified **misplaced**, with the remediation "this is a real
-handle, but only the accept tool's `sturdyRef` argument redeems it"; only text
-that matches no live or recorded entry at all is **unknown**.
-"Misplaced" is deliberately scoped to a handle that reaches the redemption
-boundary as a tool-call argument in a non-accept position: a handle the model
-merely quotes back in its own free-text or reasoning output is never submitted
-for redemption, is not classified at all, and does not fail a call — the
-classification governs argument positions the tool layer actually inspects, not
-text the model narrates.
+position this same turn) submitted as a tool argument in some *other* position
+is classified **misplaced**, with the remediation "this is a real handle, but
+only the accept tool's `sturdyRef` argument redeems it".
+Text submitted in the **accept** position that matches no live or recorded
+entry is **unknown**, with the remediation "stop inventing handles"; fabricating
+a handle cannot conjure a capability, which is the "arbitrary text never becomes
+a sturdyref" bar.
+The two are distinguished by position: **misplaced** requires a string equal to
+a live entry in a non-accept position, whereas **unknown** requires the accept
+position.
+Handle-shaped text that equals no entry and sits in a non-accept position is
+neither: it is ordinary data and is not classified or failed at all (see the
+redemption-position rule above).
+"Misplaced" is therefore deliberately scoped to a *live* handle that reaches
+the redemption boundary as a tool-call argument in a non-accept position: a
+handle the model merely quotes back in its own free-text or reasoning output is
+never submitted for redemption, is not classified at all, and does not fail a
+call.
+The classification governs argument positions the tool layer actually inspects,
+not text the model narrates.
 Misplaced is the fourth model-facing reason alongside **unknown**, **stale**,
 and the daemon-side **enlivenment-failure**, and its message is pinned as a
 shared constant on the same footing (see [Tool-layer
 escrow](#tool-layer-escrow) and [Acceptance Criteria](#acceptance-criteria)).
-Classifying it as misplaced discloses nothing an attacker could exploit — it
-only confirms the handle the confined code already holds is live — while
+Classifying it as misplaced discloses nothing an attacker could exploit (it
+only confirms the handle the confined code already holds is live), while
 withholding the correct remediation would strand a model that merely put a good
 handle in the wrong slot.
 
@@ -710,16 +755,16 @@ can do with the value: the model gets text it can only pass back verbatim into
 the one admitted accept position, and it can no longer reach the underlying
 value's structure, its locator, or its swiss number (which it never had, and
 the handle does not add).
-So the render map admits *by construction* on the output side too — a handle
-grants strictly less than the value it replaces — and that is exactly why it
+So the render map admits *by construction* on the output side too (a handle
+grants strictly less than the value it replaces), and that is exactly why it
 can walk an arbitrary output passable graph and render a `SturdyRef` found at
 any nesting depth, from any method, without a per-method admission table: no
 output path can turn rendering into an authority the value did not already
 carry.
 The accept side needs its per-row audit precisely because it runs the other
 way, turning a handle back into an enlivenable value.
-What the provide direction does *not* own — which daemon methods are permitted
-to hand a confined worker a `SturdyRef` in the first place — is the parent
+What the provide direction does *not* own (which daemon methods are permitted
+to hand a confined worker a `SturdyRef` in the first place) is the parent
 work's admission-source question (PR #541's facet-boundary resolution),
 deferred there deliberately, not silently skipped here; the render map governs
 only the authority-reducing rendering step, and governs it by the construction
@@ -761,8 +806,8 @@ property the shipped method has by default.
 
 These two facts name two different principals, and the design guards each with
 a different mechanism rather than expecting one to cover both.
-The single-turn render-map property defends against the **model** — the
-untrusted text-emitter that could quote a prior-turn handle — and the confined
+The single-turn render-map property defends against the **model** (the
+untrusted text-emitter that could quote a prior-turn handle), and the confined
 **worker** is the principal every confinement section here treats (the
 attenuated facet, the `storeValue` deny, the deferred retention investigation).
 The render map does not confine the worker (it holds the real value); the facet
@@ -824,7 +869,7 @@ This matters because every sturdyref is structurally identical: `makeSturdyRef`
 returns `makeTagged('ocapn-sturdyref', undefined)`
 (`packages/ocapn/src/client/sturdyrefs.js:56`), so a structural key would
 collapse all sturdyrefs to one handle and violate "two sturdyrefs never
-collapse".
+collapse."
 Identity keying is well-defined within a turn because the worker holds the same
 `SturdyRef` object in process memory across that turn's deliveries (the render
 map is where it is held), so the same object rendered twice yields the same
@@ -834,9 +879,20 @@ the map serves stays within one turn and never round-trips the value back
 through the codec between rendering and redemption.
 
 Calling this map "presentation state only" would understate it: the same
-structure is both the rendering table (handle to value and back) and the sole
+structure is both the rendering table (handle to value and back) and the
 enforcer of the redemption window (through the epoch stamp described just
 below), so it does carry lifetime policy.
+Two mechanisms could each close that window (the per-entry epoch stamp checked
+at redemption, and the per-activation map lifetime that discards every entry on
+return), and to keep an implementer from having to guess which is load-bearing
+this design names exactly one: the **per-entry epoch stamp** is the enforcer,
+because it is the value redemption actually reads and it is what lets the
+bounded classification record tell **stale** from **unknown** after a map is
+discarded.
+The per-activation map lifetime is defense in depth, not a second enforcer: it
+bounds accumulation and makes a forgotten wrap fail loud, but a handle's
+redeemability is decided by its stamped epoch, never by which map object happens
+to hold it.
 What it is *not* is a lifetime record of what the daemon retains: it mints no
 authority, changes no pass style, and is not the holder of record for any
 daemon-side edge.
@@ -869,8 +925,8 @@ The epoch is deliberately stamped on the map entry, not carried inside the
 `SturdyRef` value, and that placement is the point rather than an accident: the
 value is an inert copy the worker holds and re-presents, so a turn number
 written into it would be worker-mutable, would travel wherever the worker
-copied the value, and would make the value itself a carrier of lifetime policy
-— exactly the retention-ledger role this map is kept out of.
+copied the value, and would make the value itself a carrier of lifetime policy,
+exactly the retention-ledger role this map is kept out of.
 Keeping the epoch on the tool-layer's own entry (and the bounded classification
 record, below, on the tool layer too) confines every lifetime decision to state
 the tool layer owns and discards, so the inert value stays inert and carries no
@@ -889,10 +945,10 @@ that activation and discards it when the activation returns.
 The loud failure this buys is a property Phase 4 must implement, not one the
 shipped renderer already exhibits: the render step must treat the *absence* of
 a per-activation map as an error rather than lazily creating one (a
-lazily-instantiated map would reintroduce exactly the silently-unbounded,
+lazily instantiated map would reintroduce exactly the silently unbounded,
 never-discarded map this scheme exists to prevent).
 With that render-step rule in place, a forgotten wrap yields *no* map for that
-turn — handles fail to render at all, a loud failure — rather than a silently
+turn (handles fail to render at all, a loud failure) rather than a silently
 unbounded one, matching the by-construction attenuation this design prefers
 elsewhere over an audit obligation.
 
@@ -906,7 +962,7 @@ layer, not by any single activation's map:
 - The **monotonic turn epoch counter** itself, so a fresh map for turn N+1 is
   stamped with a strictly greater epoch than turn N's discarded map and no
   prior-turn handle can ever match again.
-- A **bounded classification record** of recently-rendered handle identifiers
+- A **bounded classification record** of recently rendered handle identifiers
   and their epoch (the handle string and its epoch, and **never** the
   `SturdyRef` value).
   This record holds no value, so it grants no cross-turn *redemption* and
@@ -917,7 +973,7 @@ layer, not by any single activation's map:
   accumulation.
 
 These two pieces of state outlive any one turn's *map*, but "owned by the tool
-layer" above must not be read as "a process-global module singleton", and the
+layer" above must not be read as "a process-global module singleton," and the
 implementation must state their instantiation scope explicitly: the epoch
 counter and the classification record are scoped to a **single worker-loop
 activation context**, one instance per concurrently running loop, not shared
@@ -935,7 +991,7 @@ in the same turn stays redeemable) for a shape that already exists.
 The counter and record must therefore be created once per worker-loop instance
 and never straddle two concurrent loops.
 (Fae's subagent path provisions a separate formula/worker, not an
-in-process loop — `makeUnconfined`, `packages/fae/src/subagent-host.js` — so
+in-process loop (`makeUnconfined`, `packages/fae/src/subagent-host.js`), so
 each Fae worker has its own process and its own counter by construction; the
 explicit per-loop scoping is what makes Lal's in-process case safe too.)
 
@@ -987,7 +1043,7 @@ First, the daemon reserves an `@`-*led* grammar for special names such as
 `@self` and `@host` (`validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/`,
 `packages/daemon/src/pet-name.js:25`), so a handle must be disjoint from that
 grammar too.
-Second (and this is the reader the parser check misses) the actual reader of a
+Second (and this is the reader the parser check misses), the actual reader of a
 handle is the model, and Lal's own system prompt teaches the model to *type*
 `@self` and `@host` as names it composes
 (`packages/lal/prompts/system.js:17,26-27`).
@@ -1005,6 +1061,34 @@ leaving the syntax open is exactly the seam two tool-layer implementations
 could diverge on.
 The reserved grammar is a `ref@` prefix followed by an opaque identifier,
 rendered for example as `ref@7f3a`.
+
+The `ref@` prefix is fixed, but the opaque identifier after it is not left to
+each agent to generate: the shared constant pins its generation, not only its
+syntax, because a grammar without a generation rule is not a security boundary.
+The identifier is drawn from a cryptographically unguessable source with an
+entropy floor no smaller than 128 bits (the four-hex-digit `ref@7f3a` is an
+illustrative rendering, not the pinned length), and it is **unique within the
+render map that mints it**, so no two live entries and no entry recorded in the
+bounded classification record share an identifier.
+Two properties follow, and both are load-bearing.
+First, a confined worker (which composes tool arguments, not only the model)
+cannot enumerate `ref@1`, `ref@2`, and so on to redeem an entry of the current
+turn's map it was never shown: a sequential or low-entropy identifier would make
+the map a liveness-and-enumeration oracle, and the **misplaced** classification
+(a liveness signal on a *live* entry) would compound that, so unguessability is
+what keeps **misplaced** from disclosing anything an attacker can search for.
+Second, per-map uniqueness plus the entropy floor forecloses a collision the
+turn epoch cannot catch: a transcript-quoted prior-turn handle that happened to
+match a live current-turn identifier would otherwise redeem to the wrong
+capability (a confused deputy the stale/unknown/misplaced taxonomy cannot
+detect), and requiring the identifier to be unique within its minting map
+removes that case by construction rather than leaving it to chance.
+This generation contract is part of the same pinned handle-contract record as
+the grammar, so the two agents cannot diverge on it, and the per-map scoping is
+what makes the concurrent-loop case safe (two loops minting the same identifier
+string for different sturdyrefs is impossible once each identifier is unique
+within, and unguessable across, its own map).
+
 It contains `@`, which no pet name may contain, so it is disjoint from pet-name
 syntax; it does not begin with `@`, so it is disjoint from the special-name
 grammar and carries no family resemblance to the `@`-led names (`@self`,
@@ -1042,7 +1126,7 @@ has a known, bounded imprecision the implementation must own rather than leave
 undocumented: a *genuinely stale* handle (a real prior-turn entry) that has
 aged out of the fixed-size window is no longer distinguishable from fabricated
 text, so it degrades to **unknown** and the model is told "the string was never
-a reference" when the correct remediation was still "re-fetch".
+a reference" when the correct remediation was still "re-fetch."
 This is a deliberate trade of the classification record's memory bound against
 remediation precision, not an oversight.
 The window must therefore be sized against the model's retained-transcript
@@ -1096,13 +1180,13 @@ model-visible tool/parameter names, and the four shared failure messages, not
 only the shared grammar constant.
 
 These pinned strings are not eight loose exports the two agents each import by
-name; they are one exported **handle-contract record** — a single frozen object
+name; they are one exported **handle-contract record**, a single frozen object
 in the shared tool layer bundling the handle grammar, the disclosure fragment,
 the model-visible accept-tool and parameter names, and the four
-**unknown**/**stale**/**misplaced**/**enlivenment-failure** messages — that Lal
+**unknown**/**stale**/**misplaced**/**enlivenment-failure** messages, which Lal
 and Fae consume as a whole.
 Bundling them into one record makes the shared surface a single import both
-agents depend on rather than a checklist of individually-importable constants
+agents depend on rather than a checklist of individually importable constants
 any one agent could partially adopt, so a new divergence seam cannot open by an
 agent picking up the grammar but re-wording a message.
 
@@ -1169,7 +1253,7 @@ these:
   removes it?
   Garbage-collection observation and `FinalizationRegistry` are not acceptable
   substitutes for an auditable lifecycle.
-- Is redemption holder-scoped or bearer?
+- Is redemption holder-scoped or bearer-scoped?
   If any facet redeems any sturdyref presented to it, then revoking worker A's
   edge revokes nothing when worker B holds a copy, so per-worker revocation is
   not meaningful without a holder-scoping rule.
@@ -1203,7 +1287,7 @@ If the sibling syscall is selected, it supplies the retention answer and this
 section's questions are discharged against that syscall's lifecycle rather than
 re-derived; if it is not, the answers are built here.
 Either way the investigation's questions gate the ship, and the selection
-decides the vehicle — this surface's initial, single-turn scope depends on
+decides the vehicle; this surface's initial, single-turn scope depends on
 neither being resolved first.
 
 ## Acceptance Criteria
@@ -1213,12 +1297,13 @@ neither being resolved first.
   (Current state: `passStyleOf` returns `'tagged'` for the in-tree shim, which
   `ocapnPassStyleOf` upgrades; this criterion is met by the pass-style
   dependency in [Dependencies](#dependencies), not by the shim.)
-- A confined worker can pass a previously received sturdyref to
-  `lookupBySturdyRef` (a JSON-mode tool whose `sturdyRef` parameter is the
-  pinned redemption position, verified against the JSON tool-schema loops Lal
-  and Fae actually run, not against a code-mode loop, which neither agent runs
-  and which exposes only `evaluate`) and receive that method's enlivened value
-  result (a presence).
+- A confined worker can pass a previously received sturdyref to the
+  `redeemSturdyRef` accept tool (which dispatches to the `lookupBySturdyRef`
+  daemon method), a JSON-mode tool whose `sturdyRef` parameter is the pinned
+  redemption position, verified against the JSON tool-schema loops Lal and Fae
+  actually run, not against a code-mode loop, which neither agent runs and which
+  exposes only `evaluate`, and receive that method's enlivened value result (a
+  presence).
   Because the presence renders with no model-carryable designator, a
   model-addressable handle for the returned presence, and any value-producing
   operation that acts on the presence within the accept call, are future
@@ -1253,6 +1338,15 @@ neither being resolved first.
 - A negative test demonstrates that a confined worker facet cannot reach a
   locator or a swiss number through any admitted method (the single property
   this surface exists to preserve).
+- A negative test demonstrates that a **worker-fabricated or enumerated**
+  sturdyref value (or wire token) that the daemon never issued is refused by
+  `lookupBySturdyRef` rather than resolved, so the method is not a general
+  resolution service.
+  This is the value-layer counterpart of the unknown-handle test above (the
+  handle layer's "arbitrary text never becomes a sturdyref"), covers the local
+  index branch as well as the remote one, and is contingent on the
+  daemon-minted, unforgeable, non-enumerable index key of [Open
+  Questions](#open-questions) item 1.
 - Tool handles are local opaque renderings that redeem only to an already-held
   `SturdyRef`; arbitrary text never becomes a sturdyref, and a handle that
   collides with no live entry yields an explicit handle-not-found failure.
@@ -1286,16 +1380,19 @@ neither being resolved first.
   failure (no cross-turn redemption).
 - The reserved handle grammar (a `ref@`-prefixed opaque token that embeds `@`
   without leading with it, so disjoint from both pet names and the `@`-led
-  special-name family the model composes) is a single shared constant in the
-  shared tool layer consumed by Lal and Fae; a single shared description
-  fragment, the shared model-visible accept-tool and parameter names (a
-  redemption verb such as `redeemSturdyRef`/`acceptSturdyRef`, not the daemon
-  method's `lookupBy*` spelling; see [Daemon provide and
-  accept](#daemon-provide-and-accept)), and the four shared
-  **unknown**/**stale**/**misplaced**/**enlivenment-failure** messages disclose
-  the handle contract and its failure modes to the model across both agents;
-  and a test asserts the handle grammar stays disjoint from both the pet-name
-  and special-name patterns of `packages/daemon/src/pet-name.js`.
+  special-name family the model composes), together with its
+  identifier-generation rule (cryptographically unguessable, unique within its
+  minting map, with an entropy floor), is a single shared constant in the shared
+  tool layer consumed by Lal and Fae.
+- The shared disclosure set (a single description fragment; the shared
+  model-visible accept-tool name `redeemSturdyRef` and its `sturdyRef` parameter
+  name, not the daemon method's `lookupBy*` spelling, see [Daemon provide and
+  accept](#daemon-provide-and-accept); and the four shared
+  **unknown**/**stale**/**misplaced**/**enlivenment-failure** messages)
+  discloses the handle contract and its failure modes to the model across both
+  agents.
+- A test asserts the handle grammar stays disjoint from both the pet-name and
+  special-name patterns of `packages/daemon/src/pet-name.js`.
 - Every admitted daemon method has an authority review proving that it does not
   disclose a locator or stable naming information, with an explicit negative
   test for each "No" row above.
@@ -1306,9 +1403,18 @@ neither being resolved first.
 ## Phased Work
 
 1. Confirm the pass-style and closely held enlivenment contract with the
-   sturdyref implementation work, and confirm the CapTP boxing/unboxing rule
+   sturdyref implementation work, and **settle** the CapTP boxing/unboxing rule
    that preserves a sturdyref's meaning across the daemon-worker marshalling
-   boundary (see [Dependencies](#dependencies)).
+   boundary ([Open Questions](#open-questions) item 1).
+   This is "settle", not "confirm": [One passable
+   representation](#one-passable-representation) rejects three of the four
+   candidate representations and marks the fourth (the daemon-minted correlation
+   token) as a candidate to weigh, not an already-trusted shape, so this phase
+   owns vetting option (4) (proving its index key can be daemon-minted,
+   unforgeable, and non-enumerable without collapsing back into the on-wire
+   secret) and stating what happens to the whole surface if all four candidates
+   fail, since the confinement acceptance criterion is contingent on the answer
+   (see [Dependencies](#dependencies)).
    Remove the prior remotable-token branch from the parent design.
 2. Build the attenuated confined-worker facet: a guest-derived facet that
    removes the locator-disclosing name-hub methods (`locate`,
@@ -1342,20 +1448,29 @@ neither being resolved first.
    the admission table, including the `storeValue` row, whose negative tests
    demonstrate that the attenuated facet rejects a sturdyref-typed value
    argument top-level and nested.
+   Add the forgery negative test: a worker-fabricated or enumerated sturdyref
+   value (or wire token) the daemon never issued is refused by
+   `lookupBySturdyRef`, which requires the daemon index key to be daemon-minted,
+   unforgeable, and non-enumerable (see [One passable
+   representation](#one-passable-representation) and [Open
+   Questions](#open-questions) item 1).
    Update the daemon help surface (`help.md` and the per-method help strings in
    `help-text-data.js`).
 4. Add the narrow single-turn tool-layer render map to the shared tool layer
-   (`@endo/agent-tools`, consumed by Lal directly and by Fae through
-   `@endo/agentry`), then adapt Lal and Fae to it.
+   (`@endo/agent-tools`, consumed by Lal directly today and to be consumed by
+   Fae once this phase adds that dependency edge through `@endo/agentry`; see
+   [Dependencies](#dependencies)), then adapt Lal and Fae to it.
    Pin the reserved handle grammar (a `ref@`-prefixed opaque token, embedding
-   `@` without leading with it) as a single exported constant both agents
-   consume, pin a single shared description fragment disclosing the handle
-   contract (opaque, verbatim, never-invented), pin the shared model-visible
-   accept-tool and parameter names (a redemption verb such as
-   `redeemSturdyRef`/`acceptSturdyRef`, not the daemon method's `lookupBy*`
-   spelling), and pin the four shared
-   **unknown**/**stale**/**misplaced**/**enlivenment-failure** messages, that
-   both agents place in the schema or description of any handle-bearing tool.
+   `@` without leading with it) and its identifier-generation rule
+   (cryptographically unguessable, unique within its minting map, with an
+   entropy floor) as a single exported constant both agents consume.
+   Pin a single shared description fragment disclosing the handle contract
+   (opaque, verbatim, never-invented), the shared model-visible accept-tool name
+   `redeemSturdyRef` and its `sturdyRef` parameter name (the redemption verb,
+   not the daemon method's `lookupBy*` spelling), and the four shared
+   **unknown**/**stale**/**misplaced**/**enlivenment-failure** messages.
+   Both agents place these shared constants in the schema or description of any
+   handle-bearing tool.
    Add the cross-package test that the handle grammar stays disjoint from both
    `pet-name.js` patterns.
    Have the shared tool layer hand out the render map per activation (a fresh
@@ -1404,7 +1519,7 @@ The by-construction argument for pinning the constants in one place stands on
 its own; only the claim that the home costs no new dependency was wrong, and
 this revision drops it.
 (The retired `@endo/genie` package is not a third agent here; it was removed on
-2026-08-13 by commit `42bc7d5161`, "chore: retire @endo/genie", and this design
+2026-08-13 by commit `42bc7d5161`, "chore: retire @endo/genie," and this design
 does not target it.)
 
 | Design / PR | Relationship |
@@ -1412,7 +1527,7 @@ does not target it.)
 | SturdyRefs on demand (PR [#539](https://github.com/endojs/endo-but-for-bots/pull/539)) | Defines the sturdyref pass style and closely held enlivenment capability this surface consumes. Its guest-token conclusion must be revised to match this document. |
 | PR [#737](https://github.com/endojs/endo-but-for-bots/pull/737) | Implements the first-class `'sturdyref'` pass-style work that this design assumes. (Supersedes the closed PR [#521](https://github.com/endojs/endo-but-for-bots/pull/521), its wrong-account predecessor.) |
 | CapTP box/unbox for sturdyrefs | The daemon's worker transport is `@endo/captp` plus marshal: the worker-transport files (`packages/daemon/src/client.js`, `bus-worker-xs.js`, `connection.js`, `residence.js`) import `@endo/captp`, not `@endo/ocapn`. (The daemon manifest lists `@endo/ocapn` as a direct dependency, but only for host-to-host networking in `packages/daemon/src/networks/ocapn.js`, a path unrelated to the worker transport.) A sturdyref marshalled to a worker and handed back must survive the round trip with its meaning intact; this is item 2 of the sibling design and is a hard prerequisite for Phase 3. |
-| [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | Design 2 of 2 of a competing sturdyref pair. It proposes an `endor` `retain`/`release` syscall for exactly the cross-turn retention this document defers to an investigation. **Selection disposition:** the two designs are presented as alternatives for the maintainer to choose between; this document does not claim to supersede its sibling, and its [Retention and user revocation](#retention-and-user-revocation) must be reconciled with that syscall answer once the maintainer selects (both ship, one supersedes, or the choice is deferred). |
+| [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | design 2 of 2 of a competing sturdyref pair. It proposes an `endor` `retain`/`release` syscall for exactly the cross-turn retention this document defers to an investigation. **Selection disposition:** the two designs are presented as alternatives for the maintainer to choose between; this document does not claim to supersede its sibling, and its [Retention and user revocation](#retention-and-user-revocation) must be reconciled with that syscall answer once the maintainer selects (both ship, one supersedes, or the choice is deferred). |
 | PR [#541](https://github.com/endojs/endo-but-for-bots/pull/541) | Provides daemon-side sturdyref resolution at the facet boundary. Its body currently asserts anonymous sturdyrefs are retention-free; this design treats that as an open question, so #541's retention claim must be held pending, or revised by, the retention investigation rather than taken as a settled foundation. |
 | [daemon-retention-paths](daemon-retention-paths.md) | Candidate basis for showing the user the workers that retain a formula; also supplies the `worker`/`petStore`/`retention` edge-label taxonomy the retention investigation starts from. |
 
@@ -1421,19 +1536,20 @@ does not target it.)
 1. What exact pass-style representation and CapTP transport rule let the
    closely held association map an opaque `SturdyRef` to its locator without
    exposing that association, or the swiss number, to confined code?
-   The four-way tension this rule must resolve — key the index on a
-   payload-free copy (no marshal-level identity to key on), put the swiss
-   number on the wire (the forbidden bearer-secret-in-confined-hands case), box
-   pass-by-reference (reintroducing the rejected identity-bearing remotable),
-   or carry a daemon-minted opaque correlation token (whose own open part is
-   whether marshalling forces it to collapse back into the secret) — is stated
-   once, with its reasoning, in [One passable
-   representation](#one-passable-representation); it is not re-enumerated here.
+   The four-way tension this rule must resolve is stated once, with its
+   reasoning, in [One passable
+   representation](#one-passable-representation), and is not re-enumerated
+   here: key the index on a payload-free copy (no marshal-level identity to key
+   on), put the swiss number on the wire (the forbidden
+   bearer-secret-in-confined-hands case), box pass-by-reference (reintroducing
+   the rejected identity-bearing remotable), or carry a daemon-minted opaque
+   correlation token (whose own open part is whether marshalling forces it to
+   collapse back into the secret).
    This question also bounds the remote branch of `enlivenSturdyRef`: whether
    confined code can obtain or fabricate a sturdyref whose location is remote
    and so aim that branch at a location of its choosing (see [One passable
    representation](#one-passable-representation)).
-2. Is sturdyref redemption holder-scoped or bearer?
+2. Is sturdyref redemption holder-scoped or bearer-scoped?
    Per-worker revocation is only meaningful if a redeeming facet checks the
    presenting worker, not merely the value.
 3. Does holding a sturdyref across a worker turn require a formula-graph
