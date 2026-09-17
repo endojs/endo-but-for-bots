@@ -40,27 +40,35 @@ export const readableBlobMethodGuards = harden({
 
 // Method-name duck-type for "this remote value is a readable blob whose bytes
 // should be materialized" — the accept side of the daemon's `write()` /
-// `copyInto` / `stageTree` and the extended-FS mount-child probes. Admits the
-// canonical `ReadableBlob` whole-value read surface (`text`, the marker every
-// `readableBlobMethodGuards` implementor carries — `blobFromBytes`, an
-// `@endo/exo-unzip` leaf, `makeBrowserBlob`), plus the two byte-stream-only
-// shapes that lack `text` yet are still readable blobs: a `BlobRef`-style
-// content-addressed blob (`getInfo`) and a raw `PassableBytesReader`
-// (`readReturnPattern`). A generic value `PassableReader` also advertises
-// `readReturnPattern`, so it is excluded by additionally requiring the
-// *absence* of `readPattern` — the value-pattern accessor a bytes reader never
-// carries (its yields are always `Uint8Array`). An `HttpResponse`
-// (`@endo/exo-http-client`) also carries `text` (plus `json`/`stream`), so the
-// bare `text` branch would admit it; but its `stream()` responder takes *zero*
-// args (no synchronize head), so `iterateBytesReader` would drive it as
-// `E(source).stream(synHead)` and die on an opaque arity guard rather than the
-// crisp shape error. It is excluded by additionally requiring the *absence* of
-// `status` — the response-code accessor an `HttpResponse` carries and a
-// readable blob never does — mirroring the `!readPattern` exclusion above. A
-// writer (`writePattern`/`writeReturnPattern`, neither `text` nor a read
-// marker) is rejected by falling through both branches. `stream` alone no
-// longer discriminates: it is the generic byte-stream method shared with
-// readers/writers and `HttpResponse`.
+// `copyInto` / `stageTree` and the extended-FS mount-child probes. Every
+// admitted value is drained through `iterateBytesReader(source)`, i.e.
+// `E(source).stream(synHead)`, so **`stream` is required on every branch** — a
+// value that carries a blob marker but no `stream` (an extended-layer
+// `BlobRef`, `{getInfo, fetch, text, json, help}`, whose bytes flow via `fetch`
+// and which deliberately has no daemon-side `stream`) would otherwise pass the
+// duck-type, get a scratch file opened, then die on an opaque method-missing
+// error — the exact failure the crisp shape error exists to replace. Admits the
+// canonical `ReadableBlob` whole-value read surface (`text` paired with
+// `stream`, the shape every `readableBlobMethodGuards` implementor carries —
+// `blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`), plus the two
+// byte-stream-only shapes that lack `text` yet are still readable blobs: a
+// `BlobRef`-style content-addressed blob (`stream` + `getInfo`) and a raw
+// `PassableBytesReader` (`stream` + `readReturnPattern`). A generic value
+// `PassableReader` also advertises `readReturnPattern`, so it is excluded by
+// additionally requiring the *absence* of `readPattern` — the value-pattern
+// accessor a bytes reader never carries (its yields are always `Uint8Array`).
+// An `HttpResponse` (`@endo/exo-http-client`) also carries `text`/`stream`
+// (plus `json`), so the `text`+`stream` branch would admit it; but its
+// `stream()` responder takes *zero* args (no synchronize head), so
+// `iterateBytesReader` would drive it as `E(source).stream(synHead)` and die on
+// an opaque arity guard rather than the crisp shape error. It is excluded by
+// additionally requiring the *absence* of `status` — the response-code accessor
+// an `HttpResponse` carries and a readable blob never does — mirroring the
+// `!readPattern` exclusion above. A writer
+// (`writePattern`/`writeReturnPattern`, neither `text` nor a read marker) is
+// rejected by falling through both branches. `stream` alone no longer
+// discriminates: it is the generic byte-stream method shared with
+// readers/writers and `HttpResponse`, so it is always paired with a marker.
 //
 // This is the single source of truth for the discriminator (four consumers
 // spread across three packages import it); never re-inline it per consumer — a
@@ -71,11 +79,11 @@ export const readableBlobMethodGuards = harden({
  * @returns {boolean}
  */
 export const looksLikeReadableBlob = methodNames =>
-  (methodNames.includes('text') && !methodNames.includes('status')) ||
-  (methodNames.includes('stream') &&
-    !methodNames.includes('readPattern') &&
-    (methodNames.includes('getInfo') ||
-      methodNames.includes('readReturnPattern')));
+  methodNames.includes('stream') &&
+  ((methodNames.includes('text') && !methodNames.includes('status')) ||
+    (!methodNames.includes('readPattern') &&
+      (methodNames.includes('getInfo') ||
+        methodNames.includes('readReturnPattern'))));
 harden(looksLikeReadableBlob);
 
 // `readableTreeMethodGuards` is the shared read-surface for content-addressed

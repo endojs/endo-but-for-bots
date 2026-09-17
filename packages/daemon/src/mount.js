@@ -1244,7 +1244,7 @@ const makeMountExo = ctx => {
     const parent = filePowers.joinPath(target, '..');
     await filePowers.makePath(parent);
     // Detect blob-vs-tree by method names, the same shape-test
-    // `checkinTree` uses.  A `stream`-bearing remotable is
+    // `checkinTree` uses.  A readable-blob-shaped remotable is
     // materialised through bytes; a `list`-bearing remotable is
     // materialised recursively.
     const source =
@@ -1299,9 +1299,9 @@ const makeMountExo = ctx => {
       return;
     }
     throw new Error(
-      'write() value must be a ReadableBlob (a `text` whole-value read, or a ' +
-        '`stream` paired with a `getInfo`/`readReturnPattern` byte-read marker) ' +
-        'or a ReadableTree (a `list` method); this value has none',
+      'write() value must be a ReadableBlob (a `stream` method paired with a ' +
+        '`text`/`getInfo`/`readReturnPattern` byte-read marker) or a ' +
+        'ReadableTree (a `list` method); this value has none',
     );
   };
 

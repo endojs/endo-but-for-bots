@@ -236,8 +236,9 @@ test('stdin is an exo-stream writer driven with iterateBytesWriter', async t => 
   });
   const handle = await makeHandle(fixture);
   const proc = await E(handle).spawn(harden(['/bin/cat']));
-  // The bytes cross as base64 over the exo-stream protocol, so a caller in
-  // another vat can feed the process; a raw Uint8Array is not passable.
+  // The bytes cross as passable immutable byte arrays over the exo-stream
+  // protocol, so a caller in another vat can feed the process; a mutable raw
+  // Uint8Array is not passable.
   const writer = iterateBytesWriter(E(proc).stdin(), { buffer: 0 });
   t.deepEqual(await writer.next(new TextEncoder().encode('ping-')), {
     done: false,

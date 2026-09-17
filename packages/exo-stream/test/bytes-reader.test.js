@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { fc } from '@fast-check/ava';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { Far } from '@endo/pass-style';
@@ -51,6 +52,44 @@ test('bytes reader round-trip', async t => {
   for (let i = 0; i < messages.length; i += 1) {
     t.deepEqual(results[i], messages[i]);
   }
+});
+
+// The reader codec round-trip is the central `forall` of this package: any
+// sequence of byte chunks a producer yields must arrive frame-for-frame,
+// byte-for-byte, at the consumer — across the `frozenBytes`/`thawedBytes`
+// freeze/thaw boundary and the marshal encoding. The hand-picked cases above
+// pin specific shapes; this property exercises arbitrary chunk counts, chunk
+// lengths (including empty frames), and byte values (0..255, the whole range
+// the hex/base64 divergence is sensitive to).
+test('bytes reader round-trip preserves arbitrary chunk sequences', async t => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(fc.uint8Array({ minLength: 0, maxLength: 64 }), {
+        minLength: 0,
+        maxLength: 16,
+      }),
+      async chunks => {
+        async function* localIterator() {
+          for (const chunk of chunks) {
+            yield chunk;
+          }
+        }
+        const readerRef = bytesReaderFromIterator(localIterator());
+        const reader = await iterateBytesReader(readerRef);
+        const results = [];
+        for await (const message of reader) {
+          results.push(message);
+        }
+        // A frame-for-frame, byte-for-byte round-trip.
+        assert.equal(results.length, chunks.length);
+        for (let i = 0; i < chunks.length; i += 1) {
+          assert.deepEqual([...results[i]], [...chunks[i]]);
+        }
+      },
+    ),
+    { numRuns: 200 },
+  );
+  t.pass();
 });
 
 test('empty bytes reader', async t => {

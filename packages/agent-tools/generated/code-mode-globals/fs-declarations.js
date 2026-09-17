@@ -275,6 +275,7 @@ type MountEndoMountStat = {
 };
 type MountDirectoryWriteSource = MountReadableBlobSource | MountReadableTree;
 type MountReadableBlobSource = {
+    stream: (...args: any[]) => PromiseLike<unknown>;
     text: (...args: any[]) => PromiseLike<unknown>;
 } | {
     stream: (...args: any[]) => PromiseLike<unknown>;

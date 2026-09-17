@@ -1306,10 +1306,7 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
           (ts.isTypeOperatorNode(aliasType) &&
             aliasType.operator === ts.SyntaxKind.ReadonlyKeyword &&
             ts.isArrayTypeNode(aliasType.type)));
-      const isPassByCopyContainer =
-        found.fileName.includes('/pass-style/src/types.d.ts') &&
-        new Set(['CopyArray', 'CopyRecord', 'CopyTagged']).has(name);
-      if (isArrayAlias || isPassByCopyContainer) {
+      if (isArrayAlias) {
         return new Map();
       }
       throw new Error(

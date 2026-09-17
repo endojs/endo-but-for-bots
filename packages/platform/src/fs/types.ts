@@ -105,14 +105,20 @@ export interface ReadableTree {
  * `write()` discriminates a blob source from a writer or an `HttpResponse` by
  * method name (`looksLikeReadableBlob`), so `stream` alone is no longer
  * accepted — it is the generic byte-stream method shared with writers and
- * `HttpResponse`. A source must advertise one of:
+ * `HttpResponse`. Every admitted source is drained through `E(source).stream()`,
+ * so `stream` is required on every branch; the second method is the *marker*
+ * that distinguishes a blob from a writer/`HttpResponse`. A source must carry
+ * `stream` paired with one of:
  *  - `text`, the whole-value read surface every canonical `ReadableBlob`
  *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`); or
- *  - `stream` paired with a byte-read marker — `getInfo` for a content-addressed
- *    blob, or `readReturnPattern` for a raw `PassableBytesReader`.
+ *  - `getInfo` for a content-addressed blob; or
+ *  - `readReturnPattern` for a raw `PassableBytesReader`.
  */
 export type ReadableBlobSource =
-  | { text: (...args: any[]) => PromiseLike<unknown> }
+  | {
+      stream: (...args: any[]) => PromiseLike<unknown>;
+      text: (...args: any[]) => PromiseLike<unknown>;
+    }
   | {
       stream: (...args: any[]) => PromiseLike<unknown>;
       getInfo: (...args: any[]) => PromiseLike<unknown>;

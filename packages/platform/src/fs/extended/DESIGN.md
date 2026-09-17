@@ -745,7 +745,7 @@ The interface doesn't see them.
 
 The layer is itself a `Filesystem` (same interface), with the
 additional operations in §8.5. Composition is N-ary: a stack of
-N layers behaves like (((L₁ ∘ L₂) ∘ L₃) ... ∘ Lₙ). Docker-style
+N layers behaves like (((L1 o L2) o L3) ... o Ln). Docker-style
 image stacks fall out without special-casing.
 
 ### 8.5 Layer-specific operations: diff and apply
