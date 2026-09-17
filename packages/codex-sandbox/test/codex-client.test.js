@@ -1046,6 +1046,28 @@ test('notifications arriving before turn/start response are replayed', async t =
   t.is(events.at(-1).type, 'end');
 });
 
+test('an undrained event queue fails explicitly and requests producer interruption', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture();
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('go');
+  for (let n = 0; n < 1025; n += 1) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId: 'answer',
+        delta: 'x',
+      },
+    });
+  }
+  // Let the producer process its push source without granting reader credit.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await t.throwsAsync(drain(reader), { message: /queue capacity exceeded/ });
+  t.true(fixture.sent.some(message => message.method === 'turn/interrupt'));
+});
+
 test('commentary is distinct from the final answer stream', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const reader = await fixture.client.send('go');

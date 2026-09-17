@@ -45,7 +45,7 @@ import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 
 import { assertBridgeEvent, parseJsonLines } from './opencode-protocol.js';
@@ -659,7 +659,11 @@ export const makeOpencodeClient = ({
    * @returns {Turn}
    */
   const enqueueTurn = (text, opts = {}) => {
-    const { push, reader, setOnClose } = makeBufferedReader();
+    const { push, reader, setOnClose } = makeBoundedReader({
+      maxItems: 1024,
+      maxWeight: 16 * 1024 * 1024,
+      weigh: event => 64 + JSON.stringify(event).length * 2,
+    });
     let settle = () => {};
     const terminal = new Promise(resolve => {
       settle = () => resolve(undefined);
@@ -680,8 +684,8 @@ export const makeOpencodeClient = ({
       if (active === turn) {
         // Consumer stopped pulling: abort the executing turn.  The pushed
         // terminal (if it still arrives) lands in a finished reader, which
-        // is a no-op; `settle` only matters for a still-parked reader.
-        turn.settle();
+        // is a no-op. Keep the separate producer-stop barrier pending until
+        // the bridge actually reports terminal; reader closure is not exit.
         writeCommand({ op: 'interrupt' }).catch(() => {});
         return;
       }

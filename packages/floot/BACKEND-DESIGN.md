@@ -149,6 +149,27 @@ journal snapshot exists.
 
 ## Atomic turns and recovery
 
+### Hosted event delivery
+
+Claude, Codex, and OpenCode use the credit-aware bounded push reader for their
+normalized event output.
+The queue admits at most 1,024 undelivered data events and 16 MiB of accounting
+weight (twice JSON string length, plus 64 per event for small-event overhead).
+This is a conservative initial burst profile replacing eager, unbounded delivery;
+the byte allowance does not exceed Codex's existing cumulative output allowance,
+and the slot allowance independently bounds floods of tiny events.
+It is not a measured heap limit or a UTF-8 wire-byte limit.
+A separate terminal slot reserves up to another 16 MiB of accounting weight.
+The pump may hold one value outside the queue, and consumer prefetch/retention
+must be budgeted separately; the queue does not bound the whole application.
+Consumed entries release their charges.
+Overflow fails delivery explicitly and requests producer cancellation, whose
+completion remains a separate backend barrier.
+Existing cumulative limits remain until other retained maps, histories, and
+storage are bounded; this change does not claim whole-session bounded memory.
+
+### Durable turns
+
 The conversation tree commits a hosted logical turn as one node after the
 backend terminal succeeds.
 Failed and cancelled turns are not presented as successful history.

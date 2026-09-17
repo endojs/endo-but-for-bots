@@ -287,6 +287,32 @@ test('interrupt writes the command and is a terminal barrier', async t => {
   ]);
 });
 
+test('overflow closes the reader but interruption still waits for the producer terminal', async t => {
+  t.timeout(5000);
+  const bridge = makeFakeBridge();
+  const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
+  t.teardown(() => client.terminate());
+  bridge.push(readyLine('ses_1'));
+  const reader = await client.send('work');
+  await waitFor(() => bridge.commands.length > 0);
+  for (let n = 0; n < 1025; n += 1) {
+    bridge.push(JSON.stringify({ type: 'text-delta', text: 'x' }));
+  }
+  await waitFor(() =>
+    bridge.commands.some(command => command.includes('interrupt')),
+  );
+  await t.throwsAsync(drain(reader), { message: /queue capacity exceeded/ });
+  let stopped = false;
+  const interrupt = client.interrupt().then(() => {
+    stopped = true;
+  });
+  await tick();
+  t.false(stopped, 'reader overflow is not confirmation of producer stop');
+  bridge.push(JSON.stringify({ type: 'abort', reason: 'interrupted' }));
+  await interrupt;
+  t.true(stopped);
+});
+
 test('interrupt refuses when no turn is in flight', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);

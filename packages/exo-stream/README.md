@@ -357,6 +357,26 @@ gracefully transition to using `iterateReader()` instead of
 
 ## Design
 
+### Bounded push sources
+
+`makeBoundedReader` from `@endo/exo-stream/bounded-channel.js` adapts a push
+source to the credit-aware reader pump.
+Pass `maxItems`, `maxWeight`, and `weigh(event)` to bound undelivered data.
+Weights and bounds use positive 32-bit integers for this resident-queue profile.
+Consumed entries release their charges; these are not lifetime traffic limits.
+One additional terminal event, itself subject to `maxWeight`, has reserved space.
+Queue exhaustion fails the reader and invokes `onClose` so the producer can stop.
+The producer must connect that hook to its own cancellation/cleanup barrier;
+closing a reader alone is not proof that native execution stopped.
+
+Unlike `makeBufferedReader`, this channel honors consumer credit rather than
+building an eager acknowledgement chain.
+Consumers must still bound prefetch and their own retained history.
+An absent consumer can fill the producer queue, but cannot cause unbounded growth.
+Use this for non-cooperative push sources where explicit overload failure is
+preferable to losing events or retaining them without a bound.
+Use a pull source directly when producer backpressure is available.
+
 See [DESIGN.md](./DESIGN.md) for design documentation.
 
 ## Future Work
