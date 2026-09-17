@@ -57,6 +57,7 @@ impl Interp {
             return None;
         }
         let comb = self.snapshot_combinator_map();
+        let from_async = self.snapshot_from_async_map();
         let mut environments: Vec<_> = std::iter::once(&self.environment)
             .chain(self.inactive_environments.values())
             .map(|env| EnvironmentRow {
@@ -161,7 +162,7 @@ impl Interp {
                         rejected,
                     } => PromiseJobRow {
                         thenable: false,
-                        reaction: reaction_snapshot(reaction, &comb),
+                        reaction: reaction_snapshot(reaction, &comb, &from_async),
                         value: *value,
                         rejected: *rejected,
                     },
@@ -521,9 +522,20 @@ impl Interp {
     }
 }
 
+/// The shared-machine twin of the promise-cluster reaction encoder in
+/// `persist.rs`. It is EXHAUSTIVE over `ReactionKind`, and must stay so: this
+/// path serializes `promise_jobs`, which a shared-machine evaluation
+/// deliberately leaves queued, so every kind the persist gate admits arrives
+/// here. It previously ended in a catch-all `unreachable!`, which turned two
+/// carries that the gate had already started admitting — the async generators
+/// at format 23 and the `Array.fromAsync` accumulations at format 24 — into a
+/// host panic reachable from ordinary guest code (`Array.fromAsync([1, 2])`
+/// then a checkpoint before the drain). A wildcard here cannot tell a kind
+/// nothing carries from a kind the gate now lets through, so there is none.
 fn reaction_snapshot(
     r: &PromiseReaction,
     comb: &std::collections::BTreeMap<u32, u32>,
+    from_async: &std::collections::BTreeMap<u32, u32>,
 ) -> PromiseReactionRow {
     let (kind, a, b) = match r.kind {
         ReactionKind::User => (0, 0, 0),
@@ -531,8 +543,17 @@ fn reaction_snapshot(
         ReactionKind::Combine(i, e) => (2, comb[&i], e),
         ReactionKind::CombineDirect(i, e) => (12, comb[&i], e),
         ReactionKind::AsyncAwait(i) => (3, i.0, 0),
+        ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
+        ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
+        ReactionKind::AsyncGeneratorReturn(i) => (6, i.0, 0),
+        // Remapped onto the compacted arena, exactly as `Combine` is: the
+        // writer emits live entries densely, so a raw index would name the
+        // wrong accumulation (architecture finding F127).
+        ReactionKind::FromAsyncNext(i) => (7, from_async[&i], 0),
+        ReactionKind::FromAsyncElem(i) => (8, from_async[&i], 0),
+        ReactionKind::FromAsyncMap(i) => (9, from_async[&i], 0),
+        ReactionKind::FromAsyncClose(i) => (10, from_async[&i], 0),
         ReactionKind::FinallyAwait(r) => (11, r as u32, 0),
-        _ => unreachable!("persist gate rejects unsupported suspended machinery"),
     };
     PromiseReactionRow {
         on_fulfilled: r.on_fulfilled,
@@ -646,6 +667,36 @@ impl Interp {
                 {
                     pending[r.a as usize] += 1;
                     ReactionKind::Combine(r.a, r.b)
+                }
+                // An async-generator step carries its instance in `a`, the
+                // same shape an `AsyncAwait` uses. The instance must already
+                // be restored; unlike `AsyncAwait` a generator may legitimately
+                // be named by more than one queued step, so there is no
+                // once-only set here.
+                kind @ 4..=6
+                    if r.b == 0 && no_slots && {
+                        let owner = crate::SlotIndex(r.a);
+                        self.async_generators.contains_key(&owner)
+                    } =>
+                {
+                    let owner = crate::SlotIndex(r.a);
+                    match kind {
+                        4 => ReactionKind::AsyncGeneratorAwait(owner),
+                        5 => ReactionKind::AsyncGeneratorYield(owner),
+                        _ => ReactionKind::AsyncGeneratorReturn(owner),
+                    }
+                }
+                // A `FromAsync*` step names a carried accumulation by its
+                // index in the COMPACTED arena, which the writer above
+                // remapped (architecture finding F127). An index past the end
+                // would step a row nothing wrote.
+                kind @ 7..=10 if r.b == 0 && no_slots && (r.a as usize) < self.from_async.len() => {
+                    match kind {
+                        7 => ReactionKind::FromAsyncNext(r.a),
+                        8 => ReactionKind::FromAsyncElem(r.a),
+                        9 => ReactionKind::FromAsyncMap(r.a),
+                        _ => ReactionKind::FromAsyncClose(r.a),
+                    }
                 }
                 _ => return Err(refuse("invalid reaction job")),
             };

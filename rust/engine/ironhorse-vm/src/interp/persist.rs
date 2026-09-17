@@ -3291,6 +3291,40 @@ impl Interp {
                 }
             }
         }
+        // The `Array.fromAsync` flags that make a CLAIM ABOUT ANOTHER TABLE,
+        // checked here because that is where every table is in place
+        // (architecture finding F127). A carried flag is a claim, not
+        // evidence, and each of these two decides a branch that assumes its
+        // own table agrees:
+        //
+        // `target_is_array` sends the accumulator through the dense store,
+        // which unwraps `self.arrays` — so a bit set over a non-Array target
+        // is an engine panic on the next crank, reachable from one flipped
+        // byte in a store. It is DERIVED at both mint sites
+        // (`self.arrays.contains_key(&target)`), so the honest value is
+        // recomputable and a disagreement is corruption by definition.
+        //
+        // `sync_wrapped` says the iterator is a sync one wrapped as async,
+        // which decides whether a step's result is awaited or read directly.
+        // Set over a genuinely async iterator, the resumed accumulation reads
+        // a promise as a `{value, done}` step and walks forever until the
+        // meter stops it. That one is not derivable from the row, so the
+        // check is the weaker one it admits: a flag about an iterator is
+        // nonsense without an iterator, which the decoder already refuses —
+        // this is the in-memory twin of that rule, for the store path.
+        //
+        // The third clause is the in-memory twin of a rule the container
+        // decoder already enforces: an iterator with no `next` method has
+        // nothing to step, so the accumulation's result promise would never
+        // settle. The store path does not run that decoder, and a silent
+        // permanent stall is the one outcome worse than a refusal, so the
+        // rule is stated on both sides rather than on the container alone.
+        let from_async_valid = self.from_async.iter().all(|f| {
+            let iterated = f.iterator.kind == Kind::Reference;
+            f.target_is_array == self.arrays.contains_key(&f.target)
+                && (!f.sync_wrapped || iterated)
+                && (!iterated || f.next_method.kind == Kind::Reference)
+        });
         // A request's capability is an ordinary resolving pair whose
         // promise is the request's own result promise; the awaited
         // promise an active request waits on may be unreachable (a
@@ -3317,7 +3351,7 @@ impl Interp {
                     .as_ref()
                     .is_none_or(|f| self.functions.contains_key(&f.cur_func))
         });
-        reactions_valid && generators_valid && self.async_instances.iter().all(|(owner, a)| {
+        reactions_valid && generators_valid && from_async_valid && self.async_instances.iter().all(|(owner, a)| {
             let function = |slot: Slot| match slot.value {
                 Payload::Reference(f) => self.promise_functions.get(&f),
                 _ => None,
