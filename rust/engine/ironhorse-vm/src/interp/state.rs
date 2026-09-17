@@ -2645,6 +2645,32 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Settlement order until the first report. Root every candidate until the job drain decides which remains unhandled.
     pending_rejections: Vec<crate::value::SlotIndex>,
+    #[boot_new(Vec::new())]
+    #[gc_root(indices)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The inert `constructor` stand-ins `lockdown()` installs, minted at boot
+    /// in `create_locked_down_constructors` and wired by step 2, in the order
+    /// `locked_down_prototypes` gives.
+    ///
+    /// XS mints these inside `fx_lockdown` with `fxDuplicateInstance`, and
+    /// following that literally put them ABOVE `boot_slot_count`, where
+    /// `function_persists` has no reconstruction recipe -- so
+    /// `Function.prototype.constructor` held a reference to a non-persisting
+    /// native and a locked-down machine could not be stored at all. Measured:
+    /// `before lockdown: None`, `after lockdown: Some("a stored reference to a
+    /// non-persisted native function")`.
+    ///
+    /// The divergence from XS is only in WHEN the objects are created, never in
+    /// what a guest can observe: they are unreferenced until step 2 wires them,
+    /// and being boot instances they are already in step 5's derived root set.
+    locked_down_constructors: Vec<crate::value::SlotIndex>,
     #[boot_new(std::collections::VecDeque::new())]
     #[gc_root(jobs)]
     #[quiescent(empty)]

@@ -681,6 +681,41 @@ The fix for the retry claim was the fix for the allocation.
 is the first in this suite to exercise any failure path at all — every other
 case ran `lockdown()` succeeding.
 
+**Closed: a guest `lockdown()` used to make the machine unsnapshottable.**
+
+`Interp::function_persists` admits a function above `boot_slot_count` only with
+an explicit reconstruction recipe. XS mints the stand-ins inside `fx_lockdown`
+with `fxDuplicateInstance`, and following that literally put them above the
+line, so `Function.prototype.constructor` held a reference to a non-persisting
+native and the whole machine refused to store: measured `before lockdown: None`,
+`after lockdown: Some("a stored reference to a non-persisted native function")`.
+A `Machine::new()` host-side freeze mints nothing and stayed persistable, which
+pins the cause on those five objects.
+
+**Why XS does not have this problem**, which is the useful comparison.
+`fxProjectCallback` (`xsSnapshot.c:1261`) snapshots a host function by storing
+an INDEX into `gxCallbacks`, and `fxDuplicateInstance` copies the
+`XS_CALLBACK_KIND` slot, so the duplicate carries `fxThrowTypeError`'s pointer
+and projects like any other. XS identifies a native by WHAT IT DOES, so one
+created mid-run snapshots for free. IronHorse identifies a native by WHERE IT
+IS -- `native_names` filters `owner < boot_slot_count` and its restore comment
+says "the native implementation stays boot-derived; only chunk locations
+travel". A native born after boot had no identity a snapshot could express.
+That asymmetry was the bug, not anything in `lockdown()`.
+
+The fix is placement, and both halves are load-bearing:
+`create_locked_down_constructors` runs AFTER `create_intrinsics` -- because
+boot's own constructor wiring reads `ctor_prototype` back to install
+`prototype.constructor`, so a stand-in visible during `create_intrinsics`
+installs lockdown's effect at boot -- and BEFORE `boot_slot_count` is fixed, so
+they persist by index like any other boot native. Step 2 then only wires, which
+is also why a failed `lockdown()` allocates nothing.
+
+An earlier attempt minted them inside `create_intrinsics` and collided with
+three separate boot invariants; a second design added a snapshot recipe table
+and a format version bump. Neither was needed. **The divergence from XS is only
+in WHEN the objects are created, never in what a guest can observe.**
+
 **Pre-existing, surfaced here but not caused here.**
 
 `%ThrowTypeError%` does not exist on IronHorse at all. XS builds it
