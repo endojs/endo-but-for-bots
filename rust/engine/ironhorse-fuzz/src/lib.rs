@@ -4205,7 +4205,45 @@ mod tests {
             0x25, 0xfe, 0x86, 0x1c, 0x28, 0xee, 0x59, 0x08, 0xa6, 0xf7, 0xec, 0xc0, 0x0d, 0x17,
         ]);
         let _ = decoder_is_panic_free(&[0x25, 0xfe]);
+        // Regression (tripwire trophy `crash-3945c21f`, CI run 35176276742):
+        // a STRING operand whose bytes hold a malformed 4-byte UTF-8
+        // sequence. `cesu8_to_units` treated any lead byte at or above 0xF0
+        // as a genuine astral scalar and computed `cp - 0x10000`; an
+        // OVERLONG sequence such as `F0 80 80 80` is zero, so the subtraction
+        // wrapped — and this workspace builds release with
+        // `overflow-checks = true`, so it aborted the process rather than
+        // producing a wrong string. The decoder now drops the malformed tail,
+        // which is what its doc comment always promised.
+        // The 4-byte core, then the libFuzzer unit that found it.
+        let _ = decoder_is_panic_free(&[0x0b, 0x00, 0x04, 0xF0, 0x80, 0x80, 0x80, 0x00]);
+        let _ = decoder_is_panic_free(FOUR_BYTE_UTF8_TROPHY);
     }
+
+    /// The tripwire trophy above, verbatim as cargo-fuzz printed the failing
+    /// unit (`artifacts/bytecode_decoder/crash-3945c21ff84a88af5233edf3327f2
+    /// e100a2eb732`). Kept whole rather than minimized because the seed
+    /// corpus is generated and cannot carry a hand-added file, so this array
+    /// IS the trophy's only checked-in home.
+    const FOUR_BYTE_UTF8_TROPHY: &[u8] = &[
+        11, 0, 75, 201, 201, 201, 2, 248, 201, 201, 201, 85, 82, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 78, 114, 2, 32, 212, 0, 143, 255,
+        255, 255, 153, 153, 153, 89, 48, 64, 140, 221, 66, 31, 2, 146, 82, 141, 31, 7, 114, 8, 221,
+        118, 19, 22, 4, 114, 82, 101, 102, 101, 114, 101, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 116, 0, 201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 239, 41, 201, 201, 201, 201,
+        201, 201, 255, 255, 255, 255, 201, 201, 201, 201, 201, 201, 201, 255, 255, 255, 255, 255,
+        255, 154, 153, 153, 153, 153, 89, 48, 64, 140, 221, 66, 31, 2, 146, 82, 141, 31, 7, 114, 8,
+        221, 118, 19, 22, 4, 114, 2, 140, 125, 114, 34, 125, 19, 221, 31, 2, 146, 82, 141, 31, 7,
+        114, 8, 221, 118, 19, 22, 4, 114, 2, 140, 125, 114, 114, 34, 125, 19, 221, 66, 34, 4, 146,
+        114, 68, 125, 21, 66, 31, 34, 146, 143, 236, 0, 108, 81, 184, 30, 133, 235, 9, 64, 221,
+        207, 31, 11, 114, 8, 31, 3, 221, 22, 2, 114, 67, 22, 9, 143, 113, 61, 10, 215, 163, 80, 70,
+        64, 127, 221, 31, 5, 114, 92, 125, 22, 1, 82, 19, 31, 33, 114, 79, 65, 12, 143, 31, 133,
+        235, 81, 184, 158, 71, 64, 19, 22, 15, 116, 0, 201, 201, 201, 201, 201, 201, 201, 201, 201,
+        201, 239, 41, 201, 201, 201, 201, 201, 201, 255, 255, 255, 255, 201, 201, 201, 201, 201,
+        201, 201, 201, 201, 201, 201, 201, 201, 201, 201, 223, 21, 187, 169,
+    ];
 
     /// Wedge-proofing lock: the self-targeting backward branch that caused the
     /// stage-4a decoder hang must abort with a bounded `Halt::StepLimit` — not
