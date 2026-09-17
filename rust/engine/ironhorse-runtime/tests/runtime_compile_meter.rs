@@ -374,9 +374,19 @@ fn retained_generator_and_async_frames_keep_their_compartment_globals() {
 /// the CALLING compartment, see its globals, and use its evaluator service.
 /// A compartment needs its own compiler for any of them, which is the same
 /// rule `sibling_realms_keep_independent_source_compilers` pins for `eval`.
+///
+/// **On an UNFROZEN machine.** `Machine::new()` performs lockdown at
+/// construction, and its step 2 leaves an inert stand-in at each of these
+/// prototypes' `constructor`, so on a frozen machine the three unnamed families
+/// are not reachable at all and the named one resolves only through the
+/// compartment's own copy. That is SES's shape and is pinned by
+/// `ironhorse-vm/tests/realms.rs::a_locked_down_machine_denies_every_prototype_chain_evaluator`.
+/// What this test measures -- which environment a reachable dynamic function
+/// compiles and runs in -- still applies to every evaluator that remains
+/// reachable, so it is kept on the machine shape that still has all of them.
 #[test]
 fn shared_dynamic_constructors_use_the_calling_compartments_evaluator_service() {
-    let machine = ironhorse_vm::Machine::new();
+    let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
     let mut start = machine.start_compartment();
     start.set_source_compiler(Rc::new(IronhorseSourceCompiler));
     let mut a = machine.new_compartment();

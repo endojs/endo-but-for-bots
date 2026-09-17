@@ -16,9 +16,17 @@ Landed, within the scope boundary below.
 `fx_lockdown` steps 1, 2 and 5; `create_hardened_globals` binds it as the guest
 global `lockdown`, beside `harden` and `petrify`. `endot-ih -l` runs instead of
 refusing, and `test262:ironhorse` with it. Pinned by
-`ironhorse-vm/tests/native_lockdown.rs` (20 cases), nine of which were written
+`ironhorse-vm/tests/native_lockdown.rs` (24 cases), most of which were written
 from defects adversarial review found after the first revision called this
 section "Landed".
+
+The same operation runs on the two HOST paths — `Machine::new()`, which locks
+down at construction, and `Machine::lock_down()`, which performs the one a
+machine built unfrozen deferred. Both used to freeze (step 5) without rewiring
+(step 2), which left `({}).constructor.constructor` compiling guest source in
+every compartment of a realm reporting `is_locked_down()`. They share
+`do_lockdown`'s step-2 helpers now, so `Intrinsics::is_locked_down` means the
+whole operation on every path that can set it.
 
 Steps 3 and 4 are absent by decision, not omission: both presuppose a guest
 `Compartment` (§ Scope boundary). The consequence stated there holds — the
@@ -503,17 +511,22 @@ compartments and a shared-realm mutation.
 
    **The consequence the question does not reach:** sharing one flag means a
    machine the HOST froze reports "already called" to a guest that never got a
-   first call. Measured on `Machine::new()`, which freezes at construction: a
+   first call. Measured on `Machine::new()`, which locks down at construction: a
    guest's very first `lockdown()` is
    `TypeError: lockdown already called`. XS has no analogue of that state,
    because XS has no host-side lockdown. This is a real edge of the shared
    flag, not a second call, and "what does a second `lockdown()` do?" was the
-   wrong framing to have settled it under. It matters because
-   `lock_down_intrinsics` performs step 5 only — a `Machine::new()` realm is
-   frozen but was never REWIRED, so `Function.prototype.constructor` is still
-   the live evaluator and the guest cannot ask for the rewiring that would
-   close it. `a_frozen_machine_refuses_the_guest_lockdown_and_keeps_the_reach_
-   open` pins exactly that, and § Known Gaps carries it as the first open item.
+   wrong framing to have settled it under.
+
+   For a while it was worse than an edge. `lock_down_intrinsics` performed step
+   5 only, so a `Machine::new()` realm was frozen but never REWIRED:
+   `Function.prototype.constructor` stayed the live evaluator, and the refusal
+   above meant the guest could not ask for the rewiring that would close it.
+   Both host paths now perform steps 2 and 5 together, so the flag means what it
+   says and the refusal costs the guest nothing.
+   `a_frozen_machine_runs_the_whole_lockdown_at_construction` pins the pair, and
+   `realms.rs::a_locked_down_machine_denies_every_prototype_chain_evaluator`
+   pins the reach it closes.
 3. **Does step 4 get a seam it does not yet need?** **No seam.** `Math.random`
    does not exist on Ironhorse and the compartment template is out of scope, so
    what survives of step 4 is `Date.prototype.constructor`, which step 2 covers
@@ -766,23 +779,39 @@ IronHorse is missing.
       under EACH of the two math providers. Earlier revisions said six, which
       counted the blob and seal once each; the whole point of the
       deterministic-provider fix is that they are two-armed.
-- [ ] **A `Machine` is frozen but never rewired, and a guest cannot ask for
-      the rewiring.** `Machine::new()` freezes at construction through
-      `lock_down_intrinsics`, which performs step 5 only. So
-      `Function.prototype.constructor` is still the live evaluator on a machine
-      that reports `is_locked_down() == true`, and because host and guest share
-      `Intrinsics::locked_down`, the guest's first `lockdown()` is refused as
-      "already called" — it cannot close the reach itself. Measured:
-      `frozen=true | lockdown=TypeError: lockdown already called | reach=2`.
-      The fix is for `lock_down_intrinsics` to run step 2 before step 5, which
-      is a change to the embedder-facing freeze and to every host holding a
-      `Machine` — including the `packages/thixotrope` worker path that CI
-      covers — so it wants its own change and its own measurement, not a
-      rider on this one.
-      `a_frozen_machine_refuses_the_guest_lockdown_and_keeps_the_reach_open`
-      pins the CURRENT behaviour deliberately: what must not happen is the gap
-      closing silently while these documents keep claiming the reach is shut.
-      If that test goes red, this paragraph is the thing to fix with it.
+- [x] **A `Machine` was frozen but never rewired, and a guest could not ask for
+      the rewiring.** `Machine::new()` froze at construction through step 5
+      only, so `Function.prototype.constructor` was still the live evaluator on
+      a machine reporting `is_locked_down() == true`; and because host and guest
+      share `Intrinsics::locked_down`, the guest's first `lockdown()` was
+      refused as "already called" and could not close the reach itself.
+      Measured: `frozen=true | lockdown=TypeError: lockdown already called |
+      reach=2`. Since a `Machine` is the only thing that has compartments, that
+      was every compartment in the system, past the `global_names` list that
+      documents itself as unable to close a prototype route.
+
+      Fixed by running step 2 on both host freeze paths —
+      `new_shared_realm_machine_configured`'s `freeze` arm and
+      `lock_down_intrinsics` — through the same
+      `poison_function_constructors` / `reassert_function_constructors` pair the
+      guest `lockdown()` uses. It allocates nothing, because the stand-ins are
+      already boot objects; that was the prerequisite, and closing this gap
+      before it would have made every `Machine` unsnapshottable.
+      Now `frozen=true | lockdown=TypeError: lockdown already called |
+      reach=TypeError: secure mode | ownFunction=3` — the compartment's own
+      `eval` and `Function` keep working, which is SES's shape, and the three
+      unnamed evaluator families (`%GeneratorFunction%`, `%AsyncFunction%`,
+      `%AsyncGeneratorFunction%`, reachable ONLY through a prototype chain)
+      become unreachable rather than shared.
+
+      `freeze = false` deliberately does NOT poison: that machine exists for the
+      SES shim, whose `repairIntrinsics` runs before its own freeze and installs
+      its own inert constructors. Two tests that measured which environment a
+      prototype-chain evaluator compiles in moved to that shape, since it is now
+      the only one that has those routes —
+      `realms.rs::every_reachable_evaluator_compiles_in_the_calling_compartment`
+      and
+      `runtime_compile_meter.rs::shared_dynamic_constructors_use_the_calling_compartments_evaluator_service`.
 - [ ] **Sweep the `-l` lane end to end.** § Status measures `test/ironhorse`
       (clean) and `built-ins/Boolean` (18 → 21, all three resolving to a
       pre-existing thrown-value renderer gap). Everything between is unmeasured
@@ -807,14 +836,29 @@ IronHorse is missing.
       **The isolation does not have to come from a GUEST `Compartment`.** An
       earlier revision of this item called the migration blocked on
       `fx_Compartment`; that was too pessimistic. Measured end to end in
-      `native_lockdown.rs::a_host_made_compartment_confines_guest_source_after_a_native_lockdown`,
-      the whole shape works today on a `Machine`: a pre-lockdown shim evaluates
-      in the (unfrozen) start compartment, the start compartment calls the
-      native `lockdown()`, and guest source then runs in a compartment the HOST
-      made. The start realm's globals do not reach that guest and its globals do
-      not reach back, it shares the frozen intrinsic graph, and
-      `({}).constructor.constructor` is a `TypeError` inside it — step 2 closes
+      `native_lockdown.rs::a_host_made_compartment_confines_guest_source_only_with_global_names`,
+      the whole shape works today on a `Machine`: the host locks down — at
+      construction with `Machine::new()`, or later with `Machine::lock_down()`
+      on a machine built unfrozen so a shim can repair the intrinsics first —
+      and guest source then runs in a compartment the HOST made. The start
+      realm's globals do not reach that guest and its globals do not reach back,
+      it shares the frozen intrinsic graph, and
+      `({}).constructor.constructor` is a `TypeError` inside it: step 2 closes
       the reach realm-wide, so a compartment inherits it.
+
+      The confinement is a CONJUNCTION, and the test measures both halves.
+      `global_names` closes the direct `eval` and `Function` BINDINGS, which
+      lockdown cannot — `compartment_evaluator` mints those per compartment,
+      after lockdown ran. Lockdown closes the prototype route, which
+      `global_names` cannot. A worker that wants guest source to see only `E`,
+      `Far` and `harden` needs both, and `E`, `Far` and `harden` arrive as
+      endowments rather than names.
+
+      Note for the migration: on an unfrozen machine the guest `lockdown` is not
+      bound at all (the shim installs its own, and until it does the engine's
+      would be a realm-wide mutation reachable from any compartment of a machine
+      that has not locked down yet). So the host drives it, with
+      `Machine::lock_down()`.
       What the worker would change is therefore its architecture, not its
       dependency on a missing primitive: it runs on a bare `Interp::new()`
       today, and `Machine::unfrozen_with_start_global_names`' doc comment

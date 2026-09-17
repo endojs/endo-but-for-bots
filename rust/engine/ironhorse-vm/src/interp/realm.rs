@@ -136,6 +136,19 @@ impl Interp {
         if self.realm.intrinsics().locked_down.get() {
             return Ok(());
         }
+        // Step 2 before step 5, the same order and the same operation the guest
+        // `lockdown()` performs -- a graph hardened WITHOUT it still hands
+        // `({}).constructor.constructor` the real evaluator. See
+        // [`Self::poison_function_constructors`].
+        //
+        // The stand-ins need no separate hardening: they are boot instances, so
+        // the root enumeration `new_shared_realm_machine_configured` took at
+        // construction already contains them.
+        //
+        // If step 5 then refuses, this leaves the realm with poisoned
+        // constructors and `locked_down` false. That is the safe side of a
+        // failure that is already not atomic: the reach is shut either way.
+        let minted = self.poison_function_constructors();
         let roots = self.realm.intrinsics().roots.clone();
         for root in roots {
             // Unlike the construction-time freeze this can legitimately fail:
@@ -145,14 +158,18 @@ impl Interp {
             // out, so no SINGLE root is left partly frozen -- but the roots
             // are hardened one at a time, so a refusal at root `k` returns
             // with roots `0..k` already transitively frozen and `locked_down`
-            // still false. A later successful call completes the freeze: the
-            // roots already done are idempotent no-ops on the retry.
+            // still false. Calling again does not fix that -- see the
+            // retraction above.
             self.do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
                 .map_err(|step| match step {
                     Step::Host(halt) => halt,
                     _ => crate::Halt::Refused("lockdown:intrinsic-graph"),
                 })?;
         }
+        // Hardening walks the roots through the MOP, so a guest Proxy can have
+        // run and put the real evaluator back -- see
+        // [`Self::reassert_function_constructors`].
+        self.reassert_function_constructors(&minted);
         self.realm.intrinsics().locked_down.set(true);
         Ok(())
     }
@@ -226,16 +243,7 @@ impl Interp {
         // so this step allocates nothing -- which is what keeps a locked-down
         // machine snapshottable. `Interp::locked_down_constructors` has the
         // measurement.
-        let minted: Vec<(crate::value::SlotIndex, crate::value::SlotIndex)> = self
-            .locked_down_prototypes()
-            .into_iter()
-            .map(|(prototype, _)| prototype)
-            .zip(self.locked_down_constructors.clone())
-            .filter(|&(prototype, _)| prototype != crate::value::SlotIndex::NULL)
-            .collect();
-        for &(prototype, inert) in &minted {
-            self.wire_locked_down_constructor(prototype, inert);
-        }
+        let minted = self.poison_function_constructors();
 
         // Step 5, harden (`:141-200`). XS walks an enumerated list of
         // intrinsics; ironhorse hardens every primordial instance, which is
@@ -306,31 +314,9 @@ impl Interp {
             }
         }
 
-        // Re-assert step 2 after step 5, because step 5 can run GUEST CODE.
-        //
-        // `do_harden` walks the roots through the MOP -- `mop_prevent_extensions`,
-        // `mop_own_keys`, `mop_get_own_property_read` -- and every one of those
-        // enters a Proxy trap. A guest that hangs a proxy off a root hardened
-        // EARLY (`Object.prototype` is the lowest-indexed one) gets its trap
-        // called while `Function.prototype` is still writable, and
-        // `Object.defineProperty(Function.prototype, 'constructor', {value: Function})`
-        // from inside that trap puts the real evaluator back. `lockdown()` then
-        // completes, reports success, and leaves the reach open permanently --
-        // measured, before this loop existed, as
-        // `lockdown=returned undefined | reach=returned 2`.
-        //
-        // The re-assert closes the window rather than trying to police it: no
-        // ordering of steps 2 and 5 can help, because the guest code runs
-        // BETWEEN them by construction. `set_own_unmetered_with_flag` ignores
-        // the descriptor it overwrites, so this works on the now-frozen
-        // prototype and is idempotent when nothing interfered -- which is the
-        // ordinary case, where it rewrites the same reference over itself.
-        //
-        // The flag is re-read here, so the property keeps the non-writable,
-        // non-configurable shape step 5 just gave it.
-        for (prototype, inert) in minted {
-            self.force_locked_down_constructor(prototype, inert);
-        }
+        // Re-assert step 2 after step 5, which can have run guest code
+        // through a Proxy trap -- see `reassert_function_constructors`.
+        self.reassert_function_constructors(&minted);
         self.realm.intrinsics().locked_down.set(true);
         Ok(Slot::undefined())
     }
@@ -386,6 +372,72 @@ impl Interp {
             (self.generator_function_proto, 1),
             (self.date_proto, 7),
         ]
+    }
+
+    /// Step 2 of the lockdown operation (`fx_lockdown`, `xsLockdown.c:94-103`,
+    /// `:127`): install the inert stand-ins as `constructor` on the
+    /// function-family and `Date` prototypes. Returns the `(prototype, inert)`
+    /// pairs that were wired, so the caller can re-assert them after step 5.
+    ///
+    /// **Every path that freezes the intrinsic graph must call this**, not just
+    /// the guest `lockdown()`. Hardening alone is step 5; it makes the
+    /// primordials immutable but leaves `Function.prototype.constructor`
+    /// pointing at the real evaluator, so
+    /// `({}).constructor.constructor('return 1')()` still compiles source. For
+    /// a year that was `Machine`'s actual behaviour: it froze at construction,
+    /// reported `is_locked_down()`, and handed every compartment a working
+    /// evaluator through a shared prototype -- exactly the reach
+    /// `CompartmentOptions::global_names` says it cannot close.
+    ///
+    /// This allocates NO instances: the stand-ins are minted during boot by
+    /// [`Self::create_locked_down_constructors`], below `boot_slot_count`, so a
+    /// machine stays snapshottable after the graph is locked down. Wiring is
+    /// deliberately not boot work -- see
+    /// [`Self::wire_locked_down_constructor`].
+    pub(super) fn poison_function_constructors(
+        &mut self,
+    ) -> Vec<(crate::value::SlotIndex, crate::value::SlotIndex)> {
+        let minted: Vec<(crate::value::SlotIndex, crate::value::SlotIndex)> = self
+            .locked_down_prototypes()
+            .into_iter()
+            .map(|(prototype, _)| prototype)
+            .zip(self.locked_down_constructors.clone())
+            .filter(|&(prototype, _)| prototype != crate::value::SlotIndex::NULL)
+            .collect();
+        for &(prototype, inert) in &minted {
+            self.wire_locked_down_constructor(prototype, inert);
+        }
+        minted
+    }
+
+    /// Re-apply step 2 after step 5, because hardening can run GUEST CODE.
+    ///
+    /// `do_harden` walks each root through the MOP -- `mop_prevent_extensions`,
+    /// `mop_own_keys`, `mop_get_own_property_read` -- and every one of those
+    /// enters a Proxy trap. A guest that hangs a proxy off a root hardened
+    /// EARLY (`Object.prototype` is the lowest-indexed one) gets its trap
+    /// called while `Function.prototype` is still writable, and
+    /// `Object.defineProperty(Function.prototype, 'constructor', {value: Function})`
+    /// from inside that trap puts the real evaluator back. `lockdown()` then
+    /// completes, reports success, and leaves the reach open permanently --
+    /// measured, before this existed, as
+    /// `lockdown=returned undefined | reach=returned 2`.
+    ///
+    /// The re-assert closes the window rather than trying to police it: no
+    /// ordering of steps 2 and 5 can help, because the guest code runs BETWEEN
+    /// them by construction. [`Self::force_locked_down_constructor`] ignores the
+    /// descriptor it overwrites, so this works on the now-frozen prototype and
+    /// is idempotent when nothing interfered -- the ordinary case, where it
+    /// rewrites the same reference over itself. The flag is re-read there, so
+    /// the property keeps the non-writable, non-configurable shape step 5 just
+    /// gave it.
+    pub(super) fn reassert_function_constructors(
+        &mut self,
+        minted: &[(crate::value::SlotIndex, crate::value::SlotIndex)],
+    ) {
+        for &(prototype, inert) in minted {
+            self.force_locked_down_constructor(prototype, inert);
+        }
     }
 
     pub(super) fn mint_locked_down_constructor(&mut self, arity: u32) -> crate::value::SlotIndex {
@@ -569,6 +621,36 @@ impl Interp {
         names.sort();
         names.dedup();
         machine.link_intrinsics(&names);
+        // Step 2 of the lockdown operation, BEFORE the harden below and before
+        // the root enumeration, so the constructor properties it writes are in
+        // place when the graph is frozen.
+        //
+        // Freezing is step 5. On its own it makes the primordials immutable and
+        // leaves `Function.prototype.constructor` pointing at the real
+        // evaluator, so `({}).constructor.constructor('return 1')()` compiles
+        // source in every compartment of a machine that reports
+        // `is_locked_down()` -- past `global_names`, which
+        // `CompartmentOptions` documents as unable to close that route. A
+        // machine that freezes at construction therefore has to perform BOTH
+        // steps at construction; this is the one place a `Machine` can, because
+        // the guest `lockdown()` it would otherwise need meets step 1's
+        // idempotence check and is refused.
+        //
+        // `freeze == false` deliberately skips it. That machine is built for
+        // the SES shim, which repairs intrinsics before freezing them and
+        // installs its own inert constructors while doing so
+        // (`tame-function-constructors.js`); poisoning first would hand
+        // `repairIntrinsics` a graph it does not expect. Such a machine does
+        // not bind the engine's `lockdown` either -- see below -- so the two
+        // halves stay together.
+        //
+        // No re-assert afterwards: no guest code can run here. The harden below
+        // is `expect`-ed as infallible precisely because the graph is pristine,
+        // which is the same premise that says no Proxy trap can fire.
+        if freeze {
+            let minted = machine.poison_function_constructors();
+            debug_assert_eq!(minted.len(), machine.locked_down_prototypes().len());
+        }
         // Before guest execution every allocated instance is primordial, except
         // the host global and the engine's writable tagged-template cache.
         // Enumerating the arena also includes non-global async/generator and
@@ -623,11 +705,17 @@ impl Interp {
         // function is created in whichever environment called for it. That is
         // the only answer that is not arbitrary here: compartments share one
         // realm and one frozen intrinsic graph, so a shared evaluator has no
-        // realm of its own to belong to. XS instead replaces the
-        // function-family prototypes' `.constructor` with a throwing stub
-        // (`fx_lockdown_aux`, `xsLockdown.c:52`), which is correct only after
-        // a guest calls `lockdown()` -- something ironhorse has no equivalent
-        // of, since it freezes at construction.
+        // realm of its own to belong to.
+        //
+        // On a FROZEN machine this is now unobservable for the three unnamed
+        // families: step 2 above replaced each prototype's `.constructor` with
+        // the inert stand-in (`fx_lockdown_aux`, `xsLockdown.c:52`), so the only
+        // route to them is gone and the only reachable evaluators are the
+        // per-compartment `eval` and `Function`. It still decides the question
+        // on an UNFROZEN machine, where those routes remain open by design --
+        // `ironhorse-runtime`'s
+        // `shared_dynamic_constructors_use_the_calling_compartments_evaluator_service`
+        // drives all four families there.
         machine.meter = Meter::new();
         machine
     }

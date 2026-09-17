@@ -408,26 +408,30 @@ fn harden_and_petrify_keep_working_after_lockdown() {
     );
 }
 
-/// The `Machine` API -- the only one with compartments and `global_names`, and
-/// so the one the confinement argument is about -- cannot reach step 2 at all.
+/// A `Machine` performs the WHOLE lockdown operation at construction, so the
+/// guest's `lockdown()` is refused as a second one and finds nothing left to do.
 ///
 /// `Realm` construction sets `locked_down: Cell::new(freeze)`, and
 /// `Machine::new()` passes `freeze = true`. One `Cell<bool>` carries two
-/// meanings: "the roots have been hardened", set at construction, and "step 2
-/// has been applied", read by `do_lockdown`'s idempotence check. So on a
-/// `Machine` the guest's first `lockdown()` is refused as a second one, the
-/// constructors are never rewired, and the evaluator reach stays open on a
-/// realm that reports `is_locked_down()`.
+/// meanings -- "the roots have been hardened" and "step 2 has been applied" --
+/// and the flag is only honest because
+/// `new_shared_realm_machine_configured` now performs both before it sets it.
 ///
-/// This is pinned rather than fixed: closing it means either splitting that
-/// flag or running step 2 at construction, and both change what
-/// `Machine::new()` hands back. `designs/ironhorse-native-lockdown.md` carries
-/// it as the first open item. What must not happen is the gap closing silently
-/// while the documents keep claiming the reach is shut -- so if this test
-/// starts failing, the claim in the design note and the PR is the thing to fix
-/// with it.
+/// **This test previously pinned the opposite**, as a deliberate KNOWN GAP:
+/// construction froze through step 5 and never rewired the constructors, so
+/// `({}).constructor.constructor('return 1+1')()` returned `2` on a realm that
+/// reported `is_locked_down()`. Since a `Machine` is the only thing that has
+/// compartments, that was every compartment in the system, and it defeated the
+/// confinement argument `CompartmentOptions::global_names` explicitly defers to
+/// lockdown for. Closing it needed the stand-ins to be boot objects first:
+/// minting them at freeze time would put them above `boot_slot_count` and make
+/// every `Machine` unsnapshottable.
+///
+/// The refusal of the guest call is NOT the protection and never was -- see
+/// `a_compartment_cannot_lock_down_the_shared_realm`, where the same refusal
+/// sat next to an open reach. The protection is that step 2 has run.
 #[test]
-fn a_frozen_machine_refuses_the_guest_lockdown_and_keeps_the_reach_open() {
+fn a_frozen_machine_runs_the_whole_lockdown_at_construction() {
     std::thread::Builder::new()
         .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
         .spawn(move || {
@@ -449,13 +453,21 @@ fn a_frozen_machine_refuses_the_guest_lockdown_and_keeps_the_reach_open() {
                     out.push('frozen=' + Object.isFrozen(Object.prototype));
                     try { lockdown(); out.push('lockdown=returned'); }
                     catch (e) { out.push('lockdown=' + e.name + ': ' + e.message); }
-                    out.push('reach=' + ({}).constructor.constructor('return 1+1')());
+                    try { out.push('reach=' + ({}).constructor.constructor('return 1+1')()); }
+                    catch (e) { out.push('reach=' + e.name + ': ' + e.message); }
+                    // The BINDING is a per-compartment evaluator minted by
+                    // `compartment_evaluator`, which step 2 does not touch and
+                    // must not: it is this compartment's own, scoped to this
+                    // global. Only the route through a SHARED prototype closes.
+                    try { out.push('ownFunction=' + Function('return 3')()); }
+                    catch (e) { out.push('ownFunction=' + e.name + ': ' + e.message); }
                     out.join(' | ');
                 "#
                 ),
-                "frozen=true | lockdown=TypeError: lockdown already called | reach=2",
-                "a Machine is hardened at construction but never rewired, and the \
-                 guest cannot ask for it"
+                "frozen=true | lockdown=TypeError: lockdown already called | \
+                 reach=TypeError: secure mode | ownFunction=3",
+                "a Machine is hardened AND rewired at construction, so the guest call \
+                 is a no-op in both directions"
             );
         })
         .unwrap()
@@ -872,16 +884,11 @@ fn a_host_made_compartment_confines_guest_source_only_with_global_names() {
             assert_eq!(
                 measure(None),
                 "Function=function | eval=function | FunctionWorks=2 | evalWorks=3 | \
-                 reach=1 | ObjProtoFrozen=true | startLeaked=undefined",
-                "KNOWN GAP, pinned deliberately: `reach=1` means the evaluator reach is \
-                 OPEN on a Machine. `Machine::new()` freezes through step 5 only and \
-                 never runs step 2, so `Function.prototype.constructor` is still the \
-                 real `Function`. Since a Machine is now the only thing that has \
-                 compartments, this is every compartment in the system. Fixing it \
-                 requires the boot-minted stand-ins first -- minting at freeze time \
-                 would put them above `boot_slot_count` and make every Machine \
-                 unsnapshottable. When this row becomes `TypeError: secure mode`, \
-                 delete this note and the Known Gaps entry with it."
+                 reach=TypeError: secure mode | ObjProtoFrozen=true | \
+                 startLeaked=undefined",
+                "the compartment's OWN evaluators work -- they are scoped to its own \
+                 global and are ordinary Compartment semantics -- while the route \
+                 through the shared `Function.prototype` is shut by step 2"
             );
 
             // Worker-shaped: a restricted list removes the direct bindings.
@@ -896,10 +903,10 @@ fn a_host_made_compartment_confines_guest_source_only_with_global_names() {
                 "Function=undefined | eval=undefined | \
                  FunctionWorks=ReferenceError: get Function: undefined variable | \
                  evalWorks=ReferenceError: get eval: undefined variable | \
-                 reach=1 | ObjProtoFrozen=true | startLeaked=undefined",
-                "global_names closes the bindings; the prototype route stays open for \
-                 the same KNOWN GAP as above, which is why neither half is sufficient \
-                 on a Machine today"
+                 reach=TypeError: secure mode | ObjProtoFrozen=true | \
+                 startLeaked=undefined",
+                "global_names closes the bindings, lockdown closes the prototype \
+                 route, and only together do they deny the guest an evaluator"
             );
         })
         .unwrap()
