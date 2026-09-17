@@ -7,7 +7,7 @@ layer new groom notes at the top of this file.*
 
 *Recently added or revised:
 [sturdy-refs-agent-surface](sturdy-refs-agent-surface.md) (added 2026-07-11 and
-revised 2026-09-17; design 2 of 2 in a competing sturdyref pair, giving Endo
+revised 2026-09-17; design 2 of 2 in a competing sturdyref pair; it gives Endo
 agents a JSON-mode accept tool that redeems an opaque `ref@`-form handle to a
 `SturdyRef` value in one pinned tool-argument position, escrowed through a
 per-activation, turn-scoped render map with a monotonic epoch and stale-vs-unknown
