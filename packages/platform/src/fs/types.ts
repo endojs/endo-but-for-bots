@@ -27,27 +27,17 @@ export type ReadableBlobRange = ReadableBlob & {
     offset: bigint,
     length: bigint,
   ) => Promise<import('@endo/exo-stream').PassableBytesReader>;
-  /**
-   * Range *attenuation* (designs/readableblob-range-attenuation.md): select
-   * the half-open byte interval `[start, end)` relative to the receiver and
-   * return a new `ReadableBlob` with exactly the authority to read it. Ranges
-   * compose (a range of a range intersects) and `start === end` selects an
-   * empty blob. Construction reads no bytes, so it resolves synchronously to
-   * the derived cap.
-   */
-  range: (start: bigint, end: bigint) => ReadableBlobRange;
-  /**
-   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF
-   * boundaries, CRLF preserved) of the receiver's current bytes and return the
-   * byte slice as a `ReadableBlob`. It must read bytes to find LF boundaries,
-   * so it resolves asynchronously.
-   */
-  textRange: (startLine: number, endLine: number) => Promise<ReadableBlobRange>;
 };
 
 /**
- * The richer LocalBlob surface, with whole-value range conveniences layered
- * on top of `ReadableBlobRange.fetch`.
+ * The richer LocalBlob surface, with whole-value range conveniences and the
+ * range *attenuation* surface layered on top of `ReadableBlobRange`.
+ *
+ * Range attenuation (designs/readableblob-range-attenuation.md) returns a new
+ * `ReadableBlob` with exactly the authority to read the selected portion, so
+ * ranges compose. This is adopted first on the in-process platform blobs; the
+ * daemon, mount, and Git blobs adopt it as a follow-up (see the design's
+ * inventory), so it layers here rather than on the shared `ReadableBlobRange`.
  */
 export type ReadableBlobRangeRead = ReadableBlobRange & {
   /**
@@ -60,6 +50,24 @@ export type ReadableBlobRangeRead = ReadableBlobRange & {
    * `[startLine, endLine)` (0-based, end-exclusive) joined with '\n'.
    */
   rangeReadText: (startLine: number, endLine: number) => Promise<string>;
+  /**
+   * Select the half-open byte interval `[start, end)` relative to the receiver
+   * and return a new `ReadableBlob` with exactly the authority to read it.
+   * Ranges compose (a range of a range intersects) and `start === end` selects
+   * an empty blob. Construction reads no bytes, so it resolves synchronously to
+   * the derived cap.
+   */
+  range: (start: bigint, end: bigint) => ReadableBlobRangeRead;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF
+   * boundaries, CRLF preserved) of the receiver's current bytes and return the
+   * byte slice as a `ReadableBlob`. It must read bytes to find LF boundaries,
+   * so it resolves asynchronously.
+   */
+  textRange: (
+    startLine: number,
+    endLine: number,
+  ) => Promise<ReadableBlobRangeRead>;
 };
 
 /**
