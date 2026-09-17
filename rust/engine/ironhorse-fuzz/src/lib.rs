@@ -4217,7 +4217,37 @@ mod tests {
         // The 4-byte core, then the libFuzzer unit that found it.
         let _ = decoder_is_panic_free(&[0x0b, 0x00, 0x04, 0xF0, 0x80, 0x80, 0x80, 0x00]);
         let _ = decoder_is_panic_free(FOUR_BYTE_UTF8_TROPHY);
+        // Regression (tripwire trophy `crash-5fa46bee`, CI run 35188561767):
+        // an arena read at `u32::MAX`. `Interp::cur_func` is `SlotIndex::NULL`
+        // at top level, and bytecode that runs a construct expecting a current
+        // function there — a `START_GENERATOR` outside any frame, which
+        // reaches `prototype_of` — passed that NULL to `find_property`, whose
+        // head read indexed the slot arena at `u32::MAX`. The chain walk below
+        // that head read had always treated a null link as "no property"; the
+        // head did not. A null owner is "no object", so it has no properties,
+        // and the generator now falls back to its default prototype.
+        let _ = decoder_is_panic_free(NULL_OWNER_TROPHY);
     }
+
+    /// The tripwire trophy above, verbatim: the 274-byte unit libFuzzer wrote
+    /// to `artifacts/bytecode_decoder/crash-5fa46bee9d784811e6c5a75006e8b3f45a
+    /// 8a251f`. Kept whole for the same reason as the one above — the seed
+    /// corpus is generated and cannot carry a hand-added file.
+    const NULL_OWNER_TROPHY: &[u8] = &[
+        11, 0, 221, 5, 31, 75, 114, 111, 98, 121, 116, 101, 122, 116, 101, 122, 20, 110, 56, 64,
+        66, 31, 11, 146, 143, 246, 40, 92, 143, 194, 85, 72, 64, 125, 19, 140, 19, 140, 143, 143,
+        194, 245, 40, 92, 143, 65, 64, 31, 11, 221, 19, 116, 0, 0, 0, 102, 199, 23, 140, 0, 143,
+        174, 71, 225, 122, 20, 110, 56, 64, 31, 11, 143, 61, 10, 215, 163, 112, 61, 71, 64, 22, 2,
+        114, 8, 114, 7, 140, 127, 116, 0, 0, 0, 90, 19, 221, 19, 128, 63, 31, 21, 114, 2, 31, 5,
+        114, 28, 125, 22, 2, 114, 0, 125, 116, 0, 0, 0, 82, 18, 22, 140, 44, 213, 19, 66, 31, 12,
+        146, 143, 51, 51, 51, 51, 51, 19, 85, 64, 221, 18, 66, 31, 24, 146, 221, 119, 221, 221, 18,
+        73, 4, 85, 85, 85, 86, 116, 0, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 0, 143, 195, 143, 194, 62, 64, 114, 6,
+        225, 31, 6, 115, 128, 0, 125, 22, 101, 110, 103, 116, 104,
+    ];
 
     /// The tripwire trophy above, verbatim as cargo-fuzz printed the failing
     /// unit (`artifacts/bytecode_decoder/crash-3945c21ff84a88af5233edf3327f2
