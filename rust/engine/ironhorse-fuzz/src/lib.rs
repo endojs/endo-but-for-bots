@@ -2196,6 +2196,32 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `daf6694aec7856aa` (target
+    /// `differential_source`). The 3-byte input `1b 1b 74` folds into
+    /// `(226492416 * 226492416)` — the byte-identical program of the earlier
+    /// `67a52af412f03a7b`, reached from different fuzzer bytes. Its value is the
+    /// exactly representable double `51298814505517056` (`729 * 2^46`). XS prints
+    /// that exact integer while ironhorse emits the shortest round-tripping
+    /// `51298814505517060`; the numeric `results_agree` comparison must recognize
+    /// that both spellings denote the identical Number.
+    #[test]
+    fn finding_daf6694aec7856aa_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 5da04328283592ebed204c27a9517bd883afa1109abbef2498a88c781eb546da).
+        let data: &[u8] = &[0x1b, 0x1b, 0x74];
+        let program = gen_program(data);
+        assert_eq!(program, "(226492416 * 226492416)");
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(divergence) => {
+                panic!(
+                    "finding daf6694aec7856aa must not diverge: {:?}",
+                    divergence
+                )
+            }
+        }
+    }
+
     /// Regression for continuous-fuzz finding `7289e31013d074ec` (target
     /// `differential_source`). The 4-byte input `d8 7f 33 ba` folds into
     /// `((~(~(1560281088 * true))) * ((~(1560281088 * true)) << ((~true) << (true << true))))`,
