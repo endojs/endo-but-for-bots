@@ -2651,6 +2651,43 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `1cb63ec6f8e6fc22` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 2-byte input
+    /// `32 eb` folds into
+    /// `"0a0a".search(new RegExp("(((\s{2}a?\s{2})?…)?…)?", ""))` — a
+    /// `String.prototype.search` over a deeply nested optional-group
+    /// whitespace-alternation pattern that matches empty at offset 0, so the
+    /// completion value is the string `"0"`.
+    ///
+    /// The completion value agreed **exactly** with the XS pin (`"0"` on both);
+    /// the ONLY disagreement was the computron count (ironhorse 540 vs the XS
+    /// pin 485). The same advisory class as sibling surface findings
+    /// `2cc2ac67ba7e9b9f` / `c6c71d428a37088c`: under `meter-v4` an XS-computron
+    /// gap is advisory, never a conformance failure, so the surface no longer
+    /// reports a divergence and no port change is warranted. This locks the
+    /// observable contract that remains.
+    #[test]
+    // The RegExp-surface family's costs are IronHorse's own under meter-v4; a
+    // computron gap vs XS is advisory. This locks completion/result agreement.
+    fn finding_1cb63ec6f8e6fc22_regexp_search_cost_gap_is_advisory() {
+        // The exact minimized fuzz input (sha256
+        // bbb90f36295c5377281fad9a7bce09f4a6a6a2d0342598c4f42cfcc434247802).
+        let data: &[u8] = &[0x32, 0xeb];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a `String#search` over a
+        // `new RegExp(...)` surface.
+        assert!(
+            prog.contains(".search(new RegExp("),
+            "finding program is the RegExp.search surface case: {}",
+            prog
+        );
+        match differential_check_meter_v4(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 1cb63ec6f8e6fc22 must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
