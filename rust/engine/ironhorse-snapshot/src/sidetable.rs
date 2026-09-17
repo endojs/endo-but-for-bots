@@ -756,6 +756,9 @@ mod tests {
             // that line and persist by index like any other boot native.
             // Never mutated after boot -- `lockdown()` only reads them.
             "locked_down_constructors",
+            // The index is boot-derived; the private completion boolean is
+            // serialized in the slot arena, not inferred from guest objects.
+            "lockdown_complete",
             "well_known_symbols",
             "proto_methods",
             "proto_data",
