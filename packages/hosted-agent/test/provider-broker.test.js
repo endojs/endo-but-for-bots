@@ -338,7 +338,12 @@ test('trusted translation runs after admission and before credential access', as
 });
 
 test('translation cannot escape the pinned origin or replace transport-owned headers', async t => {
-  for (const adapted of [
+  // Annotated because the cases differ in shape: left to infer, TypeScript
+  // normalizes them into a union and gives each member the other members'
+  // absent keys as `?: undefined`, which then fails the adapter's
+  // `Record<string, string>` header index signature.
+  /** @type {Array<{ path: string, headers?: Readonly<Record<string, string>> }>} */
+  const adaptations = [
     { path: 'https://elsewhere.test/v1/responses' },
     { path: '//elsewhere.test/v1/responses' },
     { path: '/provider/../accounts' },
@@ -347,7 +352,8 @@ test('translation cannot escape the pinned origin or replace transport-owned hea
     { path: '/provider/responses', headers: { authorization: 'injected' } },
     { path: '/provider/responses', headers: { host: 'elsewhere.test' } },
     { path: '/provider/responses', headers: { custom: 'bad\r\nheader' } },
-  ]) {
+  ];
+  for (const adapted of adaptations) {
     let reads = 0;
     const subject = setup({
       adaptRequest: () => adapted,

@@ -323,9 +323,16 @@ export const makeClaudeBackendFactory = ({
     },
     listModels,
     create,
+    async stop(spec) {
+      const sessionId = assertSessionId(spec?.sessionId);
+      return sessions.inOrder(sessionId, async () => {
+        // Reach the durable owner even when no admin survived this factory.
+        if (!(await sessions.stop(sessionId))) await stopSession(sessionId);
+      });
+    },
     destroy,
     help() {
-      return 'Claude CLI backend factory: describe, listModels, create, and idempotent destroy.';
+      return 'Claude CLI backend factory: describe, listModels, create, stop (keeps state), and idempotent destroy.';
     },
   });
 };

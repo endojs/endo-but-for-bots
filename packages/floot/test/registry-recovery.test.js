@@ -9,6 +9,35 @@ const backupName = 'floot-sessions-backup';
 const journalName = 'floot-sessions-v1-00000000000000000000';
 const entries = harden([{ id: 'saved', title: 'Saved', createdAt: 1 }]);
 
+test('deletion recovery takes precedence over a persisted stopped state', async t => {
+  t.timeout(5000);
+  const store = new Map([
+    [
+      'floot-sessions',
+      harden([
+        {
+          id: 'saved',
+          title: 'Saved',
+          createdAt: 1,
+          lifecycle: 'deleting',
+          executionState: 'stopped',
+        },
+      ]),
+    ],
+  ]);
+  const factory = make(makeHost(store));
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await E(factory).listSessions()).length === 0) {
+      t.pass();
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  t.fail('Stopped session deletion was not recovered');
+});
+
 /** @typedef {{ version: number, sequence: bigint, sessions: typeof entries }} Journal */
 /** @typedef {Map<string, typeof entries | Journal>} RegistryStore */
 

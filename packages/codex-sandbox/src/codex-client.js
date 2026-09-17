@@ -4,7 +4,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { responsesApiItems } from '@endo/hosted-agent/transcript-records.js';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
@@ -1659,7 +1659,11 @@ export const makeCodexClient = ({
         turnReserved = false;
         throw Error('Codex session terminated');
       }
-      const channel = makeBufferedReader();
+      const channel = makeBoundedReader({
+        maxItems: 1024,
+        maxWeight: 16 * 1024 * 1024,
+        weigh: event => 64 + JSON.stringify(event).length * 2,
+      });
       let resolveTerminal = () => {};
       const terminal = /** @type {Promise<void>} */ (
         new Promise(resolve => {

@@ -222,7 +222,7 @@ export const FlootApp = ({ controller }) => {
             : 'Turn journal and recovery',
           'aria-pressed': recoveryOpen ? 'true' : 'false',
           title: needsRecovery
-            ? 'A turn has an unknown outcome; acknowledge it in the journal'
+            ? 'A turn has an unknown outcome; inspect the journal before repeating its effects'
             : 'Turn journal and recovery',
           onClick: () => {
             setRecoveryOpen(!recoveryOpen);

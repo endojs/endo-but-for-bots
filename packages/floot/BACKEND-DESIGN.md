@@ -43,8 +43,33 @@ The provisioned backend is split into two facets:
 
 `interrupt()` is a terminal barrier: it resolves only after the backend can no
 longer emit events or mutate its opaque conversation for that turn.
-The factory-level `destroy({ sessionId })` operation is idempotent and is used
+The factory-level `stop({ sessionId })` operation reaches the durable owner even
 when lifecycle recovery has no surviving admin facet.
+It preserves workspace, transcript, and session records and is retryable after
+failed cleanup; completion means the owner's native cleanup has completed.
+It is ordered with creation and deletion for that session, not a bypass around
+an in-flight acquisition.
+The application must separately fence new work and recreation before invoking it.
+The idempotent `destroy({ sessionId })` operation additionally removes session state.
+
+## Operator emergency stop
+
+The session facet exposes `getExecutionState()`, `emergencyStop()`, and `resume()`.
+The Settings panel keeps emergency stop separate from cooperative turn cancellation.
+Stop fences UI turns, hosted tool admission, and mount recreation on delivery,
+persists a stopping intent, and asks the backend's durable owner to stop.
+It reports stopped only after native cleanup and the session agent's shutdown finish.
+A late acquisition is observed and stopped before that completion is published.
+An acquisition that never settles can keep completion pending; no timeout is treated
+as evidence that local execution has ended.
+Already-dispatched remote effects can still finish.
+
+Stopped sessions keep their workspace and records.
+Reading their history after restart does not provision a backend or start an inbox.
+An incomplete stop is retried on restart; deletion recovery takes precedence.
+Only explicit resume permits a new incarnation, without replaying a prompt.
+Emergency stop can supersede an in-flight resume.
+These controls are on the operator session facet, never the model's tool catalog.
 
 Codex implements this seam in `@endo/codex-sandbox/backend-factory.js`.
 Claude Code should implement the same seam instead of adding another branch to
@@ -124,6 +149,27 @@ journal snapshot exists.
 
 ## Atomic turns and recovery
 
+### Hosted event delivery
+
+Claude, Codex, and OpenCode use the credit-aware bounded push reader for their
+normalized event output.
+The queue admits at most 1,024 undelivered data events and 16 MiB of accounting
+weight (twice JSON string length, plus 64 per event for small-event overhead).
+This is a conservative initial burst profile replacing eager, unbounded delivery;
+the byte allowance does not exceed Codex's existing cumulative output allowance,
+and the slot allowance independently bounds floods of tiny events.
+It is not a measured heap limit or a UTF-8 wire-byte limit.
+A separate terminal slot reserves up to another 16 MiB of accounting weight.
+The pump may hold one value outside the queue, and consumer prefetch/retention
+must be budgeted separately; the queue does not bound the whole application.
+Consumed entries release their charges.
+Overflow fails delivery explicitly and requests producer cancellation, whose
+completion remains a separate backend barrier.
+Existing cumulative limits remain until other retained maps, histories, and
+storage are bounded; this change does not claim whole-session bounded memory.
+
+### Durable turns
+
 The conversation tree commits a hosted logical turn as one node after the
 backend terminal succeeds.
 Failed and cancelled turns are not presented as successful history.
@@ -145,12 +191,18 @@ not undo external effects.
 Truncated recovery evidence is explicitly marked and instructs the model to
 verify outcomes rather than repeat uncertain operations.
 
-A lost result, unfinished recovered dispatch, or unconfirmed backend stop fences
-new dispatches.
+A lost result or unfinished recovered dispatch remains outcome-unknown but does
+not prevent unrelated new work.
+New turns receive their own dispatch records; prior work is never automatically
+replayed or marked resolved by a subsequent success.
+Unresolved hosted evidence remains in the bounded recovery prompt even after
+intervening completed turns; direct-provider history also preserves it.
+Runtime quarantine after an unconfirmed stop remains an independent admission
+barrier, as does operator emergency stop.
 An abnormal stream or lost send response also leaves an unknown outcome even if
 interruption succeeds, since the missing events may conceal external effects.
-The legacy Claude client cannot confirm process exit: cancellation is therefore
-unknown rather than permission for automatic continuation.
+The legacy Claude client cannot confirm process exit: its cancellation is therefore
+unknown, not proof that external effects stopped.
 After independently checking external effects, an operator may call
 `resolveTurn(turnId, note)` on an idle session to acknowledge the uncertainty.
 This preserves the original outcome and adds a resolution; it never replays work.

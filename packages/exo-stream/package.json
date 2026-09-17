@@ -70,6 +70,10 @@
       "types": "./buffered-channel.d.ts",
       "default": "./buffered-channel.js"
     },
+    "./bounded-channel.js": {
+      "types": "./bounded-channel.d.ts",
+      "default": "./bounded-channel.js"
+    },
     "./type-guards.js": {
       "types": "./type-guards.d.ts",
       "default": "./type-guards.js"

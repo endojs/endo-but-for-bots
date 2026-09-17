@@ -186,7 +186,7 @@ const RecoveryTurn = ({ turn, recovery, controller }) => {
                     },
                     recovery.resolving
                       ? 'Acknowledging…'
-                      : 'Acknowledge and allow a new turn',
+                      : 'Record acknowledgement',
                   ),
                 ),
               )

@@ -114,6 +114,7 @@ export {};
  *   settingsOpen: boolean,
  *   recovery?: FlootRecovery,
  *   network?: FlootNetwork,
+ *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
  *   unavailable?: boolean,
  *   usage: { inputTokens: number, outputTokens: number } | null,
  *   voice: FlootVoiceState,
@@ -140,6 +141,8 @@ export {};
  *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
  * @property {() => void} toggleSettings
+ * @property {() => void} [emergencyStop]
+ * @property {() => void} [resumeSession]
  * @property {(text: string) => void} setInput
  * @property {() => void} [refreshRecovery]
  * @property {(turnId: string, note: string, confirmed: boolean) => void} [resolveTurn]

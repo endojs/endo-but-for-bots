@@ -46,7 +46,7 @@ import { mapReader } from '@endo/stream';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -606,7 +606,11 @@ export const makeClaudeClient = ({
     /** @type {ProcessHandle | null} */
     let proc = null;
     let closed = false;
-    const { push, reader, close, setOnClose } = makeBufferedReader();
+    const { push, reader, close, setOnClose } = makeBoundedReader({
+      maxItems: 1024,
+      maxWeight: 16 * 1024 * 1024,
+      weigh: event => 64 + JSON.stringify(event).length * 2,
+    });
     setOnClose(() => {
       closed = true;
       if (proc) {

@@ -179,6 +179,19 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
+test('an undrained event queue fails explicitly and kills its producer', async t => {
+  t.timeout(5000);
+  const fake = makeFakeSlice([
+    [enc.encode('{"type":"system"}\n'.repeat(1025))],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const reader = await client.send('work');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await t.throwsAsync(drain(reader), { message: /queue capacity exceeded/ });
+  t.true(procKilled.get(fake.spawned[0]));
+});
+
 test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
   const fake = makeFakeSlice([[]]);
   const client = makeClaudeClient(

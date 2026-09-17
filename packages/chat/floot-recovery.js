@@ -106,7 +106,7 @@ export const makeFlootRecovery = ({ notify, isBusy }) => {
         ...state,
         blocked: state.turns.some(
           (/** @type {any} */ turn) =>
-            turn.state === 'outcome-unknown' && !turn.resolution,
+            turn.turnId === 'legacy-import' && !turn.resolution,
         ),
         resolving,
         canResolve:

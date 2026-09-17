@@ -253,10 +253,18 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
       'Turn outcome-unknown: claude turn failed: error_max_turns',
     ),
   );
-  await t.throwsAsync(
-    agent.converse('retry uncertain effect', makeReplyChannel().writer),
-    { message: /unknown turn outcome/ },
+  const nextP = agent.converse(
+    'Answer an unrelated question',
+    makeReplyChannel().writer,
   );
+  await waitForTurn(2);
+  turns[1].push({ type: 'text-delta', text: 'Unrelated answer' });
+  turns[1].push({ type: 'end' });
+  await nextP;
+  const [prior, next] = await agent.getTurns();
+  t.is(prior.state, 'outcome-unknown');
+  t.is(prior.resolution, undefined);
+  t.is(next.state, 'completed');
 });
 
 test('a leading backend refusal remains a durable failed dispatch', async t => {
