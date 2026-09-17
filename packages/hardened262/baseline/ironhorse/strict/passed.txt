@@ -1,6 +1,7 @@
 test/intrinsics/ArrayBuffer/prototype-slice.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
+test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/DataView/numeric-accessors.js
 test/intrinsics/GeneratorFunction/intrinsic-metadata.js
 test/intrinsics/IteratorPrototype/intrinsic-metadata.js
