@@ -36,6 +36,12 @@ struct XsOracleResultRaw {
     /// holds a truncated prefix.
     result_len: u32,
     exit_status: i32,
+    /// XS's own heap accounting at the end of the run: slots (which XS
+    /// accounts at 32 bytes each) and the byte arena's size. The footprint
+    /// half of the engine design's performance envelope needs an XS side to
+    /// compare against, and had none.
+    heap_count: u32,
+    chunks_size: u32,
 }
 
 impl Default for XsOracleResultRaw {
@@ -52,6 +58,8 @@ impl Default for XsOracleResultRaw {
             error: [0u8; 256],
             result_len: 0,
             exit_status: 0,
+            heap_count: 0,
+            chunks_size: 0,
         }
     }
 }
@@ -255,6 +263,25 @@ pub struct OracleOutcome {
     pub meter_raw: u32,
     /// Original XS machine abort status; zero for ordinary guest exceptions.
     pub exit_status: i32,
+    /// XS's live slot count at the end of the run. XS accounts a slot at 32
+    /// bytes, which is where `xs_accounted_heap_bytes` comes from.
+    ///
+    /// DIAGNOSTIC ONLY. Nothing in the differential comparison reads this, so
+    /// it cannot produce a trophy; it exists so the footprint half of the
+    /// design's performance envelope has an XS side to compare against, which
+    /// it did not (architecture findings F106/F122).
+    pub heap_count: u32,
+    /// XS's byte-arena size at the end of the run, the counterpart of this
+    /// engine's chunk arena. Diagnostic only, as above.
+    pub chunks_size: u32,
+}
+
+impl OracleOutcome {
+    /// XS's own heap figure for this run, in bytes: slots at XS's 32-byte
+    /// accounting unit, plus the byte arena.
+    pub fn xs_accounted_heap_bytes(&self) -> u64 {
+        self.heap_count as u64 * 32 + self.chunks_size as u64
+    }
 }
 
 /// Whether an explicit XS abort status means memory or stack exhaustion.
@@ -311,6 +338,8 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
         exit_status: raw.exit_status,
+        heap_count: raw.heap_count,
+        chunks_size: raw.chunks_size,
     };
 
     // Safety: frees the heap buffers the shim allocated; we have copied
@@ -378,6 +407,8 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
         exit_status: raw.exit_status,
+        heap_count: raw.heap_count,
+        chunks_size: raw.chunks_size,
     };
     // Safety: frees the shim's heap buffers; copied out above.
     unsafe { xs_oracle_free(raw as *mut _) };

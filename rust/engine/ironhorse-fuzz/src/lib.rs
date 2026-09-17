@@ -16,6 +16,16 @@
 //!   interpreter, which must degrade to a `Halt::Decode`, never panic
 //!   (XS treats bytecode as trusted; ironhorse's loader must not).
 //!
+//! **Trophies pin the PROGRAM, not the bytes.** A regression here records the
+//! minimized fuzz input in a comment and asserts over the program that input
+//! folded to, as a literal or a `tests/fixtures/*.program.js` file. The bytes
+//! alone are not a durable lock: a change to the generator — making the cursor
+//! finite, drawing the expression depth from the input (F040) — re-folds every
+//! recorded input, and the trophy would then exercise a different program
+//! under the same name, silently. The program text is what the divergence
+//! lives in and is independent of how it was reached. Structural guards on a
+//! pinned constant ("is this a product") cannot fail and are not carried.
+//!
 //! **When an arm finds a trophy** (a minimized, fixed divergence), it lands a
 //! durable regression, not a change to a generator: a source-level divergence
 //! becomes a test262 case under `test262-runner/test262/test/ironhorse/regressions/` (arm named in
@@ -42,89 +52,180 @@ pub use snapshot::{
     RoundtripDivergence,
 };
 
+/// The store-seam decoder fuzz arm over `StoreManifest::decode`,
+/// `SmallState::decode`, `validate_store` and the adoption path — the
+/// targets the store-seam design's phase-1 acceptance bar names.
+pub mod store;
+pub use store::{export_adopt_is_identity, store_decoder_is_error_free, store_succession_is_total};
+
+/// The checked-in, derived seed corpus for every libFuzzer target, so
+/// coverage survives a cache eviction instead of silently resetting.
+pub mod seeds;
+
+/// The multi-crank differential arm: fuzzer bytes folded into a crank
+/// SEQUENCE on one live machine per engine, so cross-crank coverage scales
+/// the way the single-crank path already does.
+pub mod cranks;
+pub use cranks::{
+    crank_sequence_differential_is_clean, differential_check_cranks, gen_crank_sequence,
+    CrankDivergence,
+};
+
 /// A cursor over fuzzer-provided bytes, used to drive the grammar
-/// deterministically (a minimal `arbitrary::Unstructured`).
+/// deterministically.
+///
+/// Backed by [`arbitrary::Unstructured`], which is **finite**: once the
+/// input is spent every further draw reads zero, and a generator settles
+/// into its terminal arms instead of looping back over bytes it has already
+/// consumed. That finiteness is the whole point. The hand-rolled cursor this
+/// replaces indexed `data[pos % data.len()]`, so a four-byte input was an
+/// infinitely long one and every generator reached full depth from it —
+/// which defeats libFuzzer's length feedback, the signal that teaches the
+/// fuzzer that a longer input buys deeper structure. With wraparound, adding
+/// a byte changed the program arbitrarily rather than extending it, so the
+/// search could not climb (F040).
+///
+/// The API is deliberately the same two draws the 190 existing call sites
+/// use, so the change is in the byte source rather than in any grammar.
+/// Callers that want the shape to stay rich must feed enough bytes; the
+/// in-crate sweeps do, and several of them assert a diversity floor.
 struct Bytes<'a> {
-    data: &'a [u8],
-    pos: usize,
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Bytes<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Bytes { data, pos: 0 }
-    }
-    fn next(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+        Bytes {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
+    }
+    /// One byte, or zero once the input is exhausted.
+    fn next(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
     }
     fn choice(&mut self, n: u8) -> u8 {
-        self.next() % n
+        if n == 0 {
+            0
+        } else {
+            self.next() % n
+        }
+    }
+    /// Whether the fuzzer's bytes are spent. A generator uses this to stop
+    /// growing a sequence rather than to change what it emits, so the
+    /// grammar stays the same shape at every length.
+    fn spent(&self) -> bool {
+        self.u.is_empty()
     }
 }
+
+/// The ceiling on the fuzzer-chosen expression depth. Bounds generation
+/// time and stack; the depth *within* it is the fuzzer's to pick, so a
+/// deeper nest is reachable by search rather than fixed at 4 forever
+/// (F040). Coding is recursive, so this stays well inside the compiler's
+/// own nesting budget.
+const MAX_EXPR_DEPTH: u8 = 8;
+
+/// The ceiling on a generated program's SIZE, in characters.
+///
+/// Depth alone is the wrong bound. `gen_expr`'s conditional arm has THREE
+/// recursive children, so the node count grows as 3^depth and depth 8 admits
+/// 6,561 leaves: an all-`0x07` input folds into a fifty-thousand-character
+/// program. That is not a useful fuzz input — it is a slow one, and on a
+/// target whose budget is seconds per iteration a handful of them is the
+/// whole budget.
+///
+/// The budget is spent DURING generation rather than checked after it. The
+/// obvious alternative — generate, and regenerate at a shallower depth if
+/// the result is too big — inverts the length gradient this crate just
+/// finished restoring: past a couple of kilobytes of conditional-heavy
+/// input, a longer input bought a SHALLOWER program and eventually a program
+/// invariant to length entirely. That is the F040 pathology pointed the
+/// other way. Spending a budget as the tree is built keeps growth monotone:
+/// a subtree that would overrun collapses to an atom, and the rest of the
+/// program is unaffected.
+const MAX_PROGRAM_CHARS: usize = 4_096;
 
 /// Structure-aware generator: fold raw bytes into a program in the
 /// stage-1 subset grammar (integer/number/boolean literals combined
 /// with the implemented arithmetic, bitwise, comparison, logic, unary,
-/// and conditional operators). `depth` bounds recursion so generation
-/// terminates.
+/// and conditional operators).
+///
+/// The recursion bound is drawn from the input rather than fixed, so the
+/// generator can emit both a bare literal and a deep nest, and libFuzzer
+/// can search the depth dimension. Generation still terminates: the drawn
+/// depth is capped at [`MAX_EXPR_DEPTH`] and decreases on every descent.
 pub fn gen_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
-    gen_expr(&mut b, 4)
+    let depth = 1 + b.choice(MAX_EXPR_DEPTH);
+    let mut budget = MAX_PROGRAM_CHARS;
+    gen_expr_budgeted(&mut b, depth, &mut budget)
 }
 
-fn gen_expr(b: &mut Bytes, depth: u8) -> String {
-    if depth == 0 {
-        return gen_atom(b);
+/// `gen_expr` under a shared character budget.
+///
+/// Each node charges itself before recursing; a node that cannot afford its
+/// own punctuation emits an atom instead. One pass, no regeneration, and the
+/// bound holds by construction rather than by a post-hoc check.
+fn gen_expr_budgeted(b: &mut Bytes, depth: u8, budget: &mut usize) -> String {
+    // The widest fixed cost of a non-atom node: `(` + ` op ` + `)` for the
+    // binary arms, and more for the conditional. Charged up front so a node
+    // that cannot pay degenerates rather than overrunning.
+    const NODE_COST: usize = 16;
+    if depth == 0 || *budget < NODE_COST {
+        let atom = gen_atom(b);
+        *budget = budget.saturating_sub(atom.len());
+        return atom;
     }
+    *budget -= NODE_COST;
+    gen_expr_node(b, depth, budget)
+}
+
+fn gen_expr_node(b: &mut Bytes, depth: u8, budget: &mut usize) -> String {
     match b.choice(9) {
         0 => {
             let op = ["+", "-", "*", "/", "%"][b.choice(5) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
         1 => {
             let op = ["&", "|", "^", "<<", ">>", ">>>"][b.choice(6) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
         2 => {
             let op = ["<", "<=", ">", ">=", "===", "!==", "==", "!="][b.choice(8) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
         3 => {
             let op = ["&&", "||"][b.choice(2) as usize];
             format!(
                 "({} {} {})",
-                gen_expr(b, depth - 1),
+                gen_expr_budgeted(b, depth - 1, budget),
                 op,
-                gen_expr(b, depth - 1)
+                gen_expr_budgeted(b, depth - 1, budget)
             )
         }
-        4 => format!("(-{})", gen_expr(b, depth - 1)),
-        5 => format!("(!{})", gen_expr(b, depth - 1)),
-        6 => format!("(~{})", gen_expr(b, depth - 1)),
+        4 => format!("(-{})", gen_expr_budgeted(b, depth - 1, budget)),
+        5 => format!("(!{})", gen_expr_budgeted(b, depth - 1, budget)),
+        6 => format!("(~{})", gen_expr_budgeted(b, depth - 1, budget)),
         7 => format!(
             "({} ? {} : {})",
-            gen_expr(b, depth - 1),
-            gen_expr(b, depth - 1),
-            gen_expr(b, depth - 1)
+            gen_expr_budgeted(b, depth - 1, budget),
+            gen_expr_budgeted(b, depth - 1, budget),
+            gen_expr_budgeted(b, depth - 1, budget)
         ),
         _ => gen_atom(b),
     }
@@ -542,6 +643,111 @@ pub fn gen_stage3_for_of_program(data: &[u8]) -> String {
         1 => format!("var n=0; for (var x of {}) n=n+1; n", lit),
         // String concatenation of the elements.
         _ => format!("var s=\"\"; for (var x of {}) s=s+x; s", lit),
+    }
+}
+
+/// Draw one **UTF-16 code unit** from the fuzzer's bytes, as the
+/// `\uXXXX` escape that names it in JavaScript source.
+///
+/// This is the alphabet the crate did not have (F040). Every other
+/// generator here draws from `b"abcdefghijklmnopqrstuvwxyz"`, so no input
+/// the crate could produce contained a non-ASCII code unit, and the whole
+/// UTF-8/UTF-16 boundary — the 2026-07-06 decision, surrogate handling, the
+/// regexp code-unit/byte remap — was unreachable *by construction*.
+///
+/// The draw is weighted rather than uniform over `0..=0xFFFF`: ASCII stays
+/// the common case so programs remain mostly legible, while the corners
+/// that actually break transcoders — a lone high surrogate, a lone low
+/// surrogate, a BMP non-ASCII code point, `U+FFFF` — each have their own
+/// arm. An escape keeps the *Rust* source valid UTF-8 while the JavaScript
+/// *string value* carries the code unit, which is the only way to write a
+/// lone surrogate at all.
+fn gen_code_unit(b: &mut Bytes) -> String {
+    let unit: u16 = match b.choice(8) {
+        // ASCII, the ordinary case.
+        0 | 1 | 2 => 0x20 + (b.next() % 0x5f) as u16,
+        // Latin-1 supplement and friends: two UTF-8 bytes, one code unit.
+        3 => 0x80 + b.next() as u16,
+        // BMP beyond Latin-1: three UTF-8 bytes, one code unit.
+        4 => 0x0800 + ((b.next() as u16) << 4 | (b.next() & 0x0f) as u16),
+        // A lone HIGH surrogate: valid UTF-16 in JavaScript, not encodable
+        // as a Rust `char` at all.
+        5 => 0xd800 + (b.next() as u16 % 0x400),
+        // A lone LOW surrogate.
+        6 => 0xdc00 + (b.next() as u16 % 0x400),
+        // The non-characters at the top of the BMP.
+        _ => 0xfff0 + (b.next() % 0x10) as u16,
+    };
+    format!("\\u{unit:04x}")
+}
+
+/// A bounded JavaScript string literal body over the code-unit alphabet.
+///
+/// Stops early once the fuzzer's bytes are [`Bytes::spent`], so the literal
+/// grows with the input rather than being padded out of wrapped bytes —
+/// which is what gives libFuzzer a length gradient to climb.
+fn gen_code_unit_literal(b: &mut Bytes, max: usize) -> String {
+    let n = (b.next() as usize) % (max + 1);
+    let mut out = String::new();
+    for _ in 0..n {
+        if b.spent() {
+            break;
+        }
+        // A surrogate PAIR, sometimes, so astral code points are reachable
+        // and not only the lone halves.
+        if b.choice(6) == 0 {
+            let high = 0xd800 + (b.next() as u16 % 0x400);
+            let low = 0xdc00 + (b.next() as u16 % 0x400);
+            out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+        } else {
+            out.push_str(&gen_code_unit(b));
+        }
+    }
+    out
+}
+
+/// Structure-aware generator for the **UTF-16 code-unit surface**: string
+/// values built from the full code-unit alphabet — lone surrogates, valid
+/// pairs, BMP non-ASCII, non-characters — observed through operations whose
+/// results are *numbers and booleans*.
+///
+/// The observable choice is deliberate. The code units themselves must reach
+/// the engines, which the escapes do; but a completion value that renders a
+/// lone surrogate would stress the oracle harness's own transport rather
+/// than either engine's semantics, and 17 of the 24 checked-in trophies were
+/// already harness artifacts rather than port defects. Comparing lengths,
+/// code-unit values, indices and equality keeps the differential pointed at
+/// the engines while the inputs stay adversarial.
+pub fn gen_code_unit_string_program(data: &[u8]) -> String {
+    let mut b = Bytes::new(data);
+    let s = gen_code_unit_literal(&mut b, 6);
+    match b.choice(8) {
+        // Code-unit length: the single most load-bearing number in the
+        // UTF-8/UTF-16 boundary decision.
+        0 => format!("\"{s}\".length"),
+        1 => {
+            let i = b.next() % 8;
+            format!("\"{s}\".charCodeAt({i})")
+        }
+        2 => {
+            let i = b.next() % 8;
+            format!("\"{s}\".codePointAt({i})")
+        }
+        // Concatenation must be code-unit-wise, not code-point-wise: two
+        // lone halves that meet at a seam do NOT become one code point.
+        3 => format!("(\"{s}\" + \"{s}\").length"),
+        4 => {
+            let i = b.next() % 8;
+            format!("\"{s}\".slice({i}).length")
+        }
+        5 => format!("\"{s}\".indexOf(\"{}\")", gen_code_unit(&mut b)),
+        // `JSON.stringify` has its own well-formed-string escaping rule for
+        // lone surrogates; its output LENGTH says whether it applied.
+        6 => format!("JSON.stringify(\"{s}\").length"),
+        _ => {
+            let t = gen_code_unit_literal(&mut b, 6);
+            format!("(\"{s}\" === \"{t}\")")
+        }
     }
 }
 
@@ -1830,6 +2036,170 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
     Ok(())
 }
 
+/// A structure-aware generator, as a plain function pointer so the roster
+/// below can be a `const` table rather than a `match` that drifts.
+type GenFn = fn(&[u8]) -> String;
+/// The differential check a generated surface admits.
+///
+/// Today this distinguishes exactly one entry: `differential_check` compares
+/// computrons bit-for-bit as well as results, and the bigint arm is the only
+/// roster member that admits it. `differential_check_with_symbols` and
+/// `differential_check_meter_v4` are currently the same function under two
+/// names, so the other eighteen entries run one check spelled two ways. The
+/// pairing is still worth carrying per entry: it records which bar each
+/// surface is claimed to meet, and the names diverge again the moment
+/// `meter_v4` does.
+type CheckFn = fn(&str) -> Result<(), Divergence>;
+
+/// **The stage-3 roster**: every structure-aware generator in the crate,
+/// paired with the differential check its surface admits.
+///
+/// This table exists so the generators have a libFuzzer lane at all. Before
+/// it, seventeen of the crate's generators were driven only by the fixed
+/// deterministic seed sweeps in the test module below — real oracle
+/// differential coverage, but no coverage-guided mutation, no persistent
+/// corpus, and no nightly lane (F040). A sweep finds what its seeds happen
+/// to reach; a fuzzer searches.
+///
+/// Two tests hold the roster honest: one sweeps every entry through its own
+/// check so a mispaired (too strong) check fails loudly, and one scans this
+/// file's own source so a generator added without a roster entry fails
+/// rather than silently keeping its sweep-only coverage.
+pub const STAGE3_SURFACES: &[(&str, GenFn, CheckFn)] = &[
+    (
+        "gen_stage3_arrays_program",
+        gen_stage3_arrays_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_array_methods_program",
+        gen_stage3_array_methods_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_array_iterators_program",
+        gen_stage3_array_iterators_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_for_of_program",
+        gen_stage3_for_of_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_string_for_of_program",
+        gen_stage3_string_for_of_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_code_unit_string_program",
+        gen_code_unit_string_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_text_math_program",
+        gen_stage3_text_math_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_json_structured_program",
+        gen_json_structured_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_json_parse_program",
+        gen_json_parse_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3b_promise_program",
+        gen_stage3b_promise_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3b_regexp_program",
+        gen_stage3b_regexp_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3_spread_program",
+        gen_stage3_spread_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_reentrant_program",
+        gen_stage3_reentrant_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3_collections_program",
+        gen_stage3_collections_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3_bigint_program",
+        gen_stage3_bigint_program,
+        differential_check,
+    ),
+    (
+        "gen_stage3b_binary_program",
+        gen_stage3b_binary_program,
+        differential_check_with_symbols,
+    ),
+    (
+        "gen_stage3b_fundamentals_followup_program",
+        gen_stage3b_fundamentals_followup_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3b_object_statics_program",
+        gen_stage3b_object_statics_program,
+        differential_check_meter_v4,
+    ),
+    (
+        "gen_stage3_for_in_program",
+        gen_stage3_for_in_program,
+        differential_check_with_symbols,
+    ),
+];
+
+/// The stage-3 surface target body: the first byte selects a surface from
+/// [`STAGE3_SURFACES`] and the rest drives that surface's generator, so one
+/// libFuzzer target covers the whole roster and the fuzzer can learn which
+/// selector byte reaches which grammar.
+pub fn stage3_surface_differential(data: &[u8]) -> Result<(), Divergence> {
+    let Some((&selector, body)) = data.split_first() else {
+        return Ok(());
+    };
+    let (_, generate, check) = STAGE3_SURFACES[selector as usize % STAGE3_SURFACES.len()];
+    check(&generate(body))
+}
+
+/// The surface name a given input selects, for a trophy's report.
+pub fn stage3_surface_name(data: &[u8]) -> &'static str {
+    match data.split_first() {
+        None => "none",
+        Some((&selector, _)) => STAGE3_SURFACES[selector as usize % STAGE3_SURFACES.len()].0,
+    }
+}
+
+/// Assert the XS oracle actually starts.
+///
+/// Every `differential_check*` in this crate returns `Ok(())` when
+/// `xs_oracle::run` yields `None` — the oracle machine failed to start,
+/// which is a harness condition rather than an agreement. That is the right
+/// behaviour for a fuzz target, which must not report a trophy because a
+/// submodule is missing, but it means a sweep that counts non-divergences
+/// counts oracle no-starts as passes: a tree with no `c/moddable` checkout
+/// would run the whole corpus, compare nothing, and go green.
+///
+/// One test calling this closes the class for the whole crate. If the oracle
+/// cannot start, THAT test fails and every other sweep's silence is
+/// explained; without it the silence reads as agreement.
+pub fn oracle_is_live() -> bool {
+    xs_oracle::run("1 + 1").is_some_and(|o| o.completed && o.result == "2")
+}
+
 /// A dispatch-count ceiling for the decoder fuzz harness. The un-metered
 /// [`run_program`] is not total on arbitrary bytecode — a malformed
 /// backward branch that targets itself (e.g. `BRANCH_STATUS_1` with offset
@@ -2072,14 +2442,12 @@ mod tests {
     /// must suppress the false divergence.
     #[test]
     fn finding_66facfd52ae8c673_large_integer_dtoa_agrees() {
-        let data: &[u8] = include_bytes!("../tests/fixtures/finding-66facfd52ae8c673.input.bin");
-        assert_eq!(
-            data.len(),
-            3,
-            "the minimized finding remains exactly three bytes"
-        );
-
-        let program = gen_program(data);
+        // Input: tests/fixtures/finding-66facfd52ae8c673.input.bin (3 bytes).
+        // The PROGRAM those bytes folded to under the generator of the
+        // day is the durable lock; making the generator cursor finite
+        // (F040) re-folds the input, while the divergence lives in the
+        // program text.
+        let program = r#"((((226492416 + 25.27) << (838860800 << 226492416)) * ((226492416 + 25.27) << (838860800 << 226492416))) + (((25.27 * 25.27) + (838860800 << 226492416)) << ((226492416 + 25.27) << (838860800 << 226492416))))"#.to_string();
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => panic!(
@@ -2103,11 +2471,13 @@ mod tests {
     fn finding_d99d263fcf6ca7a7_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 749f2021f82cf2664d886690b5e87184f084e600df531f9ab232e3f64e09a4f9).
-        let data: &[u8] = &[0x2d, 0x57, 0x27, 0x48, 0x86];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer arithmetic whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x2d, 0x57, 0x27, 0x48, 0x86]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((729808896 && (729808896 && (-83 && 327155712))) * (((-83 && 327155712) * (729808896 % 603979776)) % 729808896))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding d99d263fcf6ca7a7 must not diverge: {:?}", d),
@@ -2131,15 +2501,13 @@ mod tests {
     fn finding_314f811064b8febb_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 4f6dc01326c7629a715a037a135e47010efe913a121ae02b43846601c850a1a5).
-        let data: &[u8] = &[0x75, 0x6c, 0x74, 0x7b, 0x2d];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-magnitude division chain whose value overflows 2^53.
-        assert!(
-            prog.contains('/'),
-            "finding program is a division chain: {}",
-            prog
-        );
+        // Input: [0x75, 0x6c, 0x74, 0x7b, 0x2d]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"(377487360 / (377487360 / (377487360 / (-5 / 981467136))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 314f811064b8febb must not diverge: {:?}", d),
@@ -2161,11 +2529,13 @@ mod tests {
     fn finding_5c29667cc15d6d93_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 203db557fe4893accc7f29b36e0fc723551a7494f0c33a65e809ec88045449e2).
-        let data: &[u8] = &[0xe1, 0x1b, 0xdc, 0xdc, 0xdc];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0xe1, 0x1b, 0xdc, 0xdc, 0xdc]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((-(-(-226492416))) * (-(-(-226492416))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 5c29667cc15d6d93 must not diverge: {:?}", d),
@@ -2181,10 +2551,13 @@ mod tests {
     /// the identical Number.
     #[test]
     fn finding_67a52af412f03a7b_large_integer_dtoa_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin");
-        let program = gen_program(data);
-        assert_eq!(program, "(226492416 * 226492416)");
+        // Input: ../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin
+        // The PROGRAM those bytes folded to under the generator of the day.
+        // The program is the lock, not the bytes: making the generator
+        // cursor finite (F040) re-folds every recorded input, while the
+        // divergence this trophy pins lives in the program text and is
+        // independent of how it was reached.
+        let program = "(226492416 * 226492416)".to_string();
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => {
@@ -2215,11 +2588,13 @@ mod tests {
     fn finding_7289e31013d074ec_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 6abb2fe734124222bc19e12518fa968a59f254edea3c9ed262414cb4637c736f).
-        let data: &[u8] = &[0xd8, 0x7f, 0x33, 0xba];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0xd8, 0x7f, 0x33, 0xba]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((~(~(1560281088 * true))) * ((~(1560281088 * true)) << ((~true) << (true << true))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 7289e31013d074ec must not diverge: {:?}", d),
@@ -2243,11 +2618,13 @@ mod tests {
     fn finding_783be6e6106bad98_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 95c5064e49e6c191f7f9b8be24270555d12b04c226cbc72c01406e024ff39008).
-        let data: &[u8] = &[0x00, 0x00, 0x66, 0x69, 0x27, 0x44];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x00, 0x00, 0x66, 0x69, 0x27, 0x44]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712))) + (!((570425344 || true) + (327155712 * -128))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 783be6e6106bad98 must not diverge: {:?}", d),
@@ -2273,11 +2650,13 @@ mod tests {
     fn finding_284de587e16bce32_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 05b1ea60cf0ed92291daeb24a160652baaa07e231d88d84f48548d261b517c33).
-        let data: &[u8] = &[0x00, 0xfc, 0x00, 0x01, 0xb1, 0x5d, 0x00, 0x00, 0x00];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x00, 0xfc, 0x00, 0x01, 0xb1, 0x5d, 0x00, 0x00, 0x00]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"(((~(true && true)) - ((780140544 - true) * (true + true))) * ((~(true && true)) - ((780140544 - true) * (true + true))))"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 284de587e16bce32 must not diverge: {:?}", d),
@@ -2304,11 +2683,13 @@ mod tests {
     fn finding_7152c1a9960a0688_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // f8b5e31e69a227500b3733aebdfffee49512debf2bb863c825991a4435652bc1).
-        let data: &[u8] = &[0x27, 0x79, 0x00, 0x00, 0x00, 0x57, 0x2d, 0x08];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program is
-        // the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x27, 0x79, 0x00, 0x00, 0x00, 0x57, 0x2d, 0x08]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((((1015021568 / true) * (377487360 + -89)) + (-(true + 377487360))) || 1015021568)"#.to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 7152c1a9960a0688 must not diverge: {:?}", d),
@@ -2335,11 +2716,14 @@ mod tests {
     fn finding_7277b0fc4a72d8d6_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 0792c486c29a77190658d061a90fc215ba1777bce94464d104c93a508dc0d08b).
-        let data: &[u8] = &[0x3f, 0xf7, 0xde];
-        let prog = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program
-        // is the large-integer product whose value overflows 2^53.
-        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        // Input: [0x3f, 0xf7, 0xde]
+        // The PROGRAM the minimized fuzz input above folded to under the
+        // generator of the day. The program is the lock, not the bytes:
+        // making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in
+        // the program text and is independent of how it was reached.
+        let prog = r#"((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))"#
+            .to_string();
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 7277b0fc4a72d8d6 must not diverge: {:?}", d),
@@ -2361,15 +2745,17 @@ mod tests {
     fn finding_a136f9038a1001fb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // d3bc62680a221ff9518c4aad6b03787bded65b75091e3b1dd34b1451e7a5835c).
-        let data: &[u8] = &[0x2c, 0x2c, 0x2c, 0xd4, 0x88];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp `.source`
-        // accessor whose rendered pattern overflows the old 1023-byte buffer.
-        assert!(
-            prog.ends_with(".source"),
-            "finding program is a RegExp.source: {}",
-            prog
-        );
+        // Input: [0x2c, 0x2c, 0x2c, 0xd4, 0x88]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-a136f9038a1001fb.program.js")
+            .trim_end()
+            .to_string();
         match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding a136f9038a1001fb must not diverge: {:?}", d),
@@ -2391,15 +2777,17 @@ mod tests {
     fn finding_ab889c8f6184c60d_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // e31b5a31b37ce02cba6b665098b0d9844e248e95e89f252910a4ec2660412e07).
-        let data = include_bytes!("../tests/fixtures/finding-ab889c8f6184c60d.input.bin");
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp `.source`
-        // accessor whose rendered pattern overflows the old 1023-byte buffer.
-        assert!(
-            prog.ends_with(".source"),
-            "finding program is a RegExp.source: {}",
-            prog
-        );
+        // Input: tests/fixtures/finding-ab889c8f6184c60d.input.bin
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-ab889c8f6184c60d.program.js")
+            .trim_end()
+            .to_string();
         match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding ab889c8f6184c60d must not diverge: {:?}", d),
@@ -2419,12 +2807,17 @@ mod tests {
     fn finding_2276f4edebdcb3bb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 4f0d6ca037b3a7536fa8e0595f92fd251fbd6aa459d916652f87a3e9f7ad111e).
-        let data = include_bytes!("../tests/fixtures/finding-2276f4edebdcb3bb.input.bin");
-        let program = gen_stage3b_regexp_program(data);
-        assert!(
-            program.ends_with(".source"),
-            "finding program must exercise RegExp.source"
-        );
+        // Input: tests/fixtures/finding-2276f4edebdcb3bb.input.bin
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let program = include_str!("../tests/fixtures/finding-2276f4edebdcb3bb.program.js")
+            .trim_end()
+            .to_string();
         match differential_check_meter_v4(&program) {
             Ok(()) => {}
             Err(divergence) => {
@@ -2446,12 +2839,17 @@ mod tests {
     fn finding_6f0b586a80019097_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 7637ee2cbd7ed3fbb4ceb06ff0e8fc37f4e64308a503b6f8bb388e2fbf965497).
-        let data = include_bytes!("../tests/fixtures/finding-6f0b586a80019097.input.bin");
-        let program = gen_stage3b_regexp_program(data);
-        assert!(
-            program.ends_with(".source"),
-            "finding program must exercise RegExp.source"
-        );
+        // Input: tests/fixtures/finding-6f0b586a80019097.input.bin
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let program = include_str!("../tests/fixtures/finding-6f0b586a80019097.program.js")
+            .trim_end()
+            .to_string();
         match differential_check_meter_v4(&program) {
             Ok(()) => {}
             Err(divergence) => {
@@ -2473,15 +2871,17 @@ mod tests {
     fn finding_493390fc03979205_long_regexp_tostring_agrees() {
         // The exact minimized fuzz input (sha256
         // 450a95b7db1bd744fc94f63a2842714b4e8bf996f97d589fb8aeef172dabbcf7).
-        let data: &[u8] = &[0x08, 0x74, 0x74, 0x2a];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp.toString()
-        // whose rendered source overflows the old 1023-byte buffer.
-        assert!(
-            prog.contains(".toString()"),
-            "finding program is a RegExp.toString(): {}",
-            prog
-        );
+        // Input: [0x08, 0x74, 0x74, 0x2a]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-493390fc03979205.program.js")
+            .trim_end()
+            .to_string();
         match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
@@ -2503,15 +2903,17 @@ mod tests {
     fn finding_3ea435c58b4c588e_regexp_tostring_agrees() {
         // The exact minimized fuzz input (sha256
         // 9df4e2b4ff1278d84c09d3caad69d47b90401dae21573f6d581a7085716e1638).
-        let data: &[u8] = &[0x8c, 0x8c, 0x8c, 0xa2];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp.toString()
-        // whose rendered source overflows the old 1023-byte buffer.
-        assert!(
-            prog.contains(".toString()"),
-            "finding program is a RegExp.toString(): {}",
-            prog
-        );
+        // Input: [0x8c, 0x8c, 0x8c, 0xa2]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-3ea435c58b4c588e.program.js")
+            .trim_end()
+            .to_string();
         match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
@@ -2534,15 +2936,23 @@ mod tests {
     fn finding_91afec2d990bc402_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 1e9756cef3b0a9372ae74719ccae857a781982d0e8f656b3b506555534670419).
-        let data: &[u8] = &[0x5c, 0x5c, 0x5c, 0x34];
-        let prog = gen_stage3b_regexp_program(data);
-        // Confirm we are still exercising the finding: a RegExp `.source`
-        // whose rendered value overflows the old 1024-byte buffer.
-        assert!(
-            prog.ends_with(".source"),
-            "finding program is a RegExp.source: {}",
-            prog
-        );
+        // Input: [0x5c, 0x5c, 0x5c, 0x34]
+        // The PROGRAM those bytes folded to under the generator of the day,
+        // kept beside them as the durable lock. The program is the lock, not
+        // the bytes: making the generator cursor finite (F040) re-folds every
+        // recorded input, while the divergence this trophy pins lives in the
+        // program text and is independent of how it was reached. It is a
+        // fixture rather than a literal because it is over a kilobyte —
+        // which is the point of the trophy.
+        let prog = include_str!("../tests/fixtures/finding-91afec2d990bc402.program.js")
+            .trim_end()
+            .to_string();
+        // The trophy's defining property, kept as a guard against a
+        // careless edit to the fixture: a `.source` rendering that
+        // overflows the old 1024-byte oracle capture buffer. The SHAPE
+        // guards these tests used to carry ("is it a product", "does it end
+        // in .source") were checks on a generator's output; against a pinned
+        // constant they cannot fail, so they are gone.
         assert!(
             prog.len() > 1024,
             "finding program overflows the old buffer: {}",
@@ -2562,7 +2972,7 @@ mod tests {
         for seed in 0u32..300 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(4 + (seed % 12)) {
+            for k in 0..(16 + (seed % 48)) {
                 buf.push(data[(k as usize) % 4].wrapping_add(k as u8));
             }
             let prog = gen_program(&buf);
@@ -2583,8 +2993,8 @@ mod tests {
         for seed in 0u32..300 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(6 + (seed % 10)) {
-                buf.push(data[(k as usize) % 4].wrapping_add(k as u8 * 7));
+            for k in 0..(24 + (seed % 40)) {
+                buf.push(data[(k as usize) % 4].wrapping_add((k as u8).wrapping_mul(7)));
             }
             let prog = gen_statement_program(&buf);
             match differential_check_result_only(&prog) {
@@ -2612,7 +3022,7 @@ mod tests {
             // reads are never starved (a short buffer biases the shape).
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(7))
@@ -2666,7 +3076,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(5))
@@ -2712,7 +3122,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2757,7 +3167,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(13))
@@ -2801,7 +3211,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(13))
@@ -2833,6 +3243,268 @@ mod tests {
         }
     }
 
+    /// The size cap must bound the program WITHOUT inverting the length
+    /// gradient it was added beside.
+    ///
+    /// The first attempt at this cap regenerated at a shallower depth when
+    /// the program came out too big, and on conditional-heavy input a longer
+    /// input then bought a shallower program — eventually a program
+    /// completely invariant to input length. That is the F040 pathology
+    /// pointed the other way, and nothing measured it. This does.
+    #[test]
+    fn the_size_cap_bounds_without_inverting_the_length_gradient() {
+        // The conditional arm (`byte % 9 == 7`) is the one whose node count
+        // grows as 3^depth; it is where the old cap misbehaved.
+        for byte in [0x07u8, 61, 70, 0xff] {
+            let mut sizes = Vec::new();
+            for len in [1usize, 2, 4, 16, 64, 512, 2048, 8192, 65536] {
+                let program = gen_program(&vec![byte; len]);
+                assert!(
+                    program.len() <= MAX_PROGRAM_CHARS,
+                    "byte {byte:#x} len {len}: {} chars exceeds the cap",
+                    program.len()
+                );
+                sizes.push((len, program.len()));
+            }
+            // Monotone non-decreasing in input length. Not strictly
+            // increasing — the grammar saturates, and a cap that is reached
+            // is allowed to stay reached — but never SHRINKING, which is the
+            // defect.
+            for pair in sizes.windows(2) {
+                let ((short, small), (long, large)) = (pair[0], pair[1]);
+                assert!(
+                    large >= small,
+                    "byte {byte:#x}: {long} bytes of input produced a SMALLER \
+                     program ({large}) than {short} bytes did ({small}); the \
+                     size cap is inverting the length gradient"
+                );
+            }
+        }
+    }
+
+    /// And the cap must actually bind on the input that motivated it.
+    #[test]
+    fn the_size_cap_binds_on_the_deepest_grammar() {
+        let program = gen_program(&vec![0x07u8; 8192]);
+        assert!(program.len() <= MAX_PROGRAM_CHARS);
+        assert!(
+            program.len() > MAX_PROGRAM_CHARS / 4,
+            "the cap is so tight the deep grammar is unreachable: {} chars",
+            program.len()
+        );
+    }
+
+    /// The precondition every differential sweep in this file depends on
+    /// and none of them can check for itself: see [`oracle_is_live`].
+    #[test]
+    fn the_xs_oracle_starts_at_all() {
+        assert!(
+            oracle_is_live(),
+            "the XS oracle did not start or did not evaluate `1 + 1` to 2. \
+             Every differential sweep in this crate reports agreement when \
+             the oracle fails to start, so they are all vacuous until this \
+             passes. Check the c/moddable submodule."
+        );
+    }
+
+    /// Every roster entry generates and checks cleanly, so the libFuzzer
+    /// lane starts from a green baseline and a mispaired (too strong) check
+    /// fails here rather than as a phantom trophy at 3am.
+    #[test]
+    fn the_stage3_roster_is_clean_over_a_sweep() {
+        for (i, (name, _, _)) in STAGE3_SURFACES.iter().enumerate() {
+            for seed in 0u32..24 {
+                let mut buf = vec![i as u8];
+                let data = seed.to_le_bytes();
+                for k in 0..(64 + (seed % 96)) {
+                    buf.push(
+                        data[(k as usize) % 4]
+                            .wrapping_add((k as u8).wrapping_mul(17))
+                            .wrapping_add((seed as u8).wrapping_mul(9)),
+                    );
+                }
+                assert_eq!(stage3_surface_name(&buf), *name, "selector picks {name}");
+                if let Err(d) = stage3_surface_differential(&buf) {
+                    panic!("stage-3 surface {name} seed {seed} diverged: {d:?}");
+                }
+            }
+        }
+    }
+
+    /// The roster must not silently fall behind the generators. Scanning
+    /// this file's own source is how a new `pub fn gen_…` is caught; the
+    /// alternative is a hand-maintained count, which is the failure mode
+    /// the engine's own safety nets are criticized for. `include_str!`
+    /// means a moved file breaks the build rather than the test.
+    #[test]
+    fn the_stage3_roster_covers_every_generator() {
+        // Generators that deliberately have their OWN libFuzzer target
+        // rather than a roster slot, each named beside the target it
+        // belongs to.
+        const OWN_TARGET: &[&str] = &[
+            "gen_program",           // differential_source
+            "gen_statement_program", // differential_source, statement arm
+            "gen_stage2b_program",   // differential_stage2b
+            "gen_compile_program",   // differential_compile
+            "gen_crank_sequence",    // differential_cranks
+            // Found by widening this scan past `lib.rs`, which is what the
+            // widening was for: both live in other modules and were invisible
+            // to the scan that was supposed to account for every generator.
+            "gen_regexp",        // differential_regexp, differential_regexp_surface
+            "gen_machine_image", // snapshot_roundtrip, snapshot_decoder, store_decoder
+        ];
+        // EVERY module, not only this file. The scan exists to catch a
+        // generator added without a lane, and a generator added in a NEW
+        // module is exactly the case a `lib.rs`-only scan cannot see — which
+        // is not hypothetical: `cranks.rs` holds one today. `include_str!`
+        // keeps a moved file a build error rather than a silent gap.
+        const SOURCES: &[&str] = &[
+            include_str!("lib.rs"),
+            include_str!("cranks.rs"),
+            include_str!("regexp.rs"),
+            include_str!("snapshot.rs"),
+            include_str!("store.rs"),
+            include_str!("seeds.rs"),
+            include_str!("comparison.rs"),
+            include_str!("bin/write_seed_corpus.rs"),
+        ];
+        // And the module list itself must be complete, or the scan has the
+        // same blind spot one level up.
+        // RECURSIVE. A non-recursive read skips `src/bin/`, which is the
+        // same blind spot one level down as the `lib.rs`-only scan this
+        // replaced: a generator added under a subdirectory would have no
+        // lane, and the count would still agree with itself.
+        fn rust_files(dir: &std::path::Path, into: &mut std::collections::BTreeSet<String>) {
+            for entry in std::fs::read_dir(dir).expect("the crate's own src/ is readable") {
+                let path = entry.expect("a readable directory entry").path();
+                if path.is_dir() {
+                    rust_files(&path, into);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    into.insert(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        let mut modules = std::collections::BTreeSet::new();
+        rust_files(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut modules,
+        );
+        assert_eq!(
+            modules.len(),
+            SOURCES.len(),
+            "src/ holds {} modules but the scan reads {}; a module was added \
+             without being scanned for generators: {modules:?}",
+            modules.len(),
+            SOURCES.len()
+        );
+        let names: Vec<String> = SOURCES
+            .iter()
+            .flat_map(|source| source.lines())
+            .filter_map(|line| line.strip_prefix("pub fn gen_"))
+            .filter_map(|rest| rest.split('(').next())
+            .map(|name| format!("gen_{name}"))
+            .collect();
+        assert!(
+            names.len() >= STAGE3_SURFACES.len(),
+            "the source scan found fewer generators than the roster names; \
+             the scan is broken, not the roster"
+        );
+        let unrostered: Vec<&String> = names
+            .iter()
+            .filter(|n| !OWN_TARGET.contains(&n.as_str()))
+            .filter(|n| !STAGE3_SURFACES.iter().any(|(rostered, _, _)| rostered == n))
+            .collect();
+        assert!(
+            unrostered.is_empty(),
+            "generators with neither a roster slot nor their own libFuzzer \
+             target: {unrostered:?}"
+        );
+    }
+
+    /// The refutation of F040's headline measurement, as a test rather than
+    /// a claim: the crate can now produce inputs carrying non-ASCII code
+    /// units, lone surrogates and astral pairs, and the engines agree on
+    /// what they mean.
+    #[test]
+    fn generated_code_unit_programs_agree_and_leave_ascii() {
+        let mut checked = 0;
+        let mut distinct = std::collections::BTreeSet::new();
+        // The corners the ASCII alphabet made unreachable by construction.
+        let (mut non_ascii, mut high_surrogate, mut low_surrogate, mut astral) =
+            (false, false, false, false);
+        for seed in 0u32..600 {
+            let data = seed.to_le_bytes();
+            let mut buf = Vec::new();
+            for k in 0..(64 + (seed % 96)) {
+                buf.push(
+                    data[(k as usize) % 4]
+                        .wrapping_add((k as u8).wrapping_mul(11))
+                        .wrapping_add((seed as u8).wrapping_mul(5)),
+                );
+            }
+            let prog = gen_code_unit_string_program(&buf);
+            distinct.insert(prog.clone());
+            for esc in prog.match_indices("\\u").map(|(i, _)| i) {
+                let Some(hex) = prog.get(esc + 2..esc + 6) else {
+                    continue;
+                };
+                let Ok(unit) = u16::from_str_radix(hex, 16) else {
+                    continue;
+                };
+                non_ascii |= unit > 0x7f;
+                if (0xd800..0xdc00).contains(&unit) {
+                    high_surrogate = true;
+                    // A high surrogate immediately followed by a low one is
+                    // a pair, i.e. an astral code point.
+                    if let Some(next) = prog
+                        .get(esc + 6..esc + 12)
+                        .filter(|s| s.starts_with("\\u"))
+                        .and_then(|s| u16::from_str_radix(&s[2..], 16).ok())
+                    {
+                        astral |= (0xdc00..0xe000).contains(&next);
+                    }
+                }
+                low_surrogate |= (0xdc00..0xe000).contains(&unit);
+            }
+            // The program text stays ASCII: the code units ride in as
+            // escapes, so the source on the wire to either engine is
+            // byte-identical and the harness's own transport is not the
+            // thing under test.
+            assert!(
+                prog.is_ascii(),
+                "generated source must stay ASCII: {:?}",
+                prog
+            );
+            // The observables are `.length`, `charCodeAt`, `indexOf` and
+            // friends, so the arm rides the full symbol-linking check: the
+            // built-in names have to relink for the property reads to
+            // resolve at all.
+            match differential_check_with_symbols(&prog) {
+                Ok(()) => checked += 1,
+                Err(d) => panic!("code-unit differential divergence: {:?}", d),
+            }
+        }
+        assert_eq!(checked, 600);
+        assert!(
+            distinct.len() > 100,
+            "code-unit sweep too uniform: {} distinct",
+            distinct.len()
+        );
+        assert!(
+            non_ascii,
+            "no generated input carried a non-ASCII code unit"
+        );
+        assert!(
+            high_surrogate,
+            "no generated input carried a lone high surrogate"
+        );
+        assert!(
+            low_surrogate,
+            "no generated input carried a lone low surrogate"
+        );
+        assert!(astral, "no generated input carried a surrogate pair");
+    }
+
     #[test]
     fn generated_stage3_text_math_programs_agree_bit_exact() {
         // The stage-3 text-math-json surface (Math statics, String.prototype,
@@ -2846,7 +3518,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2903,7 +3575,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(24 + (seed % 40)) {
+            for k in 0..(96 + (seed % 160)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -2952,7 +3624,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(24 + (seed % 40)) {
+            for k in 0..(96 + (seed % 160)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -3000,7 +3672,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(24 + (seed % 40)) {
+            for k in 0..(96 + (seed % 160)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(11))
@@ -3050,7 +3722,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(20 + (seed % 48)) {
+            for k in 0..(80 + (seed % 192)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(13))
@@ -3107,7 +3779,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(17))
@@ -3140,7 +3812,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(23))
@@ -3184,7 +3856,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3230,7 +3902,7 @@ mod tests {
         for seed in 0u32..800 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3280,7 +3952,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3332,7 +4004,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(29))
@@ -3391,7 +4063,7 @@ mod tests {
         for seed in 0u32..1200 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(23))
@@ -3442,7 +4114,7 @@ mod tests {
         for seed in 0u32..600 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(16 + (seed % 24)) {
+            for k in 0..(64 + (seed % 96)) {
                 buf.push(
                     data[(k as usize) % 4]
                         .wrapping_add((k as u8).wrapping_mul(19))
@@ -3487,8 +4159,8 @@ mod tests {
         for seed in 0u32..400 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(6 + (seed % 14)) {
-                buf.push(data[(k as usize) % 4].wrapping_add(k as u8 * 5));
+            for k in 0..(24 + (seed % 56)) {
+                buf.push(data[(k as usize) % 4].wrapping_add((k as u8).wrapping_mul(5)));
             }
             kinds[(buf[0] % 4) as usize] += 1;
             let prog = gen_stage2b_program(&buf);
@@ -3594,7 +4266,7 @@ mod tests {
         for seed in 0u32..512 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(4 + (seed % 24)) {
+            for k in 0..(16 + (seed % 96)) {
                 buf.push(data[(k as usize) % 4].wrapping_add(k as u8));
             }
             // Generated programs.
@@ -3625,7 +4297,7 @@ mod tests {
         for seed in 0u32..256 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(4 + (seed % 16)) {
+            for k in 0..(16 + (seed % 64)) {
                 buf.push(data[(k as usize) % 4].wrapping_add(k as u8));
             }
             let prog = gen_compile_program(&buf);

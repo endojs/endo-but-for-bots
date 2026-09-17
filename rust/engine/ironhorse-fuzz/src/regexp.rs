@@ -16,24 +16,29 @@ use crate::Divergence;
 
 /// A cursor over fuzzer bytes, driving the grammar deterministically.
 struct Bytes<'a> {
-    data: &'a [u8],
-    pos: usize,
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Bytes<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Bytes { data, pos: 0 }
-    }
-    fn next(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+        Bytes {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
+    }
+    /// One byte, or zero once the input is exhausted. FINITE, like the
+    /// grammar driver in `lib.rs` and for the same reason (F040): a cursor
+    /// that wraps makes every input infinitely long, so adding a byte
+    /// reshuffles the case instead of extending it and libFuzzer's length
+    /// feedback has nothing to climb.
+    fn next(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
     }
     fn choice(&mut self, n: u8) -> u8 {
-        self.next() % n
+        if n == 0 {
+            0
+        } else {
+            self.next() % n
+        }
     }
 }
 
@@ -310,7 +315,7 @@ mod tests {
         for seed in 0u32..3000 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(10 + (seed % 20)) {
+            for k in 0..(40 + (seed % 80)) {
                 buf.push(data[(k as usize) % 4].wrapping_add((k as u8).wrapping_mul(13)));
             }
             let case = gen_regexp(&buf);

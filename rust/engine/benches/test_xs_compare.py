@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from xs_compare import FIXTURES, summarize
+from xs_compare import FIXTURES, summarize, summarize_footprint
 
 
 def output(ratio=1.0):
@@ -33,3 +33,32 @@ class XsReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FOOTPRINT = """XS_FOOTPRINT properties xs_bytes=164928 ironhorse_xs_accounted_bytes=40574 ironhorse_resident_bytes=38702 accounted_ratio=0.2460 resident_ratio=0.2347
+XS_FOOTPRINT allocation_churn xs_bytes=391448 ironhorse_xs_accounted_bytes=1000542 ironhorse_resident_bytes=864286 accounted_ratio=2.5560 resident_ratio=2.2079
+XS_FOOTPRINT_LIMIT 1.1 within=false
+"""
+
+
+class FootprintReport(unittest.TestCase):
+    """The heap half of the envelope's footprint bar (F106/F122)."""
+
+    def test_the_worst_ratio_decides_the_bar(self):
+        report = summarize_footprint(FOOTPRINT)
+        self.assertEqual(set(report["fixtures"]), {"properties", "allocation_churn"})
+        self.assertAlmostEqual(report["worst_accounted_ratio"], 2.556)
+        self.assertFalse(report["within_heap_limit"])
+
+    def test_a_run_within_the_bar_is_reported_as_within(self):
+        within = FOOTPRINT.replace("accounted_ratio=2.5560", "accounted_ratio=1.0500")
+        self.assertTrue(summarize_footprint(within)["within_heap_limit"])
+
+    def test_output_without_footprint_lines_is_absent_not_empty(self):
+        # An absent measurement must stay on the `unmeasured` list rather
+        # than reporting a vacuous pass.
+        self.assertIsNone(summarize_footprint("no footprint here\n"))
+
+    def test_a_duplicate_fixture_is_an_error(self):
+        with self.assertRaises(ValueError):
+            summarize_footprint(FOOTPRINT + FOOTPRINT.splitlines()[0])

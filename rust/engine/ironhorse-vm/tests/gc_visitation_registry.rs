@@ -712,6 +712,12 @@ fn type_defs(src: &str) -> BTreeMap<&str, String> {
                 b'{' => delimited_body_at(src, open, b'{', b'}'),
                 // A tuple struct's field list.
                 b'(' => delimited_body_at(src, open, b'(', b')'),
+                // A UNIT struct (`struct Marker;`) has no body. Recorded
+                // with an empty one rather than skipped: skipping left it
+                // absent from `defs`, so the resolution gate reported a type
+                // this crate plainly defines as unresolvable and told the
+                // reader to define it.
+                b';' => "",
                 _ => continue,
             }
         };
@@ -799,6 +805,332 @@ fn value_half_is_slot_free(ty: &str, is_bearing: &dyn Fn(&str) -> bool) -> bool 
         None => ty,
     };
     !is_bearing(after_key)
+}
+
+/// Type names the parser will never find a definition for because they are
+/// not this crate's to define, each with the reason it cannot carry a slot.
+///
+/// Anything NOT here and not defined in the crate is a parse failure, not an
+/// exemption — see [`assert_every_reachable_type_resolves`].
+const EXTERNAL_TYPES: &[(&str, &str)] = &[
+    // Containers: slot-free themselves, and the walk reads their arguments.
+    ("Vec", "std container; its element type is walked"),
+    ("VecDeque", "std container; its element type is walked"),
+    ("HashMap", "std container; both halves are walked"),
+    ("BTreeMap", "std container; both halves are walked"),
+    ("HashSet", "std container; its element type is walked"),
+    ("BTreeSet", "std container; its element type is walked"),
+    ("Option", "std container; its payload is walked"),
+    ("Box", "std container; its payload is walked"),
+    ("Rc", "std container; its payload is walked"),
+    ("Arc", "std container; its payload is walked"),
+    ("RefCell", "std container; its payload is walked"),
+    ("Cell", "std container; its payload is walked"),
+    ("Weak", "std container; its payload is walked"),
+    ("Range", "std container; its bound type is walked"),
+    ("Result", "std container; both halves are walked"),
+    ("Cow", "std container; its payload is walked"),
+    ("PhantomData", "zero-sized marker"),
+    // Leaves: no fields at all, so nothing to walk.
+    ("String", "std leaf: bytes"),
+    ("PathBuf", "std leaf: bytes"),
+    ("OsString", "std leaf: bytes"),
+    ("Instant", "std leaf: a clock reading"),
+    ("Duration", "std leaf: a span"),
+    ("TypeId", "std leaf: an opaque id"),
+    ("Ordering", "std leaf: an enum of three"),
+    // Cross-crate types. The parser reads THIS crate's sources, so a type
+    // from another crate has no body here to walk; each is listed with why
+    // it cannot reach a slot.
+    (
+        "Program",
+        "ironhorse-regexp: compiled matcher bytecode, no VM slot types in scope",
+    ),
+    (
+        "SymbolName",
+        "ironhorse-text: an interned name, `String`-shaped",
+    ),
+    // TRAIT OBJECTS, and the honest limit of a source-text analysis. A
+    // `dyn Trait` has no fields to read, and an implementor could in
+    // principle capture a slot. Nothing in a type-text walk can see that, so
+    // these are declared rather than derived, and the GC contract for them
+    // rests on the implementors: the VM's own implementors hold no slots,
+    // and an embedder's `HostCallable` reaches the heap only through the
+    // `Interp` it is handed, never by owning a `SlotIndex`. Listing them
+    // here is the point of the check — the alternative was every field
+    // mentioning them being classified slot-free without anyone noticing.
+    (
+        "HostCallable",
+        "trait object: host hook, holds no slot of its own",
+    ),
+    (
+        "PageSource",
+        "trait object: byte-page backing, holds no slot",
+    ),
+    (
+        "SourceCompiler",
+        "trait object: compiles source to bytecode, holds no slot",
+    ),
+    (
+        "FnMut",
+        "std trait object: a boxed callback; its captures are outside any \
+         source-text analysis, and the VM's own are slot-free",
+    ),
+];
+
+/// Every named type reachable from an `Interp` field must RESOLVE: either
+/// this crate defines it, so [`slot_bearing_types`] read its body, or it is
+/// on [`EXTERNAL_TYPES`] with a reason it cannot carry a slot.
+///
+/// This is the blind spot the architecture review named (F053): the
+/// slot-bearingness of a field is computed from its type TEXT against a type
+/// graph parsed from the crate's own sources, and a type the parser never saw
+/// simply failed every `mentions` check and was classified slot-free. A future
+/// field typed by a slot-bearing struct the parser missed would be silently
+/// exempt from the GC visitation contract rather than loudly unclassifiable.
+/// The parse now fails on the type it cannot account for, and says which.
+///
+/// The walk is transitive: a resolved type's own body is re-scanned, so a
+/// definition three hops from `Interp` cannot hide an unresolvable name.
+fn assert_every_reachable_type_resolves(
+    fields: &[(String, String)],
+    defs: &BTreeMap<&str, String>,
+) {
+    let external: BTreeMap<&str, &str> = EXTERNAL_TYPES.iter().copied().collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut queue: Vec<String> = fields.iter().map(|(_, ty)| ty.clone()).collect();
+    let mut unresolved: BTreeMap<String, String> = BTreeMap::new();
+
+    while let Some(text) = queue.pop() {
+        for name in named_types(&text) {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(body) = defs.get(name.as_str()) {
+                queue.push(type_position_text(body));
+            } else if !external.contains_key(name.as_str()) {
+                unresolved.insert(name, compact(&text));
+            }
+        }
+    }
+
+    assert!(
+        unresolved.is_empty(),
+        "the type-graph parser cannot resolve {} type(s) reachable from \
+         `Interp`, and would have classified every field mentioning them as \
+         slot-free WITHOUT looking: {:?}.\n\
+         Define the type in this crate, or add it to EXTERNAL_TYPES with the \
+         reason it cannot carry a `Slot`, `SlotIndex` or `ChunkOffset`.",
+        unresolved.len(),
+        unresolved
+    );
+}
+
+/// Blank out everything in a type definition's body that is NOT a type
+/// position, so the walk sees field and payload types and nothing else.
+///
+/// Without this an enum's variant NAMES read as type names — `Host`, `Eval`,
+/// `Array` — and the resolution check drowns in hundreds of phantom
+/// unresolved types while saying nothing about the real graph. A type
+/// position is the text after a field's `:` or inside a tuple payload's
+/// parentheses, up to the item's own comma.
+fn type_position_text(body: &str) -> String {
+    // Comments first. A doc comment is prose, and prose carries unbalanced
+    // `(`, `<` and `:` that would drift the depth counter and leave the
+    // scanner reading an enum's variant names as though they were types.
+    let body = strip_comments(body);
+    // `delimited_body_at` hands back the body INCLUDING its outer delimiter,
+    // so a struct or enum body arrives as `{ … }`. Left in place, the opening
+    // brace holds the depth counter at one for the whole scan, the closing
+    // parenthesis of the first tuple variant never returns depth to zero, and
+    // `in_type` latches true over every variant name that follows. Strip the
+    // wrapper so the scan runs at base depth.
+    let trimmed = body.trim();
+    // Three body SHAPES arrive here, and they are not the same question.
+    //
+    // A brace body (`struct`/`enum`) is a field list: the type positions are
+    // after each field's `:` and inside each tuple variant's parentheses,
+    // which is what the scanner below reads.
+    //
+    // A PAREN body is a tuple struct or tuple variant: the whole inner text
+    // is type positions, with no colon anywhere. Handing it to the scanner
+    // as-is yields nothing, and a newtype over an unresolvable type was
+    // therefore exempt — `struct HostSlab(ForeignTable);` resolved to
+    // silence, which is precisely the blind spot this gate exists to close.
+    // This crate is full of that shape (`PoisonedPage(Slot)`,
+    // `SymbolIds(HashMap<SymbolName, u16>)`, `SnapshotDirt(Rc<Cell<u32>>)`).
+    //
+    // An `=` body is a type alias: everything after the `=` is one type
+    // position, and the same exemption applied to its head.
+    let (body, whole_text_is_a_type) = match trimmed.chars().next() {
+        Some('{') => (
+            trimmed[1..trimmed.len().saturating_sub(1)].to_string(),
+            false,
+        ),
+        Some('(') => (
+            trimmed[1..trimmed.len().saturating_sub(1)].to_string(),
+            true,
+        ),
+        Some('=') => (trimmed[1..].to_string(), true),
+        _ => (trimmed.to_string(), false),
+    };
+    if whole_text_is_a_type {
+        return body;
+    }
+    let mut out = String::with_capacity(body.len());
+    let bytes = body.as_bytes();
+    let mut depth = 0i32;
+    let mut in_type = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        // `::` is a path separator inside a type, not a field's colon.
+        let path_sep =
+            c == ':' && (bytes.get(i + 1) == Some(&b':') || (i > 0 && bytes[i - 1] == b':'));
+        // `->` is a function-pointer arrow, not a generic closer.
+        let arrow = c == '>' && i > 0 && bytes[i - 1] == b'-';
+        match c {
+            ':' if !path_sep => in_type = true,
+            ',' if depth <= 0 => in_type = false,
+            // A tuple payload or a generic argument list is a type position.
+            '(' | '[' | '<' => {
+                depth += 1;
+                in_type = true;
+            }
+            ')' | ']' => {
+                depth = (depth - 1).max(0);
+                if depth == 0 {
+                    in_type = false;
+                }
+            }
+            '>' if !arrow => {
+                depth = (depth - 1).max(0);
+                if depth == 0 {
+                    in_type = false;
+                }
+            }
+            // A struct-variant's braces are not, until its fields' colons.
+            '{' => {
+                depth += 1;
+                in_type = false;
+            }
+            '}' => {
+                depth = (depth - 1).max(0);
+                in_type = false;
+            }
+            _ => {}
+        }
+        out.push(if in_type { c } else { ' ' });
+        i += 1;
+    }
+    out
+}
+
+/// Line and block comments, blanked. Attribute contents go with them: a
+/// `#[serde(rename = "x")]` is not a type position either, and its parens
+/// would drift the depth counter the same way prose does.
+fn strip_comments(body: &str) -> String {
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                out.push(' ');
+                i += 1;
+            }
+        } else if bytes[i..].starts_with(b"/*") {
+            let end = body[i..]
+                .find("*/")
+                .map(|e| i + e + 2)
+                .unwrap_or(bytes.len());
+            out.push_str(&" ".repeat(end - i));
+            i = end;
+        } else if bytes[i] == b'#' && bytes.get(i + 1) == Some(&b'[') {
+            // Blank the whole attribute, brackets balanced.
+            let mut depth = 0i32;
+            let start = i;
+            i += 1;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            out.push_str(&" ".repeat(i - start));
+        } else {
+            let ch = body[i..].chars().next().unwrap();
+            out.push_str(&" ".repeat(ch.len_utf8() - 1));
+            out.push(if ch == '\n' { '\n' } else { ch });
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+/// The type names in a type's text: every identifier that starts with an
+/// ASCII uppercase letter, which is the convention every type in this crate
+/// and in std follows. Lifetimes, primitives (`u32`, `bool`, `str`) and
+/// field names are lowercase and are skipped; a primitive cannot carry a
+/// slot, so skipping it is sound rather than convenient.
+fn named_types(ty: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = ty.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < bytes.len() {
+                let c = bytes[i] as char;
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            let word = &ty[start..i];
+            // A path segment followed by `::` is a module, not the type.
+            let is_module = ty[i..].starts_with("::");
+            // A single uppercase letter is a generic PARAMETER (`T`, `K`,
+            // `V`), and a SCREAMING_SNAKE name in a type position is a const
+            // generic or an array length (`[u64; XS_CODE_COUNT]`). Neither
+            // is a type to resolve.
+            let is_generic_param = word.len() == 1;
+            // Marker traits and `Self` appear in type POSITIONS but are not
+            // types to resolve: `Box<dyn HostCallable + Send>` names a bound,
+            // `Box<Self>` names the enclosing type. Neither can be defined in
+            // `defs` nor sensibly listed as external, and failing the gate on
+            // them would make an ordinary `+ Send` unbuildable.
+            let is_bound_or_self = matches!(
+                word,
+                "Send" | "Sync" | "Sized" | "Copy" | "Clone" | "Unpin" | "Self" | "Debug"
+            );
+            let is_const = word.len() > 1
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            if !is_module
+                && !is_generic_param
+                && !is_bound_or_self
+                && !is_const
+                && word.starts_with(|c: char| c.is_ascii_uppercase())
+            {
+                out.push(word.to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The transitive slot-bearing type set: a type is slot-bearing when
@@ -1289,6 +1621,91 @@ fn anchors_after_a_collection() -> Vec<(&'static str, bool)> {
     m.boot_anchor_liveness()
 }
 
+/// The resolution gate must actually fire. A check that cannot fail is the
+/// failure mode this whole file exists to avoid, so prove it on a synthetic
+/// field naming a type nothing defines — which is exactly the shape of the
+/// blind spot F053 named: a future field typed by a struct declared where
+/// the parser does not look.
+#[test]
+#[should_panic(expected = "cannot resolve")]
+fn an_unknown_field_type_fails_the_resolution_gate() {
+    let defs = type_defs(src());
+    let invented = vec![(
+        "a_future_field".to_string(),
+        "Vec<SomeTypeDeclaredWhereThisParserDoesNotLook>".to_string(),
+    )];
+    assert_every_reachable_type_resolves(&invented, &defs);
+}
+
+/// The gate's doc claims the walk is TRANSITIVE — "a definition three hops
+/// from `Interp` cannot hide an unresolvable name". The first version of it
+/// could not: a hop through a tuple struct or a bare type alias produced no
+/// type positions at all, so the commonest newtype shape in this crate was
+/// a hole. Each hop shape gets its own case here, because each was broken
+/// separately.
+#[test]
+fn the_walk_reaches_through_every_definition_shape() {
+    for (shape, body) in [
+        ("brace struct", "{ pub field: Missing }"),
+        ("tuple struct", "(Missing)"),
+        ("tuple struct, second position", "(u32, Missing)"),
+        ("type alias", "= Missing"),
+        ("generic alias", "= std::vec::Vec<Missing>"),
+        ("enum tuple variant", "{ A, B(Missing), C }"),
+        ("enum struct variant", "{ A, B { f: Missing }, C }"),
+    ] {
+        let mut defs = type_defs(src());
+        defs.insert("AReviewHop", body.to_string());
+        let field = vec![("a_field".to_string(), "AReviewHop".to_string())];
+        let caught = std::panic::catch_unwind(|| {
+            assert_every_reachable_type_resolves(&field, &defs);
+        });
+        assert!(
+            caught.is_err(),
+            "a {shape} hop hid an unresolvable type: the walk is not \
+             transitive through {body:?}"
+        );
+    }
+}
+
+/// Three hops, to hold the doc's own words.
+#[test]
+fn the_walk_reaches_three_hops_down() {
+    let mut defs = type_defs(src());
+    defs.insert("HopOne", "(HopTwo)".to_string());
+    defs.insert("HopTwo", "= HopThree".to_string());
+    defs.insert("HopThree", "{ f: StillMissing }".to_string());
+    let field = vec![("a_field".to_string(), "Vec<HopOne>".to_string())];
+    let caught = std::panic::catch_unwind(|| {
+        assert_every_reachable_type_resolves(&field, &defs);
+    });
+    assert!(caught.is_err(), "three hops hid an unresolvable type");
+}
+
+/// A bound or `Self` in a type position is not a type to resolve, and must
+/// not turn an ordinary `+ Send` into a gate failure.
+#[test]
+fn bounds_and_self_are_not_types_to_resolve() {
+    let defs = type_defs(src());
+    for ty in [
+        "Box<dyn HostCallable + Send>",
+        "Box<dyn HostCallable + Send + Sync>",
+        "Option<Box<Self>>",
+    ] {
+        let field = vec![("a_field".to_string(), ty.to_string())];
+        assert_every_reachable_type_resolves(&field, &defs);
+    }
+}
+
+/// And it must not fire on a type the crate does define, or the gate would
+/// be a wall rather than a check.
+#[test]
+fn a_known_field_type_passes_the_resolution_gate() {
+    let defs = type_defs(src());
+    let known = vec![("stack".to_string(), "Vec<Slot>".to_string())];
+    assert_every_reachable_type_resolves(&known, &defs);
+}
+
 #[test]
 fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     let src = src();
@@ -1296,6 +1713,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     let defs = type_defs(src);
     let bearing_types = slot_bearing_types(&defs);
     let fields = interp_fields();
+    assert_every_reachable_type_resolves(&fields, &defs);
     assert!(
         fields.len() > 140,
         "parse sanity: found {} fields",
@@ -2123,7 +2541,15 @@ fn the_type_graph_spans_the_whole_production_crate() {
     assert!(bearing.contains(&"Tuple"));
     assert!(bearing.contains(&"Alias"));
     assert!(!bearing.contains(&"Plain"));
-    assert!(!defs.contains_key("Unit"));
+    // A unit struct is IN the graph, with an empty body. It used to be
+    // skipped, which was harmless while the graph only answered "is this
+    // slot-bearing" — a type with no fields never is — and became wrong when
+    // the resolution gate started asking "is this type known at all": a
+    // field typed by a unit struct this crate defines was reported as
+    // unresolvable, with advice to define it.
+    assert!(defs.contains_key("Unit"));
+    assert_eq!(defs["Unit"].trim(), "");
+    assert!(!bearing.contains(&"Unit"));
     assert!(bearing.contains(&"Assoc"));
     // The real crate's aliases and tuple structs are covered.
     let real = type_defs(src());

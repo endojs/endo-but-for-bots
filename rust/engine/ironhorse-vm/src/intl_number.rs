@@ -335,6 +335,39 @@ fn round_to_significant(dec: &Decimal, keep: usize, mode: RoundingMode, negative
         rest_nonzero,
         kept.last().copied().unwrap_or(0),
     );
+    if keep == 0 {
+        // Rounding to NO significant digits: the cut is at the leading
+        // digit's own place, so rounding up produces a single `1` one place
+        // ABOVE it (0.999999 to zero fraction digits is 1, not 0), and
+        // rounding down produces the empty digit string the caller lays out
+        // as zero.
+        //
+        // The general path below cannot express this: it preserves the
+        // fixed width `keep`, and at width zero a carry has nowhere to
+        // land — `increment_digits` on the empty slice reports a carry,
+        // `insert(0, 1)` then `pop()` puts it straight back, and the value
+        // renders as 0. A magnitude in [0.1, 1) that rounds up to 1 was
+        // reported as 0 by `maximumFractionDigits: 0`, a silent wrong value
+        // at exactly the oracle-blind seam F062 is about; the
+        // compact-notation exponent re-check reaches this path on every
+        // 999,999-shaped input.
+        //
+        // This handles the cut at the leading digit's own place. A cut
+        // BELOW it (`keep < 0`: 0.0001 at two fraction digits) is the
+        // caller's to place, in `to_raw_fixed`, because only the caller
+        // knows `max_frac` — see the note there.
+        return if round_up {
+            Decimal {
+                digits: vec![1],
+                exponent: dec.exponent + 1,
+            }
+        } else {
+            Decimal {
+                digits: Vec::new(),
+                exponent: dec.exponent,
+            }
+        };
+    }
     let mut exponent = dec.exponent;
     if round_up {
         if increment_digits(&mut kept) {
@@ -446,7 +479,26 @@ fn to_raw_fixed(
     let keep = dec.exponent + max_frac as i32 + 1;
     let rounded = if keep <= 0 {
         // Everything rounds away below the least place; decide carry.
-        round_to_significant(dec, 0, mode, negative)
+        //
+        // `round_to_significant(_, 0, …)` answers "does this round up?" and
+        // places the resulting `1` one decade above the LEADING digit, which
+        // is the right place only when the cut sits exactly there
+        // (`keep == 0`). When the cut is further down — 0.0001 at two
+        // fraction digits, `keep == -3` — the carried digit belongs at
+        // `10^-max_frac`, the least place being kept, and placing it at
+        // `10^(exponent+1)` puts it below the layout's floor where it
+        // renders as zero. `$0.0001` under `roundingMode: 'expand'` was
+        // reported as `$0.00`, which is the same silent-wrong-value class as
+        // the rest of F062, one decade further down.
+        let carried = round_to_significant(dec, 0, mode, negative);
+        if carried.digits.is_empty() || keep == 0 {
+            carried
+        } else {
+            Decimal {
+                digits: vec![1],
+                exponent: -(max_frac as i32),
+            }
+        }
     } else {
         round_to_significant(dec, keep as usize, mode, negative)
     };
@@ -688,12 +740,94 @@ fn trim_fraction(
 
 /// The compact scaling decision: the power of ten to divide by and the CLDR
 /// affix (prefix, suffix) for the chosen magnitude in the given locale.
-/// Reserved for the compact-notation follow-up child.
-#[allow(dead_code)]
+///
+/// The scaling exponent is the caller's — `compute_notation_exponent`
+/// already computed it and the re-check may have moved it — so this carries
+/// only the affix.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Compact {
-    divisor_pow10: i32,
     prefix: String,
     suffix: String,
+    /// Whether the affix is separated from the mantissa by a space, which
+    /// is a `literal` part rather than part of the affix.
+    spaced: bool,
+}
+
+/// Whether this engine models compact-decimal data for `locale`.
+///
+/// Compact notation is *per-locale data*, not an algorithm: the affixes
+/// differ (`K`/`M` against `Tsd.`/`Mio.`), and so do the magnitudes the
+/// patterns sit on — Japanese groups by ten thousands, so a K/M divisor
+/// would be a wrong value rather than a wrong word. Only `en` is modeled
+/// here, and `Intl.NumberFormat` REFUSES `notation: 'compact'` for any
+/// other locale at construction rather than formatting it with the wrong
+/// data (architecture finding F062: an honest named skip, never a silent
+/// wrong value, and `Intl` is oracle-blind so no differential test would
+/// catch the wrong value).
+pub fn compact_locale_is_modeled(locale: &str) -> bool {
+    // `und` is the undetermined locale, which falls back to the default —
+    // `en` here — so it carries the data it resolves to rather than none.
+    matches!(locale_language(locale).as_str(), "en" | "und")
+}
+
+/// The pattern exponent for a magnitude, per `ComputeExponentForMagnitude`:
+/// the largest modeled compact pattern at or below `magnitude`.
+///
+/// `en` carries patterns at 10^3, 10^6, 10^9 and 10^12 and stops there, so
+/// a quadrillion renders as `1000T` rather than growing a new affix — which
+/// is what CLDR says and what other engines produce.
+fn compact_exponent_for_magnitude(magnitude: i32) -> i32 {
+    if magnitude < 3 {
+        0
+    } else {
+        (magnitude / 3 * 3).min(12)
+    }
+}
+
+/// The CLDR compact affix for `exponent` in `locale`.
+///
+/// Returns `None` for an exponent with no pattern (below a thousand), which
+/// is the standard-notation case; the caller has already decided the
+/// locale is modeled.
+fn compact_affix(
+    locale: &str,
+    display: CompactDisplay,
+    style: Style,
+    exponent: i32,
+) -> Option<Compact> {
+    debug_assert!(compact_locale_is_modeled(locale));
+    // CLDR `en` carries no LONG compact CURRENCY patterns, so ICU falls back
+    // to the short ones: `$1.2K`, never `$1.2 thousand`. Following that
+    // fallback is the difference between matching the reference engines and
+    // inventing an affix.
+    let display = if style == Style::Currency {
+        CompactDisplay::Short
+    } else {
+        display
+    };
+    let suffix = match (display, exponent) {
+        (_, e) if e < 3 => return None,
+        (CompactDisplay::Short, 3) => "K",
+        (CompactDisplay::Short, 6) => "M",
+        (CompactDisplay::Short, 9) => "B",
+        (CompactDisplay::Short, _) => "T",
+        // A regular space, as CLDR's `en` long patterns carry: `12 thousand`.
+        // No leading space: `PartitionNotationSubPattern` makes the
+        // pattern's literal text its own `literal` part, so the separator is
+        // pushed separately below. Folding it into the affix produced a
+        // `compact` part of `" thousand"` where the reference engines
+        // produce `literal " "` then `compact "thousand"` — the same string,
+        // a different part list, and `formatToParts` exists to be read.
+        (CompactDisplay::Long, 3) => "thousand",
+        (CompactDisplay::Long, 6) => "million",
+        (CompactDisplay::Long, 9) => "billion",
+        (CompactDisplay::Long, _) => "trillion",
+    };
+    Some(Compact {
+        prefix: String::new(),
+        suffix: suffix.to_string(),
+        spaced: display == CompactDisplay::Long,
+    })
 }
 
 /// The ten digits of a numbering system, as the code points that replace the
@@ -837,8 +971,16 @@ fn should_group(grouping: Grouping, int_digit_count: usize, notation: Notation) 
         // Notation `compact`/`scientific`/`engineering` never group unless
         // explicitly `always` — the mantissa is below the group threshold.
         Grouping::Always => int_digit_count > 3,
-        Grouping::Auto => notation == Notation::Standard && int_digit_count > 3,
-        Grouping::Min2 => notation == Notation::Standard && int_digit_count > 4,
+        // Compact groups too. Its mantissa is NOT bounded below the group
+        // threshold: `en` has no pattern above 10^12, so 1e18 renders as
+        // `1,000,000T`. Scientific and engineering keep a single integer
+        // digit by construction and are excluded.
+        Grouping::Auto => {
+            matches!(notation, Notation::Standard | Notation::Compact) && int_digit_count > 3
+        }
+        Grouping::Min2 => {
+            matches!(notation, Notation::Standard | Notation::Compact) && int_digit_count > 4
+        }
     }
 }
 
@@ -934,7 +1076,18 @@ fn render_magnitude(opts: &NfResolved, dec: &Decimal, negative: bool) -> Rendere
 /// ten to divide the value by before rendering the mantissa.
 fn compute_notation_exponent(opts: &NfResolved, dec: &Decimal) -> i32 {
     match opts.notation {
-        Notation::Standard | Notation::Compact => 0,
+        Notation::Standard => 0,
+        // `ComputeExponentForMagnitude` for compact. The construction gate
+        // has already refused an unmodeled locale, so reaching here with
+        // one would be an engine fault rather than a guest input; fall back
+        // to standard rather than pick an affix out of the wrong data.
+        Notation::Compact => {
+            if compact_locale_is_modeled(&opts.locale) {
+                compact_exponent_for_magnitude(dec.exponent)
+            } else {
+                0
+            }
+        }
         Notation::Scientific => dec.exponent,
         Notation::Engineering => dec.exponent - dec.exponent.rem_euclid(3),
     }
@@ -1021,9 +1174,31 @@ fn finite_body_parts(opts: &NfResolved, mut dec: Decimal, negative: bool) -> (Ve
     let mut notation_exp = notation_exp;
     if opts.notation == Notation::Scientific && rendered.int_digits.len() > 1 {
         notation_exp += rendered.int_digits.len() as i32 - 1;
-        let mut d2 = original;
+        let mut d2 = original.clone();
         d2.scale_pow10(-notation_exp);
         rendered = render_magnitude(opts, &d2, negative);
+    }
+    // The same re-check for compact, which `ComputeExponent` spells out: the
+    // rounded mantissa can cross into the next pattern (999,999 scales to
+    // 999.999, rounds to 1000, and belongs under the million pattern as
+    // `1M`, not under the thousand pattern as `1000K`). Only a mantissa that
+    // grew past its window triggers it, and a window is at most three digits
+    // wide.
+    if opts.notation == Notation::Compact
+        // `>= 0`, not `> 0`. The transition that STARTS at zero is the one
+        // that matters most — 999.9 rounds to 1000 and belongs under the
+        // thousand pattern as `1K` — and a `> 0` guard excluded exactly it.
+        && notation_exp >= 0
+        && rendered.int_digits.len() > 3
+        && compact_locale_is_modeled(&opts.locale)
+    {
+        let bumped = compact_exponent_for_magnitude(original.exponent + 1);
+        if bumped > notation_exp {
+            notation_exp = bumped;
+            let mut d2 = original.clone();
+            d2.scale_pow10(-notation_exp);
+            rendered = render_magnitude(opts, &d2, negative);
+        }
     }
 
     // Enforce minimum integer digits.
@@ -1061,6 +1236,29 @@ fn finite_body_parts(opts: &NfResolved, mut dec: Decimal, negative: bool) -> (Ve
             PartType::Fraction,
             map_digits(&rendered.frac_digits, nu),
         ));
+    }
+
+    // The compact affix, as its own `compact` part so `formatToParts`
+    // names it rather than folding it into a literal. `en` carries a
+    // suffix only; the prefix arm is there because CLDR has locales that
+    // use one, and an empty prefix costs nothing.
+    if opts.notation == Notation::Compact && notation_exp != 0 {
+        if let Some(compact) =
+            compact_affix(&opts.locale, opts.compact_display, opts.style, notation_exp)
+        {
+            if !compact.prefix.is_empty() {
+                // Ahead of the whole number body. `en` never takes this
+                // branch; CLDR has locales whose compact pattern is a
+                // prefix, and an empty prefix costs nothing.
+                parts.insert(0, Part::new(PartType::Compact, compact.prefix));
+            }
+            if !compact.suffix.is_empty() {
+                if compact.spaced {
+                    parts.push(Part::new(PartType::Literal, " "));
+                }
+                parts.push(Part::new(PartType::Compact, compact.suffix));
+            }
+        }
     }
 
     // Exponent for scientific/engineering.

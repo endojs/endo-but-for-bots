@@ -1214,11 +1214,71 @@ impl SlotArena {
     }
 
     /// XS-accounted capacity: 32 bytes per addressable record.
-    /// This legacy metric is not resident memory: it excludes Rust layout,
-    /// bookkeeping vectors and side tables. See architecture finding F121.
+    ///
+    /// This is **XS's** accounting unit, kept so a comparison against XS's
+    /// own `currentHeapSize` is like-for-like. It is not this engine's
+    /// record size — `size_of::<Slot>()` is 24, and `Slot` carries no
+    /// `repr` attribute so even that is Rust's choice rather than a
+    /// contract — and it is not resident memory: it excludes Rust layout,
+    /// the per-slot bookkeeping vectors, the chunk arena and the side
+    /// tables. [`SlotArena::resident_byte_size`] is the one to ask for
+    /// footprint. The name says which of the two this is, because the
+    /// unqualified name read as the honest measurement and was cited as
+    /// one (architecture finding F121).
     #[inline]
-    pub fn byte_size(&self) -> usize {
+    pub fn xs_accounted_byte_size(&self) -> usize {
         self.capacity() as usize * 32
+    }
+
+    /// The arena's **resident** footprint: what this process actually
+    /// holds for the slot arena, in bytes.
+    ///
+    /// Counts the record storage at its real `Slot` size plus every
+    /// bookkeeping vector the design's accounting argument left out: the
+    /// free list, the per-slot free-mark and collector-mark bitmaps, and
+    /// the per-page checkpoint-dirty and lazy-residency bitmaps.
+    /// A lazily attached arena
+    /// holds its records page-sparse in the backing rather than in
+    /// `slots`, so the record term follows the vector that is actually
+    /// populated rather than the capacity.
+    ///
+    /// Still not the whole machine: the chunk arena
+    /// ([`ChunkArena::byte_size`]) and the side tables are separate terms,
+    /// and the footprint envelope needs all three. This is the slot term,
+    /// measured rather than asserted.
+    pub fn resident_byte_size(&self) -> usize {
+        use std::mem::size_of;
+        let records = match &self.lazy {
+            // Detached: the dense vec holds every record.
+            None => self.slots.capacity() * size_of::<Cell<Slot>>(),
+            // Lazily attached: `slots` is EMPTY and the records live
+            // page-sparse in the backing, materialized on first fault and
+            // grow-only thereafter. Reading `slots.capacity()` here reported
+            // zero record bytes for an arena holding millions, and reported
+            // the SAME number before and after faulting every page — the one
+            // number that should move was the only one that did not.
+            Some(backing) => {
+                let pages = backing.pages.borrow();
+                let materialized: usize = pages
+                    .iter()
+                    .map(|page| page.as_ref().map_or(0, |records| records.len()))
+                    .sum();
+                materialized * size_of::<Cell<Slot>>()
+                    // The pages table itself: one `Option<Box<..>>` per page,
+                    // held whether or not the page has faulted.
+                    + pages.capacity() * size_of::<Option<Box<[Cell<Slot>]>>>()
+                    // The backing's own per-slot bookkeeping, the same kind
+                    // of vector the detached arena's bitmaps are.
+                    + backing.resident.capacity()
+                    + backing.snapshot_free.capacity()
+            }
+        };
+        records
+            + self.free.capacity() * size_of::<u32>()
+            + self.free_marks.capacity()
+            + self.marks.capacity()
+            + self.dirty.capacity()
+            + self.unbacked.capacity()
     }
 
     // --- snapshot support (see `ironhorse-snapshot`) ---

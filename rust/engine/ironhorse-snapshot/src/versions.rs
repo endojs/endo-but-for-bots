@@ -47,6 +47,18 @@
 //! CI rejects stale generation. Custom data builds are outside this profile.
 //! In-tree locale algorithm/table changes still require deliberate release review.
 //!
+//! **Release review, 2026-09-16.** `Intl.NumberFormat` compact notation
+//! landed with in-tree CLDR `en` affixes and a corrected rounding carry
+//! (architecture finding F062). Guest-visible output changed —
+//! `{notation:'compact'}.format(12345)` went from `12,345` to `12K`, and a
+//! magnitude below the least kept place now rounds away from zero where it
+//! reported zero — so a snapshot written before resumes after with a
+//! matching boot fingerprint and a different answer for the same program.
+//! The fingerprint does not move because `INTL_DATA_VERSION` binds the ICU
+//! DEPENDENCY graph and these tables are ours, which is exactly the case
+//! the sentence above reserves for review rather than for automation.
+//! Recorded here because the alternative is that it is recorded nowhere.
+//!
 //! [`ironhorse_vm::Interp::boot_fingerprint`] hashes ordered intrinsic layout,
 //! the Intl profile and the selected deterministic Math provider. SIGN therefore
 //! refuses incompatible profiles before execution. A matching cost-table digest
