@@ -49,10 +49,18 @@ export const readableBlobMethodGuards = harden({
 // (`readReturnPattern`). A generic value `PassableReader` also advertises
 // `readReturnPattern`, so it is excluded by additionally requiring the
 // *absence* of `readPattern` — the value-pattern accessor a bytes reader never
-// carries (its yields are always `Uint8Array`). A writer
-// (`writePattern`/`writeReturnPattern`, neither `text` nor a read marker) is
-// rejected. `stream` alone no longer discriminates: it is the generic
-// byte-stream method shared with readers/writers and `HttpResponse`.
+// carries (its yields are always `Uint8Array`). An `HttpResponse`
+// (`@endo/exo-http-client`) also carries `text` (plus `json`/`stream`), so the
+// bare `text` branch would admit it; but its `stream()` responder takes *zero*
+// args (no synchronize head), so `iterateBytesReader` would drive it as
+// `E(source).stream(synHead)` and die on an opaque arity guard rather than the
+// crisp shape error. It is excluded by additionally requiring the *absence* of
+// `status` — the response-code accessor an `HttpResponse` carries and a
+// readable blob never does — mirroring the `!readPattern` exclusion above. A
+// writer (`writePattern`/`writeReturnPattern`, neither `text` nor a read
+// marker) is rejected by falling through both branches. `stream` alone no
+// longer discriminates: it is the generic byte-stream method shared with
+// readers/writers and `HttpResponse`.
 //
 // This is the single source of truth for the discriminator (four consumers
 // spread across three packages import it); never re-inline it per consumer — a
@@ -63,7 +71,7 @@ export const readableBlobMethodGuards = harden({
  * @returns {boolean}
  */
 export const looksLikeReadableBlob = methodNames =>
-  methodNames.includes('text') ||
+  (methodNames.includes('text') && !methodNames.includes('status')) ||
   (methodNames.includes('stream') &&
     !methodNames.includes('readPattern') &&
     (methodNames.includes('getInfo') ||

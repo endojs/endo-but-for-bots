@@ -28,8 +28,8 @@ test('blobFromBytes exposes bytes through the ReadableBlob surface', async t => 
 // non-zero-`byteOffset` views into the exo-stream wire boundary for any
 // payload larger than one 48 KiB chunk. A single-chunk fixture never crosses
 // that boundary, so exercise it over generated payloads that span many chunks
-// (up to ~3× CHUNK_BYTES + 1) and confirm the drained bytes round-trip exactly —
-// which would fail if a windowed slice leaked a pooled buffer's neighbouring
+// (up to ~3x CHUNK_BYTES + 1) and confirm the drained bytes round-trip exactly —
+// which would fail if a windowed slice leaked a pooled buffer's neighboring
 // bytes or dropped the final short chunk.
 //
 // `@fast-check/ava` resolves fast-check 4.x, where `defaultSizeToMaxWhenMaxSpecified`

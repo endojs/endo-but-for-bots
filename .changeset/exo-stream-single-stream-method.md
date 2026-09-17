@@ -1,7 +1,9 @@
 ---
+'@endo/9p-server': patch
 '@endo/agent-tools': major
 '@endo/daemon': major
-'@endo/endo-fs-exec': major
+'@endo/endo-fs-asset-server': patch
+'@endo/endo-fs-exec': patch
 '@endo/exo-git': major
 '@endo/exo-http-client': major
 '@endo/exo-stream': major
