@@ -70,9 +70,26 @@ One finding regressed, F119, when the classification index this review's own
 tradeoff was deliberately removed.
 The still-open and partially-open set is listed on its own, by severity, in
 [OPEN-FINDINGS.md](OPEN-FINDINGS.md).
-Appendix A now carries six locations and five statuses per finding; the
+Appendix A now carries eight locations and seven statuses per finding; the
 `7753a4b9` locations are file-level, because the decomposition moved every
 construct in the VM.
+
+**Resolved again against
+[`e1038c189`](https://github.com/endojs/endo-but-for-bots/commit/e1038c189),
+2026-09-17.**
+A second pass the same day, on the six findings the first did not attempt.
+Three moved: F068 from open to partially open (the `JsMachine` extraction,
+which reopens W6 decision 2 by instruction rather than by any of its three
+triggers), and F063 and F119 kept their statuses while losing the clause that
+made them untestable.
+181 fixed, 7 partially fixed, 1 open, 2 held.
+F075, F127 and F149 were not attempted and the Revision history says so rather
+than saying they were hard.
+The pass's most useful output is a measurement it did not set out to produce:
+`ironhorse-compile` returns rather than panics on all 53,575 sources of the
+pinned test262 corpus, and the two that did panic before it were found by a
+reviewer rather than by the roster meant to be the net.
+Two of the pass's own fixes were wrong first and are recorded as such.
 
 **Resolved against
 [`0b25cdba9`](https://github.com/endojs/endo-but-for-bots/commit/0b25cdba9),
