@@ -10,7 +10,8 @@
  * - No partial-range I/O: `read(path, offset, length)` fetches the
  *   whole file via `stream()` and slices. `write`/`setStat`
  *   likewise read-modify-write the whole file, since Mount has no
- *   partial-range write. Cost is O(filesize) on the wire
+ *   partial-range write. Cost is O(filesize) on the wire (≈2×, the hex
+ *   marshal representation of a passable byteArray)
  *   and in memory; the write side sends the file as a *single* byteArray
  *   chunk via `makeBytesBlob` (no back-pressure). Acceptable for the
  *   config/source-tree files this adapter targets; large-blob streaming
@@ -58,12 +59,11 @@ harden(isNotFoundMessage);
 
 /**
  * Wrap a `Uint8Array` as a `PassableBytesReader` that `Mount.write`
- * accepts. `Mount.write` classifies a readable-blob source by method
- * name (`looksLikeReadableBlob`) and drains it through
- * `iterateBytesReader` (the `@endo/exo-stream` protocol), so the
- * producer must speak that protocol too — it must hand over a reader
- * reference the `Mount.write` drain protocol pulls, rather than the
- * bytes themselves.
+ * accepts. Even though a byte array is itself passable now, `Mount.write`
+ * has no by-value bytes overload: it is a streaming drain that pulls chunks
+ * from a reader reference (`E(source).stream()`, via `iterateBytesReader`)
+ * for flow control, so a producer with a single in-memory buffer must still
+ * present it as a one-chunk reader rather than the bytes themselves.
  *
  * @param {Uint8Array} bytes
  */

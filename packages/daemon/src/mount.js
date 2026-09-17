@@ -1300,7 +1300,8 @@ const makeMountExo = ctx => {
     }
     throw new Error(
       'write() value must be a ReadableBlob (a `stream` method paired with a ' +
-        '`text`/`getInfo`/`readReturnPattern` byte-read marker) or a ' +
+        '`text` whole-value read surface or a `getInfo`/`readReturnPattern` ' +
+        'byte-read marker) or a ' +
         'ReadableTree (a `list` method); this value has none',
     );
   };

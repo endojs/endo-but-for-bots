@@ -110,9 +110,18 @@ export interface ReadableTree {
  * that distinguishes a blob from a writer/`HttpResponse`. A source must carry
  * `stream` paired with one of:
  *  - `text`, the whole-value read surface every canonical `ReadableBlob`
- *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`); or
+ *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`) —
+ *    but *not* `status`, which excludes an `HttpResponse` (it also carries
+ *    `text`+`stream`, but its zero-arg `stream()` would die on an arity guard);
+ *    or
  *  - `getInfo` for a content-addressed blob; or
- *  - `readReturnPattern` for a raw `PassableBytesReader`.
+ *  - `readReturnPattern` for a raw `PassableBytesReader` — but *not*
+ *    `readPattern`, which excludes a generic `PassableReader` (it also
+ *    advertises `readReturnPattern`, but yields arbitrary values, not bytes).
+ *
+ * See `looksLikeReadableBlob` in `../interfaces.js` for the authoritative
+ * duck-type; the `!status`/`!readPattern` exclusions are part of the contract
+ * and are enforced there, not by these structural types.
  */
 export type ReadableBlobSource =
   | {
