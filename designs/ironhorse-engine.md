@@ -93,6 +93,22 @@ Kill criteria, named up front:
   XS) proves unreachable by more than 2x after the planned
   optimization pass.
 
+  This criterion is LIVE and, as of 2026-09-16, partially
+  instrumented rather than unevaluable (F106/F122).
+  The throughput half is measured: `benches/xs_compare.py`
+  `--check-micro` fails above 2.0x geometric mean on the
+  microbenchmark corpus, nightly.
+  The four-variant daemon arm remains blocked on the worker
+  protocol, and `bench-daemon.js` reports that blocker rather than
+  timing a substitute.
+  Both footprint clauses are measured too: code size at about 6x
+  against a 2x bar, and heap between 0.2x and 2.5x against a 1.1x
+  bar depending on whether the workload churns.
+  So the criterion has an early-warning device for the first time,
+  on the throughput clause; it does not yet have one on the whole
+  envelope, and the README's acceptance table records stage 8 as
+  BAR NOT MET.
+
 ## What Is the Problem Being Solved?
 
 Endo and agoric-sdk trust XS with their most security-critical
@@ -889,6 +905,35 @@ Fuzzing starts in stage 1 (targets 1 and 2 exist as soon as the
 interpreter subset does) and runs nightly in CI with a checked-in
 corpus and a trophies ledger.
 
+This sentence described an intent for longer than it described the tree, and
+the gap was invisible because each half was true somewhere (F039).
+The nightly lane existed but ran four pure-Rust targets and none of the
+differential ones; "checked-in corpus" was contradicted by
+`ironhorse-fuzz/fuzz/.gitignore`, which excluded `corpus/`, so the only corpus
+lived in a GitHub Actions cache and an eviction reset the search to zero
+silently.
+
+What is true now, stated narrowly.
+Both lanes read their roster from `fuzz/Cargo.toml`, so every declared target
+is fuzzed: `ironhorse-deep-fuzz.yml` for minutes per target nightly, and a
+`fuzz-ironhorse` tripwire in `ci.yml` for seconds per target on every
+engine-relevant pull request.
+`ironhorse-fuzz/fuzz/seeds/` is a checked-in, *derived* seed corpus, built from
+the engine's own writers by
+`cargo run -p ironhorse-fuzz --bin write-seed-corpus` and held current by a
+test, so it cannot go stale the way a collected corpus does.
+What is NOT checked in is the accreted corpus: `corpus/` is still a gitignored
+working directory that lives in the Actions cache, so an eviction still costs
+whatever the search has found since the seeds.
+That is a smaller claim than "a checked-in corpus" and it is the one that
+holds.
+
+Two clauses in item 1 above remain UNMET and are not made true by any of this:
+the generators are `arbitrary`-driven now, but there is no corpus splicing in
+the Fuzzilli style.
+Recorded here because the failure this passage is correcting was precisely a
+true half standing in for a false one.
+
 ### Endor integration (requirement 8)
 
 **Current status:** direct embedding exists in `rust/endo/src/ironhorse_engine.rs`;
@@ -928,6 +973,32 @@ its actual goals:
 - **Footprint**: heap within 1.1x (the slot accounting is
   identical by construction; overhead can come only from arena
   bookkeeping); engine code size within 2x of `libxs.a`.
+
+  *Measured 2026-09-16, and both halves of this clause need
+  amending rather than repeating (F106/F122).*
+  "The slot accounting is identical by construction" was never
+  true: the engine's record is 24 bytes, XS accounts 32, and the
+  per-slot bookkeeping vectors, the chunk arena and the side
+  tables sit outside the accounting entirely.
+  `SlotArena::resident_byte_size` is the honest slot term now, and
+  the comparison has an XS side: the oracle shim reports
+  `currentHeapCount` and `currentChunksSize`, so
+  `ironhorse-262/tests/xs_footprint_bench.rs` can measure both
+  engines over one workload.
+  The answer is not one number. On property access, calls and
+  string work the engine sits near 0.2x XS, which is mostly XS
+  booting a larger intrinsics set. On allocation churn it sits near
+  2.5x, above the bar — and that is precisely where the
+  parenthesis fails, because nothing collects within a crank, so
+  churned garbage is still resident at the boundary.
+  The residue of F010/F076 now has a measured cost.
+  The code-size half now has an instrument,
+  `benches/code_size.py`, and the answer is about **6x**, not
+  within 2x — static-library text against static-library text,
+  an upper bound on a linked artifact.
+  The bar stands as the design's target; what has changed is that
+  it is a measurement rather than an assertion, and the measurement
+  says the target is a long way off.
 - **Latency**: no regression on the pump-loop properties the
   performance design fought for (no sleeps, no polling).
 

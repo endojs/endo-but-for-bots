@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -225,6 +231,8 @@ dependencies = [
 name = "ironhorse-fuzz"
 version = "0.0.1"
 dependencies = [
+ "arbitrary",
+ "ironhorse-262",
  "ironhorse-compile",
  "ironhorse-regexp",
  "ironhorse-snapshot",

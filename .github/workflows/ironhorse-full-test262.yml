@@ -63,16 +63,55 @@ jobs:
         working-directory: rust/engine
         run: cargo test --locked -p xs-oracle --test timing
       - name: Measure XS microbenchmark slice
-        # Report the 2x microbenchmark result independently of command success.
-        # The complete stage-8 envelope still lacks daemon/footprint measurements.
+        # Report the 2x microbenchmark result independently of command
+        # success. The complete stage-8 envelope still lacks its
+        # four-variant daemon measurement; throughput, code size and heap
+        # footprint are all measured now (F106/F122).
         run: python3 rust/engine/benches/xs_compare.py --output xs-microbenchmarks.json
+      - name: Measure engine code size against XS
+        # Reported, not gated: the engine is far outside the design's 2x bar
+        # and a failing check would say nothing the number does not.
+        if: always()
+        run: python3 rust/engine/benches/code_size.py --output engine-code-size.json
       - name: Upload comparison report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: xs-microbenchmarks
-          path: xs-microbenchmarks.json
+          path: |
+            xs-microbenchmarks.json
+            engine-code-size.json
           if-no-files-found: warn
+  unified-resolution:
+    name: engine suites under the root resolution
+    runs-on: ubuntu-latest
+    # A fresh resolve plus a cold build of the engine and the XS oracle.
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_MIN_STACK: '33554432'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Self-test the unified-resolution builder
+        run: python3 rust/engine/scripts/test-unified-resolution.py
+      - name: Run the engine's suites under the root workspace's resolution
+        # The repository has two workspaces and two lockfiles. The
+        # lockfile-agreement check (in ci.yml, per pull request) proves they
+        # AGREE; this proves the engine's own suites PASS under the
+        # resolution the shipped `endor` binary links, which nothing did
+        # before — `cargo test -p ironhorse-vm` from the repo root refuses,
+        # because the engine crates are not root-workspace members
+        # (architecture finding F070).
+        #
+        # Scheduled rather than per-pull-request: this is a cold build of the
+        # whole engine, and the cheap per-pull-request protection is the
+        # agreement check.
+        run: python3 rust/engine/scripts/check-unified-resolution.py
+
   sweep:
     name: sweep
     runs-on: ubuntu-latest
