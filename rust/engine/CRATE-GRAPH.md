@@ -29,6 +29,7 @@ flowchart TD
     ironhorse_compile -->|"normal"| ironhorse_text
     ironhorse_compile -->|"normal"| ironhorse_unicode
     ironhorse_compile -->|"normal optional"| xs_oracle
+    ironhorse_fuzz -->|"normal"| ironhorse_262
     ironhorse_fuzz -->|"normal"| ironhorse_compile
     ironhorse_fuzz -->|"normal"| ironhorse_regexp
     ironhorse_fuzz -->|"normal"| ironhorse_snapshot
