@@ -307,6 +307,40 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
   });
 });
 
+test('revocation: a range of a mount file view revokes with it', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const { mount, control } = makeRevocableMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+  });
+  await E(mount).writeText(['file.txt'], 'hello world');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
+  // Attenuate to a byte range *before* revoking; the derived view reads through
+  // the same live file, so it must revoke together with its origin.
+  const range = await E(file).range(0n, 5n);
+  t.is(await E(range).text(), 'hello');
+
+  E(control).revoke();
+
+  await t.throwsAsync(() => E(range).text(), {
+    message: /Mount has been revoked/,
+  });
+  await t.throwsAsync(() => E(range).getInfo(), {
+    message: /Mount has been revoked/,
+  });
+  // A range taken *after* revocation likewise cannot read.
+  const postRange = await E(file).range(0n, 3n).catch(() => undefined);
+  if (postRange !== undefined) {
+    await t.throwsAsync(() => E(postRange).text(), {
+      message: /Mount has been revoked/,
+    });
+  } else {
+    // `range` itself may reject on a revoked file (assertLive) — also valid.
+    t.pass();
+  }
+});
+
 test('revocation: a base64 file stream refuses on a revoked mount', async t => {
   const rootPath = makeTemporaryRoot(t);
   const { mount, control } = makeRevocableMount({

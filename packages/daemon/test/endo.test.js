@@ -755,6 +755,120 @@ test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)',
   t.is(await collect(await E(blob).fetch(100n, 4n)), '');
 });
 
+test('stored blob range attenuation: range / textRange return derived readable blobs', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const payload = new TextEncoder().encode('hello world\n'); // 12 bytes
+  const readerRef = bytesReaderFromIterator([payload]);
+  const blob = await E(host).storeBlob(readerRef, 'range-blob');
+
+  /** @param {any} reader */
+  const collect = async reader => {
+    const chunks = [];
+    for await (const chunk of iterateBytesReader(reader)) {
+      chunks.push(chunk);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c, offset);
+      offset += c.length;
+    }
+    return new TextDecoder().decode(out);
+  };
+
+  const b64 = bytes => crypto.createHash('sha256').update(bytes).digest('base64');
+
+  // range(start, end) → a derived EndoReadable over [start, end).
+  const hello = await E(blob).range(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  const helloInfo = await E(hello).getInfo();
+  t.is(helloInfo.size, 5n, 'getInfo reports the selected length');
+  t.is(
+    helloInfo.hash,
+    b64(new TextEncoder().encode('hello')),
+    'getInfo reports the selected content SHA-256',
+  );
+
+  // A range of a range intersects (composition, never regaining authority).
+  const el = await E(hello).range(1n, 3n);
+  t.is(await E(el).text(), 'el');
+  // Even a wide child range cannot escape its parent's [0,5) window.
+  const clampedChild = await E(hello).range(3n, 100n);
+  t.is(await E(clampedChild).text(), 'lo');
+
+  // EOF clamp on the top-level blob.
+  const world = await E(blob).range(6n, 100n);
+  t.is(await E(world).text(), 'world\n');
+
+  // start === end selects an empty blob.
+  const empty = await E(blob).range(3n, 3n);
+  t.is(await E(empty).text(), '');
+  t.is((await E(empty).getInfo()).size, 0n);
+
+  // fetch still works within a range (measured within the selection).
+  t.is(await collect(await E(hello).fetch(1n, 2n)), 'el');
+
+  // EINVAL: an inverted or negative byte range rejects.
+  await t.throwsAsync(E(blob).range(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(E(blob).range(-1n, 2n), { message: /EINVAL|safe/ });
+});
+
+test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text composition', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  /** @param {any} reader */
+  const collect = async reader => {
+    const chunks = [];
+    for await (const chunk of iterateBytesReader(reader)) {
+      chunks.push(chunk);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c, offset);
+      offset += c.length;
+    }
+    return new TextDecoder().decode(out);
+  };
+
+  const store = async text => {
+    const readerRef = bytesReaderFromIterator([new TextEncoder().encode(text)]);
+    return E(host).storeBlob(readerRef, `tr-${Math.random().toString(36).slice(2)}`);
+  };
+
+  // LF-delimited lines, 0-based end-exclusive; agrees with lines.slice.join.
+  const lf = await store('a\nb\nc\n');
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(1, 3)).text(), 'b\nc');
+  // endLine past the last line clamps to the end.
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n');
+  // start === end selects nothing.
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '');
+
+  // Terminal LF: the trailing empty line is addressable and empty.
+  const term = await store('a\nb\n');
+  t.is(await E(await E(term).textRange(2, 3)).text(), '');
+
+  // CRLF: the CR before LF stays content, so it is preserved.
+  const crlf = await store('x\r\ny\r\n');
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
+
+  // text-after-byte: a byte range then a line range of it.
+  const doc = await store('one\ntwo\nthree\n');
+  const firstEight = await E(doc).range(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(firstEight).text(), 'one\ntwo\n');
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  // byte-after-text: a line range then a byte range of it.
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await E(twoLines).text(), 'one\ntwo');
+  t.is(await collect(await E(twoLines).fetch(0n, 3n)), 'one');
+});
+
 test('store blob in subdirectory', async t => {
   const { cancelled, config } = await prepareConfig(t);
 

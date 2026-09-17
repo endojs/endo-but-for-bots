@@ -11,6 +11,7 @@ import {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
+  rangeAttenuationMethodGuards,
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
 import {
@@ -709,6 +710,14 @@ export const InspectorInterface = M.interface('EndoInspector', {
 export const BlobInterface = M.interface('EndoBlob', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`range` / `textRange`,
+  // designs/readableblob-range-attenuation.md): return a new `EndoBlob` with
+  // exactly the authority to read the selected byte / line interval, so ranges
+  // compose and can be handed to anything that accepts a readable blob. The
+  // derived cap re-invokes the same factory with a composed absolute interval
+  // over the same content-store address / captured bytes — no formula, name, or
+  // persistence entry for a derived range.
+  ...rangeAttenuationMethodGuards,
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
@@ -856,6 +865,11 @@ export const MountFileInterface = M.interface('EndoMountFile', {
   // (getInfo / fetch) over the live file, plus the mount-file write surface.
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`range` / `textRange`): return a read-only
+  // `ReadableBlob` view over the selected byte / line interval of the *live*
+  // file — each read on the derived view still observes the source, subject to
+  // the fixed interval. See designs/readableblob-range-attenuation.md.
+  ...rangeAttenuationMethodGuards,
   writeText: M.call(M.string()).returns(M.promise()),
   append: M.call(M.string()).returns(M.promise()),
   writeBytes: M.call(M.remotable()).returns(M.promise()),

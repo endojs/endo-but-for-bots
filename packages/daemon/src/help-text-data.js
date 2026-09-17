@@ -176,6 +176,10 @@ export const helpTextEntries = harden([
         'streamBase64(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
       text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
       json: 'json() -> Promise<any>\nRead and parse the blob as JSON.',
+      range:
+        'range(start, end) -> EndoReadable\nAttenuate to the half-open byte interval [start, end) of this blob.\nReturns a new EndoReadable with exactly the authority to read the selected\nbytes; ranges compose (a range of a range intersects) and start === end selects\nan empty blob. start and end are bigints. Construction reads no bytes, so it\nresolves synchronously.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<EndoReadable>\nAttenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,\nCRLF preserved) of the blob's bytes.\nReturns a new EndoReadable over the corresponding byte slice; it reads bytes to\nfind the line boundaries, so it resolves asynchronously.",
     },
   ],
   [
@@ -271,6 +275,10 @@ export const helpTextEntries = harden([
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the file\'s current bytes in one\nround-trip: algorithm ("sha256"), hash (base64), and size (bigint).\nRecomputed each call, since the live file may change.',
       fetch:
         'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) of the live file without\nstreaming the whole thing. offset and length are bigints; the range is\nclamped at end-of-content.',
+      range:
+        'range(start, end) -> ReadableBlobView\nAttenuate to the half-open byte interval [start, end) of the live file.\nReturns a read-only ReadableBlob view with exactly the authority to read the\nselected bytes; ranges compose (a range of a range intersects) and the view\nstill observes the live file subject to the fixed interval. start and end are\nbigints. Construction reads no bytes, so it resolves synchronously.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<ReadableBlobView>\nAttenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,\nCRLF preserved) of the live file's current bytes.\nReturns a read-only ReadableBlob view over the corresponding byte slice; it\nreads bytes to find the line boundaries, so it resolves asynchronously.",
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
       streamBase64:
         'streamBase64(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',

@@ -107,6 +107,10 @@ export const helpTextEntries = harden([
         'getInfo() -> Promise<{ algorithm, hash, size }>\nGet the blob\'s content-address identity and byte length.\nThe result carries `algorithm` ("sha256"), a base64 `hash`, and `size` as a\nbigint.',
       fetch:
         'fetch(offset, length) -> Promise<PassableBytesReader>\nRead a byte window from the blob.\nThe range is `[offset, offset + length)`, clamped at end of file.',
+      range:
+        'range(start, end) -> GitBlob\nAttenuate to the half-open byte interval `[start, end)` of this blob.\nReturns a new GitBlob with exactly the authority to read the selected bytes;\nranges compose (a range of a range intersects) and `start === end` selects an\nempty blob. Construction reads no bytes, so it resolves synchronously.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<GitBlob>\nAttenuate to lines `[startLine, endLine)` (0-based, end-exclusive, LF\nboundaries, CRLF preserved) of the blob's bytes.\nReturns a new GitBlob over the corresponding byte slice; it reads bytes to find\nthe line boundaries, so it resolves asynchronously.",
     },
   ],
   [

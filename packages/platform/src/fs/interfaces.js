@@ -177,16 +177,20 @@ export const ReadableBlobInterface = M.interface('ReadableBlob', {
 harden(ReadableBlobInterface);
 
 // A `ReadableBlob` that also exposes the `BlobRef` range-I/O surface
-// (`getInfo` / `fetch`) — the rich shape for content-addressed blobs read
-// remotely. Pre-assembled so implementers (LocalBlob, GitBlob) can adopt the
-// full surface without re-spreading the records or depending on `@endo/patterns`
-// themselves. The interface tag is distinct from `ReadableBlobInterface`'s so
-// the two shapes don't collide in diagnostics / marshaled interface names
-// (feature detection keys on method names, not the tag). See
-// designs/fs-interface-consolidation.md § C4.
+// (`getInfo` / `fetch`) plus the range *attenuation* surface (`range` /
+// `textRange`, designs/readableblob-range-attenuation.md) — the rich shape for
+// content-addressed blobs read remotely, where a range returns a new
+// `ReadableBlob` with exactly the authority to read the selected portion.
+// Pre-assembled so implementers (mount `EndoMountReadableBlob`, GitBlob) can
+// adopt the full surface without re-spreading the records or depending on
+// `@endo/patterns` themselves. The interface tag is distinct from
+// `ReadableBlobInterface`'s so the two shapes don't collide in diagnostics /
+// marshaled interface names (feature detection keys on method names, not the
+// tag). See designs/fs-interface-consolidation.md § C4.
 export const ReadableBlobRangeInterface = M.interface('ReadableBlobRange', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  ...rangeAttenuationMethodGuards,
 });
 harden(ReadableBlobRangeInterface);
 

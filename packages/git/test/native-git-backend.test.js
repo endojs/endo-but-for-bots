@@ -12,6 +12,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { execFile, execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
+
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
   gitClone,
@@ -140,6 +143,88 @@ test('NativeGitBackend.tree exposes GitBlob help through eventual send', async t
     );
   });
   t.is(unknown, 'No documentation available for method "unknownMethod".');
+});
+
+/** @param {any} reader */
+const collectBlobText = async reader => {
+  const chunks = [];
+  for await (const chunk of iterateBytesReader(reader)) {
+    chunks.push(chunk);
+  }
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return new TextDecoder().decode(out);
+};
+
+/**
+ * Commit a single file and return its GitBlob for the committed content.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} name
+ * @param {string} content
+ */
+const commitBlob = async (t, name, content) => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.writeFile(path.join(repoRoot, name), content);
+  await execFileAsync('git', ['add', name], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'init'],
+    { cwd: repoRoot },
+  );
+  const tree = await backend.tree('HEAD');
+  return tree.lookup(name);
+};
+
+test('GitBlob.range attenuates to a derived blob over a byte interval', async t => {
+  const blob = /** @type {any} */ (await commitBlob(t, 'data.txt', 'hello world\n'));
+  const b64 = s => createHash('sha256').update(s).digest('base64');
+
+  const hello = await E(blob).range(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  const info = await E(hello).getInfo();
+  t.is(info.size, 5n);
+  t.is(info.hash, b64('hello'), 'getInfo reports the selected content SHA-256');
+
+  // A range of a range intersects and never regains authority.
+  t.is(await E(await E(hello).range(1n, 3n)).text(), 'el');
+  t.is(await E(await E(hello).range(3n, 100n)).text(), 'lo');
+
+  // EOF clamp and start === end.
+  t.is(await E(await E(blob).range(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).range(3n, 3n)).text(), '');
+
+  // fetch within a range is measured within the selection.
+  t.is(await collectBlobText(await E(hello).fetch(1n, 2n)), 'el');
+
+  // EINVAL on an inverted or negative byte range.
+  await t.throwsAsync(() => E(blob).range(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(blob).range(-1n, 2n), { message: /EINVAL|safe/ });
+});
+
+test('GitBlob.textRange attenuates to a line interval (LF, terminal-LF, CRLF)', async t => {
+  const lf = /** @type {any} */ (await commitBlob(t, 'lf.txt', 'a\nb\nc\n'));
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n');
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '');
+
+  const term = /** @type {any} */ (await commitBlob(t, 'term.txt', 'a\nb\n'));
+  t.is(await E(await E(term).textRange(2, 3)).text(), '');
+
+  const crlf = /** @type {any} */ (await commitBlob(t, 'crlf.txt', 'x\r\ny\r\n'));
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
+
+  // Composition: byte range then text range, and text range then byte fetch.
+  const doc = /** @type {any} */ (await commitBlob(t, 'doc.txt', 'one\ntwo\nthree\n'));
+  const firstEight = await E(doc).range(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await collectBlobText(await E(twoLines).fetch(0n, 3n)), 'one');
 });
 
 /**

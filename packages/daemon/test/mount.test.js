@@ -243,6 +243,110 @@ test('EndoMountFile.fetch rejects a negative or out-of-range window with EINVAL'
   });
 });
 
+/** @param {any} reader */
+const collectBytesText = async reader => {
+  const chunks = [];
+  for await (const chunk of iterateBytesReader(reader)) {
+    chunks.push(chunk);
+  }
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return new TextDecoder().decode(out);
+};
+
+test('EndoMountFile.range attenuates to a read-only byte-interval view', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['f.txt'], 'hello world\n'); // 12 bytes
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+
+  // range returns a ReadableBlob view (no write surface), not an EndoMountFile.
+  const hello = await E(file).range(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  const info = await E(hello).getInfo();
+  t.is(info.size, 5n, 'getInfo reports the selected length');
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await E(/** @type {any} */ (hello)).__getMethodNames__();
+  t.false(methods.includes('writeText'), 'a range is read-only');
+
+  // A range of a range intersects (never regaining authority).
+  const el = await E(hello).range(1n, 3n);
+  t.is(await E(el).text(), 'el');
+  t.is(await E(await E(hello).range(3n, 100n)).text(), 'lo', 'child clamps to parent');
+
+  // EOF clamp and start === end.
+  t.is(await E(await E(file).range(6n, 100n)).text(), 'world\n');
+  const empty = await E(file).range(3n, 3n);
+  t.is(await E(empty).text(), '');
+  t.is((await E(empty).getInfo()).size, 0n);
+
+  // fetch within a range is measured within the selection.
+  t.is(await collectBytesText(await E(hello).fetch(1n, 2n)), 'el');
+
+  // EINVAL on an inverted or negative byte range.
+  await t.throwsAsync(() => E(file).range(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(file).range(-1n, 2n), { message: /EINVAL|safe/ });
+});
+
+test('EndoMountFile range view is LIVE: it observes the file changing under it', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['f.txt'], 'hello world');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+
+  // A view over bytes [6, 11): the sixth-onward word.
+  const tail = await E(file).range(6n, 11n);
+  t.is(await E(tail).text(), 'world');
+
+  // Rewrite the underlying file; the range still selects [6, 11) of the *new*
+  // content (live), not a snapshot of the old bytes.
+  await E(mount).writeText(['f.txt'], 'hello codebase');
+  t.is(await E(tail).text(), 'codeb');
+  t.is((await E(tail).getInfo()).size, 5n);
+});
+
+test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-LF, CRLF)', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  await E(mount).writeText(['lf.txt'], 'a\nb\nc\n');
+  const lf = /** @type {EndoMountFile} */ (await E(mount).lookup('lf.txt'));
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n', 'endLine clamps');
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '', 'empty interval');
+
+  await E(mount).writeText(['term.txt'], 'a\nb\n');
+  const term = /** @type {EndoMountFile} */ (await E(mount).lookup('term.txt'));
+  t.is(await E(await E(term).textRange(2, 3)).text(), '', 'terminal empty line');
+
+  await E(mount).writeText(['crlf.txt'], 'x\r\ny\r\n');
+  const crlf = /** @type {EndoMountFile} */ (await E(mount).lookup('crlf.txt'));
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r', 'CR before LF preserved');
+
+  // Composition: a byte range's textRange, and a line range's fetch.
+  await E(mount).writeText(['doc.txt'], 'one\ntwo\nthree\n');
+  const doc = /** @type {EndoMountFile} */ (await E(mount).lookup('doc.txt'));
+  const firstEight = await E(doc).range(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await collectBytesText(await E(twoLines).fetch(0n, 3n)), 'one');
+});
+
+test('the read-only view (readOnly()) also carries range / textRange', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['f.txt'], 'alpha\nbeta\n');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
+  const view = await E(file).readOnly();
+  t.is(await E(await E(view).range(0n, 5n)).text(), 'alpha');
+  t.is(await E(await E(view).textRange(1, 2)).text(), 'beta');
+});
+
 test('followNameChanges yields existing entries as the initial snapshot', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });

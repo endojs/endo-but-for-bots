@@ -393,6 +393,37 @@ test('NativeGitBackend.tree exposes historical blobs and subtrees', async t => {
   t.deepEqual(await E(config).json(), { ok: true });
 });
 
+test('NativeGitBackend GitBlob range / textRange attenuate to derived blobs', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'data.txt'), 'hello world\n');
+  await fs.promises.writeFile(path.join(repoRoot, 'lines.txt'), 'a\nb\nc\n');
+  await execFileAsync('git', ['add', 'data.txt', 'lines.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'add data'],
+    { cwd: repoRoot },
+  );
+
+  const backend = makeNativeGitBackend({ repoRoot });
+  const tree = /** @type {any} */ (await backend.tree('HEAD'));
+  const blob = await E(tree).lookup('data.txt');
+
+  // range(start, end) → a derived GitBlob over [start, end), composing and
+  // clamping at EOF; start === end selects an empty blob.
+  t.is(await E(await E(blob).range(0n, 5n)).text(), 'hello');
+  t.is((await E(await E(blob).range(0n, 5n)).getInfo()).size, 5n);
+  t.is(await E(await E(await E(blob).range(0n, 5n)).range(1n, 3n)).text(), 'el');
+  t.is(await E(await E(blob).range(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).range(3n, 3n)).text(), '');
+  await t.throwsAsync(() => E(blob).range(5n, 2n), { message: /EINVAL/ });
+
+  // textRange(startLine, endLine) → a derived GitBlob over the line slice.
+  const lines = await E(tree).lookup('lines.txt');
+  t.is(await E(await E(lines).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lines).textRange(0, 100)).text(), 'a\nb\nc\n');
+  t.is(await E(await E(lines).textRange(1, 1)).text(), '');
+});
+
 test('NativeGitBackend.tree streams archiveTar from the immutable tree', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'archive.txt'), 'old\n');

@@ -89,6 +89,7 @@
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/relay-server": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/tar": "workspace:^",
@@ -105,7 +106,6 @@
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@endo/sha256": "workspace:^",
     "@types/ws": "^8.18.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
