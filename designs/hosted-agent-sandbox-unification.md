@@ -2498,6 +2498,31 @@ acceptable interval. It is recorded as a follow-up, not as free.
 Each step is gated on the one before, and each gate is an observation rather
 than a judgement.
 
+0. **Revoke the OpenCode grant on the ordinary termination path.** Confirmed
+   present at this branch’s head:
+   ```js
+   // opencode-native-controller.js:461-464
+   const early = client ? E(client).terminate() : closeResources();
+   await Promise.allSettled([activating, early]);
+   if (client) await E(client).terminate();  // terminate() twice
+   else await closeResources();              // never runs when a client exists
+   ```
+   `closeResources()` is the only caller of `E(brokerScope).revoke()`, and a
+   grant no longer carries an expiry, so every OpenCode session that activated
+   successfully leaves indefinite access to the operator’s credential behind
+   when it terminates. Claude’s counterpart calls `closeResources()`
+   unconditionally; `lost()` has the same divergence.
+
+   **This one does not wait for the supervisor, and it is not a contradiction
+   of the rule above.** The Codex lease is throwaway machinery inside a
+   subsystem being deleted; this is a one-line correction on a path that
+   survives every step below, on the boundary that is this design’s central
+   claim. What is written here that outlives the extraction is the test — a
+   terminate-with-live-client case asserting the grant is revoked — which
+   becomes step 2’s acceptance criterion rather than being deleted by it.
+   *Gate: Phase 2’s exit reads true again on OpenCode — explicit revocation
+   still stops further access.*
+
 1. **Clear the leases operationally and prove Codex restores.** The existing
    check: give a session a word, restart the daemon, ask for it back, with the
    CLI's own store unavailable. Claude and OpenCode already answer it. This is
