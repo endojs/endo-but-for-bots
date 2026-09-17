@@ -1255,11 +1255,9 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("segment_iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("error_stack_accessor", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("this_captures", &[Req::BehavioralTwin("each_activation_register_independently_refuses_quiescence")], "non-owning property-slot indices; each property is owned by a closure environment reachable through its rooted arrow function"),
-    ("closure_site_templates", &[Req::BehavioralTwin("closure_template_gc_state_is_derived_or_boundary_empty")], "reference-free derived bytecode cache; full collection discards segment-keyed entries"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::GcRoots], "armed by SUPER; rooted across non-throw halts, gated at quiescence, reset at run entry (F025)"),
     ("array_iterator_proxy_get_context", &[Req::BehavioralTwin("each_activation_register_independently_refuses_quiescence")], "installed only across one synchronous Proxy trap call, restored on success/throw, and rejected by is_quiescent if leaked"),
-    ("active_closure_allocation", &[Req::BehavioralTwin("closure_template_gc_state_is_derived_or_boundary_empty")], "synchronously consumed allocation cursor; required absent before either collector is admitted"),
 ];
 
 /// The body text of the `#[test] fn NAME(` function in `source`, or

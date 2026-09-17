@@ -28,10 +28,7 @@ mod state;
 
 mod admission;
 mod apply;
-mod closure_template;
 mod code;
-pub use closure_template::ClosureTemplateStatistics;
-use closure_template::{ActiveClosureAllocation, ClosureSiteKey, ClosureSiteTemplateEntry};
 mod coerce;
 mod dispatch;
 mod metering;
@@ -2468,7 +2465,6 @@ impl Interp {
     }
 
     pub(crate) fn reset_activation(&mut self) {
-        self.active_closure_allocation = None;
         self.strict = false;
         self.gen_run_stack.clear();
         self.async_run_stack.clear();

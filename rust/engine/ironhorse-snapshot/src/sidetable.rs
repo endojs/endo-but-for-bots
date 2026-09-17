@@ -686,11 +686,6 @@ mod tests {
             // derived object-classification index is retained.
             "snapshot_dirt",
             "snapshot_baseline_identity",
-            // Reference-free closure-site templates and their counters are
-            // disposable diagnostics derived from retained bytecode. Restore
-            // drops them rather than assigning either a snapshot row.
-            "closure_site_templates",
-            "closure_template_statistics",
         ];
         const TRANSIENTS: &[&str] = &[
             // Intrinsic linking is synchronous and restores this guard before
@@ -723,10 +718,6 @@ mod tests {
             // synchronous trap call and restored on both success and throw.
             // `is_quiescent` additionally refuses a leaked context.
             "array_iterator_proxy_get_context",
-            // A copied closure fragment is consumed synchronously by the
-            // validated function/code/environment/store sequence. Persistence
-            // refuses a boundary reached before that sequence finishes.
-            "active_closure_allocation",
             // Poison latch for the property-key id-space meet: provably
             // never set at a persistable boundary — the dispatch loop
             // halts on it before the next instruction and `is_quiescent`
@@ -749,8 +740,6 @@ mod tests {
             "cost",
             "step_limit",
             "n_dispatched",
-            // Differential-test policy, deliberately outside machine state.
-            "closure_templates_enabled",
         ];
         const BOOT_DERIVED: &[&str] = &[
             "realm",
@@ -1210,9 +1199,6 @@ mod tests {
             "gc_failed",
             // The Proxy-trap context, refused if leaked.
             "array_iterator_proxy_get_context",
-            // `Option` rather than a table, but equally required absent at a
-            // persistence boundary.
-            "active_closure_allocation",
             // Hidden control latches may survive a halted activation (F025).
             "pending_new_target",
             "resume_status",

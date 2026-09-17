@@ -268,9 +268,6 @@ impl Interp {
         self.chunks = chunks;
         self.stack = stack;
         self.meter.restore(meter);
-        self.closure_site_templates.clear();
-        self.active_closure_allocation = None;
-        self.closure_template_statistics = Default::default();
         // SymbolTables ledger row: only `symbol_names` is serialized; the
         // inverse `symbol_ids` and the
         // name-keyed lookup-id caches are *derived* from it — `link_intrinsics`
