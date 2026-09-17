@@ -5391,47 +5391,35 @@ impl Coder<'_, '_> {
         use Token::*;
         let no_value = stmt_no_value || node.flags & crate::ast::flags::EXPRESSION_NO_VALUE != 0;
         let token = node.token;
-        let shortcut = matches!(token, AndAssign | OrAssign | CoalesceAssign);
-        let else_target = if shortcut {
-            Some(self.create_target())
-        } else {
-            None
+        let branch = match token {
+            AndAssign => Some(XS_CODE_BRANCH_ELSE_1),
+            OrAssign => Some(XS_CODE_BRANCH_IF_1),
+            CoalesceAssign => Some(XS_CODE_BRANCH_COALESCE_1),
+            _ => None,
         };
-        let end_target = if shortcut {
-            Some(self.create_target())
-        } else {
-            None
-        };
+        // Keep the opcode and its two targets in one value. Arithmetic
+        // assignments have no targets; a short-circuit arm cannot observe a
+        // partially initialized pair (F063).
+        let shortcut = branch.map(|op| (op, self.create_target(), self.create_target()));
         let swap = self.code_this(&node.children[0], 1);
-        match token {
-            AndAssign => {
+        if let Some((branch, else_target, _)) = shortcut {
+            if token != CoalesceAssign {
                 self.add_byte(1, XS_CODE_DUB);
-                self.add_branch(-1, XS_CODE_BRANCH_ELSE_1, else_target.unwrap());
+            }
+            self.add_branch(-1, branch, else_target);
+            if token != CoalesceAssign {
                 self.add_byte(-1, XS_CODE_POP);
-                self.code(&node.children[1]);
-                self.code_compound_name(node);
             }
-            CoalesceAssign => {
-                self.add_branch(-1, XS_CODE_BRANCH_COALESCE_1, else_target.unwrap());
-                self.code(&node.children[1]);
-                self.code_compound_name(node);
-            }
-            OrAssign => {
-                self.add_byte(1, XS_CODE_DUB);
-                self.add_branch(-1, XS_CODE_BRANCH_IF_1, else_target.unwrap());
-                self.add_byte(-1, XS_CODE_POP);
-                self.code(&node.children[1]);
-                self.code_compound_name(node);
-            }
-            _ => {
-                self.code(&node.children[1]);
-                self.add_byte(-1, compound_op(token));
-            }
+            self.code(&node.children[1]);
+            self.code_compound_name(node);
+        } else {
+            self.code(&node.children[1]);
+            self.add_byte(-1, compound_op(token));
         }
         self.code_assign(&node.children[0], 0);
-        if shortcut {
-            self.add_branch(0, XS_CODE_BRANCH_1, end_target.unwrap());
-            self.place_target(0, else_target.unwrap());
+        if let Some((_, else_target, end_target)) = shortcut {
+            self.add_branch(0, XS_CODE_BRANCH_1, end_target);
+            self.place_target(0, else_target);
             let mut swap = swap;
             while swap > 0 {
                 if !no_value {
@@ -5440,7 +5428,7 @@ impl Coder<'_, '_> {
                 self.add_byte(-1, XS_CODE_POP);
                 swap -= 1;
             }
-            self.place_target(0, end_target.unwrap());
+            self.place_target(0, end_target);
         }
     }
 
@@ -6815,6 +6803,9 @@ fn binary_code(token: Token) -> i32 {
         _ => unreachable!("not a binary op: {:?}", token),
     }
 }
+
+#[cfg(test)]
+mod target_invariants;
 
 #[cfg(test)]
 mod symbol_hash_tests {

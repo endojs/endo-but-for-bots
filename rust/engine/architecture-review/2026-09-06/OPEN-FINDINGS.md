@@ -89,8 +89,13 @@ Four temporary mutations independently break those tests.
 No new source-triggered panic was found in those seven shapes.
 The traversal roster is evidence for parser-produced trees, not a proof that
 `scope_of`'s panic is unreachable for every source or every externally constructed AST.
-The coder's bookkeeping `expect`s and the audit's non-reproducible negative over
-generated sources are the rest.
+The [coder follow-up](F063-CODER-AUDIT.md) removes six logical-assignment target
+unwraps, examines 24 local/control-flow sites, and inventories 53 remaining
+AST-shape, scoper-receipt and declaration-bookkeeping sites.
+Five checked-in matrices require all 17,534 generated compilations to succeed;
+180 runtime cases separately pin the changed logical-assignment behavior.
+This supplies reproducible evidence without relying on the earlier unpublished
+generated-source sweep, but does not discharge the 53 remaining sites or close F063.
 
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a

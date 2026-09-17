@@ -4702,6 +4702,19 @@ No new source-triggered panic was found in those seven shapes.
 Neither a finite traversal roster nor the wider corpus sweep proves totality,
 so F063 remains partially open, including the coder's bookkeeping sites and
 the earlier audit's generated sources that are not reproducible in this tree.
+The subsequent [coder bookkeeping audit](F063-CODER-AUDIT.md) inventories 83
+explicit production assertion/panic/unwrap sites at `6bca165de`.
+Six logical-assignment unwraps are removed by carrying the branch opcode and
+both targets in one optional tuple; arithmetic assignments still allocate none.
+Twenty-four local/control-flow sites have source-level invariant arguments,
+and 53 cross-pass, AST-shape and declaration-bookkeeping sites remain for follow-up.
+The new deterministic matrices check 17,534 successful compilations and the
+logical-assignment runtime matrix checks 180 result/evaluation-count cases.
+Two independent mutations fail the new tests: dropping finalizer alias origins
+and reversing the `&&=` branch.
+The checked-in matrices are new reproducible evidence, not a claimed reconstruction
+of the earlier unpublished 1.28-million-source run.
+F063's status remains partially open.
 Changed by `27e637606 fix(ironhorse-compile): two panics the F063 audit proved
 reachable`.
 Pinned by `the_audits_reachable_panics_return_rather_than_panic` in
