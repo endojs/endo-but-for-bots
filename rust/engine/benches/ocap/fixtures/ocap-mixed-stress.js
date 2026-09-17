@@ -48,7 +48,7 @@ function makePromiseKit() {
         checksum += cohort.facets[facetIndex].tagged();
       }
       checksum += cohort.forwarding.forwarder.call(2);
-      
+
       if (cohortIndex % 2 === 0) { cohort.forwarding.control.revoke(); checksum += cohort.forwarding.forwarder.call(1); }
       if (cohortIndex % 3 === 0) retained.push(cohort);
       batch.push(cohort);

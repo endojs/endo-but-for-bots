@@ -24,7 +24,8 @@ SIZES = ("small", "representative", "stress")
 
 
 def program(body):
-    return "'use strict';\n(function () {\n" + body.strip() + "\n}())\n"
+    normalized = "\n".join(line.rstrip() for line in body.strip().splitlines())
+    return "'use strict';\n(function () {\n" + normalized + "\n}())\n"
 
 
 def closure_site(parameters):
