@@ -6,6 +6,19 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[sturdy-refs-agent-surface](sturdy-refs-agent-surface.md) (added 2026-07-11 and
+revised 2026-09-17; design 2 of 2 in a competing sturdyref pair, giving Endo
+agents a JSON-mode accept tool that redeems an opaque `ref@`-form handle to a
+`SturdyRef` value in one pinned tool-argument position, escrowed through a
+per-activation, turn-scoped render map with a monotonic epoch and stale-vs-unknown
+classification so a handle never redeems across a turn; pins the handle grammar,
+disclosure text, model-visible tool/parameter names, and failure messages as
+shared constants across Lal and Fae, attenuates a new confined-worker facet that
+drops the locator-disclosing name-hub methods, and defers all cross-turn retention
+and revocation to an explicit investigation; the sibling
+[sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) answers that retention
+question with an `endor` `retain`/`release` syscall, and the maintainer selects
+between the two),
 [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
 (added 2026-09-14; the ordering proposal for the daemon SES and worker-protocol
 acceptance scope PR #1263 fenced off — fifteen architecture-review findings in
@@ -350,7 +363,7 @@ LLM-agent stack).*
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-05-19 | In Progress (PR #284) |
 | [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
-| [sturdy-refs-agent-surface](sturdy-refs-agent-surface.md) | 2026-07-11 | 2026-09-05 | Proposed |
+| [sturdy-refs-agent-surface](sturdy-refs-agent-surface.md) | 2026-07-11 | 2026-09-17 | Proposed |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-06-26 | Not Started |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
