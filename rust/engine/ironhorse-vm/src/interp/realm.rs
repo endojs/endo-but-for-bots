@@ -123,8 +123,15 @@ impl Interp {
     /// NOT atomic. The roots are hardened in sequence, so a refusal partway
     /// through returns `Err` with the earlier roots already frozen while
     /// `locked_down` stays false -- that flag reporting false does not mean
-    /// the graph is still fully mutable. Retrying is the supported recovery,
-    /// and completes the freeze.
+    /// the graph is still fully mutable.
+    ///
+    /// **Retrying is NOT a recovery.** An earlier revision said so, reasoning
+    /// that a hardened root is idempotent. The case that actually gets here
+    /// refutes it: a Proxy whose `preventExtensions` trap returns false refuses
+    /// the same root on every attempt, so the retry throws forever instead of
+    /// converging. The embedder's recourse is to discard the realm, not to call
+    /// again. The guest-facing [`Self::do_lockdown`] makes the same failure
+    /// uncatchable for the same reason.
     pub(crate) fn lock_down_intrinsics(&mut self) -> Result<(), crate::Halt> {
         if self.realm.intrinsics().locked_down.get() {
             return Ok(());
@@ -257,16 +264,48 @@ impl Interp {
         }
         roots.extend(minted.iter().map(|&(_, inert)| inert));
         for root in roots {
-            // Not atomic, exactly as `lock_down_intrinsics` documents: the
-            // roots are hardened one at a time, so a refusal at root `k`
-            // returns with `0..k` already frozen and `locked_down` still
-            // false. A guest that catches this TypeError is holding a realm
-            // that is partly frozen AND still reports itself unlocked. XS has
-            // the same shape -- its harden calls are a straight-line sequence
-            // with no rollback -- so this is fidelity rather than an
-            // oversight, and calling `lockdown()` again completes the freeze
-            // because a hardened root is idempotent on the retry.
-            self.do_harden(code, Slot::of(Kind::Reference, Payload::Reference(root)))?;
+            // **A partial freeze is a hard failure, not a catchable one.**
+            //
+            // The roots are hardened one at a time with no rollback, so a
+            // refusal at root `k` leaves `0..k` frozen while `locked_down` is
+            // still false. A guest that could CATCH that would hold a realm
+            // which is partly frozen and simultaneously reports itself
+            // unlocked -- and would go on running in it. There is no useful
+            // thing for it to do with that.
+            //
+            // An earlier revision propagated the throw and told the caller to
+            // retry, on the reasoning that a hardened root is idempotent so a
+            // second call completes the freeze. **That is false**, and the
+            // case that refutes it is the one that gets here in the first
+            // place: a Proxy whose `preventExtensions` trap returns false
+            // refuses the same root on every attempt, so `lockdown()` throws
+            // forever rather than converging. Advertising retry as the
+            // recovery pointed callers at a loop that cannot terminate.
+            //
+            // So step 5's refusal unwinds the run instead. `Halt::Refused` is
+            // uncatchable by construction, which is the contract this wants:
+            // succeed, or fail once and stop. `lockdown:intrinsic-graph` is
+            // the label `lock_down_intrinsics` already uses for exactly this
+            // condition, and it is classified in `REFUSED_LABELS` --
+            // "recognized but refused under the current execution profile".
+            //
+            // **This is a deliberate divergence from XS**, recorded in
+            // `designs/ironhorse-native-lockdown.md` § Oracle divergences:
+            // `fx_lockdown`'s harden calls are a straight-line sequence whose
+            // failure propagates as an ordinary catchable exception. Matching
+            // that would mean reproducing a state a guest cannot safely
+            // continue from, which is not a fidelity worth having.
+            //
+            // A genuine engine halt -- heap exhaustion, a meter overflow --
+            // propagates unchanged; only a guest-visible refusal is converted.
+            if let Err(step) =
+                self.do_harden(code, Slot::of(Kind::Reference, Payload::Reference(root)))
+            {
+                return Err(match step {
+                    Step::Host(halt) => Step::Host(halt),
+                    _ => Step::Host(crate::Halt::Refused("lockdown:intrinsic-graph")),
+                });
+            }
         }
 
         // Re-assert step 2 after step 5, because step 5 can run GUEST CODE.
