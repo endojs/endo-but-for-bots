@@ -285,9 +285,15 @@ they are not a second remote protocol. The current marshal hex representation is
 larger and slower than the retired transitional base64 representation: hex uses
 two wire characters per input byte versus base64's four per three bytes, so the
 serialized CapData body is ~1.5x larger, and the copy-heavy
-`frozenBytes`->`thawedBytes` round-trip per chunk is materially slower on an
-interpreted engine. (An ad-hoc local measurement on Node 22 over a 64 KiB chunk
-saw ~131,000 vs ~87,000 wire bytes and roughly a 4-5x slower cross-boundary
-round-trip; these are indicative single-run figures, not a maintained
-benchmark.) Compact byteArray marshalling and ownership-aware transfer therefore
-remain performance work.
+`frozenBytes`->`thawedBytes` round-trip per chunk is measurably slower. The
+figures below were taken on **Node 22 (V8, JIT)**; an interpreted engine (XS,
+which has no native immutable `ArrayBuffer` and installs an emulation, per the PR
+notes) is plausibly worse but is **not** measured here. An ad-hoc local
+measurement on Node 22 over a 64 KiB chunk saw ~131,000 vs ~87,000 wire bytes and
+roughly a 4-5x slower cross-boundary round-trip; these are indicative single-run
+figures. The method, test bed, and reproduction harness are recorded in
+[`BENCH.md`](./BENCH.md), and the full run-to-run table lives on the PR that
+introduced this change,
+[endojs/endo-but-for-bots#1100](https://github.com/endojs/endo-but-for-bots/pull/1100).
+Compact byteArray marshalling and ownership-aware transfer therefore remain
+performance work.

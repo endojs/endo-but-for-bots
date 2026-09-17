@@ -890,10 +890,11 @@ export const serveConnection = ({
     if (count > remaining || count > maxByMsize) {
       return sendError(tag, ERRNO.EINVAL);
     }
-    // The write path has no chunk-length limit to work around: the
-    // responder (`bytesWriterFromIterator`) builds its pump without a
-    // `writePattern`, so a write chunk is never length-validated. `count`
-    // is already bounded by the frame checks above.
+    // The write path needs no `byteLengthLimit` clamp to work around: the
+    // responder (`bytesWriterFromIterator`) leaves `byteLengthLimit` at its
+    // unbounded default (`Number.MAX_SAFE_INTEGER`), so a write frame is never
+    // *size*-rejected — its pump's `M.byteArray()` writePattern validates only
+    // the frame *kind*. `count` is already bounded by the frame checks above.
     const data = r.take(count);
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);

@@ -171,6 +171,7 @@ type GitQid<K = GitNodeKind> = {
     version: bigint;
 };
 type GitReadableBlobSource = {
+    stream: (...args: any[]) => PromiseLike<unknown>;
     text: (...args: any[]) => PromiseLike<unknown>;
 } | {
     stream: (...args: any[]) => PromiseLike<unknown>;

@@ -58,11 +58,11 @@ harden(isNotFoundMessage);
 
 /**
  * Wrap a `Uint8Array` as a `PassableBytesReader` that `Mount.write`
- * accepts. `Mount.write` introspects for a `stream` method and
- * drains it through `iterateBytesReader` (the `@endo/exo-stream`
- * protocol), so the producer must speak that protocol too. A raw
- * `Uint8Array` cannot cross CapTP (byte arrays are not yet passable),
- * which is why writes must hand over a reader reference rather than the
+ * accepts. `Mount.write` classifies a readable-blob source by method
+ * name (`looksLikeReadableBlob`) and drains it through
+ * `iterateBytesReader` (the `@endo/exo-stream` protocol), so the
+ * producer must speak that protocol too — it must hand over a reader
+ * reference the `Mount.write` drain protocol pulls, rather than the
  * bytes themselves.
  *
  * @param {Uint8Array} bytes

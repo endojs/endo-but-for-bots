@@ -81,6 +81,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
+    "bench": "node test/bytes-wire-cost.bench.js",
     "build": "exit 0",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
