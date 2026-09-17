@@ -221,17 +221,40 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     assert_eq!(labels.len(), 16);
 }
 
+/// Both async shapes that once refused a snapshot now write one, and what
+/// they write reads back. The `Array.fromAsync` arm is the last of them
+/// (format 24, architecture finding F127's last clause); before it, a machine
+/// holding one refused with `PendingStateUnsupported`.
+///
+/// This lives beside the golden corpus rather than in the carry suite because
+/// it is the assertion that the corpus's own gate — `write_snapshot`, not the
+/// container reader — admits these machines at all.
 #[test]
-fn async_generator_state_writes_and_a_from_async_step_remains_an_explicit_refusal() {
-    let machine = fresh("async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0");
-    assert!(machine
-        .write_snapshot(&Signature::new("w4-determinism-corpus"))
-        .is_ok());
-    let machine = fresh("var p = Array.fromAsync([new Promise(function () {})]); 0");
-    assert!(
-        matches!(machine.write_snapshot(&Signature::new("w4-determinism-corpus")),
-        Err(MachineSnapshotError::PendingStateUnsupported { row }) if row == "a promise reaction that would resume a non-persisted async frame")
-    );
+fn both_async_generator_and_from_async_state_now_write_and_read_back() {
+    let sig = Signature::new("w4-determinism-corpus");
+    for source in [
+        "async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0",
+        "var p = Array.fromAsync([new Promise(function () {})]); 0",
+    ] {
+        let machine = fresh(source);
+        let bytes = machine
+            .write_snapshot(&sig)
+            .unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        from_snapshot_bytes(&bytes, &sig).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+    }
+    // The gate itself is not vacuous: a machine stopped mid-crank is still
+    // refused, so the two arms above are admissions and not a disabled check.
+    // The host denies the first budget refill, which aborts inside the loop
+    // body and leaves the frame on the stack.
+    let mut machine = Interp::new();
+    let (code, names) = ironhorse_compile::compile_atoms("while (true) {}").unwrap();
+    machine.link_intrinsics(&parse_symbols(&names));
+    machine.arm_meter(200, Box::new(|_| false));
+    assert!(!machine.run(&code).completed);
+    assert!(matches!(
+        machine.write_snapshot(&sig),
+        Err(MachineSnapshotError::NotQuiescent)
+    ));
 }
 
 /// An identity fixture, read back so regeneration rewrites only the digest

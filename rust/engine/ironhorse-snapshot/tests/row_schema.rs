@@ -14,6 +14,11 @@ fn declarations(source: &str) -> String {
             rest.find('}').expect("row struct closes") + 1
         } else if rest.starts_with("pub type ") {
             rest.find(';').expect("row alias closes") + 1
+        } else if rest.starts_with("pub const ") {
+            // A public constant beside a row IS the row's contract: a packed
+            // flag's bit position decides how a persisted byte reads, so
+            // renumbering one silently changes every stored row's meaning.
+            rest.find(';').expect("row constant closes") + 1
         } else {
             // Public methods live inside impls, which are not data contracts.
             assert!(
@@ -85,4 +90,12 @@ fn fingerprint_tracks_fields_and_aliases_but_ignores_docs_and_impls() {
     ] {
         assert_ne!(declarations(baseline), declarations(changed));
     }
+    // A packed flag's bit position is part of the persisted meaning, so
+    // renumbering one moves the fingerprint even though no field changed.
+    let flagged = format!("{baseline}\nimpl Row {{ pub const SETTLED: u8 = 1 << 2; }}");
+    assert_ne!(declarations(&flagged), declarations(baseline));
+    assert_ne!(
+        declarations(&flagged),
+        declarations(&flagged.replace("1 << 2", "1 << 3"))
+    );
 }

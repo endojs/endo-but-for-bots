@@ -400,6 +400,73 @@ pub struct CombinatorRow {
     pub results: u32,
 }
 
+/// One in-flight `Array.fromAsync` accumulation, as it travels (architecture
+/// finding F127).
+///
+/// `Array.fromAsync` is a **native** async state machine: it runs no guest
+/// bytecode, so instead of a suspended frame it keeps this record in the
+/// `from_async` arena and steps through it at each promise-job drain. That is
+/// why it needs a row of its own rather than riding `ASYN`'s activations —
+/// there is no frame to save, only the closure state the next step reads.
+///
+/// The arena is emitted COMPACTED, exactly as `combinators` is: the writer
+/// applies the collector's liveness rule (an entry is live while a pending
+/// `FromAsync*` reaction names it) and remaps the reaction payloads onto the
+/// dense arena, so a continued machine and its resumed twin emit byte-identical
+/// clusters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FromAsyncRow {
+    /// The result promise's capability callbacks.
+    pub resolve: Slot,
+    pub reject: Slot,
+    /// The accumulator object `A`.
+    pub target: u32,
+    /// The current index `k`, and the array-like length (`0` on the iterator
+    /// path, where `iterator` is not `undefined`).
+    pub k: u64,
+    pub len: u64,
+    /// The map function and its `thisArg`; `mapfn` is `undefined` unless the
+    /// `MAPPING` flag is set.
+    pub mapfn: Slot,
+    pub this_arg: Slot,
+    /// The iterator object and its `next` method, both `undefined` on the
+    /// array-like path.
+    pub iterator: Slot,
+    pub next_method: Slot,
+    /// The array-like input, read only when `len > 0`.
+    pub array_like: Slot,
+    /// The error an `AsyncIteratorClose` await is unwinding with.
+    pub close_error: Slot,
+    /// The four booleans, packed: [`Self::TARGET_IS_ARRAY`],
+    /// [`Self::MAPPING`], [`Self::SETTLED`], [`Self::SYNC_WRAPPED`].
+    ///
+    /// One byte rather than four, and a named constant per bit rather than a
+    /// comment, because the decoder has to refuse a byte with an unknown bit
+    /// set — a boolean that is neither 0 nor 1 is the shape every other row in
+    /// this cluster refuses by name.
+    pub flags: u8,
+}
+
+impl FromAsyncRow {
+    /// `A` is an intrinsic Array, so indices and `length` go through the dense
+    /// store rather than `[[DefineOwnProperty]]`/`[[Set]]`.
+    pub const TARGET_IS_ARRAY: u8 = 1 << 0;
+    /// A `mapfn` was supplied.
+    pub const MAPPING: u8 = 1 << 1;
+    /// The result promise has settled; a late reaction is a no-op.
+    pub const SETTLED: u8 = 1 << 2;
+    /// A sync iterator wrapped as an async one.
+    pub const SYNC_WRAPPED: u8 = 1 << 3;
+    /// Every bit this row defines. A byte outside it is corrupt.
+    pub const FLAGS: u8 =
+        Self::TARGET_IS_ARRAY | Self::MAPPING | Self::SETTLED | Self::SYNC_WRAPPED;
+
+    /// Whether `flag` (one of the constants above) is set.
+    pub fn has(&self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
+}
+
 /// The atomic promise cluster: the four side tables whose rows
 /// cross-reference each other (a reaction indexes `combinators`, a
 /// resolving function indexes `guards` and names a `promises` row), so
@@ -428,6 +495,16 @@ pub struct PromiseClusterSnapshot {
     /// instance with no request yet names no promise at all, so the
     /// `PRMS` payload stays absent while `ASYN` carries the row.
     pub async_generators: Vec<AsyncGeneratorRow>,
+    /// The in-flight `Array.fromAsync` accumulations, carried in `ASYN` after
+    /// the generators (architecture finding F127). Not part of
+    /// [`Self::is_empty`], for the same reason the generators are not: the
+    /// `ASYN` payload and the `PRMS` payload are emitted independently.
+    ///
+    /// In practice a non-empty `from_async` implies a non-empty `promises` —
+    /// every live entry is anchored by a pending `FromAsync*` reaction on a
+    /// live promise, and an unanchored entry is unreachable and compacted away
+    /// — but that is a fact the GATE proves rather than one this type assumes.
+    pub from_async: Vec<FromAsyncRow>,
 }
 
 impl PromiseClusterSnapshot {
@@ -443,7 +520,9 @@ impl PromiseClusterSnapshot {
 
     /// Whether the `ASYN` payload has nothing to carry.
     pub fn async_section_is_empty(&self) -> bool {
-        self.async_instances.is_empty() && self.async_generators.is_empty()
+        self.async_instances.is_empty()
+            && self.async_generators.is_empty()
+            && self.from_async.is_empty()
     }
 }
 

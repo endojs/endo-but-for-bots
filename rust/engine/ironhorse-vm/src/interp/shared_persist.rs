@@ -22,6 +22,36 @@ impl Interp {
             .collect()
     }
 
+    /// The same liveness rule for the `Array.fromAsync` arena (architecture
+    /// finding F127): an entry is live while a pending `FromAsync*` reaction
+    /// names it, on a promise or on a queued job.
+    ///
+    /// Written as its own function beside the combinator one rather than
+    /// generalised over both, because the two arenas are indexed by different
+    /// reaction kinds and a shared helper would take a matcher closure that is
+    /// longer than the duplication it removes.
+    pub(super) fn snapshot_from_async_map(&self) -> std::collections::BTreeMap<u32, u32> {
+        self.promises
+            .values()
+            .flat_map(|p| p.reactions.iter())
+            .chain(self.promise_jobs.iter().filter_map(|job| match job {
+                PromiseJob::Reaction { reaction, .. } => Some(reaction),
+                _ => None,
+            }))
+            .filter_map(|r| match r.kind {
+                ReactionKind::FromAsyncNext(i)
+                | ReactionKind::FromAsyncElem(i)
+                | ReactionKind::FromAsyncMap(i)
+                | ReactionKind::FromAsyncClose(i) => Some(i),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(n, i)| (i, n as u32))
+            .collect()
+    }
+
     pub(super) fn shared_machine_snapshot(&self) -> Option<SharedMachineSnapshot> {
         if !self.shared_compartments {
             return None;

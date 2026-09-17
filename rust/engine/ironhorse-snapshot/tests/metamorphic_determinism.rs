@@ -400,23 +400,31 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // Re-pinned for format version 23, which lets `ASYN` carry
             // async generator instances (architecture review F127). This
             // fixture holds none, so only the VERS payload changes.
-            "c0e16ad94b444384b294a9ff577e0ec45a6acd274d3a15d41cc355b4d2cb8d86"
+            // Re-pinned for format version 24, which lets `ASYN` carry the
+            // `Array.fromAsync` accumulations behind the generators (the
+            // last clause of F127). Same story: this fixture holds none, so
+            // only the VERS payload moves. Re-measured on top of the guest
+            // `lockdown()` work, which moves the boot heap under both pins.
+            "1b26c5ca32d0c58d60df8127ea3fb2b733a3afde91dfb0e32eebaf522d4cf1b3"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
-            // Re-pinned for format version 23 alongside the platform pin.
+            // Re-pinned for format version 23 alongside the platform pin,
+            // and again for format version 24 (the `Array.fromAsync` carry).
+            // BOTH arms moved together, as the warning below requires.
             // Reached ONLY under the deterministic provider, so a golden
             // run under the default provider alone never evaluates this arm
             // and cannot tell you it is stale. A re-pin that moves the
             // platform arm above and leaves this one behind therefore looks
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
-            // The digest below is the guest `lockdown()` one, moved with the
-            // platform arm above and measured under this provider rather than
-            // copied from it -- the two arms carry DIFFERENT digests, because
+            // The digest below carries the guest `lockdown()` boot move AND
+            // format version 24, moved with the platform arm above and
+            // measured under this provider rather than copied from it -- the
+            // two arms carry DIFFERENT digests, because
             // `derive_boot_fingerprint` folds `MATH_PROVIDER` in only when
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized.
-            "7a5acb87016de123175d2e7d8ebd8356b6bb3386a823e671d28025e0dbf140e3"
+            "440fdd411edf1e2063c0ca89fbf044f659a771f2005e1087b525adb631015395"
         },
         "canonical final blob hash"
     );
@@ -655,20 +663,28 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // the `VERS` stamp and the schema, so the seal moves with the blob
             // while the small state itself is unchanged (this machine holds no
             // async generator).
-            "b8bdae6ab380f0d3ef09f1f99461efb42a336601077d33662d59e23117f2c6ec"
+            // Re-pinned again for format version 24 / store schema v35 (the
+            // `Array.fromAsync` carry, F127's last clause), for the same
+            // reason: the stamp and the schema are in the manifest, and this
+            // machine holds no accumulation. Re-measured on top of the guest
+            // `lockdown()` work, which moves the boot heap the seal covers.
+            "91fd121ae8949885793186b0b5aa5186997b222b479ebd7e92b11013f7dc977a"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
-            // the platform pin.
+            // the platform pin, and again for format version 24 / store
+            // schema v35. BOTH arms moved together, as the warning below
+            // requires.
             // Reached ONLY under the deterministic provider, so a golden
             // run under the default provider alone never evaluates this arm
             // and cannot tell you it is stale. A re-pin that moves the
             // platform arm above and leaves this one behind therefore looks
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
-            // The digest below is the guest `lockdown()` one, measured under
-            // this provider rather than copied from the platform arm, for the
-            // reason given on the blob's else-arm above.
-            "f7368a2df1611cc087a0d58c33e14e09c098bbe86f3b19e7e8f3a3633742a8a9"
+            // The digest below carries the guest `lockdown()` boot move AND
+            // format version 24, measured under this provider rather than
+            // copied from the platform arm, for the reason given on the blob's
+            // else-arm above.
+            "e8c6083413854b3e55c711f23e74bd9f0c452a4a0b71361bfb487ea87e4668d5"
         },
         "epoch-3 seal chain"
     );

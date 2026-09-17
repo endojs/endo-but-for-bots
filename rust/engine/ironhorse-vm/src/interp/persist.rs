@@ -539,17 +539,16 @@ impl Interp {
         if self.intrinsics.contains_key("$262") {
             return Some("a test262 `$262` host object, which no snapshot carries");
         }
-        // A pending reaction whose KIND names an `Array.fromAsync` step
-        // points at `from_async` state the image does not carry. Every
-        // such in-flight accumulation is anchored by exactly one
-        // `FromAsync*` reaction on a live promise — an unanchored entry is
-        // unreachable and compacted away — so refusing by kind here is the
-        // whole gate for that satellite, checked before the doomed-set
-        // early return below because it is independent of function slots.
-        // Async functions carry their frames in ASYN, and async generators
-        // their instances beside them, so the `AsyncAwait` and
-        // `AsyncGenerator*` kinds resume. The side tables are walked in
-        // full in both variants, as below.
+        // Every reaction kind now names state some atom carries, so this
+        // refuses only a kind that does not (architecture finding F127
+        // closed the last of them). Async functions carry their frames in
+        // `ASYN`, async generators their instances beside them, and the
+        // `Array.fromAsync` accumulations follow those — so the
+        // `AsyncAwait`, `AsyncGenerator*` and `FromAsync*` kinds all resume.
+        // The check stays, rather than becoming unreachable code: a new
+        // reaction kind added without a carry must be refused here rather
+        // than resumed against state nothing wrote. The side tables are
+        // walked in full in both variants, as below.
         let async_reaction = self
             .promises
             .values()
@@ -566,6 +565,10 @@ impl Interp {
                         | ReactionKind::AsyncGeneratorAwait(_)
                         | ReactionKind::AsyncGeneratorYield(_)
                         | ReactionKind::AsyncGeneratorReturn(_)
+                        | ReactionKind::FromAsyncNext(_)
+                        | ReactionKind::FromAsyncElem(_)
+                        | ReactionKind::FromAsyncMap(_)
+                        | ReactionKind::FromAsyncClose(_)
                         | ReactionKind::FinallyReturn
                         | ReactionKind::FinallyAwait(_)
                         | ReactionKind::Combine(_, _)
@@ -2435,6 +2438,9 @@ impl Interp {
             .collect();
         let live_comb: std::collections::BTreeSet<u32> =
             self.snapshot_combinator_map().into_keys().collect();
+        let fa_map: std::collections::HashMap<u32, u32> =
+            self.snapshot_from_async_map().into_iter().collect();
+        let live_from_async: std::collections::BTreeSet<u32> = fa_map.keys().copied().collect();
         let guard_map: std::collections::HashMap<usize, u32> = live_guards
             .iter()
             .enumerate()
@@ -2540,10 +2546,14 @@ impl Interp {
                                 ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
                                 ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
                                 ReactionKind::AsyncGeneratorReturn(i) => (6, i.0, 0),
-                                ReactionKind::FromAsyncNext(fa) => (7, fa, 0),
-                                ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
-                                ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
-                                ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
+                                // Remapped onto the compacted arena, exactly as
+                                // `Combine` is: the writer emits live entries
+                                // densely, so a raw index would point at the
+                                // wrong row (architecture finding F127).
+                                ReactionKind::FromAsyncNext(fa) => (7, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncElem(fa) => (8, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncMap(fa) => (9, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncClose(fa) => (10, fa_map[&fa], 0),
                                 ReactionKind::FinallyAwait(rejected) => (11, rejected as u32, 0),
                             };
                             PromiseReactionRow {
@@ -2593,6 +2603,39 @@ impl Interp {
                         reject: c.reject,
                         remaining: c.remaining,
                         results: c.results.0,
+                    }
+                })
+                .collect(),
+            from_async: live_from_async
+                .iter()
+                .map(|&old| {
+                    let f = &self.from_async[old as usize];
+                    let mut flags = 0u8;
+                    if f.target_is_array {
+                        flags |= FromAsyncRow::TARGET_IS_ARRAY;
+                    }
+                    if f.mapping {
+                        flags |= FromAsyncRow::MAPPING;
+                    }
+                    if f.settled {
+                        flags |= FromAsyncRow::SETTLED;
+                    }
+                    if f.sync_wrapped {
+                        flags |= FromAsyncRow::SYNC_WRAPPED;
+                    }
+                    FromAsyncRow {
+                        resolve: f.resolve,
+                        reject: f.reject,
+                        target: f.target.0,
+                        k: f.k,
+                        len: f.len,
+                        mapfn: f.mapfn,
+                        this_arg: f.this_arg,
+                        iterator: f.iterator,
+                        next_method: f.next_method,
+                        array_like: f.array_like,
+                        close_error: f.close_error,
+                        flags,
                     }
                 })
                 .collect(),
@@ -2832,9 +2875,25 @@ impl Interp {
                             comb_pending[r.a as usize] += 1;
                             ReactionKind::CombineDirect(r.a, r.b)
                         }
-                        // The `FromAsync*` kinds name machinery no atom
-                        // carries; the decoder refuses them and so does
-                        // this verb — as it does the crafted shapes above.
+                        // The four `Array.fromAsync` steps, carried in `ASYN`
+                        // since format 24 (architecture finding F127). Each
+                        // indexes the accumulation arena and, like the other
+                        // native reactions, carries no callback slots — a row
+                        // that carries any is crafted.
+                        7..=10
+                            if (r.a as usize) < snap.from_async.len()
+                                && r.b == 0
+                                && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                    .iter()
+                                    .all(|slot| slot.kind == Kind::Undefined) =>
+                        {
+                            match r.kind {
+                                7 => ReactionKind::FromAsyncNext(r.a),
+                                8 => ReactionKind::FromAsyncElem(r.a),
+                                9 => ReactionKind::FromAsyncMap(r.a),
+                                _ => ReactionKind::FromAsyncClose(r.a),
+                            }
+                        }
                         _ => return None,
                     };
                     Some(PromiseReaction {
@@ -3124,6 +3183,31 @@ impl Interp {
                 results: crate::value::SlotIndex(c.results),
             })
             .collect();
+        // The `Array.fromAsync` arena, restored densely in the order the
+        // writer compacted it, so the remapped reaction payloads index it
+        // (architecture finding F127). Rebuilding it EMPTY was sound only
+        // while the persist gate refused every machine holding one.
+        *self.from_async = snap
+            .from_async
+            .iter()
+            .map(|f| FromAsyncData {
+                resolve: f.resolve,
+                reject: f.reject,
+                target: crate::value::SlotIndex(f.target),
+                target_is_array: f.has(FromAsyncRow::TARGET_IS_ARRAY),
+                k: f.k,
+                mapfn: f.mapfn,
+                mapping: f.has(FromAsyncRow::MAPPING),
+                this_arg: f.this_arg,
+                settled: f.has(FromAsyncRow::SETTLED),
+                iterator: f.iterator,
+                next_method: f.next_method,
+                sync_wrapped: f.has(FromAsyncRow::SYNC_WRAPPED),
+                array_like: f.array_like,
+                len: f.len,
+                close_error: f.close_error,
+            })
+            .collect();
         Ok(())
     }
 
@@ -3149,6 +3233,18 @@ impl Interp {
                     ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                         self.combinators.get(ci as usize).is_some_and(|c| {
                             self.is_callable_value(c.resolve) && self.is_callable_value(c.reject)
+                        })
+                    }
+                    // The same shape for the `Array.fromAsync` arena: the
+                    // reaction indexes a row, and that row's result
+                    // capability must be callable or the next step settles
+                    // nothing (architecture finding F127).
+                    ReactionKind::FromAsyncNext(fa)
+                    | ReactionKind::FromAsyncElem(fa)
+                    | ReactionKind::FromAsyncMap(fa)
+                    | ReactionKind::FromAsyncClose(fa) => {
+                        self.from_async.get(fa as usize).is_some_and(|f| {
+                            self.is_callable_value(f.resolve) && self.is_callable_value(f.reject)
                         })
                     }
                     _ => true,

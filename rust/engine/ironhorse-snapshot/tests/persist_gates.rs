@@ -324,11 +324,13 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
 // and the fixtures below (which mint resolvers into every holder
 // shape the traversal walks) become its regression bed.
 //
-// The refuse-on-hold arms that remain are the ASYNC ones: a promise
-// reaction whose kind would resume a still-Pending async frame, and a
-// live async generator (a guest-held object whose row `.next()`
-// consults in every state). Both refuse by name until their atoms
-// land -- the recorded lift.
+// The async refuse-on-hold arms are GONE, one carry at a time: async
+// activations (`ASYN`, format 14), async generators (format 23) and the
+// `Array.fromAsync` accumulations (format 24, architecture finding F127's
+// last clause) all travel now. The kind check stays rather than becoming
+// unreachable code — a NEW reaction kind added without a carry must be
+// refused here rather than resumed against state nothing wrote — and the
+// test below is the one that would notice if a carry regressed.
 
 fn resolver_fixture(tail: &str) -> Interp {
     let src = format!(
@@ -442,11 +444,19 @@ fn a_live_async_generator_persists_in_every_verb() {
     }
 }
 
-/// The one async-flavored refusal that remains: an `Array.fromAsync`
-/// accumulation mid-flight, anchored by a `FromAsync*` reaction whose
-/// state no atom carries.
+/// The LAST async-flavored refusal, and it is gone: an `Array.fromAsync`
+/// accumulation mid-flight now persists (architecture finding F127's final
+/// clause).
+///
+/// This test used to assert the refusal, and it was the residue written down
+/// — "a promise reaction that would resume a non-persisted async frame". The
+/// `from_async` arena rides the `ASYN` payload behind the async generators at
+/// format 24, so the gate admits the machine and the accumulation resumes.
+/// `ironhorse-snapshot/tests/from_async_carry.rs` proves it comes back with
+/// the right elements; this proves the GATE stopped refusing, which is the
+/// half that lives here.
 #[test]
-fn a_mid_flight_array_from_async_refuses_every_persist_verb() {
+fn a_mid_flight_array_from_async_no_longer_refuses_any_persist_verb() {
     let (b, n) = compile(
         "var p = 0; var t = 0; p = Array.fromAsync([new Promise(function () {})]); t = 7; t",
     );
@@ -454,10 +464,42 @@ fn a_mid_flight_array_from_async_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     let out = m.run(&b);
     assert!(out.completed, "fixture crank: {:?}", out.halt);
-    assert_every_persist_verb_refuses(
-        m,
-        "a promise reaction that would resume a non-persisted async frame",
+    assert_eq!(
+        m.stored_unpersistable_row(),
+        None,
+        "the gate must no longer name a holder for a mid-flight fromAsync"
     );
+    assert!(
+        m.write_snapshot(&sig()).is_ok(),
+        "the blob verb must accept it"
+    );
+    let mut store = MemoryStore::new();
+    assert!(
+        begin_store_session(m, &sig(), &mut store).is_ok(),
+        "the store verb must accept it"
+    );
+}
+
+/// The three persist verbs still agree on a refusal, and name it identically.
+///
+/// This check used to ride the `Array.fromAsync` refusal above; F127's carry
+/// took that fixture away, and the property is independent of which row is
+/// refused. The `$262` host is what a QUIESCENT machine can still hold that
+/// no atom carries — a conformance machine is not a persistable one — so it
+/// is the fixture now. Without this, `stored_unpersistable_row` could start
+/// disagreeing with `write_snapshot`, or the store verb could refuse through
+/// a different gate, and only the row-by-row tests above would notice.
+#[test]
+fn every_persist_verb_refuses_a_held_row_by_the_same_name() {
+    let (b, n) = compile("var x = 0; x = 41; x");
+    let mut m = Interp::new();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    m.install_test262_host();
+    m.link_intrinsics(&n);
+    let out = m.run(&b);
+    assert!(out.completed, "fixture crank: {:?}", out.halt);
+    assert!(m.is_quiescent(), "the refusal must not be quiescence's");
+    assert_every_persist_verb_refuses(m, "a test262 `$262` host object, which no snapshot carries");
 }
 
 #[test]
@@ -869,18 +911,21 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
         Ok(_) => panic!("an ungated image of a halted machine must not exist"),
         Err(other) => panic!("refused by the wrong gate: {other:?}"),
     }
-    // And the pending-row arm refuses the image by name too.
-    let (b, n) = compile(
-        "var p = 0; var t = 0; p = Array.fromAsync([new Promise(function () {})]); t = 7; t",
-    );
+    // And the pending-row arm refuses the image by name too. The fixture was
+    // a mid-flight `Array.fromAsync` until format 24 carried those
+    // (architecture finding F127); the `$262` host is what is left that a
+    // quiescent machine can hold and no snapshot carries.
+    let (b, n) = compile("var x = 0; x = 41; x");
     let mut m = Interp::new();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    m.install_test262_host();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
     match m.snapshot_image_for_testing(&sig()) {
         Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
             assert_eq!(
                 row,
-                "a promise reaction that would resume a non-persisted async frame"
+                "a test262 `$262` host object, which no snapshot carries"
             )
         }
         other => panic!("the image must refuse by the pending row's name: {other:?}"),
