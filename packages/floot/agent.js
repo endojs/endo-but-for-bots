@@ -176,6 +176,10 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
 // not runtime-tested here.
 const FlootSessionInterface = M.interface('FlootSession', {
   getInfo: M.callWhen().returns(M.record()),
+  getExecutionState: M.callWhen().returns(M.record()),
+  // Admission must close on delivery, not after callWhen's argument await.
+  emergencyStop: M.call().returns(M.promise()),
+  resume: M.callWhen().returns(M.record()),
   startTurn: M.call(M.any()).returns(M.remotable()),
   getCurrentTurn: M.callWhen().returns(M.or(M.null(), M.record())),
   getHistory: M.callWhen().returns(M.any()),
@@ -3045,6 +3049,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
     let pendingReport;
 
     const createLive = async () => {
+      assertSessionAdmission(id);
+      if (closed) throw Error('Session mount client is closed');
       const declaring = declared;
       const session = await E(backend.factory).create(
         harden({
@@ -3151,6 +3157,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
       return run;
     };
     const requireLive = () => {
+      assertSessionAdmission(id);
+      if (closed) throw Error('Session mount client is closed');
       if (pendingReport) {
         const report = pendingReport;
         pendingReport = undefined;
@@ -3264,7 +3272,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string, executionState?: string }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3454,6 +3462,116 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // session guest and revives an existing one after a restart.
   /** @type {Map<string, Promise<any>>} */
   const agents = new Map();
+  const stopFences = new Set();
+  const stopFlights = new Map();
+  const resumeTokens = new Map();
+  const assertSessionAdmission = id => {
+    const entry = (registry || []).find(session => session.id === id);
+    if (
+      stopFences.has(id) ||
+      ['deleting', 'error'].includes(entry?.lifecycle) ||
+      (entry?.executionState && entry.executionState !== 'running')
+    )
+      throw Error(
+        'Session is stopped or stopping; explicitly resume it in Settings',
+      );
+  };
+  const setExecutionState = async (id, executionState) => {
+    const index = (registry || []).findIndex(session => session.id === id);
+    if (index < 0 || !registry) throw Error('Unknown Floot session');
+    registry[index] = harden({ ...registry[index], executionState });
+    await saveRegistry();
+  };
+  const executionState = async id => {
+    const entry = await assertSessionReady(id);
+    return harden({
+      state: stopFences.has(id)
+        ? 'stopping'
+        : entry.executionState || 'running',
+      supported: Boolean(entry.backendId),
+    });
+  };
+  const emergencyStop = id => {
+    const existing = stopFlights.get(id);
+    if (existing) return existing;
+    // Fence synchronously, before persistence, inbox shutdown, or native calls.
+    stopFences.add(id);
+    resumeTokens.delete(id);
+    const stopping = (async () => {
+      const entry = await assertSessionReady(id);
+      if (!entry.backendId) {
+        stopFences.delete(id);
+        throw Error('This backend has no hosted sandbox to stop');
+      }
+      const failures = [];
+      const attempt = async operation => {
+        try {
+          await operation();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      // Persistence failure must not prevent withdrawing live authority.
+      const intent = attempt(() => setExecutionState(id, 'stopping'));
+      const pending = agents.get(id);
+      const shutdown = pending?.then(agent => agent.shutdown(true));
+      // Final shutdown retries after native stop releases blocked readers.
+      void shutdown?.catch(() => undefined);
+      const mount = hostedMountClients.get(id);
+      const closed = mount?.close();
+      void closed?.catch(() => undefined);
+      const backend = (await getHostedBackends()).get(entry.backendId);
+      if (!backend) {
+        await intent;
+        throw Error('Hosted backend unavailable; stop remains pending');
+      }
+      await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
+      // Observe late acquisition before claiming completion. The admission
+      // fence prevents new acquisitions and the second stop covers late ones.
+      const agent = pending ? await pending.catch(() => undefined) : undefined;
+      const lateMount = hostedMountClients.get(id);
+      if (lateMount) await attempt(() => lateMount.close());
+      await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
+      if (agent) await attempt(() => agent.shutdown(true));
+      await intent;
+      if (failures.length)
+        throw new AggregateError(
+          failures,
+          'Session stop incomplete; retry in Settings',
+        );
+      backendAdmins.delete(id);
+      hostedMountClients.delete(id);
+      await setExecutionState(id, 'stopped');
+      stopFences.delete(id);
+      return executionState(id);
+    })().finally(() => stopFlights.delete(id));
+    stopFlights.set(id, stopping);
+    return stopping;
+  };
+  const resumeSession = async id => {
+    const entry = await assertSessionReady(id);
+    if (
+      stopFlights.has(id) ||
+      stopFences.has(id) ||
+      entry.executionState === 'stopping'
+    )
+      throw Error('Finish emergency stop before resuming');
+    if (entry.executionState !== 'stopped') return executionState(id);
+    // Fence while publishing permission to start a fresh incarnation.
+    const token = harden({});
+    resumeTokens.set(id, token);
+    stopFences.add(id);
+    await setExecutionState(id, 'running');
+    const observer = agents.get(id);
+    if (observer) await observer.catch(() => undefined);
+    if (resumeTokens.get(id) !== token)
+      throw Error('Resume superseded by emergency stop');
+    resumeTokens.delete(id);
+    agents.delete(id);
+    stopFences.delete(id);
+    await getAgent(id);
+    return executionState(id);
+  };
   const networkControllers = new Map();
   const networkChanges = new Set();
   const networkController = id => {
@@ -3495,6 +3613,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return networkControllers.get(id);
   };
   const changeNetwork = async (id, operation) => {
+    assertSessionAdmission(id);
     if (networkChanges.has(id))
       throw Error('Network policy change already in progress');
     networkChanges.add(id);
@@ -3510,11 +3629,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (!agents.has(id)) await getAgent(id);
     return result;
   };
-  const getAgent = id => {
+  const getAgent = (id, { observeOnly = false } = {}) => {
+    if (!observeOnly) assertSessionAdmission(id);
     if (networkChanges.has(id))
       throw Error('Network policy change in progress');
     let agentP = agents.get(id);
     if (!agentP) {
+      if (observeOnly && stopFlights.has(id))
+        throw Error(
+          'Session cleanup is in progress; retry reading records after it settles',
+        );
       agentP = (async () => {
         const host = getHost();
         const network = networkController(id);
@@ -3560,6 +3684,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // once and idempotency makes re-reads harmless).
         await loadRegistry();
         const entry = (registry || []).find(s => s.id === id);
+        const suspended =
+          stopFences.has(id) ||
+          (entry?.executionState && entry.executionState !== 'running');
+        if (suspended && !observeOnly) assertSessionAdmission(id);
         const preset = getPreset(entry?.presetId || DEFAULT_PRESET_ID);
         const sessionPrompt =
           entry?.systemPrompt || systemPrompt || preset.systemPrompt;
@@ -3658,7 +3786,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
         let agentConfig;
         /** @type {string | undefined} */
         let hostedContinuity;
-        if (entry?.backendId) {
+        if (suspended) {
+          // Construct a records-only observer, never a backend or inbox.
+          agentConfig = {
+            provideProvider: () => {
+              throw Error('Session is stopped');
+            },
+          };
+        } else if (entry?.backendId) {
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
@@ -3694,7 +3829,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
             : undefined;
           agentConfig = {
             provideHostedClient: async snapshot => {
-              const toolSet = makeEndoToolSet(snapshot);
+              assertSessionAdmission(id);
+              const toolSet = makeEndoToolSet(
+                harden({
+                  ...snapshot,
+                  execute: (name, args) => {
+                    assertSessionAdmission(id);
+                    return snapshot.execute(name, args);
+                  },
+                }),
+              );
               const mountClient = makeHostedMountClient({
                 id,
                 backend,
@@ -3771,7 +3915,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
           }),
         );
         // Each session is addressable by mail: start following its inbox.
-        agent.startInbox();
+        if (suspended || stopFences.has(id)) await agent.shutdown(true);
+        else agent.startInbox();
         return agent;
       })().catch(async error => {
         agents.delete(id);
@@ -3833,6 +3978,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         },
       );
       facet = makeExo('FlootSession', FlootSessionInterface, {
+        getExecutionState: () => executionState(id),
+        emergencyStop: () => emergencyStop(id),
+        resume: () => resumeSession(id),
         async getInfo() {
           const entry = await assertSessionReady(id);
           return harden({
@@ -3864,6 +4012,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
          * @returns {object} a FlootTurn
          */
         startTurn(input) {
+          assertSessionAdmission(id);
           return turns.start(input);
         },
         async getCurrentTurn() {
@@ -3874,7 +4023,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         },
         async getHistory() {
           await assertSessionReady(id);
-          const agent = await getAgent(id);
+          const agent = await getAgent(id, { observeOnly: true });
           return agent.getHistory();
         },
         // The same records a hosted adapter is handed to rebuild its CLI's
@@ -3884,16 +4033,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // daemon log to answer.
         async getTranscript() {
           await assertSessionReady(id);
-          const agent = await getAgent(id);
+          const agent = await getAgent(id, { observeOnly: true });
           return agent.getTranscript();
         },
         async getTurns() {
           await assertSessionReady(id);
-          return (await getAgent(id)).getTurns();
+          return (await getAgent(id, { observeOnly: true })).getTurns();
         },
         async getJournalStatus() {
           await assertSessionReady(id);
-          return (await getAgent(id)).getJournalStatus();
+          return (await getAgent(id, { observeOnly: true })).getJournalStatus();
         },
         async getNetworkPolicy() {
           await assertSessionReady(id);
@@ -3921,11 +4070,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
           await assertSessionReady(id);
           if (turns.getCurrent())
             throw Error('Cannot resolve while a turn is active');
-          await (await getAgent(id)).resolveTurn(turnId, note);
+          await (
+            await getAgent(id, { observeOnly: true })
+          ).resolveTurn(turnId, note);
         },
         async getUsage() {
           await assertSessionReady(id);
-          const agent = await getAgent(id);
+          const agent = await getAgent(id, { observeOnly: true });
           return agent.getUsage();
         },
         /**
@@ -3946,7 +4097,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             });
           }
           if (refresh) await E(oracle).refresh();
-          const agent = await getAgent(id);
+          const agent = await getAgent(id, { observeOnly: true });
           const [plan, rateLimits, rateCard, usage] = await Promise.all([
             E(oracle).getPlan(),
             E(oracle).getRateLimits(),
@@ -3977,6 +4128,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         },
         help(methodName) {
+          if (methodName === 'emergencyStop')
+            return 'emergencyStop() — Fence new work, withdraw hosted sandbox authority and await native cleanup. Keeps records and workspace. Failures remain stopping and retryable; remote effects may still finish.';
+          if (methodName === 'resume')
+            return 'resume() — After completed emergency stop, explicitly permit a fresh incarnation. Never replays a prompt.';
           if (methodName === 'getNetworkPolicy')
             return 'getNetworkPolicy() — Report enforced backend support, configured off/public-internet policy, and pending requests. Null policy is not proof of off enforcement.';
           if (methodName === 'setNetworkPolicy')
@@ -4479,7 +4634,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const startAllInboxes = async () => {
     const reg = await loadRegistry();
     for (const s of reg) {
-      if (s.lifecycle === 'deleting' || s.lifecycle === 'error') {
+      if (
+        (!s.lifecycle || s.lifecycle === 'ready') &&
+        (s.executionState === 'stopping' || s.executionState === 'stopped')
+      ) {
+        if (s.executionState === 'stopping') {
+          void emergencyStop(s.id).catch(error => {
+            console.error(
+              '[floot-factory] emergency stop recovery incomplete:',
+              error,
+            );
+          });
+        }
+      } else if (s.lifecycle === 'deleting' || s.lifecycle === 'error') {
         finishSessionDeletion(s.id).catch(error => {
           console.error(
             `[floot-factory] cleanup recovery failed for session-${s.id}: ${

@@ -52,6 +52,25 @@ an in-flight acquisition.
 The application must separately fence new work and recreation before invoking it.
 The idempotent `destroy({ sessionId })` operation additionally removes session state.
 
+## Operator emergency stop
+
+The session facet exposes `getExecutionState()`, `emergencyStop()`, and `resume()`.
+The Settings panel keeps emergency stop separate from cooperative turn cancellation.
+Stop fences UI turns, hosted tool admission, and mount recreation on delivery,
+persists a stopping intent, and asks the backend's durable owner to stop.
+It reports stopped only after native cleanup and the session agent's shutdown finish.
+A late acquisition is observed and stopped before that completion is published.
+An acquisition that never settles can keep completion pending; no timeout is treated
+as evidence that local execution has ended.
+Already-dispatched remote effects can still finish.
+
+Stopped sessions keep their workspace and records.
+Reading their history after restart does not provision a backend or start an inbox.
+An incomplete stop is retried on restart; deletion recovery takes precedence.
+Only explicit resume permits a new incarnation, without replaying a prompt.
+Emergency stop can supersede an in-flight resume.
+These controls are on the operator session facet, never the model's tool catalog.
+
 Codex implements this seam in `@endo/codex-sandbox/backend-factory.js`.
 Claude Code should implement the same seam instead of adding another branch to
 Floot's logical-turn persistence.

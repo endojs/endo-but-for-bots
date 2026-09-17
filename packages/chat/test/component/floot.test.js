@@ -7,6 +7,7 @@ import test from 'ava';
 /** @import { ExecutionContext } from 'ava' */
 import { Far } from '@endo/pass-style';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { flootComponent } from '../../floot-component.js';
 import {
@@ -29,6 +30,72 @@ globalThis.requestAnimationFrame = fn => testWindow.setTimeout(() => fn(0), 0);
 globalThis.cancelAnimationFrame = id => clearTimeout(id);
 testWindow.confirm = () => true;
 const waitFor = predicate => waitForDOM(predicate, 10, 2000);
+
+test.serial(
+  'Settings keeps emergency stop available during a pending resume',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const { promise: resumeResult, resolve: resolveResume } = makePromiseKit();
+    let resumes = 0;
+    let stops = 0;
+    const execution = state => harden({ supported: true, state });
+    const facet = Far('ExecutionUiSession', {
+      __getMethodNames__: () =>
+        harden(['getExecutionState', 'emergencyStop', 'resume']),
+      getExecutionState: () => execution('stopped'),
+      getCurrentTurn: () => null,
+      getHistory: () => harden([]),
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+      resume: () => {
+        resumes += 1;
+        return resumeResult;
+      },
+      emergencyStop: () => {
+        stops += 1;
+        return execution('stopped');
+      },
+    });
+    const factory = Far('ExecutionUiFactory', {
+      listSessions: () =>
+        harden([{ id: 'one', title: 'Stopped session', createdAt: 1 }]),
+      listPresets: () => harden([]),
+      listModels: () => harden([]),
+      getSession: () => facet,
+    });
+    const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      resolveResume(execution('running'));
+      cleanup();
+      parent.remove();
+    });
+    await waitFor(() =>
+      parent.querySelector('[aria-label="Settings & transcription"]'),
+    );
+    parent
+      .querySelector('[aria-label="Settings & transcription"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    const button = text =>
+      /** @type {HTMLButtonElement | undefined} */ (
+        [...parent.querySelectorAll('button')].find(
+          candidate => candidate.textContent === text,
+        )
+      );
+    await waitFor(() => button('Resume session'));
+    button('Resume session')?.click();
+    await waitFor(() => resumes === 1 && button('Emergency stop'));
+    t.false(button('Emergency stop')?.disabled);
+    button('Emergency stop')?.click();
+    await waitFor(() => stops === 1 && button('Resume session'));
+    resolveResume(execution('running'));
+    await tick();
+    t.truthy(
+      button('Resume session'),
+      'late resume cannot undo the displayed stop',
+    );
+  },
+);
 
 test.serial(
   'sandbox network changes require explicit operator actions and escape request reasons',

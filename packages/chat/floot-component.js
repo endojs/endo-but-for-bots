@@ -11,6 +11,7 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
 import { makeFlootNetwork } from './floot-network.js';
+import { makeFlootExecution } from './floot-execution.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -677,6 +678,7 @@ export const flootComponent = (
             queuedSends.some(q => q.sessionId === activeSessionId))),
       ),
   });
+  const execution = makeFlootExecution({ notify });
 
   /** @param {any[]} history
    * @returns {HistoryMessage[]} */
@@ -848,6 +850,7 @@ export const flootComponent = (
       settingsOpen,
       recovery: recovery.getState(),
       network: network.getState(),
+      execution: execution.getState(),
       unavailable: Boolean(session?.lifecycle && session.lifecycle !== 'ready'),
       usage: usage
         ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
@@ -1094,6 +1097,12 @@ export const flootComponent = (
   // Serialize submissions so an auto-sent voice utterance can't overlap a typed
   // message: each turn waits for the previous.
   const submit = (/** @type {string} */ raw) => {
+    if (execution.getState().blocked) {
+      setStatus(
+        'Session stopped or stopping. Inspect Settings before resuming.',
+      );
+      return submitChain;
+    }
     if (network.getState().changing || network.getState().blocked) {
       setStatus(
         'Finish or retry the sandbox network policy change before sending.',
@@ -1160,6 +1169,12 @@ export const flootComponent = (
           )
             return;
           if (ready === viewReady && previous === turnPromise) break;
+        }
+        if (execution.getState().blocked) {
+          setStatus(
+            'Queued message not sent: session stopped. Resume explicitly in Settings.',
+          );
+          return;
         }
         if (network.getState().changing || network.getState().blocked) {
           setStatus(
@@ -1233,6 +1248,7 @@ export const flootComponent = (
     // Opening a session starts at the latest message.
     stick = true;
     const session = getActiveSession();
+    void execution.select(session ? facetFor(session) : null);
     void recovery.select(
       session && (!session.lifecycle || session.lifecycle === 'ready')
         ? facetFor(session)
@@ -2137,6 +2153,15 @@ export const flootComponent = (
   // ── Controller (the view's only handle on the host engine) ───────────────────
   const controller = harden({
     getState,
+    emergencyStop() {
+      // Queued prompts are not a request to resume a stopped session.
+      queuedSends = queuedSends.filter(q => q.sessionId !== activeSessionId);
+      stopTts();
+      void execution.stop();
+    },
+    resumeSession() {
+      void execution.resume();
+    },
     refreshNetworkPolicy() {
       void network.refresh();
     },
@@ -2226,6 +2251,7 @@ export const flootComponent = (
     toggleSettings() {
       settingsOpen = !settingsOpen;
       if (settingsOpen) void network.refresh();
+      if (settingsOpen) void execution.refresh();
       notify();
     },
     setInput(/** @type {string} */ text) {
@@ -2429,6 +2455,7 @@ export const flootComponent = (
   // Never overwrite an optimistic/in-flight user turn with an older snapshot.
   let historyTimer;
   const refreshMailHistory = async () => {
+    void execution.refresh();
     void network.refresh();
     const session = getActiveSession();
     if (
@@ -2459,6 +2486,7 @@ export const flootComponent = (
     cancelled = true;
     void recovery.select(null);
     void network.select(null);
+    void execution.select(null);
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();

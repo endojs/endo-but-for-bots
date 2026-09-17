@@ -154,6 +154,56 @@ export const SettingsPanel = ({ state, controller }) => {
       'div',
       { class: 'floot-settings' },
       h('div', { class: 'floot-modal-title' }, 'Transcription & settings'),
+      state.execution?.supported
+        ? h(
+            'section',
+            { class: 'floot-execution floot-operator-panel' },
+            h('h3', null, 'Sandbox execution'),
+            h(
+              'p',
+              { role: 'status' },
+              state.execution.changing
+                ? 'Waiting for session cleanup or resume…'
+                : state.execution.state === 'stopped'
+                  ? 'Stopped. Local sandbox cleanup completed.'
+                  : state.execution.state === 'stopping'
+                    ? 'Stop incomplete. New work remains blocked; retry cleanup.'
+                    : 'Running. Turn interruption does not stop background processes.',
+            ),
+            h(
+              'p',
+              null,
+              'Emergency stop withdraws session authority and ends local sandbox execution. Already-dispatched remote effects may still finish. History and workspace are retained.',
+            ),
+            state.execution.error
+              ? h('p', { role: 'alert' }, state.execution.error)
+              : null,
+            state.execution.state === 'stopped' &&
+              state.execution.action !== 'resume'
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: state.execution.changing,
+                    onClick: () => controller.resumeSession?.(),
+                  },
+                  'Resume session',
+                )
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled:
+                      state.execution.changing &&
+                      state.execution.action !== 'resume',
+                    onClick: () => controller.emergencyStop?.(),
+                  },
+                  state.execution.state === 'stopping'
+                    ? 'Retry emergency stop'
+                    : 'Emergency stop',
+                ),
+          )
+        : null,
       state.network
         ? h(NetworkPolicyPanel, {
             key: state.activeSessionId || '',

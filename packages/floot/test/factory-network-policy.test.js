@@ -17,7 +17,7 @@ const until = async predicate => {
   throw Error('Timed out waiting for factory fixture');
 };
 
-const makeWorld = async t => {
+const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   t.timeout(5000);
   const inboxes = [];
   const streams = [];
@@ -27,6 +27,10 @@ const makeWorld = async t => {
   const dismissed = [];
   const sends = [];
   let mode = 'complete';
+  let stopFails = false;
+  let stopBarrier = Promise.resolve();
+  let createBarrier = Promise.resolve();
+  let writeFails = false;
   let tools;
   const key = name => (Array.isArray(name) ? name.join('/') : name);
   const guestStore = new Map([['user', harden({})]]);
@@ -65,11 +69,12 @@ const makeWorld = async t => {
         supportedNetworkPolicies: ['off', 'public-internet'],
       }),
     listModels: () => harden([{ id: 'm', title: 'Model' }]),
-    create: (spec, toolSet) => {
+    create: async (spec, toolSet) => {
       tools = toolSet;
       creates.push(spec);
       const generation = creates.length;
       events.push(`create:${generation}:${spec.networkPolicy}`);
+      await createBarrier;
       return harden({
         run: Far('NetworkRun', {
           send: async () => {
@@ -101,6 +106,13 @@ const makeWorld = async t => {
       });
     },
     destroy: () => undefined,
+    stop: async () => {
+      events.push('stop');
+      for (const stream of streams)
+        stream.push({ type: 'abort', reason: 'sandbox stopped' });
+      await stopBarrier;
+      if (stopFails) throw Error('native cleanup pending');
+    },
   });
   const hostStore = new Map(
     /** @type {[string, unknown][]} */ ([
@@ -114,7 +126,8 @@ const makeWorld = async t => {
             title: 'One',
             createdAt: 1,
             presetId: 'general',
-            lifecycle: 'ready',
+            lifecycle,
+            ...(executionState ? { executionState } : {}),
             backendId: 'test',
             modelId: 'm',
           },
@@ -127,6 +140,8 @@ const makeWorld = async t => {
     lookup: name => hostStore.get(name),
     list: () => harden([...hostStore.keys()]),
     storeValue: (value, name) => {
+      if (writeFails && name.startsWith('floot-sessions-v1-'))
+        throw Error('registry write failed');
       hostStore.set(name, value);
     },
     remove: name => hostStore.delete(name),
@@ -136,7 +151,10 @@ const makeWorld = async t => {
   t.teardown(async () => {
     for (const stream of streams) stream.push({ type: 'end' });
     for (const inbox of inboxes) inbox.close();
-    await E(factory).deleteSession('one');
+    stopFails = false;
+    writeFails = false;
+    if ((await E(factory).listSessions()).some(entry => entry.id === 'one'))
+      await E(factory).deleteSession('one');
   });
   const session = await E(factory).getSession('one');
   await E(session).getTurns();
@@ -144,9 +162,11 @@ const makeWorld = async t => {
     'legacy-import',
     'Fixture legacy evidence checked',
   );
-  await until(() => inboxes.length > 0);
+  if (!executionState) await until(() => inboxes.length > 0);
   return {
     session,
+    factory,
+    host,
     creates,
     events,
     sends,
@@ -155,6 +175,18 @@ const makeWorld = async t => {
     dismissed,
     setMode: value => {
       mode = value;
+    },
+    failStop: value => {
+      stopFails = value;
+    },
+    blockStop: barrier => {
+      stopBarrier = barrier;
+    },
+    blockCreate: barrier => {
+      createBarrier = barrier;
+    },
+    failWrite: value => {
+      writeFails = value;
     },
     tools: () => tools,
     finish: () => {
@@ -179,6 +211,133 @@ const makeWorld = async t => {
     },
   };
 };
+
+test('emergency stop fences active turns, waits for cleanup, and requires explicit resume', async t => {
+  const world = await makeWorld(t);
+  world.setMode('hold');
+  const turn = await E(world.session).startTurn('held');
+  await until(() => world.sends.length === 1);
+  let release;
+  const barrier = new Promise(resolve => {
+    release = resolve;
+  });
+  t.teardown(() => release());
+  world.blockStop(barrier);
+  let completed = false;
+  const stopped = E(world.session)
+    .emergencyStop()
+    .then(value => {
+      completed = true;
+      return value;
+    });
+  await t.throwsAsync(
+    E(world.tools()).execute('getSandboxNetworkPolicy', harden({})),
+    {
+      message: /stopped or stopping/,
+    },
+  );
+  await until(() => world.events.includes('stop'));
+  t.false(completed);
+  t.is((await E(world.session).getExecutionState()).state, 'stopping');
+  await t.throwsAsync(E(world.session).startTurn('must not run'), {
+    message: /stopped or stopping/,
+  });
+  await t.throwsAsync(E(world.session).resume(), {
+    message: /Finish emergency stop/,
+  });
+  release();
+  t.is((await stopped).state, 'stopped');
+  await E(turn).whenFinished();
+  const count = world.creates.length;
+  await E(world.session).getHistory();
+  await E(world.session).getTurns();
+  t.is(world.creates.length, count);
+  await t.throwsAsync(E(world.session).startTurn('still blocked'), {
+    message: /stopped or stopping/,
+  });
+  await E(world.session).resume();
+  t.is(world.creates.length, count + 1);
+  t.is(world.sends.length, 1, 'resume does not replay a prompt');
+});
+
+test('failed stop remains fenced and retryable without deleting records', async t => {
+  const world = await makeWorld(t);
+  world.failStop(true);
+  await t.throwsAsync(E(world.session).emergencyStop(), {
+    message: /stop incomplete/,
+  });
+  t.is((await E(world.session).getExecutionState()).state, 'stopping');
+  t.is((await E(world.factory).listSessions()).length, 1);
+  world.failStop(false);
+  t.is((await E(world.session).emergencyStop()).state, 'stopped');
+});
+
+test('failed stop-intent persistence still withdraws native authority', async t => {
+  const world = await makeWorld(t);
+  world.failWrite(true);
+  await t.throwsAsync(E(world.session).emergencyStop(), {
+    message: /stop incomplete/,
+  });
+  t.true(world.events.includes('stop'));
+  await t.throwsAsync(E(world.session).startTurn('blocked'), {
+    message: /stopped or stopping/,
+  });
+  world.failWrite(false);
+  t.is((await E(world.session).emergencyStop()).state, 'stopped');
+});
+
+test('stopped session revival reads records without creating a sandbox or inbox', async t => {
+  const world = await makeWorld(t, { executionState: 'stopped' });
+  await E(world.session).getHistory();
+  await E(world.session).getTurns();
+  t.is(world.creates.length, 0);
+  t.is(world.inboxes.length, 0);
+  const revived = make(world.host);
+  const session = await E(revived).getSession('one');
+  await E(session).getHistory();
+  t.is(world.creates.length, 0);
+  t.is(world.inboxes.length, 0);
+  await E(session).resume();
+  t.is(world.creates.length, 1);
+  await E(session).emergencyStop();
+});
+
+test('incomplete stop is retried on factory revival without starting a sandbox', async t => {
+  const world = await makeWorld(t);
+  world.failStop(true);
+  await t.throwsAsync(E(world.session).emergencyStop());
+  world.failStop(false);
+  const count = world.creates.length;
+  const revived = make(world.host);
+  const session = await E(revived).getSession('one');
+  // Joining the recovered stop observes its completion, not a new incarnation.
+  t.is((await E(session).emergencyStop()).state, 'stopped');
+  t.is(world.creates.length, count);
+});
+
+test('emergency stop fences resume and reaps its late acquisition before completion', async t => {
+  const world = await makeWorld(t, { executionState: 'stopped' });
+  let release = () => undefined;
+  const barrier = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(release);
+  world.blockCreate(barrier);
+  const resumed = E(world.session).resume();
+  await until(() => world.creates.length === 1);
+  const stopped = E(world.session).emergencyStop();
+  await until(() => world.events.includes('stop'));
+  t.is((await E(world.session).getExecutionState()).state, 'stopping');
+  await t.throwsAsync(E(world.session).startTurn('must not run'), {
+    message: /stopped or stopping/,
+  });
+  release();
+  await resumed;
+  t.is((await stopped).state, 'stopped');
+  t.is(world.creates.length, 1);
+  t.is(world.sends.length, 0);
+  t.true(world.events.filter(event => event === 'stop').length >= 2);
+});
 
 test('factory network request only asks; idle approval recreates policy and resumes mail', async t => {
   const world = await makeWorld(t);
