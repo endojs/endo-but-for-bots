@@ -15,13 +15,18 @@ Latest increment, 2026-09-17: Claude and OpenCode now compose one
 It owns plan identity, activation fencing, retained resources, recovery lookup,
 native stop acknowledgement, and failed-release retry.
 Clients dispose their own slices but no longer own the controller's broker/MCP
-cleanup algorithm; revocation and MCP closure start independently of client stop.
-Mount release still requires sandbox closure.
+cleanup algorithm; authority fencing and MCP closure start independently of client stop.
+Provider namespace removal and mount release require sandbox closure.
 Successful releases are cached; an explicit stop can retry failed revocation even
 while another owner is still pending, without claiming that native stop completed.
 Both adapters use the shared inert MCP server owner, retained before startup.
-The controller suites and three affected package suites pass; this extraction's
-live Tokyo acceptance is pending, and Codex is not yet on this supervisor.
+The controller suites and three affected package suites pass.
+Tokyo at `87c0150c1` completed Floot tool-use turns on both adapters, preserving
+tool errors/results and replies; deletion initially needed an explicit retry.
+A disposable native probe reproduced Podman's refusal to remove a namespace owner
+before its dependent guest. Both test sessions and probe containers were cleaned up.
+The corrective two-phase fence/removal split is implemented locally and reviewed;
+its live acceptance is pending. Codex is not yet on this supervisor.
 Earlier entries below record the increments that led here, not current claims
 that the now-extracted Claude/OpenCode lifecycle is still duplicated.
 
@@ -2724,7 +2729,12 @@ than a judgement.
    Four shared regressions cover late client acquisition, hung-client stop,
    independent revocation retry, and preserving mounts until sandbox closure.
    Adversarial review found the hung-cleanup retry case; the regression and
-   narrow re-review close it. Live acceptance of this increment remains pending.
+   narrow re-review close it. Tokyo at `87c0150c1` passed tool-use/persistence,
+   but exposed provider-before-guest removal: Podman refuses that dependency order.
+   Explicit cleanup retry removed both sessions and all their native resources.
+   The corrective split fences authority immediately and removes the provider only
+   after sandbox closure. Unit regressions cover the fence and ordering; its
+   live acceptance remains pending.
 
 3. **Move Codex's state onto `session-state-storage.js`,** deleting the volume
    subsystem and the lease with it. Now that the supervisor exists, this is

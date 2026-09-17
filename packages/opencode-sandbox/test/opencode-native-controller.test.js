@@ -216,6 +216,9 @@ const fixture = (t, { realClient = false } = {}) => {
             ...(faults.badEvidence ? { unexpected: foreign } : {}),
           });
         },
+        async fence() {
+          events.push(`fence grant ${id}`);
+        },
         async revoke() {
           closed = true;
           grantReleased.resolve();

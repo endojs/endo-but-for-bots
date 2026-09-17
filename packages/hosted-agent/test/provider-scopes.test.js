@@ -54,6 +54,9 @@ const fixture = () => {
           })();
           return harden({
             value,
+            fence: async () => {
+              fenced.add(sessionId);
+            },
             revoke: async () => {
               fenced.add(sessionId);
               revoked.push(identity);
@@ -84,6 +87,21 @@ const fixture = () => {
     },
   };
 };
+
+test('fencing withdraws authority without removing the retained listener', async t => {
+  const f = fixture();
+  t.teardown(f.close);
+  const scope = await E(f.service).provideScope('session', spec);
+  await E(scope).start();
+  await E(scope).fence();
+  t.true(f.fenced.has('session'));
+  t.is(f.revoked.length, 0);
+  t.is(await E(f.service).lookupScope('session'), scope);
+  await t.throwsAsync(E(scope).attestation(), { message: /closed/ });
+  await E(scope).revoke();
+  t.is(f.revoked.length, 1);
+  t.is(await E(f.service).lookupScope('session'), undefined);
+});
 
 test('scope replies and recovery lookup are inert and accept only copy specifications', async t => {
   const f = fixture();
@@ -145,6 +163,7 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
     '__getInterfaceGuard__',
     '__getMethodNames__',
     'attestation',
+    'fence',
     'revoke',
     'sandboxEvidence',
     'start',

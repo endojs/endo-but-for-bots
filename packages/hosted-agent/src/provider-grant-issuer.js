@@ -315,7 +315,7 @@ export const makeProviderBrokerGrantIssuer = ({
       throw AggregateError([error], 'Provider grant admission failed');
     });
     void value.catch(() => {});
-    return harden({ value, revoke });
+    return harden({ value, fence, revoke });
   };
   const clean = async callbacks => {
     const results = await Promise.allSettled(

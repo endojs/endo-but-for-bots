@@ -15,7 +15,7 @@ import { M } from '@endo/patterns';
 
 /**
  * @typedef {object} ScopedProviderIssuer
- * @property {(spec: ProviderScopeSpec & {sessionId: string}) => {value: Promise<any>, revoke(): Promise<void>}} issueKit
+ * @property {(spec: ProviderScopeSpec & {sessionId: string}) => {value: Promise<any>, fence(): Promise<void>, revoke(): Promise<void>}} issueKit
  */
 
 const SpecShape = M.splitRecord(
@@ -28,6 +28,7 @@ const ScopeInterface = M.interface('ProviderScope', {
   start: M.call().returns(M.promise()),
   attestation: M.call().returns(M.promise()),
   sandboxEvidence: M.call().returns(M.promise()),
+  fence: M.call().returns(M.promise()),
   revoke: M.call().returns(M.promise()),
 });
 
@@ -113,6 +114,12 @@ export const makeProviderScopes = ({ openIssuer }) => {
       void starting.catch(() => {});
       return starting;
     };
+    // Withdraw inference and public egress without removing the namespace
+    // anchor. The session owner must reap guest dependents before revoke().
+    const fence = async () => {
+      inactive = true;
+      await issue?.fence();
+    };
     const revoke = () => {
       inactive = true;
       if (released) return Promise.resolve();
@@ -158,6 +165,7 @@ export const makeProviderScopes = ({ openIssuer }) => {
       start,
       attestation: () => observe(value => E(value).attestation()),
       sandboxEvidence: () => observe(value => E(value).sandboxEvidence()),
+      fence,
       revoke,
     });
     const owner = { spec, facet, revoke };

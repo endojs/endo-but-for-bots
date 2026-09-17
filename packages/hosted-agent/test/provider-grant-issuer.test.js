@@ -115,6 +115,27 @@ const fixture = ({
   };
 };
 
+test('authority fencing blocks inference without removing the namespace listener', async t => {
+  const f = fixture();
+  t.teardown(f.issuer.dispose);
+  const kit = f.issuer.issueKit(spec);
+  await kit.value;
+  await kit.fence();
+  t.is(f.stops(), 0);
+  await t.throwsAsync(
+    E(f.endpoint()).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    ),
+    { message: /inactive|disposed/ },
+  );
+  await kit.revoke();
+  t.is(f.stops(), 1);
+});
+
 test('public egress is lease-bound and revoked before cleanup retries', async t => {
   let disposed = 0;
   /** @type {Record<string, any> | undefined} */

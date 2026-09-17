@@ -37,9 +37,10 @@ const SupervisorInterface = M.interface('HostedSessionSupervisor', {
  * partial acquisition here before starting it. It does not own a second stop
  * algorithm, and its client must not call back into this owner's cleanup.
  *
- * Stop fences immediately. Client shutdown, grant revocation, MCP admission
- * closure and sandbox reaping begin independently: none can hold revocation
- * hostage. Mount release depends on proven sandbox closure. Late acquisitions
+ * Stop fences immediately. Client shutdown, grant fencing, MCP admission
+ * closure and sandbox reaping begin independently: none can hold fencing
+ * hostage. Provider namespace removal and mount release depend on proven
+ * sandbox closure. Late acquisitions
  * are retained and closed, failed releases remain retryable, and successful
  * releases are never repeated. Native acknowledgement, not a timeout, permits
  * the daemon to delete the incarnation and subsequently remove its storage.
@@ -78,12 +79,12 @@ export const makeHostedSessionSupervisor = ({
   let activating;
   /** @type {Promise<void> | undefined} */
   let closing;
-  /** @type {Map<ResourceRole, Resource>} */
+  /** @type {Map<ResourceRole | 'brokerFence', Resource>} */
   const resources = new Map();
   const assertOpen = () => {
     !stopping || Fail`${q(name)} native controller is stopping`;
   };
-  /** @param {ResourceRole} role */
+  /** @param {ResourceRole | 'brokerFence'} role */
   const release = role => {
     const resource = resources.get(role);
     if (!resource || resource.released) return Promise.resolve();
@@ -92,6 +93,7 @@ export const makeHostedSessionSupervisor = ({
         .then(async () => {
           const { value } = resource;
           if (role === 'client') await E(value).terminate();
+          else if (role === 'brokerFence') await E(value).fence();
           else if (role === 'broker') await E(value).revoke();
           else if (role === 'sandbox') await E(value).close();
           else await value.close();
@@ -107,8 +109,9 @@ export const makeHostedSessionSupervisor = ({
   const closeResources = async () => {
     const results = await Promise.allSettled([
       release('client'),
-      release('broker'),
+      release('brokerFence'),
       release('mcp'),
+      release('sandbox').then(() => release('broker')),
       release('sandbox').then(() => release('mounter')),
     ]);
     const errors = results.flatMap(result =>
@@ -121,6 +124,9 @@ export const makeHostedSessionSupervisor = ({
   const own = (role, value) => {
     !resources.has(role) || Fail`Native resource ${q(role)} is already owned`;
     resources.set(role, { value, released: false });
+    if (role === 'broker') {
+      resources.set('brokerFence', { value, released: false });
+    }
     if (stopping) {
       void closeResources().catch(reportError);
       assertOpen();
@@ -181,7 +187,12 @@ export const makeHostedSessionSupervisor = ({
             if (resources.has(role)) return;
             const service = await E(resolver).get(dependency);
             const value = await E(service).lookupScope(plan.sandboxSessionId);
-            if (value) resources.set(role, { value, released: false });
+            if (value) {
+              resources.set(role, { value, released: false });
+              if (role === 'broker') {
+                resources.set('brokerFence', { value, released: false });
+              }
+            }
           }),
         );
         const released = await Promise.allSettled([

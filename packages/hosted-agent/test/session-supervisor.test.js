@@ -35,7 +35,13 @@ test('a hung client cannot delay revocation, sandbox closure, or MCP admission c
     name: 'Test',
     readPlan,
     start: async (_plan, _resolver, { own }) => {
-      own('broker', Far('Grant', { revoke: () => revoked.resolve(undefined) }));
+      own(
+        'broker',
+        Far('Grant', {
+          fence: async () => undefined,
+          revoke: () => revoked.resolve(undefined),
+        }),
+      );
       own(
         'sandbox',
         Far('Scope', { close: () => sandboxStopped.resolve(undefined) }),
@@ -91,6 +97,7 @@ test('failed revocation can retry while client termination is still pending', as
       own(
         'broker',
         Far('Grant', {
+          fence: async () => undefined,
           async revoke() {
             attempts += 1;
             if (attempts === 1) {
@@ -139,6 +146,7 @@ test('failed release remains owned, successful releases are not repeated on retr
       own(
         'broker',
         Far('Grant', {
+          fence: async () => undefined,
           revoke: () => {
             revocations += 1;
           },
@@ -179,12 +187,57 @@ test('failed release remains owned, successful releases are not repeated on retr
   });
   t.is(closures, 1, 'one attempt, not an implicit retry');
   t.is(unmounts, 0, 'storage remains mounted until reaping succeeds');
-  t.is(revocations, 1, 'independent authority has already been withdrawn');
+  t.is(
+    revocations,
+    0,
+    'namespace anchor stays until its dependents are reaped',
+  );
   refuse = false;
   await E(supervisor).terminate('plan', resolver);
   t.is(closures, 2);
   t.is(unmounts, 1);
   t.is(revocations, 1);
+});
+
+test('authority is fenced during hung sandbox closure, but its namespace anchor is retained', async t => {
+  t.timeout(3000);
+  const reaped = makePromiseKit();
+  const fenced = makePromiseKit();
+  let removed = false;
+  const supervisor = makeHostedSessionSupervisor({
+    name: 'Test',
+    readPlan,
+    start: async (_plan, _resolver, { own }) => {
+      own('sandbox', Far('Sandbox', { close: () => reaped.promise }));
+      own(
+        'broker',
+        Far('Grant', {
+          fence: async () => fenced.resolve(undefined),
+          revoke: async () => {
+            removed = true;
+          },
+        }),
+      );
+      return Far('Client', {
+        terminate: async () => undefined,
+        send: async () => undefined,
+        interrupt: async () => undefined,
+        status: async () => harden({}),
+      });
+    },
+  });
+  await E(supervisor).activate('plan', resolver);
+  const stopping = E(supervisor).terminate('plan', resolver);
+  t.teardown(async () => {
+    reaped.resolve(undefined);
+    await stopping;
+  });
+  await fenced.promise;
+  t.false(removed);
+  t.like(await E(supervisor).status(), { stopping: true, stopped: false });
+  reaped.resolve(undefined);
+  await stopping;
+  t.true(removed);
 });
 
 test('a client arriving after stop stays owned until its release acknowledges', async t => {

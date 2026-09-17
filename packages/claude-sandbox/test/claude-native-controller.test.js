@@ -226,6 +226,9 @@ const fixture = (t, { realClient = false } = {}) => {
             ...(faults.badEvidence ? { unexpected: foreign } : {}),
           });
         },
+        async fence() {
+          events.push(`fence grant ${id}`);
+        },
         async revoke() {
           events.push(`revoke ${id}`);
           if (faults.revokeFail) throw Error('revoke failed');
@@ -648,6 +651,7 @@ test('terminate releases the slice, sandbox, mounter, bridge, and broker grant, 
       'close mounter',
       'close sandbox sandbox-a',
       'dispose slice sandbox-a',
+      'fence grant sandbox-a',
       'revoke sandbox-a',
     ],
     'every owner is released exactly once',
@@ -725,8 +729,8 @@ test('failed cleanup is retained and retried, never reported as release', async 
   t.like(await E(controller).status(), { stopped: true });
   t.is(
     f.events.filter(e => e === 'revoke sandbox-a').length,
-    2,
-    'revoke retried',
+    1,
+    'provider removed only after sandbox close succeeds',
   );
   t.true(f.events.includes('close mounter'));
   t.is(f.grants.size, 0);
@@ -865,6 +869,7 @@ test('the real client over a resolved slice disposes it on terminate and leaves 
     'close mounter',
     'close sandbox sandbox-a',
     'dispose slice sandbox-a',
+    'fence grant sandbox-a',
     'revoke sandbox-a',
   ]);
   t.true(
