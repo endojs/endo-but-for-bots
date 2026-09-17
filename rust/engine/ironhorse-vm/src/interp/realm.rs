@@ -156,6 +156,9 @@ impl Interp {
         }
         let _guard =
             LockdownGuard::enter(self.realm.intrinsics()).ok_or(crate::Halt::MachineBusy)?;
+        if self.realm.intrinsics().hardening.get() {
+            return Err(crate::Halt::MachineBusy);
+        }
         // Step 2 before step 5, the same order and the same operation the guest
         // `lockdown()` performs -- a graph hardened WITHOUT it still hands
         // `({}).constructor.constructor` the real evaluator. See
@@ -242,6 +245,13 @@ impl Interp {
         let Some(_guard) = LockdownGuard::enter(self.realm.intrinsics()) else {
             return Err(self.catchable_type_error_msg("lockdown already called".into()));
         };
+        // A first lockdown can also arrive from an unrelated outer harden.
+        // Its queued marks are not evidence of a completed freeze. Refuse the
+        // call before step 2 instead of reporting completion while another
+        // walk still has unfinished roots (and can subsequently throw).
+        if self.realm.intrinsics().hardening.get() {
+            return Err(self.catchable_type_error_msg("lockdown cannot start during harden".into()));
+        }
 
         // **No compartment check here: neither SES nor XS has one.** An
         // earlier revision refused when
@@ -775,6 +785,7 @@ impl Interp {
                 roots,
                 locked_down: std::cell::Cell::new(freeze),
                 locking_down: std::cell::Cell::new(false),
+                hardening: std::cell::Cell::new(false),
             }),
             default_global: machine.environment.global_obj,
         });

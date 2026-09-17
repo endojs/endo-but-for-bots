@@ -1106,10 +1106,9 @@ pub enum Native {
     /// instance, reserving "strict mode" for the arguments-object poison. The
     /// oracle compares thrown messages, so this is not a free choice.
     ///
-    /// Minted at `lockdown()` time, never at boot, so no snapshot carries one
-    /// and [`Interp::boot_fingerprint`] does not see it. (Binding
-    /// [`NativeMethod::GlobalLockdown`] *does* move the fingerprint; that is a
-    /// separate consequence, recorded on `create_hardened_globals`.)
+    /// Minted during boot so snapshots retain native identities by boot index.
+    /// Lockdown freezes their metadata and wires their prototype edges before
+    /// exposing them. Their identities participate in [`Interp::boot_fingerprint`].
     LockedDownConstructor,
 }
 

@@ -36,6 +36,8 @@ pub struct Intrinsics {
     pub(crate) locked_down: std::cell::Cell<bool>,
     /// A transient guard: no quiescent snapshot can contain an active lockdown.
     pub(crate) locking_down: std::cell::Cell<bool>,
+    /// An unfinished harden walk has queued objects that are not yet frozen.
+    pub(crate) hardening: std::cell::Cell<bool>,
 }
 
 impl Intrinsics {

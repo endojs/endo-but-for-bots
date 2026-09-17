@@ -549,8 +549,8 @@ void xs_oracle_free(EndorOracleResult *out)
  * the aborting crank). Every out slot must be released with
  * xs_oracle_free regardless.
  */
-int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
-	txU4 crankCount, EndorOracleResult *outs)
+static int xs_oracle_run_sources(const char **sources, const txU4 *sourceLens,
+	txU4 crankCount, EndorOracleResult *outs, txBoolean drainEach, txBoolean drainLast)
 {
 	txMachine *the;
 	txScript *volatile script = C_NULL;
@@ -641,8 +641,8 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 				fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
 					mxRealmClosures(realm)->value.reference, C_NULL, module);
 				script = C_NULL; /* No live parser allocation during jobs. */
-				/* Per-crank microtask drain (the pump-loop latch). */
-				while (the->promiseJobs) {
+				/* Test setup shares one checkpoint with the final case. */
+				while ((drainEach || (drainLast && crank_i + 1 == crankCount)) && the->promiseJobs) {
 					the->promiseJobs = 0;
 					fxRunPromiseJobs(the);
 				}
@@ -654,6 +654,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 				{
 					txString s = result->value.string;
 					if (s) {
+						out->result_len = (txU4)c_strlen(s);
 						strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
 						out->result[ENDOR_RESULT_MAX - 1] = 0;
 					}
@@ -676,6 +677,20 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;
+}
+
+/* Existing crank semantics keep their checkpoint after every script. */
+int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
+	txU4 count, EndorOracleResult *outs)
+{
+	return xs_oracle_run_sources(sources, sourceLens, count, outs, 1, 1);
+}
+
+/* Separately compiled scripts, one final microtask checkpoint (xst262 order). */
+int xs_oracle_run_scripts(const char **sources, const txU4 *sourceLens,
+	txU4 count, EndorOracleResult *outs, txBoolean checkpoint)
+{
+	return xs_oracle_run_sources(sources, sourceLens, count, outs, 0, checkpoint);
 }
 
 /*
@@ -844,10 +859,13 @@ static void xs_oracle_module_rejected(txMachine *the)
  * a machine-level failure (out of memory creating the machine).
  */
 int xs_oracle_run_module(const char *dir, const char *mainRel,
+	const char *setup, txU4 setupLen, EndorOracleResult *setupOut,
 	EndorOracleResult *out)
 {
 	txMachine *the;
 	volatile txBoolean rendering_rejection = 0;
+	txScript *volatile setupScript = C_NULL;
+	memset(setupOut, 0, sizeof(*setupOut));
 	memset(out, 0, sizeof(*out));
 
 	the = xs_oracle_create_machine("xs-oracle-run-module");
@@ -892,6 +910,25 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
 				mxPop();
 			}
+
+			/* The harness/native lockdown is a Script evaluated before the
+			 * module is linked; module declarations cannot shadow setup.
+			 * Do not checkpoint jobs until the module's normal drain. */
+			if (setupLen) {
+				txStringCStream stream;
+				stream.buffer = (txString)setup;
+				stream.offset = 0;
+				stream.size = (txSize)setupLen;
+				setupScript = fxParseScript(the, &stream, fxStringCGetter,
+					mxProgramFlag | mxEvalFlag);
+				module = mxProgram.value.reference;
+				realm = mxModuleInstanceInternal(module)->value.module.realm;
+				fxRunScript(the, setupScript, mxRealmGlobal(realm), C_NULL,
+					mxRealmClosures(realm)->value.reference, C_NULL, module);
+				setupScript = C_NULL;
+				mxPop();
+			}
+			setupOut->ok = 1;
 
 			/* Resolve dir + '/' + mainRel to an absolute path so XS keys the
 			 * entry module (and every relative specifier off it) by a stable
@@ -973,7 +1010,13 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 		mxCatch(the) {
 			/* A synchronous throw escaping fxRunImport (before the promise
 			 * machinery caught it) is still a normal rejection outcome. */
-			if (rendering_rejection) {
+			if (!setupOut->ok) {
+				if (the->exitStatus && setupScript)
+					fxDeleteScript(setupScript);
+				setupOut->exit_status = the->exitStatus;
+				endor_error_from_exception(the, setupOut->error, ENDOR_ERROR_MAX);
+			}
+			else if (rendering_rejection) {
 				/* fxExitToHost skips nested mxTry frames on resource abort.
 				 * Keep the already captured guest rejection and its meter. */
 				strncpy(out->error, "(exception stringification threw)", ENDOR_ERROR_MAX - 1);

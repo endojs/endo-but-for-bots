@@ -73,6 +73,9 @@ extern "C" {
     fn xs_oracle_run_module(
         dir: *const c_char,
         main_rel: *const c_char,
+        setup: *const c_char,
+        setup_len: u32,
+        setup_out: *mut XsOracleResultRaw,
         out: *mut XsOracleResultRaw,
     ) -> c_int;
     fn xs_oracle_free(out: *mut XsOracleResultRaw);
@@ -81,6 +84,13 @@ extern "C" {
         source_lens: *const u32,
         crank_count: u32,
         outs: *mut XsOracleResultRaw,
+    ) -> c_int;
+    fn xs_oracle_run_scripts(
+        sources: *const *const c_char,
+        source_lens: *const u32,
+        script_count: u32,
+        outs: *mut XsOracleResultRaw,
+        checkpoint: c_int,
     ) -> c_int;
     fn xs_oracle_regexp(
         pattern: *const c_char,
@@ -412,6 +422,49 @@ pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
     Some(raws.iter_mut().map(outcome_from_raw).collect())
 }
 
+/// Run separately compiled setup and case scripts in one realm, draining
+/// microtasks only after the final script. Setup cannot be shadowed by the
+/// case's declarations, and raw case directives/hashbangs remain intact.
+/// An exception stops the sequence; subsequent outcomes are not completed.
+pub fn run_scripts(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
+    run_scripts_with_checkpoint(sources, true)
+}
+
+/// Like `run_scripts`, optionally ending before the final job checkpoint.
+/// This lets a parse-negative module validate setup without running jobs that
+/// would never run after its early error.
+pub fn run_scripts_with_checkpoint(
+    sources: &[&str],
+    checkpoint: bool,
+) -> Option<Vec<OracleOutcome>> {
+    if sources.is_empty() {
+        return Some(Vec::new());
+    }
+    let count = u32::try_from(sources.len()).ok()?;
+    let ptrs: Vec<_> = sources.iter().map(|s| s.as_ptr().cast()).collect();
+    let lens: Vec<u32> = sources
+        .iter()
+        .map(|s| u32::try_from(s.len()))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let mut raws: Vec<_> = (0..count).map(|_| XsOracleResultRaw::default()).collect();
+    // Safety: source buffers and output slots remain live for this synchronous
+    // call, whose C implementation bounds every access by count and lens.
+    let rc = unsafe {
+        xs_oracle_run_scripts(
+            ptrs.as_ptr(),
+            lens.as_ptr(),
+            count,
+            raws.as_mut_ptr(),
+            i32::from(checkpoint),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    Some(raws.iter_mut().map(outcome_from_raw).collect())
+}
+
 /// The outcome of compiling one **Module** on XS (parse + code, no run).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleOutcome {
@@ -543,15 +596,43 @@ pub struct ModuleRunOutcome {
 /// the machine); a rejection is a normal `ModuleRunOutcome` with
 /// `completed == false`.
 pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRunOutcome> {
+    run_module_dir_with_setup(dir, main_rel, "")?.ok()
+}
+
+/// Evaluate a setup Script before linking the entry module, with a single final
+/// job checkpoint. A setup failure is returned separately so it cannot satisfy
+/// a module's expected negative outcome.
+pub fn run_module_dir_with_setup(
+    dir: &std::path::Path,
+    main_rel: &str,
+    setup: &str,
+) -> Option<Result<ModuleRunOutcome, OracleOutcome>> {
     let dir_c = std::ffi::CString::new(dir.as_os_str().to_str()?).ok()?;
     let main_c = std::ffi::CString::new(main_rel).ok()?;
     let mut raw = XsOracleResultRaw::default();
     // Safety: both C strings outlive the call; the C side writes only
     // within `raw` and heap buffers it also frees on the module path
     // (module runs capture no bytecode, so there is nothing for us to free).
-    let rc = unsafe { xs_oracle_run_module(dir_c.as_ptr(), main_c.as_ptr(), &mut raw as *mut _) };
+    let mut setup_raw = XsOracleResultRaw::default();
+    let setup_len = u32::try_from(setup.len()).ok()?;
+    let rc = unsafe {
+        xs_oracle_run_module(
+            dir_c.as_ptr(),
+            main_c.as_ptr(),
+            setup.as_ptr().cast(),
+            setup_len,
+            &mut setup_raw,
+            &mut raw,
+        )
+    };
     if rc != 0 {
         return None;
+    }
+    let setup_outcome = outcome_from_raw(&mut setup_raw);
+    if !setup_outcome.completed {
+        // Safety: release any partial module result even when setup aborts.
+        unsafe { xs_oracle_free(&mut raw) };
+        return Some(Err(setup_outcome));
     }
     let outcome = ModuleRunOutcome {
         completed: raw.ok != 0,
@@ -563,7 +644,7 @@ pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRun
     };
     // Safety: frees any heap buffers the shim allocated (none on this path).
     unsafe { xs_oracle_free(&mut raw as *mut _) };
-    Some(outcome)
+    Some(Ok(outcome))
 }
 
 fn cstr_field(buf: &[u8]) -> String {
@@ -574,6 +655,44 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separate_scripts_defer_jobs_until_the_subject() {
+        let sources = [
+            "globalThis.phase = 'setup'; Promise.resolve().then(() => { phase = 'job'; }); void 0;",
+            "phase",
+        ];
+        let scripted = run_scripts(&sources).expect("oracle");
+        assert!(scripted.iter().all(|run| run.completed));
+        assert_eq!(scripted[1].result, "setup");
+        let cranks = run_cranks(&sources).expect("oracle");
+        assert_eq!(
+            cranks[1].result, "job",
+            "existing crank checkpoints are unchanged"
+        );
+    }
+
+    #[test]
+    fn separate_script_capture_marks_truncated_completions() {
+        let runs = run_scripts(&["void 0;", "'x'.repeat(20000)"]).expect("oracle");
+        assert!(runs[1].completed);
+        assert!(runs[1].result_truncated);
+        assert_eq!(runs[1].result.len(), RESULT_BUF_CAP - 1);
+    }
+
+    #[test]
+    fn module_setup_failures_are_distinct_from_module_rejections() {
+        for source in ["throw new TypeError('setup failure');", "const = ;"] {
+            // Setup fails before path resolution, so no fixture is necessary.
+            let failure =
+                run_module_dir_with_setup(std::path::Path::new("."), "absent.mjs", source)
+                    .expect("oracle")
+                    .expect_err("the setup failure must not become a module rejection");
+            assert!(!failure.completed);
+            assert_eq!(failure.exit_status, 0);
+            assert!(!failure.error.is_empty());
+        }
+    }
 
     /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
     /// value longer than the old 1024-byte capture buffer used to be silently

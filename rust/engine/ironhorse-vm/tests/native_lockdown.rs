@@ -132,6 +132,45 @@ fn a_reentrant_lockdown_is_refused_during_the_harden_walk() {
 }
 
 #[test]
+fn a_first_lockdown_waits_for_the_outer_harden_walk() {
+    for allow in [false, true] {
+        assert_eq!(
+            result(&format!(
+                r#"{CATCH}
+                var allow = {allow};
+                var first = true;
+                var nested;
+                Object.prototype.extra = new Proxy({{}}, {{
+                  preventExtensions(target) {{
+                    if (first) {{
+                      first = false;
+                      // Returning from this nested walk must not clear the
+                      // still-active outer walk's guard.
+                      harden({{}});
+                      nested = attempt(function() {{ return lockdown(); }});
+                    }}
+                    return allow && Reflect.preventExtensions(target);
+                  }}
+                }});
+                var outer = attempt(function() {{ return harden(Object.prototype); }});
+                var unchanged = Function.prototype.constructor === Function;
+                allow = true;
+                var later = attempt(function() {{ return lockdown(); }});
+                [nested, outer, unchanged, later,
+                 Object.isFrozen(Function.prototype),
+                 attempt(function() {{ return lockdown(); }})].join(' | ');
+                "#
+            )),
+            format!(
+                "TypeError: lockdown cannot start during harden | {} | true | returned undefined | true | TypeError: lockdown already called",
+                if allow { "returned [object Object]" } else { "TypeError: extensible object" }
+            ),
+            "the outer harden allows freezing: {allow}"
+        );
+    }
+}
+
+#[test]
 fn lockdown_closes_the_evaluator_reach_through_every_function_family_prototype() {
     // The measured hole this whole operation exists to close.
     // `CompartmentOptions::global_names` decides which names are BOUND and

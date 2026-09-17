@@ -7,7 +7,13 @@ use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
-use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use ironhorse_snapshot::machine::{
+    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
+    resume_from_store_lazy, MachineSnapshot,
+};
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_vm::Interp;
@@ -46,6 +52,46 @@ fn the_second_call_still_throws_after_store_resume() {
     let dir = TempDir::new("ih-lockdown-second-call");
     let mut file = FileStore::open(dir.join("heap.ihstore")).expect("open");
     twin("lockdown(); 0", &[SECOND_CALL], &mut file);
+}
+
+/// The completion marker can change after adoption of an unlocked store.
+/// Checkpoint must retain that write, including on a lazy page. Run without GC
+/// as well as with it: collection marks every page dirty and could otherwise
+/// conceal a missing dirty-page notification from the marker's own write.
+#[test]
+fn lockdown_after_store_resume_survives_checkpoint() {
+    for (lazy, collect) in [(false, false), (true, false), (false, true), (true, true)] {
+        let store = Rc::new(RefCell::new(MemoryStore::new()));
+        let mut machine = Interp::new();
+        assert!(crank(&mut machine, "0").0);
+        drop(
+            begin_store_session(machine, &sig(), &mut *store.borrow_mut())
+                .map_err(|(_, error)| error)
+                .expect("store the unlocked machine"),
+        );
+        let mut resumed = if lazy {
+            resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume")
+        } else {
+            resume_from_store(&*store.borrow(), &sig()).expect("eager resume")
+        };
+        let first = crank(resumed.machine_mut(), "lockdown(); 0");
+        assert!(first.0, "first lockdown: {first:?}");
+        if collect {
+            resumed
+                .machine_mut()
+                .collect_garbage()
+                .expect("collect after lockdown");
+        }
+        checkpoint_to_store(&mut resumed, &sig(), &mut *store.borrow_mut())
+            .expect("checkpoint the completion marker");
+        let mut again = resume_from_store(&*store.borrow(), &sig()).expect("resume checkpoint");
+        let second = crank(again.machine_mut(), SECOND_CALL);
+        assert!(second.0, "catch the second lockdown: {second:?}");
+        assert_eq!(
+            second.2, "TypeError: lockdown already called",
+            "lazy={lazy}, collect={collect}"
+        );
+    }
 }
 
 /// The same across a raw snapshot blob, the other persistence path, which does

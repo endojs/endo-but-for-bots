@@ -1,6 +1,27 @@
 //! Property integrity operations.
 use crate::interp::*;
 
+/// Preserve the outer walk's state when a proxy callback hardens another graph.
+struct HardenGuard {
+    intrinsics: std::rc::Rc<crate::Intrinsics>,
+    previous: bool,
+}
+
+impl HardenGuard {
+    fn enter(intrinsics: &std::rc::Rc<crate::Intrinsics>) -> Self {
+        Self {
+            previous: intrinsics.hardening.replace(true),
+            intrinsics: intrinsics.clone(),
+        }
+    }
+}
+
+impl Drop for HardenGuard {
+    fn drop(&mut self) {
+        self.intrinsics.hardening.set(self.previous);
+    }
+}
+
 impl Interp {
     /// The global `harden(x)` (`fx_harden` + `fx_hardenFreezeAndTraverse` +
     /// `fx_hardenQueue`, `xsLockdown.c`): the transitive freeze worklist over
@@ -26,6 +47,7 @@ impl Interp {
         if self.slots.get(inst).flag & XS_DONT_MARSHALL_FLAG != 0 {
             return Ok(arg0);
         }
+        let _guard = HardenGuard::enter(self.realm.intrinsics());
         let mut list: Vec<crate::value::SlotIndex> = Vec::new();
         self.harden_enqueue(inst, &mut list);
         let mut i = 0;
