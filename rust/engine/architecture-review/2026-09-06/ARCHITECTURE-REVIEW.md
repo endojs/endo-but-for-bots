@@ -4712,7 +4712,13 @@ for all 29 frame-slot reads, including function aliases versus module indirectio
 and the resource/disposal adjacency that Eval-list reversal must not disturb.
 Its 2,240 generated cases and 34 boundary cases inspect receipts before coding and
 require slots for every resolved node afterward; three damaged-tree controls are rejected.
-The remaining inventory is 43 cross-pass and AST-shape sites.
+The subsequent scope-receipt audit examines 22 cross-pass sites, distinguishing
+absent resolution rows from unresolved names and ordinary scopes from synthetic
+class initializer scopes.
+Its 1,920 nested-class cases and 82 boundary cases inspect the scoper's completed
+receipts and must compile successfully; 13 damaged-tree controls are rejected.
+The remaining inventory is 21 AST-shape sites, including the parser layout and
+flag preconditions used by the cross-pass arguments.
 The new deterministic matrices check 17,534 successful compilations and the
 logical-assignment runtime matrix checks 180 result/evaluation-count cases.
 Two independent mutations fail the new tests: dropping finalizer alias origins
