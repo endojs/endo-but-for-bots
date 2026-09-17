@@ -58,10 +58,13 @@ const DEFAULT_MSIZE = 131_072;
 //
 // The bound we actually want is "no more than this Tread asked for", which
 // `onRead` already clamps against `msize`. Using that byte count directly as
-// the `byteLengthLimit` says so, and is a tighter bound than the 100_000-byte
-// default rather than a looser one. Now that chunks are raw bytes rather than
-// base64 strings, the limit is the requested byte count itself — no base64
-// 4/3 expansion — so no conversion helper is needed.
+// the `byteLengthLimit` says exactly that: it tracks the request (up to the
+// 128 KiB `msize`), so for a large read it is *looser* than the 100_000-byte
+// default — admitting the over-100-KiB chunks the default wrongly rejected —
+// while still bounding each chunk to precisely what the client asked for. Now
+// that chunks are raw bytes rather than base64 strings, the limit is the
+// requested byte count itself — no base64 4/3 expansion — so no conversion
+// helper is needed.
 
 const MASK_U32 = 0xffff_ffffn;
 const MASK_U64 = (1n << 64n) - 1n;

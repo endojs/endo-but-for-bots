@@ -75,6 +75,13 @@ export const readableBlobMethodGuards = harden({
 // divergent copy is exactly the wire-shape classification bug this consolidates
 // away.
 /**
+ * The single exported discriminator for "this remote value is a readable blob
+ * whose bytes should be materialized": true when `methodNames` carries `stream`
+ * paired with a `text` whole-value read surface (and not `status`) or a
+ * `getInfo`/`readReturnPattern` byte-read marker (and not `readPattern`). See
+ * the block comment above for the full duck-type rationale and the values each
+ * branch admits or excludes.
+ *
  * @param {string[]} methodNames
  * @returns {boolean}
  */

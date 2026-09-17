@@ -295,7 +295,7 @@ Passable byte arrays are copied into mutable local chunks.
 **Options:**
 - `buffer` (number, default 0): Number of values to pre-synchronize
 - `readReturnPattern` (Pattern): Pattern to validate TReadReturn
-- `byteLengthLimit` (number): Maximum byte length per chunk
+- `byteLengthLimit` (number): Maximum byte length per chunk. When omitted, `@endo/patterns`' `M.byteArray()` default of 100,000 bytes caps each chunk (a larger chunk is rejected); set this to raise or lower that bound.
 
 ### Bytes Writer Modules
 

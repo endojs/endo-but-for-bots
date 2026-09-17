@@ -219,7 +219,9 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
     // Resolve to a readable blob; a directory selects its index. Any failure
     // (missing path, directory with no readable index, index that is itself a
     // directory) is a 404 — we never emit a 200 we cannot fulfil. A file is
-    // confirmed by the presence of `stream`, not shared metadata methods.
+    // confirmed by `looksLikeReadableBlob` (a `stream` method paired with a
+    // `text`/`getInfo`/`readReturnPattern` marker), not by the shared
+    // metadata methods alone (both blobs and trees expose those).
     let blob;
     let fileName = pathSegments[pathSegments.length - 1] || index;
     /** @type {bigint} */

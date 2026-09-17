@@ -56,9 +56,11 @@ Over a single 64 KiB (65,536-byte) chunk:
 | freeze+thaw per chunk (Node 22)| ~30 µs                           | n/a            | —      |
 
 The cross-boundary round-trip figure quoted in `DESIGN.md` (roughly 4–5x slower
-than the base64 path) folds in marshal/CapTP serialization of the larger hex
-body on top of the freeze/thaw copy the harness isolates above; that end-to-end
-figure was taken over a CapTP boundary on the same test bed and is the number a
+than the base64 path) folds `@endo/marshal` serialize/unserialize of the larger
+hex body on top of the freeze/thaw copy the harness isolates above; that
+end-to-end figure was measured as a marshal serialize/unserialize round-trip (not
+over a CapTP network boundary), and its full run-to-run table lives on the
+introducing PR rather than in this freeze/thaw-only harness. It is the number a
 downstream author weighs when deciding whether to upgrade.
 
 Compact `byteArray` marshalling and ownership-aware transfer would recover most
