@@ -37,7 +37,16 @@ pub struct Intrinsics {
 }
 
 impl Intrinsics {
-    /// True after the complete primordial graph has been frozen.
+    /// True after the complete lockdown operation has run on this realm: the
+    /// function-family and `Date` constructors replaced with inert stand-ins,
+    /// and the whole primordial graph transitively frozen.
+    ///
+    /// One flag for both steps, which is honest only because every path that
+    /// sets it performs both -- construction
+    /// (`Interp::new_shared_realm_machine_configured`), the deferred host
+    /// freeze ([`Machine::lock_down`]) and the guest `lockdown()` alike. It
+    /// once meant "frozen" alone, and a realm could report `true` while
+    /// `({}).constructor.constructor` still compiled source.
     pub fn is_locked_down(&self) -> bool {
         self.locked_down.get()
     }
@@ -276,18 +285,29 @@ pub struct CompartmentOptions {
     /// stay reachable two ways.
     ///
     /// Through any object's prototype chain, the dynamic evaluator included:
-    /// under `Some(vec![])` a guest still reads `({}).constructor.name` as
-    /// `"Object"`, `({}).constructor.constructor.name` as `"Function"`, and
-    /// evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`. SES
-    /// and XS close that route by replacing the function-family prototypes'
-    /// `.constructor` with a throwing stub during `lockdown()`
-    /// (`fx_lockdown_aux`, `xsLockdown.c:52`), and ironhorse's native
-    /// `lockdown()` now does the same. So this paragraph describes a realm that
-    /// has NOT locked down: after `lockdown()` that route is closed here too,
-    /// realm-wide and inside compartments
-    /// (`native_lockdown.rs::a_host_made_compartment_confines_guest_source_after_a_native_lockdown`).
-    /// `global_names` still does not confine on its own, which is the point
-    /// this paragraph exists to make.
+    /// a guest reads `({}).constructor.name` as `"Object"` and
+    /// `({}).constructor.constructor.name` as `"Function"` whatever this list
+    /// says, because a denied name is an absent BINDING and not an absent
+    /// object. Whether that reaches a working evaluator is the realm's
+    /// question, not this list's:
+    ///
+    /// * On a realm that has NOT locked down -- a bare `Interp`, or
+    ///   [`Machine::unfrozen_with_start_global_names`] before something freezes
+    ///   it -- `({}).constructor.constructor('return 1 + 1')()` evaluates to
+    ///   `2` under `Some(vec![])`, and this list has done nothing about it.
+    /// * After lockdown, SES and XS both close that route by replacing the
+    ///   function-family prototypes' `.constructor` with a throwing stub
+    ///   (`fx_lockdown_aux`, `xsLockdown.c:52`), and so does ironhorse. A
+    ///   [`Machine`] does it at construction, so the route is shut in every
+    ///   compartment of one
+    ///   (`realms.rs::a_locked_down_machine_denies_every_prototype_chain_evaluator`).
+    ///
+    /// Neither half suffices alone, which is the point this paragraph exists to
+    /// make: lockdown cannot close the direct `eval`/`Function` bindings,
+    /// because `compartment_evaluator` mints each compartment its own AFTER it
+    /// ran, and this list cannot close the prototype route.
+    /// `native_lockdown.rs::a_host_made_compartment_confines_guest_source_only_with_global_names`
+    /// measures both configurations.
     ///
     /// And transitively through an endowed object. Raw heap-backed `Slot`
     /// endowments are refused, but [`Compartment::define_global_value`] shares
@@ -1146,15 +1166,25 @@ impl Machine {
         })
     }
 
-    /// Freeze the shared intrinsic graph that
-    /// [`Machine::unfrozen_with_start_global_names`] left mutable. Idempotent, and a
-    /// no-op on a machine that was built frozen.
+    /// Perform on this machine the lockdown that
+    /// [`Machine::unfrozen_with_start_global_names`] deferred: replace the
+    /// function-family and `Date` constructors with inert stand-ins, then
+    /// transitively freeze the intrinsic graph. Idempotent, and a no-op on a
+    /// machine that was built frozen -- [`Machine::new`] does both steps at
+    /// construction.
     ///
-    /// NOT atomic. The intrinsic roots are frozen one at a time, so a guest
-    /// that has made an intrinsic non-extensible or installed a refusing
-    /// Proxy can make this return `Err` with some roots already frozen while
-    /// [`Intrinsics::is_locked_down`] still reports false. Call it again to
-    /// finish: the roots already frozen are no-ops.
+    /// Freezing alone would not be lockdown. It leaves
+    /// `Function.prototype.constructor` pointing at the real evaluator, so
+    /// `({}).constructor.constructor` still compiles guest source in every
+    /// compartment -- the route `CompartmentOptions::global_names` says it
+    /// cannot close.
+    ///
+    /// NOT atomic, and **calling again is not a recovery**. The roots are
+    /// frozen one at a time, so a guest that has made an intrinsic
+    /// non-extensible or installed a refusing Proxy can make this return `Err`
+    /// with some roots already frozen while [`Intrinsics::is_locked_down`]
+    /// still reports false. Retrying does not converge: the Proxy that refused
+    /// one root refuses it on every attempt. Discard the machine instead.
     pub fn lock_down(&self) -> Result<(), Halt> {
         self.machine
             .interpreter

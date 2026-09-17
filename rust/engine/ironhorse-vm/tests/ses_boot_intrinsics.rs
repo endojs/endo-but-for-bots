@@ -387,13 +387,14 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             // one. A `typeof` census can say no more than that, and an earlier
             // revision of this comment read more into it -- that such a realm
             // "has a native `lockdown()`" and so "the option now exists". It
-            // does not. This is a `Machine::new()` realm, frozen at
-            // construction, and `Realm` construction sets `locked_down` at the
-            // same time; the guest's first call is therefore refused as a
-            // second one and the constructors are never rewired. The name is
-            // bound and calling it throws.
-            // `native_lockdown.rs::a_frozen_machine_refuses_the_guest_lockdown_and_keeps_the_reach_open`
-            // pins that, and the design note carries it as an open item.
+            // does not. This is a `Machine::new()` realm, which performs the
+            // whole lockdown operation at construction and sets `locked_down`
+            // while doing it; the guest's first call is therefore refused as a
+            // second one. The name is bound and calling it throws.
+            // `native_lockdown.rs::a_frozen_machine_runs_the_whole_lockdown_at_construction`
+            // pins the refusal together with the reach it costs nothing:
+            // construction already rewired the constructors, so there is no
+            // work the refused call would have done.
             assert_eq!(
                 crank(SES_CENSUS),
                 "lockdown=function harden=undefined Compartment=undefined \
