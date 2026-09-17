@@ -270,6 +270,8 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "call:stack-underflow",
     "call:unexpected",
     "class:invalid-stack",
+    "closure-template:capture-index",
+    "closure-template:capture-sequence",
     "collection:missing-method-brand",
     "collection:unexpected-method",
     "comparison:stack-underflow",
