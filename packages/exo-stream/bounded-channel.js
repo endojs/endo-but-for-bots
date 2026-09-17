@@ -7,7 +7,7 @@ import { makeReaderPump } from './reader-pump.js';
 import { BufferedReaderInterface } from './type-guards.js';
 
 /** @import { Passable } from '@endo/pass-style' */
-/** @import { BufferedReaderKit, MakeBufferedReaderOptions } from './types.js' */
+/** @import { BufferedReaderKit, MakeBufferedReaderOptions, SomehowAsyncIterable } from './types.js' */
 
 /**
  * Push-fed, credit-aware reader. Bounds apply to undelivered data, not lifetime
@@ -97,6 +97,13 @@ export const makeBoundedReader = options => {
     }
     notify();
   };
+  // Annotated rather than inferred: TypeScript cannot discriminate `value` on
+  // `done` across a hand-written `next()`, so it collapses the yield and the
+  // return into `T | undefined` and the pump then produces
+  // `StreamNode<T | undefined, T | undefined>` where the kit declares
+  // `StreamNode<T, undefined>`. This iterator does yield `T` and return
+  // `undefined`; saying so restores the pump's inference.
+  /** @type {SomehowAsyncIterable<T, undefined, undefined>} */
   const iterator = harden({
     async next() {
       await null;
@@ -119,7 +126,15 @@ export const makeBoundedReader = options => {
     },
     async return() {
       close();
-      return harden({ done: true, value: undefined });
+      // Pinned: the object literal widens `done` to `boolean`, which stops it
+      // satisfying `IteratorResult`'s discriminated union. `next()` above is
+      // narrowed by its `done: false` sibling and needs no annotation.
+      return harden(
+        /** @type {IteratorReturnResult<undefined>} */ ({
+          done: true,
+          value: undefined,
+        }),
+      );
     },
     [Symbol.asyncIterator]() {
       return this;
@@ -127,11 +142,16 @@ export const makeBoundedReader = options => {
   });
   const pump = makeReaderPump(iterator, { cancelPending: close });
   const reader = makeExo('BoundedReader', BufferedReaderInterface, {
+    // `unknown` rather than `Passable`, and cast at the call: the guard
+    // checks the argument at runtime, and the reader's declared type takes an
+    // `ERef<StreamNode<…>>` that is not itself `Passable` to TypeScript.
+    // Same shape as `blobFromBytes` in @endo/platform.
+    /** @param {unknown} syn */
     stream(syn) {
       if (streaming)
         throw TypeError('BoundedReader stream() may be called at most once');
       streaming = true;
-      return pump(syn);
+      return pump(/** @type {any} */ (syn));
     },
     readPattern: () => readPattern,
     readReturnPattern: () => undefined,
