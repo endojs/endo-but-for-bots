@@ -95,12 +95,23 @@ use std::path::Path;
 /// `tame-function-constructors.js` could no longer install its inert
 /// constructor -- `lockdown()` died with `invalid descriptor`.
 ///
-/// `ironhorse-pre-shim.js` now hands the selector `@endo/harden`'s
-/// `makeHardener({ traversePrototypes: false })` instead, which is present (so
-/// nothing installs into the poisoning slot) and gentle (so the intrinsics
-/// lockdown still has to tame survive). The rejection was always spec-correct;
-/// the freeze was the problem, and it is the pre-lockdown harden that had to
-/// change.
+/// The prelude now takes that in two parts, and the split is the
+/// point. `@endo/ironhorse-prelude` -- the prologue the SHIPPED worker also
+/// bundles -- DELETES the native `harden` before the shim is evaluated, so the
+/// shim builds and keeps its own, which traverses. Installing a gentle
+/// hardener there instead would have handed it to the shim for the life of the
+/// realm, since `packages/ses/src/make-hardener.js:142-147` adopts an existing
+/// `globalThis.harden` and `lockdown.js:85` calls it at module scope --
+/// `lockdown()` does not replace it.
+///
+/// `packages/test262-runner/src/install-pre-lockdown-harden.js` then supplies
+/// `@endo/harden`'s `makeHardener({ traversePrototypes: false })` AFTER the
+/// shim, which is present (so nothing installs into the poisoning slot) and
+/// gentle (so the intrinsics lockdown still has to tame survive), and withdraws
+/// it in a `lockdown` wrapper (so `initProperty` does not see two definitions
+/// of `harden` and throw `Conflicting definitions of harden`). The rejection
+/// was always spec-correct; the freeze was the problem, and it is the
+/// pre-lockdown harden that had to change.
 ///
 /// XS needs none of this: it has a native `lockdown` (`fx_lockdown`,
 /// `c/moddable/xs/sources/xsLockdown.c`) that rewires those constructors with

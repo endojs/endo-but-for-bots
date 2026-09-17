@@ -15,6 +15,7 @@ import './ironhorse-pre-shim.js';
 import 'ses/lockdown-shim.js';
 import 'ses/compartment-shim.js';
 import 'ses/assert-shim.js';
+import './install-pre-lockdown-harden.js';
 import './expose-pass-style-bytes-globals.js';
 
 const test262AssertSymbol = Symbol.for('test262Assert');
