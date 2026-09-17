@@ -284,9 +284,10 @@ They own the mutable/passable boundary over the generic `stream()` protocol;
 they are not a second remote protocol. The current marshal hex representation is
 larger and slower than the retired transitional base64 representation: hex uses
 two wire characters per input byte versus base64's four per three bytes, so the
-serialized CapData body is ≈1.5× larger (measured at a 64 KiB chunk: 131,105 vs
-87,386 bytes), and the copy-heavy `frozenBytes`→`thawedBytes` round-trip per
-chunk measured ≈4.5× slower on Node 22 (interpreted; 8,192 vs 1,720 ms to cross
-a 64 MiB boundary — see PR #1100 for the full benchmark table). Compact
-byteArray marshalling and ownership-aware transfer therefore remain performance
-work.
+serialized CapData body is ~1.5x larger, and the copy-heavy
+`frozenBytes`->`thawedBytes` round-trip per chunk is materially slower on an
+interpreted engine. (An ad-hoc local measurement on Node 22 over a 64 KiB chunk
+saw ~131,000 vs ~87,000 wire bytes and roughly a 4-5x slower cross-boundary
+round-trip; these are indicative single-run figures, not a maintained
+benchmark.) Compact byteArray marshalling and ownership-aware transfer therefore
+remain performance work.

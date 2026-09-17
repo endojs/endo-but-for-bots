@@ -308,6 +308,7 @@ Passable byte arrays received from the initiator are copied to mutable
 **Options:**
 - `buffer` (number, default 0): Number of flow-control acks to pre-send
 - `writeReturnPattern` (Pattern): Pattern describing TWriteReturn (return value)
+- `byteLengthLimit` (number): Maximum byte length per synchronize frame. Unlike the reader, when omitted the write limit is effectively unbounded (the responder validates each frame is a byte array, not its size); set it to bound the frames a remote initiator may push.
 
 #### `iterateBytesWriter(bytesWriterRef, options?)`
 

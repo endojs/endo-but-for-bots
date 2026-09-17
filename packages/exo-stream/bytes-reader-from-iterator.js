@@ -32,7 +32,7 @@ import { makeReaderPump } from './reader-pump.js';
  *   JavaScript iterator with a `return(value)` method, it forwards the argument
  *   and uses the iterator’s returned value as the terminal ack; otherwise it
  *   terminates with the original argument value.
- * - Responder sends acknowledgements (immutable bytes) via the acknowledgement chain
+ * - Responder sends acknowledgments (immutable bytes) via the acknowledgment chain
  *
  * @param {SomehowAsyncIterable<Uint8Array>} bytesIterator
  * @param {MakeBytesReaderOptions} [options]

@@ -71,10 +71,13 @@ export const bytesWriterFromIterator = (iterator, options = {}) => {
   //
   // The check is on the *kind* (a base64 string is not a `byteArray` and is
   // rejected regardless of size). A caller may bound the per-frame size with
-  // `byteLengthLimit` (symmetric with `iterateBytesReader`); when omitted the
-  // limit is effectively unbounded, preserving the prior no-`writePattern`
-  // behaviour so a legitimate large frame (e.g. a 256 KiB file write) is not
-  // newly rejected by the default 100 KB `M.byteArray()` cap.
+  // `byteLengthLimit` — the *option* is symmetric with `iterateBytesReader`,
+  // but its *default* deliberately is not: when omitted the write limit is
+  // effectively unbounded (`Number.MAX_SAFE_INTEGER`), whereas the reader falls
+  // back to `M.byteArray()`'s 100 KB cap. The asymmetry preserves the prior
+  // no-`writePattern` behavior so a legitimate large frame (e.g. a 256 KiB file
+  // write) is not newly rejected by a default cap; a caller that wants a bound
+  // opts in explicitly.
   const writePattern = M.byteArray({
     byteLengthLimit:
       byteLengthLimit === undefined ? Number.MAX_SAFE_INTEGER : byteLengthLimit,

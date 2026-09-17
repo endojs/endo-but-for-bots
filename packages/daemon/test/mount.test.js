@@ -751,6 +751,55 @@ test('write rejects a generic PassableReader that merely advertises stream', asy
   );
 });
 
+test('write rejects an HttpResponse that merely advertises text/stream', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // An `@endo/exo-http-client` `HttpResponse` carries the readable-blob
+  // whole-value markers `text`/`json`/`stream`, so the bare `text` branch of
+  // `looksLikeReadableBlob` would admit it — but its `stream()` responder takes
+  // *zero* args, so `iterateBytesReader` would drive `E(source).stream(synHead)`
+  // and die on an opaque arity guard deep in the read, not the crisp shape
+  // error `write()` promises. The discriminator excludes it by the *absence* of
+  // `status` (the response-code accessor a readable blob never carries), so
+  // `write()` must reject it up front with the same "must be a ReadableBlob"
+  // error the fall-through branch gives.
+  const HttpResponseShape = M.interface('HttpResponse', {
+    status: M.call().returns(M.number()),
+    statusText: M.call().returns(M.string()),
+    ok: M.call().returns(M.boolean()),
+    headers: M.call().returns(M.recordOf(M.string(), M.string())),
+    url: M.call().returns(M.string()),
+    text: M.callWhen().returns(M.string()),
+    json: M.callWhen().returns(M.any()),
+    stream: M.call().returns(M.any()),
+    help: M.call().returns(M.string()),
+  });
+  const httpResponse = makeExo('HttpResponse', HttpResponseShape, {
+    status: () => 200,
+    statusText: () => 'OK',
+    ok: () => true,
+    headers: () => harden({}),
+    url: () => 'https://example.test/',
+    text: async () => 'body',
+    json: async () => harden({}),
+    stream: () => harden({}),
+    help: () => 'http response',
+  });
+  await t.throwsAsync(
+    () =>
+      E(mount).write(
+        ['x'],
+        /** @type {Parameters<import('../src/types.js').EndoMount['write']>[1]} */ (
+          /** @type {unknown} */ (httpResponse)
+        ),
+      ),
+    {
+      message: /must be a ReadableBlob/,
+    },
+  );
+});
+
 test('write materializes a canonical ReadableBlob source (blobFromBytes)', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
@@ -758,7 +807,7 @@ test('write materializes a canonical ReadableBlob source (blobFromBytes)', async
   // `blobFromBytes` is the repo's canonical `ReadableBlob`: its interface is
   // exactly `{ help, stream, text, json }`, carrying neither `getInfo` nor
   // `readReturnPattern`. The narrowed `stream && (getInfo || readReturnPattern)`
-  // predicate rejected it — `write()` threw "must be a ReadableBlob…" on a value
+  // predicate rejected it — `write()` threw "must be a ReadableBlob..." on a value
   // that *is* one. `looksLikeReadableBlob` admits it via the `text` whole-value
   // read surface, so `write()` must now materialize its bytes.
   const bytes = new TextEncoder().encode('hello canonical blob');

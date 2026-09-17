@@ -18,8 +18,10 @@
  * `getInfo()`.
  *
  * Because both blobs and trees expose `getInfo`, a resolved node is confirmed
- * to be a *file* by the presence of `stream` (introspected via
- * `__getMethodNames__`) — never by `getInfo`. A path that resolves to a
+ * to be a *file* by the shared `looksLikeReadableBlob` discriminator over its
+ * method names (introspected via `__getMethodNames__`) — a `SnapshotBlob`
+ * carries `stream`, a `SnapshotTree` does not — never by `getInfo`. A path
+ * that resolves to a
  * directory with no readable index is a `404`, never a `200` we cannot fulfil.
  *
  * The response-policy and caching baseline (design § Browser boundaries,
@@ -32,6 +34,7 @@
 import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 
 import { normalizeSegments } from './asset-server.js';
 import { contentTypeForName } from './mime.js';
@@ -144,7 +147,12 @@ const readBlobBody = async function* readBlobBody(blob, size) {
 const isBlob = async node => {
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(node).__getMethodNames__();
-  return methods.includes('stream');
+  // Use the one exported discriminator rather than re-inlining a bare `stream`
+  // name check — `stream` alone is the generic byte-stream method now shared
+  // with readers/writers/`HttpResponse`, and a divergent per-consumer copy is
+  // exactly the wire-shape confusion this consolidates away. A `SnapshotBlob`
+  // (`stream`+`getInfo`) passes; a `SnapshotTree` (no `stream`) does not.
+  return looksLikeReadableBlob(methods);
 };
 
 /**
