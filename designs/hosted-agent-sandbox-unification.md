@@ -492,6 +492,109 @@ procfs while the record keeps its plan, dependencies, and directories, and then 
 everything through destroy — wiring evidence, not native acceptance.
 Codex adoption, native recovery semantics, and live acceptance remain pending.
 
+## What Paseo does differently
+
+Paseo instruments the same three CLIs this design does, and makes the opposite bet
+about who owns the transcript. Its provider layer is described in
+[`paseo-meta-harness-report.md`](paseo-meta-harness-report.md), vendored here
+verbatim; section numbers below are that report's.
+
+**The disagreement is total, and it is the only one that matters.** Paseo §0: *"Paseo
+never owns the transcript. Each provider's own session store is the durable
+authority... It is also the only restore path — there is no Paseo-side transcript
+database in production."* It persists a handle — provider id, native session id, a
+config snapshot — and rebuilds its timeline by asking the harness to reopen its own
+session. The durable-timeline slot exists in its manager and is deliberately left
+unwired.
+
+This design is the mirror image. The stack owns the records; a CLI's store is a cache
+it can rebuild. As of the store-authority change, a Claude store that outlives the
+daemon no longer decides what the conversation is.
+
+### The blocker Paseo names, measured
+
+Paseo §4.3 says what a design like this one would need, and why it did not build it:
+
+> keep a durable, lossless, provider-neutral transcript ... and give every provider an
+> `importTimeline(rows)` that can seed a fresh native session from it. Both halves are
+> real work — most harnesses have no "prefill this conversation" API, so seeding
+> degrades to prompt-injection anyway.
+
+Measured against the three harnesses Paseo itself instruments, the second half is
+false:
+
+| | prefill path | vendor change |
+| --- | --- | --- |
+| Claude | write the JSONL, resume it by id | none |
+| Codex | `thread/inject_items`, raw Responses API items | none |
+| OpenCode | the import route | a ~200-line fork patch |
+
+Two of three need nothing from the vendor, and the third needed one patch. Codex
+additionally reprojects a rollout file written before it boots, measured separately,
+so even there the prompt-injection floor is not where the design bottoms out. Paseo
+was right that the work is real — this session spent most of its defects inside
+exactly that machinery — and wrong that it degrades to prompt injection.
+
+### Where two designs arrived at the same rule independently
+
+- **No fallbacks.** Paseo §1.4: *"gate the feature once, then either run it or tell
+  the user — never write a defensive fallback path."* This design removed both lossy
+  restoration fallbacks for the same reason, after one of them hid a dropped
+  transcript through a full test suite and three deploys.
+- **One writer, and close before resume.** Paseo's gotcha 2 is that a Codex thread has
+  exactly one writer even when idle, so it checks `thread/loaded/list` before resuming
+  and closes the old session first. The durable volume lease here is the same
+  constraint one layer down, and it bites the same way: a lease left by a dead
+  incarnation makes the session unopenable, and a lease held by this one makes a
+  second provisioning fail.
+- **Ask what the runtime can do; do not discover it by timeout.** Paseo negotiates on
+  advertised capability flags. The OpenCode bridge now names its features in `ready`
+  for the same reason.
+
+### Where Paseo is ahead
+
+- **A normalized `ToolCallDetail`** — `shell`, `read`, `edit`, `write`, `search`, …,
+  with `unknown` as the escape hatch. Paseo calls it *"the single highest-leverage
+  decision in the whole design"*, and it is why one renderer serves every harness.
+  The records here carry a tool call's `name` and `args` as opaque strings: enough to
+  restore a call as a call, not enough to render three harnesses through one view.
+- **The native id is not stable.** Paseo captures a Claude session id that changes
+  mid-stream when a hook restarts the process, and re-reads its handle after any
+  fork. Nothing here watches for that; the deterministic uuid this stack derives is
+  what it resumes, and a CLI that renamed its own session would not be noticed. The
+  exposure is smaller because this design owns the config directory and ships no
+  hooks, but it is not zero.
+- **Read-only history** (`purpose: "history"`, a temporary app-server) — reading an
+  archived conversation without resurrecting it in the CLI's own UI.
+- **Import from nothing**, rewind/fork, and a catalog cache that treats a saved model
+  choice as user intent a failed probe must never erase.
+
+### Where the sandbox removes the problem instead of solving it
+
+Paseo's worst fragility is its first gotcha: Claude's project-directory encoding is
+undocumented, ported verbatim from the SDK bundle — non-alphanumerics to `-`, a
+200-character cap, a base-36 hash suffix, realpath, NFC on darwin — and must be
+re-derived on every SDK upgrade. Here the guest's cwd is always `/workspace`, so the
+encoding is `'/workspace'.replace(/\//g, '-')` and the whole class is gone. The same
+fixed cwd removes its gotcha 13, realpath-aware matching for symlinked worktrees.
+
+Three more of its process-hygiene rules are structural here rather than maintained:
+the guest gets an allowlisted environment instead of a denylist that must name
+`CLAUDECODE` and its siblings; descendant reaping is a policy control the attestation
+proves rather than a tree-kill the daemon must remember; and a slice is an attested
+container rather than a pid in a managed-process ledger.
+
+### The cost of this bet, stated plainly
+
+Everything in Paseo §3 that it gets for free — restore works because the provider's
+store works — is machinery this design has to build and keep correct. The deploy that
+closed this work found nine defects and five of them were in exactly that seam: the
+transcript dropped before it reached a client, a restore that wrote the wrong file, a
+store that silently outranked the records, a capability discovered only by timeout,
+and a fallback that hid all of it. Paseo's bet costs cross-harness portability and
+buys reliability; this one costs reliability work and buys a conversation the stack
+can always rebuild, on any adapter, including one whose store is `:memory:`.
+
 ## Motivation
 
 Claude, Codex, and OpenCode need the same basic service: run an agent with selected
