@@ -460,6 +460,39 @@ test('default socket paths are distinct across concurrent-ish mounts', async t =
   t.not(await E(h1).socketPath(), await E(h2).socketPath());
 });
 
+test('generated socket fits the hosted Codex session directory', async t => {
+  const socketDir =
+    '/var/lib/endo/codex-subscription-v2/sessions/mu59t5ik-ftuwid-84a7a67b6c05/9p';
+  const { mounter, close } = makeHarness({
+    env: { NINEP_SOCKET_DIR: socketDir },
+  });
+  t.teardown(close);
+  const handle = await E(mounter).mount(fakeFs(), '/mnt/a', harden({}));
+  const socketPath = await E(handle).socketPath();
+  t.is(nodePath.dirname(socketPath), socketDir);
+  t.regex(nodePath.basename(socketPath), /^endo-9p-[A-Za-z0-9_-]{16}$/);
+  t.true(new TextEncoder().encode(socketPath).byteLength <= 103);
+});
+
+test('oversized explicit and generated sockets fail before native effects', async t => {
+  for (const socketDir of [`/${'a'.repeat(104)}`, `/${'é'.repeat(52)}`]) {
+    const { mounter, calls, close } = makeHarness({
+      env: { NINEP_SOCKET_DIR: socketDir },
+    });
+    t.teardown(close);
+    for (const options of [{}, { socketPath: `${socketDir}/s` }]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        E(mounter).mount(fakeFs(), '/mnt/a', harden(options)),
+        { message: /socket path exceeds 103 bytes/ },
+      );
+    }
+    t.is(calls.makeDir.length, 0);
+    t.is(calls.bridges.length, 0);
+    t.is(calls.run.length, 0);
+  }
+});
+
 test('cancellation unmounts live mounts and refuses new ones', async t => {
   let rejectCancelled;
   const cancelledP = new Promise((_resolve, reject) => {

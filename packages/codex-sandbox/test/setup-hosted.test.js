@@ -47,6 +47,7 @@ const makeFakeHost = ({
   const removed = [];
   const environments = new Map();
   const specifiers = new Map();
+  const powersIds = new Map();
   const bind = (namePath, id, specifier, env) => {
     bindings.set(key(...namePath), id);
     specifiers.set(id, specifier);
@@ -99,6 +100,7 @@ const makeFakeHost = ({
           harden({
             type: 'make-unconfined',
             properties: {
+              powers: { kind: 'reference', identifier: powersIds.get(id) },
               specifier: {
                 kind: 'literal',
                 value: specifiers.get(id) ?? unsupportedSpecifier,
@@ -140,6 +142,8 @@ const makeFakeHost = ({
       bindings.delete(key(...parts));
     },
     async makeUnconfined(worker, specifier, options) {
+      if (typeof options.powersName !== 'string')
+        throw Error('powersName must be one pet name');
       mints.push({ worker, specifier, options });
       const result = Array.isArray(options.resultName)
         ? options.resultName
@@ -147,9 +151,13 @@ const makeFakeHost = ({
       bindings.set(key(...result), `${result.at(-1)}-id`);
       specifiers.set(`${result.at(-1)}-id`, specifier);
       environments.set(`${result.at(-1)}-id`, options.env);
+      powersIds.set(
+        `${result.at(-1)}-id`,
+        bindings.get(key(options.powersName)),
+      );
     },
   });
-  return { host, bindings, mints, stored, copies, removed };
+  return { host, bindings, mints, stored, copies, removed, bind };
 };
 
 const withEnv = (t, values) => {
@@ -182,7 +190,24 @@ const baseEnv = async t => {
     ENDO_CODEX_PROJECT_IDS: JSON.stringify({ first: 42_020, last: 43_019 }),
     ENDO_CODEX_MAX_SESSIONS: '2',
     ENDO_CODEX_STATE_BYTES: '268435456',
-    ENDO_CODEX_MODELS: JSON.stringify([{ id: 'gpt-5.6-sol', isDefault: true }]),
+    ENDO_CODEX_MODELS: JSON.stringify([
+      {
+        id: 'model-a',
+        displayName: 'Model A',
+        isDefault: true,
+        defaultReasoningEffort: null,
+        supportedReasoningEfforts: [],
+      },
+    ]),
+    ENDO_CODEX_NATIVE_PROFILE: JSON.stringify({
+      uid: 1000,
+      gid: 1000,
+      memoryBytes: '536870912',
+      cpuQuotaMicros: '200000',
+      pids: 128,
+      cpuPeriodMicros: 100_000,
+      maxConcurrentOperations: 1,
+    }),
     NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
     NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
     NINEP_SUDO: '1',
@@ -206,96 +231,76 @@ test.serial('missing configuration enables nothing', async t => {
   t.deepEqual(fake.mints, []);
 });
 
-test.serial('requires the host-side formulas', async t => {
-  await baseEnv(t);
-  const fake = makeFakeHost();
-  fake.bindings.delete(key('codex-sandbox', 'state-provider'));
-  await t.throwsAsync(main(fake.host, { exec: noExec }), {
-    message: /state-provider.*run setup-host\.js first/s,
-  });
-  t.deepEqual(fake.mints, []);
-});
-
 test.serial('refuses an owner label the runtime does not run as', async t => {
-  // The volume registry records one owner and refuses a change outright, so a
-  // disagreement is a migration, not a restart.
   await baseEnv(t);
   withEnv(t, { ENDO_CODEX_SANDBOX_OWNER_ID: 'codex-other' });
   const fake = makeFakeHost();
   await t.throwsAsync(main(fake.host, { exec: noExec }), {
-    message: /native-sandbox runs as .*codex-test-owner.*codex-other/s,
+    message: /owner differs/,
   });
   t.deepEqual(fake.mints, []);
 });
 
-test.serial('mints the credential, the backend, and binds Floot', async t => {
-  const base = await baseEnv(t);
-  const fake = makeFakeHost();
-  await main(fake.host, { exec: noExec });
-
-  const credentialMint = fake.mints.find(
-    mint => mint.specifier === renewableCredentialsSpecifier,
-  );
-  t.truthy(credentialMint);
-  t.is(credentialMint.options.powersName, '@agent');
-  t.deepEqual(credentialMint.options.env, {
-    CREDENTIAL_SECRET_PATH: JSON.stringify([
-      'secrets',
-      'codex-subscription-auth',
-    ]),
-    CREDENTIAL_LABEL: 'Codex',
-  });
-
-  const backendMint = fake.mints.find(
-    mint => mint.specifier === backendSpecifier,
-  );
-  t.truthy(backendMint);
-  // The backend is minted under a temporary name first, so a failed mint leaves
-  // the live backend and Floot's binding to it working.
-  t.deepEqual(backendMint.options.resultName, [
-    'codex-sandbox',
-    'backend-next',
-  ]);
-  t.is(backendMint.options.powersName, 'codex.backend-powers');
-
-  // Its powers is a record of exactly three capabilities, and the temporary
-  // name that carried it is removed again.
-  const [bundle] = fake.stored;
-  t.deepEqual(Object.keys(bundle.value).sort(), [
-    'credential',
-    'sandbox',
-    'stateProvider',
-  ]);
-  t.true(
-    fake.removed.some(parts => key(...parts) === key('codex.backend-powers')),
-  );
-
-  const config = JSON.parse(backendMint.options.env.CODEX_HOST_CONFIG);
-  t.is(config.accountRef, accountId);
-  t.is(config.ownerId, ownerId);
-  t.is(config.imageRef, `localhost/codex-subscription@${digest}`);
-  t.deepEqual(config.projectIds, { first: 42_020, last: 43_019 });
-  // The daemon's own 9P mount programs are recorded with the rest of the
-  // configuration, so the backend never reads a process environment for them.
-  t.deepEqual(config.mounterEnv, {
-    NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
-    NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
-    NINEP_SUDO: '1',
-  });
-  // Absent means broker-only; a stale rollout flag is what made revival throw.
-  t.false('publicInternet' in config);
-  t.false('diagnostics' in config);
-
-  t.true(
-    fake.copies.some(
-      ({ to }) =>
-        key(...to) === key('floot', 'controller-profile', 'codex-backend'),
-    ),
-  );
-  // The private host root is created with the mode the registry expects.
-  // eslint-disable-next-line no-bitwise
-  t.is((await stat(path.join(base, 'host'))).mode & 0o777, 0o700);
-});
+test.serial(
+  'mints retained credential/broker/storage and a replaceable daemon-owned backend',
+  async t => {
+    const base = await baseEnv(t);
+    const fake = makeFakeHost();
+    await main(fake.host, { exec: noExec });
+    const credential = fake.mints.find(
+      mint => mint.specifier === renewableCredentialsSpecifier,
+    );
+    t.is(credential.options.powersName, '@agent');
+    const broker = fake.mints.find(
+      mint => mint.options.resultName.at(-1) === 'broker-service',
+    );
+    const storage = fake.mints.find(
+      mint => mint.options.resultName.at(-1) === 'session-storage',
+    );
+    const backend = fake.mints.find(
+      mint => mint.specifier === backendSpecifier,
+    );
+    t.is(broker.options.powersName, 'codex.broker-service-powers');
+    t.is(storage.options.powersName, 'codex.session-storage-powers');
+    t.is(backend.options.powersName, '@agent');
+    t.deepEqual(fake.stored, [], 'no legacy credential/runtime powers bundle');
+    const config = JSON.parse(broker.options.env.CODEX_BROKER_CONFIG);
+    t.is(config.accountRef, accountId);
+    t.is(config.imageRef, `localhost/codex-subscription@${digest}`);
+    t.false(config.publicInternet);
+    t.false(config.diagnostics);
+    t.false('projectIds' in config);
+    t.false('volumeRoot' in config);
+    t.deepEqual(JSON.parse(backend.options.env.CODEX_MOUNTER_ENV), {
+      NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
+      NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
+      NINEP_SUDO: '1',
+    });
+    t.is(
+      storage.options.env.CODEX_WORKSPACE_BASE_DIR,
+      path.join(base, 'host', 'workspaces'),
+    );
+    t.true(
+      fake.copies.some(
+        ({ to }) =>
+          key(...to) === key('floot', 'controller-profile', 'codex-backend'),
+      ),
+    );
+    // eslint-disable-next-line no-bitwise
+    t.is((await stat(path.join(base, 'host', 'broker'))).mode & 0o777, 0o700);
+    await main(fake.host, { exec: noExec });
+    t.is(
+      fake.mints.filter(
+        mint => mint.options.resultName.at(-1) === 'broker-service',
+      ).length,
+      1,
+    );
+    t.is(
+      fake.mints.filter(mint => mint.specifier === backendSpecifier).length,
+      2,
+    );
+  },
+);
 
 test.serial('resolves an unpinned slice image through Podman', async t => {
   await baseEnv(t);
@@ -303,27 +308,25 @@ test.serial('resolves an unpinned slice image through Podman', async t => {
     ENDO_CODEX_SANDBOX_IMAGE: 'oci:localhost/codex-subscription:0.152.0',
   });
   const fake = makeFakeHost();
-  await main(fake.host, {
-    exec: async () => ({ stdout: `${digest}\n` }),
-  });
-  const backendMint = fake.mints.find(
-    mint => mint.specifier === backendSpecifier,
+  await main(fake.host, { exec: async () => ({ stdout: `${digest}\n` }) });
+  const broker = fake.mints.find(
+    mint => mint.options.resultName.at(-1) === 'broker-service',
   );
-  const config = JSON.parse(backendMint.options.env.CODEX_HOST_CONFIG);
-  // The tag it was reached by is dropped: `name:tag@digest` is a reference the
-  // native runtime refuses.
-  t.is(config.imageRef, `localhost/codex-subscription@${digest}`);
+  t.is(
+    JSON.parse(broker.options.env.CODEX_BROKER_CONFIG).imageRef,
+    `localhost/codex-subscription@${digest}`,
+  );
 });
 
 test.serial(
-  'refuses a credential that is not a normalized state record',
+  'refuses a non-normalized credential before publishing services',
   async t => {
     await baseEnv(t);
     const fake = makeFakeHost({
       credentialState: { tokens: { access_token: 'x' } },
     });
     await t.throwsAsync(main(fake.host, { exec: noExec }), {
-      message: /Import and normalize the Codex subscription credential/,
+      message: /normalized Codex subscription/,
     });
     t.false(fake.mints.some(mint => mint.specifier === backendSpecifier));
   },
@@ -341,102 +344,80 @@ test.serial(
   },
 );
 
+test.serial('retained broker configuration cannot silently change', async t => {
+  await baseEnv(t);
+  const fake = makeFakeHost();
+  await main(fake.host, { exec: noExec });
+  const before = fake.mints.length;
+  withEnv(t, { ENDO_CODEX_PUBLIC_INTERNET: '1' });
+  await t.throwsAsync(main(fake.host, { exec: noExec }), {
+    message: /retained service configuration changed/,
+  });
+  t.is(fake.mints.length, before);
+});
+
+test.serial('invalid native profile is refused before minting', async t => {
+  await baseEnv(t);
+  withEnv(t, { ENDO_CODEX_NATIVE_PROFILE: '{}' });
+  const fake = makeFakeHost();
+  await t.throwsAsync(main(fake.host, { exec: noExec }), {
+    message: /Native profile/,
+  });
+  t.deepEqual(fake.mints, []);
+});
+
 test.serial(
-  'refuses to re-point an existing backend at another account',
+  'retained storage refuses a rebound state-provider identity',
   async t => {
     await baseEnv(t);
-    const fake = makeFakeHost({
-      backendConfig: {
-        accountRef: 'account-z',
-        directory: '/var/lib/endo/codex',
-        filesystem: '/var/lib/endo/volumes',
-        imageRef: `localhost/codex-subscription@${digest}`,
-        listenerImageRef: listenerRef,
-        maxSessions: 2,
-        models: [{ id: 'gpt-5.6-sol' }],
-        ownerId,
-        projectIds: { first: 42_020, last: 43_019 },
-        quotaCommand: '/etc/endo/codex-quota',
-        stateBytes: '268435456',
-        volumeRoot: '/var/lib/endo/volumes',
-      },
-    });
+    const fake = makeFakeHost();
+    await main(fake.host, { exec: noExec });
+    const before = fake.mints.length;
+    fake.bind(
+      ['codex-sandbox', 'state-provider'],
+      'replacement-state-id',
+      stateProviderSpecifier,
+      { ENDO_CODEX_STATE_DIR: '/var/lib/endo/replacement-state' },
+    );
     await t.throwsAsync(main(fake.host, { exec: noExec }), {
-      message: /pinned to account .*account-z.*migration/s,
+      message: /retained service dependency changed/,
     });
-    t.false(fake.mints.some(mint => mint.specifier === backendSpecifier));
+    t.is(fake.mints.length, before);
   },
 );
 
 test.serial(
-  'a malformed setting is refused before anything is minted',
+  'daemon-prefixed projection settings reach the recorded backend',
   async t => {
     await baseEnv(t);
-    withEnv(t, { ENDO_CODEX_STATE_BYTES: '268435457' });
-    const fake = makeFakeHost();
-    await t.throwsAsync(main(fake.host, { exec: noExec }), {
-      message: /stateBytes.*MiB-aligned/s,
+    withEnv(t, {
+      ENDO_NINEP_SUDO: '1',
+      ENDO_NINEP_MOUNT_PROGRAM: '/trusted/mount',
+      ENDO_NINEP_UMOUNT_PROGRAM: '/trusted/umount',
+      NINEP_MOUNT_PROGRAM: '/ignored/mount',
     });
-    t.deepEqual(fake.mints, []);
-    t.deepEqual(fake.stored, []);
+    const fake = makeFakeHost();
+    await main(fake.host, { exec: noExec });
+    const backend = fake.mints.find(
+      mint => mint.options.resultName.at(-1) === 'backend-next',
+    );
+    t.deepEqual(JSON.parse(backend.options.env.CODEX_MOUNTER_ENV), {
+      NINEP_SUDO: '1',
+      NINEP_MOUNT_PROGRAM: '/trusted/mount',
+      NINEP_UMOUNT_PROGRAM: '/trusted/umount',
+    });
   },
 );
 
 test.serial('public internet and diagnostics are opt-in', async t => {
   await baseEnv(t);
-  withEnv(t, {
-    ENDO_CODEX_PUBLIC_INTERNET: '1',
-    ENDO_CODEX_DIAGNOSTICS: '1',
-  });
+  withEnv(t, { ENDO_CODEX_PUBLIC_INTERNET: '1', ENDO_CODEX_DIAGNOSTICS: '1' });
   const fake = makeFakeHost();
   await main(fake.host, { exec: noExec });
-  const backendMint = fake.mints.find(
-    mint => mint.specifier === backendSpecifier,
+  const broker = fake.mints.find(
+    mint => mint.options.resultName.at(-1) === 'broker-service',
   );
-  const config = JSON.parse(backendMint.options.env.CODEX_HOST_CONFIG);
+  const config = JSON.parse(broker.options.env.CODEX_BROKER_CONFIG);
   t.true(config.publicInternet);
   t.true(config.diagnostics);
 });
-
-test.serial('a rerun retains the backend instead of re-minting it', async t => {
-  // The caplet constructs the provider listener, which takes an exclusive lock
-  // keyed by the owner label, so minting a replacement beside the live one
-  // fails with "Provider runtime owner is already active" — which aborted
-  // setup on the second daemon start, before the Floot binding.
-  await baseEnv(t);
-  const first = makeFakeHost();
-  await main(first.host, { exec: noExec });
-  const minted = first.mints.find(mint => mint.specifier === backendSpecifier);
-  const configText = minted.options.env.CODEX_HOST_CONFIG;
-
-  const second = makeFakeHost({ backendConfig: JSON.parse(configText) });
-  await main(second.host, { exec: noExec });
-  t.false(second.mints.some(mint => mint.specifier === backendSpecifier));
-  t.deepEqual(second.stored, []);
-  // Floot is still re-bound, so a profile that lost the name recovers.
-  t.true(
-    second.copies.some(
-      ({ to }) =>
-        key(...to) === key('floot', 'controller-profile', 'codex-backend'),
-    ),
-  );
-});
-
-test.serial(
-  'a changed configuration is refused, not applied beside the live one',
-  async t => {
-    await baseEnv(t);
-    const first = makeFakeHost();
-    await main(first.host, { exec: noExec });
-    const configText = first.mints.find(
-      mint => mint.specifier === backendSpecifier,
-    ).options.env.CODEX_HOST_CONFIG;
-
-    const changed = makeFakeHost({ backendConfig: JSON.parse(configText) });
-    withEnv(t, { ENDO_CODEX_MAX_SESSIONS: '3' });
-    await t.throwsAsync(main(changed.host, { exec: noExec }), {
-      message: /configuration changed.*retire/s,
-    });
-    t.false(changed.mints.some(mint => mint.specifier === backendSpecifier));
-  },
-);

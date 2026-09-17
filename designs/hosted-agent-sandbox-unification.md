@@ -3,12 +3,63 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-16 |
+| **Updated** | 2026-09-17 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
+
+Latest increment, 2026-09-17: Codex now uses the same daemon session owner,
+supervisor, scoped native runtime, provider grants, and state-storage operations.
+Its volume registry, quota host/worker, and lease subsystem are deleted.
+Host checkpoints stay separate from the guest-writable `cli_homes` subtree.
+ChatGPT request translation lives in the Codex subscription profile rather than
+in the generic provider broker; credentials remain host-managed.
+
+Tokyo at `59226eb58` passed fresh Floot Codex Sol acceptance
+(`mu5acqsf-w5ami8`): Endo tool use, native shell write/read, durable tool/reply
+records, shared-owner stop and scope revocation, daemon restart with marker/file
+recall without manual repair, and removal of private state while preserving the
+Floot-owned workspace. The Floot test was then deleted; native container, volume,
+and 9P mount inventories were empty. This followed three live boundary fixes:
+empty thinking selection, oversized Unix socket names, and the policy-incompatible
+`.cli` path. Controller tests now invoke the real shared request validator.
+Codex's 249 tests and the 9P server's 95 tests pass; the fixes received adversarial
+review before commit. Host quota configuration retirement, mechanical cleanup,
+transport/journal simplification, and final conformance remain; this is not a
+claim that the entire design is implemented.
+
+Previous increment, 2026-09-17: Claude and OpenCode now compose one
+`makeHostedSessionSupervisor` in `@endo/hosted-agent/session-supervisor.js`.
+It owns plan identity, activation fencing, retained resources, recovery lookup,
+native stop acknowledgement, and failed-release retry.
+Clients dispose their own slices but no longer own the controller's broker/MCP
+cleanup algorithm; authority fencing and MCP closure start independently of client stop.
+Provider namespace removal and mount release require sandbox closure.
+Successful releases are cached; an explicit stop can retry failed revocation even
+while another owner is still pending, without claiming that native stop completed.
+Both adapters use the shared inert MCP server owner, retained before startup.
+The controller suites and three affected package suites pass.
+Tokyo at `87c0150c1` completed Floot tool-use turns on both adapters, preserving
+tool errors/results and replies; deletion initially needed an explicit retry.
+A disposable native probe reproduced Podman's refusal to remove a namespace owner
+before its dependent guest. Both test sessions and probe containers were cleaned up.
+The corrective two-phase fence/removal split landed in `fa1d91ac6` and passed
+fresh Tokyo Floot tool-use, persistence, and first-attempt deletion on both
+adapters. Both test mounts/state directories were absent after deletion, with
+no remaining container references to either session's paths.
+Codex joined this supervisor in the subsequent increment described above.
+
+The Codex migration also requires its native model discovery and durable
+checkpoint acknowledgement to pass through the common session facade.
+Those methods now forward through the daemon owner and supervisor, with stale
+incarnation fencing and copy-only model replies at the daemon boundary.
+The supervisor drains admitted protocol calls before acknowledging native stop,
+so a pending checkpoint write cannot outlive storage removal; grant fencing and
+sandbox reaping remain independent of that drain.
+Earlier entries below record the increments that led here, not current claims
+that the now-extracted Claude/OpenCode lifecycle is still duplicated.
 
 The first implementation increment replaces mandatory inference leases with revocable
 session grants and simultaneous-request admission in the shared broker.
@@ -2658,11 +2709,23 @@ than a judgement.
    than falling back, and it has no surviving store to prefer, so there was
    nothing to close. Its suite is unchanged and green.
 
-   **1c. Deploy and re-run the live check — next.** It now means something
+   **1c. Deploy and re-run the live check — done, 2026-09-17.** It means something
    stronger than before: all three answer with their stores *present* and the
    records authoritative, rather than only with the store destroyed.
    *Gate: the unit tests pin the decision for each adapter — done, see
    below — and the live run answers on all three.*
+
+   Tokyo at `6b4983932` passed all three through Floot: each recalled the test
+   word after daemon restart, with native stores preserved and the completed
+   turns/transcript independently read back. Codex reconciled its inherited
+   thread and answered on a new thread with the prior messages restored.
+   The offline unblock also required reclaiming its stale 9P workspace mount:
+   the old source worker was gone and stat returned EIO; clearing the lease
+   alone caused startup to reserve another lease and fail projection cleanup.
+   With the daemon stopped and the exact test container reaped, normal unmount
+   and removal of the empty mountpoint, followed by test-only lease clearing,
+   let restoration run without a source patch or deletion of native state.
+   These operational repairs do not establish clean automatic restart.
 
    **Where 1b landed.** Suites green at the counts the base had, which is the
    check that matters here because the change rewrote test expectations:
@@ -2681,7 +2744,7 @@ than a judgement.
    seventeen further tests behind a file timeout; running the suite at `HEAD`
    as a control is what showed it was mine.
 
-2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode.** Two
+2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode — done.** Two
    adapters, one algorithm, before adding a third. Its acceptance test is the
    pair from step 0 and item 2 above: one release path, so that whether a
    grant is revoked and a lease released is answerable by reading one
@@ -2690,11 +2753,34 @@ than a judgement.
    lifecycle, and the terminate-with-live-client test from step 0 still
    asserts exactly one revocation.*
 
+   The common lifecycle and inert MCP server now live in `@endo/hosted-agent`.
+   Adapter callbacks construct their CLI configuration and client while
+   transferring partial acquisitions to the supervisor before using them.
+   The full suites pass: hosted-agent 318, Claude 190, OpenCode 255.
+   Four shared regressions cover late client acquisition, hung-client stop,
+   independent revocation retry, and preserving mounts until sandbox closure.
+   Adversarial review found the hung-cleanup retry case; the regression and
+   narrow re-review close it. Tokyo at `87c0150c1` passed tool-use/persistence,
+   but exposed provider-before-guest removal: Podman refuses that dependency order.
+   Explicit cleanup retry removed both sessions and all their native resources.
+   The corrective split fences authority immediately and removes the provider only
+   after sandbox closure. Unit regressions cover the fence and ordering; its
+   live acceptance passed at `fa1d91ac6`: both fresh sessions completed tool use
+   and persisted replies, then deleted on the first attempt without manual repair.
+   Final package suites were hosted-agent 321, Claude 190, OpenCode 255.
+
 3. **Move Codex's state onto `session-state-storage.js`,** deleting the volume
    subsystem and the lease with it. Now that the supervisor exists, this is
    also what gives Codex a session plan and a scope.
    *Gate: the registry, the quota host and the registry worker are gone, and
    a destroyed Codex session leaves no volume and no directory.*
+
+   Implemented in `812f10b47`; live Codex acceptance passed at `59226eb58`.
+   Both host-record and guest-home leaves and the private projection directory
+   disappeared on owner removal; the external workspace remained until Floot
+   deleted its own session. Old test leases/volumes were explicitly retired
+   before replacement. The operational NixOS quota helper is being retired
+   separately; persistent directory storage does not inherit its quota guarantee.
 
 4. **Move Codex onto the supervisor and the shared broker scopes,** retiring
    `broker-launch.js`. The review expects this to be the hard step, because
@@ -2703,6 +2789,13 @@ than a judgement.
    move forces open.
    *Gate: Phase 3's exit reads true — all three on common grants and the
    supervisor — and revocation demonstrably stops access on all three.*
+
+   Codex now composes those shared owners. `b9bd65509` removed the generic
+   broker's subscription branch and retired `broker-launch.js`.
+   Tokyo's retained Codex scope rejected access after owner stop and disappeared
+   from scope lookup; containers and mounts were absent before restart.
+   The earlier Claude/OpenCode acceptance remains recorded above.
+   Final cross-backend conformance on the completed refactor is still pending.
 
 5. **Collapse the mechanical leaves.** `current-specifier.js` and
    `managed-credentials-module.js` are byte-identical across three packages;

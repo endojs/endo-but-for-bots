@@ -1,40 +1,10 @@
 // @ts-check
 /* global process */
-// endo run --UNCONFINED setup-host.js --powers @agent
-//   [-E ENDO_CODEX_SANDBOX_OWNER_ID=operator-chosen-stable-id]
-//   [-E ENDO_CODEX_STATE_DIR=/var/lib/endo/codex-state]
-//   -E ENDO_SANDBOX_RUNTIME_DIR=<existing-private-host-directory>
-//   -E ENDO_SANDBOX_GENERATED_MAX_BYTES=<decimal-byte-budget>
-//   -E ENDO_SANDBOX_GENERATED_MAX_ENTRIES=<positive-decimal-entry-budget>
-//   -E ENDO_CODEX_VOLUME_ROOT=<podman volume root>
-//   -E ENDO_CODEX_FILESYSTEM=<XFS filesystem holding it>
-//   -E ENDO_CODEX_QUOTA_COMMAND=<operator-installed quota bridge>
-//   [-E ENDO_CODEX_SUDO_PATH=/run/wrappers/bin/sudo]
-//
-// HOST-side provisioning for the Codex sandbox stack. Run this on the machine
-// that runs the containers (Linux + podman + XFS project quotas). Idempotent.
-// Mints, nested under `codex-sandbox/` so the host root stays clean:
-//
-//   native-sandbox  — the owned `@endo/sandbox` Podman runtime. It claims the
-//                     exclusive ownership marker of ENDO_SANDBOX_RUNTIME_DIR,
-//                     stages generated files there, reconciles Podman orphans
-//                     under its owner label, and builds the kernel-quota
-//                     observer the driver requires before admitting a durable
-//                     volume mount.
-//   state-provider  — one 0700 host directory per session under
-//                     ENDO_CODEX_STATE_DIR (default /var/lib/endo/codex-state)
-//                     holding the audit journal, its anchors, and the thread
-//                     checkpoint, with ownership markers in a provider-owned
-//                     `.owners/` beside them.
-//
-// Both are constructed with slot-free `null` powers: neither imports daemon
-// host authority. They live apart from the backend because the backend caplet
-// is pinned to a release checkout and is re-minted on every setup run, and
-// neither an ownership marker nor durable session state may be re-created each
-// time it is.
-//
-// The credential, broker and backend belong on the same machine — see
-// setup-hosted.js.
+// Host-side setup of the common scoped Podman service and Codex state provider.
+// ENDO_SANDBOX_RUNTIME_DIR and generated-file limits configure the native
+// service. ENDO_CODEX_STATE_DIR holds separate host records and CLI homes.
+// Both formulas retain slot-free null powers. Quota and volume configuration
+// are obsolete; the session owner records placement and owns native cleanup.
 
 import { createHash } from 'node:crypto';
 
@@ -42,7 +12,6 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { assertNoRuntimeLeftovers } from '@endo/hosted-agent/hosted-setup.js';
 
-import { readCodexNativeConfig } from './src/codex-native-agent.js';
 import { assertCodexStateRoot } from './src/codex-state-provider.js';
 import {
   SANDBOX_DIR,
@@ -55,12 +24,9 @@ import {
 } from './src/hosted-runtime-setup.js';
 
 /**
- * The Podman reconciliation label, the volume registry's recorded owner and the
- * broker listener's lock name are one identity in this adapter, and the
- * registry refuses a change outright once it has recorded one. This derivation
- * is therefore not free to change: it reproduces what the backend caplet
- * computed for itself while it still held `@agent` to ask the daemon for a host
- * identity.
+ * Stable native reconciliation identity, also pinned by the broker service.
+ * Keep the prior derivation so old exact-owner resources remain identifiable
+ * during explicit retirement; changing a label is not evidence of cleanup.
  *
  * @param {any} hostAgent
  */
@@ -107,11 +73,8 @@ export const main = async hostAgent => {
   let nativeEnv;
   if (await hasInSandbox('native-sandbox')) {
     const native = await readNativeSandbox(hostAgent);
-    // The persisted quota configuration names the effective volume root; the
-    // current environment's is not what this runtime observes.
     await assertRuntimePlacement(native.config.directory, {
       stateDir,
-      volumeRoot: native.quota.volumeRoot,
     });
     console.log(
       'Retaining owned native sandbox service with its persisted configuration; current runtime environment is not reapplied.',
@@ -119,30 +82,8 @@ export const main = async hostAgent => {
   } else {
     const ownerId =
       env.ENDO_CODEX_SANDBOX_OWNER_ID || (await deriveCodexOwnerId(hostAgent));
-    // Validate the whole construction policy — the runtime's and the quota
-    // bridge's — before any placement work, so a missing variable is reported
-    // by name rather than as an unresolvable storage root. A runtime that could
-    // not observe quotas would otherwise be refused at a session's first mount.
-    const requested = readCodexNativeConfig({
-      ...env,
-      ENDO_SANDBOX_OWNER_ID: ownerId,
-    });
-    // Generated files and Podman's volumes must not share a tree: the runtime
-    // stages host-writable content under its own directory, and a volume root
-    // inside it would put guest-writable storage in the same place.
-    const runtimeEnv = await prepareRuntimeEnv(env, ownerId, {
+    nativeEnv = await prepareRuntimeEnv(env, ownerId, {
       stateDir,
-      volumeRoot: requested.quota.volumeRoot,
-    });
-    // Persist what the runtime resolved, not what the operator typed: the
-    // sudo path has a default, and a formula should record the value it will
-    // actually use rather than re-deriving it on every revival.
-    nativeEnv = harden({
-      ...runtimeEnv,
-      ENDO_CODEX_VOLUME_ROOT: requested.quota.volumeRoot,
-      ENDO_CODEX_FILESYSTEM: requested.quota.filesystem,
-      ENDO_CODEX_QUOTA_COMMAND: requested.quota.quotaCommand,
-      ENDO_CODEX_SUDO_PATH: requested.quota.sudoPath,
     });
     await assertNoRuntimeLeftovers(
       nativeEnv.ENDO_SANDBOX_RUNTIME_DIR,

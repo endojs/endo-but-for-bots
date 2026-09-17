@@ -368,7 +368,17 @@ export const makeFsMounterKit = ({
     } else {
       socketPath = nodePath.join(
         socketDir,
-        `endo-9p-${process.pid}-${mountCounter}-${randomBytes(9).toString('hex')}.sock`,
+        `endo-9p-${randomBytes(12).toString('base64url')}`,
+      );
+    }
+    // Unix socket names are byte-bounded (104 bytes including the terminator
+    // on Darwin, 108 on Linux). A long name may be silently truncated by the
+    // bind implementation, leaving chmod/unlink aimed at a nonexistent path.
+    // Keep generated names compact with 96 bits of entropy, and reject even
+    // explicit names before creating a bridge or mutating mount directories.
+    if (new TextEncoder().encode(socketPath).byteLength > 103) {
+      throw makeError(
+        X`9P socket path exceeds 103 bytes; configure a shorter socket directory: ${q(socketDir)}`,
       );
     }
 

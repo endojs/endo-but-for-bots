@@ -19,8 +19,6 @@ import {
 } from '@endo/hosted-agent/hosted-setup.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 
-import { readCodexHostConfigEnv } from './codex-host-config.js';
-import { readCodexNativeConfig } from './codex-native-agent.js';
 import { assertCodexStateRoot } from './codex-state-provider.js';
 import {
   assertCurrentSpecifier,
@@ -35,9 +33,11 @@ const LABEL = 'Codex';
  * clean, and the backend's session state is named from here. */
 export const SANDBOX_DIR = 'codex-sandbox';
 
-/** The owned native runtime: a Podman factory with a kernel-quota observer. */
+/** The common scoped native Podman service; Codex has no volume registry. */
 export const nativeSandboxSpecifier = assertCurrentSpecifier(
-  toCurrentSpecifier(new URL('./codex-native-agent.js', import.meta.url).href),
+  toCurrentSpecifier(
+    new URL('../../sandbox/src/native-agent.js', import.meta.url).href,
+  ),
   'native sandbox',
 );
 harden(nativeSandboxSpecifier);
@@ -51,11 +51,10 @@ export const stateProviderSpecifier = assertCurrentSpecifier(
 );
 harden(stateProviderSpecifier);
 
-/** The hosted backend caplet; its powers is a stored record of the three
- * capabilities above plus the renewable credential. */
+/** The host-private backend records plans and delegates to the session owner. */
 export const backendSpecifier = assertCurrentSpecifier(
   toCurrentSpecifier(
-    new URL('./hosted-subscription-module.js', import.meta.url).href,
+    new URL('./codex-backend-module.js', import.meta.url).href,
   ),
   'codex backend',
 );
@@ -86,7 +85,6 @@ export const readNativeSandbox = async host => {
   return harden({
     identifier,
     config: readRuntimeConfig(env),
-    quota: readCodexNativeConfig(env).quota,
   });
 };
 harden(readNativeSandbox);
@@ -104,23 +102,6 @@ export const readStateProvider = async host => {
   });
 };
 harden(readStateProvider);
-
-/** @param {any} host */
-export const readBackend = async host => {
-  const { identifier, env } = await readProvisionedEnvironment(
-    host,
-    'backend',
-    backendSpecifier,
-  );
-  return harden({
-    identifier,
-    config: readCodexHostConfigEnv(env),
-    // The document verbatim, so setup can tell "unchanged" from "equivalent
-    // after parsing" without re-deriving every default.
-    text: env.CODEX_HOST_CONFIG,
-  });
-};
-harden(readBackend);
 
 /** @param {string} name */
 export const resolveFuturePath = name => resolveHostedFuturePath(name, LABEL);

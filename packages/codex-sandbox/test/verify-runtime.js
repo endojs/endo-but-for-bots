@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 // eslint-disable-next-line import/no-relative-packages
 import { makePodmanDriver } from '../../sandbox/src/drivers/podman.js';
 
-import { makeBrokerAppServerArgv } from '../src/broker-launch.js';
+import { makeBrokerAppServerArgv } from '../src/app-server-transport.js';
 import { makeCodexRuntimeVerifier } from '../src/runtime-verifier.js';
 
 const execute = promisify(execFile);

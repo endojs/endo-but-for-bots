@@ -10,7 +10,7 @@ import {
 } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
-/** @import { BrokerPolicy } from '../src/provider-broker.js' */
+/** @import { BrokerPolicy, ProviderRequestAdapter } from '../src/provider-broker.js' */
 
 const policy = harden({
   origin: 'https://api.example.test',
@@ -231,6 +231,7 @@ const makeRecord = ({
  * @param {(request: any) => Promise<any>} [options.exchange] - Token endpoint.
  * @param {any} [options.record] - An existing record to share.
  * @param {() => number} [options.clock] - A clock shared between leases.
+ * @param {ProviderRequestAdapter} [options.adaptRequest]
  */
 const setup = ({
   limits = {},
@@ -243,6 +244,7 @@ const setup = ({
   exchange,
   record: shared,
   clock,
+  adaptRequest,
 } = {}) => {
   const calls = [];
   const audit = [];
@@ -268,6 +270,7 @@ const setup = ({
           readBase64: read ?? (async () => globalThis.btoa(credential)),
         }),
     transport,
+    adaptRequest,
     now,
     audit: event => {
       audit.push(event);
@@ -293,60 +296,91 @@ const setup = ({
   };
 };
 
-const subscriptionLimits = harden({
-  authMode: /** @type {const} */ ('subscription'),
-  origin: 'https://chatgpt.com',
-  accountRef: 'account-1',
-});
-
-test('subscription profile fixes the upstream route and account header', async t => {
-  const subject = setup({ limits: subscriptionLimits, oauth: true });
-  await E(subject.endpoint).request({
-    ...request,
-    body: JSON.stringify({ model: 'allowed', stream: true, store: false }),
-  });
-  t.is(subject.calls.length, 1);
-  t.is(subject.calls[0].url, 'https://chatgpt.com/backend-api/codex/responses');
-  t.is(subject.calls[0].headers['chatgpt-account-id'], 'account-1');
-  t.is(subject.calls[0].headers.authorization, `Bearer ${accessToken}`);
-  t.false(JSON.stringify(subject.calls[0].headers).includes(refreshToken));
-  t.false(subject.calls[0].body.includes(refreshToken));
-});
-
-test('subscription profile refuses alternate origins, routes, and API credentials', t => {
-  for (const limits of [
-    { origin: 'https://api.openai.com' },
-    { routes: [{ method: 'POST', path: '/v1/messages' }] },
-    { anthropicVersion: '2023-06-01' },
-    { credentialHeader: 'x-api-key' },
-  ]) {
-    t.throws(() =>
-      setup({
-        limits: {
-          ...subscriptionLimits,
-          .../** @type {Partial<BrokerPolicy>} */ (limits),
-        },
-        oauth: true,
-      }),
-    );
-  }
-  t.throws(() => setup({ limits: subscriptionLimits }));
-});
-
-test('subscription profile refuses storage, nonstreaming, and account routes before dispatch', async t => {
-  const subject = setup({ limits: subscriptionLimits, oauth: true });
-  await t.throwsAsync(() => E(subject.endpoint).request(request), {
-    message: /non-stored streaming/,
+test('trusted translation runs after admission and before credential access', async t => {
+  let adaptations = 0;
+  let reads = 0;
+  const subject = setup({
+    adaptRequest: ({ path, data }) => {
+      adaptations += 1;
+      t.is(path, '/v1/responses');
+      t.true(Object.isFrozen(data));
+      return {
+        path: '/provider/responses',
+        headers: { 'provider-account': 'owned' },
+      };
+    },
+    read: async () => {
+      reads += 1;
+      return btoa(credential);
+    },
   });
   await t.throwsAsync(
-    () =>
-      E(subject.endpoint).request({
-        ...request,
-        path: '/backend-api/accounts',
-      }),
-    { message: /route denied/ },
+    E(subject.endpoint).request(harden({ ...request, path: '/v1/account' })),
   );
-  t.is(subject.calls.length, 0);
+  await t.throwsAsync(
+    E(subject.endpoint).request(
+      harden({ ...request, body: '{"model":"denied"}' }),
+    ),
+  );
+  t.is(adaptations, 0);
+  t.is(reads, 0);
+  await E(subject.endpoint).request(
+    harden({
+      ...request,
+      headers: { 'provider-account': 'guest' },
+    }),
+  );
+  t.is(adaptations, 1);
+  t.is(reads, 1);
+  t.is(subject.calls[0].url, 'https://api.example.test/provider/responses');
+  t.is(subject.calls[0].headers['provider-account'], 'owned');
+  t.is(subject.calls[0].headers.authorization, `Bearer ${credential}`);
+});
+
+test('translation cannot escape the pinned origin or replace transport-owned headers', async t => {
+  for (const adapted of [
+    { path: 'https://elsewhere.test/v1/responses' },
+    { path: '//elsewhere.test/v1/responses' },
+    { path: '/provider/../accounts' },
+    { path: '/provider/%2e%2e/accounts' },
+    { path: '/provider/responses#fragment' },
+    { path: '/provider/responses', headers: { authorization: 'injected' } },
+    { path: '/provider/responses', headers: { host: 'elsewhere.test' } },
+    { path: '/provider/responses', headers: { custom: 'bad\r\nheader' } },
+  ]) {
+    let reads = 0;
+    const subject = setup({
+      adaptRequest: () => adapted,
+      read: async () => {
+        reads += 1;
+        return btoa(credential);
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(subject.endpoint).request(request), {
+      message: /Invalid adapted inference/,
+    });
+    t.is(reads, 0);
+    t.deepEqual(subject.calls, []);
+  }
+});
+
+test('translation snapshots its result before asynchronous credential lookup', async t => {
+  const adapted = {
+    path: '/provider/responses',
+    headers: { custom: 'original' },
+  };
+  const subject = setup({
+    adaptRequest: () => adapted,
+    read: async () => {
+      adapted.path = '//elsewhere.test';
+      adapted.headers.custom = 'changed';
+      return btoa(credential);
+    },
+  });
+  await E(subject.endpoint).request(request);
+  t.is(subject.calls[0].url, 'https://api.example.test/provider/responses');
+  t.is(subject.calls[0].headers.custom, 'original');
 });
 
 test('broker injects credentials only into fixed transport and canonicalizes JSON', async t => {
@@ -679,7 +713,7 @@ test('operator configuration cannot enable administrative routes or unprovisione
   // Naming subscription mode alone cannot conjure renewal authority.
   t.throws(
     () => setup({ limits: /** @type {any} */ ({ authMode: 'subscription' }) }),
-    { message: /Unprovisioned broker OAuth mode/ },
+    { message: /Unsupported broker authentication mode/ },
   );
   // The mode that *is* implemented is refused until it is provisioned, so a
   // policy naming `oauth` without the capabilities that make refresh and

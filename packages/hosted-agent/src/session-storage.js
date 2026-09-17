@@ -25,7 +25,7 @@ import { isNormalizedAbsolutePath } from './session-plan.js';
  * @property {string} sandboxSessionId
  * @property {string} [workspaceDir]
  * @property {string} workspaceMountPoint
- * @property {string} mcpDir
+ * @property {string} [mcpDir] Absent for adapters using native dynamic tools.
  * @property {string} mounterSocketDir
  */
 
@@ -107,7 +107,15 @@ export const makeSessionStorage = ({
     /** @type {readonly [string, string, string][]} */
     const targets = harden([
       ['mounterSocketDir', plan.mounterSocketDir, mcpRoot],
-      ['mcpDir', plan.mcpDir, mcpRoot],
+      ...(plan.mcpDir === undefined
+        ? []
+        : [
+            /** @type {[string, string, string]} */ ([
+              'mcpDir',
+              plan.mcpDir,
+              mcpRoot,
+            ]),
+          ]),
       // An operator-supplied workspace records no owned directory and is
       // never removed here.
       ...(plan.workspaceDir === undefined
@@ -156,9 +164,9 @@ export const makeSessionStorage = ({
     // The socket, relay, and mount-point directories share one private
     // per-session parent directly under the MCP root. Remove it once all are
     // gone; anything else left there is not this plan's to delete.
-    const parent = dirname(plan.mcpDir);
+    const parent = dirname(plan.mounterSocketDir);
     if (
-      parent === dirname(plan.mounterSocketDir) &&
+      (plan.mcpDir === undefined || parent === dirname(plan.mcpDir)) &&
       parent === dirname(plan.workspaceMountPoint) &&
       dirname(parent) === mcpRoot
     ) {

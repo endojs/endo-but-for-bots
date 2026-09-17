@@ -78,7 +78,10 @@ including the record-deletion collection failure and cross-worker supervisor ris
 the administrative owner belongs at a daemon-local boundary, and fresh caplet
 workers now wait for reference publication before process acquisition; inert MCP
 kits retain cleanup before startup and drain admitted host calls; controller
-construction must defer capability-bundle revival until explicit activation),
+construction must defer capability-bundle revival until explicit activation;
+the September 17 Codex migration now uses the shared owners and directory storage,
+with Tokyo tool-use, stop/revocation, restart recall, and deletion acceptance passed;
+transport/journal simplification and final conformance remain In Progress),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
@@ -356,7 +359,7 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-10-02 | In Progress |
-| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-14 | In Progress |
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-17 | In Progress |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |

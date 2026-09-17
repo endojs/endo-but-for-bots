@@ -26,6 +26,10 @@ const makeHarness = () => {
     },
     interrupt: async () => {},
     status: async () => 'running',
+    models: async () => harden([{ id: 'native-model' }]),
+    acknowledge: async checkpoint => {
+      calls.push(['acknowledge', checkpoint]);
+    },
     terminate: async () => {
       calls.push(['terminate']);
       if (faults.stop) throw Error('Native stop failed');
@@ -78,6 +82,30 @@ test('record inspection and client forwarding acquisition remain passive', async
     ['provide', 'client-id'],
     ['send', 'hello'],
   ]);
+});
+
+test('model discovery and checkpoint acknowledgement use the fenced incarnation', async t => {
+  const h = makeHarness();
+  await E(h.owner).create('a', 'approved plan', h.refs);
+  const client = await E(h.owner).client('a');
+  t.deepEqual(await E(client).models(), [{ id: 'native-model' }]);
+  await E(client).acknowledge('checkpoint-1');
+  t.true(
+    h.calls.some(
+      ([kind, value]) => kind === 'acknowledge' && value === 'checkpoint-1',
+    ),
+  );
+  await E(h.owner).stop('a');
+  const calls = h.calls.length;
+  await t.throwsAsync(E(client).models(), { message: /stopped/ });
+  await t.throwsAsync(E(client).acknowledge('checkpoint-2'), {
+    message: /stopped/,
+  });
+  t.is(
+    h.calls.length,
+    calls,
+    'stale protocol calls never resolve a replacement',
+  );
 });
 
 test('failed stop fences the old handle and retains the exact client for retry', async t => {

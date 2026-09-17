@@ -10,7 +10,7 @@ import { Far } from '@endo/far';
 import {
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-} from '../src/broker-launch.js';
+} from '../src/app-server-transport.js';
 import { makeCodexRuntimeVerifier } from '../src/runtime-verifier.js';
 
 // Controlled process doubles test admission and cleanup, not Linux enforcement.

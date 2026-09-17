@@ -5,12 +5,12 @@ import { randomBytes } from 'node:crypto';
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
 import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 import {
   assertPublicNetworkEvidence,
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
+import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
 import {
   makeDefaultMounter,
@@ -20,7 +20,6 @@ import {
   HOSTED_SLICE_RESOURCES,
   sliceWritableBytes,
 } from '@endo/hosted-agent/hosted-agent-policy.js';
-import { M } from '@endo/patterns';
 import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
 
 import path from 'node:path';
@@ -44,14 +43,6 @@ import {
 } from './mcp-socket-server.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 import { readSessionPlan } from './opencode-session-plan.js';
-
-const ControllerInterface = M.interface('OpencodeNativeController', {
-  activate: M.call(M.string(), M.remotable()).returns(M.promise()),
-  send: M.call(M.string()).optional(M.record()).returns(M.promise()),
-  interrupt: M.call().returns(M.promise()),
-  status: M.call().returns(M.promise()),
-  terminate: M.call(M.string(), M.remotable()).returns(M.promise()),
-});
 
 /**
  * Inert composition for one dedicated native worker. Resolver capabilities are
@@ -100,78 +91,36 @@ export const makeOpencodeNativeController = ({
   reportError = error =>
     console.error('OpenCode native cleanup pending', error),
 } = {}) => {
-  let stopping = false;
-  let stopped = false;
-  /** @type {string | undefined} */
-  let originalText;
-  /** @type {Promise<void> | undefined} */
-  let activating;
-  /** @type {Promise<void> | undefined} */
-  let closing;
-  /** @type {any} */
-  let sandboxScope;
-  /** @type {any} */
-  let brokerScope;
-  /** @type {ReturnType<typeof makeWorkspaceProjection> | undefined} */
-  let mounter;
-  /** @type {ReturnType<typeof makeMcpSocketServer> | undefined} */
-  let mcp;
-  /** @type {ReturnType<typeof makeOpencodeClient> | undefined} */
-  let client;
-  const assertOpen = () => {
-    !stopping || Fail`OpenCode native controller is stopping`;
-  };
-
-  // This operation must be reachable while activation is waiting for a native
-  // acquisition. Parents are released only after the sandbox acknowledges stop.
-  const closeResources = async () => {
-    const sandboxClosed = sandboxScope
-      ? E(sandboxScope).close()
-      : Promise.resolve();
-    const results = await Promise.allSettled([
-      sandboxClosed.then(() => mounter?.close()),
-      brokerScope ? E(brokerScope).revoke() : Promise.resolve(),
-      mcp?.close(),
-    ]);
-    const failures = results.flatMap(result =>
-      result.status === 'rejected' ? [result.reason] : [],
-    );
-    if (failures.length)
-      throw AggregateError(failures, 'OpenCode native cleanup pending');
-  };
-  const closeIfStopping = () => {
-    if (stopping) void closeResources().catch(() => {});
-    assertOpen();
-  };
-  /**
-   * @param {string} text
-   * @param {any} resolver
-   */
-  const activate = (text, resolver) => {
-    assertOpen();
-    if (activating) {
-      text === originalText || Fail`Native controller plan cannot change`;
-      return activating;
-    }
-    originalText = text;
-    activating = (async () => {
-      const approved = readSessionPlan(text);
+  return makeHostedSessionSupervisor({
+    name: 'OpenCode',
+    readPlan: readSessionPlan,
+    env,
+    context,
+    reclaimMount,
+    reportError,
+    start: async (approved, resolver, { own, assertOpen }) => {
       const sandbox = await E(resolver).get('sandboxService');
       assertOpen();
-      sandboxScope = await E(sandbox).provideScope(approved.sandboxSessionId);
-      closeIfStopping();
+      const sandboxScope = own(
+        'sandbox',
+        await E(sandbox).provideScope(approved.sandboxSessionId),
+      );
+      assertOpen();
       const broker = await E(resolver).get('brokerService');
       assertOpen();
-      brokerScope = await E(broker).provideScope(
-        approved.sandboxSessionId,
-        harden({
-          providerOrigin: OPENROUTER_ORIGIN,
-          accountRef: OPENCODE_BROKER_ACCOUNT,
-          networkPolicy: approved.networkPolicy,
-          ...(approved.model ? { model: parseModelRef(approved.model) } : {}),
-        }),
+      const brokerScope = own(
+        'broker',
+        await E(broker).provideScope(
+          approved.sandboxSessionId,
+          harden({
+            providerOrigin: OPENROUTER_ORIGIN,
+            accountRef: OPENCODE_BROKER_ACCOUNT,
+            networkPolicy: approved.networkPolicy,
+            ...(approved.model ? { model: parseModelRef(approved.model) } : {}),
+          }),
+        ),
       );
-      closeIfStopping();
+      assertOpen();
       await E(brokerScope).start();
       assertOpen();
       const [attestation, evidence] = await Promise.all([
@@ -202,18 +151,21 @@ export const makeOpencodeNativeController = ({
       // Exactly one of the two is recorded; the parser enforces it.
       // Retained before it is established, so a failed mount is still
       // closed by this owner's ordinary cleanup.
-      mounter = makeWorkspaceProjection(
-        {
-          workspaceRootPath:
-            approved.workspaceHostPath ??
-            /** @type {string} */ (approved.workspaceDir),
-          workspaceMountPoint: approved.workspaceMountPoint,
-          mounterSocketDir: approved.mounterSocketDir,
-          ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
-        },
-        { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
+      const mounter = own(
+        'mounter',
+        makeWorkspaceProjection(
+          {
+            workspaceRootPath:
+              approved.workspaceHostPath ??
+              /** @type {string} */ (approved.workspaceDir),
+            workspaceMountPoint: approved.workspaceMountPoint,
+            mounterSocketDir: approved.mounterSocketDir,
+            ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
+          },
+          { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
+        ),
       );
-      closeIfStopping();
+      assertOpen();
       await mounter.mount();
       assertOpen();
       // The attested table. The workspace is the 9P projection this
@@ -245,8 +197,8 @@ export const makeOpencodeNativeController = ({
       assertOpen();
       const bridge = await makeBridge(tools);
       assertOpen();
-      mcp = makeMcp({ socketDir: approved.mcpDir, bridge });
-      closeIfStopping();
+      const mcp = own('mcp', makeMcp({ socketDir: approved.mcpDir, bridge }));
+      assertOpen();
       await mcp.start();
       assertOpen();
       // The bridge's socket and its stdio shim. Read-only: the guest connects
@@ -366,12 +318,11 @@ export const makeOpencodeNativeController = ({
           ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
         },
       );
-      closeIfStopping();
-      client = makeClient({
+      assertOpen();
+      return makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
         slice,
-        cleanupProvision: closeResources,
         workspaceMountPoint: approved.workspaceMountPoint,
         workspacePath: '/workspace',
         statePath: '/tmp/opencode-home/.local/share',
@@ -382,122 +333,7 @@ export const makeOpencodeNativeController = ({
         opencodeSessionId: approved.opencodeSessionId,
         resumePriorConversation: Boolean(approved.opencodeSessionId),
       });
-      // No initialPrompt: only foreground sends may initiate recorded turns.
-    })();
-    return activating;
-  };
-  /**
-   * @param {string} text
-   * @param {any} resolver
-   */
-  const terminate = (text, resolver) => {
-    stopping = true;
-    if (originalText !== undefined)
-      text === originalText || Fail`Cleanup must use the original native plan`;
-    else {
-      originalText = text;
-    }
-    if (closing) return closing;
-    closing = (async () => {
-      if (!activating) {
-        // Recovery only. Never create substitutes for an earlier owner.
-        const recoveredPlan = readSessionPlan(text);
-        // Reaching the shared services is best effort, and never proof either
-        // way: a service revived to answer this call holds no scopes from the
-        // lost incarnation, and one that cannot be reached cannot be asked.
-        // A scope still live in THIS incarnation is found here and closed
-        // below, which is the case worth trying for. A slice left behind by a
-        // lost runtime is reconciled by the driver's own label sweep, so a
-        // failure here is reported, not raised: raising it is what used to
-        // leave a session permanently unstoppable whenever a superseded
-        // service formula refused to revive.
-        const recovered = await Promise.allSettled([
-          (async () => {
-            if (sandboxScope) return;
-            const sandbox = await E(resolver).get('sandboxService');
-            sandboxScope = await E(sandbox).lookupScope(
-              recoveredPlan.sandboxSessionId,
-            );
-          })(),
-          (async () => {
-            if (brokerScope) return;
-            const broker = await E(resolver).get('brokerService');
-            brokerScope = await E(broker).lookupScope(
-              recoveredPlan.sandboxSessionId,
-            );
-          })(),
-        ]);
-        // The kernel mount outlives every process that knew about it, so it
-        // is the one thing this owner must establish. Both run before either
-        // is judged: a failed scope close must not skip the unmount.
-        const released = await Promise.allSettled([
-          closeResources(),
-          // Compose the mounter settings exactly as activation does: the
-          // operator's are this worker's trusted configuration and the plan's
-          // recorded overrides sit on top. Reading only the plan would run a
-          // bare `umount` on a host whose mounts go through a privilege
-          // helper, and refuse every reclamation with EPERM.
-          reclaimMount({
-            ...recoveredPlan,
-            mounterEnv: { ...env, ...recoveredPlan.mounterEnv },
-          }),
-        ]);
-        const failures = released.flatMap(result =>
-          result.status === 'rejected' ? [result.reason] : [],
-        );
-        const diagnosed = recovered.flatMap(result =>
-          result.status === 'rejected' ? [result.reason] : [],
-        );
-        if (failures.length) {
-          throw AggregateError(
-            [...diagnosed, ...failures],
-            'Original local 9P/MCP cleanup ownership is unavailable',
-          );
-        }
-        for (const error of diagnosed) reportError(error);
-        stopped = true;
-        return;
-      }
-      const early = client ? E(client).terminate() : closeResources();
-      await Promise.allSettled([activating, early]);
-      if (client) await E(client).terminate();
-      else await closeResources();
-      stopped = true;
-    })().catch(error => {
-      closing = undefined;
-      throw error;
-    });
-    return closing;
-  };
-  if (context !== undefined) {
-    const lost = () => {
-      stopping = true;
-      // Lost context fences now, even if an acquisition is waiting for close.
-      // Its rejection is diagnostic; it is never converted to release proof.
-      void (client ? E(client).terminate() : closeResources()).catch(
-        reportError,
-      );
-    };
-    void E(context).whenCancelled().then(lost, lost);
-  }
-  return makeExo('OpencodeNativeController', ControllerInterface, {
-    activate,
-    send: async (prompt, options = {}) => {
-      assertOpen();
-      if (client === undefined)
-        throw Fail`OpenCode native controller is not active`;
-      return E(client).send(prompt, options);
     },
-    interrupt: async () => {
-      if (client) await E(client).interrupt();
-    },
-    status: async () =>
-      harden({
-        ...(client ? await E(client).status() : {}),
-        stopping,
-        stopped,
-      }),
-    terminate,
   });
 };
 harden(makeOpencodeNativeController);

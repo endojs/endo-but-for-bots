@@ -19,7 +19,9 @@ import { makeSecretRotator } from './secret-rotator.js';
  * maxConcurrentRequests: number, maxRequestBytes: bigint, maxResponseBytes: bigint,
  * credentialHeader?: 'bearer' | 'x-api-key',
  * anthropicVersion?: string, anthropicBeta?: string,
- * authMode?: 'api-key' | 'oauth' | 'subscription', accountRef?: string }} BrokerPolicy
+ * authMode?: 'api-key' | 'oauth', accountRef?: string }} BrokerPolicy
+ * @typedef {(request: {path: string, data: Readonly<Record<string, unknown>>}) =>
+ *   {path: string, headers?: Readonly<Record<string, string>>}} ProviderRequestAdapter
  * @typedef {{ startedAt: number }} BrokerRefreshIntent
  * @typedef {{ version: 'BrokerOAuthStateV1', accessToken: string,
  * refreshToken?: string, expiresAt: number, accountId: string,
@@ -514,20 +516,22 @@ harden(makeBrokerOAuthCredential);
  * - The shared refreshing credential for this secret record, required by
  * `authMode: 'oauth'`. Shared rather than per grant so that concurrent
  * sessions cannot each redeem the same refresh token.
+ * @param {ProviderRequestAdapter} [powers.adaptRequest]
+ * Trusted provider code, never guest data or serialized operator policy.
+ * Runs after route/model/body admission and before reading credentials.
+ * May translate the path within the pinned origin and add non-credential
+ * headers; cannot change the method, body, credential, or response bounds.
  */
 export const makeProviderBrokerGrant = (
   policy,
-  { secret, transport, audit = () => {}, credential },
+  { secret, transport, audit = () => {}, credential, adaptRequest },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
   const { origin, maxConcurrentRequests, maxRequestBytes, maxResponseBytes } =
     policy;
   const authMode = policy.authMode ?? 'api-key';
-  // Subscription is a fixed ChatGPT inference profile, not an arbitrary OAuth
-  // proxy. Account/login/refresh routes remain on separate host-only powers.
   authMode === 'api-key' ||
     authMode === 'oauth' ||
-    authMode === 'subscription' ||
     Fail`Unsupported broker authentication mode`;
   const credentialHeader = policy.credentialHeader ?? 'bearer';
   credentialHeader === 'bearer' ||
@@ -562,7 +566,7 @@ export const makeProviderBrokerGrant = (
   // read synchronously, which requires the credential to be a local object: the
   // single-flight guard it carries only excludes callers sharing that object,
   // so a remote presence to it would not be the guard this mode needs anyway.
-  if (authMode === 'oauth' || authMode === 'subscription') {
+  if (authMode === 'oauth') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
     // The grant's account is the operator's selection; a credential for some
     // other account is a different session's, not this one's.
@@ -572,7 +576,7 @@ export const makeProviderBrokerGrant = (
       Fail`Unprovisioned broker OAuth mode`;
   }
   const oauth =
-    authMode === 'oauth' || authMode === 'subscription'
+    authMode === 'oauth'
       ? (credential ?? Fail`Unprovisioned broker OAuth mode`)
       : undefined;
   const parsedOrigin = new URL(origin);
@@ -598,18 +602,6 @@ export const makeProviderBrokerGrant = (
     return `${method} ${path}`;
   });
   routes.length > 0 || Fail`Inference routes required`;
-  if (authMode === 'subscription') {
-    (origin === 'https://chatgpt.com' &&
-      credentialHeader === 'bearer' &&
-      clientAuthorization === 'reject' &&
-      anthropicVersion === undefined &&
-      anthropicBeta === undefined &&
-      typeof accountRef === 'string' &&
-      /^[A-Za-z0-9_-]{1,256}$/.test(accountRef) &&
-      routes.length === 1 &&
-      routes[0] === 'POST /v1/responses') ||
-      Fail`Invalid ChatGPT subscription profile`;
-  }
   const models = [...policy.models];
   (models.length > 0 &&
     models.every(model => typeof model === 'string' && model.length > 0)) ||
@@ -791,15 +783,23 @@ export const makeProviderBrokerGrant = (
       typeof data.model === 'string' &&
       models.includes(data.model)) ||
       Fail`Model denied`;
-    if (authMode === 'subscription') {
-      (data.store === false && data.stream === true) ||
-        Fail`Subscription inference requires non-stored streaming responses`;
-    }
     const canonicalBody = JSON.stringify(data);
     const canonicalBytes = BigInt(
       new TextEncoder().encode(canonicalBody).length,
     );
     canonicalBytes <= maxRequestBytes || Fail`Request byte quota exceeded`;
+    const adapted = adaptRequest
+      ? adaptRequest(harden({ path, data }))
+      : { path };
+    const upstreamPath = adapted.path;
+    const target = splitInferenceTarget(upstreamPath);
+    (target &&
+      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
+      Fail`Invalid adapted inference target`;
+    const adapterHeaders = forwardableHeaders(adapted.headers ?? {});
+    Object.entries(adapted.headers ?? {}).every(
+      ([name, value]) => adapterHeaders[name] === value,
+    ) || Fail`Invalid adapted inference headers`;
     activeRequests < maxConcurrentRequests ||
       Fail`Provider concurrency limit reached`;
     // Reserve before the secret read; an open stream retains its slot until
@@ -837,10 +837,7 @@ export const makeProviderBrokerGrant = (
         if (!exposed.includes(screen)) exposed.push(screen);
       }
       const upstream = harden({
-        url:
-          authMode === 'subscription'
-            ? 'https://chatgpt.com/backend-api/codex/responses'
-            : `${origin}${path}`,
+        url: `${origin}${upstreamPath}`,
         method,
         headers: {
           // The harness describes its own request; the broker authenticates it.
@@ -858,15 +855,10 @@ export const makeProviderBrokerGrant = (
             ? {}
             : { 'anthropic-beta': anthropicBeta }),
           'content-type': 'application/json',
+          ...adapterHeaders,
           ...(credentialHeader === 'bearer'
             ? { authorization: `Bearer ${token}` }
             : { 'x-api-key': token }),
-          ...(authMode === 'subscription'
-            ? {
-                'chatgpt-account-id': accountRef,
-                originator: 'codex_cli_rs',
-              }
-            : {}),
         },
         body: canonicalBody,
         redirect: /** @type {const} */ ('error'),
