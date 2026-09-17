@@ -237,8 +237,10 @@ check that accepted early rejections and five witnesses limited to sloppy Script
 Static fields, private methods and accessors, destructuring and module export
 paths are included.
 Three omitted-hoist mutations each fail at `scope_of`.
-These probes advance F063 without claiming totality or changing its status;
-seven of the nine scoper `expect`/`unwrap` shapes still need their own audit.
+These probes advance F063 without claiming totality or changing its status.
+The [follow-up invariant audit](F063-SCOPER-AUDIT.md) covers the other seven
+scoper `expect`/`unwrap` shapes, with private phase-boundary tests and four
+checked mutations; it found no further source-triggered panic in those shapes.
 
 **Nothing else was attempted.**
 The other six findings that are not fixed — F010, F076, F068, F106, F122 and
@@ -4684,9 +4686,19 @@ visits constructor-init and instance-init children that `hoist_class` omits,
 but the parser leaves both children null.
 The audit is therefore about parser-produced trees, not arbitrary external ASTs.
 
-Two of the nine `expect`/`unwrap` shapes now have targeted probe suites;
-seven still need their own audit: `scope`, `function_scope`, the two
-declare-index pairs, the two field-scope hoists and the catch statement scope.
+Two of the nine `expect`/`unwrap` shapes have targeted traversal probe suites.
+The [follow-up invariant audit](F063-SCOPER-AUDIT.md) examines the other seven:
+`scope`, `function_scope`, the two declare-index pairs, the two field-scope hoists
+and the catch statement scope.
+It records the initialization/restoration and stable-ID provenance arguments,
+including removal of block placeholders before binding and the final Eval-list
+reversal after the last indexed read.
+The accompanying private tests reconstruct declaration indexes at both phase
+boundaries and check explicit field/catch hoist receipts before binding consumes them.
+Four independent mutations break these tests: stale removed-ID positions, a
+missing catch secondary scope, omitted static-private-method-only initializer
+scopes, and failure to restore the function scope after field hoisting.
+No new source-triggered panic was found in those seven shapes.
 Neither a finite traversal roster nor the wider corpus sweep proves totality,
 so F063 remains partially open, including the coder's bookkeeping sites and
 the earlier audit's generated sources that are not reproducible in this tree.

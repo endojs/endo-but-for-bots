@@ -3012,6 +3012,9 @@ fn decl_flags(flags: u32) -> String {
 mod tests;
 
 #[cfg(test)]
+mod invariants;
+
+#[cfg(test)]
 mod lazy_declare_index_tests {
     use super::*;
 

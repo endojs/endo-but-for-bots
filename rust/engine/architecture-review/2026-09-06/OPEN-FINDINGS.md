@@ -80,12 +80,16 @@ methods and accessors, binding patterns, parameter defaults, templates, spreads,
 optional chains, loops, catches and module exports.
 Omitting hoisting of a computed field key, a field initializer value or a private
 method makes the suite fail at `scope_of`; all three mutations were checked.
-Two of the nine shapes now have targeted probe suites; seven still need their
-own audit: `scope`, `function_scope`, the two declare-index pairs, the two
-field-scope hoists and the catch statement scope.
+The other seven shapes now have a [source-level invariant audit](F063-SCOPER-AUDIT.md):
+`scope`, `function_scope`, the two declare-index pairs, the two field-scope hoists
+and the catch statement scope.
+Private phase-boundary tests check scope restoration, declaration indexes before
+and after binding, and explicit catch/class hoist receipts.
+Four temporary mutations independently break those tests.
+No new source-triggered panic was found in those seven shapes.
 The traversal roster is evidence for parser-produced trees, not a proof that
 `scope_of`'s panic is unreachable for every source or every externally constructed AST.
-The bookkeeping `expect`s and the audit's non-reproducible negative over
+The coder's bookkeeping `expect`s and the audit's non-reproducible negative over
 generated sources are the rest.
 
 F010 and F076 are held pending a GC usage-pattern design.
