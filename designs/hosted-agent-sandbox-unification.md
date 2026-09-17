@@ -10,7 +10,27 @@
 
 ## Implementation status
 
-Latest increment, 2026-09-17: Claude and OpenCode now compose one
+Latest increment, 2026-09-17: Codex now uses the same daemon session owner,
+supervisor, scoped native runtime, provider grants, and state-storage operations.
+Its volume registry, quota host/worker, and lease subsystem are deleted.
+Host checkpoints stay separate from the guest-writable `cli_homes` subtree.
+ChatGPT request translation lives in the Codex subscription profile rather than
+in the generic provider broker; credentials remain host-managed.
+
+Tokyo at `59226eb58` passed fresh Floot Codex Sol acceptance
+(`mu5acqsf-w5ami8`): Endo tool use, native shell write/read, durable tool/reply
+records, shared-owner stop and scope revocation, daemon restart with marker/file
+recall without manual repair, and removal of private state while preserving the
+Floot-owned workspace. The Floot test was then deleted; native container, volume,
+and 9P mount inventories were empty. This followed three live boundary fixes:
+empty thinking selection, oversized Unix socket names, and the policy-incompatible
+`.cli` path. Controller tests now invoke the real shared request validator.
+Codex's 249 tests and the 9P server's 95 tests pass; the fixes received adversarial
+review before commit. Host quota configuration retirement, mechanical cleanup,
+transport/journal simplification, and final conformance remain; this is not a
+claim that the entire design is implemented.
+
+Previous increment, 2026-09-17: Claude and OpenCode now compose one
 `makeHostedSessionSupervisor` in `@endo/hosted-agent/session-supervisor.js`.
 It owns plan identity, activation fencing, retained resources, recovery lookup,
 native stop acknowledgement, and failed-release retry.
@@ -29,7 +49,7 @@ The corrective two-phase fence/removal split landed in `fa1d91ac6` and passed
 fresh Tokyo Floot tool-use, persistence, and first-attempt deletion on both
 adapters. Both test mounts/state directories were absent after deletion, with
 no remaining container references to either session's paths.
-Codex is not yet on this supervisor.
+Codex joined this supervisor in the subsequent increment described above.
 
 The Codex migration also requires its native model discovery and durable
 checkpoint acknowledgement to pass through the common session facade.
@@ -2755,6 +2775,13 @@ than a judgement.
    *Gate: the registry, the quota host and the registry worker are gone, and
    a destroyed Codex session leaves no volume and no directory.*
 
+   Implemented in `812f10b47`; live Codex acceptance passed at `59226eb58`.
+   Both host-record and guest-home leaves and the private projection directory
+   disappeared on owner removal; the external workspace remained until Floot
+   deleted its own session. Old test leases/volumes were explicitly retired
+   before replacement. The operational NixOS quota helper is being retired
+   separately; persistent directory storage does not inherit its quota guarantee.
+
 4. **Move Codex onto the supervisor and the shared broker scopes,** retiring
    `broker-launch.js`. The review expects this to be the hard step, because
    `provider-broker.js` already carries a hardcoded subscription/`chatgpt.com`
@@ -2762,6 +2789,13 @@ than a judgement.
    move forces open.
    *Gate: Phase 3's exit reads true — all three on common grants and the
    supervisor — and revocation demonstrably stops access on all three.*
+
+   Codex now composes those shared owners. `b9bd65509` removed the generic
+   broker's subscription branch and retired `broker-launch.js`.
+   Tokyo's retained Codex scope rejected access after owner stop and disappeared
+   from scope lookup; containers and mounts were absent before restart.
+   The earlier Claude/OpenCode acceptance remains recorded above.
+   Final cross-backend conformance on the completed refactor is still pending.
 
 5. **Collapse the mechanical leaves.** `current-specifier.js` and
    `managed-credentials-module.js` are byte-identical across three packages;
