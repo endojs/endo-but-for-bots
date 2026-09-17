@@ -4706,8 +4706,13 @@ The subsequent [coder bookkeeping audit](F063-CODER-AUDIT.md) inventories 83
 explicit production assertion/panic/unwrap sites at `6bca165de`.
 Six logical-assignment unwraps are removed by carrying the branch opcode and
 both targets in one optional tuple; arithmetic assignments still allocate none.
-Twenty-four local/control-flow sites have source-level invariant arguments,
-and 53 cross-pass, AST-shape and declaration-bookkeeping sites remain for follow-up.
+Twenty-four local/control-flow sites have source-level invariant arguments.
+The subsequent declaration-bookkeeping audit examines ten more sites and accounts
+for all 29 frame-slot reads, including function aliases versus module indirections
+and the resource/disposal adjacency that Eval-list reversal must not disturb.
+Its 2,240 generated cases and 34 boundary cases inspect receipts before coding and
+require slots for every resolved node afterward; three damaged-tree controls are rejected.
+The remaining inventory is 43 cross-pass and AST-shape sites.
 The new deterministic matrices check 17,534 successful compilations and the
 logical-assignment runtime matrix checks 180 result/evaluation-count cases.
 Two independent mutations fail the new tests: dropping finalizer alias origins

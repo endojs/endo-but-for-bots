@@ -882,8 +882,8 @@ impl<'a, 'm> Coder<'a, 'm> {
     /// `fxScopeCodingBlock` — give every declaration in `scope` its frame
     /// slot and, for `var`, its `undefined` initialization; if the scope
     /// is a direct-`eval` scope, publish the slots into a `with`
-    /// environment. Deferred: `Define`/`Private` declarations (the
-    /// function/class slices) assert.
+    /// environment. Hoisted `Define` values are installed after all slots
+    /// exist, so their nested functions can capture later declarations.
     fn scope_coding_block(&mut self, scope: usize) {
         if self.declare_count(scope) == 0 {
             return;
@@ -952,7 +952,8 @@ impl<'a, 'm> Coder<'a, 'm> {
     /// (a hoisted function declaration's binding) allocates its slot here
     /// like any non-`var` declare — a `NEW_LOCAL`/`NEW_CLOSURE` with no
     /// value init (`fxScopeCodeDefineNodes` assigns the function value
-    /// later). Class `Private`s remain the class slice and assert loudly.
+    /// later). Class brands are `Const` declarations too; the scoper never
+    /// produces a `Private` declaration for the source compilation entry.
     fn assert_declared_kind(&self, token: Token) {
         assert!(
             matches!(
@@ -3644,12 +3645,10 @@ impl Coder<'_, '_> {
         use crate::ast::flags as f;
         let flags = node.flags;
         let scope = self.scope_of(node);
-        // The function scope may declare positional parameters (`Arg`,
-        // possibly captured) and closure aliases (a `NoToken` use-closure
-        // declare for a variable an inner function captures). Deferred
-        // features add other declares: a named function expression adds a
-        // `Define` (the `CURRENT` name binding) and an `arguments`
-        // reference adds a `Var`. Guard those as named gaps.
+        // Hoisting puts parameters, the optional self-name and synthetic
+        // arguments in this scope; body declarations have a separate block.
+        // Binding adds only NoToken closure aliases. This is an invariant
+        // over that producer roster, not an unsupported-feature refusal.
         for d in &self.tree.scopes[scope].declares {
             let is_alias =
                 d.token == Token::NoToken && d.flags & crate::scoper::dflags::USE_CLOSURE != 0;
@@ -3842,9 +3841,8 @@ impl Coder<'_, '_> {
         self.environment_level = saved_env;
     }
 
-    /// `fxScopeCodeRetrieve` — retrieve captured closures into frame slots.
-    /// This slice has no captured closures and no arrow-default, so it is a
-    /// no-op; the closure and arrow-default paths assert.
+    /// `fxScopeCodeRetrieve` — assign captured closures their frame slots
+    /// before parameter binding or field-initializer expressions can use them.
     fn scope_code_retrieve(&mut self, scope: usize) {
         // Give each captured variable (a use-closure alias with a name) a
         // fresh frame slot and count them; `RETRIEVE_1` pulls that many
@@ -4441,7 +4439,7 @@ impl Coder<'_, '_> {
             // A plain `Arg` (`[symbol]`), an `= default` param (a `Binding`
             // wrapping an `Arg`), or a `...rest` param (`RestBinding`
             // wrapping its target, bound from `ARGUMENTS i`). Destructuring
-            // (`ArrayBinding`/`ObjectBinding`) targets are deferred.
+            // targets use the same reference/assign dispatch as declarations.
             if arg.token == Token::RestBinding {
                 let target = &arg.children[0];
                 self.code_reference(target, 0);
@@ -6806,6 +6804,9 @@ fn binary_code(token: Token) -> i32 {
 
 #[cfg(test)]
 mod target_invariants;
+
+#[cfg(test)]
+mod declaration_invariants;
 
 #[cfg(test)]
 mod symbol_hash_tests {

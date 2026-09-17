@@ -86,21 +86,86 @@ try/finally functions, both inside bodies and in the module function-parameter w
 These are source-reading arguments; the generated matrices are regression evidence for
 their composition, not a replacement for their stated preconditions.
 
-## Remaining fifty-three explicit sites
+## Declaration bookkeeping: ten more sites examined
+
+This follow-up reads the declaration producers and all 29 `declare_index` call sites at
+`465f7104d`, then checks their composition with real parser/scoper output.
+It does not replace the remaining AST-shape and scoper-receipt audit.
+All ten assertions remain defensive invariants; none is converted into an `Unsupported`
+refusal, and this pass found no new source-triggered panic.
+
+### Kinds, names, aliases and disposal adjacency: nine sites
+
+| Sites | Producer and consumer argument |
+|---|---|
+| `add_variable`: required name | `hoist_declare`, `hoist_define` and `inject_arguments` create named ordinary declarations. Anonymous class slots go through `scope_coding_block`'s null-symbol branch; anonymous disposal slots use `NEW_TEMPORARY`; function aliases are retrieved, not passed here. Module imports/re-exports use `TRANSFER` instead. Root Eval cannot contain `using`, so its named-only allocation loop cannot meet a nameless disposal slot. |
+| `assert_declared_kind` and strict-eval private-kind guard | Block placeholder `NoToken`s are removed by `fx_scope_hoisted`; function aliases are added at function boundaries, not blocks. Ordinary declarations are Var/Let/Const/Using/Arg/Define. Class brands, keys and initializer closures are Const, not Private. No production `new_declare` call constructs Private; unresolved private names report a scoper error rather than synthesizing an eval-root brand. |
+| `code_function`: scope-kind guard | `hoist_function`/`hoist_function_no_self` put Arg, optional self-name Define and injected arguments Var in the parameter scope; body declarations have a separate Block. The only subsequent function-scope insertions are NoToken captures from `scope_lookup` and the base-constructor initializer capture. |
+| `scope_coding_params`: kind and non-self-alias guards | The same function producer roster applies. NoToken captures are skipped and Define is handled before the Arg/Var/Const guard. Capturing an existing parameter sets CLOSURE on it; USE_CLOSURE is set on a new NoToken alias in the inner function, not on the Arg itself. Synthetic field functions reach this helper only after `code_field_init_function` refuses non-alias declarations, so their entries all take the NoToken skip. |
+| `scope_code_store`: alias target | Its callers are ordinary and field-initializer functions. The two function-capture producers set both CLOSURE and USE_CLOSURE, preserve a non-null symbol (including `Sym::Anon`), and install an ancestor `(scope, id)` target before insertion. Module/root USE_CLOSURE declarations need not have aliases, but those scopes are never passed to this helper. |
+| `scope_code_used_reverse`: following disposal slot; `code_declare_assign`: resource position | `scope_add_declare` appends each Using immediately followed by a nameless Const marked DISPOSABLE. Block cleanup removes only NoToken placeholders, and binding appends captures only to functions, so neither separates the pair. Using resolutions select the declaration inserted by that hoist. The final Eval-list reversal cannot affect a pair: program-root using is rejected by the parser's block-context check; accepted pairs live in blocks, for scopes or Module. |
+
+The USE_CLOSURE distinction matters: an assertion over **every** scope that equated that
+flag with an alias would be false for imports, re-exports and module-local indirect bindings.
+The new tests count those as witnesses of the exception, not malformed captures.
+
+### Slot assignment before access: one site, 29 readers
+
+`set_declare_index` is the sole writer of `decl_index`; it records `(scope, stable id)`.
+There is no removal or clear during coding.
+The scoper's completed declaration lists are immutable, and its stable-ID provenance is
+covered by [F063-SCOPER-AUDIT.md](F063-SCOPER-AUDIT.md).
+Resetting `scope_level` for an embedded function changes its next frame offset, not the
+outer declaration's map entry.
+The module's second wrapper reassigns the same named retrieve slots before its body.
+
+| Reader family | Calls | Assignment precedes the read |
+|---|---:|---|
+| Block, Eval, body-eval and parameter environment publication | 5 | Each helper allocates its declaration group before its STORE loop. Body-eval has separate var/define and lexical allocation/publication passes. |
+| Loop refresh and reset | 2 | `code_for` and `code_for_in_of` scope-code the header before initialization, iteration and refresh/reset. |
+| Function self-name and arguments object | 2 | `scope_code_retrieve` and `scope_coding_params` run before `code_arguments_object`, parameter defaults and `code_function_name`. |
+| Module var initialization | 1 | `scope_code_retrieve` assigns the module's named indirect bindings first, before the hoisted function definitions. Anonymous import-only slots are linkage records, never resolved source accesses. |
+| Resource and disposal slots | 3 | Blocks/for scopes allocate the entire pair before coding declarations. Module resources are retrieved; `scope_code_using` explicitly allocates their non-retrieved disposal temporaries before the body. |
+| Resolved value/reference/assignment/private access | 5 | Scope entry allocates before child traversal; parameters before defaults, body slots before hoisted definitions, catches before parameter/body coding, and switch/loop slots before their scoped children. `scope_lookup` resolves a local or creates an alias at each crossed function boundary; unresolved global/with/eval accesses take the symbol path and do not read an index. |
+| Class slots, field-member plans, base and derived initializer captures | 10 | The class-name scope is coded before heritage; class-body slots before constructor/member emission. Field functions retrieve before constructing their plans. Base constructors retrieve before the initializer call; derived `super` uses the already-retrieved alias. |
+| Captures stored into a newly created function | 1 | The alias targets the enclosing declaration or an enclosing function's retrieved alias. Its scope is already allocated when child function code is entered. Coding and returning from that child does not remove the outer map entry. |
+
+`code_define_nodes` runs after scope allocation in programs, function bodies, blocks,
+catches and loops; a hoisted function capturing a later lexical declaration
+therefore sees an assigned slot even though its runtime value is still uninitialized.
+That is a compiler ordering argument, not a claim that JavaScript TDZ access succeeds.
+Switch discriminants are scoped and coded outside the case scope; that scope's slots are
+allocated before case tests and bodies, including any functions those bodies contain.
+Field-function non-alias declarations remain an explicit Unsupported boundary, not an
+implicit premise that such source must never be parsed.
+
+### Checked-in evidence
+
+`coder/declaration_invariants.rs` exercises 2,240 parameter/body/function-form/goal
+combinations and 34 additional goal-specific cases for anonymous class captures, mapped
+arguments, with, loops, catches, module imports/re-exports and synchronous/asynchronous disposal.
+It inspects completed scoper receipts before coding, requires every resolved node to have
+an assigned slot afterward, serializes successfully, and compares with the public compile entry.
+Counters require that captures, anonymous captures, disposal pairs and module indirections
+really occurred; successful parsing alone cannot satisfy them.
+Three checked-in damaged-tree controls must fail the receipt checker: a missing alias
+target, a missing USE_CLOSURE bit, and a reversed resource/disposal pair.
+These controls mutate test data only; no production failure path is weakened.
+The finite matrix supports the ordering arguments above; it does not prove all source total.
+
+## Remaining forty-three explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.
 These need the fuller parser/scoper/coder producer-and-consumer argument, especially child
-traversal and declaration slot assignment; this pass does not claim to have discharged them.
+traversal and AST construction; this pass does not claim to have discharged them.
 
 | Family | Count | Consumers |
 |---|---|---|
 | AST shapes | 21 | `node_of` (1), `code` (1), `code_node_inner` (5), `symbol_of` (1), `code_class` reserved children/Host/member kinds (5), `code_field` kind (1), `code_params_binding` (2), `code_object_binding_assign` (1), `code_object` (1), `code_assign` (2), `code_template` (1) |
 | Scoper receipts | 22 | `resolution_of` (1), `scope_of` (1), `scope_secondary` (2), four scope-count reads, `private_index` (1), `code_class` member/initializer receipts (8), field-member receipt (1), `code_field` aliases (3), base-constructor capture (1) |
-| Declaration bookkeeping | 10 | `declare_index`, `add_variable`, `assert_declared_kind`, strict-eval private-kind guard, disposal-slot read, using-declaration position, function-scope kind guard, captured alias target, and two parameter-scope guards |
 
 The related scoper producer arguments are recorded in [F063-SCOPER-AUDIT.md](F063-SCOPER-AUDIT.md).
-They do not on their own prove that every coder consumer follows the same child traversal or
-assigns a slot before accessing it.
+They do not on their own prove that every coder consumer follows the same child traversal.
 
 ## Reproducible generated evidence
 
@@ -126,6 +191,7 @@ Run the compiler tests from the repository root and the VM tests with the engine
 ```sh
 cargo test --locked -p ironhorse-compile --test coder_totality_matrix
 cargo test --locked -p ironhorse-compile --lib coder::target_invariants
+cargo test --locked -p ironhorse-compile --lib coder::declaration_invariants
 cargo test --manifest-path rust/engine/Cargo.toml --locked -p ironhorse-vm \
   --test logical_assignment_control_flow --test logical_assignment_names
 ```
