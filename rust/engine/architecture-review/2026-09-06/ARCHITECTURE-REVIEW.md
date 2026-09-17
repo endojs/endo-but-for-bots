@@ -4576,14 +4576,20 @@ sources — a different probe from the corpus rather than a superset of it, and
 in any case not the invariant argument the recommendation asks for.
 Nothing in the tree holds that negative, which is the gap this block is
 admitting rather than papering over.
-The audit splits the rest three ways, and its middle group is the honest
-worry: `coder.rs:2218` and `:2296` call the SAME asserting helper the catch
-bug tripped, and nothing but the grammar — a FunctionDeclaration cannot be a
-bare loop body — keeps them unreached.
-That is a grammar argument rather than a measurement, and it is the kind of
-argument that just failed for `code_catch`.
-The bookkeeping `expect`s and all 29 scoper sites have no source-shape handle
-at all, so for those the claim rests where it always did.
+The audit split the rest three ways, and its middle group WAS the honest
+worry: `code_for` and `code_for_in_of` called the SAME asserting helper the
+catch bug tripped, kept unreached by nothing but the grammar — a
+FunctionDeclaration cannot be a bare loop body — which is the argument that
+had just failed for `code_catch`.
+That group is now empty.
+Both loops code their body's defines the way a block does, so an empty list
+costs nothing and a define that ever appeared would be coded rather than
+asserted against, and the asserting helper has no callers and is deleted.
+The class the catch bug belonged to no longer exists, rather than resting on a
+grammar argument that the same file already disproved once.
+What is left is the bookkeeping `expect`s and all 29 scoper sites, which have
+no source-shape handle at all — for those the claim rests where it always did,
+on an invariant argument this pass neither strengthened nor undermined.
 Changed by `27e637606 fix(ironhorse-compile): two panics the F063 audit proved
 reachable`.
 Pinned by `the_audits_reachable_panics_return_rather_than_panic` in
