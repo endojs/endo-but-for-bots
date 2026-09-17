@@ -660,13 +660,15 @@ pub enum NativeMethod {
     /// which step 2 covers, and `Math.random`, which ironhorse does not
     /// implement and so has nothing to secure.
     ///
-    /// **Order is load-bearing: rewire, then harden.** [`Self::GlobalHarden`]
-    /// walks prototype chains, so a single `harden({})` anywhere leaves
-    /// `Function.prototype.constructor` `{writable: false, configurable: false}`
-    /// and a later `[[DefineOwnProperty]]` cannot replace it. XS avoids this
-    /// by writing the slot directly (`fx_lockdown_aux`, `:52`) before it
-    /// hardens anything, and this does the same through
-    /// `set_own_unmetered_with_flag`.
+    /// **The direct slot write is load-bearing; the order is not.**
+    /// [`Self::GlobalHarden`] walks prototype chains, so a single `harden({})`
+    /// anywhere leaves `Function.prototype.constructor`
+    /// `{writable: false, configurable: false}` and a later
+    /// `[[DefineOwnProperty]]` cannot replace it. XS writes the slot directly
+    /// instead (`fx_lockdown_aux`, `:52`) and so does this, through
+    /// `set_own_unmetered_with_flag` -- which is why the rewire works whenever
+    /// it runs. `do_lockdown` rewires before hardening AND again after, because
+    /// the harden walk can run guest Proxy traps in between.
     ///
     /// Allocation-driven metering, like its `harden` sibling — `xsLockdown.c`
     /// calls no `mxMeter`.

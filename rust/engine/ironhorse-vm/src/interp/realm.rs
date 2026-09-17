@@ -162,16 +162,25 @@ impl Interp {
     /// there to secure. `designs/ironhorse-native-lockdown.md` § Scope
     /// boundary states both, and what they cost.
     ///
-    /// **The order is the contract.** Rewire, then harden. `do_harden` walks
-    /// prototype chains, so once ANY harden has run
-    /// `Function.prototype.constructor` is `{writable: false,
-    /// configurable: false}` and no `[[DefineOwnProperty]]` can replace it --
-    /// which is exactly how the SES shim's `lockdown()` fails on ironhorse,
-    /// with `TypeError: invalid descriptor` out of
-    /// `tame-function-constructors.js`. XS sidesteps it by writing the
-    /// constructor slot directly before hardening anything
-    /// (`fx_lockdown_aux`, `:52`); [`Self::install_locked_down_constructor`]
-    /// is that write.
+    /// **The direct write is the contract, not the order.** An earlier revision
+    /// of this comment said "rewire, then harden" was load-bearing. Mutation
+    /// testing refuted it: inverting the two steps changes no observable
+    /// behaviour and fails no test. The reason is
+    /// [`Self::force_locked_down_constructor`], which assigns the slot rather
+    /// than defining the property, so a frozen `Function.prototype` is no
+    /// obstacle whenever the write happens.
+    ///
+    /// The order IS load-bearing for a JS implementation, which is why the
+    /// claim was plausible: `do_harden` walks prototype chains, so after any
+    /// harden `Function.prototype.constructor` is
+    /// `{writable: false, configurable: false}` and `[[DefineOwnProperty]]`
+    /// must refuse it -- exactly how the SES shim's `lockdown()` fails on
+    /// ironhorse, with `TypeError: invalid descriptor` out of
+    /// `tame-function-constructors.js`. XS sidesteps that by writing the slot
+    /// (`fx_lockdown_aux`, `:52`), and so does this. `lockdown_still_rewires_a_
+    /// prototype_the_guest_has_already_hardened` is the test, and what it
+    /// guards is the write path: replace it with an ordinary define and that
+    /// test goes red.
     pub(super) fn do_lockdown(&mut self, code: &[u8]) -> Result<Slot, Step> {
         // Step 1, idempotence (`:88-92`). XS throws; the HOST-side
         // [`Self::lock_down_intrinsics`] deliberately does not, because it is
@@ -182,6 +191,42 @@ impl Interp {
         // records the split as deliberate.
         if self.realm.intrinsics().locked_down.get() {
             return Err(self.catchable_type_error_msg("lockdown already called".into()));
+        }
+
+        // Step 0, not in XS because XS cannot reach this: a COMPARTMENT must
+        // not perform the realm's lockdown.
+        //
+        // `lockdown()` mutates state every compartment of the machine shares
+        // -- it rewrites `Function.prototype.constructor` and freezes the
+        // whole intrinsic graph. XS has no analogue of this check because it
+        // has no analogue of the exposure: `harden`/`lockdown`/`petrify` are
+        // globals the TEST SHIM installs on the host global (`xst.c:428-429`),
+        // and a compartment's global is built by `fx_lockdown` itself from the
+        // intrinsics array (`xsLockdown.c:105-139`), which never contains
+        // them. Ironhorse installs them as boot intrinsics instead, so every
+        // environment with an unrestricted `global_names` gets the binding.
+        //
+        // Measured before this check: two compartments on
+        // `Machine::unfrozen_with_start_global_names`, compartment A calls
+        // `lockdown()` and compartment B -- which observed
+        // `false | false | false` moments earlier -- then sees
+        // `Object.isFrozen(Object.prototype) = true`,
+        // `Object.isFrozen(Function.prototype) = true` and
+        // `Function.prototype.constructor !== Function`. One guest hardened
+        // the realm for every sibling.
+        //
+        // The check is on the CAPABILITY, not on the name, which is why it is
+        // here rather than in `install_intrinsic_bindings`. Hiding the binding
+        // would leave the hole open for a compartment whose creator endows it
+        // with a `lockdown` reference captured from the start realm, or
+        // reaches it by any route that is not a bare name. Refusing the call
+        // closes both. The binding stays visible, as `harden` and `petrify`
+        // do; `designs/ironhorse-native-lockdown.md` § Constraints records the
+        // amendment.
+        if self.environment.global_obj != self.realm.global_object() {
+            return Err(
+                self.catchable_type_error_msg("lockdown is not available to a compartment".into())
+            );
         }
 
         // Step 2, poison the function-family constructors (`:94-103`, `:127`).
@@ -205,7 +250,10 @@ impl Interp {
             if prototype == crate::value::SlotIndex::NULL {
                 continue;
             }
-            minted.push(self.install_locked_down_constructor(prototype, arity));
+            minted.push((
+                prototype,
+                self.install_locked_down_constructor(prototype, arity),
+            ));
         }
 
         // Step 5, harden (`:141-200`). XS walks an enumerated list of
@@ -231,7 +279,7 @@ impl Interp {
                 .filter(|&root| self.slots.get(root).kind == Kind::Instance)
                 .collect();
         }
-        roots.extend(minted);
+        roots.extend(minted.iter().map(|&(_, inert)| inert));
         for root in roots {
             // Not atomic, exactly as `lock_down_intrinsics` documents: the
             // roots are hardened one at a time, so a refusal at root `k`
@@ -243,6 +291,32 @@ impl Interp {
             // oversight, and calling `lockdown()` again completes the freeze
             // because a hardened root is idempotent on the retry.
             self.do_harden(code, Slot::of(Kind::Reference, Payload::Reference(root)))?;
+        }
+
+        // Re-assert step 2 after step 5, because step 5 can run GUEST CODE.
+        //
+        // `do_harden` walks the roots through the MOP -- `mop_prevent_extensions`,
+        // `mop_own_keys`, `mop_get_own_property_read` -- and every one of those
+        // enters a Proxy trap. A guest that hangs a proxy off a root hardened
+        // EARLY (`Object.prototype` is the lowest-indexed one) gets its trap
+        // called while `Function.prototype` is still writable, and
+        // `Object.defineProperty(Function.prototype, 'constructor', {value: Function})`
+        // from inside that trap puts the real evaluator back. `lockdown()` then
+        // completes, reports success, and leaves the reach open permanently --
+        // measured, before this loop existed, as
+        // `lockdown=returned undefined | reach=returned 2`.
+        //
+        // The re-assert closes the window rather than trying to police it: no
+        // ordering of steps 2 and 5 can help, because the guest code runs
+        // BETWEEN them by construction. `set_own_unmetered_with_flag` ignores
+        // the descriptor it overwrites, so this works on the now-frozen
+        // prototype and is idempotent when nothing interfered -- which is the
+        // ordinary case, where it rewrites the same reference over itself.
+        //
+        // The flag is re-read here, so the property keeps the non-writable,
+        // non-configurable shape step 5 just gave it.
+        for (prototype, inert) in minted {
+            self.force_locked_down_constructor(prototype, inert);
         }
         self.realm.intrinsics().locked_down.set(true);
         Ok(Slot::undefined())
@@ -266,6 +340,27 @@ impl Interp {
     /// `{writable: true, enumerable: false, configurable: true}` across the
     /// rewiring and becomes non-writable only when step 5 hardens it -- which
     /// is the order a `verifyProperty` case observes.
+    ///
+    /// **Except the accessor bits, which must be cleared.** "Preserve the flag"
+    /// is the right rule only because of how XS represents an accessor: there
+    /// it is `slot->kind == XS_ACCESSOR_KIND` with the getter and setter IN the
+    /// slot value, so `fx_lockdown_aux`'s `slot->kind = constructor->kind;
+    /// slot->value = constructor->value;` (`xsLockdown.c:65-66`) converts an
+    /// accessor into a data property as a side effect of the assignment.
+    /// Ironhorse keeps accessorness in the flag byte
+    /// (`XS_GETTER_FLAG|XS_SETTER_FLAG`) with the callables in the `accessors`
+    /// side table, so preserving the flag verbatim preserves ACCESSORNESS while
+    /// writing a data payload underneath -- a slot that reads as a getter and
+    /// holds a reference.
+    ///
+    /// That is not a cosmetic mismatch. `ordinary_get` consults the side table
+    /// first, so a guest that runs
+    /// `Object.defineProperty(Function.prototype, 'constructor', {get: ...})`
+    /// before `lockdown()` keeps its evaluator: the getter still answers, the
+    /// inert constructor is never seen, and `lockdown()` returns normally and
+    /// reports success. Three lines of setup defeated the entire operation
+    /// until adversarial review found it; `lockdown_poisons_an_accessor_constructor`
+    /// is the regression test.
     fn install_locked_down_constructor(
         &mut self,
         prototype: crate::value::SlotIndex,
@@ -298,18 +393,51 @@ impl Interp {
             XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
         );
 
+        self.force_locked_down_constructor(prototype, inert);
+        inert
+    }
+
+    /// Write `prototype.constructor = inert` through the privileged path,
+    /// whatever is currently there. Used to install the stand-in and again
+    /// after step 5 has run (and possibly run guest code) -- see the re-assert
+    /// loop in [`Self::do_lockdown`].
+    ///
+    /// The current flag is preserved minus the accessor bits, so the property
+    /// keeps whatever writable/enumerable/configurable shape it has at the
+    /// moment of the call, and a stale `accessors` row can never outrank the
+    /// data value this writes.
+    ///
+    /// **When the property is ABSENT the default is `0`, not `XS_DONT_ENUM_FLAG`.**
+    /// A guest can run `delete Function.prototype.constructor` before
+    /// `lockdown()`, and then step 2 CREATES the property rather than
+    /// rewriting one. XS reaches that case through
+    /// `mxBehaviorSetProperty(..., XS_OWN)` -> `fxOrdinarySetProperty`
+    /// (`xsType.c`), whose creation branch allocates with `fxNewSlot`, and a
+    /// fresh XS slot carries no flags at all. So XS's re-created `constructor`
+    /// is ENUMERABLE, and stays enumerable through step 5 (hardening clears
+    /// writable and configurable, not enumerable). Measured against the oracle:
+    /// `delete Function.prototype.constructor; lockdown()` leaves
+    /// `e=true w=false c=false` on XS. Defaulting to `XS_DONT_ENUM_FLAG` here
+    /// gave `e=false` and was a real divergence;
+    /// `a_deleted_constructor_is_recreated_enumerable` is the regression test.
+    fn force_locked_down_constructor(
+        &mut self,
+        prototype: crate::value::SlotIndex,
+        inert: crate::value::SlotIndex,
+    ) {
         let constructor_id = self.intern_static_key_unmetered("constructor");
         self.constructor_id.get_or_insert(constructor_id);
         let flag = self
             .find_property(prototype, constructor_id)
-            .map_or(XS_DONT_ENUM_FLAG, |p| self.slots.get(p).flag);
+            .map_or(0, |p| self.slots.get(p).flag)
+            & !(XS_GETTER_FLAG | XS_SETTER_FLAG);
+        self.accessors.remove(&(prototype, constructor_id));
         self.set_own_unmetered_with_flag(
             prototype,
             constructor_id,
             Slot::of(Kind::Reference, Payload::Reference(inert)),
             flag,
         );
-        inert
     }
 
     pub(crate) fn realm(&self) -> &std::rc::Rc<Realm> {
