@@ -382,17 +382,18 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             // nothing, and `harden` is gone because the bundle deletes
             // `polyfills.js`'s before the shim runs.
             //
-            // `lockdown` here is the ENGINE's, not the shim's: the shim
-            // aborted before installing its own, and `create_hardened_globals`
-            // binds one. So a realm that takes this path is no longer left
-            // with neither implementation -- it has a native `lockdown()`,
-            // which does not need the guest `harden` the bundle deleted
-            // (`do_lockdown` calls the engine's `do_harden` rather than
-            // fetching a guest one off the global, which is a deliberate
-            // divergence from `fx_lockdown`). Whether such a realm SHOULD take
-            // the native route instead of the shim is the open question in
-            // `designs/ironhorse-ses-compartment-equivalence.md`; this test
-            // only records that the option now exists.
+            // `lockdown` here is the ENGINE's, not the shim's: the shim aborted
+            // before installing its own, and `create_hardened_globals` binds
+            // one. A `typeof` census can say no more than that, and an earlier
+            // revision of this comment read more into it -- that such a realm
+            // "has a native `lockdown()`" and so "the option now exists". It
+            // does not. This is a `Machine::new()` realm, frozen at
+            // construction, and `Realm` construction sets `locked_down` at the
+            // same time; the guest's first call is therefore refused as a
+            // second one and the constructors are never rewired. The name is
+            // bound and calling it throws.
+            // `native_lockdown.rs::a_frozen_machine_refuses_the_guest_lockdown_and_keeps_the_reach_open`
+            // pins that, and the design note carries it as an open item.
             assert_eq!(
                 crank(SES_CENSUS),
                 "lockdown=function harden=undefined Compartment=undefined \

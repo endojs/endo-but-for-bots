@@ -2115,12 +2115,27 @@ impl Interp {
     /// `ironhorse-snapshot` golden identity fixtures are regenerated whenever
     /// this loop changes.
     fn create_hardened_globals(&mut self) {
-        for (name, m) in [
-            ("harden", NativeMethod::GlobalHarden),
-            ("petrify", NativeMethod::GlobalPetrify),
-            ("lockdown", NativeMethod::GlobalLockdown),
+        // `alloc_named_method`, not `alloc_method`: the latter hard-codes
+        // `name_chunk = ""` and arity 0, and these three are observable guest
+        // functions whose `name`/`length` XS pins. The shim installs them as
+        // `fxNextHostFunctionProperty(..., fx_harden, 1, "harden", ...)`,
+        // `(..., fx_lockdown, 0, "lockdown", ...)` and
+        // `(..., fx_petrify, 1, "petrify", ...)` (`xst.c:428-429`), so the
+        // arities are 1, 0, 1.
+        //
+        // Measured before this change: oracle
+        // `lockdown=lockdown/0 harden=harden/1 petrify=petrify/1`, ironhorse
+        // `lockdown=/0 harden=/0 petrify=/0`. `harden` and `petrify` predate
+        // native lockdown and were wrong in both name and arity; `lockdown`
+        // was wrong only in name, its arity already being 0. The same one-line
+        // change closes all three, so all three are fixed here rather than
+        // leaving two anonymous siblings beside a named newcomer.
+        for (name, m, arity) in [
+            ("harden", NativeMethod::GlobalHarden, 1),
+            ("petrify", NativeMethod::GlobalPetrify, 1),
+            ("lockdown", NativeMethod::GlobalLockdown, 0),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.intrinsics.insert(name, mf);
         }
     }
