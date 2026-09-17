@@ -788,8 +788,10 @@ So stage 4's remaining work is **not** "make the boot bundles run", and it is
 not "match the oracle's globals". Against the daemon it is `Compartment`,
 plus whatever guest-visible `lockdown` the daemon decides it wants. The
 `boot:ses-lockdown-bundle` ledger row names a real gap for the wrong reason:
-the named skips that track this are `ses-mode:lockdown-unimplemented` and
-`compartment:intrinsic-surface`.
+the named skip that tracks this is `compartment:intrinsic-surface`.
+(It also named `ses-mode:lockdown-unimplemented`, which no longer exists:
+`lockdown()` has since landed as a guest-callable native —
+`designs/ironhorse-native-lockdown.md`.)
 
 **But the machinery is built; what is absent is the binding layer.**
 Both facilities exist in Rust and are tested:
