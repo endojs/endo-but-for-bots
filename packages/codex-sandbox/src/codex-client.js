@@ -284,6 +284,15 @@ export const makeCodexClient = ({
   let replayContinuity =
     !savedThreadId ||
     Boolean(savedRecovery && savedRecovery.baseTurnId === null);
+  // A thread id that arrived in the saved state was written by a previous
+  // incarnation, so resuming it would let the CLI's own store decide the
+  // conversation -- the behaviour the stack's records exist to replace, and
+  // the one Claude's client stopped doing for the same reason. There is no
+  // "resume what we rebuilt" for Codex the way there is for Claude, because
+  // the rebuild *is* the injection into a thread. So an inherited thread is
+  // reconciled and then rotated away from, which is the path a changed tool
+  // catalog already takes. Cleared once this incarnation owns a thread.
+  let inheritedThread = Boolean(savedThreadId);
   let continuityCheckpoint = savedRecovery?.previousCheckpoint;
   // Codex app-server 0.152.0 refuses `thread/turns/list` on a thread that has
   // had no user message: a thread is not materialized until its first turn
@@ -1337,6 +1346,14 @@ export const makeCodexClient = ({
       boundToolSetId !== toolSetId &&
       (dynamicTools.length > 0 || boundToolSetId),
     );
+  // Two reasons to abandon the current thread, one mechanism. They differ in
+  // what they demand of the caller: a catalog change *requires* the records,
+  // because a conversation is being carried across an authority boundary and
+  // silently dropping it would rebind old context to new tools. An inherited
+  // thread does not -- if the stack holds no records then no turn is known to
+  // have happened, and a fresh empty thread is the honest result rather than
+  // a refusal.
+  const mustRotate = () => catalogChanged() || inheritedThread;
 
   const transcriptRecords = opts =>
     Array.isArray(opts.transcript)
@@ -1356,7 +1373,7 @@ export const makeCodexClient = ({
 
   const ensureThread = async (opts = {}, preserveCatalog = false) => {
     await ensureReady();
-    if (threadReady && threadId && (preserveCatalog || !catalogChanged()))
+    if (threadReady && threadId && (preserveCatalog || !mustRotate()))
       return threadId;
     const common = {
       cwd,
@@ -1375,20 +1392,28 @@ export const makeCodexClient = ({
         : {}),
     };
     let rotatedFrom;
-    if (!preserveCatalog && catalogChanged()) {
-      assertContinuity(opts, true);
+    /** @type {'catalog-changed' | 'thread-inherited' | undefined} */
+    let rotationReason;
+    if (!preserveCatalog && mustRotate()) {
+      assertContinuity(opts, catalogChanged());
       if (ledger.status().needsReconciliation) {
         throw Error(
           'Codex must reconcile the old thread before context rotation',
         );
       }
       // A schema/capability change gets a fresh conversation rather than
-      // silently rebinding old model context to new authority. The old thread
-      // remains intact for audit/recovery.
+      // silently rebinding old model context to new authority; an inherited
+      // thread gets one so that the records, not the surviving store, decide
+      // what the conversation is. Either way the old thread remains intact
+      // for audit and recovery -- it is superseded, never rewritten.
+      rotationReason = catalogChanged()
+        ? 'catalog-changed'
+        : 'thread-inherited';
       rotatedFrom = threadId;
       continuityCheckpoint =
         opts.acknowledgedCheckpoint || continuityCheckpoint;
       threadId = undefined;
+      inheritedThread = false;
       threadHasTurns = false;
       replayContinuity = true;
       // The marker names a turn in the thread being abandoned; the new thread
@@ -1396,6 +1421,7 @@ export const makeCodexClient = ({
       // audit and recovery.
       ledger.forget();
       await audit('thread-rotation-required', {
+        reason: rotationReason || 'catalog-changed',
         oldThreadId: rotatedFrom,
         oldToolSetId: savedToolSetId || '',
         newToolSetId: toolSetId || '',
@@ -1540,9 +1566,9 @@ export const makeCodexClient = ({
       let currentThreadId;
       await null;
       try {
-        const rotating = catalogChanged();
+        const rotating = mustRotate();
         if (rotating || (replayContinuity && !threadHasTurns)) {
-          assertContinuity(opts, rotating);
+          assertContinuity(opts, catalogChanged());
         }
         if (rotating) {
           // Reconcile the old native thread under its original catalog before

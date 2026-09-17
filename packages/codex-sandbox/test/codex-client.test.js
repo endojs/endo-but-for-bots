@@ -97,17 +97,41 @@ test('rotation with missing or invalid history fails before altering the old thr
   }
 });
 
-test('normal resumed threads do not replay context or reject unavailable context', async t => {
+test('a thread inherited across incarnations is superseded, not resumed', async t => {
+  // The rule this pins: within an incarnation a session keeps using the
+  // thread it started; across incarnations the stack's records decide. A
+  // thread id in the saved state can only have been written by a previous
+  // incarnation, so it names the CLI's own surviving store -- which is
+  // exactly what the records exist to replace. It is reconciled under its
+  // original catalog and then left behind, intact, for audit.
+  //
+  // With no records handed in there is nothing to replay, and that is not a
+  // refusal: an empty stack claim honestly means no conversation, so the
+  // fresh thread simply starts empty. Requiring records is reserved for a
+  // catalog rotation, where a conversation is being carried across an
+  // authority boundary and dropping it silently would be the bug.
   const fixture = makeFixture({
     threadId: 'thread-saved',
     clientOptions: { savedToolSetId: 'same', toolSetId: 'same' },
   });
   const reader = await fixture.client.send('continue', {});
-  t.deepEqual(
-    fixture.sent.find(message => message.method === 'turn/start').params.input,
-    [{ type: 'text', text: 'continue', text_elements: [] }],
+  t.true(
+    fixture.sent.some(message => message.method === 'thread/resume'),
+    'the inherited thread is resumed so it can be reconciled',
   );
-  t.false(fixture.sent.some(message => message.method === 'thread/start'));
+  t.true(
+    fixture.sent.some(message => message.method === 'thread/start'),
+    'and then superseded by one this incarnation owns',
+  );
+  const started = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(
+    started.params.threadId,
+    'thread-new',
+    'the turn runs on the new thread, never the inherited one',
+  );
+  t.deepEqual(started.params.input, [
+    { type: 'text', text: 'continue', text_elements: [] },
+  ]);
   await fixture.client.interrupt();
   await drain(reader);
 });
@@ -327,7 +351,17 @@ test('a crash after empty reconciliation retains the durable empty marker and li
   await drain(reader);
 });
 
-test('revival after acknowledged history reads the native base checkpoint', async t => {
+test('a superseded thread leaves the revived turn with no base to revert to', async t => {
+  // The write-ahead marker names the turn a crash would have to be reconciled
+  // against. It used to name the inherited thread's latest turn, because the
+  // turn would have run there. It no longer does: the turn runs on a thread
+  // this incarnation started, which has no turns yet, so the honest base is
+  // null and a reconciliation reverts the new thread to empty rather than to
+  // somebody else's checkpoint.
+  //
+  // The inherited thread's own turns are not forgotten -- they are read
+  // during reconciliation, before the supersession, which is what
+  // 'Floot retry after revival ...' covers.
   const saved = [];
   const fixture = makeFixture({
     threadId: 'thread-saved',
@@ -339,7 +373,11 @@ test('revival after acknowledged history reads the native base checkpoint', asyn
     },
   });
   const reader = await fixture.client.send('next');
-  t.like(saved[0], { recovery: { baseTurnId: 'turn-1' } });
+  t.like(saved[0], { threadId: 'thread-new', recovery: { baseTurnId: null } });
+  t.false(
+    saved.some(state => state.threadId === 'thread-saved'),
+    "the inherited thread is never re-saved as this incarnation's own",
+  );
   await fixture.client.interrupt();
   await drain(reader);
 });
@@ -440,12 +478,22 @@ const makeFixture = ({
   network,
   configReadResult,
   existingTurnIds = [],
+  // How many turns the app-server has ever named, which stops being the same
+  // as how many the current thread holds once a session supersedes a thread
+  // it inherited: the new thread is empty, but the ids already handed out are
+  // not available again.
+  turnCounterStart = existingTurnIds.length,
   announceTurns = true,
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
   let transportClosed = false;
-  let turnNumber = existingTurnIds.length;
+  // Which thread the client is running on right now. A session that inherits
+  // a thread across incarnations supersedes it rather than resuming it, so
+  // "the saved thread" and "the active thread" are no longer the same name,
+  // and a test that pushes a server notification has to address the live one.
+  let activeThread = threadId;
+  let turnNumber = turnCounterStart;
   const turnIds = [...existingTurnIds];
   const push = message => {
     if (message?.method === 'turn/completed') {
@@ -476,12 +524,14 @@ const makeFixture = ({
         });
         break;
       case 'thread/start':
+        activeThread = 'thread-new';
         push({
           id: message.id,
-          result: { thread: { id: 'thread-new' } },
+          result: { thread: { id: activeThread } },
         });
         break;
       case 'thread/resume':
+        activeThread = message.params.threadId;
         push({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
@@ -609,6 +659,7 @@ const makeFixture = ({
     client,
     push,
     sent,
+    activeThreadId: () => activeThread,
     isClosed: () => transportClosed,
   };
 };
@@ -792,13 +843,16 @@ test('a malformed account status fails the session closed', async t => {
 });
 
 test('notifications arriving before turn/start response are replayed', async t => {
+  // No inherited thread: this is about notifications that arrive before the
+  // response that names the turn, and a session with nothing to supersede
+  // reaches that state in one step. The notifications name 'thread-new'
+  // because that is the thread a fresh session starts.
   const fixture = makeFixture({
-    threadId: 'thread-saved',
     beforeTurnResponse: [
       {
         method: 'item/agentMessage/delta',
         params: {
-          threadId: 'thread-saved',
+          threadId: 'thread-new',
           turnId: 'turn-1',
           itemId: 'msg-1',
           delta: 'response last',
@@ -807,7 +861,7 @@ test('notifications arriving before turn/start response are replayed', async t =
       {
         method: 'turn/completed',
         params: {
-          threadId: 'thread-saved',
+          threadId: 'thread-new',
           turn: { id: 'turn-1', status: 'completed' },
         },
       },
@@ -825,7 +879,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/started',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       item: { type: 'agentMessage', id: 'comment', phase: 'commentary' },
     },
@@ -833,7 +887,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'comment',
       delta: 'working',
@@ -842,7 +896,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/started',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       item: { type: 'agentMessage', id: 'final', phase: 'final_answer' },
     },
@@ -850,7 +904,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'final',
       delta: 'answer',
@@ -859,7 +913,7 @@ test('commentary is distinct from the final answer stream', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -874,7 +928,7 @@ test('a turn notification without an exact turn id poisons the session', async t
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { status: 'completed' },
     },
   });
@@ -890,7 +944,7 @@ test('turn/completed with a nonterminal status cannot release the session', asyn
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'inProgress' },
     },
   });
@@ -905,25 +959,25 @@ test('unconsumed thread-scoped notifications do not poison an active turn', asyn
   const reader = await fixture.client.send('go');
   fixture.push({
     method: 'thread/status/changed',
-    params: { threadId: 'thread-saved', status: 'active' },
+    params: { threadId: fixture.activeThreadId(), status: 'active' },
   });
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   t.is((await drain(reader)).at(-1).type, 'end');
 });
 
-test('resumes a persisted thread and lists server-provided models', async t => {
+test('a persisted thread is resumed under its own sandbox before it is superseded', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const reader = await fixture.client.send('continue');
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -933,7 +987,10 @@ test('resumes a persisted thread and lists server-provided models', async t => {
       .sandbox,
     'danger-full-access',
   );
-  t.falsy(fixture.sent.find(message => message.method === 'thread/start'));
+  // The inherited thread is resumed -- that is what carries the sandbox
+  // setting above -- and then superseded, so the turn runs on a thread this
+  // incarnation owns rather than on the CLI's surviving store.
+  t.truthy(fixture.sent.find(message => message.method === 'thread/start'));
   const models = await fixture.client.models();
   t.is(models[0].id, 'gpt-test');
 });
@@ -1026,7 +1083,7 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   fixture.push({
     method: 'error',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       willRetry: false,
       error: { message: 'quota exhausted' },
@@ -1035,7 +1092,7 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'failed' },
     },
   });
@@ -1051,7 +1108,7 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -1072,7 +1129,7 @@ test('a persisted Floot checkpoint acknowledges a completed backend turn', async
   first.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: first.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -1097,7 +1154,7 @@ test('a persisted Floot checkpoint acknowledges a completed backend turn', async
   second.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: second.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -1111,7 +1168,7 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -1124,7 +1181,7 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -1166,15 +1223,22 @@ test('Floot retry after revival acknowledges the durable base then reconciles th
   failed.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: failed.activeThreadId(),
       turn: { id: 'turn-2', status: 'failed' },
     },
   });
   t.is((await drain(reader)).at(-1).type, 'abort');
   await failed.client.terminate();
   const revived = makeFixture({
-    threadId: 'thread-saved',
-    existingTurnIds: ['turn-1', 'turn-2'],
+    // The thread the failed incarnation ended on -- not the one it began
+    // with. It superseded its inherited thread, so that is the thread holding
+    // the failed turn, and the thread the retry must revert before it runs.
+    // It holds only `turn-2`: `turn-1` belongs to the thread that was
+    // superseded, which is why the failed turn's durable base is null and why
+    // reverting before `turn-2` has to leave this thread empty.
+    threadId: /** @type {any} */ (state).threadId,
+    existingTurnIds: ['turn-2'],
+    turnCounterStart: 2,
     clientOptions: {
       savedRecovery: /** @type {any} */ (state).recovery,
       saveThreadState: async next => {
@@ -1195,7 +1259,7 @@ test('Floot retry after revival acknowledges the durable base then reconciles th
   revived.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: revived.activeThreadId(),
       turn: { id: 'turn-3', status: 'completed' },
     },
   });
@@ -1226,12 +1290,17 @@ test('a failed thread-binding audit is retried before dispatch', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   await drain(reader);
-  t.is(bindingAttempts, 2);
+  // Three, not two: the first attempt fails, and the retry binds twice --
+  // once to the inherited thread it resumes in order to reconcile, and once
+  // to the thread that supersedes it. What the test pins is that a failed
+  // binding audit is retried before anything is dispatched, not the number
+  // of threads a turn touches.
+  t.is(bindingAttempts, 3);
   await fixture.client.acknowledge('turn-1');
   await fixture.client.terminate();
 });
@@ -1254,7 +1323,7 @@ test('reconciliation is idempotent after revert wins a crash', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -1294,7 +1363,7 @@ test('reconciliation marker survives a failed completion audit', async t => {
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -1318,7 +1387,7 @@ test('a failed turn without terminal confirmation poisons the session', async t 
   fixture.push({
     method: 'error',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       willRetry: false,
       error: { message: 'upstream failed' },
@@ -1353,7 +1422,7 @@ test('interrupt keeps the turn reserved until terminal confirmation', async t =>
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'interrupted' },
     },
   });
@@ -1374,14 +1443,14 @@ test('late completion from an interrupted turn cannot end its successor', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-2',
       itemId: 'msg-2',
       delta: 'new turn',
@@ -1390,7 +1459,7 @@ test('late completion from an interrupted turn cannot end its successor', async 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
@@ -1431,7 +1500,7 @@ test('operation approvals are automatically accepted inside the Endo sandbox', a
     id: 92,
     method: 'item/commandExecution/requestApproval',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'command-1',
       command: 'touch output.txt',
@@ -1457,7 +1526,7 @@ test('permission-profile expansion is not an exposed approval capability', async
     id: 921,
     method: 'item/permissions/requestApproval',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: 'permission-1',
       permissions: {
@@ -1938,7 +2007,7 @@ test('turn output bounds interrupt an excessive stream', async t => {
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: '1',
       delta: 'one',
@@ -1947,7 +2016,7 @@ test('turn output bounds interrupt an excessive stream', async t => {
   fixture.push({
     method: 'item/agentMessage/delta',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turnId: 'turn-1',
       itemId: '1',
       delta: 'two',
@@ -2170,6 +2239,15 @@ test('ambiguous turn-start write failure poisons the session', async t => {
             id: message.id,
             result: { thread: { id: 'thread-saved' } },
           });
+        } else if (message.method === 'thread/start') {
+          // An inherited thread is superseded rather than resumed, so a turn
+          // runs on a thread this incarnation started. This fake gives it the
+          // same name: what is under test here is the turn, not which thread
+          // carries it, and keeping one name keeps that visible.
+          queue.push({
+            id: message.id,
+            result: { thread: { id: 'thread-saved' } },
+          });
         } else if (message.method === 'thread/turns/list') {
           queue.push({
             id: message.id,
@@ -2218,6 +2296,15 @@ test('an interrupt requested while turn/start is unanswered waits for the announ
         } else if (message.method === 'account/read') {
           queue.push({ id: message.id, result: ACCOUNT_RESULT });
         } else if (message.method === 'thread/resume') {
+          queue.push({
+            id: message.id,
+            result: { thread: { id: 'thread-saved' } },
+          });
+        } else if (message.method === 'thread/start') {
+          // An inherited thread is superseded rather than resumed, so a turn
+          // runs on a thread this incarnation started. This fake gives it the
+          // same name: what is under test here is the turn, not which thread
+          // carries it, and keeping one name keeps that visible.
           queue.push({
             id: message.id,
             result: { thread: { id: 'thread-saved' } },
@@ -2290,7 +2377,13 @@ test('an interrupt between the turn/start response and turn/started is deferred,
   const interrupted = fixture.client.interrupt();
   await flush();
   t.false(fixture.sent.some(message => message.method === 'turn/interrupt'));
-  fixture.push(STARTED_TURN_1);
+  fixture.push({
+    ...STARTED_TURN_1,
+    params: {
+      ...STARTED_TURN_1.params,
+      threadId: fixture.activeThreadId(),
+    },
+  });
   await interrupted;
   t.true(fixture.sent.some(message => message.method === 'turn/interrupt'));
   t.deepEqual((await drain(reader)).at(-1), {
@@ -2310,7 +2403,7 @@ test('an interrupt for a turn that ends before its announcement has nothing to d
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -2387,7 +2480,7 @@ test('an idle interrupt cannot terminate a turn that starts afterward', async t 
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
@@ -2754,7 +2847,7 @@ test('a thread resumed from a write-ahead marker with no turn is still unmateria
   fixture.push({
     method: 'turn/completed',
     params: {
-      threadId: 'thread-saved',
+      threadId: fixture.activeThreadId(),
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
