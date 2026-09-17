@@ -23,6 +23,29 @@ const makeSession = (overrides = {}) =>
     ...overrides,
   });
 
+test('ordinary uncertainty stays visible without blocking; imported evidence still needs verification', async t => {
+  const recovery = makeFlootRecovery({ notify: () => {}, isBusy: () => false });
+  await recovery.select(makeSession());
+  t.false(recovery.getState().blocked);
+  t.deepEqual(recovery.getState().turns, [unknownTurn]);
+  t.true(recovery.getState().canResolve);
+  await recovery.select(
+    makeSession({
+      getTurns: () => harden([{ ...unknownTurn, turnId: 'legacy-import' }]),
+    }),
+  );
+  t.true(recovery.getState().blocked);
+  await recovery.select(
+    makeSession({
+      getTurns: () =>
+        harden([
+          { ...unknownTurn, turnId: 'legacy-import', resolution: 'Verified' },
+        ]),
+    }),
+  );
+  t.false(recovery.getState().blocked);
+});
+
 test('resolution needs explicit confirmation, a note, and idle admission', async t => {
   const calls = [];
   let busy = false;

@@ -343,16 +343,15 @@ test.serial(
       0,
       'collapsed evidence is not rendered',
     );
-    t.true(textareaIn(parent, '.floot-input').disabled);
+    t.false(textareaIn(parent, '.floot-input').disabled);
     const compose = textareaIn(parent, '.floot-input');
-    compose.value = 'must not produce phantom history';
+    compose.value = 'unrelated work without replay';
     compose.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
     compose.dispatchEvent(
       new testWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
     );
     await tick();
-    t.is(starts, 0);
-    t.is(parent.querySelectorAll('.floot-msg-row').length, 0);
+    t.is(starts, 1);
     parent
       .querySelector('.floot-recovery-turn summary')
       ?.dispatchEvent(
@@ -388,7 +387,7 @@ test.serial(
     const acknowledge = () =>
       /** @type {HTMLButtonElement} */ (
         buttons().find(
-          button => button.textContent === 'Acknowledge and allow a new turn',
+          button => button.textContent === 'Record acknowledgement',
         )
       );
     t.true(acknowledge().disabled);

@@ -1003,12 +1003,19 @@ export const makeStreamingAgent = async (
     }
   };
   const hostedRecoveryText = async (text, turnId) => {
+    /** @type {any[]} */
     const records = await turnJournal.list();
     const prior = records.filter(record => record.turnId !== turnId);
     const lastCompleted = prior.findLastIndex(
       record => record.state === 'completed',
     );
-    const incomplete = prior.slice(lastCompleted + 1);
+    // A later successful turn does not resolve earlier uncertain effects.
+    // Keep reminding the backend until the operator records a resolution.
+    const incomplete = prior.filter(
+      (record, index) =>
+        index > lastCompleted ||
+        (record.state === 'outcome-unknown' && !record.resolution),
+    );
     if (!incomplete.length) return text;
     // This is recovery evidence, not executable instructions or a replay. Cap
     // the context explicitly; omitted details require inspection, not guessing.
@@ -1898,23 +1905,25 @@ export const makeStreamingAgent = async (
       return stopped
         ? Promise.reject(Error('Floot session agent is shutting down'))
         : runTurn(input, writer, meta, turnController.signal).catch(err => {
+            // Failed containment is independent of historical uncertainty.
+            // Broken transports can fail this barrier without a user abort.
+            if (
+              err?.name === 'HostedTurnCancellationError' ||
+              `${err?.message || ''}`.includes(
+                'Hosted turn cancellation failed:',
+              )
+            ) {
+              quarantineError = err;
+              stopped = true;
+              stopInbox();
+              writer.abort(err.message);
+              throw err;
+            }
             // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
             // `signal`, tearing down the in-flight provider stream. That's a
             // clean stop, not a failure, and the turn's owner has already
             // closed the reply channel, so swallow it.
             if (turnController.signal.aborted) {
-              if (
-                err?.name === 'HostedTurnCancellationError' ||
-                `${err?.message || ''}`.includes(
-                  'Hosted turn cancellation failed:',
-                )
-              ) {
-                quarantineError = err;
-                stopped = true;
-                stopInbox();
-                writer.abort(err.message);
-                throw err;
-              }
               if (stopped) writer.abort('Floot session agent shut down');
               return;
             }

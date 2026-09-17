@@ -170,12 +170,18 @@ not undo external effects.
 Truncated recovery evidence is explicitly marked and instructs the model to
 verify outcomes rather than repeat uncertain operations.
 
-A lost result, unfinished recovered dispatch, or unconfirmed backend stop fences
-new dispatches.
+A lost result or unfinished recovered dispatch remains outcome-unknown but does
+not prevent unrelated new work.
+New turns receive their own dispatch records; prior work is never automatically
+replayed or marked resolved by a subsequent success.
+Unresolved hosted evidence remains in the bounded recovery prompt even after
+intervening completed turns; direct-provider history also preserves it.
+Runtime quarantine after an unconfirmed stop remains an independent admission
+barrier, as does operator emergency stop.
 An abnormal stream or lost send response also leaves an unknown outcome even if
 interruption succeeds, since the missing events may conceal external effects.
-The legacy Claude client cannot confirm process exit: cancellation is therefore
-unknown rather than permission for automatic continuation.
+The legacy Claude client cannot confirm process exit: its cancellation is therefore
+unknown, not proof that external effects stopped.
 After independently checking external effects, an operator may call
 `resolveTurn(turnId, note)` on an idle session to acknowledge the uncertainty.
 This preserves the original outcome and adds a resolution; it never replays work.

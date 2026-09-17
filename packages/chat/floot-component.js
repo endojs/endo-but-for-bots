@@ -1118,7 +1118,7 @@ export const flootComponent = (
     }
     if (recovery.getState().resolving || recovery.getState().blocked) {
       setStatus(
-        'Sending is blocked. Inspect the Journal and acknowledge unresolved outcomes after checking external effects.',
+        'Sending is blocked while a journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
       );
       return submitChain;
     }
@@ -1184,7 +1184,7 @@ export const flootComponent = (
         }
         if (recovery.getState().resolving || recovery.getState().blocked) {
           setStatus(
-            'Queued message not sent: inspect unresolved outcomes in the Journal before retrying.',
+            'Queued message not sent: journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
           );
           return;
         }

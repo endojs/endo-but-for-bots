@@ -247,15 +247,7 @@ test('hosted snapshot tools durably authorize effects and preserve failures with
   t.is(turn.tools[0].result, 'Hosted effect completed');
   t.deepEqual(turn.activity, []);
   t.is((await agent.getHistory())[1].result, 'Hosted effect completed');
-  await t.throwsAsync(
-    agent.converse('Blocked until checked', makeReplyChannel().writer),
-    { message: /unknown turn outcome/ },
-  );
   t.is(inputs.length, 1);
-  await agent.resolveTurn(
-    turn.turnId,
-    'Operator independently verified all hosted effects',
-  );
   await agent.converse('Inspect, do not repeat', makeReplyChannel().writer);
   t.regex(inputs[1], /Previous incomplete-turn recovery evidence/);
   t.regex(inputs[1], /Hosted effect completed/);
@@ -267,6 +259,17 @@ test('hosted snapshot tools durably authorize effects and preserve failures with
     'Inspect, do not repeat',
     'Recovery envelope does not replace original durable input',
   );
+  await agent.converse('Unrelated follow-up', makeReplyChannel().writer);
+  t.regex(inputs[2], /Hosted effect completed/);
+  t.regex(inputs[2], /outcome-unknown/);
+  t.is((await agent.getTurns())[0].resolution, undefined);
+  t.is(effects, 1);
+  await agent.resolveTurn(
+    turn.turnId,
+    'Operator independently verified all hosted effects',
+  );
+  await agent.converse('After resolution', makeReplyChannel().writer);
+  t.is(inputs[3], 'After resolution');
 });
 
 test('aliased backend observations retain distinct execution evidence without claiming duplicate effects', async t => {
@@ -416,7 +419,7 @@ test('failed mail turns merge partial input nodes with durable tool evidence aft
   );
 });
 
-test('lost result writes prevent automatic redispatch and revival requires explicit outcome resolution', async t => {
+test('lost result writes poison dispatch; revival permits unrelated work without replay or resolution', async t => {
   t.timeout(5000);
   const f = fixture();
   let effects = 0;
@@ -455,8 +458,15 @@ test('lost result writes prevent automatic redispatch and revival requires expli
   t.is(effects, 1);
   f.refuse(undefined);
   const safeProvider = harden({
-    async chatStream() {
+    async chatStream(context) {
       calls += 1;
+      t.true(
+        context.some(
+          message =>
+            message.role === 'tool' &&
+            /outcome unknown; do not automatically retry/.test(message.content),
+        ),
+      );
       return completed();
     },
   });
@@ -470,18 +480,15 @@ test('lost result writes prevent automatic redispatch and revival requires expli
   const [uncertain] = await revived.getTurns();
   t.is(uncertain.state, 'outcome-unknown');
   t.is(uncertain.tools[0].settled, undefined);
-  await t.throwsAsync(
-    revived.converse('Do not replay yet', makeReplyChannel().writer),
-    { message: /unknown turn outcome/ },
-  );
   t.is(calls, 1);
+  await revived.converse('Continue safely', makeReplyChannel().writer);
+  t.is(calls, 2);
+  t.is(effects, 1);
+  t.is((await revived.getTurns())[0].resolution, undefined);
   await revived.resolveTurn(
     uncertain.turnId,
     'Operator verified the effect happened once',
   );
-  await revived.converse('Continue safely', makeReplyChannel().writer);
-  t.is(calls, 2);
-  t.is(effects, 1);
   const [resolved, next] = await revived.getTurns();
   t.is(resolved.state, 'outcome-unknown');
   t.is(resolved.resolution, 'Operator verified the effect happened once');
@@ -520,7 +527,7 @@ test('failed intent persistence never dispatches the actual Endo tool', async t 
   );
 });
 
-test('native hosted activity without result fences a later turn despite a provider success claim', async t => {
+test('native activity without result remains unknown while unrelated later work completes', async t => {
   t.timeout(5000);
   const f = fixture();
   let sends = 0;
@@ -531,6 +538,11 @@ test('native hosted activity without result fences a later turn despite a provid
     async send() {
       sends += 1;
       const channel = makeBufferedReader();
+      if (sends > 1) {
+        channel.push({ type: 'text-delta', text: 'Unrelated answer' });
+        channel.push({ type: 'end' });
+        return channel.reader;
+      }
       channel.push({
         type: 'tool-call',
         id: 'native',
@@ -555,11 +567,16 @@ test('native hosted activity without result fences a later turn despite a provid
   const [turn] = await agent.getTurns();
   t.is(turn.state, 'outcome-unknown');
   t.is(turn.activity[0].settled, undefined);
-  await t.throwsAsync(
-    agent.converse('Do not blindly replay', makeReplyChannel().writer),
-    { message: /unknown turn outcome/ },
+  await agent.converse(
+    'Do not blindly replay; answer an unrelated question',
+    makeReplyChannel().writer,
   );
-  t.is(sends, 1);
+  t.is(sends, 2);
+  const [prior, next] = await agent.getTurns();
+  t.is(prior.state, 'outcome-unknown');
+  t.is(prior.resolution, undefined);
+  t.is(next.state, 'completed');
+  t.deepEqual(next.activity, []);
 });
 
 test('interrupt closes hosted tool admission before backend acknowledgement and preserves admitted context', async t => {

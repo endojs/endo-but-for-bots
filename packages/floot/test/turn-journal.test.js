@@ -156,7 +156,7 @@ test('legacy import acknowledgement is independent of event capacity and unknown
     'Checked the external system independently',
   );
   t.deepEqual(await journal.status(), before);
-  await t.throwsAsync(journal.assertReady(), { message: /unknown turn/ });
+  await journal.assertReady();
   await journal.resolve(pending, 'No external effects occurred');
   await journal.assertReady();
   const revived = makeTurnJournal(powers, { migration });
@@ -287,17 +287,13 @@ test('unsettled observed activity fences terminal outcome and late results do no
     state: 'completed',
     output: 'claimed done',
   });
-  await t.throwsAsync(journal.assertReady(), {
-    message: /unknown turn outcome/,
-  });
+  await journal.assertReady();
   await journal.append(id, {
     type: 'observed-tool-result',
     callId: 'native',
     result: 'late known result',
   });
-  await t.throwsAsync(journal.assertReady(), {
-    message: /unknown turn outcome/,
-  });
+  await journal.assertReady();
   await journal.resolve(id, 'Operator checked native effect');
   await journal.assertReady();
   const [record] = await makeTurnJournal(powers).list();
@@ -342,7 +338,7 @@ test('journal persists complete turns and concurrent tool results in order', asy
   t.is(store.size, 6);
 });
 
-test('revival fences unknown outcomes and explicit resolution retains evidence', async t => {
+test('revival preserves unknown outcomes while new work and explicit resolution remain independent', async t => {
   const { powers } = fixture();
   const first = makeTurnJournal(powers);
   const id = await first.begin(options);
@@ -353,14 +349,11 @@ test('revival fences unknown outcomes and explicit resolution retains evidence',
     args: {},
   });
   const journal = makeTurnJournal(powers);
-  await t.throwsAsync(journal.assertReady(), {
-    message: /unknown turn outcome/,
-  });
-  await t.throwsAsync(journal.begin(options), {
-    message: /unknown turn outcome/,
-  });
-  await journal.resolve(id, 'Operator checked the effect');
+  await journal.assertReady();
   const next = await journal.begin(options);
+  t.is((await journal.get(id)).resolution, undefined);
+  await t.throwsAsync(journal.begin(options), { message: /already active/ });
+  await journal.resolve(id, 'Operator checked the effect');
   await journal.append(id, {
     type: 'tool-result',
     callId: 'a',
@@ -391,9 +384,7 @@ test('terminal turn with unresolved effect is unknown, including cancellation', 
   });
   t.is((await journal.list())[0].state, 'outcome-unknown');
   t.is((await journal.list())[0].reportedState, 'cancelled');
-  await t.throwsAsync(journal.assertReady(), {
-    message: /unknown turn outcome/,
-  });
+  await journal.assertReady();
 });
 
 test('ambiguous writes poison all subsequent operations, revival keeps committed intent', async t => {

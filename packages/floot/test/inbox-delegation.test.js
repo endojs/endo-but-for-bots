@@ -476,7 +476,7 @@ test('shutdown releases fenced mail without dismissing it or waiting for acknowl
   t.is(mailbox.sent.length, 0);
 });
 
-test('mail preserves pre-dispatch refusal when an earlier UI turn establishes a fence', async t => {
+test('unrelated queued mail proceeds after UI uncertainty without resolving or replaying it', async t => {
   t.timeout(5000);
   const mailbox = makeLiveMailbox();
   const first = makeBufferedReader();
@@ -516,28 +516,22 @@ test('mail preserves pre-dispatch refusal when an earlier UI turn establishes a 
     from: locatorFor(HOST),
     strings: ['queued mail'],
   });
-  // The worker's preflight sees a pending (not unknown) UI turn, then queues
-  // behind it. Closing that turn below establishes the fence before dispatch.
+  // Mail waits behind the active UI turn, but historical uncertainty alone
+  // must not prevent its independent dispatch after that turn settles.
   await new Promise(resolve => setTimeout(resolve, 50));
   first.push({ type: 'tool-call', id: 'native', name: 'shell', args: '{}' });
   first.push({ type: 'end' });
   await uiFailed;
-  await new Promise(resolve => setTimeout(resolve, 50));
-  t.is(sends, 1);
-  t.is(
-    mailbox.sent.length,
-    0,
-    'writer abort must not turn admission refusal into a mailed error',
-  );
-  t.false(mailbox.dismissed.includes(mail.number));
+  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
+  t.is(sends, 2);
   const [unknown] = await agent.getTurns();
-  t.is((await agent.getTurns()).length, 1, 'refused mail did not dispatch');
   t.is(unknown.state, 'outcome-unknown');
+  t.is(unknown.resolution, undefined);
+  t.is((await agent.getTurns())[1].state, 'completed');
   await agent.resolveTurn(
     unknown.turnId,
     'Checked UI operation effects independently',
   );
-  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
   t.is(sends, 2);
   t.is((await agent.getTurns()).length, 2);
 });

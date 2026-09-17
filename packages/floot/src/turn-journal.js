@@ -53,7 +53,7 @@ const assertText = (value, limit = 1024, allowEmpty = false) => {
 /**
  * Append-only, single-writer journal scoped to one Floot agent's powers.
  * Storage failure is ambiguous: this incarnation is permanently poisoned.
- * A new incarnation replays every event and fences unresolved outcomes.
+ * A new incarnation replays every event and preserves unresolved outcomes.
  * All operations are serialized, including reads and acknowledgements.
  * @param {any} powers
  * @param {{ migration?: any }} [options]
@@ -214,9 +214,9 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
     !migrationStatus.required ||
       migrationStatus.resolution ||
       Fail`Verify the imported legacy journal before dispatching another turn`;
-    ![...records.values()].some(
-      record => record.state === 'outcome-unknown' && !record.resolution,
-    ) || Fail`Resolve the unknown turn outcome before dispatching another turn`;
+    // Unknown historical effects are evidence, not a session-wide admission
+    // lock. New work gets a new dispatch; nothing here retries the old one.
+    // Storage poison and live runtime containment are independent barriers.
   };
 
   /** @param {any} value */

@@ -430,6 +430,45 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
   );
 });
 
+test('failed containment after EOF quarantines without an abort signal, including queued turns', async t => {
+  t.timeout(5000);
+  const sent = makeSendSignal();
+  const channel = makeBufferedReader();
+  let sends = 0;
+  const agent = await makeStreamingAgent(
+    makeFakePowers(),
+    undefined,
+    {
+      hostedClient: harden({
+        async send() {
+          sends += 1;
+          sent.notify();
+          return channel.reader;
+        },
+        async interrupt() {
+          throw Error('producer remains active');
+        },
+      }),
+    },
+    'test prompt',
+  );
+  const first = agent.converse('work', makeReplyChannel().writer);
+  const firstFailure = t.throwsAsync(first, {
+    message: /stop was not confirmed/,
+  });
+  await sent.waitFor(1);
+  const queued = agent.converse('queued work', makeReplyChannel().writer);
+  const queuedFailure = t.throwsAsync(queued, { message: /shutting down/ });
+  channel.close();
+  await firstFailure;
+  await queuedFailure;
+  await t.throwsAsync(agent.converse('new work', makeReplyChannel().writer), {
+    message: /stop was not confirmed/,
+  });
+  t.is(sends, 1);
+  t.is((await agent.getTurns())[0].state, 'outcome-unknown');
+});
+
 test('shutdown cancels inbox startup delayed before iterator creation', async t => {
   const base = makeFakePowers();
   let releaseLocate = () => {};
