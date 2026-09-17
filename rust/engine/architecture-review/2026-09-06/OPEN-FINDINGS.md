@@ -54,10 +54,19 @@ never ran, so the rule moved to the parser where all four modes refuse it.
 The two other callers of the asserting helper the catch bug tripped — the two
 loop coders — now code their body's defines the same way, and the helper is
 deleted, so that class is gone rather than resting on a grammar argument.
-What keeps the finding open is narrower: the remaining sites are the
-bookkeeping `expect`s and the 29 scoper sites, which have no source-shape
-handle at all, and the audit's negative result over generated sources is not
-reproducible from this repository.
+What keeps the finding open is narrower, and the scoper half is now a list
+rather than a surface: of its 29 `expect`/`unwrap` sites, six are in its own
+`#[cfg(test)]` modules, and the 23 production ones are nine shapes, fifteen of
+which are the three `Option<usize>` scope fields.
+Those three do not share one invariant: `scope` and `function_scope` are set
+on entry and restored on exit, so one argument — whether a visitor can run
+outside the scope that set it — retires twelve, but `body_scope` is CLEARED to
+`None` on function entry and re-established by the body, so it is `None` inside
+an open scope and its three readers rest on token dispatch instead.
+The panic surface is wider than those 29 in any case: `node_id` asserts in
+release mode from 39 call sites.
+The bookkeeping `expect`s and the audit's non-reproducible negative over
+generated sources are the rest.
 
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a
