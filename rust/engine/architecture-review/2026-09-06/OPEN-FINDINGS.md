@@ -51,10 +51,13 @@ fixture the parser rejects before the coder runs.
 The second took two attempts — a coder-side guard fixed the goal that panicked
 and left three goals compiling the same early error into a function whose body
 never ran, so the rule moved to the parser where all four modes refuse it.
-What keeps the finding open is that the remaining sites were reported
-audited-negative over generated sources that this repository cannot re-run,
-and two of them call the same asserting helper the catch bug tripped, kept
-unreached by a grammar argument of exactly the kind that just failed.
+The two other callers of the asserting helper the catch bug tripped — the two
+loop coders — now code their body's defines the same way, and the helper is
+deleted, so that class is gone rather than resting on a grammar argument.
+What keeps the finding open is narrower: the remaining sites are the
+bookkeeping `expect`s and the 29 scoper sites, which have no source-shape
+handle at all, and the audit's negative result over generated sources is not
+reproducible from this repository.
 
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a

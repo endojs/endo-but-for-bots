@@ -156,6 +156,21 @@ fn the_audits_reachable_panics_return_rather_than_panic() {
     // function inside a parameter default owns its own `await`/`yield`, and
     // the rule must not see through it. These are the cases a flag that
     // leaked across the nested function's scope would break.
+    // Loop bodies, which had the OTHER two callers of the asserting helper
+    // that the catch bug tripped. Both now code their body's defines like a
+    // block does, so the class is gone rather than resting on "the grammar
+    // forbids a bare FunctionDeclaration there" — the argument that failed
+    // for `code_catch`. These compile today and must keep compiling.
+    for source in [
+        "for(var i=0;i<1;i++){ function f(){return i;} f(); }",
+        "for(let i=0;i<1;i++){ function f(){return i;} f(); }",
+        "for(var k of [1]){ function g(){return k;} g(); }",
+        "for(var k in {a:1}){ function h(){return k;} h(); }",
+        "for(var i=0;i<1;i++){ function f(){} function g(){} }",
+        "for(var i=0;i<1;i++) i;",
+    ] {
+        assert_eq!(outcome(source).expect(source), "compiled", "{source}");
+    }
     for source in [
         "async function f(a = async function(){ await 0; }) {}",
         "function* g(a = function*(){ yield 1; }) {}",
