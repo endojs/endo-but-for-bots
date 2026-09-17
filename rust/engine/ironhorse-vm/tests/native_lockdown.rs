@@ -323,6 +323,73 @@ fn a_proxy_cannot_restore_the_evaluator_from_inside_the_freeze() {
     );
 }
 
+/// The re-assert after step 5 must SEAL, not merely rewrite.
+///
+/// `a_proxy_cannot_restore_the_evaluator_from_inside_the_freeze` covers a trap
+/// that REPLACES `Function.prototype.constructor` during the harden walk. This
+/// covers the one that DELETES it, which is a different bug and a worse one.
+///
+/// The trap fires while `Function.prototype` is still configurable, so the
+/// delete succeeds. Step 5 then freezes a prototype carrying no `constructor`,
+/// `find_property` answers `None` for a genuinely absent property, and the
+/// re-assert's `map_or(0, …)` -- correct for step 2, where it reproduces XS's
+/// freshly-created slot -- recreated it **writable and configurable on an
+/// already-hardened prototype**. Measured before the fix:
+/// `writable=true enumerable=true configurable=true | reach=2 |
+/// isFrozen(Function.prototype)=false`. `lockdown()` returned success, the
+/// prototype it had just frozen was no longer frozen, and one assignment put
+/// the evaluator back.
+///
+/// **XS has no analogue of this, in either direction.** `fx_lockdown` performs
+/// steps 2 and 5 once each with no re-assert, so on XS the trap simply wins and
+/// there is nothing to compare against. The re-assert is this port's deliberate
+/// divergence (`designs/ironhorse-native-lockdown.md` § Oracle divergences), so
+/// its failure modes are ours to define — and the definition is that after
+/// `lockdown()` every one of the five prototypes carries the inert stand-in,
+/// non-writable and non-configurable, whatever the walk left behind.
+///
+/// `enumerable=true` survives deliberately. A `constructor` that had to be
+/// re-created is enumerable, which is exactly what XS produces for the
+/// pre-lockdown delete that `a_deleted_constructor_is_recreated_enumerable`
+/// pins. Enumerability is not an integrity bit; writable and configurable are,
+/// and those are forced.
+#[test]
+fn a_proxy_that_deletes_the_constructor_inside_the_freeze_gets_a_sealed_one_back() {
+    assert_eq!(
+        result(
+            r#"
+            var fired = false;
+            Object.prototype.extra = new Proxy({}, {
+              preventExtensions: function (target) {
+                fired = true;
+                delete Function.prototype.constructor;
+                return Reflect.preventExtensions(target);
+              }
+            });
+            var ld;
+            try { lockdown(); ld = 'returned'; }
+            catch (e) { ld = e.name + ': ' + e.message; }
+            var d = Object.getOwnPropertyDescriptor(Function.prototype, 'constructor');
+            // A sloppy-mode assignment to a non-writable property is a silent
+            // no-op, so this is the attack's last move and it must not land.
+            Function.prototype.constructor = Function;
+            var reach;
+            try { reach = ({}).constructor.constructor('return 1+1')(); }
+            catch (e) { reach = e.name + ': ' + e.message; }
+            ['fired=' + fired, 'ld=' + ld,
+             'w=' + d.writable, 'e=' + d.enumerable, 'c=' + d.configurable,
+             'inert=' + (d.value !== Function),
+             'reach=' + reach,
+             'protoFrozen=' + Object.isFrozen(Function.prototype)].join(' | ')
+        "#
+        ),
+        "fired=true | ld=returned | w=false | e=true | c=false | inert=true | \
+         reach=TypeError: secure mode | protoFrozen=true",
+        "a constructor deleted during the harden walk must come back SEALED, or \
+         lockdown() reports success on a prototype it left writable"
+    );
+}
+
 #[test]
 fn the_inert_constructor_is_frozen_even_on_a_prototype_the_guest_hardened() {
     // What `roots.extend(minted)` is actually for. On a virgin realm, step 5's

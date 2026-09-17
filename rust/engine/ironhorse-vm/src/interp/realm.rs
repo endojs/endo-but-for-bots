@@ -436,8 +436,68 @@ impl Interp {
         minted: &[(crate::value::SlotIndex, crate::value::SlotIndex)],
     ) {
         for &(prototype, inert) in minted {
-            self.force_locked_down_constructor(prototype, inert);
+            self.force_locked_down_constructor(prototype, inert, true);
         }
+    }
+
+    /// Whether lockdown step 2 has been applied to this realm, read off the
+    /// heap rather than off a flag.
+    ///
+    /// **This is how `Intrinsics::locked_down` survives persistence.** The flag
+    /// lives on an `Rc<Realm>` beside the arena, not in it, so nothing carried
+    /// it: a restored machine answered `returned` to a second `lockdown()` where
+    /// the uninterrupted one answered `TypeError: lockdown already called`,
+    /// re-ran the whole operation, and charged the guest for it
+    /// (`lockdown_carry.rs`, which compares computrons too).
+    ///
+    /// Deriving beats carrying here, and not only because it needs no wire
+    /// format: the thing derived from is step 2's own effect, so the two cannot
+    /// drift.
+    ///
+    /// **It reads the ARENA, which is what persistence actually carries.** The
+    /// first attempt used `ctor_prototype`, which step 2 writes and boot
+    /// deliberately does not -- a perfect signal that does not survive:
+    /// `function_state_snapshot` collects its rows only for owners with
+    /// `native.is_none() && method.is_none()`, so a row keyed by a native
+    /// stand-in is filtered out on the way to the snapshot. The property slot
+    /// is not filtered: `slots` travel wholesale, boot instances included.
+    ///
+    /// So this walks each poisoned prototype's own property chain for a
+    /// reference to its stand-in. That is exactly the state step 2 installs and
+    /// [`Self::reassert_function_constructors`] re-seals, which makes the
+    /// derivation say what it means rather than stand in for it.
+    ///
+    /// A guest cannot forge it. The stand-ins are boot instances with no edge
+    /// into the object graph until step 2 wires them, so guest code has nothing
+    /// to install; and once step 2 has run, the prototypes are frozen.
+    ///
+    /// It reads `true` on one realm the flag would call `false`: step 5 refused
+    /// partway, after step 2. That realm is outside the operation's contract
+    /// either way -- the freeze is not atomic and retrying does not converge
+    /// (see [`Self::lock_down_intrinsics`]) -- and of the two answers, "already
+    /// called" is the one that does not invite the retry those docs retract.
+    pub(super) fn lockdown_step_two_applied(&self) -> bool {
+        let mut wired = 0;
+        let mut seen = 0;
+        for (prototype, inert) in self
+            .locked_down_prototypes()
+            .into_iter()
+            .map(|(prototype, _)| prototype)
+            .zip(self.locked_down_constructors.iter().copied())
+            .filter(|&(prototype, _)| prototype != crate::value::SlotIndex::NULL)
+        {
+            seen += 1;
+            let mut property = self.slots.get(prototype).next;
+            while !property.is_null() {
+                let slot = self.slots.get(property);
+                if slot.kind == Kind::Reference && slot.value == Payload::Reference(inert) {
+                    wired += 1;
+                    break;
+                }
+                property = slot.next;
+            }
+        }
+        seen > 0 && wired == seen
     }
 
     pub(super) fn mint_locked_down_constructor(&mut self, arity: u32) -> crate::value::SlotIndex {
@@ -475,7 +535,11 @@ impl Interp {
             Slot::of(Kind::Reference, Payload::Reference(prototype)),
             XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
         );
-        self.force_locked_down_constructor(prototype, inert);
+        // `seal = false`: step 2 preserves the property's existing
+        // writable/configurable shape, so `Function.prototype.constructor`
+        // becomes non-writable only when step 5 hardens it -- the order a
+        // `verifyProperty` case observes.
+        self.force_locked_down_constructor(prototype, inert, false);
     }
 
     /// Write `prototype.constructor = inert` through the privileged path,
@@ -505,6 +569,7 @@ impl Interp {
         &mut self,
         prototype: crate::value::SlotIndex,
         inert: crate::value::SlotIndex,
+        seal: bool,
     ) {
         let constructor_id = self.intern_static_key_unmetered("constructor");
         self.constructor_id.get_or_insert(constructor_id);
@@ -531,10 +596,40 @@ impl Interp {
         // and it must be, because by then the property exists and the flag read
         // finds it.
         self.materialize_intrinsic_own_surface(prototype);
-        let flag = self
+        let found = self
             .find_property(prototype, constructor_id)
             .map_or(0, |p| self.slots.get(p).flag)
             & !(XS_GETTER_FLAG | XS_SETTER_FLAG);
+        // **The post-harden call SEALS, whatever it finds.**
+        //
+        // The `0` default above is right for step 2, where it reproduces XS's
+        // freshly-created slot. On the re-assert it is a complete defeat of the
+        // operation, and the path there is short: a Proxy trap firing inside
+        // step 5 runs `delete Function.prototype.constructor` while that
+        // prototype is still configurable. The walk then freezes a prototype
+        // with NO constructor, `find_property` answers `None` for a genuinely
+        // absent property, and the re-assert recreates it writable and
+        // configurable on a prototype that had just been hardened.
+        //
+        // Measured before this: `lockdown()` returned success and left
+        // `writable=true configurable=true`, `Function.prototype.constructor =
+        // Function` put the evaluator straight back
+        // (`({}).constructor.constructor('return 1+1')()` = `2`), and
+        // `Object.isFrozen(Function.prototype)` read **false** -- the re-assert
+        // had un-frozen the prototype it exists to protect.
+        //
+        // So the re-assert keeps only the enumerable bit and forces the two
+        // integrity bits. In every case but the deleted one it is a no-op,
+        // because step 5 has already set them. Enumerability is carried rather
+        // than forced for the same reason step 2 defaults to `0`: a `constructor`
+        // that had to be re-created is enumerable, which is what XS produces for
+        // the pre-lockdown delete and what
+        // `a_deleted_constructor_is_recreated_enumerable` pins.
+        let flag = if seal {
+            (found & XS_DONT_ENUM_FLAG) | XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG
+        } else {
+            found
+        };
         self.accessors.remove(&(prototype, constructor_id));
         self.set_own_unmetered_with_flag(
             prototype,
