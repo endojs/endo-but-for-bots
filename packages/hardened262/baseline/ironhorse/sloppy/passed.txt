@@ -1,4 +1,8 @@
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
+test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/GeneratorFunction/intrinsic-metadata.js
+test/intrinsics/IteratorPrototype/intrinsic-metadata.js
+test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/ironhorse/smoke.js

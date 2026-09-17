@@ -4145,6 +4145,15 @@ pub struct Interp {
     /// FIFO order until the currently executing/awaiting request finishes.
     async_generators: std::collections::HashMap<crate::value::SlotIndex, AsyncGeneratorData>,
     async_generator_proto: crate::value::SlotIndex,
+    /// `%AsyncIteratorPrototype%`: the shared prototype every async iterator
+    /// (async-generator instances, and — once modeled — the wrappers `for await`
+    /// mints) reaches through `%AsyncGeneratorPrototype%`. A plain object off
+    /// `%Object.prototype%` carrying only the `[Symbol.asyncIterator]` identity
+    /// method (returns `this`). Interposed between `%AsyncGeneratorPrototype%`
+    /// and `%Object.prototype%` so the spec chain
+    /// `%AsyncGeneratorPrototype%` -> `%AsyncIteratorPrototype%` ->
+    /// `%Object.prototype%` holds (ES2024 27.1.3).
+    async_iterator_proto: crate::value::SlotIndex,
     async_generator_function_proto: crate::value::SlotIndex,
     async_iterator_identity: crate::value::SlotIndex,
     async_gen_run_stack: Vec<AsyncGenRunFrame>,
@@ -4800,6 +4809,7 @@ impl Interp {
             async_run_stack: Vec::new(),
             async_generators: std::collections::HashMap::new(),
             async_generator_proto: crate::value::SlotIndex::NULL,
+            async_iterator_proto: crate::value::SlotIndex::NULL,
             async_generator_function_proto: crate::value::SlotIndex::NULL,
             async_iterator_identity: crate::value::SlotIndex::NULL,
             async_gen_run_stack: Vec::new(),
@@ -5420,10 +5430,18 @@ impl Interp {
         // check reaches it); its own `Symbol.toStringTag` is unread and omitted.
         let async_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         self.async_function_proto = async_function_proto;
+        // `%AsyncIteratorPrototype%`: the shared async-iterator root, a plain
+        // object off `%Object.prototype%`. Its `[Symbol.asyncIterator]`
+        // identity method is installed with the well-known symbols in
+        // `install_intrinsic_bindings`.
+        let async_iterator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.async_iterator_proto = async_iterator_proto;
         // `%AsyncGeneratorPrototype%` and `%AsyncGeneratorFunction.prototype%`.
         // Async-generator instances expose the same three request methods as
         // generators, but each returns a promise and requests are serialized.
-        let async_generator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        // Chains to `%AsyncIteratorPrototype%` (ES2024 27.1.3), not directly to
+        // `%Object.prototype%`.
+        let async_generator_proto = self.slots.alloc(Slot::instance(async_iterator_proto));
         self.async_generator_proto = async_generator_proto;
         for (name, arity, m) in [
             ("next", 1, NativeMethod::AsyncGeneratorNext),
@@ -5433,7 +5451,11 @@ impl Interp {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((async_generator_proto, name, mf));
         }
-        self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
+        self.async_iterator_identity = self.alloc_named_method(
+            NativeMethod::AsyncIteratorIdentity,
+            "[Symbol.asyncIterator]",
+            0,
+        );
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         // `%AsyncGenerator%` (the common prototype of async-generator
         // functions) exposes `%AsyncGeneratorPrototype%` through its own
@@ -7046,8 +7068,11 @@ impl Interp {
             }
         }
         if let Some(id) = self.well_known_symbol_property_id("asyncIterator") {
+            // `%AsyncIteratorPrototype%[Symbol.asyncIterator]` is the identity
+            // method (returns `this`); `%AsyncGeneratorPrototype%` inherits it
+            // rather than carrying an own copy (ES2024 27.1.3.1).
             self.set_own_unmetered_with_flag(
-                self.async_generator_proto,
+                self.async_iterator_proto,
                 id,
                 Slot::of(
                     Kind::Reference,
@@ -7077,11 +7102,12 @@ impl Interp {
                 ),
                 XS_DONT_ENUM_FLAG,
             );
-            // Map's @@iterator is `entries`; Set's is the shared `values`
-            // function. Locate the already-created boot methods directly so
-            // the aliases exist even when the source never spells those
-            // string keys (a Symbol.iterator-only test).
+            // Array's @@iterator is `values`; Map's is `entries`; Set's is the
+            // shared `values` function. Locate the already-created boot methods
+            // directly so the aliases exist even when the source never spells
+            // those string keys (a Symbol.iterator-only test).
             for (proto, method_name) in [
+                (self.array_proto, "values"),
                 (self.map_proto, "entries"),
                 (self.set_proto, "values"),
             ] {
