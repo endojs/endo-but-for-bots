@@ -2115,6 +2115,40 @@ current build ref) on `kumavis/opencode`; point `OPENCODE_REF` at it; delete
 `--source`; re-pin `opencodeSandbox.image` to the new digest. Pushing to the fork is
 the one step this work cannot take on its own.
 
+### 1b. The image pin is read once, and then never again
+
+Found while doing item 1, and it is the reason the rebuilt image did not take.
+`opencodeSandbox.image` reaches a slice through the **broker service**, whose
+`OPENCODE_BROKER_CONFIG` carries `imageRef`/`imageDigest`, and the broker is
+retained whenever one already exists:
+
+```js
+if (existingBroker) {
+  console.log('Retaining OpenCode broker service with its persisted configuration.');
+} else {
+  const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
+  // ... minted into OPENCODE_BROKER_CONFIG ...
+}
+```
+
+So the pin is read on first setup and ignored forever after. Changing it in the
+NixOS configuration, rebuilding, and restarting the daemon all appear to
+succeed — the unit environment carries the new digest and the hosted backend is
+re-minted on every run — while every slice keeps launching the old image. The
+disagreement is invisible unless someone asks a running container what it is.
+
+Claude's setup has the same shape. Codex's resolves the reference outside the
+retained branch and so does not.
+
+The operational unblock is to remove `opencode-sandbox/broker-service` and let
+setup mint it again, which is what was done here. The fix is for setup to
+compare the configured pin against the persisted one and re-mint on a
+mismatch — retention exists so that a broker holding credentials and live
+grants is not rebuilt for nothing, not so that a changed pin is silently
+discarded. Until that lands, **bumping any hosted CLI image requires removing
+the adapter's broker service**, and that belongs next to the re-pin recipe in
+`hosts/common.nix` rather than in someone's memory.
+
 ### 2. The Codex lease, which leaks more than it blocks
 
 Higher priority than its symptom suggested. `destroy()` refuses a leased session
