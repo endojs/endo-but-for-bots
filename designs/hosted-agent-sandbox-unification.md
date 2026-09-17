@@ -2584,14 +2584,102 @@ than a judgement.
    two hand-written lifecycles are not merely places a fix can fail to reach,
    they are places a careful reader cannot tell whether it did.
 
-1. **Clear the leases operationally and prove Codex restores.** The existing
-   check: give a session a word, restart the daemon, ask for it back, with the
-   CLI's own store unavailable. Claude and OpenCode already answer it. This is
-   the only step whose result cannot be predicted from reading, and it is the
-   one piece of Codex work that survives the reshape intact.
-   *Gate: Codex answers, or `inject_items` is shown not to carry the history —
-   in which case step 3's rollout writer stops being a fallback and becomes
-   the mechanism.*
+1. **Make the stack’s records authoritative across incarnations, and prove
+   it.** Opening this step found that the property it was meant to verify is
+   not implemented on any adapter that has its own surviving store — so
+   "prove Codex restores" was the wrong shape. Three parts:
+
+   **1a. Clear the Codex leases on the staging host. Done, 2026-09-17.**
+   Daemon stopped, `volumes.json` backed up beside itself, the `lease` field
+   removed from all ten session records, daemon restarted: ten of ten leased
+   became zero of ten, and the sessions are openable and deletable again. No
+   code, so nothing to unwind when step 3 deletes the subsystem. It will
+   recur until then.
+
+   **1b. Close the store-authority gap on Claude and Codex. Done,
+   2026-09-17.** The rule is one sentence and it is the same for both: *within an incarnation a session
+   resumes the conversation it started; across incarnations the stack’s
+   records decide.* Neither implements the second half today.
+
+   - **Claude.** `claude-client.js:531` computes
+     `liveConversation = conversationStarted && priorConversation()`, and the
+     comment above it states the rule correctly. But `conversationStarted` is
+     seeded from `resumePriorConversation` (`:340`), which
+     `claude-native-controller.js:395-397` derives from
+     `resume.detectPriorConversation()` — the surviving store itself. So on
+     the first turn after a restart, with a non-empty `CLAUDE_CONFIG_DIR`,
+     `liveConversation` is true, the restore branch never runs, and the CLI
+     resumes the stale store. **Fixed:** `conversationStarted` starts false
+     and tracks only sends this incarnation made. `resumePriorConversation`
+     had no consumer left and is gone from the client, the controller and the
+     client module, along with the two derivations that computed it.
+   - **Codex.** `codex-client.js:284` sets
+     `replayContinuity = !savedThreadId || …`, and `ensureThread` resumes a
+     saved `threadId` directly. A thread id saved by a previous incarnation
+     therefore wins over the records, which is the same defect. The rotation
+     path already does the right thing — `threadId = undefined`,
+     `replayContinuity = true`, then inject — so the change is to take that
+     path for a thread inherited across incarnations, not only for a changed
+     tool catalog. **Fixed:** `mustRotate() = catalogChanged() ||
+     inheritedThread`, where `inheritedThread` starts as
+     `Boolean(savedThreadId)` and clears when this incarnation owns a thread.
+     The inherited thread is still resumed first, so the write-ahead ledger
+     reconciles it under its original catalog before it is superseded; it is
+     left intact for audit, never rewritten.
+
+     One asymmetry is deliberate. A catalog rotation *requires* the records
+     — a conversation is crossing an authority boundary and dropping it
+     silently would be the bug — while an inherited thread does not: an
+     empty stack claim honestly means no conversation, so a fresh empty
+     thread is the right answer rather than a refusal. That is why
+     `assertContinuity` is now passed `catalogChanged()` instead of
+     `rotating`.
+
+     What this moved, and had to: the write-ahead marker's base checkpoint is
+     now `null` on the first turn of an incarnation, because the turn runs on
+     a thread with no turns. The inherited thread's own latest turn is still
+     read — during reconciliation, before the supersession — which is the
+     property `Floot retry after revival …` pins.
+   - **OpenCode** is the one to check rather than assume: its restoration
+     refuses rather than falling back, and `OPENCODE_DB=:memory:` means there
+     is usually no surviving store to prefer. Confirm, do not presume.
+
+   **Why the existing live evidence does not cover this.** The deploy check
+   that Claude and OpenCode pass makes the CLI’s store *unavailable* — the
+   config dir is deleted, the database is `:memory:`. That proves the restore
+   mechanism works when nothing else could have carried the conversation. It
+   cannot prove which source wins when both are present, because the case it
+   constructs is the one where only one is. The discriminating test is a unit
+   test, and the review states it exactly: pass `resumePriorConversation: true`
+   *and* `detectPriorConversation: () => true` together, and assert the
+   argument vector names the conversation rebuilt from records.
+
+   **OpenCode, checked rather than presumed:** its restoration refuses rather
+   than falling back, and it has no surviving store to prefer, so there was
+   nothing to close. Its suite is unchanged and green.
+
+   **1c. Deploy and re-run the live check — next.** It now means something
+   stronger than before: all three answer with their stores *present* and the
+   records authoritative, rather than only with the store destroyed.
+   *Gate: the unit tests pin the decision for each adapter — done, see
+   below — and the live run answers on all three.*
+
+   **Where 1b landed.** Suites green at the counts the base had, which is the
+   check that matters here because the change rewrote test expectations:
+   codex-sandbox 296 passed / 3 skipped (identical to `HEAD`), claude-sandbox
+   190, opencode-sandbox 255, hosted-agent 314.
+
+   Nine Codex tests and five Claude tests failed on the first run, and the
+   split is worth recording because it is the evidence that the change is a
+   contract change rather than a break. Four encoded the old rule directly and
+   were rewritten to the new one. The rest were fixtures addressing a thread
+   the session no longer runs on — a fake that could not represent a
+   superseded thread. The fixture now tracks the live thread
+   (`activeThreadId()`), and `turnCounterStart` separates *turns this thread
+   holds* from *turn ids already handed out*, which stop being the same number
+   once a thread is superseded. One of those failures was a hang that hid
+   seventeen further tests behind a file timeout; running the suite at `HEAD`
+   as a control is what showed it was mine.
 
 2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode.** Two
    adapters, one algorithm, before adding a third. Its acceptance test is the
