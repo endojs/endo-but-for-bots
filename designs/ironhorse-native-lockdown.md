@@ -16,7 +16,7 @@ Landed, within the scope boundary below.
 `fx_lockdown` steps 1, 2 and 5; `create_hardened_globals` binds it as the guest
 global `lockdown`, beside `harden` and `petrify`. `endot-ih -l` runs instead of
 refusing, and `test262:ironhorse` with it. Pinned by
-`ironhorse-vm/tests/native_lockdown.rs` (25 cases), most of which were written
+`ironhorse-vm/tests/native_lockdown.rs` (26 cases), most of which were written
 from defects adversarial review found after the first revision called this
 section "Landed".
 
@@ -853,6 +853,64 @@ IronHorse is missing.
       `realms.rs::every_reachable_evaluator_compiles_in_the_calling_compartment`
       and
       `runtime_compile_meter.rs::shared_dynamic_constructors_use_the_calling_compartments_evaluator_service`.
+- [x] **The re-assert after step 5 recreated a WRITABLE constructor when a
+      Proxy trap had deleted it.** Found in review on `9f9ff0a74`.
+      `a_proxy_cannot_restore_the_evaluator_from_inside_the_freeze` covers a
+      trap that REPLACES `Function.prototype.constructor` during the harden
+      walk; the one that DELETES it is a different bug and a worse one. The
+      delete succeeds while the prototype is still configurable, step 5 then
+      freezes a prototype carrying no `constructor`, `find_property` answers
+      `None` for a genuinely absent property, and the re-assert's
+      `map_or(0, …)` — correct for step 2, where it reproduces XS's freshly
+      created slot — recreated it writable and configurable on an
+      already-hardened prototype. Measured:
+      `w=true e=true c=true | reach=2 | isFrozen(Function.prototype)=false`.
+      `lockdown()` returned success, the prototype it had just frozen was no
+      longer frozen, and one assignment put the evaluator back.
+
+      `force_locked_down_constructor` now takes a `seal` mode: step 2 preserves
+      the existing flag as before, and the re-assert keeps only the enumerable
+      bit and forces `XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG`. In every case but
+      the deleted one it is a no-op, because step 5 has already set them.
+      Enumerability is carried rather than forced for the same reason step 2
+      defaults to `0`: a `constructor` that had to be re-created is enumerable,
+      which is what XS produces for the pre-lockdown delete.
+      `a_proxy_that_deletes_the_constructor_inside_the_freeze_gets_a_sealed_one_back`
+      is the regression, mutation-verified.
+
+      XS has no analogue in either direction: `fx_lockdown` performs steps 2 and
+      5 once each with no re-assert, so on XS the trap simply wins. The
+      re-assert is this port's deliberate divergence, so its failure modes are
+      ours to define.
+- [x] **`Intrinsics::locked_down` did not survive persistence.** Found in the
+      same review. The flag lives on an `Rc<Realm>` beside the arena rather than
+      in it, so nothing carried it: a restored standalone `Interp` answered
+      `returned` to a second `lockdown()` where the uninterrupted one answered
+      `TypeError: lockdown already called`. Not merely a wrong answer — the
+      guest then re-ran the whole operation and was charged for it; `twin`
+      compares computrons and measured 2610 against 2624.
+
+      Derived on restore rather than carried, which needs no wire format and
+      cannot drift from the thing it reports: `lockdown_step_two_applied` walks
+      each poisoned prototype's own property chain for a reference to its
+      stand-in, which is exactly the state step 2 installs. A guest cannot forge
+      it — the stand-ins have no edge into the object graph until step 2 wires
+      them, and afterwards the prototypes are frozen.
+
+      **The first attempt used `ctor_prototype`** — written by step 2 and
+      deliberately not by boot, a perfect signal that does not survive:
+      `function_state_snapshot` collects its rows only for owners with
+      `native.is_none() && method.is_none()`, so a row keyed by a native
+      stand-in is filtered out. The property slot is not filtered; `slots`
+      travel wholesale, boot instances included. Worth recording because the
+      signal that is cleanest in memory is not the one that persists.
+
+      The shared-machine path was already correct for a different reason:
+      `restore_shared_machine` adopts the reference boot realm's `Rc<Realm>`,
+      which is locked down. `ironhorse-snapshot/tests/lockdown_carry.rs` covers
+      store resume (eager, lazy, checkpoint), the raw blob path, and the
+      negative — a machine that never locked down must not come back reporting
+      that it did.
 - [ ] **Sweep the `-l` lane end to end.** § Status measures `test/ironhorse`
       (clean) and `built-ins/Boolean` (18 → 21, all three resolving to a
       pre-existing thrown-value renderer gap). Everything between is unmeasured
