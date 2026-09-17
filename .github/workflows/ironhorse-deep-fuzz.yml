@@ -1,11 +1,21 @@
 # The DEEP fuzz lane for the ironhorse engine (store-seam design
 # § Fuzzability; the deferred-work checklist's scheduled-deep-fuzz
-# item). ci.yml's fuzz-ironhorse job is a 30-second-per-target
-# regression tripwire on every relevant PR; this workflow is the
-# search — minutes per target on a schedule, plus on demand from the
-# Actions tab. It shares the smoke lane's corpus cache family, so the
-# two lanes accrete ONE corpus: whatever the nightly search discovers
-# seeds the next PR's tripwire.
+# item). ci.yml's fuzz-ironhorse job is a short per-target regression
+# tripwire on every relevant PR; this workflow is the search — minutes
+# per target on a schedule, plus on demand from the Actions tab. It
+# shares the smoke lane's corpus cache family, so the two lanes
+# accrete ONE corpus: whatever the nightly search discovers seeds the
+# next PR's tripwire.
+#
+# Both lanes start from `ironhorse-fuzz/fuzz/seeds/`, a checked-in,
+# derived seed corpus, so an evicted cache costs accreted coverage
+# rather than resetting the search to zero.
+#
+# This header once described a pull-request tripwire that did not
+# exist and a nightly loop over four pure-Rust targets while the
+# manifest declared nine (F039). Both are now true statements: the
+# tripwire is `fuzz-ironhorse` in ci.yml, and the loop below reads its
+# roster from `fuzz/Cargo.toml` rather than naming a subset.
 
 name: Ironhorse deep fuzz
 
@@ -19,7 +29,7 @@ on:
       seconds_per_target:
         description: 'libFuzzer -max_total_time per target'
         required: false
-        default: '900'
+        default: '300'
         type: string
 
 # Minimal permissions: read the checkout; artifacts ride the built-in
@@ -45,8 +55,16 @@ jobs:
     name: deep-fuzz
 
     runs-on: ubuntu-latest
-    # Four targets at up to 15 minutes each, plus the cold build.
-    timeout-minutes: 120
+    # FOURTEEN targets at the default budget, plus the cold build of the
+    # engine, the XS oracle C sources and cargo-fuzz. When the roster was
+    # four targets at 15 minutes this was 60 minutes of fuzzing inside 120;
+    # the roster grew to the whole manifest, so the per-target default came
+    # down to 5 minutes (14 x 300s = 70 minutes) and the ceiling went up.
+    # Budget and ceiling move together: a dispatch that widens
+    # `seconds_per_target` past ~20 minutes will be killed here rather than
+    # accumulating failures to the end, which is the one behaviour this job
+    # exists to provide.
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -108,8 +126,41 @@ jobs:
             exit 1
           }
 
+      - name: Seed the corpus from the checked-in seeds
+        working-directory: rust/engine/ironhorse-fuzz
+        # The corpus cache is best-effort: a key can be evicted, and an
+        # eviction used to reset the search to zero silently, because
+        # `fuzz/.gitignore` excluded `corpus/` and nothing else held a
+        # starting point. `fuzz/seeds/` is the checked-in, derived
+        # floor under that — copied in before every run, so the worst
+        # a cache loss costs is the accreted coverage, never the
+        # well-framed starting point.
+        run: |
+          # `nullglob`: without it an unmatched pattern runs the loop once
+          # with the literal `fuzz/seeds/*/`, which creates a directory
+          # named `*` and caches it forever. A missing seed tree is a real
+          # failure here, not something to paper over, so check for it.
+          shopt -s nullglob
+          seeded=0
+          for d in fuzz/seeds/*/; do
+            t=$(basename "$d")
+            mkdir -p "fuzz/corpus/$t"
+            cp -n "$d"*.bin "fuzz/corpus/$t/" 2>/dev/null || true
+            seeded=$((seeded + 1))
+          done
+          test "$seeded" -gt 0 || { echo "::error::fuzz/seeds/ is empty or absent"; exit 1; }
+          echo "seeded $seeded targets; corpus now holds $(find fuzz/corpus -name '*.bin' | wc -l) inputs"
+
       - name: Deep fuzz (minutes per target)
         working-directory: rust/engine/ironhorse-fuzz
+        # EVERY target, not only the pure-Rust four. The differential
+        # targets are the ones that produced every checked-in trophy,
+        # and running them only in an out-of-repo service left the
+        # repository unable to verify or reproduce its own search
+        # (F039). The roster is read from the manifest rather than
+        # retyped, so a target added to `fuzz/Cargo.toml` is fuzzed
+        # without a second edit here.
+        #
         # Accumulate failures instead of stopping at the first
         # crashing target, so one red run surfaces every crashing
         # target's artifact at once. A scheduled run uses the default
@@ -118,16 +169,34 @@ jobs:
         # expansion inside `run` (zizmor: template-injection), and is
         # digit-checked before use.
         env:
-          FUZZ_BUDGET: ${{ github.event.inputs.seconds_per_target || '900' }}
+          FUZZ_BUDGET: ${{ github.event.inputs.seconds_per_target || '300' }}
         run: |
           case "$FUZZ_BUDGET" in
             *[!0-9]*|'') echo "::error::seconds_per_target must be a positive integer"; exit 1 ;;
             *[1-9]*) ;;
             *) echo "::error::seconds_per_target must be greater than zero"; exit 1 ;;
           esac
+          # `|| true`: GitHub runs this with `-eo pipefail`, so a `grep`
+          # that matches nothing would kill the step before the diagnostic
+          # below could print, and the roster failure would read as a bare
+          # nonzero exit.
+          targets=$(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -v '^ironhorse-fuzz-targets$' || true)
+          test -n "$targets" || { echo "::error::no fuzz targets found in fuzz/Cargo.toml"; exit 1; }
+          echo "targets: $(echo "$targets" | tr '\n' ' ')"
+          # `-s none`: NO sanitizer. The roster used to be the four
+          # pure-Rust targets; it is now every target, which includes the
+          # differential ones that link the Moddable XS C sources. Running
+          # those under cargo-fuzz's default AddressSanitizer plus
+          # LeakSanitizer would make this lane a sanitizer run over XS —
+          # a genuinely useful thing, and one the repository already does
+          # deliberately and separately in `ironhorse-sanitizers.yml`,
+          # where the leak suppressions and the expectations live. The
+          # engine itself is `forbid(unsafe_code)`, so what a sanitizer
+          # would add here is XS findings this lane is not set up to
+          # triage, arriving as red runs on unrelated pull requests.
           rc=0
-          for t in snapshot_decoder snapshot_roundtrip bytecode_decoder parser; do
-            cargo +"$FUZZ_TOOLCHAIN" fuzz run "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
+          for t in $targets; do
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run -s none "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
           done
           exit "$rc"
 

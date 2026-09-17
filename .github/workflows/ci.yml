@@ -1102,6 +1102,157 @@ jobs:
           --strict-skip-reasons
           --repeat 3 --expectations ironhorse-262/expectations/ironhorse.txt
           ../../packages/test262-runner/test262/test/ironhorse
+  fuzz-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['fuzz-ironhorse']) }}
+    name: fuzz-ironhorse
+
+    env:
+      # JOB level, not step level: the cache keys below interpolate it, and
+      # a step-level definition would leave them reading an empty string —
+      # which silently detaches this lane's build cache from the nightly
+      # one and makes a toolchain bump invisible to the key.
+      # The SAME pin as ironhorse-deep-fuzz.yml and
+      # `ironhorse-fuzz/fuzz/rust-toolchain.toml` (bump them together).
+      FUZZ_TOOLCHAIN: nightly-2026-08-15
+
+    runs-on: ubuntu-latest
+    # A TRIPWIRE, not a search: every target for a few seconds each over
+    # the checked-in seed corpus and whatever the nightly lane has
+    # accreted. The search is `ironhorse-deep-fuzz.yml`, minutes per
+    # target on a schedule. This lane exists so a pull request that
+    # reintroduces a fixed trophy fails on the pull request rather than
+    # at 3am, which is what the deep lane's header claimed for a job
+    # that did not exist (F039).
+    #
+    # The ceiling is a first estimate, not a measurement: the fuzzing
+    # itself is 14 x 30s = 7 minutes, and everything else is the cold
+    # build — cargo-fuzz from source, the engine graph and the XS oracle C
+    # sources, release with a sanitizer, across fourteen binaries. Narrow
+    # it once a few runs have reported their real duration.
+    timeout-minutes: 60
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch XS oracle submodule
+        # The ironhorse-fuzz lib links the XS oracle for its differential
+        # targets. Anonymous shallow fetch can hit transient throttling on
+        # shared runner egress; retry before failing, and fail LOUD if all
+        # attempts leave the sources absent.
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache Cargo + fuzz build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            rust/engine/ironhorse-fuzz/fuzz/target
+          key: ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-${{ hashFiles('rust/engine/ironhorse-fuzz/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-
+
+      - name: Restore fuzz corpus
+        # RESTORE ONLY, deliberately. A cache written by a pull-request run
+        # is scoped to that pull request's ref and nothing else can ever
+        # read it, so saving here would write an entry no lane restores
+        # while pushing the repository's shared cache quota — and evicting
+        # the yarn and xsnap caches the rest of CI depends on. The flow is
+        # one-way: the nightly lane's discoveries reach this tripwire
+        # through the default branch's cache scope, and this tripwire's
+        # own accretion is not worth keeping for 30 seconds of search.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/engine/ironhorse-fuzz/fuzz/corpus
+          key: ${{ runner.os }}-ironhorse-fuzz-corpus-
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-corpus-
+
+      - name: Install pinned nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install "$FUZZ_TOOLCHAIN" --profile minimal
+          command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+
+      - name: Check fuzz lockfile freshness
+        working-directory: rust/engine/ironhorse-fuzz
+        # `cargo fuzz run` itself does not take --locked, so a stale
+        # committed fuzz/Cargo.lock would silently float new registry deps
+        # at build time. The nightly lane has always had this gate; it
+        # belongs on the lane that runs on pull requests too, or the defect
+        # class it guards reaches the PR green and the nightly red.
+        run: |
+          cargo +"$FUZZ_TOOLCHAIN" fetch --locked --manifest-path fuzz/Cargo.toml || {
+            echo "::error::fuzz/Cargo.lock is stale — run 'cargo update --workspace' in rust/engine/ironhorse-fuzz/fuzz and commit the lock"
+            exit 1
+          }
+
+      - name: Seed the corpus from the checked-in seeds
+        working-directory: rust/engine/ironhorse-fuzz
+        run: |
+          # `nullglob`: without it an unmatched pattern runs the loop once
+          # with the literal `fuzz/seeds/*/` and creates a directory named
+          # `*`. A missing seed tree is a real failure, and on the tripwire
+          # lane a silent no-op would be invisible, so say what happened.
+          shopt -s nullglob
+          seeded=0
+          for d in fuzz/seeds/*/; do
+            t=$(basename "$d")
+            mkdir -p "fuzz/corpus/$t"
+            cp -n "$d"*.bin "fuzz/corpus/$t/" 2>/dev/null || true
+            seeded=$((seeded + 1))
+          done
+          test "$seeded" -gt 0 || { echo "::error::fuzz/seeds/ is empty or absent"; exit 1; }
+          echo "seeded $seeded targets; corpus now holds $(find fuzz/corpus -name '*.bin' | wc -l) inputs"
+
+      - name: Fuzz tripwire (seconds per target)
+        working-directory: rust/engine/ironhorse-fuzz
+        env:
+          FUZZ_BUDGET: '30'
+        run: |
+          # `|| true`: GitHub runs this with `-eo pipefail`, so a `grep`
+          # that matches nothing would kill the step before the diagnostic
+          # below could print.
+          targets=$(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -v '^ironhorse-fuzz-targets$' || true)
+          test -n "$targets" || { echo "::error::no fuzz targets found in fuzz/Cargo.toml"; exit 1; }
+          # `-s none`: NO sanitizer. The roster used to be the four
+          # pure-Rust targets; it is now every target, which includes the
+          # differential ones that link the Moddable XS C sources. Running
+          # those under cargo-fuzz's default AddressSanitizer plus
+          # LeakSanitizer would make this lane a sanitizer run over XS —
+          # a genuinely useful thing, and one the repository already does
+          # deliberately and separately in `ironhorse-sanitizers.yml`,
+          # where the leak suppressions and the expectations live. The
+          # engine itself is `forbid(unsafe_code)`, so what a sanitizer
+          # would add here is XS findings this lane is not set up to
+          # triage, arriving as red runs on unrelated pull requests.
+          rc=0
+          for t in $targets; do
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run -s none "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
+          done
+          exit "$rc"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-fuzz-tripwire-artifacts
+          path: rust/engine/ironhorse-fuzz/fuzz/artifacts/
+          if-no-files-found: ignore
+
   test-ocapn-python:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ocapn-python']) }}
