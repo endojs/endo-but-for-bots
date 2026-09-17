@@ -27,6 +27,7 @@ use crate::opcode::Opcode;
 /// instrument. Sorted by byte order.
 pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Date:method",
+    "Intl.NumberFormat:compact-locale",
     "Intl.NumberFormat:formatRange",
     "Iterator.helper",
     "JSON.parse:lone-surrogate",

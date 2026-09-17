@@ -52,31 +52,33 @@ pub fn fuzz_snapshot_sig() -> Signature {
 /// A cursor over fuzzer-provided bytes, folding raw input into a machine image
 /// deterministically (a local copy of the lib's `Bytes` driver — the snapshot
 /// arms need `u32`/`ChunkOffset` draws the grammar driver does not expose).
-struct Cursor<'a> {
-    data: &'a [u8],
-    pos: usize,
+/// Same finite byte source, so all three cursors in the crate share one
+/// length-feedback story rather than two of them quietly wrapping.
+pub(crate) struct Cursor<'a> {
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Cursor { data, pos: 0 }
-    }
-    fn byte(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Cursor {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
     }
-    fn choice(&mut self, n: u8) -> u8 {
+    /// One byte, or zero once the input is exhausted. FINITE, like the
+    /// grammar driver in `lib.rs` and for the same reason (F040): a
+    /// wrapping cursor makes every input infinitely long and defeats
+    /// libFuzzer's length feedback.
+    pub(crate) fn byte(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
+    }
+    pub(crate) fn choice(&mut self, n: u8) -> u8 {
         if n == 0 {
             0
         } else {
             self.byte() % n
         }
     }
-    fn u32(&mut self) -> u32 {
+    pub(crate) fn u32(&mut self) -> u32 {
         let mut v = 0u32;
         for _ in 0..4 {
             v = (v << 8) | self.byte() as u32;
@@ -379,9 +381,26 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
     let n_dates = ((c.byte() % 4) as usize).min(cap as usize);
     let dates: Vec<ironhorse_snapshot::image::DateImage> = (0..n_dates)
-        .map(|owner| ironhorse_snapshot::image::DateImage {
-            owner: owner as u32,
-            value_bits: ((c.u32() as u64) << 32) | c.u32() as u64,
+        .map(|owner| {
+            let drawn = ((c.u32() as u64) << 32) | c.u32() as u64;
+            // A Date's time value is a Number, and a Number NaN has no
+            // observable payload in JavaScript, so `encode_dates`
+            // deliberately canonicalizes one (its own
+            // `date_encoding_canonicalizes_nan_and_refuses_duplicate_owners`
+            // pins that). A live machine therefore never holds a
+            // non-canonical NaN here, and drawing one would make the model
+            // half of the round-trip invariant fail on an image no engine
+            // can produce. Slot payloads are different and keep their raw
+            // NaN bits, which is why `payload` draws freely.
+            let value_bits = if f64::from_bits(drawn).is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                drawn
+            };
+            ironhorse_snapshot::image::DateImage {
+                owner: owner as u32,
+                value_bits,
+            }
         })
         .collect();
 
@@ -1004,7 +1023,7 @@ pub fn suspend_resume_is_transparent(
 /// This is the productive malformed corpus: the mutant still passes the
 /// `VERS`/`SIGN` gates often enough to reach the atom-payload decoders where a
 /// corrupt count field would, unclamped, drive an unbounded allocation.
-fn mutate_bytes(base: &[u8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn mutate_bytes(base: &[u8], data: &[u8]) -> Vec<u8> {
     let mut out = base.to_vec();
     if out.is_empty() {
         return out;
@@ -1089,7 +1108,7 @@ mod tests {
     fn seed_bytes(seed: u32, salt: u8) -> Vec<u8> {
         let s = seed.to_le_bytes();
         let mut buf = Vec::new();
-        for k in 0..(20 + (seed % 40)) {
+        for k in 0..(80 + (seed % 160)) {
             buf.push(
                 s[(k as usize) % 4]
                     .wrapping_add((k as u8).wrapping_mul(29))

@@ -88,7 +88,7 @@ entire stage where the verdict is open.
 | 5. Compiler | Full-corpus byte identity and parse meter | Implemented; full bar not reverified | 2026-09-09 / `96db92e23` audit | Historical `compile-diff` measurements in CHANGELOG; compiler golden costs and parity tests are narrower than fresh full-corpus acceptance. |
 | 6. Snapshots | Round-trip, meter and supervisor integration | Partial; historical subset passed | 2026-09-09 / `96db92e23` audit | `ironhorse-snapshot/tests/state_golden.rs`, `supervisor_suspend_resume.rs`, `persist_gates.rs`; unsupported/live state refuses persistence. |
 | 7. Debugger | xsbug and unchanged debugger suites | Not accepted | 2026-09-09 / `96db92e23` audit | No reproduced acceptance or debugger crate. Historical child numbering is unrelated. |
-| 8. Closure/hardening | Full result equality, XS-relative envelope | **BAR NOT MET** | 2026-09-09 / `96db92e23` audit | `benches/README.md` describes self-relative gates, not the XS comparison or footprint bar; daemon benchmark arm is blocked. |
+| 8. Closure/hardening | Full result equality, XS-relative envelope | **BAR NOT MET** | 2026-09-16 / F106-F122 instrument pass | Three of the envelope's four clauses are now MEASURED rather than unfalsifiable: throughput (`xs_compare.py --check-micro`, gated at 2.0x), code size (`code_size.py`, ~6x against a 2x bar), heap (`xs_footprint_bench.rs`, 0.2x-2.5x against a 1.1x bar). None of the three bars is met on every workload, and the four-variant daemon arm is still blocked on the worker protocol. |
 | 9. Ecosystem | Zero result divergence on real corpora | Not accepted | 2026-09-09 / `96db92e23` audit | No completed daemon/Agoric replay campaign establishes the bar. |
 
 See the [design Status](../../designs/ironhorse-engine.md#status) for deviations
@@ -283,14 +283,51 @@ The pure-Rust engine crates enforce `forbid(unsafe_code)` and run ordinary unit 
 There is no Miri CI lane; the previously named `*_is_miri_clean` tests have descriptive
 behavior names and do not establish a Miri result.
 
+## Two workspaces, one resolution
+
+The repository has two Cargo workspaces: the root one, whose resolution the
+shipped `endor` binary links, and this one, under which every engine crate's
+test suite runs.
+The separation is deliberate (this workspace's `Cargo.toml` records it as the
+design's resolved question 9), and it has a cost: the two could resolve a
+shared dependency differently, and until recently nothing ran the engine's
+suites against the resolution that ships.
+
+Two checks close that, at two prices:
+
+```sh
+# Cheap, per pull request: the two lockfiles agree on every package
+# reachable from the shared IronHorse path crates.
+python3 rust/engine/scripts/check-lockfile-agreement.py
+
+# Expensive, scheduled: the engine's own suites actually PASS under the root
+# workspace's resolution. Stages a copy of rust/ under one workspace root,
+# unions both member lists, and resolves fresh.
+python3 rust/engine/scripts/check-unified-resolution.py
+```
+
+The second exists because `cargo test -p ironhorse-vm` from the repository
+root refuses — the engine crates are not root-workspace members — so there
+was no way to ask the question at all (architecture finding F070).
+
 ## Running the fuzzers locally
 
-Fuzzing is **no longer part of pull-request CI** — the `fuzz-ironhorse` job was
-removed so a latent crash never reddens an unrelated PR. A garden background service
-now drives all of the `ironhorse-fuzz` targets **continuously** over a persistent
-corpus and files each distinct reproducible finding as a standing repair PR (design:
-`designs/continuous-ironhorse-fuzz.md` in kriscendobot/garden). The targets stay
-fully runnable locally:
+Fuzzing runs in two in-repo lanes plus one out-of-repo service.
+`ci.yml`'s `fuzz-ironhorse` job is a **tripwire**: every target for 30 seconds
+on every engine-relevant pull request, so a change that reintroduces a fixed
+trophy fails on the pull request.
+`ironhorse-deep-fuzz.yml` is the **search**: every target for minutes, nightly
+and on demand.
+Both start from the checked-in seed corpus in `fuzz/seeds/` and share the
+nightly lane's corpus cache.
+A garden background service also drives the targets continuously over a
+persistent corpus and files each distinct reproducible finding as a standing
+repair PR (design: `designs/continuous-ironhorse-fuzz.md` in
+kriscendobot/garden).
+This section previously said fuzzing was no longer part of pull-request CI,
+which was true of the tree and false of every other document describing it —
+the drift architecture finding F039 measured.
+The targets stay fully runnable locally:
 
 ```sh
 # 1. Build the XS oracle submodule (needed for the differential targets — see above).
@@ -301,19 +338,29 @@ cargo install cargo-fuzz --locked
 # 3. Run any target from the fuzz project (the toolchain file selects the nightly):
 cd rust/engine/ironhorse-fuzz
 cargo fuzz run parser            # or differential_compile, snapshot_decoder, bytecode_decoder, …
-cargo fuzz run parser -- -max_total_time=30   # bounded, mirrors the old CI smoke
+cargo fuzz run parser -- -max_total_time=30   # bounded, as the PR tripwire runs it
 ```
 
-The maintained targets are `differential_source`, `bytecode_decoder`,
-`differential_stage2b`, `differential_regexp`, `differential_regexp_surface`,
-`parser`, `differential_compile`, `snapshot_roundtrip`, `snapshot_decoder`, and
+The maintained targets are whatever `fuzz/Cargo.toml` declares — both CI lanes
+read the roster from the manifest rather than naming a subset, so this list is
+documentation and the manifest is the source of truth.
+Today: `differential_source`, `bytecode_decoder`, `differential_stage2b`,
+`differential_regexp`, `differential_regexp_surface`, `parser`,
+`differential_compile`, `snapshot_roundtrip`, `snapshot_decoder`,
 `guest_no_abort` (no oracle: its only assertion is that an arbitrary guest
 program halts the crank rather than the process — see § Native recursion
-budget).
+budget), `utf16_boundary`, `store_decoder`, `differential_stage3_surface` and
+`differential_cranks`.
 Crashing inputs land in `fuzz/artifacts/`; reduce with `cargo fuzz tmin <target>
-<input>`. A finding's durable regression is a Rust unit test in `ironhorse-vm` (the
-`fuzz/corpus` and `fuzz/artifacts` trees are gitignored, so a corpus seed cannot be
-a committed regression).
+<input>`.
+A finding's durable regression is a Rust unit test in `ironhorse-vm` or
+`ironhorse-fuzz`, never a corpus entry: `fuzz/corpus/` and `fuzz/artifacts/`
+are gitignored working directories.
+`fuzz/seeds/` is different and IS checked in — a derived, verified starting
+corpus, regenerated with `cargo run -p ironhorse-fuzz --bin write-seed-corpus`
+and held current by `seeds::tests::the_checked_in_seed_corpus_is_current`, so
+an evicted cache costs accreted coverage rather than resetting the search to
+zero.
 
 ## Running the harness
 

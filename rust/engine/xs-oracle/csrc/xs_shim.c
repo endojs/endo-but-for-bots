@@ -53,6 +53,14 @@ typedef struct {
 	 * differential check skips such a case honestly (finding 493390fc0397). */
 	txU4 result_len;
 	txS4 exit_status; /* original fxAbort status; zero for ordinary JS throws */
+	/* XS's own heap accounting at the end of the run, so the footprint half
+	 * of the engine design's performance envelope ("heap within 1.1x") has
+	 * an XS side to compare against. Both are plain txMachine counters
+	 * (xsAll.h): heap_count is slots, which XS accounts at 32 bytes each,
+	 * and chunks_size is the byte arena. Diagnostic only — nothing in the
+	 * differential comparison reads them, so they cannot make a trophy. */
+	txU4 heap_count;
+	txU4 chunks_size;
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
@@ -459,6 +467,8 @@ static int xs_oracle_run_impl(const char *source, txU4 sourceLen,
 			}
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 
 			/* fxRunScript leaves the completion value on the stack top. */
 			result = the->stack;
@@ -496,6 +506,8 @@ static int xs_oracle_run_impl(const char *source, txU4 sourceLen,
 			 * not only the completion path (stage-2a review observation 3). */
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 			/* mxException holds the thrown value; stringify best-effort. */
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
@@ -648,6 +660,8 @@ static int xs_oracle_run_sources(const char **sources, const txU4 *sourceLens,
 				}
 				out->computrons = the->meterIndex >> 16;
 				out->meter_raw = (txU4)the->meterIndex;
+				out->heap_count = (txU4)the->currentHeapCount;
+				out->chunks_size = (txU4)the->currentChunksSize;
 
 				result = the->stack;
 				fxToString(the, result);
@@ -671,6 +685,8 @@ static int xs_oracle_run_sources(const char **sources, const txU4 *sourceLens,
 			out->exit_status = the->exitStatus;
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
@@ -980,6 +996,8 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
+			out->heap_count = (txU4)the->currentHeapCount;
+			out->chunks_size = (txU4)the->currentChunksSize;
 
 			if (gEndorModuleRejected) {
 				/* The import promise rejected: stringify the latched reason. */
@@ -1025,6 +1043,8 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 			else {
 				out->computrons = the->meterIndex >> 16;
 				out->meter_raw = (txU4)the->meterIndex;
+				out->heap_count = (txU4)the->currentHeapCount;
+				out->chunks_size = (txU4)the->currentChunksSize;
 				out->ok = 0;
 				out->exit_status = the->exitStatus;
 				endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
