@@ -353,6 +353,10 @@ export const makeCodexDurableVolumeProvider = ({
     Fail`Invalid Codex session directory root`;
   const mounts = new WeakMap();
   const active = new Map();
+  // Sessions `recoverLease` has cleared in this incarnation. Only used to say
+  // so in a refusal: a lease that survives recovery means something other than
+  // a lease recovery never reached.
+  const recovered = new Set();
   /**
    * Resolve the host tree this session's workspace projects.
    *
@@ -437,9 +441,16 @@ export const makeCodexDurableVolumeProvider = ({
       // doing. Recovery cannot serve that case and should not: it refuses a
       // live local lease on purpose. A lease with no live holder here still
       // requires explicit recovery, unchanged.
-      !record?.lease ||
-        active.get(sessionId) === record.lease ||
-        Fail`Session volumes have an outstanding durable lease`;
+      // A refusal here has been wrong to diagnose from the source four times
+      // running, because the message named the symptom and nothing else. It
+      // now carries what distinguishes the cases: whose lease it is, whether
+      // this process holds one for the session, and whether recovery has
+      // already run this incarnation. A lease this process holds is a reopen
+      // and is allowed; one with no live holder here needs explicit recovery.
+      if (record?.lease && active.get(sessionId) !== record.lease) {
+        const held = active.get(sessionId);
+        Fail`Session volumes have an outstanding durable lease ${q(record.lease)} for session ${q(sessionId)}; this process ${held === undefined ? q('holds no lease for it') : q(`holds ${held}`)} and recovery ${recovered.has(sessionId) ? q('already ran this incarnation') : q('has not run this incarnation')}.`;
+      }
       if (!record) {
         const nextProjectId = /** @type {number} */ (state.nextProjectId);
         (!state.exhausted && nextProjectId < projectIds.last) ||
@@ -687,6 +698,7 @@ export const makeCodexDurableVolumeProvider = ({
       const record = Object.hasOwn(state.sessions, sessionId)
         ? state.sessions[sessionId]
         : undefined;
+      recovered.add(sessionId);
       if (!record?.lease) return;
       for (const volume of record.volumes)
         await E(volumes).assertUnused({ name: volume.name });
