@@ -1701,12 +1701,16 @@ export const makeHostMaker = ({
           }
         }
         // `stream` alone no longer discriminates a blob (it is the generic
-        // byte-stream method name shared with readers/writers and
-        // `HttpResponse`). `looksLikeReadableBlob` (`@endo/platform/fs/lite`) is
-        // the one exported discriminator: it admits the canonical `text`
-        // whole-value read surface plus the `getInfo`/`readReturnPattern`
-        // byte-read markers, and excludes a writer and a generic value
-        // `PassableReader`.
+        // byte-stream method name shared with readers and writers).
+        // `looksLikeReadableBlob` (`@endo/platform/fs/lite`) is the one exported
+        // discriminator: it admits the canonical `text` whole-value read
+        // surface plus the `getInfo`/`readReturnPattern` byte-read markers, and
+        // excludes a writer and a generic value `PassableReader`. This is the
+        // `kind()`-less fallback path — a source tree that does not advertise
+        // the `kind` protocol classifies each child by method name here. The
+        // discriminator is regression-covered directly by
+        // `@endo/platform`'s `looks-like-readable-blob.test.js` and, at the
+        // `write()` call site, by `daemon/test/mount.test.js`.
         const looksLikeBlob =
           kind === undefined
             ? looksLikeReadableBlob(methodNames)

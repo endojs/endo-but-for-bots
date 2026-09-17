@@ -751,19 +751,18 @@ test('write rejects a generic PassableReader that merely advertises stream', asy
   );
 });
 
-test('write rejects an HttpResponse that merely advertises text/stream', async t => {
+test('write rejects an HttpResponse that advertises text but no stream', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
   // An `@endo/exo-http-client` `HttpResponse` carries the readable-blob
-  // whole-value markers `text`/`json`/`stream`, so the bare `text` branch of
-  // `looksLikeReadableBlob` would admit it — but its `stream()` responder takes
-  // *zero* args, so `iterateBytesReader` would drive `E(source).stream(synHead)`
-  // and die on an opaque arity guard deep in the read, not the crisp shape
-  // error `write()` promises. The discriminator excludes it by the *absence* of
-  // `status` (the response-code accessor a readable blob never carries), so
+  // whole-value markers `text`/`json`, but it exposes its byte reader under
+  // `body()` — a zero-arg factory returning a `PassableBytesReader` — rather
+  // than `stream`, precisely so it cannot collide with `looksLikeReadableBlob`.
+  // Lacking `stream`, it fails the discriminator's top-level check outright, so
   // `write()` must reject it up front with the same "must be a ReadableBlob"
-  // error the fall-through branch gives.
+  // error the fall-through branch gives — no `HttpResponse`-specific negative
+  // clause required in the predicate.
   const HttpResponseShape = M.interface('HttpResponse', {
     status: M.call().returns(M.number()),
     statusText: M.call().returns(M.string()),
@@ -772,7 +771,7 @@ test('write rejects an HttpResponse that merely advertises text/stream', async t
     url: M.call().returns(M.string()),
     text: M.callWhen().returns(M.string()),
     json: M.callWhen().returns(M.any()),
-    stream: M.call().returns(M.any()),
+    body: M.call().returns(M.any()),
     help: M.call().returns(M.string()),
   });
   const httpResponse = makeExo('HttpResponse', HttpResponseShape, {
@@ -783,7 +782,7 @@ test('write rejects an HttpResponse that merely advertises text/stream', async t
     url: () => 'https://example.test/',
     text: async () => 'body',
     json: async () => harden({}),
-    stream: () => harden({}),
+    body: () => harden({}),
     help: () => 'http response',
   });
   await t.throwsAsync(

@@ -411,7 +411,7 @@ harden(NodeWatcherInterface);
  * are mutually interchangeable for the common read shapes: `getInfo` + `fetch`
  * (range I/O) and `text` + `json` (whole value). `stream` stays
  * daemon-only — the extended layer streams via `fetch` / `PassableBytesReader`
- * rather than the CapTP base64 pump. See
+ * rather than the daemon-side `stream` pump. See
  * designs/fs-interface-consolidation.md § C4.
  */
 export const BlobRefInterface = M.interface('BlobRef', {

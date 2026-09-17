@@ -506,11 +506,13 @@ test.serial('Rlcreate advertises the same iounit as Rlopen', async t => {
   t.is(r.u32(), msize - 24);
 });
 
-// The write path has no chunk-length limit to route around: the responder
-// builds its pump without a `writePattern`, so a write chunk is never
-// length-validated. Guards against reintroducing a clamp here by symmetry
-// with the read path, which would silently halve the write frame.
-test.serial('a write past the base64 read limit is not truncated', async t => {
+// The write path is not size-clamped: the responder
+// (`bytesWriterFromIterator`) leaves `byteLengthLimit` at its unbounded
+// default, so its `M.byteArray()` writePattern validates only the frame
+// *kind*, never the length. Guards against reintroducing a fixed size clamp
+// here by symmetry with the read path, which would silently halve the write
+// frame.
+test.serial('a write past the read limit is not truncated', async t => {
   const { rootDir, socketPath } = await setupNodeFsBridge(t);
   const c = await setupClient(t, socketPath);
   await negotiateFullMsize(c);

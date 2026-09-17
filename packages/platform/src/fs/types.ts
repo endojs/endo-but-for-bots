@@ -102,26 +102,27 @@ export interface ReadableTree {
 /**
  * A remotable byte source accepted by `Directory.write()`.
  *
- * `write()` discriminates a blob source from a writer or an `HttpResponse` by
+ * `write()` discriminates a blob source from a writer by
  * method name (`looksLikeReadableBlob`), so `stream` alone is no longer
- * accepted — it is the generic byte-stream method shared with writers and
- * `HttpResponse`. Every admitted source is drained through `E(source).stream()`,
- * so `stream` is required on every branch; the second method is the *marker*
- * that distinguishes a blob from a writer/`HttpResponse`. A source must carry
- * `stream` paired with one of:
+ * accepted — it is the generic byte-stream method shared with writers. Every
+ * admitted source is drained through `E(source).stream()`, so `stream` is
+ * required on every branch; the second method is the *marker* that
+ * distinguishes a blob from a writer. A source must carry `stream` paired with
+ * one of:
  *  - `text`, the whole-value read surface every canonical `ReadableBlob`
- *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`) —
- *    but *not* `status`, which excludes an `HttpResponse` (it also carries
- *    `text`+`stream`, but its zero-arg `stream()` would die on an arity guard);
- *    or
+ *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`); or
  *  - `getInfo` for a content-addressed blob; or
  *  - `readReturnPattern` for a raw `PassableBytesReader` — but *not*
  *    `readPattern`, which excludes a generic `PassableReader` (it also
  *    advertises `readReturnPattern`, but yields arbitrary values, not bytes).
  *
- * See `looksLikeReadableBlob` in `../interfaces.js` for the authoritative
- * duck-type; the `!status`/`!readPattern` exclusions are part of the contract
- * and are enforced there, not by these structural types.
+ * An `@endo/exo-http-client` `HttpResponse` is *not* accepted: it exposes its
+ * byte reader under `body()`, not `stream`, so it fails the discriminator's
+ * top-level `stream` check without any `HttpResponse`-specific clause.
+ *
+ * See `looksLikeReadableBlob` in `./interfaces.js` for the authoritative
+ * duck-type; the `!readPattern` exclusion is part of the contract and is
+ * enforced there, not by these structural types.
  */
 export type ReadableBlobSource =
   | {

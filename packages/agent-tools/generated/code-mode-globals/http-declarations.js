@@ -35,7 +35,7 @@ export const httpDeclarations = harden({
     maxResponseBytes: () => number;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
-    stream: () => HttpPassableBytesReader;
+    body: () => HttpPassableBytesReader;
     help: () => string;
 };
 type HttpPassableBytesReader<TReadReturn = undefined> = {

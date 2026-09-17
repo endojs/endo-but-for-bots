@@ -409,14 +409,14 @@ test('Shell, HTTP, and GitRemote declarations match runtime method names', t => 
   assertIRTypeMatchesGuard(t, httpIR, 'HttpResponse', HttpResponseInterface);
 });
 
-// `HttpResponse.stream()` returns `import('@endo/exo-stream').PassableBytesReader`.
+// `HttpResponse.body()` returns `import('@endo/exo-stream').PassableBytesReader`.
 // The extractor follows that import into `@endo/exo-stream`'s own type source,
 // so the declaration carries the real streaming surface and the stream-node
 // types it reaches, rather than a hand-written stand-in or `unknown`.
-test('HTTP stream declaration keeps the followed reader shape named', t => {
+test('HTTP body declaration keeps the followed reader shape named', t => {
   const text = declarationText(httpDeclarations.http);
-  t.false(text.includes('stream: () => unknown;'));
-  t.true(text.includes('stream: () => HttpPassableBytesReader;'));
+  t.false(text.includes('body: () => unknown;'));
+  t.true(text.includes('body: () => HttpPassableBytesReader;'));
   t.true(text.includes('type HttpPassableBytesReader'));
   t.true(text.includes('stream: (synPromise: HttpERef<HttpStreamNode<'));
   for (const shape of [

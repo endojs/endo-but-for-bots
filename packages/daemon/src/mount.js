@@ -48,13 +48,19 @@ const revokedSentinel = Symbol('mount-revoked');
  * Assert a remote source is a readable blob after the `write()` method-name
  * check. The discriminator is `looksLikeReadableBlob`
  * (`@endo/platform/fs/lite`), the one exported copy shared by every consumer.
- * Unlike a bare `stream` test, it rejects a writer or an `HttpResponse` with
- * the same clear error the fall-through branch gives, rather than admitting it
- * and dying on an opaque byte-reader guard error.
+ * Unlike a bare `stream` test, it rejects a writer (or any value lacking the
+ * blob markers) with the same clear error the fall-through branch gives, rather
+ * than admitting it and dying on an opaque byte-reader guard error.
+ *
+ * The runtime check admits any of the three shapes `ReadableBlobSource`
+ * enumerates (a `text`-bearing canonical `ReadableBlob`, a `getInfo`-bearing
+ * content-addressed blob, or a `readReturnPattern`-bearing
+ * `PassableBytesReader`), so the asserted type is that union — not the narrower
+ * `PassableBytesReader`, which only one branch satisfies.
  *
  * @param {unknown} value
  * @param {string[]} methodNames
- * @returns {asserts value is import('@endo/eventual-send').ERef<import('@endo/exo-stream').PassableBytesReader>}
+ * @returns {asserts value is import('@endo/eventual-send').ERef<import('@endo/platform/fs/lite/types').ReadableBlobSource>}
  */
 const assertReadableBlobSource = (value, methodNames) => {
   if (!looksLikeReadableBlob(methodNames)) {
@@ -1271,7 +1277,15 @@ const makeMountExo = ctx => {
       const writer = filePowers.makeFileWriter(scratch);
       try {
         assertReadableBlobSource(source, methodNames);
-        for await (const bytes of iterateBytesReader(source)) {
+        // Every shape `assertReadableBlobSource` admits (`ReadableBlobSource`
+        // is a union of three) carries the `stream` responder, which is the
+        // only method `iterateBytesReader` drives; the static union is wider
+        // than `PassableBytesReader`, so narrow to the drain contract here.
+        const blobReader =
+          /** @type {import('@endo/eventual-send').ERef<import('@endo/exo-stream').PassableBytesReader>} */ (
+            /** @type {unknown} */ (source)
+          );
+        for await (const bytes of iterateBytesReader(blobReader)) {
           // eslint-disable-next-line no-await-in-loop
           await writer.next(bytes);
         }
