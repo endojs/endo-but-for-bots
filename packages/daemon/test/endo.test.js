@@ -7851,3 +7851,66 @@ test.serial(
     t.true((await pendingMessage).done);
   },
 );
+
+test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir');
+  await E(host).storeValue(1, 'one-src');
+  await E(host).storeValue(2, 'two-src');
+  const oneId = await E(host).identify('one-src');
+  const twoId = await E(host).identify('two-src');
+  await E(directory).storeIdentifier(['one'], oneId);
+  await E(directory).storeIdentifier(['two'], twoId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Reads round-trip against the backing directory.
+  t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDirectory).has('one'));
+  t.false(await E(readOnlyDirectory).has('absent'));
+  t.is(
+    await E(readOnlyDirectory).lookup('one'),
+    await E(directory).lookup('one'),
+  );
+  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
+
+  // The read-only view exposes no mutators at all.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
+    undefined,
+    'storeIdentifier is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
+    undefined,
+    'remove is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
+    undefined,
+    'makeDirectory is not available on a read-only view',
+  );
+
+  // Malformed arguments are rejected at THIS boundary by the ReadableNameHub
+  // interface guard (makeExo), not only downstream at the backing directory.
+  // `lookup` requires a string or string[]; a number must be refused by the
+  // guard before it forwards. This is the behavioural proof the interface
+  // guard is live on the guest-facing view.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).lookup(42),
+    { message: /ReadableNameHub/ },
+    'a wrong-typed argument is rejected at the read-only exo boundary',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).has(42),
+    { message: /ReadableNameHub/ },
+    'has rejects a non-string path segment at the exo boundary',
+  );
+
+  // A live write to the backing directory is observable through the view,
+  // confirming it is a live attenuation rather than a snapshot.
+  await E(host).storeValue(3, 'three-src');
+  const threeId = await E(host).identify('three-src');
+  await E(directory).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDirectory).has('three'));
+});

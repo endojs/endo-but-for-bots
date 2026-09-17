@@ -2783,6 +2783,13 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
+            // `ReadableNameHub` view via an evaluation formula), this hub
+            // is *already* fully read-only: every mutator above is
+            // `disallowedMutation`/`notSupported`, so there is no writable
+            // surface left to attenuate. `readOnly()` therefore returns the
+            // same already-attenuated hub rather than a distinct narrower exo.
+            readOnly: async () => mailHub,
           }),
         )
       )
@@ -3163,6 +3170,13 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
+            // `ReadableNameHub` view via an evaluation formula), this hub
+            // is *already* fully read-only: every mutator above is
+            // `disallowedMutation`/`notSupported`, so there is no writable
+            // surface left to attenuate. `readOnly()` therefore returns the
+            // same already-attenuated hub rather than a distinct narrower exo.
+            readOnly: async () => messageHub,
           }),
         )
       )
@@ -4196,7 +4210,7 @@ const makeDaemonCore = async (
       // Behold, unavoidable forward-reference:
       // eslint-disable-next-line no-use-before-define
       makePetStoreInspector(petStoreId),
-    directory: ({ petStore: petStoreId }, context) => {
+    directory: ({ petStore: petStoreId }, context, id) => {
       // Behold, forward-reference:
       // eslint-disable-next-line no-use-before-define
       return makeIdentifiedDirectory({
@@ -4204,6 +4218,7 @@ const makeDaemonCore = async (
         context,
         agentNodeNumber: localNodeNumber,
         isLocalKey,
+        directoryId: id,
       });
     },
     peer: (
@@ -6803,6 +6818,7 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
+    formulateEval,
     pinTransient,
     unpinTransient,
   });

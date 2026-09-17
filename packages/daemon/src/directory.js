@@ -31,7 +31,69 @@ import { directoryHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface } from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, Formula, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, EvalDeferredTaskParams, EvalFormula, StoreController } from './types.js' */
+
+// The evaluation formula is the durable identity of the attenuation. Its
+// result is a worker-hosted exo that forwards only the readable hub methods to
+// the backing directory. The exo carries the `ReadableNameHub` interface guard
+// (help / has / list / lookup / maybeLookup), so malformed / extra / wrong-typed
+// arguments from a less-trusted holder are rejected at THIS boundary — before
+// they reach the backing directory — rather than only downstream. `harden`/`Far`
+// gives passability but no argument guard, which is why this is a guarded
+// `makeExo` and not a bare `Far`.
+//
+// The interface is reconstructed inline from `M` because the worker compartment
+// that evaluates this source is endowed with `E`, `makeExo`, and `M` (see
+// `worker.js`), but not with `@endo/platform`'s `readableNameHubMethodGuards`
+// record or `@endo/daemon`'s `ReadableNameHubInterface`. The reconstructed guard
+// mirrors `ReadableNameHubInterface` (`interfaces.js`) method-for-method. `help`
+// is a synchronous self-description of the read-only surface (the guard requires
+// a string return, and a remote forward would resolve to a promise); the four
+// read methods forward to the backing hub and keep their promise/any returns.
+export const readOnlyDirectorySource = `
+const NamePathShape = M.arrayOf(M.string());
+const NameOrPathShape = M.or(M.string(), NamePathShape);
+const ReadableNameHubInterface = M.interface('ReadableNameHub', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
+});
+const readOnlyHelp = {
+  '': 'ReadableNameHub - A read-only view of a name hub.\\n\\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\\nbacking directory; every mutator is withheld. Attenuation is shallow: looked-up\\nnested directories are returned live and writable.',
+  help: 'help(method?) -> string\\nDescribe this cap, or one of its methods.',
+  has: 'has(...path) -> Promise<boolean>\\nWhether a name or path resolves in the backing hub.',
+  list: 'list(...path) -> Promise<string[]>\\nThe names at a path in the backing hub.',
+  lookup: 'lookup(nameOrPath) -> Promise<unknown>\\nResolve a name or path to its value.',
+  maybeLookup:
+    'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\\nResolve a name or path, or undefined if absent.',
+};
+const readOnly = hub =>
+  makeExo('ReadableNameHub', ReadableNameHubInterface, {
+    help: method => readOnlyHelp[method ?? ''] ?? readOnlyHelp[''],
+    has: (...path) => E(hub).has(...path),
+    list: (...path) => E(hub).list(...path),
+    lookup: path => E(hub).lookup(path),
+    maybeLookup: path => E(hub).maybeLookup(path),
+  });
+readOnly(hub)
+`;
+
+/**
+ * Recognize the evaluation recipe used for a read-only directory. This lets
+ * daemon-internal network discovery reach the backing directory's identifiers
+ * without broadening the guest-facing attenuation.
+ *
+ * @param {Formula} formula
+ * @returns {formula is EvalFormula}
+ */
+export const isReadOnlyDirectoryFormula = formula =>
+  formula.type === 'eval' &&
+  formula.source === readOnlyDirectorySource &&
+  formula.names.length === 1 &&
+  formula.names[0] === 'hub' &&
+  formula.values.length === 1;
 
 /**
  * @param {object} args
@@ -44,6 +106,7 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
+ * @param {DaemonCore['formulateEval']} args.formulateEval
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -55,6 +118,7 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
+  formulateEval,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -611,12 +675,14 @@ export const makeDirectoryMaker = ({
    * @param {Context} args.context
    * @param {NodeNumber} args.agentNodeNumber
    * @param {(node: string) => boolean} args.isLocalKey
+   * @param {FormulaIdentifier} args.directoryId
    */
   const makeIdentifiedDirectory = async ({
     petStoreId,
     context,
     agentNodeNumber,
     isLocalKey,
+    directoryId,
   }) => {
     // TODO thread context
 
@@ -681,6 +747,29 @@ export const makeDirectoryMaker = ({
         readText: directory.readText,
         maybeReadText: directory.maybeReadText,
         writeText: directory.writeText,
+        // Mint a read-only `ReadableNameHub` view. Attenuation is SHALLOW:
+        // the view withholds this directory's mutators, but `lookup`/
+        // `maybeLookup` on it forward to the backing directory and return any
+        // nested directory / agent handle / worker as the live, fully-writable
+        // object — not a further-attenuated view. A holder of the read-only
+        // view can therefore mutate nested directories one level down. This is
+        // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
+        // a recursively read-only surface must re-attenuate results themselves.
+        readOnly: async () => {
+          /** @type {DeferredTasks<EvalDeferredTaskParams>} */
+          const tasks = makeDeferredTasks();
+          const { value } = await formulateEval(
+            directoryId,
+            readOnlyDirectorySource,
+            ['hub'],
+            [directoryId],
+            tasks,
+            undefined,
+            undefined,
+            'read-only-directory',
+          );
+          return value;
+        },
       }),
     );
   };

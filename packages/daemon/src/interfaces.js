@@ -231,6 +231,7 @@ export const HandleInterface = M.interface(
 export const DirectoryInterface = M.interface('EndoDirectory', {
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  readOnly: M.call().returns(M.promise()),
 });
 
 export const GuestInterface = M.interface('EndoGuest', {
