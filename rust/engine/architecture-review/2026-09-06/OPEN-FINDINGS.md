@@ -1,22 +1,24 @@
-# IronHorse architecture review: findings still open at `e1038c189`
+# IronHorse architecture review: findings still open at `2c69bf78d`
 
-The 10 findings of the 2026-09-06 review that are still open or partially open
-after the
-[2026-09-17 resolution passes](ARCHITECTURE-REVIEW.md#2026-09-17-resolution-pass-second-against-e1038c189),
-ordered by severity, and within a severity: open, then partially open, then held.
+The 9 findings of the 2026-09-06 review that are still open or partially open
+after the [2026-09-17 resolution passes][pass], ordered by severity, and
+within a severity: open, then partially open, then held.
+
+[pass]: ARCHITECTURE-REVIEW.md#2026-09-17-resolution-pass-third-against-2c69bf78d
+
 Severities are the ones the original verification settled on and are not
 re-rated by a revision.
 
 This is an index, not an analysis: each finding's claim, evidence, impact,
 recommended fix and full status history are in
 [ARCHITECTURE-REVIEW.md](ARCHITECTURE-REVIEW.md), in the section named beside it.
-The other 181 findings are fixed and are listed in that document's
+The other 182 findings are fixed and are listed in that document's
 [Appendix A](ARCHITECTURE-REVIEW.md#appendix-a-full-findings-index).
 
-The count has not moved since the previous pass — nine findings closed in the
-first, none in the second — but three of these ten changed.
-F068 went from open to partially open; F063 and F119 kept their status and lost
-the clause that made them untestable.
+The count has moved for the first time since the FIRST pass, which closed
+nine: the second closed none, and this one closed F127.
+The low-severity set is down to F106 and F122, which are one clause between
+them and blocked on the worker protocol.
 
 **Held** marks a finding that is not actionable yet because a design decision it
 depends on has not been taken.
@@ -99,7 +101,6 @@ Realm extraction.
 |---|---|---|---|
 | F106 | Partially open | [3.11](ARCHITECTURE-REVIEW.md#311-design-drift-and-documentation) | The performance envelope has no instrument |
 | F122 | Partially open | [3.10](ARCHITECTURE-REVIEW.md#310-performance-architecture) | The performance envelope has no machine-checked expression |
-| F127 | Partially open | [3.9](ARCHITECTURE-REVIEW.md#39-snapshot-and-persistence-seam) | Three Pending rows make every await-bearing machine un-checkpointable |
 
 F106 and F122 are down to one clause between them.
 Three of the stage-8 envelope's four measurements now exist — throughput
@@ -109,13 +110,16 @@ an instrument is for.
 The fourth, the four-variant daemon benchmark, is **blocked** on the worker
 protocol.
 
-F127's residue is the `Array.fromAsync` family: `FromAsyncNext`/`Elem`/`Map`/
-`Close` are outside the persist whitelist because nothing carries the
-`from_async` side table, so a machine with one in flight refuses to checkpoint.
-The carry is templated by the `ASYN` one and the GC half is already done —
-collection compacts the arena and remaps reaction indices — so what remains is
-a row type, a compacted extraction with an index remap, restore, an `ASYN`
-trailer, a gate clause, a format increment and the whitelist change.
-The finding's own recommendation had a second clause that is also outstanding
-and is cheap: state the limitation in the `PersistentMachine` docs where an
-embedder meets it, not only in the ledger.
+## Closed since the previous edition
+
+**F127** — Three Pending rows make every await-bearing machine
+un-checkpointable — closed at `2c69bf78d`: the claim's remaining clause and the
+recommendation's second one.
+The `Array.fromAsync` accumulations travel in `ASYN` at format 24 and the four
+`FromAsync*` reaction kinds resume, which leaves the persist whitelist covering
+every kind the enum defines; and `PersistentMachine`'s documentation states
+what a checkpoint refuses where an embedder meets it.
+Its status block is worth reading for the defect list rather than the feature:
+the carry as first written turned a refusal into a host panic on any queued
+`Array.fromAsync` job, and four claims it made about its own test coverage were
+false.

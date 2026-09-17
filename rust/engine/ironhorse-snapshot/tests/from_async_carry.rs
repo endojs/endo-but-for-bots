@@ -11,9 +11,9 @@
 //! The fixture suspends an accumulation at a quiescent boundary the only way
 //! it can be suspended: an element the guest has not resolved yet. The twin
 //! then resolves it on both the continuous machine and its store-resumed
-//! copy, and requires the same answer — which is a claim about eleven carried
-//! slots, four packed flags and a remapped reaction index, not just about the
-//! gate letting the machine through.
+//! copy, and requires the same answer — which is a claim about eight carried
+//! slots, three scalars, four packed flags and a remapped reaction index, not
+//! just about the gate letting the machine through.
 
 #[path = "common/twin.rs"]
 mod carry;
