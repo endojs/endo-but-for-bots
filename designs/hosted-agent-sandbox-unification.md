@@ -2329,14 +2329,20 @@ Three consequences follow from the one cause:
 - **Its volume and XFS project ID leak.** IDs are never recycled by design —
   the registry has advanced to 42043 — so each session spends one forever.
 
-**This is the same defect the architecture review found in OpenCode**, in a
-different organ. There, `closeResources()` — the only caller of
-`E(brokerScope).revoke()` — is not reached when a client exists, so an
-ordinary termination never revokes the grant on the operator's credential.
-Here, `unmount()` is not reached, so an ordinary termination never releases
-the lease. Two adapters, two hand-written lifecycles, the same class of hole
-in each, found independently. That is the argument for the supervisor, and it
-is why the repair below is not a Codex repair.
+**This is a Codex defect, and it survived a review of the same class of
+defect elsewhere.** The architecture review reported the matching hole in
+OpenCode — `closeResources()`, the only caller of `E(brokerScope).revoke()`,
+skipped when a client exists. That one turned out not to be real: OpenCode
+releases through its client's `cleanupProvision` instead, and step 0 of the
+plan below records the measurement. This one is real and measured.
+
+Read together they say something sharper than either alone. In two
+hand-written lifecycles, one reader found a cleanup hole that was not there
+and missed one that was — from the same evidence, the terminate bodies read
+side by side. The argument for the supervisor is usually that a fix to one
+copy does not reach the other. The stronger argument is this: with two
+copies, *whether a release happens at all* stops being answerable by reading
+the code that appears to perform it.
 
 ### 2b. `codex exec` may delete this subsystem rather than repair it
 
@@ -2498,30 +2504,47 @@ acceptable interval. It is recorded as a follow-up, not as free.
 Each step is gated on the one before, and each gate is an observation rather
 than a judgement.
 
-0. **Revoke the OpenCode grant on the ordinary termination path.** Confirmed
-   present at this branch’s head:
-   ```js
-   // opencode-native-controller.js:461-464
-   const early = client ? E(client).terminate() : closeResources();
-   await Promise.allSettled([activating, early]);
-   if (client) await E(client).terminate();  // terminate() twice
-   else await closeResources();              // never runs when a client exists
-   ```
-   `closeResources()` is the only caller of `E(brokerScope).revoke()`, and a
-   grant no longer carries an expiry, so every OpenCode session that activated
-   successfully leaves indefinite access to the operator’s credential behind
-   when it terminates. Claude’s counterpart calls `closeResources()`
-   unconditionally; `lost()` has the same divergence.
+0. **Nothing. The OpenCode grant leak is not real — corrected 2026-09-17.**
+   The architecture review reported that `closeResources()` — the only caller
+   of `E(brokerScope).revoke()` — is skipped when a client exists, leaving an
+   unexpiring grant on the operator’s credential once per terminated session.
+   The two controllers do read that way side by side:
 
-   **This one does not wait for the supervisor, and it is not a contradiction
-   of the rule above.** The Codex lease is throwaway machinery inside a
-   subsystem being deleted; this is a one-line correction on a path that
-   survives every step below, on the boundary that is this design’s central
-   claim. What is written here that outlives the extraction is the test — a
-   terminate-with-live-client case asserting the grant is revoked — which
-   becomes step 2’s acceptance criterion rather than being deleted by it.
-   *Gate: Phase 2’s exit reads true again on OpenCode — explicit revocation
-   still stops further access.*
+   ```js
+   // claude-native-controller.js        // opencode-native-controller.js
+   const early = client                  const early = client
+     ? undefined : closeResources();       ? E(client).terminate() : closeResources();
+   if (client) await E(client).terminate();  if (client) await E(client).terminate();
+   await closeResources();  // always     else await closeResources();  // skipped
+   ```
+
+   **The compensating difference is at the `makeClient` call site, not in
+   terminate.** OpenCode constructs its client with
+   `cleanupProvision: closeResources` (`opencode-native-controller.js:374`),
+   and `opencode-client.js:334` binds `releaseResources = cleanupProvision ||
+   ‹dispose the slice›`. So the client’s own terminate runs the entire
+   release, and the `else` is correct rather than a missing branch. Claude
+   passes no `cleanupProvision` — its comment "the client disposes the slice
+   on its terminate" describes *Claude’s* wiring — so its controller must
+   close unconditionally. Two shapes, each internally consistent.
+
+   Measured rather than reasoned: with the review’s proposed fix applied, a
+   terminate-with-live-client test passes; **with it reverted, the same test
+   still passes**, and the event trace shows `revoke sandbox-a` occurring
+   exactly once either way. The proposed fix would have made
+   `closeResources()` run twice on the ordinary path.
+
+   What lands is the test alone — `terminating a session that has a live
+   client revokes its grant`, asserting revocation happens and happens once.
+   The property was untested, which is why two readers could disagree about
+   it from the source. Phase 2’s exit condition was never unmet.
+
+   **The review’s finding 2 is untouched by this.** There is still no shared
+   supervisor, the two lifecycles are still written twice, and the drift
+   hazard is still real — this correction is evidence about one alleged
+   symptom, not about the diagnosis. If anything it sharpens the argument:
+   two hand-written lifecycles are not merely places a fix can fail to reach,
+   they are places a careful reader cannot tell whether it did.
 
 1. **Clear the leases operationally and prove Codex restores.** The existing
    check: give a session a word, restart the daemon, ask for it back, with the
@@ -2533,12 +2556,13 @@ than a judgement.
    the mechanism.*
 
 2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode.** Two
-   adapters, one algorithm, before adding a third. The extraction's own
-   acceptance test is OpenCode's unreached `closeResources` — the supervisor is
-   correct when that hole is unrepresentable rather than fixed.
+   adapters, one algorithm, before adding a third. Its acceptance test is the
+   pair from step 0 and item 2 above: one release path, so that whether a
+   grant is revoked and a lease released is answerable by reading one
+   function rather than by comparing two and their call sites.
    *Gate: both adapters pass their existing suites against the shared
-   lifecycle, and a terminate-with-live-client test asserts the grant is
-   revoked.*
+   lifecycle, and the terminate-with-live-client test from step 0 still
+   asserts exactly one revocation.*
 
 3. **Move Codex's state onto `session-state-storage.js`,** deleting the volume
    subsystem and the lease with it. Now that the supervisor exists, this is
