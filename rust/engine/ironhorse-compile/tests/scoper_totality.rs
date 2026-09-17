@@ -245,3 +245,121 @@ fn the_roster_contains_sources_that_compile_end_to_end() {
         );
     }
 }
+
+/// `scope_of`'s cross-pass invariant: the hoist pass inserted a `node_scope`
+/// entry for every node the bind pass looks one up for (scoper.rs:2329).
+///
+/// The two passes agree by dispatch: each of the ten `scope_of` callers
+/// (`bind_program`, `bind_module`, `bind_block`, `bind_function`,
+/// `bind_catch`, `bind_for`, `bind_for_in_of`, `bind_switch`, `bind_with`,
+/// `bind_class`) is routed the same tokens as a `hoist_*` that inserts. That
+/// much is checkable by reading the two match arms, and it holds.
+///
+/// What reading them does not settle is asymmetric child traversal: a
+/// subtree `bind_X` descends into that `hoist_X` skips would reach
+/// `scope_of` with nothing inserted, and no dispatch table shows it. This is
+/// the `code_catch` shape exactly — two passes that must agree on a node
+/// roster — so the positions where a scope-bearing node can hide are probed.
+/// Every fixture must compile in every mode, ensuring an earlier rejection
+/// cannot silently remove a traversal from this audit. Sloppy-only `with`
+/// statements and module-only exports have their own tests below.
+#[test]
+fn scope_bearing_children_are_hoisted_before_they_are_bound() {
+    for source in [
+        // Computed keys: evaluated in the enclosing scope, but attached to a
+        // class or object member the two passes walk differently.
+        "class C { [(() => { { let x; } return 0; })()]() {} }",
+        "class C { static [(() => { switch (0) { case 0: let x; } return 0; })()]() {} }",
+        "class C { [(() => { try {} catch (e) { let x; } return 0; })()]; }",
+        "class C { get [(() => { { let x; } return 'g'; })()]() {} }",
+        "({ [(() => { { let x; } return 0; })()]: 1 });",
+        // Heritage: an expression evaluated before the class scope exists.
+        "class C extends (() => { { let x; } return Object; })() {}",
+        "class C extends (function () { for (let i of []) ; return Object; })() {}",
+        // Field initializers, which hoist into a synthetic field-init scope.
+        "class C { p = (() => { { let x; } })(); }",
+        "class C { p = (() => { try {} catch (e) { let y; } })(); }",
+        "class C { #p = (() => { switch (0) { default: let w; } })(); }",
+        "class C { static p = (() => { for (let i = 0; i < 1; i++) { let x; } })(); }",
+        "class C { static #p = (() => { for (let i in {}) { let x; } })(); }",
+        // Private methods and accessors bind in the class scope rather than
+        // the synthetic field-init scope used by private data fields.
+        "class C { #m() { { let x; } } get #p() { try {} catch (e) { let x; } } set #p(v) { for (let x of []) ; } }",
+        "class C { static #m(a = (() => { { let x; } })()) { { let y; } } static get #p() { { let z; } } static set #p(v) { { let w; } } }",
+        "class C extends Object { constructor(a = (() => { { let x; } })()) { super(); } }",
+        // Blocks, loops, catches and switches nested in parameter defaults.
+        "function f(a = (() => { { let x; } })()) {}",
+        "function f(a = (() => { for (const q of []) ; })()) {}",
+        "function f(a = (() => { try {} catch ({ b }) {} })()) {}",
+        "function f(a = (() => { switch (0) { case 0: let s; } })()) {}",
+        // Binding patterns walk their keys and defaults through different
+        // bind visitors from object/array expression literals.
+        "let { [(() => { { let x; } return 'k'; })()]: value = (() => { { let y; } })() } = {};",
+        "function f([a = (() => { for (let x of []) ; })()], { [(() => { { let y; } return 'k'; })()]: b } = {}) {}",
+        "try {} catch ({ [(() => { { let x; } return 'k'; })()]: e = (() => { { let y; } })() }) {}",
+        // Template substitutions, spreads and optional chains: expression
+        // positions whose children are easy to miss in one pass.
+        "`${(() => { { let x; } return 1; })()}`;",
+        "tag`${(() => { { let x; } return 1; })()}`;",
+        "[...(() => { { let x; } return []; })()];",
+        "({ ...(() => { { let x; } return {}; })() });",
+        "a?.[(() => { { let x; } return 0; })()];",
+        // Generator and async bodies, and a labelled try with all three arms
+        // carrying their own block scope.
+        "(async () => { for await (const x of []) { let y; } })();",
+        "(function* () { switch (0) { case 0: let x; } })();",
+        "(async function* () { for await (const x of []) { let y; } })();",
+        "l: try { { let x; } } catch (e) { { let y; } } finally { { let z; } }",
+    ] {
+        for &(goal, strict) in MODES {
+            assert_eq!(
+                outcome(source, goal, strict),
+                Ok("compiled"),
+                "{source} ({goal:?}, strict={strict})"
+            );
+        }
+    }
+}
+
+/// `with` is rejected before scoping in strict code. Require compilation in
+/// both sloppy goals to exercise `bind_with`, and pin the strict rejection
+/// separately rather than counting it as successful traversal coverage.
+#[test]
+fn with_scope_traversal_requires_a_sloppy_program() {
+    for source in [
+        "function f(a = (() => { with ({}) { var v; } })()) {}",
+        "tag`${(() => { with ({}) { var x; } return 1; })()}`;",
+        "try { try {} finally { with ({}) { var x; } } } catch {}",
+    ] {
+        for &(goal, strict) in MODES {
+            let expected = if strict || goal == Goal::Module {
+                "syntax"
+            } else {
+                "compiled"
+            };
+            assert_eq!(
+                outcome(source, goal, strict),
+                Ok(expected),
+                "{source} ({goal:?}, strict={strict})"
+            );
+        }
+    }
+}
+
+/// Export visitors have declaration paths that program-grammar fixtures
+/// cannot reach, including anonymous declarations synthesized for `default`.
+#[test]
+fn exported_scope_bearing_children_reach_both_passes() {
+    for source in [
+        "export default function (a = (() => { { let x; } })()) { try {} catch (e) { let y; } }",
+        "export default class extends (() => { { let x; } return Object; })() { static p = (() => { { let y; } })(); }",
+        "export function* f() { for (let x of []) { let y; } }",
+        "export const x = class { [(() => { { let y; } return 'k'; })()]() {} };",
+    ] {
+        assert_eq!(
+            outcome(source, Goal::Module, false),
+            Ok("compiled"),
+            "{source}"
+        );
+    }
+}
