@@ -758,6 +758,16 @@ const makeDaemonCore = async (
           ['worker', formula.worker],
           ['networks', formula.networks],
           ['planes', formula.planes],
+          ...(formula.guestPins
+            ? /** @type {Array<[string, FormulaIdentifier]>} */ ([
+                ['guestPins', formula.guestPins],
+              ])
+            : []),
+          ...(formula.hostPins
+            ? /** @type {Array<[string, FormulaIdentifier]>} */ ([
+                ['hostPins', formula.hostPins],
+              ])
+            : []),
         ];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
@@ -2677,6 +2687,11 @@ const makeDaemonCore = async (
       return E(hub).list();
     };
 
+    const listValues = async () => {
+      const values = listMessageNames().map(name => lookup(name));
+      return harden(values);
+    };
+
     const listIdentifiers = async (...petNamePath) => {
       assertNames(petNamePath);
       const names = await list(...petNamePath);
@@ -2809,6 +2824,7 @@ const makeDaemonCore = async (
             followLocatorNameChanges: locator =>
               readerFromIterator(followLocatorNameChanges(locator)),
             list,
+            listValues,
             listIdentifiers,
             listLocators,
             followNameChanges: (...petNamePath) =>
@@ -3110,6 +3126,11 @@ const makeDaemonCore = async (
       return E(hub).list();
     };
 
+    const listValues = async () => {
+      const values = orderedNames.map(name => lookup(name));
+      return harden(values);
+    };
+
     const listIdentifiers = async (...petNamePath) => {
       assertNames(petNamePath);
       const listedNames = await list(...petNamePath);
@@ -3228,6 +3249,7 @@ const makeDaemonCore = async (
             followLocatorNameChanges: locator =>
               readerFromIterator(followLocatorNameChanges(locator)),
             list,
+            listValues,
             listIdentifiers,
             listLocators,
             followNameChanges: (...petNamePath) =>
@@ -3705,6 +3727,8 @@ const makeDaemonCore = async (
         worker: workerId,
         networks: networksDirectoryId,
         planes: planesDirectoryId,
+        guestPins: guestPinsDirectoryId,
+        hostPins: hostPinsDirectoryId,
       } = formula;
 
       if (mailHubId === undefined) {
@@ -3740,6 +3764,8 @@ const makeDaemonCore = async (
         workerId,
         networksDirectoryId,
         planesDirectoryId,
+        guestPinsDirectoryId,
+        hostPinsDirectoryId,
         context,
       );
       const handle = /** @type {any} */ (agent).handle();
@@ -4208,6 +4234,7 @@ const makeDaemonCore = async (
             loadContent: disallowedFn,
             followLocatorNameChanges: disallowedFn,
             list: disallowedFn,
+            listValues: disallowedFn,
             listIdentifiers: disallowedFn,
             listLocators: disallowedFn,
             followNameChanges: disallowedFn,
@@ -5579,6 +5606,8 @@ const makeDaemonCore = async (
     hostAgentId,
     hostHandleId,
     workerLabel,
+    specifiedGuestPinsDirectoryId,
+    specifiedNetworksDirectoryId,
   ) => {
     // Pin each dependency formula to protect it from collection until the
     // parent guest formula links them via formulaDeps.
@@ -5653,9 +5682,24 @@ const makeDaemonCore = async (
     // Each guest gets its own (initially empty) networks directory that
     // controls which connection hints appear in locators it produces.
     const networksDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
+      specifiedNetworksDirectoryId ??
+        (await formulateDirectory(agentNodeNumber)).id,
     );
     const planesDirectoryId = pin(
+      (await formulateDirectory(agentNodeNumber)).id,
+    );
+    // A guest-scoped pin directory, the guest's own `@pins`. It mirrors the
+    // host's `@pins`, but it is the guest's own directory (not the daemon's
+    // root pins), so it confers no host authority.
+    const guestPinsDirectoryId = pin(
+      specifiedGuestPinsDirectoryId ??
+        (await formulateDirectory(agentNodeNumber)).id,
+    );
+    // A second pin directory is held by the guest formula but never installed
+    // as a special name. Daemon-owned relationships can therefore remain
+    // durable without letting the guest or its connected agent remove their
+    // pin.
+    const hostPinsDirectoryId = pin(
       (await formulateDirectory(agentNodeNumber)).id,
     );
     return harden({
@@ -5671,6 +5715,8 @@ const makeDaemonCore = async (
       workerId,
       networksDirectoryId,
       planesDirectoryId,
+      guestPinsDirectoryId,
+      hostPinsDirectoryId,
       pinned,
     });
   };
@@ -5689,6 +5735,8 @@ const makeDaemonCore = async (
       worker: identifiers.workerId,
       networks: identifiers.networksDirectoryId,
       planes: identifiers.planesDirectoryId,
+      guestPins: identifiers.guestPinsDirectoryId,
+      hostPins: identifiers.hostPinsDirectoryId,
     };
 
     return /** @type {FormulateResult<EndoGuest>} */ (
@@ -5706,12 +5754,16 @@ const makeDaemonCore = async (
     hostHandleId,
     deferredTasks,
     workerLabel,
+    guestPinsDirectoryId,
+    networksDirectoryId,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
+        guestPinsDirectoryId,
+        networksDirectoryId,
       );
 
       await deferredTasks.execute({

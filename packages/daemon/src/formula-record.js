@@ -75,6 +75,26 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
         identifier: formula.mailHub,
       };
       properties.worker = { kind: 'reference', identifier: formula.worker };
+      properties.networks = {
+        kind: 'reference',
+        identifier: formula.networks,
+      };
+      properties.planes = {
+        kind: 'reference',
+        identifier: formula.planes,
+      };
+      if (formula.guestPins !== undefined) {
+        properties.guestPins = {
+          kind: 'reference',
+          identifier: formula.guestPins,
+        };
+      }
+      if (formula.hostPins !== undefined) {
+        properties.hostPins = {
+          kind: 'reference',
+          identifier: formula.hostPins,
+        };
+      }
       break;
     }
     case 'host': {
@@ -90,6 +110,10 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       properties.nodeWorker = {
         kind: 'reference',
         identifier: formula.nodeWorker,
+      };
+      properties.registry = {
+        kind: 'reference',
+        identifier: formula.registry,
       };
       properties.inspector = {
         kind: 'reference',
