@@ -989,14 +989,6 @@ impl<'a, 'm> Coder<'a, 'm> {
         }
     }
 
-    /// `fxScopeCodeDefineNodes` for a scope with no define nodes (no-op).
-    fn scope_code_define_nodes(&mut self, scope: usize) {
-        assert!(
-            self.tree.scopes[scope].defines.is_empty(),
-            "define nodes reached in control-flow coder (function slice)"
-        );
-    }
-
     /// `fxScopeCodeDefineNodes` for a function's own scope: bind a named
     /// function expression's name to the running function (`CURRENT`) in a
     /// `const` slot, so the body can refer to itself. The slot was
@@ -2215,7 +2207,13 @@ impl Coder<'_, '_> {
         self.targets[continue_target].next_target = None;
 
         self.scope_coding_block(scope);
-        self.scope_code_define_nodes(scope);
+        // The body's defines, as `code_block` does. A loop body is a
+        // Statement and the grammar forbids a bare FunctionDeclaration
+        // there, so this finds none today — but "the grammar forbids it" is
+        // the argument that failed for `code_catch`, whose identical call to
+        // the asserting helper turned valid ES2022 into an engine abort.
+        // Coding an empty list costs nothing and cannot abort (F063).
+        self.code_define_nodes(&node.children[3]);
         let using_context =
             (self.tree.scopes[scope].disposable_count > 0).then(|| self.scope_code_using(scope));
         let next_target = self.create_target();
@@ -2293,7 +2291,8 @@ impl Coder<'_, '_> {
 
         let scope = self.scope_of(node);
         self.scope_coding_block(scope);
-        self.scope_code_define_nodes(scope);
+        // The body's defines, for the same reason as `code_for` above.
+        self.code_define_nodes(&node.children[2]);
 
         if self.program_flag {
             self.add_byte(1, XS_CODE_UNDEFINED);
@@ -5821,12 +5820,15 @@ impl Coder<'_, '_> {
             // a catch body is a block, and `function f(){}` directly inside
             // one is valid ES2022 (Annex B in sloppy mode, a lexical
             // declaration in strict). This used to call the asserting
-            // `scope_code_define_nodes`, whose contract is "this scope has no
+            // an asserting helper whose contract was "this scope has no
             // defines" — so `try{}catch{function f(){}}`, twenty-six bytes of
             // valid source, aborted the compiler. Found by the F063
-            // reachability audit; test262 has exactly one function-in-catch
-            // case and it is a `negative: parse` fixture, so the corpus sweep
-            // could not reach this.
+            // reachability audit; test262 has exactly one DIRECTLY nested
+            // function-in-catch case and it is a `negative: parse` fixture, so
+            // the corpus sweep could not reach this. The helper had two other
+            // callers resting on the same grammar argument, `code_for` and
+            // `code_for_in_of`; both now code their body's defines too, and
+            // the helper is gone.
             self.code_define_nodes(&node.children[1]);
             if self.tree.scopes[statement_scope].disposable_count > 0 {
                 let context = self.scope_code_using(statement_scope);
