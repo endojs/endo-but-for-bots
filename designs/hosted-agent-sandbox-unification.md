@@ -2273,23 +2273,92 @@ discarded. Until that lands, **bumping any hosted CLI image requires removing
 the adapter's broker service**, and that belongs next to the re-pin recipe in
 `hosts/common.nix` rather than in someone's memory.
 
-### 2. The Codex lease, which leaks more than it blocks
+### 2. The Codex lease — acquisition leaks it, and recovery is already spent, 2026-09-17
 
-Higher priority than its symptom suggested. `destroy()` refuses a leased session
-(`Cannot destroy a durably leased session`), so a session whose lease is stuck is not
-merely unopenable — it is **permanently undeletable**, and its volume and its XFS
-project ID go with it. Project IDs are never recycled by design, a host-lifetime
-budget, so each stuck session spends one forever. Observed: every cleanup run in this
-deploy ended with `DELETE_FAILED … backend did not fully clean up` on a Codex
-session, against 5 volumes and 7 session directories on a host with far fewer live
-sessions.
+**Answered, by making the refusal say what it knew.** The message named only
+the symptom, and four readings of the source were wrong against it. Carrying
+the lease id, whether this process holds one, and whether recovery had run
+settled it in a single deploy:
 
-Three explanations have already been tried and refuted by the deployment — capacity
-contention, the half-wired recovery, and a lease held by this process. What remains
-by elimination is that the lease belongs to a dead incarnation and `recoverLease` is
-not reaching it, which means the failing path does not run through the wrapped
-provisioner. The next step is instrumentation on the provisioning path, not a fourth
-reading of it.
+```
+outstanding durable lease "ee93032f-…" for session "mu4zg8fz-hxy5fc";
+this process "holds no lease for it" and recovery "already ran this incarnation".
+```
+
+The first reading of that was still wrong, and the journal says why. The
+session it names is not one a previous daemon left behind: `mu4zg8fz-hxy5fc`
+was **created minutes earlier by the same process that then refused it**, in
+phase 1 of the same test run. So this is not a release that a crash
+interrupted. The sequence is:
+
+1. Phase 1 creates the session. `recoverOnce` runs first, finds no record,
+   returns — and marks the session recovered. `ensure` then commits
+   `record.lease` and sets `active`.
+2. The session ends without reaching `unmount`. The release is reachable from
+   exactly one call site (`backend-factory.js:324`), and `active` is
+   process-local, so the durable lease outlives the runtime state that
+   identifies its holder.
+3. Phase 2 reopens. `recoverOnce` returns immediately — the session is already
+   in its set — and `ensure` meets a lease with no local holder and refuses.
+
+**The guard is consumed before there is anything to guard.** Recovery is
+once per session per incarnation, and it is spent at creation, when the
+registry is empty by definition. A lease leaked later in the same incarnation
+can never be recovered, only restarted around.
+
+So the registry's ten-of-ten is a residue, not a cause:
+
+```
+sessions in registry: 10
+with a lease:         10
+without:               0
+```
+
+Every Codex session ever created is still leased because every one of them
+left by a path that does not reach the release. Measured on the host, the
+leaked volumes are not held by anything — `podman ps --all --filter volume=…`
+is empty for them, so `assertUnused` would pass and recovery would succeed if
+it were allowed to run.
+
+Three consequences follow from the one cause:
+
+- **A session cannot be reopened.** The spent guard, above.
+- **A session cannot be deleted.** `destroy()` refuses a leased session, which
+  is the `DELETE_FAILED … backend did not fully clean up` that ended every
+  cleanup run in this deploy.
+- **Its volume and XFS project ID leak.** IDs are never recycled by design —
+  the registry has advanced to 42043 — so each session spends one forever.
+
+**This is the same defect the architecture review found in OpenCode**, in a
+different organ. There, `closeResources()` — the only caller of
+`E(brokerScope).revoke()` — is not reached when a client exists, so an
+ordinary termination never revokes the grant on the operator's credential.
+Here, `unmount()` is not reached, so an ordinary termination never releases
+the lease. Two adapters, two hand-written lifecycles, the same class of hole
+in each, found independently. That is the argument for the supervisor, and it
+is why the repair below is not a Codex repair.
+
+### 2b. `codex exec` may delete this subsystem rather than repair it
+
+The pinned CLI offers `codex exec` — "Run Codex non-interactively" — with
+`exec resume <id>`, `exec fork`, and `--json` to "print events to stdout as
+JSONL". The surface this design builds on instead, `app-server`, is marked
+**[experimental]** by that same CLI.
+
+One process per turn is what Claude already does, and Claude is the adapter
+whose lifecycle has cost the least: its defects were about transcript
+authority and file contents, never about a session that would not open. A
+single-turn Codex would retire the durable lease, the single-writer
+constraint, thread revival, the app-server transport, and the store-authority
+question in one move, because the rollout file becomes the whole session and
+`exec resume` reads it — which the rollout experiment already proved Codex
+will reproject.
+
+What it costs is one thing, not three. Steering is not lost: `turn/steer` is
+called nowhere in this stack, and Floot's own system prompt tells the model it
+cannot steer a run. Interrupt is not lost: Claude already interrupts by
+killing the process. What remains is per-turn process startup, which Claude
+already pays.
 
 ### 3. Deploy and verify what has landed
 
@@ -2317,6 +2386,16 @@ keeps); closing it and accepting churn (worsens item 2); or leaving Codex resumi
 its own thread (inconsistent with the other two adapters). It is recorded here rather
 than chosen.
 
+**Resolved by the storage decision, 2026-09-17.** The quota is what made this
+hard: churn was only expensive because a fixed 256 MiB ceiling sat under it. The
+alignment plan below moves Codex’s state to a host bind and deletes the quota
+with the volume, so the choice collapses to the first option without its cost — a
+fresh thread per incarnation, injecting the stack’s records, and the superseded
+rollout left in place as the audit copy thread rotation was meant to keep.
+Unlinking it becomes a retention question rather than a correctness one.
+Sequenced as step 1 of that plan, because it is the behaviour that has to be
+proved before anything is reshaped around it.
+
 ### 5. Not scheduled, but named
 
 A normalized tool-call detail union, of the kind
@@ -2326,6 +2405,146 @@ tool call, which is what restoration needs; they do not describe it well enough 
 one view to render three harnesses. That is a presentation concern this design does
 not have yet, and the point at which it would be cheapest to adopt is before a second
 consumer of the records exists.
+
+## Alignment plan — 2026-09-17
+
+Two architecture reviews on the pull request argue that this design is
+"unified at its outer boundary and duplicated at its inner one", and that the
+remedy is a shared `makeHostedSessionSupervisor` with Codex brought onto it.
+The Codex lease work above ran into that argument from the other direction:
+its defect turned out to be the same one the review found in OpenCode. This
+section settles what lands before the reshape and what waits for it.
+
+### The question is not "small fix first?" — two things share that name
+
+**Lifecycle plumbing.** The lease, its release, `destroy()`'s refusal to
+remove a leased session, the once-per-incarnation recovery guard. This is
+exactly the surface `makeHostedSessionSupervisor` replaces, and the review
+demonstrated the bug class is structural rather than Codex's: OpenCode leaks a
+broker grant on the same shape of unreached cleanup. Repairing Codex's copy
+now writes code the extraction deletes, and — worse — records a structural
+defect as an adapter bug, which is how the second copy stayed broken.
+
+**Adapter behaviour.** Whether Codex restores a conversation from the stack's
+records rather than from its own store. This survives every reshape; it is
+the third leg of a tripod whose other two legs are verified on a deployment;
+and the lease blocks it only incidentally, by preventing the session from
+opening at all.
+
+So the instinct to prove the fix before reworking the format is right about
+the order and wrong about the subject. **Prove the behaviour; do not repair
+the plumbing.** The plumbing needs an unblock, not a fix, and an unblock
+should leave no code behind.
+
+### Unblock: operational, not a patch
+
+`active` is process-local. With the daemon stopped, every durable lease in
+`volumes.json` is by construction unheld — there is no process that could be
+holding one. Clearing those fields with the daemon down is precisely what a
+working release would have done, and it needs no code, no deploy, and nothing
+un-deleted after the reshape.
+
+This is a staging-host operation, recorded here because it must be repeatable
+rather than remembered: stop the daemon, clear `lease` from each session
+record, remove the named volumes once `podman ps --all --filter volume=…`
+confirms each is unreferenced, and restart. It will recur until the supervisor
+lands; recurring is acceptable, writing a throwaway repair for it is not.
+
+### The decision that gates the reshape: Codex's state volume
+
+Both reviews converge on one question, and the review asks for it to be
+settled **before** the supervisor is extracted, because it decides whether the
+supervisor's adapter spec needs a storage hook at all:
+
+> Either the XFS-quota guarantee justifies 1,280 lines that only one adapter
+> gets, or this follows the workspace volume out.
+
+Measured: 1,293 lines across `durable-volumes.js` (724), `volume-host.js`
+(230), `codex-quota-host.js` (116), `volume-registry-worker.js` (114),
+`host-volume-provider.js` (78) and `volume-limits.js` (31), against
+`session-state-storage.js` (268) which serves both other adapters.
+
+**Decided: Codex's `/codex-home` follows the workspace volume out, and becomes
+a host bind through the shared `session-state-storage.js`.** Four reasons, in
+descending order of weight:
+
+1. **It deletes the lease rather than repairing it.** The lease exists to
+   exclude a second writer from a podman volume. A per-session host directory
+   under the shared provider has the same exclusion property by construction —
+   it is what Claude and OpenCode already rely on — and with it go the release
+   path, the recovery guard, `destroy()`'s refusal, and the project-ID leak.
+2. **It makes the supervisor's adapter spec storage-free.** All three adapters
+   then acquire state the same way, so the extraction has one storage path to
+   express instead of two, and Codex stops being the reason the abstraction
+   needs an escape hatch.
+3. **It makes the rollout fallback cheap.** Writing Codex's rollout before
+   boot — proven to work, and recorded above as a fallback rather than a plan —
+   currently means writing inside a podman volume. Against a host bind it is
+   an ordinary file write beside the one Claude's transcript writer already
+   does. The `inject_items` dependency stops being a single point of failure.
+4. **The quota it gives up was never a fleet guarantee.** `stateBytes` caps
+   one adapter's state at 256 MiB while Claude's and OpenCode's are uncapped.
+   A cap worth having is worth having on all three, which makes it a feature
+   of the shared storage provider — a much better place for it, and a smaller
+   change than the subsystem that carries it today.
+
+What this gives up, stated plainly: a hard, kernel-enforced ceiling on Codex
+state, replaced by no ceiling until the shared provider grows one. On a
+staging host with a 4 GiB default that has never been approached, that is an
+acceptable interval. It is recorded as a follow-up, not as free.
+
+### Order
+
+Each step is gated on the one before, and each gate is an observation rather
+than a judgement.
+
+1. **Clear the leases operationally and prove Codex restores.** The existing
+   check: give a session a word, restart the daemon, ask for it back, with the
+   CLI's own store unavailable. Claude and OpenCode already answer it. This is
+   the only step whose result cannot be predicted from reading, and it is the
+   one piece of Codex work that survives the reshape intact.
+   *Gate: Codex answers, or `inject_items` is shown not to carry the history —
+   in which case step 3's rollout writer stops being a fallback and becomes
+   the mechanism.*
+
+2. **Extract `makeHostedSessionSupervisor` from Claude and OpenCode.** Two
+   adapters, one algorithm, before adding a third. The extraction's own
+   acceptance test is OpenCode's unreached `closeResources` — the supervisor is
+   correct when that hole is unrepresentable rather than fixed.
+   *Gate: both adapters pass their existing suites against the shared
+   lifecycle, and a terminate-with-live-client test asserts the grant is
+   revoked.*
+
+3. **Move Codex's state onto `session-state-storage.js`,** deleting the volume
+   subsystem and the lease with it. Now that the supervisor exists, this is
+   also what gives Codex a session plan and a scope.
+   *Gate: the registry, the quota host and the registry worker are gone, and
+   a destroyed Codex session leaves no volume and no directory.*
+
+4. **Move Codex onto the supervisor and the shared broker scopes,** retiring
+   `broker-launch.js`. The review expects this to be the hard step, because
+   `provider-broker.js` already carries a hardcoded subscription/`chatgpt.com`
+   branch — a provider concern sitting inside the shared broker, which this
+   move forces open.
+   *Gate: Phase 3's exit reads true — all three on common grants and the
+   supervisor — and revocation demonstrably stops access on all three.*
+
+5. **Collapse the mechanical leaves.** `current-specifier.js` and
+   `managed-credentials-module.js` are byte-identical across three packages;
+   `parse-rootfs.js` wants a `defaultImage` parameter; the hosted policies
+   want to export only their mounts tables. Cheap, and deliberately last: done
+   first it is churn that conflicts with every step above, done last it is a
+   tidy-up over a settled shape.
+
+### What this plan does not do
+
+It does not adopt `codex exec`. The case for it is recorded above and remains
+good — one process per turn would retire the transport, the single-writer
+constraint and thread revival together. But it is a second large change to the
+same adapter, and running it concurrently with the supervisor migration means
+neither can be blamed when something breaks. Revisit it after step 4, when
+Codex's lifecycle is shared and the only thing left that is Codex-specific is
+its transport — which is exactly the thing `exec` would replace.
 
 ## Remaining design questions
 
