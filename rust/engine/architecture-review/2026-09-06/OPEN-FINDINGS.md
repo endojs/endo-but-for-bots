@@ -1,8 +1,8 @@
-# IronHorse architecture review: findings still open at `27e637606`
+# IronHorse architecture review: findings still open
 
 The 9 findings of the 2026-09-06 review that are still open or partially open
-after the [2026-09-17 resolution passes][pass], ordered by severity, and
-within a severity: open, then partially open, then held.
+after the [2026-09-17 resolution passes][pass] and scoper traversal follow-up,
+ordered by severity, and within a severity: open, then partially open, then held.
 
 [pass]: ARCHITECTURE-REVIEW.md#2026-09-17-resolution-pass-third-against-2c69bf78d
 
@@ -66,13 +66,25 @@ an open scope and its three readers rest on token dispatch instead.
 `body_scope`'s window is now probed rather than argued —
 `tests/scoper_totality.rs` drives every way to nest a declarator in a
 parameter default across all five goal modes, and none panics — which closes
-one of the nine shapes and leaves eight.
+the targeted probe work for one of the nine shapes, without proving it total.
 The panic surface is wider than those 29 in any case: `node_id` asserts in
 release mode from 39 call sites — audited, and unreachable, because the
 `u32::MAX` sentinel is only issued on identity exhaustion and `finish_tree`
 refuses such a tree at the parse exit; a scanner now holds the exit roster
 complete, since that was the one assumption a later entry point could break.
-Eight of the nine `expect`/`unwrap` shapes remain.
+The `scope_of` lookup now has a targeted traversal suite too.
+Each legal fixture must compile end to end across its applicable goals, so an
+earlier rejection cannot silently remove its scope traversal from the audit.
+The roster covers computed keys, heritage, instance and static fields, private
+methods and accessors, binding patterns, parameter defaults, templates, spreads,
+optional chains, loops, catches and module exports.
+Omitting hoisting of a computed field key, a field initializer value or a private
+method makes the suite fail at `scope_of`; all three mutations were checked.
+Two of the nine shapes now have targeted probe suites; seven still need their
+own audit: `scope`, `function_scope`, the two declare-index pairs, the two
+field-scope hoists and the catch statement scope.
+The traversal roster is evidence for parser-produced trees, not a proof that
+`scope_of`'s panic is unreachable for every source or every externally constructed AST.
 The bookkeeping `expect`s and the audit's non-reproducible negative over
 generated sources are the rest.
 
