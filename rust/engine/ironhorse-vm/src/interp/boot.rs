@@ -96,6 +96,9 @@ impl Interp {
         // which is why minting these when a guest calls `lockdown()` made the
         // machine unsnapshottable.
         interp.create_locked_down_constructors();
+        interp.lockdown_complete = interp
+            .slots
+            .alloc(Slot::of(Kind::Boolean, Payload::Boolean(false)));
         interp.boot_slot_count = interp.slots.capacity();
         interp
     }
@@ -213,6 +216,7 @@ impl Interp {
             )
             .as_bytes(),
         );
+        term(format!("lockdown_complete={:?}", self.lockdown_complete).as_bytes());
         term(format!("object_proto={:?}", self.object_proto).as_bytes());
         term(format!("function_proto={:?}", self.function_proto).as_bytes());
         term(format!("array_proto={:?}", self.array_proto).as_bytes());
@@ -455,11 +459,13 @@ impl Interp {
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
                 Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
                 Native::Eval => unreachable!("eval is not a constructor-loop entry"),
-                // `lockdown()` mints these one at a time and gives each its own
-                // `prototype` (`Interp::do_lockdown`); none is ever an
-                // `intrinsics()` entry, so this loop never sees one.
+                // These are minted after `create_intrinsics`, then receive
+                // their `prototype` when lockdown wires them. They are not
+                // `intrinsics()` entries, so this loop never sees one.
                 Native::LockedDownConstructor => {
-                    unreachable!("the locked-down constructor is minted by lockdown(), not at boot")
+                    unreachable!(
+                        "locked-down constructors are minted separately after create_intrinsics"
+                    )
                 }
                 // `%GeneratorFunction%` / `%AsyncFunction%` /
                 // `%AsyncGeneratorFunction%` are non-global and created

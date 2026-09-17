@@ -34,6 +34,8 @@ use crate::value::{Kind, Payload, Slot};
 pub struct Intrinsics {
     pub(crate) roots: Vec<crate::SlotIndex>,
     pub(crate) locked_down: std::cell::Cell<bool>,
+    /// A transient guard: no quiescent snapshot can contain an active lockdown.
+    pub(crate) locking_down: std::cell::Cell<bool>,
 }
 
 impl Intrinsics {

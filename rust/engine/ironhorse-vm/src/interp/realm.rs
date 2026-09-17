@@ -1,6 +1,24 @@
 //! The single Realm and the machine's compartment environments.
 use super::*;
 
+/// Release the in-progress latch on success, refusal, or host unwinding.
+struct LockdownGuard(std::rc::Rc<crate::Intrinsics>);
+
+impl LockdownGuard {
+    fn enter(intrinsics: &std::rc::Rc<crate::Intrinsics>) -> Option<Self> {
+        if intrinsics.locking_down.replace(true) {
+            return None;
+        }
+        Some(Self(intrinsics.clone()))
+    }
+}
+
+impl Drop for LockdownGuard {
+    fn drop(&mut self) {
+        self.0.locking_down.set(false);
+    }
+}
+
 /// The machine's single Realm: shared primordials and its default environment.
 /// The default environment is also the start compartment's environment.
 pub struct Realm {
@@ -136,6 +154,8 @@ impl Interp {
         if self.realm.intrinsics().locked_down.get() {
             return Ok(());
         }
+        let _guard =
+            LockdownGuard::enter(self.realm.intrinsics()).ok_or(crate::Halt::MachineBusy)?;
         // Step 2 before step 5, the same order and the same operation the guest
         // `lockdown()` performs -- a graph hardened WITHOUT it still hands
         // `({}).constructor.constructor` the real evaluator. See
@@ -145,21 +165,19 @@ impl Interp {
         // the root enumeration `new_shared_realm_machine_configured` took at
         // construction already contains them.
         //
-        // If step 5 then refuses, this leaves the realm with poisoned
-        // constructors and `locked_down` false. That is the safe side of a
-        // failure that is already not atomic: the reach is shut either way.
+        // If step 5 refuses, `locked_down` stays false. A proxy may already
+        // have changed the graph, so a failed realm must be discarded.
         let minted = self.poison_function_constructors();
         let roots = self.realm.intrinsics().roots.clone();
         for root in roots {
             // Unlike the construction-time freeze this can legitimately fail:
             // the graph has been reachable by a guest, which may have made an
             // intrinsic non-extensible or installed a Proxy that refuses the
-            // definition. `do_harden` rolls its own worklist back on the way
-            // out, so no SINGLE root is left partly frozen -- but the roots
-            // are hardened one at a time, so a refusal at root `k` returns
-            // with roots `0..k` already transitively frozen and `locked_down`
-            // still false. Calling again does not fix that -- see the
-            // retraction above.
+            // definition. `do_harden` clears its temporary traversal marks on
+            // failure; it cannot undo property freezes already performed.
+            // Earlier roots and part of this root's graph may remain frozen
+            // while `locked_down` is still false. Calling again does not fix
+            // that -- see the retraction above.
             self.do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
                 .map_err(|step| match step {
                     Step::Host(halt) => halt,
@@ -170,7 +188,7 @@ impl Interp {
         // run and put the real evaluator back -- see
         // [`Self::reassert_function_constructors`].
         self.reassert_function_constructors(&minted);
-        self.realm.intrinsics().locked_down.set(true);
+        self.mark_lockdown_complete();
         Ok(())
     }
 
@@ -216,6 +234,14 @@ impl Interp {
         if self.realm.intrinsics().locked_down.get() {
             return Err(self.catchable_type_error_msg("lockdown already called".into()));
         }
+        // `do_harden` marks queued objects before traversing them. A nested
+        // lockdown could skip the outer walk's unfinished roots and report
+        // success, even if the outer proxy trap subsequently refuses freezing.
+        // XS's early mxProgram flag also refuses reentry; keep our transient
+        // guard separate from the persisted successful-completion marker.
+        let Some(_guard) = LockdownGuard::enter(self.realm.intrinsics()) else {
+            return Err(self.catchable_type_error_msg("lockdown already called".into()));
+        };
 
         // **No compartment check here: neither SES nor XS has one.** An
         // earlier revision refused when
@@ -235,12 +261,10 @@ impl Interp {
         // inert constructor carries is the one the constructor it replaces
         // carried -- 1 for the function family, 7 for `Date`.
         //
-        // These are collected rather than hardened inline: they are minted
-        // AFTER the root enumeration below took its snapshot, so step 5 would
-        // not otherwise reach them, and an inert constructor left mutable
-        // would be a writable edge out of a realm that claims to be frozen.
+        // Collect the pairs for the post-harden re-assertion. Each stand-in's
+        // own surface is frozen before it becomes reachable by guest code.
         // The stand-ins are BOOT objects (`create_locked_down_constructors`),
-        // so this step allocates nothing -- which is what keeps a locked-down
+        // so this step mints no new native stand-ins -- which keeps a locked-down
         // machine snapshottable. `Interp::locked_down_constructors` has the
         // measurement.
         let minted = self.poison_function_constructors();
@@ -317,7 +341,7 @@ impl Interp {
         // Re-assert step 2 after step 5, which can have run guest code
         // through a Proxy trap -- see `reassert_function_constructors`.
         self.reassert_function_constructors(&minted);
-        self.realm.intrinsics().locked_down.set(true);
+        self.mark_lockdown_complete();
         Ok(Slot::undefined())
     }
 
@@ -344,7 +368,7 @@ impl Interp {
     /// is the right rule only because of how XS represents an accessor: there
     /// it is `slot->kind == XS_ACCESSOR_KIND` with the getter and setter IN the
     /// slot value, so `fx_lockdown_aux`'s `slot->kind = constructor->kind;
-    /// slot->value = constructor->value;` (`xsLockdown.c:65-66`) converts an
+    /// slot->value = constructor->value;` (`xsLockdown.c:68-69`) converts an
     /// accessor into a data property as a side effect of the assignment.
     /// Ironhorse keeps accessorness in the flag byte
     /// (`XS_GETTER_FLAG|XS_SETTER_FLAG`) with the callables in the `accessors`
@@ -389,7 +413,7 @@ impl Interp {
     /// evaluator through a shared prototype -- exactly the reach
     /// `CompartmentOptions::global_names` says it cannot close.
     ///
-    /// This allocates NO instances: the stand-ins are minted during boot by
+    /// The native stand-ins are minted during boot by
     /// [`Self::create_locked_down_constructors`], below `boot_slot_count`, so a
     /// machine stays snapshottable after the graph is locked down. Wiring is
     /// deliberately not boot work -- see
@@ -440,64 +464,13 @@ impl Interp {
         }
     }
 
-    /// Whether lockdown step 2 has been applied to this realm, read off the
-    /// heap rather than off a flag.
-    ///
-    /// **This is how `Intrinsics::locked_down` survives persistence.** The flag
-    /// lives on an `Rc<Realm>` beside the arena, not in it, so nothing carried
-    /// it: a restored machine answered `returned` to a second `lockdown()` where
-    /// the uninterrupted one answered `TypeError: lockdown already called`,
-    /// re-ran the whole operation, and charged the guest for it
-    /// (`lockdown_carry.rs`, which compares computrons too).
-    ///
-    /// Deriving beats carrying here, and not only because it needs no wire
-    /// format: the thing derived from is step 2's own effect, so the two cannot
-    /// drift.
-    ///
-    /// **It reads the ARENA, which is what persistence actually carries.** The
-    /// first attempt used `ctor_prototype`, which step 2 writes and boot
-    /// deliberately does not -- a perfect signal that does not survive:
-    /// `function_state_snapshot` collects its rows only for owners with
-    /// `native.is_none() && method.is_none()`, so a row keyed by a native
-    /// stand-in is filtered out on the way to the snapshot. The property slot
-    /// is not filtered: `slots` travel wholesale, boot instances included.
-    ///
-    /// So this walks each poisoned prototype's own property chain for a
-    /// reference to its stand-in. That is exactly the state step 2 installs and
-    /// [`Self::reassert_function_constructors`] re-seals, which makes the
-    /// derivation say what it means rather than stand in for it.
-    ///
-    /// A guest cannot forge it. The stand-ins are boot instances with no edge
-    /// into the object graph until step 2 wires them, so guest code has nothing
-    /// to install; and once step 2 has run, the prototypes are frozen.
-    ///
-    /// It reads `true` on one realm the flag would call `false`: step 5 refused
-    /// partway, after step 2. That realm is outside the operation's contract
-    /// either way -- the freeze is not atomic and retrying does not converge
-    /// (see [`Self::lock_down_intrinsics`]) -- and of the two answers, "already
-    /// called" is the one that does not invite the retry those docs retract.
-    pub(super) fn lockdown_step_two_applied(&self) -> bool {
-        let mut wired = 0;
-        let mut seen = 0;
-        for (prototype, inert) in self
-            .locked_down_prototypes()
-            .into_iter()
-            .map(|(prototype, _)| prototype)
-            .zip(self.locked_down_constructors.iter().copied())
-            .filter(|&(prototype, _)| prototype != crate::value::SlotIndex::NULL)
-        {
-            seen += 1;
-            let mut property = self.slots.get(prototype).next;
-            while !property.is_null() {
-                let slot = self.slots.get(property);
-                if slot.kind == Kind::Reference && slot.value == Payload::Reference(inert) {
-                    wired += 1;
-                    break;
-                }
-                property = slot.next;
-            }
-        }
-        seen > 0 && wired == seen
+    /// Record successful completion in a private boot slot as well as the
+    /// host-facing realm flag. Only the slot is carried by persistence.
+    /// Step 2's reachable constructor edges cannot establish completion:
+    /// proxy traps run before step 5 finishes and can make that step fail.
+    fn mark_lockdown_complete(&mut self) {
+        self.slots.get_mut(self.lockdown_complete).value = Payload::Boolean(true);
+        self.realm.intrinsics().locked_down.set(true);
     }
 
     pub(super) fn mint_locked_down_constructor(&mut self, arity: u32) -> crate::value::SlotIndex {
@@ -535,6 +508,18 @@ impl Interp {
             Slot::of(Kind::Reference, Payload::Reference(prototype)),
             XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
         );
+        // Freeze the stand-in's own surface before step 5 can enter guest
+        // Proxy traps. Non-extensibility alone blocks new properties and
+        // prototype changes, but still permits replacing configurable `name`
+        // and `length` with guest getters. Materialize and seal those metadata
+        // slots without traversing Function.prototype or running guest code.
+        for name in ["name", "length"] {
+            let id = self.intern_static_key_unmetered(name);
+            self.materialize_function_meta_slot(inert, id);
+            let property = self.find_property(inert, id).expect("stand-in metadata");
+            self.slots.get_mut(property).flag |= XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG;
+        }
+        self.slots.get_mut(inert).flag |= XS_DONT_PATCH_FLAG;
         // `seal = false`: step 2 preserves the property's existing
         // writable/configurable shape, so `Function.prototype.constructor`
         // becomes non-writable only when step 5 hardens it -- the order a
@@ -783,11 +768,13 @@ impl Interp {
                     .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
                     .expect("pristine intrinsic graph must admit transitive freezing");
             }
+            machine.mark_lockdown_complete();
         }
         machine.realm = std::rc::Rc::new(Realm {
             intrinsics: std::rc::Rc::new(crate::Intrinsics {
                 roots,
                 locked_down: std::cell::Cell::new(freeze),
+                locking_down: std::cell::Cell::new(false),
             }),
             default_global: machine.environment.global_obj,
         });

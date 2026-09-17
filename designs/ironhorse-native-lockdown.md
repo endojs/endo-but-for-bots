@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-16 |
-| **Updated** | 2026-09-16 |
+| **Updated** | 2026-09-17 |
 | **Author** | kumavis (prompted) |
 | **Status** | Implemented (`lockdown`); `Compartment` not started |
 | **Source** | The gap [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) sized and Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) sequenced |
@@ -16,7 +16,7 @@ Landed, within the scope boundary below.
 `fx_lockdown` steps 1, 2 and 5; `create_hardened_globals` binds it as the guest
 global `lockdown`, beside `harden` and `petrify`. `endot-ih -l` runs instead of
 refusing, and `test262:ironhorse` with it. Pinned by
-`ironhorse-vm/tests/native_lockdown.rs` (26 cases), most of which were written
+`ironhorse-vm/tests/native_lockdown.rs` (30 cases), most of which were written
 from defects adversarial review found after the first revision called this
 section "Landed".
 
@@ -72,10 +72,10 @@ The renderer divergence is pre-existing and independent of lockdown. Measured
 with a two-line case that never calls `lockdown()` — a custom-constructor
 object thrown uncaught — oracle `[object Object]`, IronHorse `Object: probe`.
 So `-l` widens the reported failure count on subtrees whose cases assert
-mutability, and every widening measured so far resolves to this one
-pre-existing renderer gap rather than to a lockdown defect. That is a claim
-about the three cases examined, not about the whole tree; the lane has not been
-swept end to end under `-l`.
+mutability.
+Those three cases resolve to the pre-existing renderer gap; that measurement
+alone does not explain failures elsewhere in the tree.
+The complete checked-in corpus sweep is recorded in § Validation below.
 
 **Independently validated by a suite that predates the work.**
 `packages/hardened262` carries `ironhorse/lockdownSloppy` and
@@ -93,11 +93,15 @@ scope boundary doing what it says"; counted from the committed baselines, the
 split is 76 under `test/Compartment`, 29 `intrinsics/*/intrinsic-metadata.js`,
 12 under `test/modules` (mostly `module-source-reflection/ses-legacy`), and 7
 others (`TextDecoder`/`TextEncoder` immutable-ArrayBuffer intersection,
-`freeze/monadic.js`, `harden/stamp.js`). The 29 metadata cases are the ones
-worth naming: they assert the shape of intrinsics this work touches rather than
-anything about `Compartment`, so they are not covered by the boundary and have
-not been diagnosed. Attributing all 124 to `Compartment` made the boundary look
-like a complete account of what is red, and it is not.
+`freeze/monadic.js`, `harden/stamp.js`). The 29 metadata outcomes are not `Compartment` failures.
+Re-running `scripts/test.js --agent ironhorse --compact test/intrinsics` shows
+that all 29 fail identically with and without native lockdown.
+Their first failing assertions cover missing `Symbol.toStringTag` properties,
+iterator and generator method names/arities, `RegExp.prototype` metadata,
+`Math.random`, and `%ThrowTypeError%`.
+They are pre-existing intrinsic-surface gaps; the native inert-stand-in cases
+pass separately.
+Attributing all 124 failures to `Compartment` hid that distinction.
 `test/intrinsics/AsyncFunction/inert-stand-in.js` is the one to read: written
 against SES's semantics, it asserts `Object.isFrozen(AsyncFunction)` and that
 the stand-in throws on call **and** on construct. That is why the inert
@@ -114,8 +118,8 @@ The decisions that gated the work are answered in § Decisions, as taken.
 
 Give IronHorse a guest-callable `lockdown()` that does what
 `c/moddable/xs/sources/xsLockdown.c`'s `fx_lockdown` does — rewire the
-function-family constructors to inert stand-ins, attenuate the ambient
-authority `Date` and `Math` carry, then transitively harden the intrinsics —
+function-family and Date prototype constructors to inert stand-ins, then
+transitively harden the intrinsics within the scope boundary below —
 so that the engine reaches a hardened realm on its own rather than only by
 evaluating ~1 MB of SES shim.
 
@@ -176,9 +180,9 @@ first commit.
 else, and its own doc comment says so.
 Measured: under `global_names: Some(vec![])` a guest still evaluates
 `({}).constructor.constructor('return 1+1')()` to `2`.
-Closing that is `fx_lockdown` step 2 and nothing else, and step 2 is correct
-only *after* a guest asks for it — which is why it cannot move into machine
-construction, and why the engine has no equivalent today.
+Closing that is `fx_lockdown` step 2 and nothing else, and step 2 closes that route.
+The native operation now runs on both host lockdown paths as well as on a
+standalone interpreter's guest request.
 
 **3. The daemon's realm profile.**
 [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md)
@@ -200,7 +204,7 @@ over.
 Wrong as stated, because mutation testing refutes it: inverting steps 2 and 5
 in `do_lockdown` changes no observable behaviour and fails no test. The reason
 is `force_locked_down_constructor`, which ASSIGNS the slot rather than defining
-the property — XS's `slot->kind = constructor->kind` (`xsLockdown.c:65-66`), the
+the property — XS's `slot->kind = constructor->kind` (`xsLockdown.c:68-69`), the
 privileged write this port copies — so a frozen `Function.prototype` is no
 obstacle whenever the write happens. The direct write is the contract; the order
 is not.
@@ -248,10 +252,11 @@ freeze above is what fails instead.
 Do not re-derive it from the shared symptom; the two hosts fail the same file
 for different reasons.
 
-A native `lockdown()` escapes the shim's version of the problem only by
-ordering: it writes the constructor slots directly, before it hardens anything,
-the way `fx_lockdown_aux` does. A native `lockdown()` written the other way
-round would reproduce the bug in Rust.
+A native `lockdown()` escapes the shim's version of the problem through the
+privileged slot write in `fx_lockdown_aux`.
+That write can replace an already-frozen constructor property.
+An implementation that used ordinary property definition would reproduce the
+shim's refusal even in Rust.
 
 ## Scope boundary
 
@@ -261,7 +266,7 @@ The goal is `fx_lockdown`, minus the two steps that presuppose a guest
 | In | Out |
 |---|---|
 | step 1, idempotence | step 3, the compartment-global template |
-| step 2, constructor rewiring, for the four function-family prototypes and `Date.prototype` | step 2's sixth call, on `Compartment.prototype` |
+| step 2, constructor rewiring, for the four function-family prototypes | step 2's fifth call, on `Compartment.prototype` |
 | step 4's `Date.prototype` rewiring (which is step 2's sixth call) | step 4's actual ATTENUATION — the secured `Date`/`Math` that only a compartment global receives |
 | — | a guest `Compartment` constructor of any kind |
 | step 5, transitive harden (largely present) | `mutabilities` and the `fxVerify*` family |
@@ -275,10 +280,9 @@ guest `Compartment`, which stays a named feature skip (`"Compartment"` in
 `DEFAULT_ENDOR_SKIP_FEATURES`).
 What this work does for that lane is let it *start*.
 
-Step 4 is in scope but nearly empty, and the measurement below is why: there is
-no `Math.random` on IronHorse to attenuate.
-Keeping it in scope is a decision about where the seam goes, not an estimate of
-work — see § Decisions, as taken, item 3.
+Only step 4's Date prototype constructor rewrite is included.
+The actual Date/Math attenuation belongs to the compartment-global template and
+remains out of scope — see § Decisions, as taken, item 3.
 
 ### The start compartment and a compartment are not the same environment
 
@@ -351,10 +355,10 @@ It is called six times: `AsyncFunction.prototype`,
 `GeneratorFunction.prototype`, `Compartment.prototype` (`:94-103`), and
 `Date.prototype` (`:127`).
 
-**This is the substance of the work.** Four of those five prototypes exist on
+**This is the substance of the work.** Five of those six prototypes exist on
 IronHorse as named fields (`async_function_proto`,
-`async_generator_function_proto`, `generator_function_proto`, and the shared
-`function_proto`); `Compartment.prototype` does not and is out of scope.
+`async_generator_function_proto`, `generator_function_proto`, `function_proto`,
+and `date_proto`); `Compartment.prototype` does not and is out of scope.
 
 Two things are new:
 
@@ -369,10 +373,10 @@ Two things are new:
   `set_own_unmetered_with_flag`-shaped write, and it needs a comment saying why
   it is allowed to ignore the descriptor it is overwriting.
 
-The ordering constraint the motivating bug turned up applies here and is the
-single most important line in this document: **rewire first, harden after.**
-XS's own order is steps 2 then 5. Doing it the other way is what makes the SES
-shim fail on IronHorse today.
+The privileged write is what allows rewiring an already-frozen prototype.
+XS orders step 2 before step 5; IronHorse also reasserts the constructor edges
+following the harden walk because proxy traps can change them during that walk.
+The stand-in's own surface must be frozen before exposure in step 2.
 
 ### Step 3 — the compartment-global template
 
@@ -417,10 +421,10 @@ rollback on a mid-walk throw.
 Two adjustments the port needs, both consequences of moving the call to guest
 time:
 
-- The roots list is the arena snapshot taken at machine construction. The inert
-  constructors minted in step 2 are allocated *after* that, so they are not in
-  it and would not be hardened. Either they join the roots or step 5 hardens
-  them explicitly.
+- The roots list is the arena snapshot taken at machine construction.
+  The stand-ins are minted during boot, so they are included.
+  Step 2 freezes their own surface before exposing them; step 5 still traverses
+  them and the prototype graph.
 - XS calls the guest `harden` — the one on the global, which a guest may have
   replaced. IronHorse's `do_harden` is the engine's own. Following XS exactly
   would mean honouring a guest replacement, which is a capability question, not
@@ -484,43 +488,24 @@ Budget for that regeneration; it is not incidental.
 removed, rather than a claim to be checked by hand. Use it.
 
 **`#![forbid(unsafe_code)]`, metering, and determinism** apply as they do to
-every other native. Note that `xsLockdown.c` calls no `mxMeter`, which is why
-`do_harden`'s cost is allocation-driven rather than per-key metered; a native
-`lockdown` inherits that shape.
+every other native.
+XS's `xsLockdown.c` calls no `mxMeter`; IronHorse charges its existing harden
+traversal, including per-object and per-key work.
+Oracle value agreement is the gate, and exact computron parity is advisory.
 
-**A compartment must not perform it.**
-`lockdown` is not an XS realm intrinsic — `fxCreateMachine` never binds it, and
-`xst.c` and the oracle shim install it on the host global.
-A compartment's global in XS is built by `fx_lockdown` itself out of the
-intrinsics array (`xsLockdown.c:105-139`), which never contains the shim's
-globals, so an XS compartment cannot see `lockdown` and the question never
-arises there.
+**A shared realm must be locked down before it admits untrusted siblings.**
+Both host construction and deferred host lockdown perform steps 2 and 5.
+A guest call on that realm throws `TypeError: lockdown already called`.
+An unfrozen shared machine does not bind the native `lockdown`; the host drives
+its transition after the trusted shim or initialization code has run.
 
-**Amended after review: the check is on the call, not on the binding.**
-An earlier revision of this paragraph said "must not *see* it" and pointed at
-`global_props` and `compartment_evaluator`. Hiding the name is the weaker
-guarantee and it was the wrong one to ask for. A compartment whose creator
-endows it with a `lockdown` reference captured from the start realm walks
-straight past a hidden binding, and so does any route that is not a bare name.
-`do_lockdown` therefore refuses outright when
-`environment.global_obj != realm.global_object()`, and the binding stays
-visible exactly as `harden` and `petrify` do.
-
-This is not theoretical. Measured before the guard existed, on
-`Machine::unfrozen_with_start_global_names(None)` with two compartments:
-compartment A calls `lockdown()` and it returns `undefined`; compartment B,
-which read `false | false | false` moments earlier, then reads
-`Object.isFrozen(Object.prototype) = true`,
-`Object.isFrozen(Function.prototype) = true` and
-`Function.prototype.constructor !== Function`. One guest hardened the realm for
-every sibling. `a_compartment_cannot_lock_down_the_shared_realm` is the
-regression test.
-
-Note that `Machine::unfrozen_with_start_global_names` already documents this
-window as caller-owned — "lock down before admitting a second compartment" —
-so the measured scenario is also a caller violating a stated precondition. The
-guard means the precondition is no longer the only thing standing between two
-compartments and a shared-realm mutation.
+An earlier ambient-environment guard was removed: promise jobs can change the
+current environment, so it did not enforce the intended policy.
+The native operation now relies on shared-realm initialization, completed-call
+idempotence, and an in-progress guard that rejects calls from proxy traps during
+the harden walk.
+The guard is transient; the private completion marker is written only after the
+entire operation succeeds and is the state carried across persistence.
 
 ## Decisions, as taken
 
@@ -686,8 +671,8 @@ XS's step 5 hardens two enumerated intrinsic ranges plus exactly two
 non-intrinsics — `harden` and `lockdown` itself. `petrify` is not in the list.
 The three dynamic-function constructors fall outside both ranges
 (`XS_INTRINSICS_COUNT == _AsyncFunction`), and `%GeneratorFunction%` is never
-stored in an intrinsic slot at all; after step 2 the only edge to them is the
-inert stand-in, so the transitive walk never reaches them either. IronHorse
+stored in an intrinsic slot at all; step 2 replaces the prototype back-references with inert stand-ins, so those
+edges no longer lead to the original evaluators. IronHorse
 derives its roots from `boot_slot_count`, which contains all four.
 
 **This is a divergence, not a free bonus, and § Step 5's "IronHorse already
@@ -708,9 +693,11 @@ a conformance digit.
 | 5 | step 5 refusing partway | a catchable exception; the guest continues | `Halt::Refused("lockdown:intrinsic-graph")`, which unwinds the run |
 
 `fx_lockdown`'s harden calls are a straight-line sequence with no rollback, so
-a refusal at root `k` leaves `0..k` frozen while the realm still reports itself
-unlocked — and XS lets the guest catch that and carry on. IronHorse reproduces
-the state but not the recovery: the refusal is uncatchable.
+a refusal at root `k` leaves earlier roots frozen.
+XS lets the guest catch that exception and carry on, but its flag was already set
+at entry (`xsLockdown.c:92`), so another call reports "lockdown already called".
+IronHorse instead leaves its successful-completion marker false and makes the
+refusal uncatchable; a false marker does not mean the realm is still mutable.
 
 Two reasons, and the second is the one that settles it.
 
@@ -763,7 +750,8 @@ boot's own constructor wiring reads `ctor_prototype` back to install
 `prototype.constructor`, so a stand-in visible during `create_intrinsics`
 installs lockdown's effect at boot -- and BEFORE `boot_slot_count` is fixed, so
 they persist by index like any other boot native. Step 2 then only wires, which
-is also why a failed `lockdown()` allocates nothing.
+means lockdown does not mint new native stand-ins.
+Wiring still materializes property slots and lazy prototype members.
 
 An earlier attempt minted them inside `create_intrinsics` and collided with
 three separate boot invariants; a second design added a snapshot recipe table
@@ -790,6 +778,85 @@ sets that flag unconditionally (`xsLockdown.c:61`), so no lockdown-installed
 stand-in in XS can reach the `"strict mode"` arm. The other consumer of
 `fxThrowTypeError` — `Function.prototype.caller`/`.arguments` — is the one
 IronHorse is missing.
+
+## Validation on 2026-09-17
+
+The final stand-in freeze includes `name` and `length`.
+Successful completion is carried in a private boot slot, and a separate transient
+guard rejects reentry during the harden walk.
+
+- Full engine workspace, including compile/regexp parity and store-integrity:
+  **3394 passed, 0 failed, 41 ignored**.
+- Deterministic-math VM and snapshot suites: **1654 passed, 0 failed, 33 ignored**.
+- Outer-workspace `ironhorse_store_worker` and `ironhorse_runtime_compiler`:
+  **14 passed**.
+- Both engine runs include all **30 native-lockdown** regressions, the **4
+  lockdown-carry** tests, all **14 SES boot-intrinsic** tests, and the SES prelude
+  test that pins the 7/8 result.
+  `IRONHORSE_SES_BOOT_REQUIRED`, `IRONHORSE_SES_SHIM_REQUIRED`, and
+  `IRONHORSE_SES_PRELUDE_REQUIRED` were set, so missing bundles could not silently
+  bypass the profiles.
+- Both providers' regenerated identities preserve continuation results and costs;
+  raw-lockdown restore also survives garbage collection.
+- Rustfmt and the CI-pinned Rust 1.88 Clippy gate (`--workspace --all-targets`,
+  `-D warnings`) pass.
+  Rust 1.91 Clippy also completes, with existing warnings in unchanged files.
+- The native hardened262 report matches the committed IronHorse profiles.
+  The **29 metadata failures** have identical first failures in the unlocked
+  profile; they are separate from the **54 native-lockdown successes**.
+
+The local Apple clang oracle build uses
+`CFLAGS=-fno-strict-float-cast-overflow`.
+Without that flag, XS's out-of-range double-to-integer cast while parsing numeric
+literals produced `2147483647` and twelve false corpus differences on this host.
+The failure and flag correction were reproduced on the backed-up WIP `a6b917dfb`.
+No XS source change is included.
+With the flag, `endot-ih -l --repeat 3` covers all **1712/1712** IronHorse corpus
+files with **0 failures and 0 skips**.
+
+The full workspace command was:
+
+```sh
+CFLAGS=-fno-strict-float-cast-overflow RUST_MIN_STACK=33554432 \
+IRONHORSE_SES_BOOT_REQUIRED=1 IRONHORSE_SES_SHIM_REQUIRED=1 \
+IRONHORSE_SES_PRELUDE_REQUIRED=1 \
+cargo test --locked --workspace --no-fail-fast \
+  --features ironhorse-compile/parity,ironhorse-regexp/parity,ironhorse-vm/store-integrity
+```
+
+A temporary `CARGO_TARGET_DIR`, disabled incremental compilation, and disabled
+debug symbols keep validation build outputs small; they do not change the test
+selection.
+
+The **complete checked-in test262 corpus** was also swept under `-l`:
+**39759 files**, excluding `staging` and `_FIXTURE.js` helpers, with no omitted
+strict variants.
+Every returned path was checked against the discovery manifest exactly once.
+Four workers ran 100-file batches with `--case-timeout 10`, `--json`, and
+`--update-expectations`, producing 398 reports and expectation files.
+
+| Outcome | Files |
+|---|---:|
+| Covered | 32072 |
+| Failed | 3781 |
+| Named pre-run skips | 206 |
+| Named post-run skips | 3700 |
+
+This is a completed measurement, not a green conformance claim.
+All 1712 `ironhorse/` files are covered.
+Of the failures, 2520 are thrown-value rendering differences, and seven are
+`ironhorse-hang` verdicts after the ten-second bound.
+The remaining failures include missing intrinsic surfaces, parser diagnostics,
+and strict property-assignment behavior; the full failure set has not been
+attributed case by case.
+Two completion-value differences are the pre-existing missing `caller` and
+`arguments` properties, reproduced on the same cases without `-l`.
+A separate probe without lockdown also reproduces strict indexed assignment to
+`Object.freeze(Array.prototype)`: XS throws `TypeError`, while IronHorse silently
+refuses the assignment; both retain a frozen prototype with no added property.
+Thus the earlier Boolean-only explanation does not account for the whole lane.
+The per-case report and generated expectations preserve the measured failures
+instead of treating them as passes.
 
 ## Known Gaps and TODOs
 
@@ -835,7 +902,7 @@ IronHorse is missing.
       `new_shared_realm_machine_configured`'s `freeze` arm and
       `lock_down_intrinsics` — through the same
       `poison_function_constructors` / `reassert_function_constructors` pair the
-      guest `lockdown()` uses. It allocates nothing, because the stand-ins are
+      guest `lockdown()` uses. It mints no new native stand-ins, because they are
       already boot objects; that was the prerequisite, and closing this gap
       before it would have made every `Machine` unsnapshottable.
       Now `frozen=true | lockdown=TypeError: lockdown already called |
@@ -890,33 +957,67 @@ IronHorse is missing.
       guest then re-ran the whole operation and was charged for it; `twin`
       compares computrons and measured 2610 against 2624.
 
-      Derived on restore rather than carried, which needs no wire format and
-      cannot drift from the thing it reports: `lockdown_step_two_applied` walks
-      each poisoned prototype's own property chain for a reference to its
-      stand-in, which is exactly the state step 2 installs. A guest cannot forge
-      it — the stand-ins have no edge into the object graph until step 2 wires
-      them, and afterwards the prototypes are frozen.
+      Completion now lives in a private boolean slot allocated at boot.
+      The host and guest paths set it only after step 5 and the final constructor
+      rewrite succeed; restore reads that slot to recover the realm flag.
+      It has no edge from any guest object, so guest code cannot set it.
+      The boot fingerprint includes its identity; existing snapshots are refused
+      as incompatible with the new boot layout, without changing the wire format.
 
-      **The first attempt used `ctor_prototype`** — written by step 2 and
-      deliberately not by boot, a perfect signal that does not survive:
-      `function_state_snapshot` collects its rows only for owners with
-      `native.is_none() && method.is_none()`, so a row keyed by a native
-      stand-in is filtered out. The property slot is not filtered; `slots`
-      travel wholesale, boot instances included. Worth recording because the
-      signal that is cleanest in memory is not the one that persists.
+      Two earlier derivations were insufficient.
+      `ctor_prototype` rows for native stand-ins are filtered out of persistence.
+      The replacement, `lockdown_step_two_applied`, inspected prototype property
+      chains for the stand-ins, but those references exist before step 5 finishes.
+      A proxy can refuse the harden walk, leaving those edges and an incomplete
+      lockdown behind.
+      Starting a new crank clears the halted activation, after which the public
+      interpreter API permits a snapshot.
+      Before this fix, restore answered `TypeError: lockdown already called`
+      while the uninterrupted interpreter still halted with
+      `Refused("lockdown:intrinsic-graph")` (114 versus 106 computrons).
+      The embedder should discard a failed realm, but restore must still preserve
+      its state rather than turn failure into success.
 
-      The shared-machine path was already correct for a different reason:
-      `restore_shared_machine` adopts the reference boot realm's `Rc<Realm>`,
-      which is locked down. `ironhorse-snapshot/tests/lockdown_carry.rs` covers
-      store resume (eager, lazy, checkpoint), the raw blob path, and the
-      negative — a machine that never locked down must not come back reporting
-      that it did.
-- [ ] **Sweep the `-l` lane end to end.** § Status measures `test/ironhorse`
-      (clean) and `built-ins/Boolean` (18 → 21, all three resolving to a
-      pre-existing thrown-value renderer gap). Everything between is unmeasured
-      under `-l`. The expectation-list machinery (`--expectations`,
-      `--update-expectations`) is the shape this wants, so the lane ratchets
-      instead of being re-argued.
+      `ironhorse-snapshot/tests/lockdown_carry.rs` covers successful completion
+      through eager, lazy and checkpoint store resume, raw blob restore, a never
+      locked-down machine, and the failed-lockdown case.
+      Shared-machine restore also requires a true completion marker.
+- [x] **A proxy trap could reenter lockdown before completion.**
+      `do_harden` marks queued roots before it traverses them.
+      A nested call could skip the outer walk's unfinished roots and return
+      `undefined`, even though the outer trap could still refuse the freeze.
+      An in-progress RAII guard now rejects reentry with
+      `TypeError: lockdown already called` and resets on every exit.
+      It is separate from the persisted successful-completion marker.
+      Regressions cover successful outer completion and a nested attempt followed
+      by refusal, another crank, and snapshot restore.
+- [x] **Stand-ins were guest-writable during step 5.**
+      Step 2 exposes the inert constructors before the harden walk enters guest
+      proxy traps.
+      A trap could add a getter that step 5 then froze into the shared graph.
+      In the deferred host path, compartment B invoked compartment A's getter
+      after `Machine::lock_down()` returned successfully.
+      Making the stand-ins non-extensible blocked added properties and prototype
+      changes, but left their existing `name` and `length` configurable.
+      A regression against that intermediate fix measured
+      `true:guest channel` after replacing `name` with a getter.
+
+      `wire_locked_down_constructor` now materializes and freezes `name` and
+      `length`, installs the immutable `prototype`, and prevents extensions
+      before publishing `prototype.constructor`.
+      This touches only the stand-in's own surface and runs no guest code.
+      It matches XS's inherited protection: `xsGlobal.c:160-168` makes
+      `%ThrowTypeError%` non-extensible and seals its properties;
+      `fxDuplicateInstance` (`xsType.c:104-118`) copies those flags.
+      Native regressions cover added properties, metadata replacement, prototype
+      changes and the cross-compartment channel.
+- [x] **Sweep the `-l` lane end to end.**
+      § Validation records all 39759 checked-in corpus files, including the
+      3781 failures and 3906 named skips.
+      The 398 batches each produced a per-case JSON report and parameterized
+      expectation file; the aggregate has exact manifest coverage.
+      Wider test262 conformance remains incomplete and is not claimed by this
+      native-lockdown implementation.
 - [ ] **`packages/thixotrope`'s Ironhorse worker still runs the SES shim, and
       moving it to the native `lockdown()` is blocked on the compartment
       environment — not on lockdown.** `scripts/bundle-ironhorse-worker.mjs`

@@ -3,11 +3,10 @@
 //! `packages/test262-runner` runs against `xst` and node.
 //!
 //! The axis's Ironhorse host (`scripts/run-ironhorse-host.js`) drives
-//! `endot-ih -l`, which expects an ENGINE-side `lockdown()`; Ironhorse has
-//! none, so every SES-mode case is a whole-case named pre-skip
-//! (`xst.rs`, `SesMode::unimplemented_skip`). The other two hosts instead
-//! evaluate a generated SES prelude, and `packages/test262-runner/src`
-//! now carries a third: `ironhorse-prelude.js`.
+//! `endot-ih -l`, which runs the engine's native `lockdown()`. The other
+//! two hosts instead evaluate a generated SES prelude, and
+//! `packages/test262-runner/src` carries a third: `ironhorse-prelude.js`.
+//! This suite measures that shim path independently of native lockdown.
 //!
 //! This measures that route. It is not the axis itself — wiring the prelude
 //! into `endot-ih` is the follow-up — but it pins how much the shim reaches

@@ -96,17 +96,29 @@ impl RestoreSession {
                 reason: "restored machine is not quiescent",
             });
         }
-        // `Intrinsics::locked_down` is not a persisted row: it lives on the
-        // `Rc<Realm>` beside the arena. A shared machine gets it back by
-        // adopting the reference boot realm above (`restore_shared_machine`),
-        // which is already locked down; a standalone `Interp` had nothing to
-        // adopt and came back reporting `false` on a realm that had run
-        // `lockdown()`. Derive it from the heap instead -- see
-        // `Interp::lockdown_step_two_applied`. Never clears a `true`: a shared
-        // realm's flag is the reference machine's and is not this to lower.
-        if self.interp.lockdown_step_two_applied() {
-            self.interp.realm().intrinsics().locked_down.set(true);
+        // Constructor wiring is observable before lockdown completes. Read
+        // the private completion marker, never guest-reachable graph edges.
+        let complete = self.interp.slots.get(self.interp.lockdown_complete);
+        let locked_down = match (complete.kind, complete.value) {
+            (Kind::Boolean, Payload::Boolean(value)) => value,
+            _ => {
+                return Err(RestoreError {
+                    row: "lockdown_complete",
+                    reason: "invalid completion marker",
+                })
+            }
+        };
+        if self.interp.shared_compartments && !locked_down {
+            return Err(RestoreError {
+                row: "lockdown_complete",
+                reason: "shared realm is not locked down",
+            });
         }
+        self.interp
+            .realm()
+            .intrinsics()
+            .locked_down
+            .set(locked_down);
         self.interp.migrate_restored_layout();
         if self.interp.id_space_exhausted {
             return Err(RestoreError {

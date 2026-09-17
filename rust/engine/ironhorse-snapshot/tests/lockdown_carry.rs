@@ -30,8 +30,8 @@ const SECOND_CALL: &str = "try { lockdown(); 'returned' } catch (e) { e.name + '
 /// well as values against an uninterrupted machine, so the metering divergence
 /// fails this too — and it exercises eager resume, lazy resume and checkpoint.
 ///
-/// The flag is DERIVED on restore rather than carried, from step 2's own
-/// `ctor_prototype` registration — see `Interp::lockdown_step_two_applied`.
+/// Completion is carried in a private boot slot, written only after both
+/// constructor rewiring and the transitive freeze have completed.
 #[test]
 fn the_second_call_still_throws_after_store_resume() {
     let mut memory = MemoryStore::new();
@@ -56,6 +56,9 @@ fn the_second_call_still_throws_after_a_blob_round_trip() {
     let mut machine = Interp::new();
     machine.link_intrinsics(&names);
     assert!(machine.run(&bytecode).completed);
+    machine
+        .collect_garbage()
+        .expect("collect the private marker");
 
     let bytes = machine.write_snapshot(&sig()).expect("write snapshot");
     let mut restored = from_snapshot_bytes(&bytes, &sig()).expect("restore");
@@ -91,4 +94,45 @@ fn a_machine_that_never_locked_down_restores_unlocked() {
         "false",
         "and it must have actually locked down, not merely been allowed to try"
     );
+}
+
+/// Step 2 is not evidence that the subsequent harden walk completed.
+#[test]
+fn a_failed_lockdown_does_not_restore_as_successful() {
+    for source in [
+        "Object.prototype.extra = new Proxy({}, { preventExtensions() { return false; } }); lockdown()",
+        r#"
+        var entered = false;
+        Object.prototype.extra = new Proxy({}, {
+          preventExtensions() {
+            if (!entered) {
+              entered = true;
+              try { lockdown(); } catch (e) {}
+            }
+            return false;
+          }
+        });
+        lockdown();
+        "#,
+    ] {
+        let mut machine = Interp::new();
+        let failed = crank(&mut machine, source);
+        assert!(!failed.0, "the trap must refuse lockdown: {failed:?}");
+        assert_eq!(failed.1, "Refused(\"lockdown:intrinsic-graph\")");
+        // Starting another crank abandons the halted activation. The public
+        // interpreter API permits this even though embedders should discard it.
+        assert!(crank(&mut machine, "0").0);
+        let bytes = machine.write_snapshot(&sig()).expect("write snapshot");
+        let mut restored = from_snapshot_bytes(&bytes, &sig()).expect("restore");
+        let continuous = crank(&mut machine, SECOND_CALL);
+        assert!(
+            !continuous.0,
+            "a nested call must not mark the unfinished outer walk complete: {continuous:?}"
+        );
+        assert_eq!(
+            crank(&mut restored, SECOND_CALL),
+            continuous,
+            "restore must not turn an incomplete lockdown into success"
+        );
+    }
 }

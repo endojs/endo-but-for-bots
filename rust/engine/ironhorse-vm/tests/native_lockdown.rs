@@ -47,6 +47,45 @@ function attempt(f) {
 "#;
 
 #[test]
+fn stand_in_metadata_cannot_be_replaced_during_lockdown() {
+    assert_eq!(
+        result(
+            r#"
+            var prototypes = [
+              Object.getPrototypeOf(async function() {}),
+              Object.getPrototypeOf(async function*() {}),
+              Function.prototype,
+              Object.getPrototypeOf(function*() {}),
+              Date.prototype
+            ];
+            var accepted = 0;
+            Object.prototype.extra = new Proxy({}, {
+              preventExtensions(target) {
+                prototypes.forEach(function(p) {
+                  ['name', 'length'].forEach(function(key) {
+                    var C = p.constructor;
+                    if (Reflect.defineProperty(C, key, {
+                      get() { return 'guest channel'; }
+                    })) accepted++;
+                    if (Reflect.defineProperty(C, key, {writable: true})) accepted++;
+                    if (Reflect.deleteProperty(C, key)) accepted++;
+                  });
+                });
+                return Reflect.preventExtensions(target);
+              }
+            });
+            lockdown();
+            var intact = prototypes.every(function(p, i) {
+              return p.constructor.name === '' && p.constructor.length === (i === 4 ? 7 : 1);
+            });
+            [accepted, intact].join(':');
+        "#
+        ),
+        "0:true"
+    );
+}
+
+#[test]
 fn lockdown_is_a_guest_callable_global_that_returns_undefined() {
     assert_eq!(
         result("[typeof lockdown, typeof harden, typeof petrify, String(lockdown())].join(':')"),
@@ -63,6 +102,30 @@ fn a_second_lockdown_throws_as_xs_does() {
     assert_eq!(
         result(&format!(
             "{CATCH} lockdown(); attempt(function () {{ return lockdown(); }});"
+        )),
+        "TypeError: lockdown already called"
+    );
+}
+
+#[test]
+fn a_reentrant_lockdown_is_refused_during_the_harden_walk() {
+    assert_eq!(
+        result(&format!(
+            r#"{CATCH}
+            var entered = false;
+            var nested;
+            Object.prototype.extra = new Proxy({{}}, {{
+              preventExtensions(target) {{
+                if (!entered) {{
+                  entered = true;
+                  nested = attempt(function() {{ return lockdown(); }});
+                }}
+                return Reflect.preventExtensions(target);
+              }}
+            }});
+            lockdown();
+            nested;
+            "#
         )),
         "TypeError: lockdown already called"
     );
@@ -388,6 +451,215 @@ fn a_proxy_that_deletes_the_constructor_inside_the_freeze_gets_a_sealed_one_back
         "a constructor deleted during the harden walk must come back SEALED, or \
          lockdown() reports success on a prototype it left writable"
     );
+}
+
+/// The stand-in is sealed the moment step 2 wires it, not when step 5 gets to it.
+///
+/// Between step 2 and the end of step 5 the stand-in IS
+/// `Function.prototype.constructor`, so guest code can reach it — and step 5
+/// runs guest code by construction, because `do_harden` walks every root
+/// through the MOP and each of those can enter a Proxy trap. While it was
+/// extensible in that window it was a guest-WRITABLE object that lockdown then
+/// froze shut with the guest's additions sealed inside.
+///
+/// Measured before the fix, with a trap on `Object.prototype`:
+///
+/// ```text
+/// Cextensible=true | setProtoOf=true | addOwn=1 | addOwnDefine=2
+/// keys=length,name,prototype,smuggled,smuggled2
+/// ld=returned | Cfrozen=true | leak=live guest code | getterRan=true
+/// ```
+///
+/// `lockdown()` reported success, `Object.isFrozen` agreed, and a getter the
+/// guest had planted still ran off the frozen primordial.
+/// `a_compartment_cannot_smuggle_a_channel_into_the_stand_ins` is the same
+/// defect where it actually bites.
+///
+/// **It also falsified a claim this port reasons from.** The stand-in's own
+/// keys are supposed to be exactly `length`, `name` and `prototype`, and SES's
+/// `seemsToBeLockedDown()` sixth term throws `TypeError: call: not a function`
+/// BECAUSE there is no `now` — see
+/// `the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown`,
+/// which asserts that message. A guest that planted a `now` got
+/// `Date.prototype.constructor.now()` answering whatever it liked, measured
+/// `sesGuardSixthTerm=planted`. Two tests in this file disagreed about the same
+/// object and only one of them was under attack.
+///
+/// The re-assert cannot substitute for sealing here: it restores
+/// `prototype.constructor`, not the stand-in's own surface, and by the time it
+/// runs step 5 has already frozen the additions in. Extensibility is one-way,
+/// so `wire_locked_down_constructor` sets `XS_DONT_PATCH_FLAG` at creation.
+#[test]
+fn the_inert_constructor_is_sealed_before_the_freeze_can_run_guest_code() {
+    assert_eq!(
+        result(
+            r#"
+            var log = [];
+            function t(l, f) {
+              try { log.push(l + '=' + String(f())); }
+              catch (e) { log.push(l + '=' + e.name); }
+            }
+            var fired = 0;
+            Object.prototype.extra = new Proxy({}, {
+              preventExtensions: function (target) {
+                fired++;
+                if (fired === 1) {
+                  var C = Function.prototype.constructor;
+                  // If this is still the real `Function`, step 2 has not run
+                  // and the test is measuring the wrong window.
+                  log.push('poisonedAlready=' + (C !== Function));
+                  t('extensible', function () { return Object.isExtensible(C); });
+                  t('addOwn', function () { C.smuggled = 1; return C.smuggled; });
+                  t('addOwnDefine', function () {
+                    Object.defineProperty(C, 'smuggled2', { value: 2, configurable: true });
+                    return C.smuggled2;
+                  });
+                  t('plantGetter', function () {
+                    Object.defineProperty(C, 'leak', {
+                      get: function () { return 'live guest code'; },
+                      configurable: true
+                    });
+                    return 'planted';
+                  });
+                  t('setProtoOf', function () {
+                    Object.setPrototypeOf(C, null);
+                    return Object.getPrototypeOf(C) === null;
+                  });
+                  // A sloppy-mode assignment to a non-extensible object is a
+                  // silent no-op, so `plantNow=assigned` says only that it did
+                  // not throw. `sixthTerm` below is the term that proves it
+                  // never landed.
+                  t('plantNow', function () {
+                    Date.prototype.constructor.now = function () { return 'planted'; };
+                    return 'assigned';
+                  });
+                }
+                return Reflect.preventExtensions(target);
+              }
+            });
+            var ld;
+            try { lockdown(); ld = 'returned'; }
+            catch (e) { ld = e.name + ': ' + e.message; }
+            var C = Function.prototype.constructor;
+            log.push('ld=' + ld);
+            log.push('keys=' + Object.getOwnPropertyNames(C).sort().join(','));
+            t('leak', function () { return C.leak; });
+            t('protoEdgeOk', function () { return C.prototype === Function.prototype; });
+            t('sixthTerm', function () { return Date.prototype.constructor.now(); });
+            log.join(' | ')
+        "#
+        ),
+        "poisonedAlready=true | extensible=false | addOwn=undefined | \
+         addOwnDefine=TypeError | plantGetter=TypeError | setProtoOf=TypeError | \
+         plantNow=assigned | ld=returned | keys=length,name,prototype | \
+         leak=undefined | protoEdgeOk=true | sixthTerm=TypeError",
+        "a stand-in that is extensible during the harden window is a guest-writable \
+         object that lockdown freezes the guest's additions into"
+    );
+}
+
+/// The same defect where it actually bites: a channel between two compartments
+/// of a realm that reports `is_locked_down()`.
+///
+/// This is the shape `designs/ironhorse-native-lockdown.md` recommends for the
+/// `packages/thixotrope` migration — build the machine unfrozen so a shim can
+/// repair intrinsics, let the host call `Machine::lock_down()`, then hand guest
+/// source a host-made compartment. Compartment A runs BEFORE the lockdown and
+/// plants a Proxy; the trap fires from inside `lock_down()`'s harden walk, while
+/// the stand-ins are still extensible.
+///
+/// Measured before the fix:
+///
+/// ```text
+/// lock_down=Ok(()) | frozen=true | channel=A was here |
+/// keys=channel,length,name,prototype | dateNow=A
+/// ```
+///
+/// `lock_down()` returned `Ok(())`. Compartment B, created after it and sharing
+/// the frozen intrinsic graph, read `A was here` — by INVOKING a getter closure
+/// that belongs to A. Not a data channel: a callable one, from a primordial
+/// that `Object.isFrozen` calls frozen.
+///
+/// `Machine::new()` never had this window, because step 2 runs at construction
+/// before any guest code exists. It is specific to the deferred host freeze,
+/// which is the path with compartments on both sides of it.
+#[test]
+fn a_compartment_cannot_smuggle_a_channel_into_the_stand_ins() {
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
+            machine
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                .expect("machine takes a compiler");
+            let mut a = machine.new_compartment();
+            a.set_source_compiler(std::rc::Rc::new(TestCompiler));
+            let run = |c: &ironhorse_vm::Compartment, src: &str| -> String {
+                let (code, symbols) = ironhorse_compile::compile_atoms(src).expect("compiles");
+                let out = c.evaluate_with_symbols(&code, &symbols);
+                assert!(out.completed, "{src:.40}: {:?}", out.halt);
+                out.result
+            };
+            assert_eq!(
+                run(
+                    &a,
+                    r#"
+                    Object.prototype.extra = new Proxy({}, {
+                      preventExtensions: function (target) {
+                        var C = Function.prototype.constructor;
+                        if (C !== Function) {
+                          try {
+                            Object.defineProperty(C, 'channel', {
+                              get: function () { return 'A was here'; },
+                              configurable: true
+                            });
+                          } catch (e) {}
+                          try {
+                            Object.defineProperty(C, 'name', {
+                              get: function () { return 'A was here'; }
+                            });
+                          } catch (e) {}
+                          try { Date.prototype.constructor.now = function () { return 'A'; }; }
+                          catch (e) {}
+                        }
+                        return Reflect.preventExtensions(target);
+                      }
+                    });
+                    'planted'
+                "#
+                ),
+                "planted"
+            );
+            machine.lock_down().expect("the host freeze completes");
+            let mut b = machine.new_compartment();
+            b.set_source_compiler(std::rc::Rc::new(TestCompiler));
+            assert_eq!(
+                run(
+                    &b,
+                    r#"
+                    var out = [];
+                    function t(l, f) {
+                      try { out.push(l + '=' + String(f())); }
+                      catch (e) { out.push(l + '=' + e.name); }
+                    }
+                    var C = Function.prototype.constructor;
+                    t('frozen', function () { return Object.isFrozen(Function.prototype); });
+                    t('channel', function () { return C.channel; });
+                    t('name', function () { return C.name; });
+                    t('keys', function () { return Object.getOwnPropertyNames(C).sort().join(','); });
+                    t('dateNow', function () { return Date.prototype.constructor.now(); });
+                    out.join(' | ')
+                "#
+                ),
+                "frozen=true | channel=undefined | name= | keys=length,name,prototype | \
+                 dateNow=TypeError",
+                "a compartment that ran before lock_down() must not be able to leave \
+                 anything reachable behind in the stand-ins"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

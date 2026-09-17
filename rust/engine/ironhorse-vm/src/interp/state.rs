@@ -2671,6 +2671,20 @@ pub struct Interp {
     /// what a guest can observe: they are unreferenced until step 2 wires them,
     /// and being boot instances they are already in step 5's derived root set.
     locked_down_constructors: Vec<crate::value::SlotIndex>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Private boolean slot, allocated below `boot_slot_count`. No guest
+    /// object refers to it; only successful lockdown writes true. Its index
+    /// is boot-derived and its value travels with the slot arena.
+    lockdown_complete: crate::value::SlotIndex,
     #[boot_new(std::collections::VecDeque::new())]
     #[gc_root(jobs)]
     #[quiescent(empty)]

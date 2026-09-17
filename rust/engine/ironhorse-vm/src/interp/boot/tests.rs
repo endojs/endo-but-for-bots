@@ -197,6 +197,7 @@ const FRESH_ORDER: &[&str] = &[
     "promise_guards",
     "pending_rejections",
     "locked_down_constructors",
+    "lockdown_complete",
     "promise_jobs",
     "combinators",
     "from_async",
