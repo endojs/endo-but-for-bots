@@ -16,6 +16,11 @@ Two things landed with this document.
 the default realm, closing a confinement hole a compartment could read and
 write through
 (`tests/realms.rs::every_reachable_evaluator_compiles_in_the_calling_compartment`).
+That test now runs on an UNFROZEN machine, because a `Machine::new()` performs
+lockdown at construction and its step 2 removes the prototype-chain routes
+altogether — `tests/realms.rs::a_locked_down_machine_denies_every_prototype_chain_evaluator`
+is the frozen-machine half. Un-pinning remains the right answer for every
+evaluator that stays reachable.
 
 `Machine::unfrozen_with_start_global_names` and `Machine::lock_down` separate the
 intrinsic freeze from machine construction, which is what made the two ways of
@@ -805,9 +810,12 @@ The shim is the larger one — and it is the one already running on IronHorse.
    machine construction before it can be attempted at all.~~
    Partly done, and it does not decide question 1. The guest-callable
    `lockdown()` landed with steps 1, 2 and 5
-   ([ironhorse-native-lockdown](ironhorse-native-lockdown.md)), measured to
-   agree with `fx_lockdown` across 6053 corpus files under `endot-ih -l`. What
-   remains for a native profile is `Compartment`, which is the larger half.
+   ([ironhorse-native-lockdown](ironhorse-native-lockdown.md)); the targeted
+   corpus `test/ironhorse` is 1712/1712 covered, 0 failed under `endot-ih -l`.
+   (An earlier revision of this line cited agreement across 6053 corpus files;
+   that measurement ran the corpus UNLOCKED, because the `-l` splice had no
+   caller, and is retracted in that note's § Status.) What remains for a native
+   profile is `Compartment`, which is the larger half.
 4. **Do not treat `CompartmentOptions` as SES-compatible** without walking the
    table above. Two of its hook fields are booleans.
 5. ~~**Re-word the `ironhorse-engine.md:940` bar.**~~ Done: its first clause is

@@ -317,11 +317,26 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
                 "lockdown=function harden=function Compartment=undefined frozenObjectProto=false",
                 "the engine binds its own harden and lockdown, but no Compartment"
             );
+            // **`lockdown=function` no longer discriminates, so pin identity
+            // too.** Before the engine bound a `lockdown`, that census term
+            // meant "the shim installed one". It is now `function` on both
+            // sides of the shim's evaluation and says nothing about whose it
+            // is; only `Compartment` and `frozenObjectProto` still move.
+            // Stash the engine's and compare by identity, which does move.
+            crank("globalThis.__engineLockdown = globalThis.lockdown; 0");
             assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
             assert_eq!(
                 crank(SES_CENSUS),
                 "lockdown=function harden=function Compartment=function frozenObjectProto=true",
                 "the shim must install what the engine does not, and freeze"
+            );
+            assert_eq!(
+                crank(
+                    "[globalThis.lockdown === globalThis.__engineLockdown, \
+                      globalThis.harden === globalThis.__engineLockdown].join(' ')"
+                ),
+                "false false",
+                "the shim REPLACED the engine's lockdown; a typeof census cannot see that"
             );
             // Not merely present: usable, with its own globals and its own
             // evaluator. The `__options__` sigil selects the modern
@@ -399,6 +414,20 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 crank(SES_CENSUS),
                 "lockdown=function harden=undefined Compartment=undefined \
                  frozenObjectProto=true"
+            );
+            // `lockdown=function` above is the weak term: the engine binds one
+            // on every realm, so it is `function` whether the shim ran or not.
+            // CALL it, and the message says whose it is -- the engine's refuses
+            // a machine that locked down at construction, where the shim's
+            // would have said `Already locked down ... (SES_MULTIPLE_INSTANCES)`
+            // had it installed.
+            assert_eq!(
+                crank(
+                    "try { lockdown(); 'returned' } \
+                     catch (e) { e.name + ': ' + e.message }"
+                ),
+                "TypeError: lockdown already called",
+                "the bound lockdown is the ENGINE's, and the machine already ran it"
             );
         })
         .unwrap()
