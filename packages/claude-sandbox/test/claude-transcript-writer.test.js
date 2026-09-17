@@ -160,9 +160,8 @@ test('a restored file round-trips through the reader as the records that wrote i
   // of the transcript — a `.jsonl` of the wrong thing entirely, which the CLI
   // would resume as an empty or unreadable conversation. Nothing caught it
   // because the transcript never reached the client to be written at all.
-  const { readClaudeTranscript } = await import(
-    '../src/claude-transcript-writer.js'
-  );
+  const { readClaudeTranscript } =
+    await import('../src/claude-transcript-writer.js');
   const records = harden([
     { kind: 'message', role: 'user', content: 'remember ALPENGLOW' },
     { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"a"}' },

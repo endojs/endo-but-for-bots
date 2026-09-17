@@ -84,9 +84,12 @@ test('an unverifiable volume is refused before any ownership change', async t =>
   // The label check is what establishes whose volume this is; the chown above
   // is only safe because it runs after that.
   const { volumes, calls } = podmanFixture([], '1000:1000');
-  await t.throwsAsync(() => volumes.ensure({ ...request, ownerId: 'someone-else' }), {
-    message: /ownership or backing mismatch/,
-  });
+  await t.throwsAsync(
+    () => volumes.ensure({ ...request, ownerId: 'someone-else' }),
+    {
+      message: /ownership or backing mismatch/,
+    },
+  );
   t.false(calls.some(args => args.includes('chown')));
 });
 

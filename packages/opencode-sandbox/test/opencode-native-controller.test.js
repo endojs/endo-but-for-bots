@@ -654,6 +654,36 @@ test('real eager client delegates cleanup and never starts the discarded initial
   t.is(f.scopes.size, 0);
 });
 
+test('terminating a session that has a live client revokes its grant', async t => {
+  // The grant is the only thing between a session and the operator's
+  // credential, and it no longer carries an expiry, so an unrevoked one is
+  // indefinite access. Terminate must revoke it on the ordinary path — a
+  // session that activated successfully and still holds its client.
+  //
+  // How it is revoked differs from Claude's controller, and the asymmetry
+  // reads like a bug until the makeClient call sites are compared. Here the
+  // client is constructed with `cleanupProvision: closeResources`, so the
+  // client's own terminate runs the whole release; the controller's
+  // `else await closeResources()` is therefore correct rather than a missing
+  // branch. Claude passes no cleanupProvision — its client disposes the slice
+  // and nothing else — so its controller closes unconditionally afterwards.
+  // Both end revoked; neither closes twice. This test pins the outcome so the
+  // wiring can change without the guarantee moving.
+  const f = fixture(t, { realClient: true });
+  const controller = f.makeController();
+  const text = JSON.stringify(planFor('a'));
+  await E(controller).activate(text, f.resolver);
+  t.true(f.grants.size > 0, 'an activated session holds a broker grant');
+  await E(controller).terminate(text, f.resolver);
+  t.is(f.grants.size, 0, 'the grant is revoked, not merely abandoned');
+  t.is(f.scopes.size, 0);
+  t.is(
+    f.events.filter(event => event === 'revoke sandbox-a').length,
+    1,
+    'revoked exactly once',
+  );
+});
+
 test('failed MCP startup retains cleanup before its rejection', async t => {
   const f = fixture(t);
   f.faults.mcpStart = true;

@@ -392,12 +392,6 @@ export const makeClaudeNativeController = ({
       const resume = makeResume(state.directory, {
         debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),
       });
-      let resumePriorConversation = false;
-      try {
-        resumePriorConversation = resume.detectPriorConversation();
-      } catch {
-        // The per-spawn detector decides; a failed one-shot read resumes nothing.
-      }
       client = makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
@@ -424,7 +418,6 @@ export const makeClaudeNativeController = ({
           CLAUDE_CONFIG_DIR: CONFIG_PATH,
           IS_SANDBOX: '1',
         }),
-        resumePriorConversation,
         detectPriorConversation: resume.detectPriorConversation,
         resolveResumeSessionId: resume.resolveResumeSessionId,
         describeTranscripts: resume.describeTranscripts,

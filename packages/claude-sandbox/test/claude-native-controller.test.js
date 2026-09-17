@@ -499,7 +499,11 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   t.is(client.env.IS_SANDBOX, '1');
   t.is(client.model, plan.model);
   t.is(client.systemPrompt, plan.systemPrompt);
-  t.false(client.resumePriorConversation);
+  t.is(
+    client.resumePriorConversation,
+    undefined,
+    'the controller hands the client no verdict derived from the surviving store',
+  );
   t.false(Object.hasOwn(client, 'initialPrompt'));
   t.deepEqual(
     f.events.find(event => Array.isArray(event) && event[0] === 'resume'),

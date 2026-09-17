@@ -13,10 +13,12 @@
  * Claude config dir (a dedicated per-session mount that survives daemon
  * restarts — see `claude-client-module.js`), letting a sequence of
  * `send()` calls build on each other (no long-lived stdin plumbing).
- * A client reincarnated after a restart is constructed with
- * `resumePriorConversation: true` when that config dir already holds a
- * transcript, so its very first post-restart turn resumes instead of
- * forking a fresh, context-free conversation.
+ * A client reincarnated after a restart does **not** resume that config
+ * dir. The store outlives the daemon, so it is still sitting there, but a
+ * store that survived is not the same claim as a record the stack owns:
+ * across incarnations the stack's records decide and the conversation is
+ * rebuilt from them. Within one incarnation a session resumes what it
+ * started, which is what `--continue` is for.
  *
  * `send()` returns a **buffered reply reader** immediately (consume it
  * with `makeRefIterator`): it yields the parsed stream-json events, then
@@ -211,13 +213,6 @@ const defaultStderrIterable = proc =>
  *   runs under the caller's persona/instructions in addition to Claude
  *   Code's built-in prompt. Overridable per turn via `send(prompt, {
  *   systemPrompt })`. Omitted argv when neither is set.
- * @property {boolean} [resumePriorConversation] - Seed
- *   `conversationStarted` so the very first `send()` passes `--continue`.
- *   Set by `claude-client-module.js` when a reincarnated session's
- *   persistent Claude config dir already holds a transcript, so a
- *   post-restart turn resumes the pre-restart conversation instead of
- *   starting a fresh, context-free one. Defaults to `false` (a brand-new
- *   session has nothing to resume).
  * @property {() => boolean} [detectPriorConversation] - Ground-truth
  *   check for a persisted transcript, consulted before *every* spawn
  *   (not once at construction). When provided it decides `--continue`
@@ -295,7 +290,6 @@ export const makeClaudeClient = ({
   mcpConfigPath,
   env = {},
   initialPrompt,
-  resumePriorConversation = false,
   detectPriorConversation,
   resolveResumeSessionId,
   restoreTranscript,
@@ -333,11 +327,12 @@ export const makeClaudeClient = ({
   // `--continue` resumes the most recent conversation persisted in the
   // session's Claude config dir. A brand-new session has nothing to
   // resume, so `--continue` is omitted until one prompt has been
-  // dispatched. A session reincarnated after a daemon restart, whose
-  // persistent config dir already holds a transcript, is constructed with
-  // `resumePriorConversation: true` so its first post-restart turn
-  // resumes the pre-restart conversation rather than forking a fresh one.
-  let conversationStarted = resumePriorConversation;
+  // Sends this incarnation made, and nothing else. It is deliberately not
+  // seeded from the surviving store: seeding it from a detector that reads
+  // that store makes `liveConversation` true on the first post-restart turn,
+  // which skips the restore branch below and resumes the stale store --
+  // precisely the behaviour the records exist to replace.
+  let conversationStarted = false;
   // Whether the *next* spawn should resume at all, and whether `initialPrompt`
   // has already been answered. The detector, when present, is the ground truth
   // (it reads the persisted transcript), so a turn killed before Claude
