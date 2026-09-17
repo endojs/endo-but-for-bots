@@ -245,3 +245,80 @@ fn the_roster_contains_sources_that_compile_end_to_end() {
         );
     }
 }
+
+/// `scope_of`'s cross-pass invariant: the hoist pass inserted a `node_scope`
+/// entry for every node the bind pass looks one up for (scoper.rs:2329).
+///
+/// The two passes agree by dispatch — each of the ten `scope_of` callers
+/// (`bind_program`, `bind_module`, `bind_block`, `bind_function`,
+/// `bind_catch`, `bind_for`, `bind_for_in_of`, `bind_switch`, `bind_with`,
+/// `bind_class`) is routed the same tokens as a `hoist_*` that inserts. That
+/// much is checkable by reading the two match arms, and it holds.
+///
+/// What reading them does NOT settle is asymmetric child traversal: a
+/// subtree `bind_X` descends into that `hoist_X` skips would reach
+/// `scope_of` with nothing inserted, and no dispatch table shows it. This is
+/// the `code_catch` shape exactly — two passes that must agree on a node
+/// roster — so the positions where a scope-bearing node can hide are probed.
+#[test]
+fn a_scope_bearing_node_in_every_odd_position_was_hoisted_before_it_is_bound() {
+    audit(&[
+        // Computed keys: evaluated in the enclosing scope, but attached to a
+        // class or object member the two passes walk differently.
+        "class C { [(() => { { let x; } return 0; })()]() {} }",
+        "class C { static [(() => { switch (0) { case 0: let x; } return 0; })()]() {} }",
+        "class C { [(() => { try {} catch (e) { let x; } return 0; })()]; }",
+        "class C { get [(() => { { let x; } return 'g'; })()]() {} }",
+        "({ [(() => { { let x; } return 0; })()]: 1 });",
+        // Heritage: an expression evaluated before the class scope exists.
+        "class C extends (() => { { let x; } return Object; })() {}",
+        "class C extends (function () { for (let i of []) ; return Object; })() {}",
+        // Field initializers, which hoist into a synthetic field-init scope.
+        "class C { p = (() => { { let x; } })(); }",
+        "class C { p = (() => { try {} catch (e) { let y; } })(); }",
+        "class C { #p = (() => { switch (0) { default: let w; } })(); }",
+        // Parameter defaults, one per scope-bearing token.
+        "function f(a = (() => { { let x; } })()) {}",
+        "function f(a = (() => { for (const q of []) ; })()) {}",
+        "function f(a = (() => { try {} catch ({ b }) {} })()) {}",
+        "function f(a = (() => { with ({}) { var v; } })()) {}",
+        "function f(a = (() => { switch (0) { case 0: let s; } })()) {}",
+        // Template substitutions, spreads and optional chains: expression
+        // positions whose children are easy to miss in one pass.
+        "`${(() => { { let x; } return 1; })()}`;",
+        "tag`${(() => { with ({}) { var x; } return 1; })()}`;",
+        "[...(() => { { let x; } return []; })()];",
+        "({ ...(() => { { let x; } return {}; })() });",
+        "a?.[(() => { { let x; } return 0; })()];",
+        // Generator and async bodies, and a labelled try with all three arms
+        // carrying their own block scope.
+        "(async () => { for await (const x of []) { let y; } })();",
+        "(function* () { switch (0) { case 0: let x; } })();",
+        "l: try { { let x; } } catch (e) { { let y; } } finally { { let z; } }",
+        "try { try {} finally { with ({}) { var x; } } } catch {}",
+    ]);
+}
+
+/// The same roster, pinned to reach the BACK END rather than being folded
+/// away first.
+///
+/// The parameter-default roster above learned this the hard way: most of it
+/// ends at the coder's deferred-static-block fold, which would have made it
+/// vacuous had the fold sat in the parser. These compile end to end, so the
+/// probe above is exercising both scoper passes and the coder.
+#[test]
+fn the_traversal_roster_reaches_the_back_end() {
+    for source in [
+        "class C { [(() => { { let x; } return 0; })()]() {} }",
+        "class C extends (() => { { let x; } return Object; })() {}",
+        "class C { p = (() => { try {} catch (e) { let y; } })(); }",
+        "function f(a = (() => { with ({}) { var v; } })()) {}",
+        "l: try { { let x; } } catch (e) { { let y; } } finally { { let z; } }",
+    ] {
+        assert_eq!(
+            outcome(source, Goal::Script, false),
+            Ok("compiled"),
+            "{source}"
+        );
+    }
+}
