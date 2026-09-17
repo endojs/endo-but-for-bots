@@ -34,12 +34,44 @@ import { DirectoryInterface } from './interfaces.js';
 /** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, Formula, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, EvalDeferredTaskParams, EvalFormula, StoreController } from './types.js' */
 
 // The evaluation formula is the durable identity of the attenuation. Its
-// result is a worker-hosted Far object that forwards only the readable hub
-// methods to the backing directory.
+// result is a worker-hosted exo that forwards only the readable hub methods to
+// the backing directory. The exo carries the `ReadableNameHub` interface guard
+// (help / has / list / lookup / maybeLookup), so malformed / extra / wrong-typed
+// arguments from a less-trusted holder are rejected at THIS boundary — before
+// they reach the backing directory — rather than only downstream. `harden`/`Far`
+// gives passability but no argument guard, which is why this is a guarded
+// `makeExo` and not a bare `Far`.
+//
+// The interface is reconstructed inline from `M` because the worker compartment
+// that evaluates this source is endowed with `E`, `makeExo`, and `M` (see
+// `worker.js`), but not with `@endo/platform`'s `readableNameHubMethodGuards`
+// record or `@endo/daemon`'s `ReadableNameHubInterface`. The reconstructed guard
+// mirrors `ReadableNameHubInterface` (`interfaces.js`) method-for-method. `help`
+// is a synchronous self-description of the read-only surface (the guard requires
+// a string return, and a remote forward would resolve to a promise); the four
+// read methods forward to the backing hub and keep their promise/any returns.
 export const readOnlyDirectorySource = `
+const NamePathShape = M.arrayOf(M.string());
+const NameOrPathShape = M.or(M.string(), NamePathShape);
+const ReadableNameHubInterface = M.interface('ReadableNameHub', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
+});
+const readOnlyHelp = {
+  '': 'ReadableNameHub - A read-only view of a name hub.\\n\\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\\nbacking directory; every mutator is withheld. Attenuation is shallow: looked-up\\nnested directories are returned live and writable.',
+  help: 'help(method?) -> string\\nDescribe this cap, or one of its methods.',
+  has: 'has(...path) -> Promise<boolean>\\nWhether a name or path resolves in the backing hub.',
+  list: 'list(...path) -> Promise<string[]>\\nThe names at a path in the backing hub.',
+  lookup: 'lookup(nameOrPath) -> Promise<unknown>\\nResolve a name or path to its value.',
+  maybeLookup:
+    'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\\nResolve a name or path, or undefined if absent.',
+};
 const readOnly = hub =>
-  Far('ReadableNameHub', {
-    help: (...args) => E(hub).help(...args),
+  makeExo('ReadableNameHub', ReadableNameHubInterface, {
+    help: method => readOnlyHelp[method ?? ''] ?? readOnlyHelp[''],
     has: (...path) => E(hub).has(...path),
     list: (...path) => E(hub).list(...path),
     lookup: path => E(hub).lookup(path),

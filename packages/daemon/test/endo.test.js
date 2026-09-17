@@ -1116,6 +1116,22 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
     'makeDirectory is not available on a read-only view',
   );
 
+  // Malformed arguments are rejected at THIS boundary by the ReadableNameHub
+  // interface guard (makeExo), not only downstream at the backing directory.
+  // `lookup` requires a string or string[]; a number must be refused by the
+  // guard before it forwards. This is the behavioural proof the interface
+  // guard is live on the guest-facing view.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).lookup(42),
+    { message: /ReadableNameHub/ },
+    'a wrong-typed argument is rejected at the read-only exo boundary',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).has(42),
+    { message: /ReadableNameHub/ },
+    'has rejects a non-string path segment at the exo boundary',
+  );
+
   // A live write to the backing directory is observable through the view,
   // confirming it is a live attenuation rather than a snapshot.
   await E(host).storeValue(3, 'three-src');
