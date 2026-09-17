@@ -23,7 +23,7 @@ Baseline: `1b130df7`; decision 5 updated for Phase 1G at `96db92e23`.
 | # | Decision | State | Findings |
 |---|---|---|---|
 | 1 | Realm | **Decided** 2026-09-08 — extract a `Realm` | F059, F054, F159, F144 |
-| 2 | Engine trait | **Deferred** 2026-09-08, with a stated trigger | F068, F157 |
+| 2 | Engine trait | **Reopened and part-decided** 2026-09-17 — `JsMachine` extracted; runtime selection still deferred | F068, F157 |
 | 3 | Integrity model | **Decided and implemented** before `f109e8f4` | F058, F015, F057 |
 | 4 | Determinism scope | **Implemented** 2026-09-10 — software `libm` feature after C1–C4 | F080, F081 |
 | 5 | GC schedule | **Decided** 2026-09-09 — engine-consumer policy; reclamation remains Phase 2B | F091, F010, F076, F090 |
@@ -96,6 +96,47 @@ has an xsnap analogue; `rust/endo/src/ironhorse_engine.rs` grew 331 lines. Two
 parallel types (`Machine`, `PersistentMachine`) still share nothing, and engine
 selection is still a string match in `bin/endor.rs`. If the trigger fires, expect
 the extraction to be larger than the review's "mechanical" estimate.
+
+### Reopened 2026-09-17: the trait is extracted, the selection is not
+
+**None of the three triggers fired.** This was reopened by instruction — a
+directive to resolve the review's open findings — not because the question the
+deferral turned on ("does `rust/endo` need to run on both engines, and by
+when?") acquired an answer. That is recorded here rather than left implicit,
+because a decision reversed for a reason other than its own trigger should say
+so.
+
+**What was decided.** `rust/endo/src/engine/js_machine.rs` defines
+`trait JsMachine` over three verbs — `eval`, `drain_jobs`, `collect_garbage` —
+implemented for `xsnap::Machine`, `ironhorse_engine::Machine` and
+`PersistentMachine`. The three shapes the research named are settled as it
+recommended: `Result` with the engine's own error preserved underneath rather
+than `Option`, `&mut self`, and metering left out.
+
+**What the deferral got right, and this does not overturn.** The argument was
+that "the second implementor is the one that tells you what the shape should
+be". It was: writing the impls found two things a trait written against xsnap
+alone would have asserted wrongly. IronHorse's stateless `Machine` does not
+retain globals between evaluations, so a `drain_jobs` contract stated in terms
+of a later read holds for two of the three types and not the third. And the
+stateless facade has no reachable collector, which is an explicit
+`Err(Unavailable)` rather than a method someone would have assumed.
+
+**What is still deferred.** Runtime engine selection: `Engine::Ironhorse` and
+choosing it from the spawn payload, which is F068's third clause. It needs an
+IronHorse worker that speaks the daemon's transport, and the worker protocol —
+the third trigger above — has not landed. Adding the variant without it would
+be a spawn path that fails at runtime. The `-e ironhorse` string match in
+`bin/endor.rs` stays until then.
+
+**A defect found on the way.** `xsnap::Machine::eval` documents "Returns `None`
+if the evaluation throws" and instead takes SIGSEGV: it installs no outermost
+`txJump`, so an XS throw longjmps past a frame Rust no longer owns. It had no
+caller outside `#[cfg(test)]`, which is why nothing had met it. Pinned as an
+`#[ignore]`d reproduction in `rust/endo/tests/js_machine_trait.rs`; the fix is
+a `c_setjmp` guard of the shape `fxRunPromiseJobsMetered` already uses in
+`xsnap/xsnap-platform.c`, and it is XS-glue work rather than part of this
+decision.
 
 ## 3. Integrity model — already decided, and already implemented
 

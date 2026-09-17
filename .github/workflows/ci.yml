@@ -678,7 +678,7 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler
+        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
