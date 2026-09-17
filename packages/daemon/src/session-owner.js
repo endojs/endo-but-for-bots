@@ -52,6 +52,8 @@ const OwnerInterface = M.interface('SessionOwner', {
 const ClientInterface = M.interface('SessionClient', {
   send: M.callWhen(M.string()).optional(M.record()).returns(M.any()),
   interrupt: M.callWhen().returns(M.undefined()),
+  models: M.callWhen().returns(M.array()),
+  acknowledge: M.callWhen(M.string()).returns(M.undefined()),
   status: M.callWhen().returns(M.any()),
   help: M.call().returns(M.string()),
 });
@@ -498,6 +500,20 @@ export const makeSessionOwner = ({
         const value = await target();
         assertOpen();
         return E(value).interrupt();
+      },
+      models: async () => {
+        const value = await target();
+        assertOpen();
+        const models = await E(value).models();
+        assertOpen();
+        assertCopyData(models);
+        return models;
+      },
+      acknowledge: async checkpoint => {
+        const value = await target();
+        assertOpen();
+        await E(value).acknowledge(checkpoint);
+        assertOpen();
       },
       status: async () => {
         const value = await target();

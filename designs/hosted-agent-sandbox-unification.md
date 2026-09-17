@@ -25,8 +25,19 @@ Tokyo at `87c0150c1` completed Floot tool-use turns on both adapters, preserving
 tool errors/results and replies; deletion initially needed an explicit retry.
 A disposable native probe reproduced Podman's refusal to remove a namespace owner
 before its dependent guest. Both test sessions and probe containers were cleaned up.
-The corrective two-phase fence/removal split is implemented locally and reviewed;
-its live acceptance is pending. Codex is not yet on this supervisor.
+The corrective two-phase fence/removal split landed in `fa1d91ac6` and passed
+fresh Tokyo Floot tool-use, persistence, and first-attempt deletion on both
+adapters. Both test mounts/state directories were absent after deletion, with
+no remaining container references to either session's paths.
+Codex is not yet on this supervisor.
+
+The Codex migration also requires its native model discovery and durable
+checkpoint acknowledgement to pass through the common session facade.
+Those methods now forward through the daemon owner and supervisor, with stale
+incarnation fencing and copy-only model replies at the daemon boundary.
+The supervisor drains admitted protocol calls before acknowledging native stop,
+so a pending checkpoint write cannot outlive storage removal; grant fencing and
+sandbox reaping remain independent of that drain.
 Earlier entries below record the increments that led here, not current claims
 that the now-extracted Claude/OpenCode lifecycle is still duplicated.
 
@@ -2734,7 +2745,9 @@ than a judgement.
    Explicit cleanup retry removed both sessions and all their native resources.
    The corrective split fences authority immediately and removes the provider only
    after sandbox closure. Unit regressions cover the fence and ordering; its
-   live acceptance remains pending.
+   live acceptance passed at `fa1d91ac6`: both fresh sessions completed tool use
+   and persisted replies, then deleted on the first attempt without manual repair.
+   Final package suites were hosted-agent 321, Claude 190, OpenCode 255.
 
 3. **Move Codex's state onto `session-state-storage.js`,** deleting the volume
    subsystem and the lease with it. Now that the supervisor exists, this is

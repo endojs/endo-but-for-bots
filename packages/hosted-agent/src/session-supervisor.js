@@ -11,6 +11,8 @@ const SupervisorInterface = M.interface('HostedSessionSupervisor', {
   activate: M.call(M.string(), M.remotable()).returns(M.promise()),
   send: M.call(M.string()).optional(M.record()).returns(M.promise()),
   interrupt: M.call().returns(M.promise()),
+  models: M.call().returns(M.promise()),
+  acknowledge: M.call(M.string()).returns(M.promise()),
   status: M.call().returns(M.promise()),
   terminate: M.call(M.string(), M.remotable()).returns(M.promise()),
 });
@@ -28,7 +30,9 @@ const SupervisorInterface = M.interface('HostedSessionSupervisor', {
  * @template Reply
  * @typedef {{send: (prompt: string, options?: any) => Promise<Reply>,
  *   interrupt: () => Promise<void>, status: () => Promise<any>,
- *   terminate: () => Promise<void>}} NativeClient
+ *   terminate: () => Promise<void>,
+ *   models?: () => Promise<any>,
+ *   acknowledge?: (checkpoint: string) => Promise<void>}} NativeClient
  */
 
 /**
@@ -81,6 +85,11 @@ export const makeHostedSessionSupervisor = ({
   let closing;
   /** @type {Map<ResourceRole | 'brokerFence', Resource>} */
   const resources = new Map();
+  // Protocol observations and durable checkpoint writes admitted before stop
+  // must settle before deletion can follow the native stop acknowledgement.
+  // They never delay independent authority fencing or sandbox reaping.
+  /** @type {Set<Promise<unknown>>} */
+  const protocolOperations = new Set();
   const assertOpen = () => {
     !stopping || Fail`${q(name)} native controller is stopping`;
   };
@@ -92,8 +101,13 @@ export const makeHostedSessionSupervisor = ({
       resource.flight = Promise.resolve()
         .then(async () => {
           const { value } = resource;
-          if (role === 'client') await E(value).terminate();
-          else if (role === 'brokerFence') await E(value).fence();
+          if (role === 'client') {
+            const outcomes = await Promise.allSettled([
+              E(value).terminate(),
+              Promise.allSettled([...protocolOperations]),
+            ]);
+            if (outcomes[0].status === 'rejected') throw outcomes[0].reason;
+          } else if (role === 'brokerFence') await E(value).fence();
           else if (role === 'broker') await E(value).revoke();
           else if (role === 'sandbox') await E(value).close();
           else await value.close();
@@ -134,6 +148,19 @@ export const makeHostedSessionSupervisor = ({
     return value;
   };
   const owner = harden({ own, assertOpen });
+  /**
+   * @param {'models' | 'acknowledge'} method
+   * @param {string[]} args
+   */
+  const callProtocol = (method, args) => {
+    assertOpen();
+    const client = resources.get('client')?.value;
+    client !== undefined || Fail`${q(name)} native controller is not active`;
+    // Eventual send preserves the native method's own guards and errors.
+    const result = E(client)[method](...args);
+    protocolOperations.add(result);
+    return result.finally(() => protocolOperations.delete(result));
+  };
   /**
    * @param {string} text
    * @param {any} resolver
@@ -250,6 +277,8 @@ export const makeHostedSessionSupervisor = ({
       const client = resources.get('client')?.value;
       if (client) await E(client).interrupt();
     },
+    models: () => callProtocol('models', []),
+    acknowledge: checkpoint => callProtocol('acknowledge', [checkpoint]),
     status: async () => {
       const client = resources.get('client')?.value;
       return harden({

@@ -24,6 +24,56 @@ const plan = harden({
 const resolver = Far('Resolver', {});
 const readPlan = () => plan;
 
+test('checkpoint acknowledgement drains before stop completes without delaying fencing', async t => {
+  t.timeout(3000);
+  const entered = makePromiseKit();
+  const committed = makePromiseKit();
+  const fenced = makePromiseKit();
+  const supervisor = makeHostedSessionSupervisor({
+    name: 'Test',
+    readPlan,
+    start: async (_plan, _resolver, { own }) => {
+      own(
+        'broker',
+        Far('Grant', {
+          fence: async () => fenced.resolve(undefined),
+          revoke: async () => undefined,
+        }),
+      );
+      return Far('Client', {
+        send: async () => undefined,
+        interrupt: async () => undefined,
+        status: async () => harden({}),
+        terminate: async () => undefined,
+        models: async () => harden([{ id: 'native-model' }]),
+        acknowledge: async checkpoint => {
+          t.is(checkpoint, 'checkpoint-1');
+          entered.resolve(undefined);
+          await committed.promise;
+        },
+      });
+    },
+  });
+  await E(supervisor).activate('plan', resolver);
+  t.deepEqual(await E(supervisor).models(), [{ id: 'native-model' }]);
+  const acknowledging = E(supervisor).acknowledge('checkpoint-1');
+  await entered.promise;
+  const stopping = E(supervisor).terminate('plan', resolver);
+  t.teardown(async () => {
+    committed.resolve(undefined);
+    await Promise.all([acknowledging, stopping]);
+  });
+  await fenced.promise;
+  t.like(await E(supervisor).status(), { stopped: false });
+  await t.throwsAsync(E(supervisor).acknowledge('late'), {
+    message: /stopping/,
+  });
+  await t.throwsAsync(E(supervisor).models(), { message: /stopping/ });
+  committed.resolve(undefined);
+  await Promise.all([acknowledging, stopping]);
+  t.like(await E(supervisor).status(), { stopped: true });
+});
+
 test('a hung client cannot delay revocation, sandbox closure, or MCP admission closure', async t => {
   t.timeout(3000);
   const clientStop = makePromiseKit();
