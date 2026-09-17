@@ -14,7 +14,7 @@
 FROM docker.io/oven/bun:1.3.14 AS build
 
 ARG OPENCODE_REPO=https://github.com/kumavis/opencode.git
-ARG OPENCODE_REF=build/v1.18.30-opencode-patched
+ARG OPENCODE_REF=build/v1.18.30-endo-session-import
 ARG OPENCODE_COMMIT
 
 RUN apt-get update \
@@ -31,14 +31,11 @@ RUN git clone --filter=blob:none --branch "${OPENCODE_REF}" "${OPENCODE_REPO}" .
   && if [ -n "${OPENCODE_COMMIT}" ]; then git checkout "${OPENCODE_COMMIT}"; fi \
   && git rev-parse HEAD
 
-# Changes this deployment needs that are not upstream yet. `git apply` without
-# `--3way` on purpose: a patch that no longer applies to the pinned commit
-# fails the build rather than being merged by guesswork into a CLI that then
-# behaves in some third way.
-COPY patches/ /patches/
-RUN for patch in /patches/*.patch; do \
-      echo "applying $(basename "${patch}")" && git apply --verbose "${patch}"; \
-    done
+# Nothing is patched here. Changes this deployment needs that are not upstream
+# live as commits on OPENCODE_REF in the fork above, so the commit this build
+# pins is the whole source of the CLI it produces — including them. A patch
+# applied at this point would be the one part of the image not covered by the
+# revision its tag is derived from.
 
 # --frozen-lockfile keeps the checked-in bun.lock authoritative. The build
 # also embeds a models.dev snapshot fetched at build time; pinning that fetch

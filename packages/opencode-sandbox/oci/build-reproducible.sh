@@ -27,7 +27,7 @@ fi
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 OPENCODE_REPO=${OPENCODE_REPO:-https://github.com/kumavis/opencode.git}
-OPENCODE_REF=${OPENCODE_REF:-build/v1.18.30-opencode-patched}
+OPENCODE_REF=${OPENCODE_REF:-build/v1.18.30-endo-session-import}
 OPENCODE_COMMIT=${OPENCODE_COMMIT:-}
 if [ -z "$OPENCODE_COMMIT" ] && command -v git >/dev/null 2>&1; then
   OPENCODE_COMMIT=$(git ls-remote "$OPENCODE_REPO" "$OPENCODE_REF" 2>/dev/null | cut -f1)
@@ -51,15 +51,14 @@ digest() {
 }
 
 if [ "$SOURCE" = 1 ]; then
-  # Minimal context: Containerfile.source, the fork patches, and the bridge.
-  # The CLI itself is cloned inside the build stage from
-  # OPENCODE_REPO/OPENCODE_COMMIT and patched there; see patches/README.md.
+  # Minimal context: Containerfile.source and the bridge. The CLI itself is
+  # cloned inside the build stage from OPENCODE_REPO/OPENCODE_COMMIT, which is
+  # the whole of its source — the changes this deployment needs are commits on
+  # that ref, not patches applied afterwards.
   CONTEXT=$(mktemp -d)
   trap 'rm -rf "$CONTEXT"' EXIT
   trap 'exit 130' INT TERM
   cp "$HERE/Containerfile.source" "$CONTEXT/Containerfile.source"
-  mkdir -p "$CONTEXT/patches"
-  cp "$HERE"/patches/*.patch "$CONTEXT/patches/"
   cp "$HERE/../src/opencode-bridge.mjs" "$CONTEXT/opencode-bridge.mjs"
   "$ENGINE" build --platform "$PLATFORM" --layers="$LAYERS" \
     --build-arg "OPENCODE_REPO=$OPENCODE_REPO" \

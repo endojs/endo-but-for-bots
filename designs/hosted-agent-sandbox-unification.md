@@ -1459,7 +1459,7 @@ take on its own authority.
 
    The import route is written and typechecked against the pinned fork, and
    this repo's image build applies it
-   (`packages/opencode-sandbox/oci/patches/`). A user turn is imported as a
+   (the fork ref `build/v1.18.30-endo-session-import`). A user turn is imported as a
    `synthetic` message rather than a prompt — the answer to the question this
    section previously recorded as opencode's to make. `Synthetic` has exactly
    one consumer, the projector, so it describes a turn without provoking one;
