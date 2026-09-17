@@ -2042,6 +2042,36 @@ fn closure_templates_fall_back_to_scalar_free_list_order() {
 }
 
 #[test]
+fn closure_template_gc_state_is_derived_or_boundary_empty() {
+    let source = "var factory = function (seed) { return function (value) { \
+        return seed + value; }; }; factory(40)(2)";
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+    let names = crate::parse_symbols(&symbols);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    let outcome = machine.run(&code);
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert_eq!(outcome.result, "42");
+    assert!(machine.active_closure_allocation.is_none());
+    assert!(!machine.closure_site_templates.is_empty());
+
+    let (throwaway, throwaway_symbols) = ironhorse_compile::compile_atoms(
+        "var throwaway = function (value) { return value; }; throwaway = null; 0",
+    )
+    .unwrap();
+    machine.link_intrinsics(&crate::parse_symbols(&throwaway_symbols));
+    assert!(machine.run(&throwaway).completed);
+    assert!(machine.active_closure_allocation.is_none());
+
+    machine.collect_garbage().unwrap();
+    assert!(machine.active_closure_allocation.is_none());
+    assert!(
+        machine.closure_site_templates.is_empty(),
+        "full collection drops the reference-free bytecode derivation"
+    );
+}
+
+#[test]
 fn hostile_suspend_below_run_base_fails_closed() {
     // The fuzz-ironhorse CI lane's first trophy (its first run, on
     // this seven-byte input): hostile bytecode enters an async
