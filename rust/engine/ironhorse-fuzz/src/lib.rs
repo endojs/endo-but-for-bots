@@ -2554,6 +2554,49 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `3a6aab9d9d140c2c` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189`). The 8-byte input `11 01 00 00 2c df 6d 6d` folds into
+    /// `var m = new RegExp("a*(?:a+a*|a+a*|\w+a*)(\n+a{1,3})", "s").exec("aa"); m ? m[0] : null`.
+    /// Both engines complete with `null` (the `\n+` tail cannot match "aa"); the
+    /// ONLY disagreement was the computron count (ironhorse 274 vs the XS pin 273
+    /// under the pre-`meter-v4` XS-parity regime). Root cause on that regime:
+    /// `REGEXP_CTOR_FRAME_METERING` over-charged every `new RegExp(...)` creation
+    /// by exactly 72 raw 16.16 units (180296 vs XS's true `fx_RegExp`/
+    /// `fxInitializeRegExp` frame residual of 180224) — a sub-computron residual
+    /// that tipped one computron here because the program's total straddled a
+    /// `>> 16` boundary.
+    ///
+    /// Under `meter-v4` this is NOT a finding and needs no port change: IronHorse
+    /// now pins its OWN cost table via the append-only `ironhorse-meter` release
+    /// ledger, and a cost gap versus XS is an advisory, never a conformance
+    /// failure (see `comparison::compare_observations`). Recalibrating the frame
+    /// to XS's 180224 would rewrite a pinned release digest and contradict that
+    /// decision. This test locks the observable contract that remains: the exact
+    /// finding input still completes with a `null` that agrees with the pin — the
+    /// computron gap is correctly absorbed as advisory, so the surface no longer
+    /// reports a divergence.
+    #[test]
+    // The RegExp-surface family's costs are IronHorse's own under meter-v4; a
+    // computron gap vs XS is advisory. This locks completion/result agreement.
+    fn finding_3a6aab9d9d140c2c_regexp_ctor_frame_cost_gap_is_advisory() {
+        // The exact minimized fuzz input (sha256
+        // a2a56dbe5d42cc9e08c57cd5951103f37c9c870e28687430b0f3910297534fdb).
+        let data: &[u8] = &[0x11, 0x01, 0x00, 0x00, 0x2c, 0xdf, 0x6d, 0x6d];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a `new RegExp(...).exec`
+        // whose `\n+` tail cannot match "aa" (so `.exec` is null).
+        assert!(
+            prog.contains(".exec(") && prog.contains("\\n+a{1,3}"),
+            "finding program is the RegExp.exec ctor-frame case: {}",
+            prog
+        );
+        match differential_check_meter_v4(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 3a6aab9d9d140c2c must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
