@@ -513,38 +513,51 @@ export const makeClaudeClient = ({
     if (useSystemPrompt) {
       argv.push('--append-system-prompt', String(useSystemPrompt));
     }
-    // Resume the conversation by its own id when we can read one off the
-    // persisted transcript. `--continue` asks the CLI to pick "the most recent
-    // conversation" by its own reckoning; naming the session removes that
-    // inference and fails loudly ("No conversation found with session ID")
-    // instead of silently starting a fresh, context-free one. Sessions with no
-    // persistent config dir (older ones, on the ephemeral tmpfs) have no id to
-    // read, so they keep the `--continue` behaviour.
+    // Which conversation this turn continues, and whose copy of it decides.
+    //
+    // Within one incarnation the CLI holds the live conversation: this client
+    // started it, every turn since has appended to it, and continuing it is
+    // the only correct thing to do — rewriting it underneath the model would
+    // be editing a conversation it is holding.
+    //
+    // Across incarnations the stack's records decide. The CLI's store is a
+    // host bind and outlives the daemon, so it is still sitting there after a
+    // restart and `--continue` would find it; that is exactly the behaviour
+    // this design exists to replace. A store that survives is not the same
+    // claim as a record the stack owns, and when they disagree the stack is
+    // right — it is the one that saw every turn, including the ones that
+    // failed before the CLI persisted anything.
     let resumeSessionId;
-    if (resolveResumeSessionId) {
+    const liveConversation = conversationStarted && priorConversation();
+    if (liveConversation && resolveResumeSessionId) {
+      // Name the live conversation by its id rather than asking `--continue`
+      // to pick "the most recent" by its own reckoning: naming it fails
+      // loudly instead of silently continuing a different one.
       try {
         resumeSessionId = resolveResumeSessionId();
       } catch {
         // Unreadable backing dir (transient fs race): fall back to --continue.
       }
     }
-    // Nothing of this conversation in the store: the worker is a new
-    // incarnation, so restore what the stack holds rather than start
-    // context-free. Only ever when the store is empty — a live conversation is
-    // the CLI's and is continued, never overwritten from underneath it.
-    if (
-      resumeSessionId === undefined &&
-      !priorConversation() &&
-      restoreTranscript &&
-      Array.isArray(opts.transcript) &&
-      /** @type {any[]} */ (opts.transcript).length > 0
-    ) {
-      resumeSessionId = await restoreTranscript(opts.transcript);
+    if (!liveConversation) {
+      const records = Array.isArray(opts.transcript) ? opts.transcript : [];
+      if (records.length > 0) {
+        if (!restoreTranscript) {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): this session holds ${q(records.length)} records and this incarnation cannot write them into the CLI's store, so the conversation cannot be handed over.`,
+          );
+        }
+        resumeSessionId = await restoreTranscript(records);
+        if (resumeSessionId === undefined) {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): restoring ${q(records.length)} records produced no conversation to resume.`,
+          );
+        }
+      }
     }
-    const resuming = resumeSessionId !== undefined || priorConversation();
     if (resumeSessionId !== undefined) {
       argv.push('--resume', resumeSessionId);
-    } else if (resuming) {
+    } else if (liveConversation) {
       argv.push('--continue');
     }
     if (describeTranscripts) {
@@ -554,10 +567,11 @@ export const makeClaudeClient = ({
         '[claude-sandbox] spawn',
         JSON.stringify({
           sessionId,
-          resuming,
+          liveConversation,
           resumeSessionId,
           detector: Boolean(detectPriorConversation),
           conversationStarted,
+          records: Array.isArray(opts.transcript) ? opts.transcript.length : 0,
           promptChars: String(prompt).length,
           argv: argv.filter(arg => arg !== String(prompt)),
           transcripts: describeTranscripts(),

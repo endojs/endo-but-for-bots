@@ -539,7 +539,45 @@ test('initialPrompt is skipped when a prior conversation exists', async t => {
   await drain(await client.send('next'));
   t.is(fake.spawned.length, 1);
   t.is(fake.spawned[0].argv[2], 'next');
-  t.true(fake.spawned[0].argv.includes('--continue'));
+});
+
+test('a store that outlived the daemon does not decide the conversation', async t => {
+  // The config directory is a host bind, so after a restart the CLI's own
+  // copy is still sitting there and `--continue` would find it. That is the
+  // behaviour this design replaces: a store that survives is not the same
+  // claim as a record the stack owns. With records in hand the stack's copy
+  // is written and resumed by id; with none, there is no conversation to
+  // continue and the turn starts clean rather than adopting whatever the
+  // store happens to hold.
+  const written = [];
+  const make = extra =>
+    makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        detectPriorConversation: () => true,
+        resolveResumeSessionId: () => 'stale-from-the-store',
+        restoreTranscript: async records => {
+          written.push(records.length);
+          return 'rebuilt-from-records';
+        },
+        ...extra,
+      }),
+    );
+  let fake = makeFakeSlice([[]]);
+  await drain(
+    await make({}).send('next', {
+      transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
+    }),
+  );
+  t.deepEqual(written, [1]);
+  t.true(fake.spawned[0].argv.includes('--resume'));
+  t.true(fake.spawned[0].argv.includes('rebuilt-from-records'));
+  t.false(fake.spawned[0].argv.includes('stale-from-the-store'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+
+  fake = makeFakeSlice([[]]);
+  await drain(await make({}).send('next'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.false(fake.spawned[0].argv.includes('--resume'));
 });
 
 test('initialPrompt is fired and drained at construction', async t => {
