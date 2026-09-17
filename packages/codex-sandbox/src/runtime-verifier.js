@@ -10,7 +10,7 @@ import {
   assertBrokerEndpoint,
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-} from './broker-launch.js';
+} from './app-server-transport.js';
 
 const PROBE = String.raw`
 import json,os,re,select,shutil,socket,subprocess,sys,tempfile,time

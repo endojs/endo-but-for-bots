@@ -16,13 +16,13 @@ import {
 } from '@endo/hosted-agent/workspace-projection.js';
 import { dirname } from 'node:path';
 
-import { startAppServerTransport } from './app-server-transport.js';
 import { canonicalAuditJson, makeStoredAuditJournal } from './audit-journal.js';
 import { assertProviderGrantV1 } from './codex-provider-grant.js';
 import {
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-} from './broker-launch.js';
+  startAppServerTransport,
+} from './app-server-transport.js';
 import { makeCodexClient } from './codex-client.js';
 import {
   assertHostedAgentPolicyV1,
@@ -108,7 +108,7 @@ export const makeCodexNativeController = ({
         networkNamespaceId: evidence.networkNamespaceId,
         providerOrigin: 'https://chatgpt.com',
         accountRef: plan.accountRef,
-        authMode: 'subscription',
+        authMode: 'oauth',
         networkPolicy: plan.networkPolicy,
         ...(plan.model ? { model: plan.model } : {}),
       });

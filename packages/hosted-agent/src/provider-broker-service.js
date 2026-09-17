@@ -76,6 +76,8 @@ harden(assertBrokerModels);
  * @param {any} options.secret - SecretBlob read facet
  * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['credential']} [options.credential]
  *   Optional retained host-only renewing credential; never returned to scopes.
+ * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['adaptRequest']} [options.adaptRequest]
+ *   Trusted provider translation, never returned to scopes or read from config.
  * @param {string} options.ownerId - Stable operator-owned cleanup scope
  * @param {string} options.directory - Private host directory for listener state
  * @param {string} options.imageRef - Pinned slice image ref (used for digest checks)
@@ -100,6 +102,7 @@ export const makeProviderBrokerKit = ({
   accountRef,
   secret,
   credential,
+  adaptRequest,
   ownerId,
   directory,
   imageRef,
@@ -182,6 +185,7 @@ export const makeProviderBrokerKit = ({
         runtime: listener,
         secret,
         ...(credential === undefined ? {} : { credential }),
+        ...(adaptRequest === undefined ? {} : { adaptRequest }),
         fetch: fetchAuthority,
         imageDigest,
         accountRef,
@@ -325,7 +329,7 @@ harden(makeProviderBrokerServiceKit);
  * @param {string} options.label
  * @param {(env: Record<string, string>) => Config} options.readConfig The
  *   adapter's persisted operator profile reader.
- * @param {(config: Config) => { policy: BrokerPolicy, accountRef: string }} options.makePolicy
+ * @param {(config: Config) => { policy: BrokerPolicy, accountRef: string, adaptRequest?: Parameters<typeof makeProviderBrokerGrantIssuer>[0]['adaptRequest'] }} options.makePolicy
  *   The adapter's policy for a profile.
  * @param {(config: Config, secret: any) => Parameters<typeof makeProviderBrokerGrantIssuer>[0]['credential']} [options.makeCredential]
  *   Synchronous, inert adapter credential construction, once per owned service.
@@ -348,7 +352,7 @@ export const makeOwnedProviderBrokerService = ({
    * @param {Record<string,string>} env
    */
   const makeKit = (config, secret, env) => {
-    const { policy, accountRef } = makePolicy(config);
+    const { policy, accountRef, adaptRequest } = makePolicy(config);
     // Runtime hooks are not configuration fields: the operator profile carries
     // only a boolean, and the hooks are constructed here. Without them an
     // upstream failure reaches the slice as a bare 502 and reaches the operator
@@ -372,6 +376,7 @@ export const makeOwnedProviderBrokerService = ({
       policy,
       accountRef,
       secret,
+      adaptRequest,
       ...(makeCredential === undefined
         ? {}
         : { credential: makeCredential(config, secret) }),

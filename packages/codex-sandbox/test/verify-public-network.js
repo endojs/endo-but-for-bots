@@ -14,7 +14,7 @@ import { createConnection } from 'node:net';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
-import { makeBrokerEnvironment } from '../src/broker-launch.js';
+import { makeBrokerEnvironment } from '../src/app-server-transport.js';
 
 // Explicit operator acceptance command. Uses no credentials or real provider
 // account; public HTTP(S) requests carry only a synthetic read-only test.

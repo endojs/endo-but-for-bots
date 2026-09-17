@@ -99,7 +99,7 @@ const fixture = async (
     grantId: 'grant-a',
     providerOrigin: 'https://chatgpt.com',
     accountRef: wrongAccount ? 'wrong' : 'account-a',
-    authMode: 'subscription',
+    authMode: 'oauth',
     endpoint: 'http://127.0.0.1:9000',
     modelAllowlist: ['model-a'],
   });

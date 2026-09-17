@@ -85,7 +85,7 @@ test('all Codex scopes share one host-only renewing credential and close with th
       return credential;
     },
     makeServiceKit: options => {
-      t.is(options.policy.authMode, 'subscription');
+      t.is(options.policy.authMode, 'oauth');
       t.is(options.policy.origin, 'https://chatgpt.com');
       t.is(options.credential, credential);
       return makeProviderBrokerServiceKit({
@@ -114,6 +114,19 @@ test('all Codex scopes share one host-only renewing credential and close with th
         },
         makeIssuer: input => {
           issuerCredential = input.credential;
+          t.deepEqual(
+            input.adaptRequest?.({
+              path: '/v1/responses',
+              data: { store: false, stream: true },
+            }),
+            {
+              path: '/backend-api/codex/responses',
+              headers: {
+                'chatgpt-account-id': 'account-a',
+                originator: 'codex_cli_rs',
+              },
+            },
+          );
           return /** @type {any} */ ({
             issueKit: spec => ({
               value: Promise.resolve(

@@ -9,7 +9,7 @@ import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
-import { assertBrokerRuntimeConfig } from './broker-launch.js';
+import { assertBrokerRuntimeConfig } from './app-server-transport.js';
 import { renderToolResult, toolFromItem } from './codex-protocol.js';
 
 const CodexClientInterface = M.interface('CodexClient', {

@@ -36,6 +36,8 @@ const fixture = ({
   credential,
   makePublicNetwork,
   observeNetwork,
+  adaptRequest,
+  fetch: fetchAuthority = async () => new Response('ok'),
 } = {}) => {
   let stops = 0;
   let fails = false;
@@ -87,7 +89,8 @@ const fixture = ({
         return btoa('host-secret');
       },
     }),
-    fetch: async () => new Response('ok'),
+    fetch: fetchAuthority,
+    adaptRequest,
     policy: policyOverride ?? policy,
     ...(credential === undefined ? {} : { credential }),
     ...(makePublicNetwork ? { makePublicNetwork } : {}),
@@ -114,6 +117,47 @@ const fixture = ({
     closed,
   };
 };
+
+test('issuer carries the trusted adapter only to host-side inference', async t => {
+  const calls = [];
+  const f = fixture({
+    adaptRequest: () => ({
+      path: '/provider/responses',
+      headers: { custom: 'host' },
+    }),
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return new Response('ok');
+    },
+  });
+  t.teardown(f.issuer.dispose);
+  const grant = await f.issuer(spec);
+  const attestation = await E(grant).attestation();
+  t.is(attestation.providerOrigin, spec.providerOrigin);
+  t.false(Object.hasOwn(attestation, 'adaptRequest'));
+  t.deepEqual(f.listenerLimits().allowedPaths, ['/v1/responses']);
+  await E(f.endpoint()).request(
+    harden({
+      method: 'POST',
+      path: '/v1/responses',
+      body: '{"model":"allowed"}',
+    }),
+  );
+  t.is(calls[0].url, 'https://api.example.test/provider/responses');
+  t.is(calls[0].options.headers.custom, 'host');
+  await E(grant).revoke();
+  await t.throwsAsync(
+    E(f.endpoint()).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    ),
+    { message: /inactive|disposed/ },
+  );
+  t.is(calls.length, 1);
+});
 
 test('authority fencing blocks inference without removing the namespace listener', async t => {
   const f = fixture();

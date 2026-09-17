@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { makeProviderBrokerGrant } from './provider-broker.js';
 import { makeProviderFetchTransport } from './provider-transport.js';
 
-/** @import { BrokerPolicy } from './provider-broker.js' */
+/** @import { BrokerPolicy, ProviderRequestAdapter } from './provider-broker.js' */
 
 /**
  * Host-side credential assembly. The worker receives only the bounded inference
@@ -38,6 +38,7 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and grant over it.
+ * @param {ProviderRequestAdapter} [options.adaptRequest] Trusted provider translation.
  * @param {(spec:any)=>{endpoint:any,dispose:()=>void}} [options.makePublicNetwork]
  * Host-only factory for a separately revocable public-egress capability.
  */
@@ -52,6 +53,7 @@ export const makeProviderBrokerGrantIssuer = ({
   audit,
   onDiagnostic,
   credential,
+  adaptRequest,
   makePublicNetwork,
 }) => {
   (/^sha256:[a-f0-9]{64}$/.test(imageDigest) &&
@@ -75,7 +77,7 @@ export const makeProviderBrokerGrantIssuer = ({
   // the selected account, and able to refresh. Without the second half an
   // object that cannot refresh is admitted here, reports `authMode: 'oauth'`
   // in its attestation, and only fails on the first turn.
-  if (authMode === 'oauth' || authMode === 'subscription') {
+  if (authMode === 'oauth') {
     credential !== undefined || Fail`Invalid provider grant issuer policy`;
     credential.accountRef === accountRef ||
       Fail`Invalid provider grant issuer policy`;
@@ -205,6 +207,7 @@ export const makeProviderBrokerGrantIssuer = ({
         transport: transport.transport,
         audit,
         credential,
+        adaptRequest,
       });
       if (spec.networkPolicy === 'public-internet') {
         if (!makePublicNetwork) throw Fail`Public network factory unavailable`;

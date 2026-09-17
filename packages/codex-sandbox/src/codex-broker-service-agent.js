@@ -10,6 +10,7 @@ import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { M, matches } from '@endo/patterns';
 
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
+import { makeCodexSubscriptionProfile } from './codex-subscription-profile.js';
 
 const ConfigShape = M.splitRecord(
   {
@@ -63,18 +64,7 @@ export const makeOwnedCodexBrokerService = ({
   makeOwnedProviderBrokerService({
     label: 'Codex',
     readConfig: readCodexBrokerConfig,
-    makePolicy: config => ({
-      accountRef: config.accountRef,
-      policy: harden({
-        origin: 'https://chatgpt.com',
-        authMode: 'subscription',
-        routes: [{ method: 'POST', path: '/v1/responses' }],
-        models: [...config.models],
-        maxConcurrentRequests: 4,
-        maxRequestBytes: 8n * 1024n ** 2n,
-        maxResponseBytes: 16n * 1024n ** 2n,
-      }),
-    }),
+    makePolicy: makeCodexSubscriptionProfile,
     makeCredential: (config, secret) =>
       makeCredential({
         secret,

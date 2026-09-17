@@ -6,7 +6,7 @@ import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.j
  * Validate the concrete provider grant before it enters a slice.
  *
  * @param {any} grant
- * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string, authMode?: 'api-key' | 'oauth' | 'subscription', networkPolicy?: string }} requirements
+ * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string, authMode?: 'api-key' | 'oauth', networkPolicy?: string }} requirements
  */
 export const assertProviderGrantV1 = (grant, requirements) => {
   const keys = [
@@ -53,9 +53,7 @@ export const assertProviderGrantV1 = (grant, requirements) => {
   // Authentication mode is a property of the host-held broker, never a token
   // delivered to the slice. Refuse a silent API-billing downgrade.
   if (
-    !['api-key', 'oauth', 'subscription'].includes(grant.authMode) ||
-    (grant.authMode === 'subscription' &&
-      grant.providerOrigin !== 'https://chatgpt.com') ||
+    !['api-key', 'oauth'].includes(grant.authMode) ||
     (requirements.authMode && grant.authMode !== requirements.authMode)
   ) {
     throw makeError(X`broker grant authentication mode is not supported`);

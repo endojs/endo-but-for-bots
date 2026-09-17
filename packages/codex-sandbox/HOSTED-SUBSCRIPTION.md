@@ -29,6 +29,11 @@ Do not paste credentials into chat, command arguments, repositories, or logs.
 Setup validates the format and pins the account rather than converting credentials
 on each daemon start.
 The retained broker owns refresh and compare-and-swap rotation.
+Its grant attests the shared `oauth` mechanism and the pinned ChatGPT origin and
+account; subscription routing is supplied by Codex's fixed host-side provider
+adapter, not by a special authentication mode in the shared broker.
+The adapter permits only non-stored streaming Responses requests and supplies
+the account header after guest headers have been screened.
 An access token alone is insufficient; neither access nor refresh tokens enter
 the model sandbox.
 Changing accounts requires deliberate service retirement.

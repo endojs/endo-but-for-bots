@@ -9,7 +9,7 @@ import {
   assertBrokerRuntimeConfig,
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-} from '../src/broker-launch.js';
+} from '../src/app-server-transport.js';
 
 const endpoint = 'http://127.0.0.1:23456';
 const network = harden({
