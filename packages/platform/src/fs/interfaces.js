@@ -57,27 +57,26 @@ export const readableBlobMethodGuards = harden({
 // `PassableReader` also advertises `readReturnPattern`, so it is excluded by
 // additionally requiring the *absence* of `readPattern` — the value-pattern
 // accessor a bytes reader never carries (its yields are always `Uint8Array`).
-// An `HttpResponse` (`@endo/exo-http-client`) also carries `text`/`stream`
-// (plus `json`), so the `text`+`stream` branch would admit it; but its
-// `stream()` responder takes *zero* args (no synchronize head), so
-// `iterateBytesReader` would drive it as `E(source).stream(synHead)` and die on
-// an opaque arity guard rather than the crisp shape error. It is excluded by
-// additionally requiring the *absence* of `status` — the response-code accessor
-// an `HttpResponse` carries and a readable blob never does — mirroring the
-// `!readPattern` exclusion above. A writer
+// An `HttpResponse` (`@endo/exo-http-client`) exposes its readable body under
+// `body()` — a zero-arg factory returning a `PassableBytesReader` — *not*
+// `stream`, precisely so its whole-value read surface (`text`/`json`) cannot
+// collide with this discriminator: lacking `stream`, an `HttpResponse` fails
+// the top-level `stream` check and is never mistaken for a drainable blob, with
+// no `@endo/exo-http-client`-specific clause reaching across the package
+// boundary into this predicate. A writer
 // (`writePattern`/`writeReturnPattern`, neither `text` nor a read marker) is
 // rejected by falling through both branches. `stream` alone no longer
 // discriminates: it is the generic byte-stream method shared with
-// readers/writers and `HttpResponse`, so it is always paired with a marker.
+// readers/writers, so it is always paired with a marker.
 //
-// This is the single source of truth for the discriminator (four consumers
-// spread across three packages import it); never re-inline it per consumer — a
+// This is the single source of truth for the discriminator (five consumers
+// spread across four packages import it); never re-inline it per consumer — a
 // divergent copy is exactly the wire-shape classification bug this consolidates
 // away.
 /**
  * The single exported discriminator for "this remote value is a readable blob
  * whose bytes should be materialized": true when `methodNames` carries `stream`
- * paired with a `text` whole-value read surface (and not `status`) or a
+ * paired with a `text` whole-value read surface or a
  * `getInfo`/`readReturnPattern` byte-read marker (and not `readPattern`). See
  * the block comment above for the full duck-type rationale and the values each
  * branch admits or excludes.
@@ -87,7 +86,7 @@ export const readableBlobMethodGuards = harden({
  */
 export const looksLikeReadableBlob = methodNames =>
   methodNames.includes('stream') &&
-  ((methodNames.includes('text') && !methodNames.includes('status')) ||
+  (methodNames.includes('text') ||
     (!methodNames.includes('readPattern') &&
       (methodNames.includes('getInfo') ||
         methodNames.includes('readReturnPattern'))));

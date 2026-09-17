@@ -34,7 +34,7 @@ round-trip and is **not** measured here.
 
 ## Methodology
 
-Run `node test/bytes-wire-cost.bench.js` (override `CHUNK_BYTES` / `ITER` via
+Run `node test/bytes-wire-cost.bench.js` (override `CHUNK_BYTES` / `ITERATIONS` via
 env). For each chunk size the harness reports:
 
 1. **Wire size.** A passable `byteArray` marshals as hex: two wire characters per
@@ -43,7 +43,7 @@ env). For each chunk size the harness reports:
    `4·ceil(n/3)` characters — a fixed ~1.5x ratio, computed analytically.
 2. **Freeze/thaw round-trip.** `frozenBytes()` on the send side and
    `thawedBytes()` on the receive side each copy the whole chunk. The harness
-   times `thawedBytes(frozenBytes(chunk))` over `ITER` iterations after a warm-up,
+   times `thawedBytes(frozenBytes(chunk))` over `ITERATIONS` iterations after a warm-up,
    and reports nanoseconds per round-trip and throughput.
 
 ## Results

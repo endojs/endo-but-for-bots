@@ -22,8 +22,13 @@ This is a breaking wire and API change. Byte-stream capabilities no longer
 provide the former bytes-only `streamBase64()` method. Producers and consumers
 must call `stream()` or use the `@endo/exo-stream` bytes adapters, which now
 carry passable immutable byte arrays directly (not base64 strings) and own the
-freeze/thaw boundary. `@endo/exo-http-client`'s `HttpResponse.stream()` is part
-of this break: it now emits `Uint8Array` chunks instead of base64 frames.
+freeze/thaw boundary. `@endo/exo-http-client`'s `HttpResponse` is part of this
+break: its body reader is renamed from `stream()` to `body()` and now emits
+`Uint8Array` chunks instead of base64 frames. The rename keeps the generic
+`stream()` protocol method name for byte readers/writers unambiguous — an
+`HttpResponse` is a whole-value response whose `body()` returns a
+`PassableBytesReader`, not itself a stream node — so the readable-blob
+discriminator no longer needs an `HttpResponse`-specific exclusion clause.
 
 `@endo/9p-server`, `@endo/endo-fs-asset-server`, and `@endo/endo-fs-exec` bump
 `major`: each exports an entry point whose accepted-collaborator contract broke

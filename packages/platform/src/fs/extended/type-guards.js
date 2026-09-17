@@ -400,7 +400,7 @@ harden(NodeWatcherInterface);
  * `EndoBlob` / lite `SnapshotBlob` surface, so a `BlobRef` and a daemon blob
  * are mutually interchangeable for the common read shapes. `stream`
  * stays daemon-only; the extended layer streams via `bytes()`
- * rather than the CapTP base64 pump. See
+ * rather than the daemon-side `stream` pump. See
  * designs/fs-interface-consolidation.md § C4.
  */
 export const BlobRefInterface = M.interface('BlobRef', {

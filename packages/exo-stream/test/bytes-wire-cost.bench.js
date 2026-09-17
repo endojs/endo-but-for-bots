@@ -7,7 +7,7 @@
  * deliberately does not match), so it never runs in CI. Run it directly:
  *
  *   node packages/exo-stream/test/bytes-wire-cost.bench.js
- *   CHUNK_BYTES=65536 ITER=2000 node packages/exo-stream/test/bytes-wire-cost.bench.js
+ *   CHUNK_BYTES=65536 ITERATIONS=2000 node packages/exo-stream/test/bytes-wire-cost.bench.js
  *
  * It reports two things, the pair DESIGN.md § Bytes Transport Decision and
  * BENCH.md quote:
@@ -18,12 +18,12 @@
  *     it is computed analytically rather than measured.
  *  2. Freeze/thaw round-trip time. `frozenBytes()` on send and `thawedBytes()`
  *     on receive each copy the whole chunk; this is the per-chunk CPU cost the
- *     base64 path did not pay in the same shape. Timed over ITER iterations.
+ *     base64 path did not pay in the same shape. Timed over ITERATIONS iterations.
  */
 import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 
 const CHUNK_BYTES = Number(process.env.CHUNK_BYTES || 65_536);
-const ITER = Number(process.env.ITER || 2000);
+const ITERATIONS = Number(process.env.ITERATIONS || 2000);
 const WARMUP = 50;
 
 /** @param {number} n */
@@ -53,22 +53,23 @@ const main = () => {
   for (let i = 0; i < WARMUP; i += 1) roundTrip(chunk);
 
   const t0 = process.hrtime.bigint();
-  for (let i = 0; i < ITER; i += 1) roundTrip(chunk);
+  for (let i = 0; i < ITERATIONS; i += 1) roundTrip(chunk);
   const t1 = process.hrtime.bigint();
 
-  const nsTotal = Number(t1 - t0);
-  const nsPerOp = nsTotal / ITER;
-  const mbPerSec = CHUNK_BYTES / (nsPerOp / 1e9) / (1024 * 1024);
+  const nanosecondsTotal = Number(t1 - t0);
+  const nanosecondsPerOperation = nanosecondsTotal / ITERATIONS;
+  const mebibytesPerSecond =
+    CHUNK_BYTES / (nanosecondsPerOperation / 1e9) / (1024 * 1024);
 
   console.log(`chunk bytes       : ${CHUNK_BYTES}`);
-  console.log(`iterations        : ${ITER}`);
+  console.log(`iterations        : ${ITERATIONS}`);
   console.log(
     `wire chars (hex)  : ${hex}  (direct immutable byteArray, current)`,
   );
   console.log(`wire chars (base64): ${b64}  (retired transitional)`);
   console.log(`wire ratio        : ${(hex / b64).toFixed(3)}x`);
-  console.log(`freeze+thaw / op  : ${nsPerOp.toFixed(0)} ns`);
-  console.log(`freeze+thaw thru  : ${mbPerSec.toFixed(0)} MiB/s`);
+  console.log(`freeze+thaw / op  : ${nanosecondsPerOperation.toFixed(0)} ns`);
+  console.log(`freeze+thaw thru  : ${mebibytesPerSecond.toFixed(0)} MiB/s`);
 };
 
 main();

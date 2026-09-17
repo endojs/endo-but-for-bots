@@ -64,9 +64,14 @@ const makeBrowserBlob = fileHandle =>
           if (reader) reader.releaseLock();
         }
       })();
-      const pump = makeReaderPump(bytesIterator, {
-        readPattern: M.byteArray(),
-      });
+      // No producer-side `readPattern`: `frozenBytes` above already guarantees
+      // each yielded chunk is an immutable `Uint8Array`, and the size of a
+      // chunk from a browser `ReadableStream` is engine-defined (a UA may
+      // enqueue a whole multi-megabyte file as one chunk), so a default
+      // `M.byteArray()` cap here would reject the producer's own bytes on some
+      // engines with no way for the consuming initiator to lift the bound. The
+      // initiator sets its own `byteLengthLimit` on the read side.
+      const pump = makeReaderPump(bytesIterator);
       return pump(/** @type {any} */ (synPromise));
     },
     async text() {

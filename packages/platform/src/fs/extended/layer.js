@@ -163,14 +163,14 @@ const enumerateLayerOps = async function* (layerFs) {
               p += piece.length;
             }
             // `write-bytes` ops travel across CapTP when a remote
-            // consumer drains `Layer.diff()`, and the marshal
-            // layer (a) rejects mutable typed arrays and (b) does
-            // not yet implement the `'byteArray'` (immutable
-            // ArrayBuffer) passStyle. Carry the payload as a
-            // base64-encoded string — the same encoding the
-            // bytes-stream protocol uses on the wire. `applyOp`
-            // and any consumer (e.g. the chat layer-diff viewer)
-            // decode via `decodeBase64`.
+            // consumer drains `Layer.diff()`. A `LayerOp` is a plain
+            // serializable record, so it carries its payload as a
+            // base64-encoded string field rather than as a `byteArray`
+            // value: `applyOp` and any consumer (e.g. the chat
+            // layer-diff viewer) decode via `decodeBase64`. This is the
+            // LayerOp record format, distinct from the exo-stream bytes
+            // protocol, which now hauls raw immutable `Uint8Array`
+            // byteArrays on the wire rather than base64.
             yield harden({
               kind: 'write-bytes',
               path: childPath,
@@ -245,8 +245,8 @@ const applyOp = async (target, op) => {
         const w = iterateBytesWriter(writer);
         // `op.bytesBase64` is a base64-encoded string (see
         // `enumerateLayerOps`). Decode to a `Uint8Array` for the
-        // bytes-writer, which then base64-encodes again on the
-        // wire — round-trip is fine.
+        // bytes-writer, which hauls it as an immutable byteArray on
+        // the wire.
         await w.next(decodeBase64(op.bytesBase64));
         await w.return();
       } finally {
