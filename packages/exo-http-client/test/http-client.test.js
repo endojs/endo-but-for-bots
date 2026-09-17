@@ -179,7 +179,7 @@ test('fetch returns a bounded HttpResponse for an allowed origin', async t => {
   t.is(fake.calls[0].options.method, 'POST');
 });
 
-test('stream() hauls the body as an exo-stream bytes reader, independent of text()', async t => {
+test('body() hauls the body as an exo-stream bytes reader, independent of text()', async t => {
   const body = '{"ok":true}';
   const fake = makeFakeFetch({ body });
   const { client } = makeHttpClientAndControl({
@@ -190,19 +190,19 @@ test('stream() hauls the body as an exo-stream bytes reader, independent of text
   const response = await E(client).fetch(ALLOWED_URL);
 
   // A fresh reader per call, drained back to the exact body bytes.
-  const streamed = await drainBytesReader(await E(response).stream());
+  const streamed = await drainBytesReader(await E(response).body());
   t.is(new TextDecoder().decode(streamed), body);
 
-  // stream() is re-callable and independent of text()/json(): each reader and
+  // body() is re-callable and independent of text()/json(): each reader and
   // the buffered accessors all observe the same body.
-  const streamedAgain = await drainBytesReader(await E(response).stream());
+  const streamedAgain = await drainBytesReader(await E(response).body());
   t.is(new TextDecoder().decode(streamedAgain), body);
   t.is(await E(response).text(), body);
   t.deepEqual(await E(response).json(), { ok: true });
 });
 
-test('stream() spans multiple chunks for bodies larger than the chunk size', async t => {
-  // Larger than the 16 KiB stream chunk size to force multiple frames.
+test('body() spans multiple chunks for bodies larger than the chunk size', async t => {
+  // Larger than the 16 KiB body chunk size to force multiple frames.
   const body = 'x'.repeat(40_000);
   const fake = makeFakeFetch({ body });
   const { client } = makeHttpClientAndControl({
@@ -211,13 +211,13 @@ test('stream() spans multiple chunks for bodies larger than the chunk size', asy
   });
 
   const response = await E(client).fetch(ALLOWED_URL);
-  const streamed = await drainBytesReader(await E(response).stream());
+  const streamed = await drainBytesReader(await E(response).body());
   t.is(streamed.length, 40_000);
   t.is(new TextDecoder().decode(streamed), body);
   t.false(await E(response).truncated());
 });
 
-test('stream() carries only the bounded bytes when the body is truncated', async t => {
+test('body() carries only the bounded bytes when the body is truncated', async t => {
   const fake = makeFakeFetch({ body: 'abcdefghij' });
   const { client } = makeHttpClientAndControl({
     fetch: fake.fetch,
@@ -227,7 +227,7 @@ test('stream() carries only the bounded bytes when the body is truncated', async
 
   const response = await E(client).fetch(ALLOWED_URL);
   t.true(await E(response).truncated());
-  const streamed = await drainBytesReader(await E(response).stream());
+  const streamed = await drainBytesReader(await E(response).body());
   t.is(new TextDecoder().decode(streamed), 'abc');
 });
 

@@ -52,8 +52,8 @@ Other handlers that pipeline two or three calls into one batch:
   in the same turn — one RTT instead of three.
 
 `Tread` against a file uses `OpenFile.read(offset, length)` →
-`PassableBytesReader`; bytes flow through `@endo/exo-stream`'s
-base64-on-the-wire framing (until CapTP gains native binary).
+`PassableBytesReader`; bytes flow through `@endo/exo-stream` as
+passable immutable `Uint8Array` frames (no base64 on the wire).
 Drained with `{ buffer: 2 }`: a single-frame read is _two_ nodes on
 the wire, not one — the chunk, then the terminator the producer
 emits when its iterator runs out — and `makeReaderPump` waits for a
@@ -63,15 +63,18 @@ paid on every `Tread`, since the handler always breaks out of the
 drain once it has `count` bytes. Higher values only add sync nodes
 this producer never uses.
 
-The chunk's `stringLengthLimit` is derived from the `Tread`'s own
-`count` rather than left to @endo/patterns' 100_000-character
-default — that default caps a base64 chunk at 75_000 bytes, which is
+The chunk's `byteLengthLimit` is derived from the `Tread`'s own
+`count` rather than left to @endo/patterns' 100_000-byte
+default — that default caps a chunk at 100_000 bytes, which is
 narrower than a 128 KiB `msize` promises and surfaces to the client
 as a bare `EIO`. So the negotiated `msize` (a per-mount option on
 [`mount-caplet.js`](./mount-caplet.js)) is what governs I/O size.
-`Twrite` has no equivalent limit to work around: the responder builds
-its pump without a `writePattern`, so a write chunk is never
-length-validated.
+`Twrite` needs no `byteLengthLimit` clamp to work around: the writer
+pump's `byteLengthLimit` defaults to unbounded
+(`Number.MAX_SAFE_INTEGER`), so a write frame is never *size*-rejected
+by a too-narrow default the way a `Tread` chunk would be. The responder
+still validates each frame's *kind* against `M.byteArray()` — a
+non-bytes producer is rejected — it just does not bound the size.
 
 `Treaddir` drains a `Directory.list()` `Cursor` once per fid
 into a per-fid buffer that's paginated against the kernel's 9P

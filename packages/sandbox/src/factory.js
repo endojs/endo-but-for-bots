@@ -234,9 +234,9 @@ harden(raceDelay);
  * Wrap driver-side stdin write closures as the `PassableBytesWriter` that
  * `ProcessHandle.stdin()` hands out: the same exo-stream plumbing as the
  * stdout and stderr readers, driven by `iterateBytesWriter` with the bytes
- * crossing CapTP base64-encoded. A writer that took chunks directly could not
- * be used at all: a mutable `Uint8Array` is not passable, so its own guard
- * refused every write.
+ * crossing CapTP as passable immutable byte arrays. A writer that took the
+ * caller's chunks directly could not be used across a vat boundary: a mutable
+ * `Uint8Array` is not passable, so its own guard refused every write.
  *
  * The driver exposes `writeStdin(chunk)` / `closeStdin()` instead of
  * the raw Node stream so the DriverProcess surface remains hardenable

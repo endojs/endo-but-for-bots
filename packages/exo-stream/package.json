@@ -81,6 +81,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
+    "bench": "node test/bytes-wire-cost.bench.js",
     "build": "exit 0",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
@@ -93,10 +94,10 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
-    "@endo/base64": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^",
@@ -106,6 +107,7 @@
     "@endo/captp": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

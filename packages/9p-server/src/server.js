@@ -46,29 +46,25 @@ const VERSION_9P2000_L = '9P2000.L';
 const MIN_MSIZE = 4096;
 const DEFAULT_MSIZE = 131_072;
 
-// `iterateBytesReader` carries each chunk from the backing Filesystem as a
-// base64 string and validates it with `M.string()`, which without an explicit
-// limit inherits @endo/patterns' default `stringLengthLimit` of 100_000
-// characters. Base64 encodes n bytes as 4*ceil(n/3) characters, so that
-// default caps a single chunk at 75_000 bytes: 75_000 encodes to exactly
-// 100_000 characters and passes, 75_001 encodes to 100_004 and is rejected
-// before it ever reaches us. The rejection surfaces to the client as a bare
-// EIO, which reads as disk corruption rather than as a limit — and with a
-// 128 KiB `msize` the client believes it may read far more than that at
-// once, so any file over ~75 KiB was unreadable through a mount.
+// `iterateBytesReader` carries each chunk from the backing Filesystem as raw
+// bytes and validates it with `M.byteArray()`, which without an explicit limit
+// inherits @endo/patterns' default `byteLengthLimit` of 100_000 bytes. That
+// default caps a single chunk at 100_000 bytes: a chunk of exactly 100_000
+// bytes passes and 100_001 is rejected before it ever reaches us. The rejection
+// surfaces to the client as a bare EIO, which reads as disk corruption rather
+// than as a limit — and with a 128 KiB `msize` the client believes it may read
+// far more than that at once, so any file over ~100 KiB was unreadable through
+// a mount.
 //
 // The bound we actually want is "no more than this Tread asked for", which
-// `onRead` already clamps against `msize`. Deriving the limit from `count`
-// says that directly, and is a tighter bound than the 100_000-character
-// default rather than a looser one.
-//
-/**
- * The longest base64 chunk a Tread of `count` bytes can legitimately carry.
- *
- * @param {number} count - bytes this Tread may return.
- * @returns {number} characters
- */
-const base64LimitFor = count => 4 * Math.ceil(count / 3);
+// `onRead` already clamps against `msize`. Using that byte count directly as
+// the `byteLengthLimit` says exactly that: it tracks the request (up to the
+// 128 KiB `msize`), so for a large read it is *looser* than the 100_000-byte
+// default — admitting the over-100-KiB chunks the default wrongly rejected —
+// while still bounding each chunk to precisely what the client asked for. Now
+// that chunks are raw bytes rather than base64 strings, the limit is the
+// requested byte count itself — no base64 4/3 expansion — so no conversion
+// helper is needed.
 
 const MASK_U32 = 0xffff_ffffn;
 const MASK_U64 = (1n << 64n) - 1n;
@@ -623,12 +619,12 @@ export const serveConnection = ({
       // nodes: measured against a remote Filesystem, 2 is where the latency
       // win saturates while the message count keeps climbing.
       //
-      // `stringLengthLimit` overrides @endo/patterns' 100_000-character
-      // default, which is narrower than `count` and surfaces as EIO
-      // (see `base64LimitFor`).
+      // `byteLengthLimit` overrides @endo/patterns' 100_000-byte default,
+      // which is narrower than `count` and surfaces as EIO. `want` is the
+      // exact byte count this Tread asked for.
       for await (const chunk of iterateBytesReader(reader, {
         buffer: 2,
-        stringLengthLimit: base64LimitFor(count),
+        byteLengthLimit: want,
       })) {
         // Stop pulling from the FS if the connection was torn down
         // mid-read (cancellation / disconnect) instead of draining a
@@ -897,10 +893,11 @@ export const serveConnection = ({
     if (count > remaining || count > maxByMsize) {
       return sendError(tag, ERRNO.EINVAL);
     }
-    // The write path has no chunk-length limit to work around: the
-    // responder (`bytesWriterFromIterator`) builds its pump without a
-    // `writePattern`, so a write chunk is never length-validated. `count`
-    // is already bounded by the frame checks above.
+    // The write path needs no `byteLengthLimit` clamp to work around: the
+    // responder (`bytesWriterFromIterator`) leaves `byteLengthLimit` at its
+    // unbounded default (`Number.MAX_SAFE_INTEGER`), so a write frame is never
+    // *size*-rejected — its pump's `M.byteArray()` writePattern validates only
+    // the frame *kind*. `count` is already bounded by the frame checks above.
     const data = r.take(count);
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);

@@ -112,7 +112,7 @@ export type HttpResponse = {
   maxResponseBytes: () => number;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
-  stream: () => import('@endo/exo-stream').PassableBytesReader;
+  body: () => import('@endo/exo-stream').PassableBytesReader;
   help: () => string;
 };
 

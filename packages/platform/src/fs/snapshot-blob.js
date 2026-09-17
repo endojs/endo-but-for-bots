@@ -3,8 +3,7 @@
 import harden from '@endo/harden';
 import { encodeBase64 } from '@endo/base64';
 import { decodeHex } from '@endo/hex';
-import { mapReader } from '@endo/stream';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
 import { byteLengthOfReader } from './reader-byte-length.js';
 
@@ -34,16 +33,17 @@ export const snapshotBlobMethods = (store, sha256) => {
         size: size ? await size() : await byteLengthOfReader(makeFileReader),
       }),
     /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
-      const pump = makeReaderPump(mapReader(makeFileReader(), encodeBase64));
-      return pump(/** @type {any} */ (synPromise));
+    stream(synPromise) {
+      return bytesReaderFromIterator(makeFileReader()).stream(
+        /** @type {any} */ (synPromise),
+      );
     },
     text,
     json,
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'SnapshotBlob: immutable content-addressed bytes (sha256, getInfo, text, json, streamBase64).'
+        ? 'SnapshotBlob: immutable content-addressed bytes (sha256, getInfo, text, json, stream).'
         : `No documentation for method ${method}.`,
   });
 };

@@ -4,7 +4,7 @@
 // Phase 1 (designs/gateway-sites-publication.md): the serving core.
 // Exercises makeTreeRequestHandler against a fake snapshot that faithfully
 // models the real SnapshotTree / SnapshotBlob surface produced by
-// E(mount).snapshot() (blobs stream via streamBase64 and expose getInfo; trees
+// E(mount).snapshot() (blobs stream via stream and expose getInfo; trees
 // also expose getInfo) — so no daemon is required and the fake cannot mask the
 // serving core's real byte-read and file-vs-directory paths.
 
@@ -54,13 +54,13 @@ const fakeHash = bytes => {
 };
 
 // Model the REAL SnapshotBlob surface produced by `E(mount).snapshot()`:
-// streamBase64 / text / json / getInfo / sha256 — and deliberately NO `fetch`
+// stream / text / json / getInfo / sha256 — and deliberately NO `fetch`
 // (fetch lives on the live-mount ReadableBlobRange face, not on snapshots). A
 // fake that carried `fetch` would mask the serving-core's byte-read path.
 const BlobInterface = M.interface(
   'SnapshotBlob',
   {
-    streamBase64: M.call(M.any()).returns(M.promise()),
+    stream: M.call(M.any()).returns(M.promise()),
     text: M.call().returns(M.promise()),
     json: M.call().returns(M.promise()),
     getInfo: M.call().returns(M.any()),
@@ -88,14 +88,14 @@ const TreeInterface = M.interface(
 
 const makeBlob = bytes =>
   makeExo('SnapshotBlob', BlobInterface, {
-    // Drive bytes through streamBase64, exactly as a real SnapshotBlob does.
+    // Drive bytes through stream, exactly as a real SnapshotBlob does.
     // Delegating to a fresh bytesReaderFromIterator makes this a faithful
     // PassableBytesReader responder for iterateBytesReader.
-    streamBase64: synHead => {
+    stream: synHead => {
       async function* one() {
         yield bytes;
       }
-      return E(bytesReaderFromIterator(one())).streamBase64(synHead);
+      return E(bytesReaderFromIterator(one())).stream(synHead);
     },
     text: async () => decode(bytes),
     json: async () => JSON.parse(decode(bytes)),
@@ -218,7 +218,7 @@ test('a directory whose index is itself a directory 404s', async t => {
     tree: makeTree({ 'empty/index.html/keep.txt': utf8('x') }),
   });
   // `/empty/` -> directory -> lookup index.html -> resolves to a sub-tree,
-  // which isBlob() rejects (no streamBase64) -> 404, before any getInfo.
+  // which isBlob() rejects (no stream) -> 404, before any getInfo.
   t.is((await get(handler, '/empty/')).status, 404);
 });
 
@@ -282,10 +282,10 @@ test('a custom index name is honored', async t => {
   t.is(decode(await collectBody(res.body)), '<h1>hi</h1>');
 });
 
-test('streams a blob larger than the 100 KB base64 frame cap', async t => {
-  // The fake emits the whole payload in one streamBase64 frame, so a payload
-  // over ~100 KB exercises readBlobBody's stringLengthLimit lift; a regression
-  // that dropped it would reject this with a string-length-cap error.
+test('streams a blob larger than the 100 KB byte frame cap', async t => {
+  // The fake emits the whole payload in one stream frame, so a payload
+  // over ~100 KB exercises readBlobBody's byteLengthLimit lift; a regression
+  // that dropped it would reject this with a byte-length-cap error.
   const big = new Uint8Array(200_000);
   for (let i = 0; i < big.length; i += 1) {
     big[i] = i % 256;

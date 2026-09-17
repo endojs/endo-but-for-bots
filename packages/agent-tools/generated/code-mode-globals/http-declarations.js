@@ -35,11 +35,11 @@ export const httpDeclarations = harden({
     maxResponseBytes: () => number;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
-    stream: () => HttpPassableBytesReader;
+    body: () => HttpPassableBytesReader;
     help: () => string;
 };
 type HttpPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<string, TReadReturn>>;
+    stream: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<Uint8Array, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type HttpERef<T> = T | Promise<T>;

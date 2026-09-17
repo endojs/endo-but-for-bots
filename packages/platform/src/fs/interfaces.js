@@ -33,10 +33,64 @@ export const pathEntryMethodGuards = harden({
 // § C2 / C4).
 export const readableBlobMethodGuards = harden({
   help: HelpMethod,
-  streamBase64: M.call(M.any()).returns(M.promise()),
+  stream: M.call(M.any()).returns(M.promise()),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
 });
+
+// Method-name duck-type for "this remote value is a readable blob whose bytes
+// should be materialized" — the accept side of the daemon's `write()` /
+// `copyInto` / `stageTree` and the extended-FS mount-child probes. Every
+// admitted value is drained through `iterateBytesReader(source)`, i.e.
+// `E(source).stream(synHead)`, so **`stream` is required on every branch** — a
+// value that carries a blob marker but no `stream` (an extended-layer
+// `BlobRef`, `{getInfo, fetch, text, json, help}`, whose bytes flow via `fetch`
+// and which deliberately has no daemon-side `stream`) would otherwise pass the
+// duck-type, get a scratch file opened, then die on an opaque method-missing
+// error — the exact failure the crisp shape error exists to replace. Admits the
+// canonical `ReadableBlob` whole-value read surface (`text` paired with
+// `stream`, the shape every `readableBlobMethodGuards` implementor carries —
+// `blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`), plus the two
+// byte-stream-only shapes that lack `text` yet are still readable blobs: a
+// `BlobRef`-style content-addressed blob (`stream` + `getInfo`) and a raw
+// `PassableBytesReader` (`stream` + `readReturnPattern`). A generic value
+// `PassableReader` also advertises `readReturnPattern`, so it is excluded by
+// additionally requiring the *absence* of `readPattern` — the value-pattern
+// accessor a bytes reader never carries (its yields are always `Uint8Array`).
+// An `HttpResponse` (`@endo/exo-http-client`) exposes its readable body under
+// `body()` — a zero-arg factory returning a `PassableBytesReader` — *not*
+// `stream`, precisely so its whole-value read surface (`text`/`json`) cannot
+// collide with this discriminator: lacking `stream`, an `HttpResponse` fails
+// the top-level `stream` check and is never mistaken for a drainable blob, with
+// no `@endo/exo-http-client`-specific clause reaching across the package
+// boundary into this predicate. A writer
+// (`writePattern`/`writeReturnPattern`, neither `text` nor a read marker) is
+// rejected by falling through both branches. `stream` alone no longer
+// discriminates: it is the generic byte-stream method shared with
+// readers/writers, so it is always paired with a marker.
+//
+// This is the single source of truth for the discriminator (five consumers
+// spread across four packages import it); never re-inline it per consumer — a
+// divergent copy is exactly the wire-shape classification bug this consolidates
+// away.
+/**
+ * The single exported discriminator for "this remote value is a readable blob
+ * whose bytes should be materialized": true when `methodNames` carries `stream`
+ * paired with a `text` whole-value read surface or a
+ * `getInfo`/`readReturnPattern` byte-read marker (and not `readPattern`). See
+ * the block comment above for the full duck-type rationale and the values each
+ * branch admits or excludes.
+ *
+ * @param {string[]} methodNames
+ * @returns {boolean}
+ */
+export const looksLikeReadableBlob = methodNames =>
+  methodNames.includes('stream') &&
+  (methodNames.includes('text') ||
+    (!methodNames.includes('readPattern') &&
+      (methodNames.includes('getInfo') ||
+        methodNames.includes('readReturnPattern'))));
+harden(looksLikeReadableBlob);
 
 // `readableTreeMethodGuards` is the shared read-surface for content-addressed
 // directories. `SnapshotTree` adds `sha256`; `Directory` adds the write
@@ -94,7 +148,7 @@ export const getInfoMethodGuard = harden({
 // round-trip (so a caller can consult a local CAS before fetching), and
 // `fetch(offset, length)` reads a byte *range* without streaming the whole
 // blob — the two methods that make remote reads optimal. The whole-value
-// `text` / `json` / `streamBase64` accessors layer on top. See
+// `text` / `json` / `stream` accessors layer on top. See
 // designs/fs-interface-consolidation.md § C4.
 export const rangeReadMethodGuards = harden({
   ...getInfoMethodGuard,

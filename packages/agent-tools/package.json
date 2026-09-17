@@ -175,6 +175,7 @@
     "@endo/daemon": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/host-spawner": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ajv": "^8.17.1",

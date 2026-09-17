@@ -10,7 +10,7 @@ export type ReadableStream = AsyncIterator<Uint8Array>;
  * Exposed by platform as an Exo; directly usable locally.
  */
 export interface ReadableBlob {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   help: (method?: string) => string;
@@ -102,12 +102,41 @@ export interface ReadableTree {
 /**
  * A remotable byte source accepted by `Directory.write()`.
  *
- * The streaming protocol only needs `streamBase64`; optional reader metadata
- * such as `readReturnPattern` is not part of the materialization contract.
+ * `write()` discriminates a blob source from a writer by
+ * method name (`looksLikeReadableBlob`), so `stream` alone is no longer
+ * accepted — it is the generic byte-stream method shared with writers. Every
+ * admitted source is drained through `E(source).stream()`, so `stream` is
+ * required on every branch; the second method is the *marker* that
+ * distinguishes a blob from a writer. A source must carry `stream` paired with
+ * one of:
+ *  - `text`, the whole-value read surface every canonical `ReadableBlob`
+ *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`); or
+ *  - `getInfo` for a content-addressed blob; or
+ *  - `readReturnPattern` for a raw `PassableBytesReader` — but *not*
+ *    `readPattern`, which excludes a generic `PassableReader` (it also
+ *    advertises `readReturnPattern`, but yields arbitrary values, not bytes).
+ *
+ * An `@endo/exo-http-client` `HttpResponse` is *not* accepted: it exposes its
+ * byte reader under `body()`, not `stream`, so it fails the discriminator's
+ * top-level `stream` check without any `HttpResponse`-specific clause.
+ *
+ * See `looksLikeReadableBlob` in `./interfaces.js` for the authoritative
+ * duck-type; the `!readPattern` exclusion is part of the contract and is
+ * enforced there, not by these structural types.
  */
-export type ReadableBlobSource = {
-  streamBase64: (...args: any[]) => PromiseLike<unknown>;
-};
+export type ReadableBlobSource =
+  | {
+      stream: (...args: any[]) => PromiseLike<unknown>;
+      text: (...args: any[]) => PromiseLike<unknown>;
+    }
+  | {
+      stream: (...args: any[]) => PromiseLike<unknown>;
+      getInfo: (...args: any[]) => PromiseLike<unknown>;
+    }
+  | {
+      stream: (...args: any[]) => PromiseLike<unknown>;
+      readReturnPattern: (...args: any[]) => unknown;
+    };
 
 /** Portable semantic payload accepted by `Directory.write()`. */
 export type DirectoryWriteSource = ReadableBlobSource | ReadableTree;
@@ -251,7 +280,7 @@ export interface TreeWriter {
  * a mount root).
  */
 export interface File {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   writeText: (content: string) => Promise<void>;

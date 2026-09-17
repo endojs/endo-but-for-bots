@@ -170,7 +170,7 @@ test('round-trips a payload larger than the default 100KB string limit', async t
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   // 200 KB of 'x' — exceeds the M.string default cap; the per-frame
-  // stringLengthLimit in drainBytesReader must lift it.
+  // byteLengthLimit in drainBytesReader must lift it.
   const big = 'x'.repeat(200_000);
   await writeFileAt(root, ['big.txt'], utf8(big));
 

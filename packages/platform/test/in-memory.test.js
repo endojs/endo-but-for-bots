@@ -24,7 +24,7 @@ const collectStream = async readerRef => {
 
 /**
  * Drain a `PassableBytesReader` into a single concatenated
- * `Uint8Array`. `iterateBytesReader` handles base64 decoding.
+ * `Uint8Array`. `iterateBytesReader` handles the passable-byte boundary.
  */
 const collectBytes = async readerRef => {
   const chunks = [];
@@ -44,7 +44,7 @@ const collectBytes = async readerRef => {
 
 /**
  * Push a single `Uint8Array` payload into a `PassableBytesWriter`
- * and close it. `iterateBytesWriter` handles base64 encoding.
+ * and close it. `iterateBytesWriter` handles the passable-byte boundary.
  */
 const writeBytes = async (writerRef, bytes) => {
   const writer = iterateBytesWriter(writerRef);

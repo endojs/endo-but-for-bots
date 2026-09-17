@@ -455,11 +455,11 @@ const negotiateFullMsize = async c => {
   return makeReader(rep.payload).u32();
 };
 
-// A chunk crosses the backing Filesystem as base64, which `iterateBytesReader`
-// validates with `M.string()`. Left to @endo/patterns' default
-// `stringLengthLimit` of 100_000 characters that caps a chunk at 75_000 bytes
+// A chunk crosses the backing Filesystem as raw bytes, which
+// `iterateBytesReader` validates with `M.byteArray()`. Left to @endo/patterns'
+// default `byteLengthLimit` of 100_000 bytes that caps a chunk at 100_000 bytes
 // and rejects anything past it, which reaches the client as a bare EIO — so
-// with a 128 KiB msize any file over ~75 KiB was unreadable through a mount.
+// with a 128 KiB msize any file over ~100 KiB was unreadable through a mount.
 // GNU `cat` and Node's `fs.readFile` both issue one big read, so this was the
 // common path, not an edge case.
 test.serial(
@@ -506,11 +506,13 @@ test.serial('Rlcreate advertises the same iounit as Rlopen', async t => {
   t.is(r.u32(), msize - 24);
 });
 
-// The write path has no chunk-length limit to route around: the responder
-// builds its pump without a `writePattern`, so a write chunk is never
-// length-validated. Guards against reintroducing a clamp here by symmetry
-// with the read path, which would silently halve the write frame.
-test.serial('a write past the base64 read limit is not truncated', async t => {
+// The write path is not size-clamped: the responder
+// (`bytesWriterFromIterator`) leaves `byteLengthLimit` at its unbounded
+// default, so its `M.byteArray()` writePattern validates only the frame
+// *kind*, never the length. Guards against reintroducing a fixed size clamp
+// here by symmetry with the read path, which would silently halve the write
+// frame.
+test.serial('a write past the read limit is not truncated', async t => {
   const { rootDir, socketPath } = await setupNodeFsBridge(t);
   const c = await setupClient(t, socketPath);
   await negotiateFullMsize(c);
