@@ -4781,11 +4781,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
     async listBackends() {
       const hosted = await getHostedBackends();
-      const cfg = await getProviderConfig().catch(() => undefined);
       return harden([
         harden({
           id: 'provider',
-          title: cfg?.provider === 'openrouter' ? 'OpenRouter' : 'LLM API',
+          title: 'Fae',
           kind: 'api',
           continuity: 'explicit',
           toolOwnership: 'endo',

@@ -85,7 +85,7 @@ test('Floot offers the configured OpenRouter model, not Anthropic models', async
   });
   const factory = make(powers);
   const backends = await E(factory).listBackends();
-  t.is(backends[0].title, 'OpenRouter');
+  t.is(backends[0].title, 'Fae');
   const models = await E(factory).listModels('provider');
   t.is(models.length, 4);
   t.is(models[0].modelId, 'vendor/model:free');

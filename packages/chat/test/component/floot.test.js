@@ -49,7 +49,7 @@ test.serial(
       listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
       listBackends: () =>
         harden([
-          { id: 'provider', title: 'OpenRouter' },
+          { id: 'provider', title: 'Fae' },
           { id: 'codex', title: 'Codex' },
         ]),
       listModels: () =>
@@ -107,7 +107,7 @@ test.serial(
     };
     const options = () => [...select('Model').options].map(o => o.value);
     t.deepEqual(options(), ['openrouter/free', 'vendor/model:free']);
-    t.true(select('Backend').textContent.includes('OpenRouter'));
+    t.true(select('Backend').textContent.includes('Fae'));
     await change('Backend', 'codex');
     t.deepEqual(options(), ['codex:sol']);
     t.is(parent.querySelectorAll('select')[2].value, 'high');

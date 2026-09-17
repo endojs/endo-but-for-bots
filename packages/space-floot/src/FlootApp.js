@@ -106,7 +106,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   'option',
                   { key: id, value: id },
                   models.find(m => (m.backendId || 'provider') === id)
-                    ?.backendTitle || (id === 'provider' ? 'LLM API' : id),
+                    ?.backendTitle || (id === 'provider' ? 'Fae' : id),
                 ),
               ),
             ),
