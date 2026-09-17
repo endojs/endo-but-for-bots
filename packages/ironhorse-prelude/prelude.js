@@ -14,66 +14,96 @@
  *   `ses-xs-parity` corpus measures that same environment rather than a
  *   look-alike.
  *
- * They had drifted on four points before this was extracted: the `Iterator`
+ * They had drifted on three points before this was extracted: the `Iterator`
  * repair was guarded in one and not the other, the `console` stub likewise, and
  * the `harden` decision differed outright -- which is what made `lockdown()`
  * fail on the corpus while succeeding in the worker.
  *
  * Every repair here is an ENGINE GAP rather than a convenience, and each should
- * disappear as the gap closes. The one that will outlive the others is
- * `harden`: see below.
+ * disappear as the gap closes.
  *
  * Importing this module has side effects and returns nothing. Import it for
  * effect, before `ses`.
  *
  * # Engine floor
  *
- * Bundling this pulls `@endo/harden` into whatever it is bundled into, and
- * `makeHardener`'s signature is an arrow with a non-simple parameter list:
+ * This is consumed as a BUNDLE -- `@endo/thixotrope`'s
+ * `scripts/bundle-ironhorse-worker.mjs` and `@endo/test262-runner`'s
+ * `scripts/generate-preludes.js` both run it through
+ * `@endo/compartment-mapper`'s `makeBundle` -- and every such bundle carries
+ * the mapper's own runtime, whose cell constructor is an arrow with a
+ * non-simple parameter list:
  *
- *     export const makeHardener = ({ traversePrototypes = false } = {}) => {
+ *     const cell = (name, value = undefined) => {
  *
- * Ironhorse rejected that shape until `242b339b`
+ * Ironhorse mishandled that shape until `242b339b`
  * (`fix(ironhorse-compile)!: stop an arrow's parameter shape escaping the
  * arrow`), where an arrow's `NOT_SIMPLE_PARAMETERS` leaked into the enclosing
  * scope and made the NEXT `"use strict"` anywhere after it a spurious
- * `invalid directive`. The `ses` bundle opens its functor with `'use strict'`,
- * so on a pre-fix engine a boot carrying this prologue dies at that seam.
+ * `invalid directive`. The arrow itself was always accepted; it was the later
+ * directive that failed. In `dist-ironhorse/boot.js` the two are two lines
+ * apart -- this bundle ends `])();`, the `ses` bundle opens
+ * `(functors => options => {`, and its `'use strict';` is the next line -- so
+ * on a pre-fix engine a boot carrying this prologue dies at that seam.
  *
- * So an artifact built with this prologue REQUIRES an engine at or after that
- * commit. A stale worker binary against a fresh `dist-ironhorse/boot.js` fails
- * as `boot ...: line NNN: invalid directive`, pointing into a generated file
- * tens of thousands of lines long with nothing to suggest the binary is the
- * problem. If you see that, check the binary's date before anything else.
+ * Nothing in this file's own source has that shape, and removing what did (the
+ * `@endo/harden` import) does not lift the floor: the mapper's runtime is
+ * unconditional. An artifact built with this prologue REQUIRES an engine at or
+ * after that commit. A stale worker binary against a fresh
+ * `dist-ironhorse/boot.js` fails as `boot ...: line NNN: invalid directive`,
+ * pointing into a generated file tens of thousands of lines long with nothing
+ * to suggest the binary is the problem. If you see that, check the binary's
+ * date before anything else.
  */
-
-import { makeHardener } from '@endo/harden/make-hardener.js';
 
 // --- harden -----------------------------------------------------------------
 //
-// Replace Ironhorse's native `harden` with one that does not traverse
-// prototypes. Three constraints meet here and only this satisfies all three.
+// Remove Ironhorse's native `harden` so the `ses` shim builds its own.
 //
-// 1. Something MAY harden before `lockdown()`. The worker happens not to, but
-//    any embedder that loads `@endo/pass-style`, `@endo/bytes` or
-//    `@endo/immutable-arraybuffer` first does -- they all call `harden()` at
-//    module scope -- and the parity corpus is exactly that case.
-// 2. `globalThis.harden` must EXIST when `@endo/harden`'s selector first runs.
-//    It takes `Object[Symbol.for('harden')]`, then `globalThis.harden`, and
-//    installs its own only if neither is there -- and an installed
-//    `Object[@harden]` makes `repairIntrinsics` refuse outright ("a prior
-//    harden implementation has been used and installed",
-//    `packages/ses/src/lockdown.js:393`). Deleting Ironhorse's harden without
-//    supplying a replacement reproduces that refusal exactly; it is how the
-//    node host fails the same corpus today.
-// 3. Whatever hardens must not FREEZE THE INTRINSICS lockdown still has to
-//    tame. Ironhorse's native `harden` is a faithful port of XS's
-//    `fx_hardenFreezeAndTraverse` and walks prototype chains, so a single
-//    `harden({})` leaves `Function.prototype.constructor`
+// Leaving it in place is not the cheap win it looks like, because `ses` ADOPTS
+// whatever it finds: `makeHardener()` returns `globalThis.harden` when one is
+// already there (`packages/ses/src/make-hardener.js:142-147`), and
+// `packages/ses/src/lockdown.js:85` calls that at MODULE SCOPE. So whatever is
+// at `globalThis.harden` when the shim is EVALUATED -- not when `lockdown()` is
+// called -- becomes the guest's `harden` for the life of the realm: it is what
+// `tameHarden` wraps (`lockdown.js:354`), what `Object[Symbol.for('harden')]`
+// is set to (`:398`), and what `lockdown()` puts back on `globalThis.harden`.
+// `lockdown()` does not replace it.
+//
+// Two requirements follow, and they pull in opposite directions.
+//
+// 1. Whatever hardens BEFORE `lockdown()` must not freeze the intrinsics
+//    lockdown still has to tame. Ironhorse's native `harden` is a faithful port
+//    of XS's `fx_hardenFreezeAndTraverse` and walks prototype chains, so a
+//    single `harden({})` leaves `Function.prototype.constructor`
 //    `{writable: false, configurable: false}` where the spec says
 //    `configurable: true`. `ses/src/tame-function-constructors.js` then cannot
 //    install its inert constructor and `lockdown()` dies with `invalid
 //    descriptor`. That rejection is spec-correct; the freeze is the problem.
+// 2. Whatever hardens AFTER `lockdown()` must traverse prototypes, or `harden`
+//    is not doing its job. A guest that hands out `harden(obj)` whose prototype
+//    is still extensible has handed out an object whose methods anyone holding
+//    that prototype can still replace.
+//
+// Deleting satisfies (2) -- the shim's own hardener traverses
+// (`make-hardener.js`'s `baseFreezeAndTraverse` enqueues `getPrototypeOf(obj)`)
+// -- and leaves (1) to the embedder, which is the right split: only the
+// embedder knows whether anything of its own hardens before it locks down.
+// Nothing in this realm does before `ses` is evaluated, and the worker's boot
+// calls `lockdown()` on the line after the shim.
+//
+// An embedder that DOES harden before `lockdown()` -- anything loading
+// `@endo/pass-style`, `@endo/bytes` or `@endo/immutable-arraybuffer` first,
+// which all call `harden()` at module scope -- must install a NON-traversing
+// hardener of its own, AFTER the shim is evaluated (so the shim keeps its own)
+// and before that module loads. It cannot simply leave `globalThis.harden`
+// absent: `@endo/harden`'s selector takes `Object[Symbol.for('harden')]`, then
+// `globalThis.harden`, and installs its own into `Object[@harden]` if neither
+// is there -- which makes `repairIntrinsics` refuse outright ("a prior harden
+// implementation has been used and installed",
+// `packages/ses/src/lockdown.js:395`). That is how the node host fails the
+// `ses-xs-parity` corpus today, and how Ironhorse would fail it without
+// `packages/test262-runner/src/install-pre-lockdown-harden.js`.
 //
 // XS escapes all of this by having a NATIVE `lockdown` -- `fx_lockdown`,
 // `c/moddable/xs/sources/xsLockdown.c` -- which rewires those constructors with
@@ -82,15 +112,9 @@ import { makeHardener } from '@endo/harden/make-hardener.js';
 // not its `lockdown`; a native `lockdown` is future work, and until it lands
 // the shim route is the SES profile and this prologue is its preparation.
 //
-// `makeHardener` rather than `@endo/harden`'s default export: the default IS
-// the selector, and assigning it to `globalThis.harden` would leave it finding
-// itself -- the infinite recursion `rust/endo/xsnap/src/polyfills.js` warns
-// about. Assign to `globalThis.harden` ONLY, never `Object[@harden]`, which is
-// the slot that poisons lockdown by its mere presence.
-//
-// `lockdown()` replaces `globalThis.harden` with SES's own tamed harden, which
-// does traverse prototypes. This one is only ever the PRE-lockdown harden.
-globalThis.harden = makeHardener({ traversePrototypes: false });
+// The cast is the assertion, as in the `Iterator` block below: `harden` is a
+// HardenedJS convention rather than a global TypeScript knows about.
+delete (/** @type {any} */ (globalThis).harden);
 
 // --- Iterator ---------------------------------------------------------------
 //

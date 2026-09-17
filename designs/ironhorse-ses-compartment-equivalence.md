@@ -218,20 +218,43 @@ The rejection is spec-correct: a non-configurable, non-writable data property
 cannot be redefined to a different value, and re-running the same define with
 the identical value is accepted. The freeze is the problem, not the refusal.
 
-This is not a hazard for the shipped IronHorse worker, which deletes `harden`
-and locks down with nothing having hardened
-(`bundle-ironhorse-worker.mjs`). It bites any embedder that hardens first, and
-it bit the `ses-xs-parity` corpus, where `@endo/pass-style`, `@endo/bytes` and
-`@endo/immutable-arraybuffer` all `harden()` at module scope while the prelude
-is still evaluating.
+This is not a hazard for the shipped IronHorse worker, whose prologue
+(`@endo/ironhorse-prelude`) deletes `harden` and whose boot then locks down with
+nothing having hardened (`bundle-ironhorse-worker.mjs`). It bites any embedder
+that hardens first, and it bit the `ses-xs-parity` corpus, where
+`@endo/pass-style`, `@endo/bytes` and `@endo/immutable-arraybuffer` all
+`harden()` at module scope while the prelude is still evaluating.
 
-`packages/test262-runner/src/ironhorse-pre-shim.js` resolves it by handing
-`@endo/harden`'s `makeHardener({ traversePrototypes: false })` to
-`globalThis.harden` before the shim loads: present, so `@endo/harden`'s selector
-adopts it rather than installing its own into
-`Object[Symbol.for('harden')]` — the slot whose mere presence makes
-`repairIntrinsics` refuse — and non-traversing, so the intrinsics survive to be
-tamed. That took the corpus from 7/8 to 8/8.
+Deleting is the right default, and not only because it sidesteps the freeze.
+`packages/ses/src/make-hardener.js:142-147` ADOPTS an existing
+`globalThis.harden`, and `packages/ses/src/lockdown.js:85` calls that at MODULE
+SCOPE, so whatever sits at `globalThis.harden` when the shim is *evaluated* is
+what the guest keeps: `lockdown()` does not replace it, it reinstalls it
+through `tameHarden`. A non-traversing stand-in left in place across the shim's
+evaluation therefore becomes the guest's `harden` for the life of the realm —
+silently, since `typeof harden` is `function` either way. Deleting hands the
+shim its own hardener, which traverses, and traversal is the whole point: a
+hardened object whose prototype is still extensible has methods anyone holding
+that prototype can replace.
+
+`packages/test262-runner/src/install-pre-lockdown-harden.js` resolves the
+corpus's case without paying that price. It installs `@endo/harden`'s
+`makeHardener({ traversePrototypes: false })` at `globalThis.harden` AFTER the
+shim is evaluated — present, so `@endo/harden`'s selector adopts it rather than
+installing its own into `Object[Symbol.for('harden')]`, the slot whose mere
+presence makes `repairIntrinsics` refuse; non-traversing, so the intrinsics
+survive to be tamed; late, so the shim keeps its own — and wraps
+`globalThis.lockdown` to withdraw it again on the way in, because the shim
+collects the start global's own `harden` as an intrinsic and
+`initProperty` (`packages/ses/src/intrinsics.js:39`) rejects two definitions of
+it as `Conflicting definitions of harden`. That took the corpus from 7/8 to
+8/8, and leaves the guest with the shim's traversing hardener in both
+environments.
+
+`rust/engine/ironhorse-vm/tests/ses_boot_intrinsics.rs` pins that last clause
+behaviourally rather than by `typeof`: its census reports `hardenTraverses`,
+measured by hardening an object whose prototype has a NULL prototype, so the
+probe cannot reach — and freeze — the intrinsic graph it is measuring.
 
 XS needs none of this because its `lockdown` is native: `fx_lockdown`
 (§ `fx_lockdown`, in order) rewires those constructors with direct slot writes,
@@ -324,10 +347,10 @@ looked safe; they part company on what `harden` did.
 
 On node the selector finds no host `harden`, installs its own at
 `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses outright
-(`packages/ses/src/lockdown.js:393`).
+(`packages/ses/src/lockdown.js:395`).
 
-On Ironhorse the selector adopts the native `globalThis.harden` exactly as
-`ironhorse-pre-shim.js` intends, and the slot stays empty — so that refusal
+On Ironhorse the selector used to adopt the native `globalThis.harden`, and the
+slot stayed empty — so that refusal
 never fires. What fails instead is
 `tame-function-constructors.js:102`:
 
@@ -528,7 +551,7 @@ The preludes import `./expose-pass-style-bytes-globals.js`, which pulls
 `@endo/pass-style` and so `@endo/harden`; where the host has no native
 `harden` for its selector to adopt, `@endo/harden` installs its own at
 `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses to run at all
-when it finds one (`packages/ses/src/lockdown.js:393`).
+when it finds one (`packages/ses/src/lockdown.js:395`).
 The corpus's one such case, `Symbol.toStringTag-lockdown.js`, is red on node
 for that reason — the host reports 14/16 — and three cases ported from
 `lockdown.test.js` and `harden.test.js` failed identically when tried.

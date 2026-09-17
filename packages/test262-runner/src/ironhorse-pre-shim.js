@@ -7,11 +7,12 @@
 // module is the point — it is what makes the `ses-xs-parity` corpus measure
 // the shipped environment rather than a look-alike.
 //
-// The two copies had drifted on four points before the extraction, and one of
-// them was load-bearing: the `harden` decision differed, which is why
-// `lockdown()` worked in the worker and failed on the corpus.
-//
 // Anything Ironhorse-specific belongs THERE, not here. This file exists only to
 // pull it in ahead of `ses/lockdown-shim.js`, and to hold whatever is genuinely
 // specific to running test262 — which is currently nothing.
+//
+// In particular the pre-lockdown `harden` this corpus needs is NOT here: it is
+// `./install-pre-lockdown-harden.js`, which must come AFTER the shim rather
+// than before it. See that file for why the order decides which hardener the
+// guest keeps.
 import '@endo/ironhorse-prelude';

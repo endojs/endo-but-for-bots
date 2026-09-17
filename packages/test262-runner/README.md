@@ -110,9 +110,29 @@ value — so the bug was the freeze, not the rejection.
 ## The Ironhorse lockdown shim
 
 Ironhorse has no native `lockdown()`. The `ironhorse-host` lane therefore runs
-SES's **shim**, and `src/ironhorse-pre-shim.js` prepares the realm for it.
-Three constraints have to hold at once, and only one arrangement satisfies all
-three:
+SES's **shim**, and two files prepare the realm for it. Which file a repair
+belongs in is decided by whether it is an engine gap or a consequence of what
+this corpus loads.
+
+`src/ironhorse-pre-shim.js` imports `@endo/ironhorse-prelude`, the engine's own
+prologue, shared with the shipped worker.
+Its `harden` decision is to **delete** Ironhorse's native one before the shim is
+evaluated.
+That is not a detail: `packages/ses/src/make-hardener.js:142-147` ADOPTS an
+existing `globalThis.harden`, and `packages/ses/src/lockdown.js:85` calls it at
+module scope, so whatever is at `globalThis.harden` when the shim is *evaluated*
+becomes the guest's `harden` for the life of the realm — `lockdown()` does not
+replace it.
+Ironhorse's native `harden` is a port of XS's `fx_hardenFreezeAndTraverse` and
+walks prototype chains, so leaving it there would freeze
+`Function.prototype.constructor` at the first pre-lockdown `harden()` and
+`tame-function-constructors.js` could no longer install its inert constructor.
+Deleting it hands the shim its own hardener, which traverses — which is what
+`harden` is for.
+
+`src/install-pre-lockdown-harden.js` handles what is left, and it is this
+corpus's problem rather than the engine's.
+Four constraints meet, and only one arrangement satisfies all four:
 
 1. **Something will harden before `lockdown()`.**
    `expose-pass-style-bytes-globals.js` pulls `@endo/pass-style`, `@endo/bytes`
@@ -125,31 +145,47 @@ three:
 3. **Whatever hardens must not freeze the intrinsics `lockdown()` still has to
    tame**, or `tame-function-constructors.js` cannot install its inert
    constructors. That was Ironhorse's failure above.
+4. **It must be gone again before `lockdown()` runs.** The shim collects the
+   start global's own `harden` as an intrinsic and separately adds its own
+   (`lockdown.js:355`); `initProperty` (`ses/src/intrinsics.js:39`) compares
+   them and throws `Conflicting definitions of harden`. The only arrangement
+   where that is not a conflict is the one constraint 3 forbids — where the
+   shim adopted this very function, so the two are the same object.
 
-So the pre-shim assigns `@endo/harden`'s
-`makeHardener({ traversePrototypes: false })` to `globalThis.harden` — present,
-so the selector adopts it and nothing lands in the poisoning slot; gentle, so
-the intrinsics survive to be tamed. `makeHardener` rather than the package
-default, because the default export is the *selector*, and giving it to
-`globalThis.harden` would leave it finding itself.
-`lockdown()` replaces `globalThis.harden` with SES's own tamed harden, so this
-one is only ever the pre-lockdown harden.
+So the module installs `@endo/harden`'s
+`makeHardener({ traversePrototypes: false })` *after* the shim — present, so the
+selector adopts it and nothing lands in the poisoning slot; gentle, so the
+intrinsics survive to be tamed; late, so the shim keeps its own — and wraps
+`globalThis.lockdown` to withdraw it again on the way in.
+`makeHardener` rather than the package default, because the default export is
+the *selector*, and giving it to `globalThis.harden` would leave it finding
+itself.
+Nothing about this is Ironhorse-specific; node fails the same case for the same
+reason and would take the same repair, which is a separate change with its own
+baseline to move.
 
 **Coverage.** `rust/engine/ironhorse-vm/tests/ses_prelude_reach.rs` runs all
 eight cases through the generated prelude and pins each outcome, so the number
 here cannot go stale; it is the shim route's ratchet. The realm profiles the
 shim depends on are pinned separately by `ses_boot_intrinsics.rs`, which loads
 the *shipped* `packages/thixotrope/dist-ironhorse/boot.js` rather than this
-prelude. Both run in the `test-ironhorse-oracle` lane with
+prelude. Its census reports `hardenTraverses` rather than `typeof harden`,
+because every configuration in that file has *a* `harden` and only the
+behaviour distinguishes them. Both run in the `test-ironhorse-oracle` lane with
 `IRONHORSE_SES_PRELUDE_REQUIRED` and `IRONHORSE_SES_SHIM_REQUIRED` set, which
 make a missing artifact a failure rather than a skip.
 
 Note that the shim route and the shipped worker are not the same environment
-and are not meant to be. `dist-ironhorse/boot.js` deletes `harden` outright and
-calls `lockdown()` immediately, with nothing hardening beforehand; this prelude
-must leave the realm *un*-locked-down, because seven of the eight cases assert
-pre-lockdown behaviour — `Symbol.toStringTag.js` wants
-`Compartment.prototype[Symbol.toStringTag]` still `configurable: true`.
+and are not meant to be. `dist-ironhorse/boot.js` calls `lockdown()` on the
+line after the shim, with nothing having hardened, so it needs no stand-in at
+all; this prelude must leave the realm *un*-locked-down, because one of the
+eight cases asserts a descriptor `lockdown()` changes — `Symbol.toStringTag.js`
+wants `Compartment.prototype[Symbol.toStringTag]` still `configurable: true`,
+and measured after an explicit `lockdown()` it fails with exactly that.
+The other seven are indifferent rather than supporting: two still pass
+post-lockdown, and four are blocked there by an unrelated engine gap
+(`native-call:TypedArray:from-array-like`).
+One case is enough to decide it, and the one is real.
 
 **A native `lockdown()` is future work.** XS has one — `fx_lockdown` in
 `c/moddable/xs/sources/xsLockdown.c` — which rewires those same constructors

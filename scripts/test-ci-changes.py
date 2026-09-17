@@ -141,6 +141,7 @@ class Repository(unittest.TestCase):
             "packages/ironhorse-prelude/package.json",
             "packages/test262-runner/src/ironhorse-prelude.js",
             "packages/test262-runner/src/ironhorse-pre-shim.js",
+            "packages/test262-runner/src/install-pre-lockdown-harden.js",
             "packages/test262-runner/scripts/generate-preludes.js",
             "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
         ]:
