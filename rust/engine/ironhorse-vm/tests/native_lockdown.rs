@@ -765,3 +765,115 @@ fn the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown() {
          fx_lockdown puts the inert stand-in there, so the guard crashes"
     );
 }
+
+/// The shape a worker actually wants — pre-lockdown shims, then a native
+/// `lockdown()`, then guest source evaluated "as if in a compartment" — works
+/// today, with ONE piece missing. This pins which.
+///
+/// `packages/thixotrope`'s Ironhorse worker runs on a bare `Interp::new()` and
+/// gets its isolation from GUEST-side `new Compartment()` in `worker-peer.js`,
+/// which is why the SES shim is in its boot bundle at all. That is not the only
+/// way to get it: the compartment can come from the HOST instead, and
+/// `Machine::unfrozen_with_start_global_names`' own doc comment anticipates
+/// exactly this migration ("`packages/thixotrope` already runs that shape on a
+/// bare `Interp`; this offers it a `Machine`").
+///
+/// Measured here, in that order:
+///
+/// 1. a pre-lockdown shim evaluates in the start compartment and can patch
+///    intrinsics, because the machine is built UNFROZEN;
+/// 2. the start compartment calls the **native** `lockdown()` and it succeeds;
+/// 3. guest source then runs in a host-made compartment.
+///
+/// What the guest gets, and why each row matters:
+///
+/// | row | value | meaning |
+/// |---|---|---|
+/// | `shimLeaked` | `undefined` | the start compartment's own globals do NOT reach the guest |
+/// | (start realm) | `undefined` | and the guest's globals do not reach back |
+/// | `ObjProtoFrozen` | `true` | the guest SHARES the locked-down intrinsic graph |
+/// | `reach` | `TypeError` | **step 2 closes the evaluator reach realm-wide, so it holds inside the compartment too** |
+/// | `harden` | `function` | available without the shim |
+/// | `lockdownVisible` | `function` | bound, but calling it refuses — see `a_compartment_cannot_lock_down_the_shared_realm` |
+/// | `ownGlobal` | `1` | the guest has its own writable global for endowments |
+///
+/// **The missing piece is attenuation, not isolation.** `Date.now()` answers
+/// from the real clock rather than the NaN a `fx_lockdown` compartment global
+/// would give, and `Math` is likewise unsecured. That is steps 3 and 4, the
+/// scope boundary — not the `Compartment` constructor, which a host-supplied
+/// compartment does not need. An earlier revision of § Known Gaps called the
+/// whole migration blocked on `fx_Compartment`; that was too pessimistic, and
+/// this test is the correction.
+///
+/// (`DateNow` is `0` rather than a wall-clock value because Ironhorse's clock
+/// is deterministic. The row that matters is `DateNowIsNaN=false`: an
+/// attenuated compartment `Date` would report NaN.)
+#[test]
+fn a_host_made_compartment_confines_guest_source_after_a_native_lockdown() {
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
+            machine
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                .expect("machine takes a compiler");
+            let start = machine.start_compartment();
+            let run = |c: &ironhorse_vm::Compartment, src: &str| -> String {
+                let (code, symbols) = ironhorse_compile::compile_atoms(src).expect("compiles");
+                let outcome = c.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{src:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+
+            // 1. A pre-lockdown shim. The machine is UNFROZEN, so this can
+            //    still repair intrinsics -- the window `Machine::new()` closes
+            //    at construction and the reason the unfrozen constructor exists.
+            assert_eq!(run(&start, "globalThis.__shimRan = true; 'ok'"), "ok");
+
+            // 2. The native lockdown, from the start compartment.
+            assert_eq!(
+                run(
+                    &start,
+                    "try { lockdown(); 'ok' } catch (e) { e.name + ': ' + e.message }"
+                ),
+                "ok",
+                "the start compartment of an unfrozen machine may lock it down"
+            );
+
+            // 3. Guest source, in a compartment the HOST made.
+            let guest = machine.compartment(ironhorse_vm::CompartmentOptions {
+                global_names: None,
+                ..Default::default()
+            });
+            assert_eq!(
+                run(
+                    &guest,
+                    r#"
+                    var out = [];
+                    function t(l, f) {
+                      try { out.push(l + '=' + String(f())); }
+                      catch (e) { out.push(l + '=' + e.name); }
+                    }
+                    t('harden', function () { return typeof harden; });
+                    t('DateNowIsNaN', function () { return Number.isNaN(Date.now()); });
+                    t('lockdownVisible', function () { return typeof lockdown; });
+                    t('shimLeaked', function () { return typeof globalThis.__shimRan; });
+                    t('ObjProtoFrozen', function () { return Object.isFrozen(Object.prototype); });
+                    t('reach', function () { return ({}).constructor.constructor('return 1')(); });
+                    t('ownGlobal', function () { globalThis.__g = 1; return globalThis.__g; });
+                    out.join(' | ');
+                "#
+                ),
+                "harden=function | DateNowIsNaN=false | lockdownVisible=function | \
+                 shimLeaked=undefined | ObjProtoFrozen=true | reach=TypeError | ownGlobal=1",
+                "isolated global, shared frozen intrinsics, closed reach -- but an \
+                 unattenuated Date"
+            );
+
+            // And nothing the guest put on its global reaches the start realm.
+            assert_eq!(run(&start, "typeof globalThis.__g"), "undefined");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

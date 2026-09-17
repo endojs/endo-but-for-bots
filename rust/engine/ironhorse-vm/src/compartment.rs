@@ -281,8 +281,13 @@ pub struct CompartmentOptions {
     /// evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`. SES
     /// and XS close that route by replacing the function-family prototypes'
     /// `.constructor` with a throwing stub during `lockdown()`
-    /// (`fx_lockdown_aux`, `xsLockdown.c:52`); ironhorse has no `lockdown()`
-    /// and does not.
+    /// (`fx_lockdown_aux`, `xsLockdown.c:52`), and ironhorse's native
+    /// `lockdown()` now does the same. So this paragraph describes a realm that
+    /// has NOT locked down: after `lockdown()` that route is closed here too,
+    /// realm-wide and inside compartments
+    /// (`native_lockdown.rs::a_host_made_compartment_confines_guest_source_after_a_native_lockdown`).
+    /// `global_names` still does not confine on its own, which is the point
+    /// this paragraph exists to make.
     ///
     /// And transitively through an endowed object. Raw heap-backed `Slot`
     /// endowments are refused, but [`Compartment::define_global_value`] shares
