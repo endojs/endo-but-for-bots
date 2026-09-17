@@ -2163,6 +2163,52 @@ accept that this harness restores by reading the conversation into the next
 prompt and declare that its mechanism rather than its fallback — lossy, but
 named, and not pretending to be faithful. That is a decision, not a task.
 
+### 1a-spike. The import mechanism is sound; the patch around it is not
+
+A spike against the fork, after the finding above. It reverses the pessimistic
+reading: **no surgery against the durable event log is needed.** The machinery
+already does what this design wants.
+
+**What was verified to work.** `SessionEvent.Synthetic` is in
+`SessionEvent.DurableDefinitions`, its aggregate field is `sessionID`, and a
+publish carrying one commits an `event` row and advances `event_sequence`. The
+projector registers it, `SessionMessageUpdater` has a `session.next.synthetic`
+branch that appends a `SessionMessage.Synthetic`, and a projected row appears.
+`SessionHistory.load` does not filter it, and `to-llm-message.ts` maps
+`case "synthetic"` to a **user** message. Observed directly against the image:
+a user-only import produced `session.next.synthetic.1` at seq 1 and a
+`session_message` row of type `synthetic`.
+
+Each turn kind also projects on its own: user → `synthetic`, assistant →
+`assistant`, tool → `assistant` (with `tool.called` and `tool.success`),
+compaction → `system`, with `step.started`/`step.ended` bracketing as written.
+
+**What is actually broken, in the patch rather than the platform.**
+
+1. **The handler answers `200 true` when the import fails.** The work runs
+   after the schema check, and a failure inside it surfaced as an unhandled
+   `ServeError` while the route still reported success. This is what made a
+   broken import indistinguishable from a working one from the outside, and it
+   is the first thing to fix regardless of the rest: a route that cannot say it
+   failed cannot be debugged.
+2. **A multi-turn import fails where each turn alone succeeds.** The
+   deployment's case — user followed by assistant — is exactly this. The cause
+   is not yet pinned down.
+3. **`GET /session/:id/message` does not list synthetic messages**, which is
+   cosmetic for restoration but is why the first probe read as a total failure.
+
+**A caveat on the measurements.** The probe killed the server with `SIGKILL`,
+which leaves the WAL uncheckpointed, so a later run showed no rows at all for
+cases that had rows minutes earlier. Only the positive observations above are
+evidence; absence of rows in that setup proves nothing. The next probe must
+shut the server down gracefully before reading, or read through the API.
+
+**The smallest change, as far as this spike can see it.** Fix the handler to
+propagate failure; re-run the multi-turn case with a real error in hand; fix
+what it names. Nothing here requires touching `Prompted`, the prompt-admission
+lifecycle, or the durable log's internals — the reason the patch chose
+`Synthetic` still holds, and `Synthetic` turns out to persist perfectly well.
+
 ### 1b. The image pin is read once, and then never again
 
 Found while doing item 1, and it is the reason the rebuilt image did not take.
