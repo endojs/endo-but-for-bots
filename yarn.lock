@@ -2709,7 +2709,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/ironhorse-prelude@workspace:packages/ironhorse-prelude"
   dependencies:
-    "@endo/harden": "workspace:^"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
