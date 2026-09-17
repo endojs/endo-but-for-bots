@@ -180,10 +180,37 @@ so `maximumFractionDigits: 0` rendered `0.09` as `1` under the default
 `halfExpand`, where the spec and V8 say `0`.
 It belongs to F062's family and arrived with `0b25cdba9`, not with F127.
 
+**Two more findings were examined and neither moved**, at `488398e36`.
+Their statuses are unchanged, so Appendix A gains no column for them and its
+newest pair still reads `2c69bf78d`; what each gained is a status block saying
+something the finding did not know.
+
+**F119**'s two recommendations turn out not to be independent.
+The second — make the callee-class probes lazy — was attempted by deriving
+every exotic
+callee class from the one `functions` lookup the call path already makes, and
+`restored_bound_metadata_takes_precedence_over_a_runnable_body` and its proxy
+twin refuted it: a RESTORED role can overlap a runnable body, so the side
+tables are authoritative and `FuncInfo` cannot decide the class.
+The dispatch loop's own comment says exactly that, and the attempt overrode it.
+So the second recommendation depends on the first, whose exotic-kind tag an
+earlier pass measured slower and removed — F119 is open on one question with
+both stated exits closed.
+
+**F075**'s residue is larger and differently shaped than the recommendation
+reads.
+An inventory of every property-key-id holder found that the sweep must cover
+about twenty-five scalar and map-key holders the existing GC traversal does
+not reach, every retained bytecode buffer, and — the part with no in-engine
+answer — ids held in host handles OUTSIDE `Interp`, which a collector cannot
+see by construction.
+Sparsity also silently defeats the persisted checks, which spell the bound as
+`id <= len` everywhere.
+
 **Nothing else was attempted.**
-The other eight findings that are not fixed — F063, F010, F076, F119, F068,
-F075, F149, F106 and F122 — were not re-verified, and their statuses in
-Appendix A's new column are their `e1038c189` ones carried forward.
+The other six findings that are not fixed — F063, F010, F076, F068, F106 and
+F122 — were not re-verified, and their statuses in Appendix A's new column are
+their `e1038c189` ones carried forward.
 F010 and F076 stay held pending the GC usage-pattern design; F106/F122's
 remaining clause and F068's third stay blocked on the worker protocol.
 
@@ -2494,6 +2521,62 @@ so a long-lived vat that mints novel keys still walks monotonically toward
 the ceiling with no way back.
 Changed by `de9f4b190 fix(ironhorse-vm): make guest key exhaustion catchable`.
 Pinned by `rust/engine/ironhorse-vm/tests/id_space_exhaustion.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp/property/keys.rs`.
+
+**Status at 488398e36 (resolution pass of 2026-09-17).** STILL PARTIALLY RESOLVED.
+No code changed; what changed is the size and shape of the residue, which the
+finding understates.
+
+The finding says reclamation "needs the `NAME` row to carry explicit
+`(id, name)` pairs instead of positional order and wants its own format
+increment", which reads as a format change plus a sweep.
+An inventory of every holder of a property-key id says it is three problems,
+and the format increment is the smallest of them.
+
+FIRST, the liveness sweep is much wider than the heap.
+Beyond the arena — where `Slot::stored_key_id` is already the canonical
+projection and is kind-INDEPENDENT, so a sweep must not switch on `Kind` —
+there are roughly twenty-five side tables holding an id as a scalar or a map
+KEY (`accessors` keyed by `(owner, id)`, `deleted_fn_meta`, `id_map` on every
+frame and saved frame, `binding_names` and `global_props` on every environment
+INCLUDING the inactive ones, `iterators`' `enum_keys`, twenty-one cached
+lookup ids, `ReadKey::Id`), about thirty more whose rows carry `Slot`s, and
+every retained bytecode buffer — `code_segments`, `top_level_code`, and the
+saved frames of all three suspension families — whose id operands
+`opcode::remap_ids` already walks.
+The existing GC traversal reaches the slots but NONE of the scalar holders:
+`visit_chunks` is the right thing to piggyback on and it sees no `id_map`, no
+`binding_names`, no map keys.
+
+SECOND, and this is the one that has no in-engine answer: ids are held OUTSIDE
+`Interp`.
+`Compartment::globals_by_id`, `CompartmentOptions::endowments_by_id` and
+`Compartment::pending_ids` (`rust/engine/ironhorse-vm/src/compartment.rs`) are
+host handles naming ids that no heap slot need store, and a collector cannot
+see them by construction.
+Reclamation therefore needs either a rooting protocol for host-held ids or a
+rule that host-installed names are never prunable.
+The finding does not mention this and it is a design decision, not an
+implementation detail.
+
+THIRD, sparsity breaks the persisted checks silently.
+Every restore validator spells the id bound as `id <= symbol_names.len()` — in
+`persist.rs`, `restore.rs`, `shared_persist.rs` and again at the store gate —
+which is a RANGE check, not a membership check.
+A table with holes passes all of them while resolving to the wrong name, which
+is the silent-wrong-value class F062 is about.
+About forty sites assume `id == index + 1` besides: `append_name_key` derives
+the next id from `len()`, `relink_crank` derives ids from `position()`, and the
+hot `scalar_key_text` path indexes `symbol_names[id - 1]` directly.
+Compacting instead of holing trades that for renumbering every persisted row
+and every retained bytecode buffer.
+
+None of this makes F075 unachievable, and the severity does not move.
+It does mean the residue is a design decision about host-held ids plus a
+sweep that must be complete on pain of silently misreading properties, rather
+than the format increment the recommendation leads with.
+Recorded rather than attempted, because attempting it without deciding the
+host-held-id question first is how the silent-wrong-value class gets made.
 Now at `rust/engine/ironhorse-vm/src/interp/property/keys.rs`.
 
 **Claim.**
@@ -11440,6 +11523,46 @@ recommendation is about".
 Changed by `88332d111 test(ironhorse-vm): gate the exotic-dispatch probe
 chain`.
 Pinned by `rust/engine/ironhorse-vm/tests/dispatch_probe_chain.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs`.
+
+**Status at 488398e36 (resolution pass of 2026-09-17).** STILL OPEN, and its two
+recommendations are now known NOT to be independent.
+Nothing about the dispatch chain changed; what changed is what we know about
+the second recommendation, "make the callee-class probes lazy so a plain
+user-function call pays at most one lookup".
+It was attempted and the attempt was refuted.
+
+The shape that looked obvious: every exotic callee class is already visible in
+the one `self.functions` lookup the call path must make anyway, so the other
+three probes could be gated on it rather than run.
+`promise_functions` is minted only through `alloc_named_method`, so a promise
+function always carries a `NativeMethod`; `bound_functions` entries are built
+with `..FuncInfo::default()`, so a bound function has no body; and a proxy is
+minted with no `functions` record at all.
+Gate on those three facts and an ordinary guest function reaches its frame
+having touched exactly one table, which is what the recommendation asks for.
+
+It is wrong, and the suite already knew.
+`restored_bound_metadata_takes_precedence_over_a_runnable_body` and
+`restored_proxy_metadata_takes_precedence_over_a_runnable_body`
+(`rust/engine/ironhorse-vm/src/interp/tests.rs`) build a callee that carries a
+runnable body AND a bound-or-proxy role, and assert the role wins.
+Their fixture asserts `candidate.body_start.is_some()` outright.
+A RESTORED role can overlap a body, so `FuncInfo` cannot decide the class and
+the side tables stay authoritative — which is what the dispatch loop's own
+comment says: "Restored roles may overlap; the dispatch order below remains
+decisive."
+Both tests went red on the attempt and it was reverted.
+
+What that establishes: the second recommendation is not an alternative to the
+first, it DEPENDS on it.
+Making the probes lazy needs a discriminator that is authoritative rather than
+inferred — which is the first recommendation's exotic-kind tag, and that was
+tried in an earlier pass, measured slower in six of eight cases, and removed.
+So F119 is open on a single question with both of its stated exits closed, and
+that is a sharper statement of the finding than the one it was written with.
+The gate added by the previous pass still holds the chain's length at 27 and 12
+by equality.
 Now at `rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs`.
 
 **Claim.** `GET_PROPERTY` tests membership in fourteen side tables in a fixed
