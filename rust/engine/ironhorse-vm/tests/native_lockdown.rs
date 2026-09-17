@@ -906,3 +906,63 @@ fn a_host_made_compartment_confines_guest_source_only_with_global_names() {
         .join()
         .unwrap();
 }
+
+/// Step 5 refusing is a HARD failure: uncatchable, one attempt, no retry.
+///
+/// This is the first test of any failure path. Before it, all 23 cases
+/// exercised `lockdown()` succeeding, and the documented recovery for a
+/// failure — "calling `lockdown()` again completes the freeze, because a
+/// hardened root is idempotent on the retry" — was never run. It was also
+/// false, and the case that refutes it is the one that reaches the failure at
+/// all: a `Proxy` whose `preventExtensions` trap returns `false` refuses the
+/// same root on every attempt, so the advertised recovery was a loop that
+/// cannot terminate.
+///
+/// What the failure leaves behind is why it must not be catchable. The roots
+/// harden one at a time with no rollback, so a refusal at root `k` leaves
+/// `0..k` frozen while `locked_down` is still `false`: a realm that is partly
+/// frozen and simultaneously reports itself unlocked. A guest that caught this
+/// would carry on running in exactly that state.
+///
+/// So the refusal unwinds the run. `Halt::Refused` cannot be caught, and the
+/// label is the one `lock_down_intrinsics` already uses for this condition,
+/// classified in `REFUSED_LABELS` as "recognized but refused under the current
+/// execution profile".
+///
+/// Note the assertion below: the guest source wraps `lockdown()` in its own
+/// `try`/`catch` and the outcome is still a halt, not the caught string. That
+/// is the property being pinned — a `catch` in guest code does not see it.
+///
+/// **Deliberate divergence from XS.** `fx_lockdown`'s harden calls are a
+/// straight-line sequence whose failure propagates as an ordinary catchable
+/// exception, so XS reproduces the half-frozen-but-unlocked state and lets the
+/// guest continue. `designs/ironhorse-native-lockdown.md` § Oracle divergences
+/// carries this as a chosen departure rather than an oversight.
+#[test]
+fn a_refused_harden_makes_lockdown_fail_hard_and_uncatchably() {
+    let halted = std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            let source = "Object.prototype.__evil__ = \
+                 new Proxy({}, {preventExtensions: function () { return false; }}); \
+                 try { lockdown(); 'LOCKED' } catch (e) { 'CAUGHT ' + e.name } ";
+            let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
+            let mut machine = Interp::new();
+            machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
+            machine.link_intrinsics(&parse_symbols(&symbols));
+            let outcome = machine.run(&code);
+            assert!(
+                !outcome.completed,
+                "a refused harden must unwind the run, not return {}",
+                outcome.result
+            );
+            format!("{:?}", outcome.halt)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(
+        halted, "Refused(\"lockdown:intrinsic-graph\")",
+        "the guest's own try/catch must not see this"
+    );
+}

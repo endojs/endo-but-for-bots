@@ -647,6 +647,40 @@ so the divergence is one of integrity, not of confinement — no reach opens or
 closes on it. Narrowing to XS's exact set would trade a security property for
 a conformance digit.
 
+**Open by decision: a refused harden fails HARD, where XS's is catchable.**
+
+| # | What diverges | XS | IronHorse |
+|---|---|---|---|
+| 5 | step 5 refusing partway | a catchable exception; the guest continues | `Halt::Refused("lockdown:intrinsic-graph")`, which unwinds the run |
+
+`fx_lockdown`'s harden calls are a straight-line sequence with no rollback, so
+a refusal at root `k` leaves `0..k` frozen while the realm still reports itself
+unlocked — and XS lets the guest catch that and carry on. IronHorse reproduces
+the state but not the recovery: the refusal is uncatchable.
+
+Two reasons, and the second is the one that settles it.
+
+First, there is nothing useful a guest can do while holding a realm that is
+partly frozen and simultaneously reports `locked_down == false`.
+
+Second, **the retry this document used to advertise does not work.** § Step 5
+and `lock_down_intrinsics` both said a hardened root is idempotent, so calling
+`lockdown()` again completes the freeze. The case that actually reaches the
+failure refutes it: a `Proxy` whose `preventExtensions` trap returns `false`
+refuses the same root on every attempt, so the retry throws forever instead of
+converging. The documented recovery was a loop that cannot terminate.
+
+Making it a halt also closed a second finding at no extra cost. Every FAILED
+`lockdown()` re-ran step 2 and minted five more inert constructors through
+unmetered allocation, so `for(;;){try{lockdown()}catch(e){}}` was a
+guest-reachable heap-growth primitive. With the failure uncatchable the loop
+cannot iterate: measured, a 500-iteration attempt halts on the first refusal.
+The fix for the retry claim was the fix for the allocation.
+
+`a_refused_harden_makes_lockdown_fail_hard_and_uncatchably` is the test, and it
+is the first in this suite to exercise any failure path at all — every other
+case ran `lockdown()` succeeding.
+
 **Pre-existing, surfaced here but not caused here.**
 
 `%ThrowTypeError%` does not exist on IronHorse at all. XS builds it
