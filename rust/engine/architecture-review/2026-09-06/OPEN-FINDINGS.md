@@ -57,8 +57,8 @@ already closed.
 The first resolution pass added a measurement to the pair rather than work: the
 heap footprint instrument it landed for F106/F122 puts the engine at about 2.5x
 XS on allocation churn against a 1.1x bar, and under 0.3x on every workload that
-does not churn. That is the cost of not collecting within a crank, priced for
-the first time.
+does not churn.
+That is the cost of not collecting within a crank, priced for the first time.
 
 ## Medium
 
@@ -69,24 +69,35 @@ the first time.
 | F075 | Partially open | [3.1](ARCHITECTURE-REVIEW.md#31-robustness-and-resource-exhaustion) | The `u16` property-key id space is a monotone machine-lifetime budget |
 | F149 | Partially open | [3.3](ARCHITECTURE-REVIEW.md#33-compiler-pipeline) | The compiler has exactly one Script shape, the oracle shim's eval program |
 
-F119 is open as a DESIGN question and is no longer ungated: the probe chain is
-counted and pinned by equality, so it cannot grow unnoticed, but neither of the
-finding's two fixes has been done and whether the chain should be a chain is
-still the open call.
+F119 is open as a DESIGN question, is no longer ungated, and its two stated
+exits are now both closed.
+The probe chain is counted and pinned by equality so it cannot grow unnoticed.
+The second recommendation — make the callee-class probes lazy — was attempted
+at `488398e36` and refuted by two existing tests: a RESTORED bound function or
+proxy can carry a runnable body, so the side tables are authoritative and the
+class cannot be inferred from the one lookup a call already makes.
+That makes the second recommendation depend on the first, whose exotic-kind tag
+was measured slower in six of eight cases and removed.
 Reopening it means measuring against
-[PERFORMANCE-TRADEOFFS.md](PERFORMANCE-TRADEOFFS.md), which measured the
-obvious alternative slower.
+[PERFORMANCE-TRADEOFFS.md](PERFORMANCE-TRADEOFFS.md) with a third design.
 
 F068 was open by a decision of record; W6 decision 2 is now reopened and the
-trait is extracted. What remains is its third clause, `Engine::Ironhorse` and
-spawn-payload selection, **blocked** on the worker protocol.
+trait is extracted.
+What remains is its third clause, `Engine::Ironhorse` and spawn-payload
+selection, **blocked** on the worker protocol.
 
-F075's residue is reclamation, and its prerequisite is named in the finding:
-the `NAME` row must carry explicit `(id, name)` pairs instead of positional
-order, with its own format increment, before GC can prune `symbol_names` at
-all.
-The expensive half is the live-id sweep, which fails quietly rather than
-loudly.
+F075's residue is reclamation, and it is bigger than the finding's own
+recommendation reads.
+The `NAME` row does need explicit `(id, name)` pairs and a format increment,
+but an inventory at `488398e36` found the live-id sweep must also cover about
+twenty-five scalar and map-key holders the existing GC traversal does not
+reach, every retained bytecode buffer, and ids held in host handles outside
+`Interp` — which a collector cannot see by construction, so reclamation needs
+a rooting protocol for those or a rule that host-installed names never prune.
+Sparsity also silently defeats the persisted checks, every one of which spells
+the bound as `id <= len` rather than as membership.
+The sweep fails quietly rather than loudly, which is the silent-wrong-value
+class F062 is about.
 
 F149 cannot be closed in the compiler.
 It needs a persistent realm lexical environment in the VM — distinct from
