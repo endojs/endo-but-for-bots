@@ -4618,8 +4618,23 @@ field-scope hoists, `node_scope`'s per-node lookup and one statement scope.
 carries a release-mode `assert_ne!` (362) reached from 39 production call
 sites, and the file additionally holds three `debug_assert`s, 57
 `self.scopes[...]` indexings and five `declare_indexes[...]`.
-That is the audit this finding still wants, now stated as a list someone can
-work rather than a surface.
+The `body_scope` window has now been probed rather than argued, in
+`tests/scoper_totality.rs`: every construct that can nest a declarator inside
+a parameter default without opening a function body — a class static block
+under each declarator token, through a heritage clause, in each of the nine
+function forms that clear the field, and re-entered through a nested
+parameter list — across all five goal/strictness modes.
+None of them panics, so the token-dispatch argument holds against the roster.
+The probe roster nearly proved nothing, which is worth recording: most of it
+ends as `Unsupported`, and had that fold been in the parser the sources would
+have died before the pass under audit ever ran.
+It is in the CODER (coder.rs:3498), downstream of the scoper, so the walk does
+happen — and a test now pins that premise, failing the day static blocks stop
+being deferred, because the audit would then need re-running against sources
+that reach the back end.
+That is one of the nine shapes.
+The other eight, and the release-mode `assert_ne!`, are the audit this finding
+still wants, now stated as a list someone can work rather than a surface.
 It is deliberately NOT claimed as done: nothing here establishes any of the
 invariants, and the first draft of this paragraph asserted one the code
 contradicts, which is the argument for making them per-cluster and in writing
