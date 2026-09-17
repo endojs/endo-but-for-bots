@@ -995,9 +995,7 @@ export const makeStreamingAgent = async (
   let activeJournalUsage;
   let activeJournalOutcomeUnknown = false;
   const assertTurnToolsSettled = async turnId => {
-    const turn = (await turnJournal.list()).find(
-      record => record.turnId === turnId,
-    );
+    const turn = await turnJournal.get(turnId);
     if ([...turn.tools, ...turn.activity].some(tool => !tool.settled)) {
       throw Error(
         'Tool outcome unknown; backend completion did not settle every tool call',

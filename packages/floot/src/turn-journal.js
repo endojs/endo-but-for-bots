@@ -75,7 +75,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
    * @param {bigint} sequence
    * @param {boolean} recovered
    */
-  const apply = (event, sequence, recovered) => {
+  const prepare = (event, sequence, recovered) => {
     const { type, turnId } = event;
     if (type === 'dispatch') {
       turnId === `${sequence}` || Fail`Invalid turn journal dispatch ID`;
@@ -85,7 +85,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       assertText(event.modelId, 1024, true);
       if (event.reasoningEffort !== undefined)
         assertText(event.reasoningEffort);
-      records.set(turnId, {
+      const record = {
         turnId,
         input: event.input,
         backendId: event.backendId,
@@ -98,8 +98,10 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
         // Provider-native activity is observed after the fact, not a claim
         // that Floot durably authorized the effect before execution.
         activity: [],
-      });
-      return;
+      };
+      return () => {
+        records.set(turnId, record);
+      };
     }
     const record = records.get(turnId);
     record || Fail`Unknown turn journal turn`;
@@ -113,18 +115,23 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       const calls = type === 'tool-intent' ? record.tools : record.activity;
       !calls.some(tool => tool.callId === event.callId) ||
         Fail`Duplicate tool journal call ID`;
-      calls.push({
+      const tool = {
         callId: event.callId,
         name: event.name,
         args: event.args,
-      });
+      };
+      return () => {
+        calls.push(tool);
+      };
     } else if (type === 'tool-result' || type === 'observed-tool-result') {
       const calls = type === 'tool-result' ? record.tools : record.activity;
       const tool = calls.find(item => item.callId === event.callId);
       tool || Fail`Tool result without intent`;
       !tool.settled || Fail`Duplicate tool journal result`;
-      tool.result = event.result;
-      tool.settled = true;
+      return () => {
+        tool.result = event.result;
+        tool.settled = true;
+      };
     } else if (type === 'finish') {
       !record.terminal || Fail`Duplicate terminal turn journal event`;
       for (const key of ['output', 'error', 'conversationNodeId']) {
@@ -134,22 +141,27 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       ['completed', 'failed', 'cancelled', 'outcome-unknown'].includes(
         event.state,
       ) || Fail`Invalid terminal turn journal state`;
-      record.terminal = true;
-      record.state = [...record.tools, ...record.activity].some(
-        tool => !tool.settled,
-      )
-        ? 'outcome-unknown'
-        : event.state;
-      record.reportedState = event.state;
-      for (const key of ['output', 'error', 'usage', 'conversationNodeId']) {
-        if (event[key] !== undefined) record[key] = event[key];
-      }
+      const state =
+        record.tools.some(tool => !tool.settled) ||
+        record.activity.some(tool => !tool.settled)
+          ? 'outcome-unknown'
+          : event.state;
+      return () => {
+        record.terminal = true;
+        record.state = state;
+        record.reportedState = event.state;
+        for (const key of ['output', 'error', 'usage', 'conversationNodeId']) {
+          if (event[key] !== undefined) record[key] = event[key];
+        }
+      };
     } else if (type === 'resolve') {
       record.state === 'outcome-unknown' ||
         Fail`Only unknown outcomes need resolution`;
       !record.resolution || Fail`Turn outcome already resolved`;
       assertText(event.note, 8192);
-      record.resolution = event.note;
+      return () => {
+        record.resolution = event.note;
+      };
     } else {
       throw Fail`Unknown turn journal event type`;
     }
@@ -172,7 +184,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       const event = copyData(await E(powers).lookup(name));
       JSON.stringify(event).length <= MAX_EVENT_SIZE ||
         Fail`Turn journal event too large`;
-      apply(event, next, true);
+      prepare(event, next, true)();
       next += 1n;
     }
     initialized = true;
@@ -213,18 +225,10 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
     const event = harden(copyData(value));
     JSON.stringify(event).length <= MAX_EVENT_SIZE ||
       Fail`Turn journal event too large`;
-    // Validate against a disposable copy before storage. No local record can
-    // advance until the immutable write has succeeded.
-    const before = [...records.entries()].map(([id, record]) => [
-      id,
-      JSON.parse(JSON.stringify(record)),
-    ]);
-    try {
-      apply(event, next, false);
-    } finally {
-      records.clear();
-      for (const [id, record] of before) records.set(id, record);
-    }
+    // Validate without mutating or copying the session's accumulated history.
+    // The serialized operation retains this commit until storage acknowledges
+    // the immutable event. No other operation can change its target meanwhile.
+    const commit = prepare(event, next, false);
     const name = `${PREFIX}${`${next}`.padStart(20, '0')}`;
     try {
       await E(powers).storeValue(event, name);
@@ -232,7 +236,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       poisoned = true;
       throw error;
     }
-    apply(event, next, false);
+    commit();
     next += 1n;
   };
 
@@ -261,6 +265,13 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
           'finish',
         ].includes(event.type) || Fail`Invalid appended turn journal event`;
         await write({ ...event, turnId });
+      }),
+    /** @param {string} turnId */
+    get: turnId =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        return harden(JSON.parse(JSON.stringify(record)));
       }),
     list: () =>
       serialized(async () =>

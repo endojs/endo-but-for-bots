@@ -30,6 +30,111 @@ const options = harden({
   modelId: 'sol',
 });
 
+test('targeted reads are detached snapshots and invalid transitions leave evidence unchanged', async t => {
+  const { powers, store } = fixture();
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin(options);
+  await journal.append(id, {
+    type: 'tool-intent',
+    callId: 'a',
+    name: 'read',
+    args: { path: 'x' },
+  });
+  const before = await journal.get(id);
+  await t.throwsAsync(
+    journal.append(id, {
+      type: 'finish',
+      state: 'invalid',
+      output: 'not committed',
+    }),
+    { message: /Invalid terminal/ },
+  );
+  t.deepEqual(await journal.get(id), before);
+  t.is(store.size, 2);
+  await journal.append(id, { type: 'tool-result', callId: 'a', result: 'ok' });
+  t.is(before.tools[0].settled, undefined);
+  t.true((await journal.get(id)).tools[0].settled);
+  await journal.append(id, { type: 'finish', state: 'completed' });
+  const next = await journal.begin(options);
+  t.is((await journal.get(next)).state, 'pending');
+  t.is((await journal.get(id)).state, 'completed');
+  await t.throwsAsync(journal.get('missing'), { message: /Unknown turn/ });
+  t.deepEqual(await journal.get(id), (await journal.list())[0]);
+  t.deepEqual(await makeTurnJournal(powers).get(id), await journal.get(id));
+});
+
+test('prepared transitions wait for storage and serialize following reads', async t => {
+  t.timeout(5000);
+  const store = new Map();
+  let release;
+  const barrier = new Promise(resolve => {
+    release = resolve;
+  });
+  let writing;
+  const entered = new Promise(resolve => {
+    writing = resolve;
+  });
+  const powers = Far('DelayedJournalStorage', {
+    list: () => harden([...store.keys()]),
+    lookup: name => store.get(name),
+    storeValue: async (value, name) => {
+      if (value.type === 'tool-intent') {
+        writing();
+        await barrier;
+      }
+      store.set(name, value);
+    },
+  });
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin(options);
+  const intent = journal.append(id, {
+    type: 'tool-intent',
+    callId: 'a',
+    name: 'read',
+    args: {},
+  });
+  await entered;
+  let readFinished = false;
+  const read = journal.get(id).then(record => {
+    readFinished = true;
+    return record;
+  });
+  await Promise.resolve();
+  t.false(readFinished);
+  t.is(store.size, 1);
+  release();
+  await intent;
+  t.is((await read).tools[0].callId, 'a');
+  await journal.append(id, { type: 'tool-result', callId: 'a', result: 'ok' });
+  t.is((await journal.get(id)).tools[0].result, 'ok');
+});
+
+test('lost result acknowledgement poisons prepared writer and revival reads committed result', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  await journal.append(id, {
+    type: 'tool-intent',
+    callId: 'a',
+    name: 'read',
+    args: {},
+  });
+  f.fail();
+  await t.throwsAsync(
+    journal.append(id, {
+      type: 'tool-result',
+      callId: 'a',
+      result: 'durable despite lost acknowledgement',
+    }),
+    { message: /Lost acknowledgement/ },
+  );
+  await t.throwsAsync(journal.get(id), { message: /uncertain storage/ });
+  const recovered = await makeTurnJournal(f.powers).get(id);
+  t.is(recovered.state, 'outcome-unknown');
+  t.is(recovered.tools[0].result, 'durable despite lost acknowledgement');
+  t.true(recovered.tools[0].settled);
+});
+
 test('legacy import acknowledgement is independent of event capacity and unknown turns', async t => {
   const { powers } = fixture();
   const pending = await makeTurnJournal(powers).begin(options);
