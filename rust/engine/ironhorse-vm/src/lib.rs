@@ -65,9 +65,9 @@ pub use gc::{GcStats, Heap};
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
-    dtf_component_key_static, error_name_static, CompiledSource, Halt, Interp, Native, PanicKind,
-    RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError, SourceCompiler,
-    TYPED_ARRAY_TYPES,
+    dtf_component_key_static, error_name_static, ClosureTemplateStatistics, CompiledSource, Halt,
+    Interp, Native, PanicKind, RelinkError, RestoreError, RestoreSession, RunOutcome,
+    SourceCompileError, SourceCompiler, TYPED_ARRAY_TYPES,
 };
 pub use interp::{CompartmentEnvironment, DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};

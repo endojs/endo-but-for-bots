@@ -1058,19 +1058,22 @@ impl Interp {
                 // and `function_environment` opcodes.
                 XS_CODE_CONSTRUCTOR_FUNCTION | XS_CODE_FUNCTION => {
                     let name = id!(1);
-                    let f = self.new_function(name);
+                    let templated = self.allocate_closure_site_template(code, pc, op, name);
+                    let f = templated.unwrap_or_else(|| self.new_function(name));
                     // Only `constructor_function` carries XS's
                     // `fxDefaultFunctionPrototype` own `prototype` property;
                     // plain `function` (a method shape) has none.
-                    if op == XS_CODE_CONSTRUCTOR_FUNCTION {
-                        self.install_own_function_prototype(f);
-                    } else {
-                        // Methods and arrows have [[Call]] but no
-                        // [[Construct]]. `new_function` materializes the
-                        // default prototype allocation shared with the
-                        // constructor opcode for metering; discard the
-                        // semantic link for the non-constructor opcode.
-                        self.ctor_prototype.remove(&f);
+                    if templated.is_none() {
+                        if op == XS_CODE_CONSTRUCTOR_FUNCTION {
+                            self.install_own_function_prototype(f);
+                        } else {
+                            // Methods and arrows have [[Call]] but no
+                            // [[Construct]]. `new_function` materializes the
+                            // default prototype allocation shared with the
+                            // constructor opcode for metering; discard the
+                            // semantic link for the non-constructor opcode.
+                            self.ctor_prototype.remove(&f);
+                        }
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
@@ -1085,11 +1088,14 @@ impl Interp {
                 // plain function.
                 XS_CODE_GENERATOR_FUNCTION => {
                     let name = id!(1);
-                    let f = self.new_generator_function(name);
+                    let templated = self.allocate_closure_site_template(code, pc, op, name);
+                    let f = templated.unwrap_or_else(|| self.new_generator_function(name));
                     // A generator function carries the same own `prototype`
                     // slot (`fxDefaultFunctionPrototype` over the generator
                     // prototype object it re-chained).
-                    self.install_own_function_prototype(f);
+                    if templated.is_none() {
+                        self.install_own_function_prototype(f);
+                    }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -1102,14 +1108,19 @@ impl Interp {
                 // `function_environment`, exactly as a plain function.
                 XS_CODE_ASYNC_FUNCTION => {
                     let name = id!(1);
-                    let f = self.new_async_function(name);
+                    let f = self
+                        .allocate_closure_site_template(code, pc, op, name)
+                        .unwrap_or_else(|| self.new_async_function(name));
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
                 XS_CODE_ASYNC_GENERATOR_FUNCTION => {
                     let name = id!(1);
-                    let f = self.new_async_generator_function(name);
-                    self.install_own_function_prototype(f);
+                    let templated = self.allocate_closure_site_template(code, pc, op, name);
+                    let f = templated.unwrap_or_else(|| self.new_async_generator_function(name));
+                    if templated.is_none() {
+                        self.install_own_function_prototype(f);
+                    }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -1140,7 +1151,20 @@ impl Interp {
                     // opcodes in this body (skipping nested function bodies)
                     // and accrue it here, where XS incurs it at
                     // definition rather than per call.
-                    let locals = count_new_locals(code, body_start, n);
+                    let locals = self
+                        .active_closure_code(pc)
+                        .map(
+                            |(templated_start, templated_length, templated_arity, locals)| {
+                                debug_assert_eq!(templated_start, body_start);
+                                debug_assert_eq!(templated_length, n);
+                                debug_assert_eq!(
+                                    templated_arity,
+                                    code.get(body_start + 1).copied().unwrap_or(0) as u32
+                                );
+                                locals
+                            },
+                        )
+                        .unwrap_or_else(|| count_new_locals(code, body_start, n));
                     self.meter.tick_raw(FUNCTION_LOCAL_METERING * locals as u64);
                     if let Payload::Reference(f) = function.value {
                         // `fxNewFunctionLength(the, variable, *(code+1))`: XS
@@ -1178,7 +1202,12 @@ impl Interp {
                 XS_CODE_FUNCTION_ENVIRONMENT | XS_CODE_ENVIRONMENT => {
                     let function =
                         dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
-                    let env = self.new_environment();
+                    let env = if op == XS_CODE_FUNCTION_ENVIRONMENT {
+                        self.allocate_active_closure_environment(pc)
+                            .unwrap_or_else(|| self.new_environment())
+                    } else {
+                        self.new_environment()
+                    };
                     // Plain `environment` captures no surrounding dynamic
                     // environment (`fxNewEnvironmentInstance(the, NULL)`),
                     // whereas `function_environment` chains to the current

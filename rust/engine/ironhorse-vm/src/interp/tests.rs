@@ -1961,6 +1961,87 @@ fn closure_capture_and_mutation_run_and_meter_bit_exact() {
 }
 
 #[test]
+fn closure_templates_match_scalar_slots_descriptors_gc_edges_and_metering() {
+    let source = "var result = ''; (function () { var captured = 40; \
+        var f = function named(a, b) { return captured + a + b; }; \
+        var descriptor = Object.getOwnPropertyDescriptor(f, 'prototype'); \
+        result = f.name + ':' + f.length + ':' + \
+          (f.prototype.constructor === f) + ':' + descriptor.enumerable + ':' + f(1, 2); \
+      })(); result";
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+    let names = crate::parse_symbols(&symbols);
+    let mut scalar = Interp::new();
+    scalar.set_closure_templates_enabled(false);
+    scalar.link_intrinsics(&names);
+    let scalar_outcome = scalar.run(&code);
+
+    let mut templated = Interp::new();
+    templated.link_intrinsics(&names);
+    let templated_outcome = templated.run(&code);
+    assert!(templated_outcome.completed, "{:?}", templated_outcome.halt);
+    assert_eq!(templated_outcome.result, "named:2:true:false:43");
+    assert_eq!(templated_outcome.result, scalar_outcome.result);
+    assert_eq!(templated_outcome.halt, scalar_outcome.halt);
+    assert_eq!(templated_outcome.meter_raw, scalar_outcome.meter_raw);
+    assert_eq!(templated_outcome.computrons, scalar_outcome.computrons);
+    assert_eq!(templated_outcome.dispatched, scalar_outcome.dispatched);
+    assert_eq!(templated.slots.records(), scalar.slots.records());
+    assert_eq!(templated.slots.free_list(), scalar.slots.free_list());
+    assert_eq!(
+        templated.function_state_snapshot(),
+        scalar.function_state_snapshot()
+    );
+    let statistics = templated.closure_template_statistics();
+    assert!(statistics.derived_sites >= 2, "{statistics:?}");
+    assert!(statistics.template_allocations >= 2, "{statistics:?}");
+
+    let templated_collection = templated.collect_garbage().unwrap();
+    let scalar_collection = scalar.collect_garbage().unwrap();
+    assert_eq!(templated_collection, scalar_collection);
+    assert_eq!(templated.slots.records(), scalar.slots.records());
+    assert_eq!(templated.slots.free_list(), scalar.slots.free_list());
+    assert_eq!(
+        templated.function_state_snapshot(),
+        scalar.function_state_snapshot()
+    );
+}
+
+#[test]
+fn closure_templates_fall_back_to_scalar_free_list_order() {
+    let source = "var result = ''; (function () { var captured = 41; \
+        var f = function (value) { return captured + value; }; result = f(1); \
+      })(); result";
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+    let names = crate::parse_symbols(&symbols);
+    let prepare = |templates_enabled| {
+        let mut machine = Interp::new();
+        machine.set_closure_templates_enabled(templates_enabled);
+        machine.link_intrinsics(&names);
+        let mut reusable = Vec::new();
+        for _ in 0..256 {
+            reusable.push(machine.slots.alloc(Slot::undefined()));
+        }
+        for slot in reusable {
+            machine.slots.free(slot);
+        }
+        machine
+    };
+    let mut scalar = prepare(false);
+    let scalar_outcome = scalar.run(&code);
+    let mut templated = prepare(true);
+    let templated_outcome = templated.run(&code);
+    assert_eq!(templated_outcome.result, "42");
+    assert_eq!(templated_outcome.result, scalar_outcome.result);
+    assert_eq!(templated_outcome.meter_raw, scalar_outcome.meter_raw);
+    assert_eq!(templated_outcome.dispatched, scalar_outcome.dispatched);
+    assert_eq!(templated.slots.records(), scalar.slots.records());
+    assert_eq!(templated.slots.free_list(), scalar.slots.free_list());
+    let statistics = templated.closure_template_statistics();
+    assert!(statistics.scalar_fallbacks >= 2, "{statistics:?}");
+    assert_eq!(statistics.template_allocations, 0, "{statistics:?}");
+}
+
+#[test]
 fn hostile_suspend_below_run_base_fails_closed() {
     // The fuzz-ironhorse CI lane's first trophy (its first run, on
     // this seven-byte input): hostile bytecode enters an async

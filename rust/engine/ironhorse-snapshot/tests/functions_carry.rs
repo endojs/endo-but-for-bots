@@ -118,6 +118,40 @@ fn blob_resume_keeps_cross_crank_callability() {
 }
 
 #[test]
+fn closure_template_cache_is_derived_after_blob_resume() {
+    let (bytecode, names) = compile(
+        "var factory = 0; var f = 0; var t = 0; \
+         factory = function (seed) { return function named(value) { return seed + value; }; }; \
+         f = factory(1); t = f(2); t",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let before = machine.closure_template_statistics();
+    assert!(before.derived_sites >= 2, "{before:?}");
+    assert!(before.template_allocations >= 2, "{before:?}");
+
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let mut resumed = from_snapshot_bytes(&bytes, &sig()).expect("restore");
+    assert_eq!(
+        resumed.closure_template_statistics(),
+        Default::default(),
+        "the derived cache and diagnostics must not be persistent state",
+    );
+    assert_eq!(
+        crank(
+            &mut resumed,
+            "var factory; var f; var t; f = factory(40); t = f(2); t"
+        )
+        .2,
+        "42"
+    );
+    let after = resumed.closure_template_statistics();
+    assert!(after.derived_sites >= 1, "{after:?}");
+    assert!(after.template_allocations >= 1, "{after:?}");
+}
+
+#[test]
 fn malformed_function_rows_are_refused() {
     let (bytecode, names) =
         compile("var f = 0; var t = 0; f = function (x) { return x + 1; }; t = 7; t");

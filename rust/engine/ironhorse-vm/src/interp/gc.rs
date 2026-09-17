@@ -291,6 +291,9 @@ impl Interp {
         for segment in self.func_segments.values_mut() {
             *segment = remap[segment];
         }
+        // Template keys contain the old segment indices. The bytecode remains
+        // authoritative, so discard rather than remap this derived cache.
+        self.closure_site_templates.clear();
     }
 }
 

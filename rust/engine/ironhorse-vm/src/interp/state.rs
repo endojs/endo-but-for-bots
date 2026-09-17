@@ -485,6 +485,56 @@ pub struct Interp {
     /// lives in. Top-level crank buffers are promoted lazily at their first
     /// function definition; eval/`Function` buffers enter directly.
     func_segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, usize>>,
+    #[boot_new(Default::default())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Immutable, reference-free closure allocation fragments derived from
+    /// retained bytecode. Segment compaction and restore discard this cache;
+    /// the next execution of a site reconstructs it from authoritative code.
+    closure_site_templates: std::collections::HashMap<ClosureSiteKey, ClosureSiteTemplateEntry>,
+    #[boot_new(true)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Test seam retaining the scalar allocation path as an oracle.
+    closure_templates_enabled: bool,
+    #[boot_new(None)]
+    #[gc_root(none)]
+    #[quiescent(none)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// One validated function/code/environment/store sequence currently
+    /// consuming a copied fragment. It is empty at every crank boundary.
+    active_closure_allocation: Option<ActiveClosureAllocation>,
+    #[boot_new(Default::default())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    closure_template_statistics: ClosureTemplateStatistics,
     #[boot_new(false)]
     #[gc_root(none)]
     #[quiescent(false)]

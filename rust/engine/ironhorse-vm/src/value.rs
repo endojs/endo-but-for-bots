@@ -1055,6 +1055,86 @@ impl SlotArena {
         }
     }
 
+    /// Copy a fixed fragment onto the fresh arena tail in one allocation.
+    ///
+    /// Closure-site templates use this only when the free list is empty. A
+    /// reusable record would make the scalar allocator's LIFO order
+    /// observable in snapshots and later allocations, so any free record (or
+    /// inability to reserve the whole fragment without mutation) returns
+    /// `None` and leaves the arena untouched. Callers then use [`Self::alloc`]
+    /// as the exact fallback.
+    pub(crate) fn allocate_tail_fragment(&mut self, fragment: &[Slot]) -> Option<SlotIndex> {
+        let count = u32::try_from(fragment.len()).ok()?;
+        if count == 0 || !self.free.is_empty() {
+            return None;
+        }
+        let start = self.capacity();
+        let end = start.checked_add(count)?;
+        if end > self.ceiling {
+            return None;
+        }
+
+        let old_page_count = start.div_ceil(SLOTS_PER_PAGE) as usize;
+        let new_page_count = end.div_ceil(SLOTS_PER_PAGE) as usize;
+        let additional_pages = new_page_count.saturating_sub(old_page_count);
+        if self.free_marks.try_reserve(fragment.len()).is_err()
+            || self.marks.try_reserve(fragment.len()).is_err()
+            || self.dirty.try_reserve(additional_pages).is_err()
+            || self.unbacked.try_reserve(additional_pages).is_err()
+        {
+            return None;
+        }
+        match &mut self.lazy {
+            Some(backing) => {
+                let current_pages = backing.pages.get_mut().len();
+                if backing
+                    .pages
+                    .get_mut()
+                    .try_reserve(new_page_count.saturating_sub(current_pages))
+                    .is_err()
+                {
+                    return None;
+                }
+            }
+            None if self.slots.try_reserve(fragment.len()).is_err() => return None,
+            None => {}
+        }
+
+        // A lazy arena may have a partial stored tail page. Materialize it
+        // before appending records beside it, exactly as scalar allocation
+        // does for its first fresh-tail record.
+        self.ensure_page_resident(start / SLOTS_PER_PAGE);
+        self.snapshot_dirt.content();
+        self.snapshot_dirt.liveness();
+        match &mut self.lazy {
+            Some(backing) => {
+                for &slot in fragment {
+                    backing.push(slot);
+                }
+            }
+            None => self.slots.extend(fragment.iter().copied().map(Cell::new)),
+        }
+        self.free_marks
+            .extend(std::iter::repeat_n(false, fragment.len()));
+        self.marks
+            .extend(std::iter::repeat_n(false, fragment.len()));
+        self.live = self
+            .live
+            .checked_add(count)
+            .expect("slot live count overflow");
+        for page in start / SLOTS_PER_PAGE..end.div_ceil(SLOTS_PER_PAGE) {
+            let page = page as usize;
+            if page >= self.dirty.len() {
+                self.dirty.resize(page + 1, false);
+            }
+            if page >= self.unbacked.len() {
+                self.unbacked.resize(page + 1, false);
+            }
+            self.dirty[page] = true;
+        }
+        Some(SlotIndex(start))
+    }
+
     /// Return a slot to the free list.
     pub fn free(&mut self, index: SlotIndex) {
         assert!(
@@ -2872,6 +2952,41 @@ mod dirty_tests {
         let y = a.alloc(Slot::integer(2));
         assert_eq!(y, x, "free-list reuse");
         assert_eq!(a.dirty_pages(), vec![0]);
+    }
+
+    #[test]
+    fn slot_tail_fragment_copies_contiguously_and_marks_every_page() {
+        let mut arena = SlotArena::new();
+        for _ in 0..SLOTS_PER_PAGE - 1 {
+            arena.alloc(Slot::undefined());
+        }
+        arena.clear_dirty();
+        let fragment = [Slot::integer(11), Slot::integer(22), Slot::integer(33)];
+        let start = arena
+            .allocate_tail_fragment(&fragment)
+            .expect("fresh tail accepts the whole fragment");
+        assert_eq!(start, SlotIndex(SLOTS_PER_PAGE - 1));
+        assert_eq!(arena.live_count(), SLOTS_PER_PAGE + 2);
+        assert_eq!(arena.dirty_pages(), vec![0, 1]);
+        for (offset, expected) in fragment.into_iter().enumerate() {
+            assert_eq!(arena.get(SlotIndex(start.0 + offset as u32)), expected);
+        }
+    }
+
+    #[test]
+    fn slot_tail_fragment_leaves_free_list_reuse_to_scalar_allocation() {
+        let mut arena = SlotArena::new();
+        let reusable = arena.alloc(Slot::integer(1));
+        arena.free(reusable);
+        arena.clear_dirty();
+        let before = arena.records();
+        assert_eq!(
+            arena.allocate_tail_fragment(&[Slot::integer(2), Slot::integer(3)]),
+            None
+        );
+        assert_eq!(arena.records(), before, "fallback probe is non-mutating");
+        assert!(arena.dirty_pages().is_empty());
+        assert_eq!(arena.alloc(Slot::integer(4)), reusable);
     }
 
     #[test]

@@ -528,6 +528,9 @@ impl Interp {
     /// keeps the same cell reference, so the captured closure and the
     /// defining frame share one cell.
     pub(super) fn store_closure(&mut self, k: usize) -> Result<(), Step> {
+        if let Some(result) = self.store_active_closure(k) {
+            return result;
+        }
         let env = match self.peek_checked()? {
             Slot {
                 value: Payload::Reference(e),
