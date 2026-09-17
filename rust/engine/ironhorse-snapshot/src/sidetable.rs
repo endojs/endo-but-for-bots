@@ -21,11 +21,14 @@
 //! Generated agreement alone cannot establish that an image carries a table.
 //!
 //! Serialized coverage includes callable proxy, accessor, private-element and
-//! Intl-bound links, as well as suspended async instances and async
-//! generator instances (both in `ASYN`).
-//! Unsupported reactions (`Array.fromAsync` steps) and runtime natives still
-//! refuse persistence; coverage does not waive those gates (see
-//! `promise_carry`, `async_carry`, `async_generator_carry`, and `persist_gates`).
+//! Intl-bound links, as well as suspended async instances, async generator
+//! instances and `Array.fromAsync` accumulations (all three in `ASYN`).
+//! Every reaction kind now names state some atom carries — the
+//! `Array.fromAsync` steps were the last that did not (architecture finding
+//! F127) — so what still refuses persistence is a runtime native restore
+//! cannot reconstruct, the test262 `$262` host, and a host module graph.
+//! Coverage does not waive those gates (see `promise_carry`, `async_carry`,
+//! `async_generator_carry`, `from_async_carry`, and `persist_gates`).
 //!
 //! # Excluded transients — why "enumerated against `Interp`'s actual
 //! fields" does not mean *every* field

@@ -281,6 +281,74 @@ fn a_carry_from_below_the_leading_digit_lands_at_the_kept_place() {
         ),
         ("style:'percent',roundingMode:'ceil'", "0.0001", "1%"),
         ("maximumFractionDigits:0,roundingMode:'ceil'", "0.09", "1"),
+        // A directed mode pointing the other way must NOT carry.
+        ("maximumFractionDigits:0,roundingMode:'floor'", "0.09", "0"),
+        ("maximumFractionDigits:0,roundingMode:'trunc'", "0.09", "0"),
+        (
+            "maximumFractionDigits:2,roundingMode:'expand'",
+            "-0.0009",
+            "-0.01",
+        ),
+    ] {
+        assert_eq!(
+            evaluate(&format!(
+                "new Intl.NumberFormat('en', {{{options}}}).format({value})"
+            )),
+            expected,
+            "{options} on {value}"
+        );
+    }
+}
+
+/// The same cut, under the HALF modes, which must not carry at all.
+///
+/// A carry from below the leading digit is a directed-mode event. When the
+/// cut sits below the leading digit every kept digit is zero AND so is the
+/// first discarded one, so the tail is far under half a unit and every
+/// half-rounding mode rounds down. Deciding this at the leading SIGNIFICANT
+/// digit instead reads 9 for 0.09 and rounds up, which reported
+/// `maximumFractionDigits: 0` on 0.09 as `1` where the spec says `0`.
+///
+/// The default mode is `halfExpand`, so the first two rows are what an
+/// ordinary caller with no `roundingMode` at all gets. Expected values
+/// cross-checked against V8.
+#[test]
+fn a_cut_below_the_leading_digit_does_not_carry_under_a_half_mode() {
+    for (options, value, expected) in [
+        ("maximumFractionDigits:0", "0.09", "0"),
+        ("maximumFractionDigits:2", "0.0009", "0"),
+        (
+            "maximumFractionDigits:0,roundingMode:'halfExpand'",
+            "0.09",
+            "0",
+        ),
+        (
+            "maximumFractionDigits:0,roundingMode:'halfEven'",
+            "0.09",
+            "0",
+        ),
+        (
+            "maximumFractionDigits:0,roundingMode:'halfCeil'",
+            "0.09",
+            "0",
+        ),
+        (
+            "maximumFractionDigits:0,roundingMode:'halfFloor'",
+            "0.09",
+            "0",
+        ),
+        (
+            "maximumFractionDigits:0,roundingMode:'halfTrunc'",
+            "0.09",
+            "0",
+        ),
+        ("maximumFractionDigits:0", "-0.09", "-0"),
+        // The boundary itself still behaves: at the leading digit's OWN
+        // place (`keep == 0`) a half mode does compare against five.
+        ("maximumFractionDigits:0", "0.5", "1"),
+        ("maximumFractionDigits:0", "0.4", "0"),
+        ("maximumFractionDigits:2", "0.005", "0.01"),
+        ("maximumFractionDigits:2", "0.004", "0"),
     ] {
         assert_eq!(
             evaluate(&format!(
