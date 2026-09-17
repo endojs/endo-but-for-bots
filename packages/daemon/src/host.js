@@ -20,9 +20,9 @@ import {
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 
 import { cancelPendingIterator } from './cancelable-iterator.js';
-import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 import {
   assertPetName,
   assertPetNamePath,
