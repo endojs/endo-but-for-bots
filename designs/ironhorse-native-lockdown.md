@@ -225,7 +225,8 @@ The goal is `fx_lockdown`, minus the two steps that presuppose a guest
 |---|---|
 | step 1, idempotence | step 3, the compartment-global template |
 | step 2, constructor rewiring, for the four function-family prototypes and `Date.prototype` | step 2's sixth call, on `Compartment.prototype` |
-| step 4, `Date`/`Math` attenuation | a guest `Compartment` constructor of any kind |
+| step 4's `Date.prototype` rewiring (which is step 2's sixth call) | step 4's actual ATTENUATION — the secured `Date`/`Math` that only a compartment global receives |
+| — | a guest `Compartment` constructor of any kind |
 | step 5, transitive harden (largely present) | `mutabilities` and the `fxVerify*` family |
 | the `SesMode::Lockdown` seam in `endot-ih` | `SesMode::Compartment` / `LockdownCompartment` |
 
@@ -241,6 +242,36 @@ Step 4 is in scope but nearly empty, and the measurement below is why: there is
 no `Math.random` on IronHorse to attenuate.
 Keeping it in scope is a decision about where the seam goes, not an estimate of
 work — see § Decisions, as taken, item 3.
+
+### The start compartment and a compartment are not the same environment
+
+An earlier revision of the table above put "step 4, `Date`/`Math` attenuation"
+squarely in scope. That overstated it, and the distinction is worth stating
+because it is the easy thing to conflate.
+
+`fx_lockdown` attenuates the **compartment global template**, not the start
+compartment. The `fxDuplicateInstance(mxDateConstructor)` plus `fx_Date_secure`
+and `fx_Date_now_secure` at `:121-128` are stored into
+`instance->next->value.array.address[_Date]`, which becomes
+`mxCompartmentGlobal` at `:139`. The host's `Date` global is never touched. So
+after `lockdown()`:
+
+* the **start compartment** keeps a working `Date` — `Date.now()` returns a
+  number and is not NaN — and that is correct, not a gap;
+* a **compartment** created afterwards would get the secured `Date`, whose
+  `now()` is NaN, and the secured `Math`.
+
+Measured against the oracle, the start compartment agrees with XS on every
+observable here but one: `Date.now() > 0` is `true` on XS and `false` on
+IronHorse, because IronHorse's clock is deterministic and returns 0. That is a
+pre-existing engine property, not a lockdown effect.
+`native_lockdown.rs::the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment`
+pins the table.
+
+What is out of scope is therefore larger than "the `Compartment` constructor".
+It is the whole attenuated environment a confined guest is supposed to run in.
+That matters for the first real embedding to ask for it — see § Known Gaps,
+the `packages/thixotrope` item.
 
 ## The specification, step by step
 
@@ -689,6 +720,45 @@ IronHorse is missing.
       under `-l`. The expectation-list machinery (`--expectations`,
       `--update-expectations`) is the shape this wants, so the lane ratchets
       instead of being re-argued.
+- [ ] **`packages/thixotrope`'s Ironhorse worker still runs the SES shim, and
+      moving it to the native `lockdown()` is blocked on the compartment
+      environment — not on lockdown.** `scripts/bundle-ironhorse-worker.mjs`
+      inlines the whole SES bundle, does `delete globalThis.harden` so
+      `@endo/harden` picks SES's own rather than the engine's, and calls the
+      SHIM's `lockdown({errorTaming: 'safe', reporting: 'none', overrideTaming:
+      'min'})`. The native `lockdown()` is not involved in that path at all, so
+      `test-thixotrope-ironhorse` passing is a NON-REGRESSION result for this
+      work, not a validation of it.
+      What blocks the move is that a thixotrope guest is supposed to run as if
+      in a compartment. `src/worker-peer.js` implements its
+      `evaluate(source, endowments)` facet as `new Compartment()`,
+      `Object.assign(compartment.globalThis, {E, Far, harden})` and
+      `compartment.evaluate(source)` — the isolation is the point, since
+      evaluated source must see only those three names. A native-lockdown start
+      compartment supplies `harden`, an extensible `globalThis` and a working
+      `eval`/`Function`, but no second global to confine them to and no
+      attenuated `Date`/`Math`. Dropping the shim before the compartment
+      environment exists would evaluate guest source against the SHARED
+      `globalThis` with a real clock: a confinement regression, not a migration.
+      So this item is downstream of the `Compartment` item below, and should not
+      be attempted before it.
+- [ ] **Native `lockdown()` and the SES shim are alternatives, not layers, and
+      the failure mode is ugly.** SES guards a second lockdown with
+      `seemsToBeLockedDown()`, whose sixth term calls
+      `Date.prototype.constructor.now()` and expects NaN — an encoding of SES's
+      own layout, where that slot holds the attenuated `SharedDate`.
+      `fx_lockdown` puts the INERT stand-in there instead, and the stand-in has
+      no `now`, so the guard throws `TypeError: call: not a function` rather
+      than returning true and reporting SES's documented
+      `SES_MULTIPLE_INSTANCES`. Binding a `lockdown` global also makes that
+      conjunction's third term true on every IronHorse realm, where it used to
+      be false.
+      Measured on BOTH engines (`true|true|true|true|true|TypeError`), so it is
+      inherent to `fx_lockdown`'s shape rather than an IronHorse defect, and
+      giving the stand-in a `now` would buy a better SES message at the cost of
+      oracle fidelity. Recorded rather than fixed; SES itself states it
+      "provides security only if it runs first in a given realm". Pinned by
+      `native_lockdown.rs::the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown`.
 - [ ] A guest `Compartment` (`fx_Compartment`, `xsModule.c:2864`) is the next
       piece, and the one that makes the parity corpus's lockdown case runnable
       natively. It needs its own definition.

@@ -601,3 +601,167 @@ fn a_compartment_cannot_lock_down_the_shared_realm() {
         .join()
         .unwrap();
 }
+
+/// What the START COMPARTMENT looks like after a native `lockdown()`, and why
+/// that is not the environment a confined guest should get.
+///
+/// **The two environments are different on purpose, and conflating them is the
+/// easy mistake.** `fx_lockdown` attenuates the *compartment* global template
+/// (steps 3 and 4, `xsLockdown.c:105-139`), not the start compartment. The
+/// start compartment keeps the host's real `Date` and `Math`; the compartment
+/// template gets `fx_Date_secure`/`fx_Date_now_secure`, whose `now()` is NaN.
+/// So a `Date.now()` that still works after lockdown is CORRECT here and is not
+/// a gap in the port.
+///
+/// Measured against the XS oracle, the two engines agree on every row of this
+/// table but one: `Date.now() > 0` is `true` on XS and `false` on Ironhorse,
+/// because Ironhorse's clock is deterministic and returns 0. That is a
+/// pre-existing engine property, not a lockdown effect — `Date.now()` is a
+/// number and is not NaN on both.
+///
+/// | row | value | why it matters |
+/// |---|---|---|
+/// | `harden` | `function` | `worker-peer.js` hardens every value it returns |
+/// | `Compartment` | **`undefined`** | see below |
+/// | `eval`/`Function` | callable, and they WORK | source evaluation is a worker's whole job |
+/// | `globalThis` | NOT frozen, still extensible | endowments are assigned onto a global |
+/// | `Object.prototype` | frozen | the integrity the worker locks down for |
+/// | `Date.now()` | works, not NaN | start-compartment Date is INTACT, by design |
+/// | `Date.prototype.constructor` | the inert stand-in, name `""` | step 2, on both engines |
+/// | `({}).constructor.constructor` | `TypeError` | the reach step 2 closes |
+///
+/// **`eval` and `Function` keep working, and that is not an oversight.** Step 2
+/// replaces the `constructor` PROPERTY on the function-family prototypes, not
+/// the global bindings, so `Function('return 1+1')()` is still `2` on XS too.
+/// What closes is the path from an arbitrary object to an evaluator
+/// (`({}).constructor.constructor`), which is the one a confined guest would
+/// otherwise use.
+///
+/// **What this means for `packages/thixotrope`.** Its Ironhorse worker boot
+/// currently inlines the whole SES shim, deletes `globalThis.harden` so
+/// `@endo/harden` picks SES's own, and calls the SHIM's
+/// `lockdown({errorTaming, reporting, overrideTaming})`. Moving it to the
+/// native `lockdown()` needs more than this table supplies, because a
+/// thixotrope guest is supposed to run AS IF IN A COMPARTMENT, not in the
+/// start compartment measured here. `worker-peer.js` builds that today with
+/// `new Compartment()`, `Object.assign(compartment.globalThis, {E, Far,
+/// harden})` and `compartment.evaluate(source)`; the isolation is the point,
+/// since evaluated source must see only those three names.
+///
+/// So the missing piece is not just the `Compartment` constructor. It is the
+/// compartment-global template itself — `fx_lockdown` steps 3 and 4, including
+/// the attenuated `Date` and `Math` a guest should get instead of the host's —
+/// which is this work's stated scope boundary (`fx_Compartment`,
+/// `xsModule.c:2864`). Dropping the shim before that exists would evaluate
+/// guest source against the SHARED `globalThis` with a real clock: a
+/// confinement regression, not a migration.
+///
+/// If this test starts reporting `Compartment=function`, re-read it alongside
+/// `designs/ironhorse-native-lockdown.md` § Known Gaps before assuming the
+/// migration is unblocked — the constructor existing is necessary, not
+/// sufficient.
+#[test]
+fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() {
+    assert_eq!(
+        result(
+            r#"
+            lockdown();
+            var out = [];
+            function t(label, f) {
+              try { out.push(label + '=' + String(f())); }
+              catch (e) { out.push(label + '=' + e.name); }
+            }
+            t('harden', function () { return typeof harden; });
+            t('Compartment', function () { return typeof Compartment; });
+            t('eval', function () { return typeof eval; });
+            t('Function', function () { return typeof Function; });
+            t('evalWorks', function () { return eval('1+1'); });
+            t('FunctionWorks', function () { return Function('return 1+1')(); });
+            t('globalThisFrozen', function () { return Object.isFrozen(globalThis); });
+            t('ObjProtoFrozen', function () { return Object.isFrozen(Object.prototype); });
+            t('hardenWorks', function () { return Object.isFrozen(harden({a: 1})); });
+            t('canEndowGlobal', function () { globalThis.__x = 1; return globalThis.__x; });
+            t('DateNowIsNumber', function () { return typeof Date.now() === 'number'; });
+            t('DateNowIsNaN', function () { return Number.isNaN(Date.now()); });
+            t('newDateWorks', function () { return new Date(0).getTime(); });
+            t('DateProtoCtorInert', function () {
+              return Date.prototype.constructor !== Date;
+            });
+            t('reachViaCtor', function () { return ({}).constructor.constructor('return 1')(); });
+            out.join(' | ');
+        "#
+        ),
+        "harden=function | Compartment=undefined | eval=function | Function=function | \
+         evalWorks=2 | FunctionWorks=2 | globalThisFrozen=false | ObjProtoFrozen=true | \
+         hardenWorks=true | canEndowGlobal=1 | DateNowIsNumber=true | DateNowIsNaN=false | \
+         newDateWorks=0 | DateProtoCtorInert=true | reachViaCtor=TypeError",
+        "the start compartment keeps a working Date and gains no Compartment; \
+         the attenuated Date belongs to the compartment template, which is out of scope"
+    );
+}
+
+/// Loading the SES shim AFTER a native `lockdown()` fails confusingly, on XS
+/// too.
+///
+/// SES guards against a second lockdown with `seemsToBeLockedDown()`, a
+/// six-term conjunction. A native `lockdown()` turns on the first five —
+/// including `typeof globalThis.lockdown === 'function'`, which
+/// `create_hardened_globals` now makes true on EVERY Ironhorse realm — and then
+/// the sixth calls `globalThis.Date.prototype.constructor.now()` and expects
+/// NaN.
+///
+/// **That expectation encodes SES's layout, not XS's.** SES's `lockdown()`
+/// points `Date.prototype.constructor` at its `SharedDate`, the attenuated
+/// constructor whose `now()` is NaN, so the term reads as "has the shared Date
+/// been installed". `fx_lockdown` puts the INERT stand-in there instead
+/// (step 2) and keeps its attenuated `Date` for the compartment global template
+/// (steps 3-4). The stand-in's own keys are exactly `length`, `name` and
+/// `prototype` — there is no `now` — so the guard THROWS instead of returning
+/// true, and the guest sees `TypeError: call: not a function` rather than SES's
+/// intended and documented `Already locked down but not by this SES instance
+/// (SES_MULTIPLE_INSTANCES)`.
+///
+/// Measured on both engines — the six terms come back
+/// `true|true|true|true|true|TypeError` on Ironhorse AND on the XS oracle — so
+/// this is inherent to `fx_lockdown`'s shape, not an Ironhorse defect. Giving
+/// the stand-in a `now` would fix SES's message at the cost of oracle fidelity,
+/// and is deliberately not done; SES also states it "provides security only if
+/// it runs first in a given realm", so a realm that has already run a native
+/// lockdown is outside its threat model by SES's own terms.
+///
+/// The practical rule this pins: native `lockdown()` and the SES shim are
+/// alternatives, not layers. `Machine::unfrozen_with_start_global_names` says
+/// the same thing from the other side — the shim repairs intrinsics before
+/// freezing them and cannot do that to a graph already frozen.
+#[test]
+fn the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown() {
+    assert_eq!(
+        result(
+            r#"
+            lockdown();
+            var out = [];
+            function t(label, f) {
+              try { out.push(label + '=' + String(f())); }
+              catch (e) { out.push(label + '=' + e.name); }
+            }
+            t('1_FnProtoCtorRewired', function () {
+              return globalThis.Function.prototype.constructor !== globalThis.Function;
+            });
+            t('2_hardenIsFn', function () { return typeof globalThis.harden === 'function'; });
+            t('3_lockdownIsFn', function () { return typeof globalThis.lockdown === 'function'; });
+            t('4_DateProtoCtorRewired', function () {
+              return globalThis.Date.prototype.constructor !== globalThis.Date;
+            });
+            t('5_DateNowIsFn', function () { return typeof globalThis.Date.now === 'function'; });
+            t('6_inertDateNow', function () {
+              return globalThis.Date.prototype.constructor.now();
+            });
+            out.join(' | ');
+        "#
+        ),
+        "1_FnProtoCtorRewired=true | 2_hardenIsFn=true | 3_lockdownIsFn=true | \
+         4_DateProtoCtorRewired=true | 5_DateNowIsFn=true | 6_inertDateNow=TypeError",
+        "SES's guard expects its own SharedDate at Date.prototype.constructor; \
+         fx_lockdown puts the inert stand-in there, so the guard crashes"
+    );
+}
