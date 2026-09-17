@@ -180,10 +180,12 @@ so `maximumFractionDigits: 0` rendered `0.09` as `1` under the default
 `halfExpand`, where the spec and V8 say `0`.
 It belongs to F062's family and arrived with `0b25cdba9`, not with F127.
 
-**Two more findings were examined and neither moved**, at `488398e36`.
-Their statuses are unchanged, so Appendix A gains no column for them and its
-newest pair still reads `2c69bf78d`; what each gained is a status block saying
-something the finding did not know.
+**Three more findings were examined**, at `488398e36` and `27e637606`.
+None of their STATUSES moved, so Appendix A gains no column and its newest
+pair still reads `2c69bf78d` — but F063's CODE did change, so that is a
+narrower claim than "nothing happened", and the distinction is spelled out
+below.
+What each gained is a status block saying something the finding did not know.
 
 **F119**'s two recommendations turn out not to be independent.
 The second — make the callee-class probes lazy — was attempted by deriving
@@ -207,9 +209,28 @@ see by construction.
 Sparsity also silently defeats the persisted checks, which spell the bound as
 `id <= len` everywhere.
 
+**F063's audit was run, at `27e637606`**, and refuted the claim it was
+auditing.
+The previous pass had left exactly one thing — the reachability audit of the
+compiler's remaining panic sites — and added a corpus measurement in its
+place, saying plainly that an empirical floor is not the audit and that the
+finding stayed open on the difference.
+Running it found `try{}catch{function f(){}}`, twenty-six bytes of valid
+ES2022, aborting the compiler under every goal, and a module-goal
+`async function f(a=await 0){}` reaching `code_await` with no return target.
+Both are fixed, the second only after a first attempt got it wrong: guarding
+in the coder fixed the goal that panicked and left the other three compiling
+the same spec early error into a function whose body never ran.
+The rule now lives in the parser, where all four modes refuse it.
+test262 could not have caught the first: its one
+function-declaration-in-catch case is a `negative: parse` fixture the parser
+rejects before the coder runs, so the corpus sweep was green throughout.
+The finding stays open because the rest is audited-negative over 1.28M
+sources rather than argued invariant.
+
 **Nothing else was attempted.**
-The other six findings that are not fixed — F063, F010, F076, F068, F106 and
-F122 — were not re-verified, and their statuses in Appendix A's new column are
+The other six findings that are not fixed — F010, F076, F068, F106, F122 and
+F149 — were not re-verified, and their statuses in Appendix A's new column are
 their `e1038c189` ones carried forward.
 F010 and F076 stay held pending the GC usage-pattern design; F106/F122's
 remaining clause and F068's third stay blocked on the worker protocol.
@@ -4488,6 +4509,86 @@ Pinned by `rust/engine/ironhorse-compile/tests/corpus_compiler_totality.rs`,
 `rust/engine/ironhorse-compile/tests/compile_budget.rs`,
 `rust/engine/ironhorse-vm/tests/compiler_fault_classification.rs`,
 `rust/engine/ironhorse-262/tests/expectation_shards.rs`.
+Now at `rust/engine/ironhorse-compile/src/coder.rs`.
+
+**Status at 27e637606 (resolution pass of 2026-09-17).** STILL PARTIALLY
+RESOLVED, and the audit that WAS the residue has now been run — with the
+result that the claim it was auditing was false.
+
+What the previous pass left was the reachability audit: other `panic!` and
+`unreachable!` sites in `coder.rs`, a wider `expect`/`unwrap` surface in
+`scoper.rs`, and nothing establishing that source text cannot reach them.
+It added a measurement instead — the compiler returns over all 53,575 sources
+of the pinned test262 corpus — and said plainly that this was an empirical
+floor rather than the audit, and that the finding stayed open on that
+difference.
+The difference turned out to be load-bearing.
+
+The audit REPORTED sweeping roughly 1.28 million generated sources under all
+five goal/strictness modes, finding two reachable sites.
+That figure is not reproducible from this repository: the generator is not in
+the tree, so unlike the corpus sweep — which is committed, gated in CI and
+re-runnable in nine seconds — the negative half of this result is a
+recollection rather than a floor anyone can re-establish.
+The two POSITIVE results below are reproducible, and are pinned.
+
+The first is the one that matters.
+`try{}catch{function f(){}}`, twenty-six bytes of unambiguously valid ES2022,
+aborted the compiler under EVERY goal.
+`code_catch` coded its body's defines through the asserting
+`scope_code_define_nodes`, whose contract is that the scope has no defines,
+where `code_block` uses the real `code_define_nodes` for the identical job.
+A catch body is a block, and a function declaration in one is valid.
+
+test262 could not have found it, which is the argument for auditing at all.
+The corpus holds exactly one DIRECTLY nested function-declaration-in-catch
+case, `language/statements/try/early-catch-function.js`, and that one is a
+`negative: parse` fixture: the parser rejects it before the coder runs.
+The roughly twenty `annexB` `if-decl-…-try` cases nest theirs inside an `if`,
+and the parser rejects those too.
+The single corpus case covering the shape is the one that cannot reach the
+site, and the sweep was green before the fix and is green after.
+
+The second is a goal asymmetry.
+`async function f(a=await 0){}` reaches `code_await` with no return target,
+because `code_module` hoists its defines before installing one where
+`code_program` installs one first.
+Per spec that is an early error: a FormalParameters list may not contain an
+AwaitExpression.
+The first attempt at this reported it from the CODER, which was wrong in a way
+worth recording — the panic was one goal's symptom, not the defect.
+Under the other three goals the same source had always compiled, into a
+function whose body silently never ran, so a coder-side guard fixed the module
+goal and left three goals answering a spec early error with a wrong program.
+That is the trade `valid_es2022_compiles` exists to refuse.
+The rule now lives in the parser's `parameters_binding`, where every function
+form funnels through and where `invalid await` already rejected the arrow
+form, so all four goal/strictness modes refuse both the declaration and the
+expression form alike.
+The generator twin — `yield` in a generator's parameter list — is the same
+rule and is refused with it.
+The three coder guards stay as belt and braces, and say so: no source reaches
+them now, and no test pins them.
+
+What still holds, and why this is not closed.
+The remaining sites were reported audited-NEGATIVE over those generated
+sources — a different probe from the corpus rather than a superset of it, and
+in any case not the invariant argument the recommendation asks for.
+Nothing in the tree holds that negative, which is the gap this block is
+admitting rather than papering over.
+The audit splits the rest three ways, and its middle group is the honest
+worry: `coder.rs:2218` and `:2296` call the SAME asserting helper the catch
+bug tripped, and nothing but the grammar — a FunctionDeclaration cannot be a
+bare loop body — keeps them unreached.
+That is a grammar argument rather than a measurement, and it is the kind of
+argument that just failed for `code_catch`.
+The bookkeeping `expect`s and all 29 scoper sites have no source-shape handle
+at all, so for those the claim rests where it always did.
+Changed by `27e637606 fix(ironhorse-compile): two panics the F063 audit proved
+reachable`.
+Pinned by `the_audits_reachable_panics_return_rather_than_panic` in
+`rust/engine/ironhorse-compile/tests/compiler_totality.rs`, verified red
+before the fix.
 Now at `rust/engine/ironhorse-compile/src/coder.rs`.
 
 **Claim.**
@@ -15331,6 +15432,10 @@ none of the other eight that are not fixed, so their statuses in this column
 are inherited rather than re-established.
 A `fixed` here still means one of the two things the `0b25cdba9` note
 describes.
+The pass continued past that commit without widening this table again: it
+carries fixes at `488398e36` and `27e637606`, and status blocks pinned to
+both, but no finding's status or file-level location moved, so a further pair
+would repeat this one verbatim.
 
 | Id | Sev | Conf | § | Location @ 97d8de25 | Location @ f109e8f4 | Status @ f109e8f4 | Location @ 6c1e1d6b | Status @ 6c1e1d6b | Location @ c14706d3 | Status @ c14706d3 | Location @ 1b130df7 | Status @ 1b130df7 | Location @ 7753a4b9 | Status @ 7753a4b9 | Location @ 0b25cdba9 | Status @ 0b25cdba9 | Location @ e1038c189 | Status @ e1038c189 | Location @ 2c69bf78d | Status @ 2c69bf78d | Title | Known |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|------|---|
