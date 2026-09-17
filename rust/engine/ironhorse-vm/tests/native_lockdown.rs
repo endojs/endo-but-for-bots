@@ -709,6 +709,89 @@ fn a_compartment_cannot_lock_down_the_shared_realm() {
 /// `designs/ironhorse-native-lockdown.md` § Known Gaps before assuming the
 /// migration is unblocked — the constructor existing is necessary, not
 /// sufficient.
+/// What SES's `lockdown()` does that the native one does not, measured rather
+/// than argued.
+///
+/// The thixotrope worker calls the SHIM's
+/// `lockdown({errorTaming: 'safe', reporting: 'none', overrideTaming: 'min'})`.
+/// The native `lockdown()` takes no options and has no analogue of any of the
+/// three, because `fx_lockdown` has none either -- it is five steps and no
+/// options against SES's permits table, `removeUnpermittedIntrinsics`, override
+/// enablement, six taming modules and fifteen options
+/// (`designs/ironhorse-native-lockdown.md` § What "native" means here).
+///
+/// `overrideTaming` is the one that changes whether ordinary guest code runs.
+/// SES converts the frequently-overridden `Object.prototype` data properties
+/// into accessors so that assigning `o.toString = ...` on an INSTANCE still
+/// works after the prototype is frozen -- the "override mistake". A native
+/// lockdown freezes them as data properties, so the same assignment is a
+/// silent no-op in sloppy mode and a `TypeError` in strict.
+///
+/// **Faithful to XS, not a defect.** The same probe spliced under `endot-ih -l`
+/// classifies `shared-positive-test-failure`: the oracle's `fx_lockdown` leaves
+/// the override mistake in place too. The classifier discriminates -- a control
+/// probe on the known `Date.now() > 0` divergence reports
+/// `error-message-differs:Error: oracle="Error: clock=true"
+/// ironhorse="Error: clock=false"` -- so agreement here is a result, not a
+/// null one.
+///
+/// This is why "only attenuation is missing" is the wrong summary of the gap
+/// between the native `lockdown()` and the shim, and why an earlier revision
+/// of the design note saying so was retracted: attenuation (steps 3 and 4) is
+/// what a CONFINED guest additionally needs, but override enablement is what
+/// arbitrary guest source needs in order to run at all.
+#[test]
+fn a_native_lockdown_does_not_enable_property_override() {
+    assert_eq!(
+        result(
+            r#"
+            lockdown();
+            var out = [];
+            function t(label, f) {
+              try { out.push(label + '=' + String(f())); }
+              // Name AND message: a bare `TypeError` cannot tell the inert
+              // stand-in's `secure mode` apart from any other refusal, which
+              // is the whole thing these rows assert.
+              catch (e) { out.push(label + '=' + e.name + ': ' + e.message); }
+            }
+            // SES's overrideTaming turns this into an accessor; a native
+            // lockdown leaves it a frozen data property.
+            t('protoToStringShape', function () {
+              var d = Object.getOwnPropertyDescriptor(Object.prototype, 'toString');
+              return (d.get ? 'accessor' : 'data:w=' + d.writable);
+            });
+            // Sloppy-mode assignment through a frozen inherited data property:
+            // silently ignored, so the own property never appears.
+            t('ownAfterAssign', function () {
+              var o = {};
+              o.toString = function () { return 'mine'; };
+              return Object.prototype.hasOwnProperty.call(o, 'toString');
+            });
+            t('valueAfterAssign', function () {
+              var o = {};
+              o.toString = function () { return 'mine'; };
+              return o.toString();
+            });
+            // defineProperty is the workaround that still works, which is what
+            // makes this an ergonomics gap rather than an isolation one.
+            t('defineStillWorks', function () {
+              var o = {};
+              Object.defineProperty(o, 'toString', {
+                value: function () { return 'mine'; },
+                writable: true, enumerable: false, configurable: true,
+              });
+              return o.toString();
+            });
+            out.join(' | ');
+        "#
+        ),
+        "protoToStringShape=data:w=false | ownAfterAssign=false | \
+         valueAfterAssign=[object Object] | defineStillWorks=mine",
+        "a native lockdown has no overrideTaming, so an instance cannot shadow a \
+         frozen Object.prototype method by assignment"
+    );
+}
+
 #[test]
 fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() {
     assert_eq!(
@@ -718,7 +801,10 @@ fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() 
             var out = [];
             function t(label, f) {
               try { out.push(label + '=' + String(f())); }
-              catch (e) { out.push(label + '=' + e.name); }
+              // Name AND message: a bare `TypeError` cannot tell the inert
+              // stand-in's `secure mode` apart from any other refusal, which
+              // is the whole thing these rows assert.
+              catch (e) { out.push(label + '=' + e.name + ': ' + e.message); }
             }
             t('harden', function () { return typeof harden; });
             t('Compartment', function () { return typeof Compartment; });
@@ -743,7 +829,7 @@ fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() 
         "harden=function | Compartment=undefined | eval=function | Function=function | \
          evalWorks=2 | FunctionWorks=2 | globalThisFrozen=false | ObjProtoFrozen=true | \
          hardenWorks=true | canEndowGlobal=1 | DateNowIsNumber=true | DateNowIsNaN=false | \
-         newDateWorks=0 | DateProtoCtorInert=true | reachViaCtor=TypeError",
+         newDateWorks=0 | DateProtoCtorInert=true | reachViaCtor=TypeError: secure mode",
         "the start compartment keeps a working Date and gains no Compartment; \
          the attenuated Date belongs to the compartment template, which is out of scope"
     );
@@ -771,7 +857,8 @@ fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() 
 /// (SES_MULTIPLE_INSTANCES)`.
 ///
 /// Measured on both engines — the six terms come back
-/// `true|true|true|true|true|TypeError` on Ironhorse AND on the XS oracle — so
+/// `true|true|true|true|true|TypeError: call: not a function` on Ironhorse AND
+/// on the XS oracle — so
 /// this is inherent to `fx_lockdown`'s shape, not an Ironhorse defect. Giving
 /// the stand-in a `now` would fix SES's message at the cost of oracle fidelity,
 /// and is deliberately not done; SES also states it "provides security only if
@@ -791,7 +878,12 @@ fn the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown() {
             var out = [];
             function t(label, f) {
               try { out.push(label + '=' + String(f())); }
-              catch (e) { out.push(label + '=' + e.name); }
+              // Name AND message. A bare `TypeError` here would read as "the
+              // stand-in refused", which is NOT what happens: the stand-in has
+              // no `now` at all, so the call fails before any refusal. The
+              // message is the only thing that tells those apart, and an
+              // earlier revision of this test asserted the bare name.
+              catch (e) { out.push(label + '=' + e.name + ': ' + e.message); }
             }
             t('1_FnProtoCtorRewired', function () {
               return globalThis.Function.prototype.constructor !== globalThis.Function;
@@ -809,7 +901,7 @@ fn the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown() {
         "#
         ),
         "1_FnProtoCtorRewired=true | 2_hardenIsFn=true | 3_lockdownIsFn=true | \
-         4_DateProtoCtorRewired=true | 5_DateNowIsFn=true | 6_inertDateNow=TypeError",
+         4_DateProtoCtorRewired=true | 5_DateNowIsFn=true | 6_inertDateNow=TypeError: call: not a function",
         "SES's guard expects its own SharedDate at Date.prototype.constructor; \
          fx_lockdown puts the inert stand-in there, so the guard crashes"
     );

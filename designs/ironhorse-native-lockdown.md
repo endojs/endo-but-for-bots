@@ -16,7 +16,7 @@ Landed, within the scope boundary below.
 `fx_lockdown` steps 1, 2 and 5; `create_hardened_globals` binds it as the guest
 global `lockdown`, beside `harden` and `petrify`. `endot-ih -l` runs instead of
 refusing, and `test262:ironhorse` with it. Pinned by
-`ironhorse-vm/tests/native_lockdown.rs` (24 cases), most of which were written
+`ironhorse-vm/tests/native_lockdown.rs` (25 cases), most of which were written
 from defects adversarial review found after the first revision called this
 section "Landed".
 
@@ -83,10 +83,21 @@ swept end to end under `-l`.
 failures across the two. **54** of those were cases that died at the
 `lockdown()` call, and all 54 now pass; the baseline diff is a pure
 failed→passed flip over the same file set, with no case regressing and no other
-agent's profile moving. The remaining 124 are `Compartment` cases and stay red,
-which is the scope boundary doing what it says. (An earlier revision of this
-paragraph, and commit `50e802b71`, gave 54 as the profiles' whole failure count.
-It cleared 30% of that baseline, not all of it.)
+agent's profile moving. (An earlier revision of this paragraph, and commit
+`50e802b71`, gave 54 as the profiles' whole failure count. It cleared 30% of
+that baseline, not all of it.)
+
+**124 remain, and only 76 of them are the scope boundary.** An earlier revision
+said "the remaining 124 are `Compartment` cases and stay red, which is the
+scope boundary doing what it says"; counted from the committed baselines, the
+split is 76 under `test/Compartment`, 29 `intrinsics/*/intrinsic-metadata.js`,
+12 under `test/modules` (mostly `module-source-reflection/ses-legacy`), and 7
+others (`TextDecoder`/`TextEncoder` immutable-ArrayBuffer intersection,
+`freeze/monadic.js`, `harden/stamp.js`). The 29 metadata cases are the ones
+worth naming: they assert the shape of intrinsics this work touches rather than
+anything about `Compartment`, so they are not covered by the boundary and have
+not been diagnosed. Attributing all 124 to `Compartment` made the boundary look
+like a complete account of what is red, and it is not.
 `test/intrinsics/AsyncFunction/inert-stand-in.js` is the one to read: written
 against SES's semantics, it asserts `Object.isFrozen(AsyncFunction)` and that
 the stand-in throws on call **and** on construct. That is why the inert
@@ -135,9 +146,9 @@ are scoped out here — see § Scope boundary.
 
 It is **not** the prelude workaround that sits next to it.
 The SES shim's `lockdown()` fails on IronHorse today for a reason this document
-inherits (§ The ordering fact), and it can be made to pass by giving the shim a
-`harden` that does not walk prototype chains — measured, and deliberately not
-taken here.
+inherits (§ The ordering fact, and what it is actually a fact about), and it
+can be made to pass by giving the shim a `harden` that does not walk prototype
+chains — measured, and deliberately not taken here.
 That route changes no engine code and leaves this gap exactly where it is.
 
 ## Why: what a native `lockdown()` unblocks
@@ -179,12 +190,30 @@ This work is the native profile's prerequisite, not its decision.
 Building native `lockdown()` does not settle it and should not be read as
 settling it; it makes the native profile answerable where today it is not.
 
-## The ordering fact
+## The ordering fact, and what it is actually a fact about
 
-The one thing this port must not get wrong, and the reason the ordering is
-worth its own section: **rewire the constructors first, harden afterwards.**
-XS does it in that order — steps 2 then 5 — and the cost of the other order is
-measurable in this tree today.
+**It is a fact about `[[DefineOwnProperty]]`, not about this port.** An earlier
+revision of this section opened "the one thing this port must not get wrong:
+rewire the constructors first, harden afterwards", and that was wrong twice
+over.
+
+Wrong as stated, because mutation testing refutes it: inverting steps 2 and 5
+in `do_lockdown` changes no observable behaviour and fails no test. The reason
+is `force_locked_down_constructor`, which ASSIGNS the slot rather than defining
+the property — XS's `slot->kind = constructor->kind` (`xsLockdown.c:65-66`), the
+privileged write this port copies — so a frozen `Function.prototype` is no
+obstacle whenever the write happens. The direct write is the contract; the order
+is not.
+
+Wrong as a plan, because step 2 now runs on BOTH sides of step 5 regardless.
+Hardening walks the roots through the MOP, so a Proxy trap can fire between the
+two and put the real evaluator back; `reassert_function_constructors` closes
+that window, and no ordering of the two steps could have
+(`a_proxy_cannot_restore_the_evaluator_from_inside_the_freeze`).
+
+What is true, and worth its own section, is the cost of the other order for an
+implementation that goes through the ordinary MOP — which is exactly how the
+SES shim fails on IronHorse.
 
 Measured on a default `Interp::new()` machine (§ Measured starting state):
 `Function.prototype.constructor` boots as the spec's
@@ -579,13 +608,25 @@ Each line is a claim, and each was measured.
       gated against the XS oracle rather than pre-skipped.
 - [x] The `ironhorse-snapshot` golden identity fixtures are regenerated for the
       moved boot fingerprint (`regenerate_persistence_identities`, both math
-      providers), the six inline digests in `metamorphic_determinism.rs` are
-      re-pinned with a note, and the upgrade consequence is in this document's
-      § Constraints and in the PR.
+      providers), the **nine** inline digests in `metamorphic_determinism.rs`
+      are re-pinned with a note, and the upgrade consequence is in this
+      document's § Constraints and in the PR. (Nine, not six: five marker
+      restamps plus the canonical blob and its seal under EACH math provider.
+      An earlier revision of this line counted the blob and seal once each,
+      which is the exact miscount the two-armed fix exists to prevent.)
 - [x] `ses_prelude_reach` stays at its 7/8 pin and `ses_boot_intrinsics`'s
       three realm profiles still pass — with one change in each, `lockdown`
       going from `undefined` to `function` in the pre-shim census, which is the
       engine binding its own and is the only thing that moved.
+
+      **That census term stopped discriminating in the process, and the tests
+      now say so.** `lockdown=function` used to mean "the shim installed one";
+      with the engine binding one on every realm it is `function` on both sides
+      of the shim's evaluation and carries no information. The unfrozen profile
+      pins object identity across the shim's evaluation instead, and the frozen
+      profile CALLS the binding and pins `TypeError: lockdown already called` —
+      the engine's message, where the shim's would have been
+      `Already locked down ... (SES_MULTIPLE_INSTANCES)`.
 - [x] This document updated with what the port did and where it diverged from
       `fx_lockdown` (§ Decisions, as taken, 4).
 - [x] `packages/hardened262`'s `ironhorse/lockdown*` baselines updated: 54
@@ -864,12 +905,36 @@ IronHorse is missing.
       today, and `Machine::unfrozen_with_start_global_names`' doc comment
       already anticipates the move ("`packages/thixotrope` already runs that
       shape on a bare `Interp`; this offers it a `Machine`").
-      What is genuinely still missing is ATTENUATION, not isolation: a host-made
-      compartment's `Date.now()` answers from the real clock instead of the NaN
-      an `fx_lockdown` compartment global would give, and `Math` is likewise
-      unsecured. That is steps 3 and 4 — a narrower gap than a guest
-      `Compartment` constructor, and the one to close if guest source must not
-      read a clock.
+      **Two things are still missing, and an earlier revision of this item named
+      only one.** It said "what is genuinely still missing is ATTENUATION, not
+      isolation", which understated the distance to the shim.
+
+      Attenuation is the first: a host-made compartment's `Date.now()` answers
+      from the real clock instead of the NaN an `fx_lockdown` compartment global
+      would give, and `Math` is likewise unsecured. That is steps 3 and 4 — a
+      narrower gap than a guest `Compartment` constructor, and the one to close
+      if guest source must not read a clock.
+
+      The second is that the worker calls the SHIM's
+      `lockdown({errorTaming: 'safe', reporting: 'none', overrideTaming:
+      'min'})`, and the native `lockdown()` has no analogue of any of the three.
+      `overrideTaming` is not cosmetic: SES converts the frequently-overridden
+      `Object.prototype` data properties into accessors so that assigning
+      `o.toString = ...` on an INSTANCE still works once the prototype is
+      frozen. Without it the assignment is a silent no-op in sloppy mode and a
+      `TypeError` in strict. Measured after a native `lockdown()`:
+      `protoToStringShape=data:w=false | ownAfterAssign=false |
+      valueAfterAssign=[object Object] | defineStillWorks=mine`
+      (`a_native_lockdown_does_not_enable_property_override`), and spliced under
+      `endot-ih -l` the same probe classifies `shared-positive-test-failure`, so
+      XS's `fx_lockdown` behaves identically — this is fidelity to the oracle,
+      not a port defect.
+
+      The distinction matters for sequencing: attenuation is what a CONFINED
+      guest additionally needs, while override enablement is what arbitrary
+      guest source needs in order to run at all. A worker that swapped the shim
+      for the native `lockdown()` today would confine correctly and break
+      ordinary guest code.
 - [ ] **Native `lockdown()` and the SES shim are alternatives, not layers, and
       the failure mode is ugly.** SES guards a second lockdown with
       `seemsToBeLockedDown()`, whose sixth term calls

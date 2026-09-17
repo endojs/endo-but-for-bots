@@ -2691,9 +2691,16 @@ mod tests {
         //
         // Asserting on `prelude()`'s shape cannot catch that. This asserts on
         // what `assemble` PRODUCES, which is the thing the engine runs.
-        let Some((_root, harness)) = crate::test262::locate_test262() else {
-            return;
-        };
+        // **Not a silent skip.** The corpus is committed at
+        // `packages/test262-runner/test262`, so `locate_test262` answering
+        // `None` means the checkout is broken, not that this case is
+        // inapplicable. Returning early here would make the guard against a
+        // disconnected `-l` wire itself vacuous -- the same class of green
+        // that let the wire go unnoticed in the first place.
+        let (_root, harness) = crate::test262::locate_test262().expect(
+            "the committed test262 subset must be locatable; a silent skip here \
+             would make this splice guard vacuous",
+        );
         let fm = frontmatter::parse("1 + 1;\n");
         let mut cfg = Config::default();
 
@@ -2733,9 +2740,16 @@ mod tests {
     /// `lockdown()` before running the file whatever the file is.
     #[test]
     fn a_raw_case_still_takes_the_lockdown_wrap() {
-        let Some((_root, harness)) = crate::test262::locate_test262() else {
-            return;
-        };
+        // **Not a silent skip.** The corpus is committed at
+        // `packages/test262-runner/test262`, so `locate_test262` answering
+        // `None` means the checkout is broken, not that this case is
+        // inapplicable. Returning early here would make the guard against a
+        // disconnected `-l` wire itself vacuous -- the same class of green
+        // that let the wire go unnoticed in the first place.
+        let (_root, harness) = crate::test262::locate_test262().expect(
+            "the committed test262 subset must be locatable; a silent skip here \
+             would make this splice guard vacuous",
+        );
         let src = "/*---\nflags: [raw]\n---*/\n1 + 1;\n";
         let fm = frontmatter::parse(src);
         let raw = assemble(&harness, src, &fm, None, SesMode::Lockdown).expect("assembles");
