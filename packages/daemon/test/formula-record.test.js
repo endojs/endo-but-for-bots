@@ -236,22 +236,6 @@ test('makeFormulaRecord omits guest pin directories when absent', t => {
   t.false('hostPins' in record.properties);
 });
 
-test('makeFormulaRecord surfaces a readable-directory reference', t => {
-  const formula = /** @type {Formula} */ (
-    /** @type {unknown} */ ({
-      type: 'readable-directory',
-      directory: 'directory-id',
-    })
-  );
-
-  const record = makeFormulaRecord(formula, aNumber);
-
-  t.is(record.type, 'readable-directory');
-  t.deepEqual(record.properties, {
-    directory: { kind: 'reference', identifier: 'directory-id' },
-  });
-});
-
 test('makeFormulaRecord omits a scratch-mount path when unresolved', t => {
   // When the host cannot resolve the path (e.g. the formula was
   // collected since resolution), the property is omitted rather than

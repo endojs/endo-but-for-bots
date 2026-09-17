@@ -35,7 +35,6 @@ const ALL_FORMULA_TYPES = [
   'pet-store',
   'promise',
   'readable-blob',
-  'readable-directory',
   'readable-tree',
   'registry',
   'resolver',

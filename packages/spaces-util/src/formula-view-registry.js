@@ -221,11 +221,6 @@ const REGISTRY = {
       'separate formulas, so this view carries no formula references — the ' +
       "tree's entries are listed below instead.",
   },
-  'readable-directory': {
-    header: 'Readable directory',
-    helpText: 'Read-only view of a live directory.',
-    propertyList: ['directory'],
-  },
   promise: {
     header: 'Promise',
     helpText: 'Pending result.',

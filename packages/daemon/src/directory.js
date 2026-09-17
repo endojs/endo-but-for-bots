@@ -31,7 +31,37 @@ import { directoryHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface } from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, Formula, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, EvalDeferredTaskParams, EvalFormula, StoreController } from './types.js' */
+
+// The evaluation formula is the durable identity of the attenuation. Its
+// result is a worker-hosted Far object that forwards only the readable hub
+// methods to the backing directory.
+export const readOnlyDirectorySource = `
+const readOnly = hub =>
+  Far('ReadableNameHub', {
+    help: (...args) => E(hub).help(...args),
+    has: (...path) => E(hub).has(...path),
+    list: (...path) => E(hub).list(...path),
+    lookup: path => E(hub).lookup(path),
+    maybeLookup: path => E(hub).maybeLookup(path),
+  });
+readOnly(hub)
+`;
+
+/**
+ * Recognize the evaluation recipe used for a read-only directory. This lets
+ * daemon-internal network discovery reach the backing directory's identifiers
+ * without broadening the guest-facing attenuation.
+ *
+ * @param {Formula} formula
+ * @returns {formula is EvalFormula}
+ */
+export const isReadOnlyDirectoryFormula = formula =>
+  formula.type === 'eval' &&
+  formula.source === readOnlyDirectorySource &&
+  formula.names.length === 1 &&
+  formula.names[0] === 'hub' &&
+  formula.values.length === 1;
 
 /**
  * @param {object} args
@@ -44,7 +74,7 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
- * @param {DaemonCore['formulateReadableDirectory']} args.formulateReadableDirectory
+ * @param {DaemonCore['formulateEval']} args.formulateEval
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -56,7 +86,7 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
-  formulateReadableDirectory,
+  formulateEval,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -714,8 +744,18 @@ export const makeDirectoryMaker = ({
         // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
         // a recursively read-only surface must re-attenuate results themselves.
         readOnly: async () => {
-          await null;
-          const { value } = await formulateReadableDirectory(directoryId);
+          /** @type {DeferredTasks<EvalDeferredTaskParams>} */
+          const tasks = makeDeferredTasks();
+          const { value } = await formulateEval(
+            directoryId,
+            readOnlyDirectorySource,
+            ['hub'],
+            [directoryId],
+            tasks,
+            undefined,
+            undefined,
+            'read-only-directory',
+          );
           return value;
         },
       }),

@@ -97,13 +97,6 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       }
       break;
     }
-    case 'readable-directory': {
-      properties.directory = {
-        kind: 'reference',
-        identifier: formula.directory,
-      };
-      break;
-    }
     case 'host': {
       properties.handle = { kind: 'reference', identifier: formula.handle };
       properties.hostHandle = {

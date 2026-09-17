@@ -43,7 +43,7 @@ import {
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
-import { makeDirectoryMaker } from './directory.js';
+import { isReadOnlyDirectoryFormula, makeDirectoryMaker } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
@@ -118,7 +118,6 @@ import {
   BlobInterface,
   ReadableTreeInterface,
   EndoInterface,
-  ReadableNameHubInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
@@ -770,8 +769,6 @@ const makeDaemonCore = async (
               ])
             : []),
         ];
-      case 'readable-directory':
-        return [['directory', formula.directory]];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
       case 'eval':
@@ -2818,7 +2815,7 @@ const makeDaemonCore = async (
             maybeReadText: notSupported,
             writeText: disallowedMutation,
             // Unlike `EndoDirectory.readOnly()` (which mints a narrow
-            // `ReadableNameHub` view via `formulateReadableDirectory`), this hub
+            // `ReadableNameHub` view via an evaluation formula), this hub
             // is *already* fully read-only: every mutator above is
             // `disallowedMutation`/`notSupported`, so there is no writable
             // surface left to attenuate. `readOnly()` therefore returns the
@@ -3211,7 +3208,7 @@ const makeDaemonCore = async (
             maybeReadText: notSupported,
             writeText: disallowedMutation,
             // Unlike `EndoDirectory.readOnly()` (which mints a narrow
-            // `ReadableNameHub` view via `formulateReadableDirectory`), this hub
+            // `ReadableNameHub` view via an evaluation formula), this hub
             // is *already* fully read-only: every mutator above is
             // `disallowedMutation`/`notSupported`, so there is no writable
             // surface left to attenuate. `readOnly()` therefore returns the
@@ -4267,21 +4264,6 @@ const makeDaemonCore = async (
         directoryId: id,
       });
     },
-    'readable-directory': async ({ directory: directoryId }, context) => {
-      context.thisDiesIfThatDies(directoryId);
-      const directory = await provide(directoryId, 'directory');
-      return makeExo(
-        'ReadableNameHub',
-        ReadableNameHubInterface,
-        /** @type {any} */ ({
-          help: () => /** @type {any} */ (directory).help(),
-          has: (...path) => directory.has(...path),
-          list: (...path) => directory.list(...path),
-          lookup: path => directory.lookup(/** @type {any} */ (path)),
-          maybeLookup: path => directory.maybeLookup(/** @type {any} */ (path)),
-        }),
-      );
-    },
     peer: (
       { networks: networksId, node: nodeId, addresses: addressesId },
       context,
@@ -5290,21 +5272,6 @@ const makeDaemonCore = async (
         pinTransient(result.id);
         return result;
       })
-    );
-  };
-
-  /** @type {DaemonCore['formulateReadableDirectory']} */
-  const formulateReadableDirectory = async (
-    directoryId,
-    nodeNumber = localNodeNumber,
-  ) => {
-    const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
-    return /** @type {FormulateResult<ReadableNameHub>} */ (
-      formulate(
-        formulaNumber,
-        { type: 'readable-directory', directory: directoryId },
-        nodeNumber,
-      )
     );
   };
 
@@ -6384,21 +6351,15 @@ const makeDaemonCore = async (
   /** @type {DaemonCore['getAllNetworkAddresses']} */
   const getAllNetworkAddresses = async networksDirectoryId => {
     const networksFormula = await getFormulaForId(networksDirectoryId);
-    // When a guest's `@nets` is a `readable-directory` attenuation, unwrap to
-    // the underlying writable directory rather than reading through the
-    // attenuated exo. This is a deliberate server-side bypass, safe here for
-    // two reasons: (1) `listIdentifiers` is not on `ReadableNameHubInterface`,
-    // so the read-only view cannot enumerate entries and the raw ref is the
-    // only way to walk them; (2) the unwrapped reference never leaves the
-    // daemon -- it is used only to compute this agent's own advertised
-    // addresses and is not handed back to the guest -- so the guest-facing
-    // attenuation boundary is not weakened. A less-trusted call site must NOT
-    // copy this unwrap idiom; it is justified only by this internal,
-    // non-escaping use.
-    const readableNetworksDirectoryId =
-      networksFormula.type === 'readable-directory'
-        ? networksFormula.directory
-        : networksDirectoryId;
+    // When a guest's `@nets` is the read-only evaluation recipe, unwrap its
+    // sole `hub` endowment to reach `listIdentifiers`. The backing reference
+    // stays inside the daemon and is used only to compute this agent's own
+    // advertised addresses, so it does not broaden the guest-facing surface.
+    const readableNetworksDirectoryId = isReadOnlyDirectoryFormula(
+      networksFormula,
+    )
+      ? networksFormula.values[0]
+      : networksDirectoryId;
     const networksDirectory = await provide(
       readableNetworksDirectoryId,
       'directory',
@@ -7080,7 +7041,7 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
-    formulateReadableDirectory,
+    formulateEval,
     pinTransient,
     unpinTransient,
   });

@@ -934,7 +934,7 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
 }
 
 test('provideGuest preserves a read-only networks attenuation', async t => {
-  const { host } = await prepareHost(t);
+  const { cancelled, config, host } = await prepareHost(t);
   const networks = await E(host).makeDirectory('delegated-nets');
   const readOnlyNetworks = await E(networks).readOnly();
   const guest = await E(host).provideGuest('guest', {
@@ -957,11 +957,20 @@ test('provideGuest preserves a read-only networks attenuation', async t => {
     guestRecord.properties.networks.identifier,
   );
   const networksId = await E(host).identify('delegated-nets');
-  t.is(readOnlyNetworksRecord.type, 'readable-directory');
-  t.is(readOnlyNetworksRecord.properties.directory.identifier, networksId);
+  t.is(readOnlyNetworksRecord.type, 'eval');
+  t.is(readOnlyNetworksRecord.properties.endowments.entries.hub, networksId);
+
+  await restart(config);
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const guestAfter = await E(hostAfter).lookup('guest-agent');
+  t.deepEqual(await E(guestAfter).list('@nets'), ['loopback']);
+  await t.throwsAsync(
+    E(guestAfter).storeIdentifier(['@nets', 'other'], markerId),
+    { message: /storeIdentifier/u },
+  );
 });
 
-// Regression guard for the `readable-directory` unwrap in
+// Regression guard for the read-only evaluation-formula unwrap in
 // `getAllNetworkAddresses` (manager.js): a guest whose `networks` is a
 // read-only attenuation must still be able to *compute* its advertised
 // addresses, which means `locate()` (the only path that reaches
@@ -997,9 +1006,9 @@ test('guest with read-only networks locates through the attenuated view', async 
   });
 
   // The discriminating assertion: locate() on the read-only-networks guest
-  // must succeed. Without the `readable-directory` unwrap in
+  // must succeed. Without the evaluation-formula unwrap in
   // `getAllNetworkAddresses`, this rejects with a `provide(id, 'directory')`
-  // type mismatch against the `readable-directory` formula.
+  // type mismatch against the `eval` formula.
   const readOnlyLocator = await E(readOnlyGuest).locate('@self');
   t.truthy(readOnlyLocator, 'read-only-networks guest can locate');
 
@@ -1029,7 +1038,7 @@ test('provideGuest rejects a non-daemon-minted pins reference', async t => {
 
 test('provideGuest rejects a wrong-typed pins reference', async t => {
   const { host } = await prepareHost(t);
-  // A read-only view is daemon-minted but is a `readable-directory`, not the
+  // A read-only view is daemon-minted but is an `eval`, not the
   // plain writable `directory` the pins option requires.
   const directory = await E(host).makeDirectory('some-dir');
   const readOnlyDirectory = await E(directory).readOnly();
@@ -1056,8 +1065,8 @@ test('provideGuest rejects a non-daemon-minted networks reference', async t => {
 
 test('provideGuest rejects a wrong-typed networks reference', async t => {
   const { host } = await prepareHost(t);
-  // A worker is daemon-minted but is neither a directory nor a
-  // readable-directory, so it must be rejected as a networks option.
+  // A worker is daemon-minted but is neither a directory nor the recognized
+  // read-only evaluation recipe, so it must be rejected as a networks option.
   const worker = await E(host).provideWorker('some-worker');
   await t.throwsAsync(
     E(host).provideGuest('guest', {

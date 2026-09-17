@@ -44,7 +44,6 @@ test('listKnownFormulaTypes covers the canonical daemon formula types', t => {
     'known-peers-store',
     'loopback-network',
     'readable-blob',
-    'readable-directory',
     'promise',
     'resolver',
     'marshal',
@@ -172,15 +171,6 @@ test('the invitation spec names the inviting agent, not a host specifically', t 
     'invitingHandle',
     'guestName',
   ]);
-});
-
-test('the readable-directory spec surfaces the backing directory reference', t => {
-  // A read-only view over a live directory (used for net attenuation),
-  // consistent with `readable-tree`/`readable-blob`. Its `directory`
-  // property references the directory it attenuates.
-  const spec = getFormulaViewSpec('readable-directory');
-  t.is(spec.header, 'Readable directory');
-  t.deepEqual(spec.propertyList, ['directory']);
 });
 
 test('the registry is frozen so callers cannot mutate per-type specs', t => {

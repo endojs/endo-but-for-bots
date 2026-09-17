@@ -10,7 +10,7 @@ The invitation object gains `cancel()`, which revokes exactly that pending invit
 Invitation redemption is single-use and race-safe: two concurrent or replayed `accept` calls cannot both redeem one invitation, and a `cancel` racing an `accept` cannot un-name the just-accepted guest.
 
 `provideGuest` gains `pins` and `networks` options that let the parent agent supply a new guest's `@pins` and `@nets` directories directly.
-Passing a read-only view for `networks` — via the new `EndoDirectory.readOnly()`, backed by a new `readable-directory` formula — delegates it un-mutably.
+Passing a read-only view for `networks` — via the new `EndoDirectory.readOnly()`, backed by an evaluation formula that attenuates the directory — delegates it un-mutably.
 
 An agent's pin directories are reincarnated when its mailbox receives a message, before the message-received notification is dispatched, so a pinned connected agent stays live to respond across a daemon restart.
 

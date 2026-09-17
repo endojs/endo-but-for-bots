@@ -620,11 +620,6 @@ export type DirectoryFormula = {
   petStore: FormulaIdentifier;
 };
 
-export type ReadableDirectoryFormula = {
-  type: 'readable-directory';
-  directory: FormulaIdentifier;
-};
-
 export type ChannelFormula = {
   type: 'channel';
   handle: FormulaIdentifier;
@@ -705,7 +700,6 @@ export type Formula =
   | WorkerFormula
   | HostFormula
   | GuestFormula
-  | ReadableDirectoryFormula
   | LeastAuthorityFormula
   | MarshalFormula
   | EvalFormula
@@ -2811,11 +2805,6 @@ export interface DaemonCore {
   formulateDirectoryForStore: (
     storeId: FormulaIdentifier,
   ) => FormulateResult<EndoDirectory>;
-
-  formulateReadableDirectory: (
-    directoryId: FormulaIdentifier,
-    nodeNumber?: NodeNumber,
-  ) => FormulateResult<ReadableNameHub>;
 
   getPeerIdForNodeIdentifier: (
     nodeNumber: NodeNumber,

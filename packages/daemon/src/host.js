@@ -44,6 +44,7 @@ import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
+import { isReadOnlyDirectoryFormula } from './directory.js';
 import { makeFormulaRecord } from './formula-record.js';
 
 import {
@@ -1911,7 +1912,7 @@ export const makeHostMaker = ({
       if (
         kind === 'networks' &&
         formula.type !== 'directory' &&
-        formula.type !== 'readable-directory'
+        !isReadOnlyDirectoryFormula(formula)
       ) {
         throw makeError(
           `${operation}: networks must be a directory or read-only directory`,
