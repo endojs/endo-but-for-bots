@@ -119,13 +119,44 @@ if (globalThis.Iterator) {
 //
 // UNCONDITIONAL, deliberately. The guest must not reach a host console if one
 // ever appears: installing only when absent would hand it straight through.
-// A deliberate stub, not a `Console`: SES reads only these six, and supplying
-// the other seventeen would confer diagnostics we do not implement.
+//
+// The whole permitted surface rather than the handful SES is observed to call.
+// SES WRAPS a base console rather than replacing it, so a missing method is a
+// `TypeError` at the moment something reaches for it -- and not only when the
+// guest asks. `packages/ses/src/error/console.js:434` calls
+// `baseConsole.group(label)` UNGUARDED while rendering nested errors, which is
+// any `console.error` on an error with a `cause`, on an `AggregateError`, or
+// with two error arguments; `baseConsole.assert` (`:536`) and
+// `baseConsole.timeLog` (`:550`) are likewise unguarded. `console.js:140`
+// enumerates the surface as `consoleLevelMethods` (9) + `consoleSpecialMethods`
+// (2) + `consoleOtherMethods` (11). These are all no-ops, so the extra names
+// confer nothing; what they buy is that nothing here has to track which call
+// sites inside SES happen to be guarded today.
+const consoleNoop = () => {};
 /** @type {any} */ (globalThis).console = {
-  log() {},
-  info() {},
-  warn() {},
-  error() {},
-  debug() {},
-  trace() {},
+  // consoleLevelMethods
+  debug: consoleNoop,
+  log: consoleNoop,
+  info: consoleNoop,
+  warn: consoleNoop,
+  error: consoleNoop,
+  trace: consoleNoop,
+  dirxml: consoleNoop,
+  group: consoleNoop,
+  groupCollapsed: consoleNoop,
+  // consoleSpecialMethods
+  assert: consoleNoop,
+  timeLog: consoleNoop,
+  // consoleOtherMethods
+  clear: consoleNoop,
+  count: consoleNoop,
+  countReset: consoleNoop,
+  dir: consoleNoop,
+  groupEnd: consoleNoop,
+  table: consoleNoop,
+  time: consoleNoop,
+  timeEnd: consoleNoop,
+  profile: consoleNoop,
+  profileEnd: consoleNoop,
+  timeStamp: consoleNoop,
 };
