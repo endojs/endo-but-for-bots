@@ -228,6 +228,18 @@ rejects before the coder runs, so the corpus sweep was green throughout.
 The finding stays open because the rest is audited-negative over 1.28M
 sources rather than argued invariant.
 
+The scoper follow-up adds reproducible probes for the `body_scope` window and
+`scope_of`'s hoist/bind agreement, plus a scanner for `node_id`'s parse-exit
+precondition.
+The traversal WIP was strengthened after adversarial review: every legal
+fixture now has to compile in every applicable goal, replacing a totality-only
+check that accepted early rejections and five witnesses limited to sloppy Script.
+Static fields, private methods and accessors, destructuring and module export
+paths are included.
+Three omitted-hoist mutations each fail at `scope_of`.
+These probes advance F063 without claiming totality or changing its status;
+seven of the nine scoper `expect`/`unwrap` shapes still need their own audit.
+
 **Nothing else was attempted.**
 The other six findings that are not fixed — F010, F076, F068, F106, F122 and
 F149 — were not re-verified, and their statuses in Appendix A's new column are
@@ -4612,8 +4624,9 @@ than by scope lifetime, sitting in the non-`Token::Arg` arms of the branch at
 Three of the nine assignments to the two function-level fields never restore
 at all (1384, 1399, 1422).
 One argument therefore retires at most twelve of the fifteen, not all of them.
-The remaining eight shapes are the two declare-index pairs, the two
-field-scope hoists, `node_scope`'s per-node lookup and one statement scope.
+Besides those three fields, the remaining eight sites form six shapes: the two
+declare-index pairs, the two field-scope hoists, `node_scope`'s per-node lookup
+and one statement scope.
 "29" also counts one syntactic shape rather than the panic surface: `node_id`
 carries a release-mode `assert_ne!` (362) reached from 39 production call
 sites, and the file additionally holds three `debug_assert`s, 57
@@ -4648,12 +4661,35 @@ that exactly four exist.
 It was mutation-tested three ways before landing — a removed `finish_tree`
 call, a non-compliant fifth entry point, and a COMPLIANT fifth one — and each
 fails it, the last being the case the first assertion alone would have missed.
-The other eight shapes are the audit this finding still wants, now stated as a
-list someone can work rather than a surface.
-It is deliberately NOT claimed as done: nothing here establishes any of the
-invariants, and the first draft of this paragraph asserted one the code
-contradicts, which is the argument for making them per-cluster and in writing
-rather than by eye.
+The `scope_of` lookup now has its own traversal probes in
+`scope_bearing_children_are_hoisted_before_they_are_bound`,
+`with_scope_traversal_requires_a_sloppy_program` and
+`exported_scope_bearing_children_reach_both_passes`.
+Its ten callers agree with the inserting hoist visitors at token dispatch;
+the roster tests the child traversal where a scope-bearing node could be
+visited only during binding.
+It covers computed keys, heritage clauses, instance and static field values,
+private methods and accessors, binding-pattern keys and defaults, parameter
+defaults, templates, spreads, optional chains, loops, catches and exports.
+Every legal fixture must compile end to end in its applicable goal modes.
+`with` fixtures compile in sloppy Script and Eval and must report `Syntax`
+in strict code; module exports compile under the Module goal.
+This replaces the WIP's permissive check and five sloppy-Script witnesses,
+which could stay green if other fixtures started rejecting before the scoper.
+Omitting each of the computed-field-key, field-initializer-value and
+private-method hoist steps makes the suite fail at `scope_of`, as verified by
+three separate temporary mutations.
+Reading found one apparent asymmetry outside those fixtures: `bind_class`
+visits constructor-init and instance-init children that `hoist_class` omits,
+but the parser leaves both children null.
+The audit is therefore about parser-produced trees, not arbitrary external ASTs.
+
+Two of the nine `expect`/`unwrap` shapes now have targeted probe suites;
+seven still need their own audit: `scope`, `function_scope`, the two
+declare-index pairs, the two field-scope hoists and the catch statement scope.
+Neither a finite traversal roster nor the wider corpus sweep proves totality,
+so F063 remains partially open, including the coder's bookkeeping sites and
+the earlier audit's generated sources that are not reproducible in this tree.
 Changed by `27e637606 fix(ironhorse-compile): two panics the F063 audit proved
 reachable`.
 Pinned by `the_audits_reachable_panics_return_rather_than_panic` in
