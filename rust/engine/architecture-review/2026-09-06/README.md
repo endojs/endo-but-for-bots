@@ -74,6 +74,20 @@ Appendix A now carries six locations and five statuses per finding; the
 `7753a4b9` locations are file-level, because the decomposition moved every
 construct in the VM.
 
+**Resolved against
+[`0b25cdba9`](https://github.com/endojs/endo-but-for-bots/commit/0b25cdba9),
+2026-09-17.**
+A resolution pass rather than a sixth revision: it set out to close the
+nineteen findings that were still open, so its statuses record work done in
+response to the review.
+Nine closed — F039, F040, F041, F053, F062, F070, F110, F121 and F158 — and
+F106/F122 went from "the envelope has no instrument" to one clause without
+one, leaving 181 fixed, 8 partially fixed and 2 open.
+F010 and F076 stayed held by design; six were not attempted.
+Three further wrong values were found while fixing F062 and are recorded
+there, two fixed and one not, and one regression the pass introduced and then
+removed is recorded in the Revision history rather than omitted.
+
 The earlier revision's per-finding statuses were **not** overwritten: a finding
 resolved since carries an additional Status line, and Appendix A carries a
 location and a status column per revision.
