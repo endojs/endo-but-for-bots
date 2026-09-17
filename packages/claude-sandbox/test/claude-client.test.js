@@ -179,21 +179,6 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
-test('resumePriorConversation makes the first send use --continue', async t => {
-  const fake = makeFakeSlice([[]]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { resumePriorConversation: true }),
-  );
-  await drain(await client.send('after restart'));
-  t.is(fake.spawned.length, 1);
-  // A session reincarnated after a daemon restart, whose persistent config dir
-  // already held a transcript, resumes it on its very first post-restart turn
-  // rather than forking a fresh, context-free conversation.
-  t.true(fake.spawned[0].argv.includes('--continue'));
-  const status = await client.status();
-  t.true(status.conversationStarted);
-});
-
 test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
   const fake = makeFakeSlice([[]]);
   const client = makeClaudeClient(
@@ -539,6 +524,38 @@ test('initialPrompt is skipped when a prior conversation exists', async t => {
   await drain(await client.send('next'));
   t.is(fake.spawned.length, 1);
   t.is(fake.spawned[0].argv[2], 'next');
+});
+
+test('within one incarnation a session resumes what it started, not the records again', async t => {
+  // The other half of the rule. Across incarnations the records decide, and
+  // the test above pins that. Within one, the conversation this incarnation
+  // built is the live one, so a second turn continues it rather than
+  // rewriting the store underneath a model that is holding it -- restoring
+  // twice would fork a second conversation out of the same history.
+  const written = [];
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => true,
+      resolveResumeSessionId: () => 'the-one-this-incarnation-made',
+      restoreTranscript: async records => {
+        written.push(records.length);
+        return 'rebuilt-from-records';
+      },
+    }),
+  );
+  const transcript = [{ kind: 'message', role: 'user', content: 'earlier' }];
+  await drain(await client.send('first', { transcript }));
+  t.deepEqual(written, [1], 'the first turn of the incarnation restores');
+  t.true(fake.spawned[0].argv.includes('rebuilt-from-records'));
+
+  await drain(await client.send('second', { transcript }));
+  t.deepEqual(written, [1], 'the second turn does not restore again');
+  t.true(
+    fake.spawned[1].argv.includes('the-one-this-incarnation-made'),
+    'it resumes the conversation this incarnation created',
+  );
+  t.false(fake.spawned[1].argv.includes('rebuilt-from-records'));
 });
 
 test('a store that outlived the daemon does not decide the conversation', async t => {

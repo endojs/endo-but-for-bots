@@ -209,14 +209,6 @@ export const make = (powers, context, contextWrapper = {}) => {
   const resolveResumeSessionId = resume?.resolveResumeSessionId;
   const detectPriorConversation = resume?.detectPriorConversation;
   const describeTranscripts = resume?.describeTranscripts;
-  let resumePriorConversation = false;
-  if (detectPriorConversation) {
-    try {
-      resumePriorConversation = detectPriorConversation();
-    } catch {
-      // Unreadable backing dir (first run, races): treat as a fresh session.
-    }
-  }
 
   // Parse (and validate) the rootfs synchronously so a bad value fails
   // at construction rather than on first use.
@@ -444,7 +436,6 @@ export const make = (powers, context, contextWrapper = {}) => {
       IS_SANDBOX: '1',
     }),
     initialPrompt,
-    resumePriorConversation,
     detectPriorConversation,
     resolveResumeSessionId,
     describeTranscripts,
