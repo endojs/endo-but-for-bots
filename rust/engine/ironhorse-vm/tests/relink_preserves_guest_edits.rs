@@ -121,7 +121,7 @@ fn a_runtime_interned_name_does_not_block_a_later_eval_install() {
             raw_budget: u64,
             charge: &mut dyn FnMut(u64) -> bool,
         ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-            match ironhorse_compile::compile_atoms_budgeted_with_limit(
+            match ironhorse_compile::compile_atoms_budgeted_firewalled(
                 source,
                 ironhorse_compile::Goal::Eval,
                 strict,
@@ -136,6 +136,11 @@ fn a_runtime_interned_name_does_not_block_a_later_eval_install() {
                 }),
                 Err(ironhorse_compile::CompileError::MeterAbort) => {
                     Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                }
+                // A caught compiler panic is an engine fault, not a coverage
+                // gap (architecture finding F063).
+                Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                    Err(ironhorse_vm::SourceCompileError::Invariant(detail))
                 }
                 Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {

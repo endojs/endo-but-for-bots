@@ -840,6 +840,27 @@ impl Parser<'_> {
                 return Err(self.error("invalid binding initializer"));
             } else if self.cur.token == Token::In && self.top_token() == Some(Token::Using) {
                 return Err(self.error("invalid using in"));
+            } else if self.top_token() == Some(Token::Statements) {
+                // `for (let x, y in {})` — a for-in/of head declares exactly
+                // ONE binding (`ForDeclaration : LetOrConst ForBinding`), and
+                // `variable_statement` pushes a `Statements` list for more
+                // than one. Upstream XS leaves this unchecked: the
+                // corresponding `fxReportParserError(…, "no reference %s", …)`
+                // in `fxForStatement` is commented out, and the multi-binding
+                // head reaches the coder, where no node description supplies a
+                // `codeAssign`. Here that was `code_assign`'s unreachable arm,
+                // so five shapes (`let`/`const`/`var`, `in`/`of`) PANICKED the
+                // compiler on a spec early error — F063's claim, in the
+                // committed expectations the whole time as
+                // `skip:compiler-unimplemented:parse`.
+                //
+                // Rejecting is a deliberate divergence from the pinned oracle's
+                // parser, in the direction of the spec and of test262
+                // (`language/block-scope/syntax/for-in/`
+                // `disallow-multiple-lexical-bindings*.js`). "no reference" is
+                // the message XS's own live sibling arm uses for the
+                // expression form of the same mistake.
+                return Err(self.error("no reference"));
             }
             let a_token = self.cur.token;
             self.get_next_token()?;
