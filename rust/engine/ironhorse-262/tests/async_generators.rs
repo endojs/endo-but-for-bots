@@ -88,6 +88,22 @@ fn async_generator_intrinsic_metadata() {
 }
 
 #[test]
+fn async_iterator_prototype_intrinsic_metadata() {
+    let run = dual_run(
+        "async function* g(){}; \
+         var agp=Object.getPrototypeOf(g).prototype; \
+         var aip=Object.getPrototypeOf(agp); \
+         var method=aip[Symbol.asyncIterator]; \
+         [method.name, method.length, method.call(aip)===aip, \
+          Object.getPrototypeOf(aip)===Object.prototype].join('|')",
+    )
+    .expect("XS oracle machine");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert!(run.result_agrees, "{run:?}");
+    assert_eq!(run.ironhorse_result, "[Symbol.asyncIterator]|0|true|true");
+}
+
+#[test]
 fn async_generator_function_prototype_remains_assignable() {
     let run = dual_run(
         "'use strict'; async function* g(){}; var p={tag:1}; \

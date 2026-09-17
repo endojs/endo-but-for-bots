@@ -1113,7 +1113,11 @@ impl Interp {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((async_generator_proto, name, mf));
         }
-        self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
+        self.async_iterator_identity = self.alloc_named_method(
+            NativeMethod::AsyncIteratorIdentity,
+            "[Symbol.asyncIterator]",
+            0,
+        );
         self.iterator_identity =
             self.alloc_named_method(NativeMethod::AsyncIteratorIdentity, "[Symbol.iterator]", 0);
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
