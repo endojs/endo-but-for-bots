@@ -4744,8 +4744,9 @@ The parser now rejects the empty substitution, a deliberate divergence from the
 pinned oracle's parser in the direction of the spec, as with `for (let x, y in {})`;
 the coder counts the items it is about to write rather than deriving the count.
 No panic meant the test262 sweep could not have found this: not one of the corpus's
-53,912 files contains an empty substitution at the pinned revision, so no committed
-expectation line moves.
+53,912 `.js` files contains an empty substitution at the pinned revision — the wider
+set, since the sweep itself compiles 53,575 of them — so no committed expectation line
+moves.
 It is evidence for what the sweep's own section already says — an empirical floor
 over a corpus is not a proof — and the explicit AST sites are unchanged by it, because
 the wrong premise was the arithmetic beside one of them rather than the assertion itself.
@@ -4757,21 +4758,45 @@ so it is a spec early error, unchecked upstream and unchecked here; it reproduce
 `var`/`let`/`const`, both pattern kinds, every nesting and every goal, and a guest
 raises it with `eval("var [a];")`.
 The parser now rejects it, conditionally: `ForBinding` takes no initializer, so
-`variable_statement` reports the bare pattern back to `for_statement` and reads
-`flags::FOR` at entry, the first attempt having read it after the binding and
-rejected 638 valid corpus files, because a default nested in the pattern clears it.
+`variable_statement` reports the bare pattern back to `for_statement`, which settles
+it on the three-part branch.
+Whether a call is a `ForBinding` is passed as an argument, after two wrong answers
+that tried to read it from the ambient `flags::FOR`.
+Reading it after the binding rejected 638 valid corpus files (604 under
+`test/language/statements/`), because a default nested in the pattern clears the flag.
+Reading it at entry left the opposite hole, which review found rather than either
+new gate: the flag is ambient over the whole head including nested function bodies,
+so `for (() => { var [a]; } ;;)` deferred its rejection to a `for_statement` that
+never received it, the call being nested inside `comma_expression`; the panic stayed
+reachable in all five modes, and reached the guest as an uncatchable
+`Halt::EngineInvariant`.
+It was not confined to the three-part `for` either — a `for-of` head reaches it
+through the LHS, where the deferred answer is never consulted.
+An argument cannot leak, which is the reading the finding was about in the first place.
 The two corpus occurrences of this shape sit inside string literals in `staging/`,
 which the sweep compiles as text and the harness excludes, so neither gate could have
 reached it; a before/after compile of all 53,575 sources in three modes changes none
 of the 160,725 outcomes, for this fix or the template one.
-`ast_shape_matrix.rs` — 67 fragments in 75 positions across five modes, 25,125
-compilations, none of which may panic — is checked in as the net that found it and as
-the corpus sweep's counterpart on the invalid side of the grammar.
-`destructuring_declaration_totality.rs` holds 215 rejections and 180 control
-compilations, and 24 eval/Function cases check the catchable SyntaxError through the
-real adapter.
-This discharges `code_node_inner`'s declaration arm by making its producer total, so
-the inventory falls from 21 AST-shape sites to 20; the audit is still open.
+`ast_shape_matrix.rs` — 67 fragments in 81 positions across five modes, 27,135
+compilations, none of which may panic — is checked in as the net that found the
+declaration panic and as the corpus sweep's counterpart on the invalid side of the
+grammar. Six of its positions exist only because it did NOT catch the arrow-body
+hole first time: its `for` rows spliced the fragment as an expression, so the shape
+was absent from all 25,125 of its original cells.
+`destructuring_declaration_totality.rs` holds 305 rejections and 195 control
+compilations, nineteen of the invalid entries being the bodies-opened-from-a-`for`-head
+roster neither earlier attempt had a case for; 24 eval/Function cases check the
+catchable SyntaxError through the real adapter.
+The AST-shape inventory stays at 21. `code_node_inner`'s fifth site is one catch-all
+over every unhandled node kind, so making one kind unreachable does not discharge it,
+and `544d225d` had already set that precedent for the same site.
+The audit is still open, and two pre-existing defects of the SAME ambient-flag root
+cause were found beside it and are NOT fixed here: `for (()=>{ return "a" in {}; };;)`
+is valid and refused, because `flags::FOR` leaks into the arrow body and suppresses
+`in`; and `for (var x = "a" in {};;)` is a spec early error and accepted, because
+`binding` clears that flag before the initializer. Both want `arrow_expression` to
+clear the flag as `function_expression` does, which is a change to a shared parser
+invariant and belongs in its own pass with its own corpus differential.
 The new deterministic matrices check 17,534 successful compilations and the
 logical-assignment runtime matrix checks 180 result/evaluation-count cases.
 Two independent mutations fail the new tests: dropping finalizer alias origins

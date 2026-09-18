@@ -89,6 +89,37 @@ fn a_pattern_declaration_without_an_initializer_is_a_syntax_error() {
         "while (0) { var [a]; }",
         "l: { let [a]; }",
         "(class { m() { var [a]; } });",
+        // Inside a function body opened FROM a `for` head. These are ordinary
+        // `VariableStatement`s however the head reached them, and they are the
+        // hole the first version of this rule left: it read the ambient
+        // `flags::FOR`, which is set across the whole head including nested
+        // bodies, so the declaration deferred its rejection to `for_statement`
+        // — which never received it, the call being nested inside
+        // `comma_expression` rather than being one of the head's own.
+        // An arrow body is the shape that leaks; a function-expression body
+        // clears the flag, which is why only half of these ever failed.
+        "for (() => { var [a]; } ;;) ;",
+        "for (x => { var {a}; } ;;) ;",
+        "for (async () => { var [a]; } ;;) ;",
+        "for ((() => { var [a]; }) ;;) ;",
+        "for (f(() => { var [a]; }) ;;) ;",
+        "for (new f(() => { var [a]; }) ;;) ;",
+        "for (0 ? 0 : () => { var [a]; } ;;) ;",
+        "for (`${() => { var [a]; }}` ;;) ;",
+        "for (f`${() => { var [a]; }}` ;;) ;",
+        "for (x[() => { var [a]; }] ;;) ;",
+        "for (void (() => { var [a]; }) ;;) ;",
+        "for ((() => { var [a]; }, 0) ;;) ;",
+        "for (0 || (() => { var [a]; }) ;;) ;",
+        "for ((() => { var [a]; })() ;;) ;",
+        "for (() => () => () => { var [a]; } ;;) ;",
+        "for (() => { for (() => { var [a]; } ;;) ; } ;;) ;",
+        "for (function () { var [a]; } ;;) ;",
+        // The same leak in a `for-in`/`for-of` head, where the deferred answer
+        // could not have rescued it even in principle: that branch never
+        // consults it, because a `ForBinding` legitimately has no initializer.
+        "for ((() => { var [a]; })().b of xs) ;",
+        "for ((() => { var [a]; })().b in xs) ;",
         // Exported, which is a separate declaration path.
         "export var [a];",
         "export let [a];",
@@ -131,6 +162,11 @@ fn an_initialized_pattern_and_every_for_binding_still_compile() {
         "var a, [b] = [];",
         "for (var [a] = [];;);",
         "for (let {x} = {};;);",
+        // A body opened from a `for` head, whose declaration IS initialized:
+        // the rule must reach in there, and must still say yes.
+        "for (() => { var [a] = []; } ;;) ;",
+        "for (() => { for (var [a] of xs) ; } ;;) ;",
+        "for (function () { var {x} = {}; } ;;) ;",
         // `ForBinding`: no initializer, and legal.
         "for (var [a] in {});",
         "for (var [a] of []);",

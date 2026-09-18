@@ -234,7 +234,8 @@ Node's parser independently rejects all 54 distinct member-parameter source stri
 The runtime's `invalid_cover_grammar_is_a_catchable_syntax_error_with_the_real_compiler`
 checks 16 eval/Function/strictness cases through the production compiler adapter, not a stub.
 This closes the two demonstrated panic paths, not the entire node-kind/default-arm audit.
-The 21-site AST inventory below remains pending a complete producer/consumer argument.
+The 21-site AST inventory in the final section remains pending a complete
+producer/consumer argument.
 
 ## Template AST follow-up: a wrong premise rather than a panic
 
@@ -277,8 +278,8 @@ That second change is behaviour-identical under the now-enforced invariant and i
 independently testable from source; it is there so the consumer stops resting on a
 shape it cannot see.
 
-`tests/template_substitution_totality.rs` requires 26 invalid sources to report Syntax
-in each of the five modes (130 rejections) and 25 valid controls to compile in each
+`tests/template_substitution_totality.rs` requires 25 invalid sources to report Syntax
+in each of the five modes (125 rejections) and 25 valid controls to compile in each
 (125 compilations).
 The invalid roster covers empty substitutions alone, between cooked text, repeated,
 mixed with well-formed neighbours in both orders, holding only whitespace or comments,
@@ -292,13 +293,16 @@ The runtime's `an_empty_template_substitution_is_a_catchable_syntax_error_with_t
 checks 16 eval/Function/strictness cases through the production compiler adapter.
 
 This one could not have come from the corpus sweep.
-No file among test262's 53,912 at the pinned revision contains an empty substitution,
-by an explicit scan for `${` followed only by whitespace or comments, so the sweep
-was never going to reach it and no committed expectation line moves.
+No file among test262's 53,912 `.js` at the pinned revision contains an empty
+substitution, by an explicit scan for `${` followed only by whitespace or comments.
+(That 53,912 is every `.js` in the checkout; the sweep itself compiles 53,575 of them,
+skipping 294 `_FIXTURE.js` and never reading `harness/`. The scan is the wider set, so
+the negative covers the sweep.)
+The sweep was therefore never going to reach it, and no committed expectation line moves.
 It is a worked example of the limit `corpus_compiler_totality.rs` states about itself:
 the sweep asks whether the compiler ANSWERS, and here it answered, wrongly.
 
-The 21-site inventory below is unchanged.
+The 21-site inventory in the final section is unchanged.
 `code_template`'s own explicit site is `panic!("template without items list")`, which
 this pass did not discharge; what it repaired was the arithmetic beside it.
 
@@ -328,18 +332,45 @@ divergence from the pinned oracle's parser in the direction of the spec.
 It is conditional in a way the others were not: `ForBinding` takes NO
 initializer, so `for (var [a] of xs)` is legal and `for (var [a]; …)` is not.
 `variable_statement` therefore reports a bare pattern back to `for_statement`
-rather than deciding alone, and reads `flags::FOR` at ENTRY — the first attempt
-read it after the binding and rejected 638 valid Temporal corpus files, because
-`binding` clears that flag on any `=` it consumes, including a default nested
-inside the pattern, as in `for (const [value, message = String(value)] of tests)`.
+rather than deciding alone, and `for_statement` settles it on the three-part
+branch.
+
+Which call is a `ForBinding` is passed as an ARGUMENT, and it took two wrong
+answers to get there — both from trying to read it out of the ambient
+`flags::FOR` instead.
+
+Reading the flag AFTER the binding rejected 638 valid corpus files — 604 of them under
+`test/language/statements/`, and only 15 anything to do with Temporal:
+`binding` clears it on any `=` it consumes, including a default nested inside
+the pattern, as in `for (const [value, message = String(value)] of tests)`.
+Reading it at ENTRY fixed those and left a hole the other way, found by review.
+The flag is ambient over the WHOLE head, nested function bodies included, so
+`for (() => { var [a]; } ;;)` entered `variable_statement` with it set although
+that declaration is an ordinary `VariableStatement`; the guard deferred, and
+`for_statement` never received the answer, because that call is nested inside
+`comma_expression` rather than being one of the head's own six. The panic was
+still reachable, in all five modes, and through the production adapter it is an
+uncatchable `Halt::EngineInvariant` rather than a `SyntaxError`.
+The flag did not even mean one thing: a function-EXPRESSION body clears it and
+an arrow body does not, so `for ((function(){ var [a]; });;)` was rejected while
+the arrow form was not. Nor was the hole confined to the three-part `for` —
+`for ((() => { var [a]; })().b of xs)` reached it through a `for-of` head, where
+the deferred answer is never consulted at all.
+An argument is positional and cannot leak, so the third answer is the one that
+does not rest on state the function cannot see — which is the whole point of
+this finding, arrived at the slow way.
 
 Neither existing gate could have caught this.
-The test262 sweep compiles each file's own source, and the corpus's only two
-occurrences of the shape sit inside string literals:
+The test262 sweep compiles each file's own source, and the corpus's only
+occurrences of the shape — six of them, across two files — sit inside string
+literals:
 `staging/sm/lexical-environment/for-loop.js` asserts
 `Function("for (const [z]; ; ) ;")` throws, and
-`staging/sm/regress/regress-699682.js` — whose comment reads "Don't assert trying
-to parse any of these" — lists `"var {''};"` among sources to parse at runtime.
+`staging/sm/lexical-environment/for-loop.js` asserts
+`Function("for (const [z]; ; ) ;")` throws, and two more of the same shape;
+`staging/sm/regress/regress-699682.js` — whose line 11 comment reads "Don't assert
+trying to parse any of these" — lists `"var {''};"`, `"var {'bad'};"` and
+`"var {'if'};"` among sources to parse at runtime.
 Both files compile cleanly as text, so the sweep is honestly green over them, and
 the 262 harness, which would execute them, excludes `staging/`.
 An explicit before/after run of the compiler over all 53,575 corpus sources in
@@ -347,30 +378,45 @@ three modes confirms it: zero of the 160,725 outcomes change, for this fix or th
 template one, so no committed expectation line moves.
 
 Evidence.
-`tests/destructuring_declaration_totality.rs` requires 43 invalid sources to
-report Syntax in each of five modes (215 rejections) and 36 controls to compile in
-each (180 compilations); the controls are load-bearing, since the rule must NOT
+`tests/destructuring_declaration_totality.rs` requires 61 invalid sources to
+report Syntax in each of five modes (305 rejections) and 39 controls to compile in
+each (195 compilations); the controls are load-bearing, since the rule must NOT
 fire on a `ForBinding`, on assignment destructuring, or on a function parameter.
-Reverting either half of the fix fails the invalid roster and leaves the controls
-green.
+Nineteen of the invalid entries are the bodies-opened-from-a-`for`-head roster,
+which the first two attempts had no case for at all — that absence is why review
+found the hole and the suite did not.
+Reverting any of the three halves of the fix fails the invalid roster and leaves
+the controls green; so does reinstating either wrong reading of `flags::FOR`.
 The runtime's `a_pattern_declaration_without_an_initializer_is_a_catchable_syntax_error`
 checks 24 eval/Function/strictness cases through the production compiler adapter,
 including the two corpus strings above.
 
 `tests/ast_shape_matrix.rs` is the net that found it, and is checked in as the
 corpus sweep's counterpart on the other side of the grammar: 67 fragments spliced
-into 75 positions across five modes, 25,125 compilations, none of which may panic.
+into 81 positions across five modes, 27,135 compilations, none of which may panic.
 The positions are chosen from the remaining-sites table below rather than from
 intuition.
+Six of them splice a declaration into a body opened from a `for` head, and they
+are there because the matrix did NOT catch the hole above on its first try: its
+`for` rows spliced the fragment as an EXPRESSION, so no row of 25,125 cells ever
+built the shape. A generated net is only as good as the positions in it, which is
+the same limit the roster has and the reason neither replaces review.
 Like the corpus sweep it asks only whether the compiler ANSWERS, not whether the
 answer is right, and like the corpus sweep it is a floor rather than a proof — a
 product of two hand-written lists is exactly as good as those lists.
 
-The inventory below is reduced by one, from 21 to 20: `code_node_inner`'s five
-sites become four, since this pass discharged the declaration arm by making its
-producer total rather than by arguing the grammar keeps it unreached.
+The inventory below is UNCHANGED at 21, and an earlier draft of this section
+claiming 20 was wrong.
+`code_node_inner`'s fifth site is a single catch-all — `other => panic!("coder:
+unsupported node kind {:?}", other)` — standing for every node kind that reaches
+the coder without a code method. Making one kind unreachable does not discharge
+it, as the immediately preceding pass already established: `544d225d` stopped
+`(...items)`'s `Spread` reaching that same catch-all and deliberately kept the
+count at 21.
+The claim that this pass "made the producer total" was also false when first
+written, and review rather than either new gate is what established that.
 
-## Remaining twenty explicit sites
+## Remaining twenty-one explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.
 These need the fuller parser/scoper/coder producer-and-consumer argument, especially child
@@ -378,7 +424,7 @@ traversal and AST construction; this pass does not claim to have discharged them
 
 | Family | Count | Consumers |
 |---|---|---|
-| AST shapes | 20 | `node_of` (1), `code` (1), `code_node_inner` (4), `symbol_of` (1), `code_class` reserved children/Host/member kinds (5), `code_field` kind (1), `code_params_binding` (2), `code_object_binding_assign` (1), `code_object` (1), `code_assign` (2), `code_template` (1) |
+| AST shapes | 21 | `node_of` (1), `code` (1), `code_node_inner` (5), `symbol_of` (1), `code_class` reserved children/Host/member kinds (5), `code_field` kind (1), `code_params_binding` (2), `code_object_binding_assign` (1), `code_object` (1), `code_assign` (2), `code_template` (1) |
 
 The related scoper producer arguments are recorded in [F063-SCOPER-AUDIT.md](F063-SCOPER-AUDIT.md).
 They do not on their own prove that every coder consumer follows the same child traversal.

@@ -193,11 +193,21 @@ const CONTEXTS: &[&str] = &[
     "with({})FRAG;",
     "async function f(){await FRAG;}",
     "function*f(){yield FRAG;}",
+    // A body opened from a `for` head. `flags::FOR` is ambient across the whole
+    // head, so a declaration in here is reached with it set although it is an
+    // ordinary statement — the shape that hid a reachable `code_node_inner`
+    // panic from every other row of this matrix.
+    "for(()=>{var FRAG;};;);",
+    "for(()=>{let FRAG=0;};;);",
+    "for(f(()=>{var FRAG;});;);",
+    "for((()=>{var FRAG;})().b of []);",
+    "for(function(){var FRAG;};;);",
+    "for(()=>{FRAG};;);",
 ];
 
 /// The product is fixed, so a shrunk list is a visible change rather than a
 /// quietly smaller sweep.
-const EXPECTED_CELLS: usize = 25_125;
+const EXPECTED_CELLS: usize = 27_135;
 
 #[test]
 fn no_generated_ast_shape_panics_the_compiler() {

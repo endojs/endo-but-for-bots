@@ -116,7 +116,7 @@ extended back into agreement.
 The parser now rejects the empty substitution in all five modes, a deliberate
 divergence from the pinned oracle in the direction of the spec, and the coder counts
 the items it writes instead of deriving the count.
-`template_substitution_totality.rs` holds 130 rejections and 125 control compilations,
+`template_substitution_totality.rs` holds 125 rejections and 125 control compilations,
 and 16 eval/Function cases check the catchable SyntaxError through the real adapter.
 The corpus sweep could not have found it: no test262 file at the pinned revision
 contains an empty substitution, so no expectation line moves.
@@ -127,18 +127,30 @@ that is a panic: `var [a];` aborts the compiler at `code_node_inner` (coder.rs:1
 A `BindingPattern` in a `VariableDeclaration` or `LexicalBinding` requires an
 initializer, so this is a spec early error, unchecked upstream and here, reachable by a
 guest through `eval` for `var`/`let`/`const` and every pattern shape.
-The parser now rejects it, conditionally, since `ForBinding` takes no initializer;
-reading `flags::FOR` after the binding rather than at entry rejected 638 valid corpus
-files on the first attempt, because a default nested in the pattern clears that flag.
+The parser now rejects it, conditionally, since `ForBinding` takes no initializer.
+Which call is a `ForBinding` is passed as an argument, after two wrong answers read
+from the ambient `flags::FOR`: reading it after the binding rejected 638 valid corpus
+files (604 under `test/language/statements/`), and reading it at entry left the opposite hole, since the flag is ambient over
+the whole head including nested function bodies, so `for (() => { var [a]; } ;;)`
+still panicked in all five modes and still reached the guest as an uncatchable
+`Halt::EngineInvariant`.
+Review found that, not either new gate; the roster had no arrow-body case and the
+matrix spliced its `for` rows as expressions, so neither could build the shape.
+Both now do.
 The corpus's only two occurrences are inside string literals in `staging/`, which the
 sweep compiles as text and the harness excludes, so neither gate could have found it;
 a before/after compile of all 53,575 sources in three modes changes none of the
 160,725 outcomes, for either fix, so no expectation line moves.
-`ast_shape_matrix.rs` checks in the net that found it — 25,125 generated compilations,
-none of which may panic — and `destructuring_declaration_totality.rs` holds 215
-rejections and 180 control compilations, with 24 eval/Function cases through the real
+`ast_shape_matrix.rs` checks in the net that found it — 27,135 generated compilations,
+none of which may panic — and `destructuring_declaration_totality.rs` holds 305
+rejections and 195 control compilations, with 24 eval/Function cases through the real
 adapter.
-The inventory falls from 21 AST-shape sites to 20, and F063 stays open.
+The inventory stays at 21 AST-shape sites: `code_node_inner`'s fifth is a catch-all
+over every unhandled node kind, which one kind's reachability does not discharge.
+Two pre-existing defects of the same ambient-flag root cause were found beside it and
+left open — `in` suppressed inside an arrow body in a `for` head (valid code refused)
+and `in` permitted after the head's first `=` (an early error accepted).
+F063 stays open.
 Five checked-in matrices require all 17,534 generated compilations to succeed;
 180 runtime cases separately pin the changed logical-assignment behavior.
 This supplies reproducible evidence without relying on the earlier unpublished
