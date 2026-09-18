@@ -109,8 +109,9 @@ value — so the bug was the freeze, not the rejection.
 
 ## The Ironhorse lockdown shim
 
-Ironhorse has no native `lockdown()`. The `ironhorse-host` lane therefore runs
-SES's **shim**, and two files prepare the realm for it. Which file a repair
+Ironhorse now has a native `lockdown()`, but no guest `Compartment`. The
+`ironhorse-host` lane therefore still runs SES's **shim**, which supplies both,
+and two files prepare the realm for it. Which file a repair
 belongs in is decided by whether it is an engine gap or a consequence of what
 this corpus loads.
 
@@ -187,13 +188,18 @@ post-lockdown, and four are blocked there by an unrelated engine gap
 (`native-call:TypedArray:from-array-like`).
 One case is enough to decide it, and the one is real.
 
-**A native `lockdown()` is future work.** XS has one — `fx_lockdown` in
-`c/moddable/xs/sources/xsLockdown.c` — which rewires those same constructors
-with direct slot writes, underneath `[[DefineOwnProperty]]`, so a frozen
-`Function.prototype` never obstructs it. Ironhorse ported XS's `harden` and not
-its `lockdown`; until the second lands, the shim route above is the SES profile,
-and `test262:ironhorse` (the differential runner, which asks for a native
-`lockdown()`) continues to refuse to start.
+**The native `lockdown()` has landed, and it does not displace this.** XS's
+`fx_lockdown` (`c/moddable/xs/sources/xsLockdown.c`) rewires those same
+constructors with direct slot writes, underneath `[[DefineOwnProperty]]`, so a
+frozen `Function.prototype` never obstructs it, and Ironhorse now implements its
+steps 1, 2 and 5 natively — `designs/ironhorse-native-lockdown.md` has the
+ledger. What the native route still does not implement is a guest `Compartment`
+(`fx_Compartment`), and the shim supplies that as well as `lockdown`. So the
+shim route above remains the SES profile for this corpus, and
+`test262:ironhorse` — the differential runner, which now starts rather than
+refusing — reports this corpus's two `Compartment` cases as `feature:Compartment`
+skips. § The engine lane's zero, below, has that number and what the rest of it
+is short of.
 
 ### The engine lane's zero
 
