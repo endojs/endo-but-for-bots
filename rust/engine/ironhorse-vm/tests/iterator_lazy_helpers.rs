@@ -244,6 +244,58 @@ fn lazy_helpers_match_the_generated_node_matrix() {
             r#"(()=>{const h=[1,2,3].values();const t=h.take(2);t.next();return String(h.next().value)})()"#,
             "2",
         ),
+        // A collection cursor's `next` must REFUSE a lazy helper receiver.
+        // A helper can be built straight over a Map or Set, so its row carries
+        // a collection in `iterable`; branding on that alone let
+        // `%MapIteratorPrototype%.next.call(helper)` run the collection-cursor
+        // path over the helper's PRIVATE holder and hand it back — the
+        // captured `next` and the guest callback, readable and writable
+        // through an ordinary Array. Found by an adversarial review; Node 22
+        // rejects both of these the same way.
+        (
+            r#"(()=>{var m=new Map();m.set("k",1);var h=Iterator.prototype.map.call(m,function(v){return v});var mnext=Object.getPrototypeOf(m.keys()).next;try{mnext.call(h)}catch(e){return e.constructor.name}return "no throw"})()"#,
+            "TypeError",
+        ),
+        (
+            r#"(()=>{var s=new Set();s.add(7);var h=Iterator.prototype.take.call(s,5);var snext=Object.getPrototypeOf(s.values()).next;try{snext.call(h)}catch(e){return e.constructor.name}return "no throw"})()"#,
+            "TypeError",
+        ),
+        // A real collection cursor still works.
+        (
+            r#"(()=>{var m=new Map();m.set("a",1);var it=m.keys();var r=it.next();return r.value+":"+r.done})()"#,
+            "a:false",
+        ),
+        // The NaN-count close, which the matrix otherwise never observed: the
+        // module note above covers a non-callable mapper and a NEGATIVE count,
+        // and only those two had a `return`-counting receiver. Node 22 answers
+        // '0' here for the same reason it does there — it predates the ES2025
+        // ordering.
+        (
+            r#"(()=>{let c=0;const it={next(){return{value:1,done:false}},return(){c++;return{}},[Symbol.iterator](){return this}};try{Iterator.prototype.take.call(it,NaN)}catch(e){}return String(c)})()"#,
+            "1",
+        ),
+        (
+            r#"(()=>{let c=0;const it={next(){return{value:1,done:false}},return(){c++;return{}},[Symbol.iterator](){return this}};try{Iterator.prototype.drop.call(it,NaN)}catch(e){}return String(c)})()"#,
+            "1",
+        ),
+        // A `flatMap` closed while suspended inside an inner iterator must
+        // close the OUTER iterator too, even when the inner's `return`
+        // misbehaves — ES2025's IfAbruptCloseIterator(backupCompletion,
+        // iterated), with the inner's error still the winner. Skipping it
+        // leaked the outer iterator, so a generator's `finally` never ran.
+        // Adversarial review found this; all three verified against Node 22.
+        (
+            r#"(()=>{var log=[];var outer={next:function(){return{done:false,value:1}},return:function(){log.push('outer-return');return{}}};outer[Symbol.iterator]=function(){return this};var inner={next:function(){return{done:false,value:2}},return:function(){log.push('inner-return');throw new Error('boom')}};inner[Symbol.iterator]=function(){return this};var h=Iterator.prototype.flatMap.call(outer,function(){return inner});h.next();try{h.return()}catch(e){log.push('caught:'+e.message)}return log.join(',')})()"#,
+            "inner-return,outer-return,caught:boom",
+        ),
+        (
+            r#"(()=>{var log=[];var outer={next:function(){return{done:false,value:1}},return:function(){log.push('outer-return');return{}}};outer[Symbol.iterator]=function(){return this};var inner={next:function(){return{done:false,value:2}},return:function(){log.push('inner-return');return 7}};inner[Symbol.iterator]=function(){return this};var h=Iterator.prototype.flatMap.call(outer,function(){return inner});h.next();try{h.return()}catch(e){log.push('caught:'+e.constructor.name)}return log.join(',')})()"#,
+            "inner-return,outer-return,caught:TypeError",
+        ),
+        (
+            r#"(()=>{var log=[];var outer={next:function(){return{done:false,value:1}},return:function(){log.push('outer-return');return{}}};outer[Symbol.iterator]=function(){return this};var inner={next:function(){return{done:false,value:2}},return:function(){log.push('inner-return');return{}}};inner[Symbol.iterator]=function(){return this};var h=Iterator.prototype.flatMap.call(outer,function(){return inner});h.next();h.return();return log.join(',')})()"#,
+            "inner-return,outer-return",
+        ),
     ] {
         assert_eq!(run(probe), expected, "{probe}");
     }

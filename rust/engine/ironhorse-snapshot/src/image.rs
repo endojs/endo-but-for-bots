@@ -4049,18 +4049,24 @@ fn iterator_from_wrapper_malformed(
 /// 10-14: map, filter, take, drop, flatMap). Each wraps a live underlying
 /// iterator and retains a holder array in `result` carrying the captured
 /// `next`, the mapper/predicate or remaining count, and flatMap's live inner
-/// iterator. `index` is the callback counter and `done` the exhaustion latch,
-/// so both are unconstrained; the for-in and string payloads are always empty.
+/// iterator. `index` is the callback counter, so it is unconstrained; the
+/// for-in and string payloads are always empty.
+///
+/// `done` is load-bearing here rather than free: a spent helper RELEASES its
+/// underlying iterator (`helper_finish`), so `iterable` is NULL on a done row
+/// — the same shape a live string cursor carries — and must NOT be on a row
+/// that can still yield. The holder survives either way, emptied.
 ///
 /// Shared by both gates for the same reason as
 /// [`iterator_from_wrapper_malformed`].
 fn lazy_helper_malformed(
     iterable: u32,
     result: u32,
+    done: bool,
     enum_keys_empty: bool,
     str_bytes_empty: bool,
 ) -> bool {
-    iterable == u32::MAX || result == u32::MAX || !enum_keys_empty || !str_bytes_empty
+    result == u32::MAX || !enum_keys_empty || !str_bytes_empty || (!done && iterable == u32::MAX)
 }
 
 /// The self-contained shape gate for a RegExp String Iterator cursor (kind 9):
@@ -4129,7 +4135,13 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         if (10..=14).contains(&kind)
-            && lazy_helper_malformed(iterable, result, enum_keys.is_empty(), str_bytes.is_empty())
+            && lazy_helper_malformed(
+                iterable,
+                result,
+                done,
+                enum_keys.is_empty(),
+                str_bytes.is_empty(),
+            )
         {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: malformed lazy Iterator helper",

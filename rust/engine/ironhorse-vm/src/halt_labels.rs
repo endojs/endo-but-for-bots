@@ -246,6 +246,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Iterator.setter:missing-toStringTag",
     "Iterator:helper-id",
     "Iterator:helper-kind",
+    "Iterator:helper-symbol",
     "Iterator:missing-constructor",
     "Object-static:unexpected-proxy",
     "Reflect:unexpected",

@@ -1241,7 +1241,17 @@ struct IterState {
     /// For a collection cursor (kinds 5-7): the owning collection's
     /// clear-generation at creation. A `clear()` bumps the collection's
     /// counter and this cursor dead-ends — XS's purge semantics (see
-    /// `CollectionData::generation`). Zero for every other kind.
+    /// `CollectionData::generation`).
+    ///
+    /// For a lazy Iterator helper (kinds 10-14) the field is reused as the
+    /// "already running" re-entrancy latch, set to 1 only for the duration of
+    /// one `next()` step, so a callback that re-enters its own helper is
+    /// refused rather than corrupting half-advanced state. The snapshot row
+    /// carries no field for it: a snapshot is taken only at a quiescent point,
+    /// where no helper is mid-step, so restore's zero is always the live
+    /// value.
+    ///
+    /// Zero for every other kind, and zero for a helper between steps.
     generation: u32,
     enum_keys: std::rc::Rc<Vec<(u16, u32)>>,
     /// For a string iterator (`kind == 4`) or RegExp String Iterator (`kind ==
@@ -2499,6 +2509,23 @@ impl Interp {
                 // remains non-quiescent and must be rewound by the supervisor.
                 self.native_depth = 0;
                 self.last_crank_completed = false;
+                // A lazy Iterator helper's "already running" latch rides
+                // `IterState::generation`, cleared by the step's own exit path
+                // — which THIS unwind skipped, because `HeapExhausted` is a
+                // `resume_unwind` rather than a returned `Step`. A latch left
+                // set poisons that helper for good (every later `next()` and
+                // `return()` answers "already running"), and because a
+                // following completed crank restores quiescence the machine
+                // could then be snapshotted: the row carries no field for the
+                // latch, so the resumed twin would answer differently from the
+                // machine it came from. No helper is mid-step once the stack
+                // has unwound, so clearing every latch here is exactly the
+                // live value.
+                for state in self.iterators.values_mut() {
+                    if (10..=14).contains(&state.kind) {
+                        state.generation = 0;
+                    }
+                }
                 RunOutcome {
                     meter_raw_this_run: 0,
                     computrons_this_run: 0,

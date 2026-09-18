@@ -3732,7 +3732,11 @@ impl Interp {
                 // where no helper is mid-step, so restore's zero is always the
                 // live value.
                 10..=14 => {
-                    if r.iterable == crate::value::SlotIndex::NULL.0
+                    // A spent helper has released its underlying iterator, so
+                    // `iterable` is NULL on a DONE row and must not be on one
+                    // that can still yield. The holder array survives either
+                    // way, emptied by `helper_finish`.
+                    if (!r.done && r.iterable == crate::value::SlotIndex::NULL.0)
                         || r.result == crate::value::SlotIndex::NULL.0
                         || !r.enum_keys.is_empty()
                         || !r.str_bytes.is_empty()
