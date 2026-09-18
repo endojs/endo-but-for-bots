@@ -1334,11 +1334,52 @@ retracted one.
       XS's `fx_lockdown` behaves identically — this is fidelity to the oracle,
       not a port defect.
 
-      The distinction matters for sequencing: attenuation is what a CONFINED
-      guest additionally needs, while override enablement is what arbitrary
-      guest source needs in order to run at all. A worker that swapped the shim
-      for the native `lockdown()` today would confine correctly and break
-      ordinary guest code.
+      **Corrected 2026-09-18: override enablement is a compatibility
+      preference here, not a requirement.** This paragraph read "override
+      enablement is what arbitrary guest source needs in order to run at all",
+      and concluded that a worker swapping the shim for the native `lockdown()`
+      "would confine correctly and break ordinary guest code". That overstates
+      it, because the override mistake is a `[[Set]]` problem only.
+
+      A class body and an object literal both define their methods through
+      `[[DefineOwnProperty]]` (`ClassDefinitionEvaluation` ->
+      `MethodDefinitionEvaluation` -> `DefinePropertyOrThrow`), which never
+      consults the prototype chain, and `Object.defineProperty` keeps working
+      after lockdown -- the probe above measures `defineStillWorks=mine`. Only
+      the ES5 ASSIGNMENT idiom is affected: `Foo.prototype.toString = ...`,
+      `Child.prototype.constructor = Child`, `MyError.prototype.name = ...`.
+      Class-syntax-first guest source, which is what `packages/thixotrope`'s
+      orthogonal-persistence model produces, is structurally immune.
+
+      SES's own list says the same thing. `minEnablements`
+      (`packages/ses/src/enablements.js:60`) is six properties on four objects
+      -- `%ObjectPrototype%.toString`, `%FunctionPrototype%.toString`,
+      `%ErrorPrototype%.name` and `%IteratorPrototype%`'s `toString`,
+      `constructor` and `@@toStringTag` -- and each entry's comment names the
+      offender it exists for (`// set by "rollup"`; `// set by "precond",
+      "ava", "node-fetch"`). It is a shim for transpiled and legacy dependency
+      output, not a language-level need.
+
+      Measured in this tree: assignment to `toString`, `name` or `constructor`
+      on any prototype, across `packages/` and `rust/endo/xsnap/src/` and
+      excluding `node_modules`, the test262 corpus and `dist/`, occurs in three
+      places and none is guest-path code -- a comment in `enablements.js`,
+      SES's own `property-override.test.js`, and
+      `packages/hardened262/scripts/agents/ironhorse.js:27`, a harness adapter
+      that rewrites an `Object.defineProperty` call INTO the assignment idiom.
+
+      So the distinction for sequencing is narrower than this item claimed.
+      Attenuation is what a CONFINED guest additionally needs. Override
+      enablement is a compatibility probe to run before migrating a worker --
+      cheap, because the surface is those six properties -- and its residual
+      risk is a guest's bundled DEPENDENCY graph rather than its authored
+      source. The one idiom that still catches otherwise-modern code is
+      `MyError.prototype.name = 'MyError'` after `class MyError extends Error
+      {}`, which has a definable alternative.
+
+      **Consequence:** the native route's remaining cost for this worker is the
+      compartment template alone, which folds into the guest `Compartment`
+      below. It does not trail a second unscoped item behind it.
 - [ ] **Native `lockdown()` and the SES shim are alternatives, not layers, and
       the failure mode is ugly.** SES guards a second lockdown with
       `seemsToBeLockedDown()`, whose sixth term calls
