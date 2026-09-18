@@ -559,8 +559,23 @@ entire operation succeeds and is the state carried across persistence.
    than by the disconnected `-l` wire an earlier revision cited: see
    § Oracle divergences, measured. Decision 4 itself produced none; the width
    of the root set (rows 3 and 4 there) did.
-5. **Does the daemon want this at all?** **Still open**, and this work does not
-   answer it. It makes the native profile answerable where it was not.
+5. **Does the daemon want this at all?** **Deferred 2026-09-18** at the owner's
+   direction: the endor daemon is not a current priority. This work does not
+   answer the question and no longer needs to -- it makes the native profile
+   answerable for whoever asks it later.
+
+   Deferred, not open. Nothing should be sequenced on it, and a reader planning
+   work here should treat Phase 4 of
+   [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
+   -- the endor SES bundle bar, which this question gates -- as deferred with
+   it. That document is not amended here; its own Status still reads Proposed
+   and it remains an ordering proposal with nothing implemented.
+
+   Distinct from the profile question answered the same day, which was about
+   `packages/thixotrope`'s IronHorse worker and chose the SES shim. The two are
+   separate decisions about separate embedders, and conflating them is easy
+   because both were once phrased as "the daemon's IronHorse worker" when only
+   thixotrope has one.
 
 ### One decision the implementation forced
 

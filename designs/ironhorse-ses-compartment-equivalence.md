@@ -783,8 +783,12 @@ The shim is the larger one — and it is the one already running on IronHorse.
 ## What a next step should establish first
 
 Written 2026-09-15, before the native `lockdown()` existed.
-Question 1 below is still the gating one and is still unanswered; questions 3
-and 5 have since been answered and are struck through.
+Question 1 below is two questions wearing one name, and both are now settled.
+"The daemon's Ironhorse worker" was written in the endor sense, while every
+measurement under it comes from `packages/thixotrope`, which is the only
+embedder that HAS an IronHorse worker. Split on 2026-09-18: thixotrope's
+profile is answered (keep the SES shim), and endor's is deferred at the owner's
+direction. Questions 3 and 5 were answered earlier and are struck through.
 For what each remaining piece needs before code — and for two corrections to
 the sequencing this section implies — read § The work #1295 deferred, triaged
 alongside it.
@@ -935,6 +939,16 @@ where third-party source runs on top of it.
 Re-open when G1 lands: per D2 below, the template is then the only thing
 separating the two profiles for `packages/thixotrope`.
 
+**And the endor half is deferred outright.** This entry's title says "the
+daemon's", which was always ambiguous: endor runs XS, calls neither `fx_harden`
+nor `fx_lockdown`, and has no IronHorse worker, so only thixotrope had a profile
+to choose. Whether endor wants one at all is a separate decision --
+`ironhorse-native-lockdown.md` § Decisions, item 5 -- and on 2026-09-18 the
+owner deferred it: endor is not a current priority. Deferred, not open: nothing
+should be sequenced on it, and Phase 4 of
+[ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md),
+which that question gates, is deferred with it.
+
 **One consequence for the rest of this list.** Under the shim profile, I1 (the
 lazy `Iterator` helpers) is the chosen route's main engine-side debt -- it is
 why both boot scripts delete that surface by hand -- and G1 loses the
@@ -1018,6 +1032,21 @@ on the `test262:ironhorse` engine lane — not all 8. The other six need
 `frozenBytes`, `compareBytes`, `concatBytes`, `passStyleOf` and `environment`,
 which a prelude supplies and no engine has natively
 (`packages/test262-runner/README.md` § The engine lane's zero).
+
+**And that list is now the whole of it, which is worth stating plainly.** G1
+had three justifications when this section was written. Two decisions on
+2026-09-18 removed the other two: D1 kept the SES shim for
+`packages/thixotrope`, and the endor question was deferred outright. The SES
+shim installs its own `Compartment`, so no embedder in this tree needs the
+native one. What remains is conformance — corpus coverage and differential
+fidelity against the oracle — which is real work with a real number attached,
+but it is test coverage rather than a product dependency, and it should be
+prioritized as such rather than as a blocker.
+
+That also tilts, without settling, the decision at the head of this item. If the
+only consumer is the corpus, then matching XS buys oracle-adjudicable behaviour
+and matching SES buys those 75 files; nothing guest-facing pulls either way any
+more.
 
 ### Research — cannot be scoped until measured
 
@@ -1136,14 +1165,14 @@ Neither is assigned:
   so it cannot see a divergence in how the two engines settle what
   `@endo/eventual-send`'s shim leaves pending.
 
-**The endor daemon's own question is still open, and D1 did not answer it.**
-D1 chose a profile for `packages/thixotrope`'s worker. The endor daemon runs XS,
-calls neither `fx_harden` nor `fx_lockdown`, and has no IronHorse worker at all;
-`ironhorse-native-lockdown.md` § Decisions records this separately as decision 5
-("Does the daemon want this at all? **Still open**"). That is Phase 4 of
+**Resolved the day this section was written: the endor daemon.** It appeared
+here as open-and-unowned, which was right for about an hour. The owner then
+deferred it outright -- endor is not a current priority -- so it is no longer
+uncovered, it is declined. Recorded at D1 above and in
+`ironhorse-native-lockdown.md` § Decisions, item 5. Phase 4 of
 [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
-and neither worker is on it. The risk is specifically that D1's answer sits
-next to it and reads as covering it.
+is deferred with it; that document is not amended, so read its Phase 4 against
+this note.
 
 **A predictable three-way collision on one file.** `ses_boot_intrinsics.rs`'s
 census pins `Compartment=undefined`. When a guest `Compartment` lands, that term
