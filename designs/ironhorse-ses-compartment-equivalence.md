@@ -1111,6 +1111,58 @@ It wants a rebase and a reconciliation before its numbers can be read against
 this document.
 Flagged, not touched.
 
+### Not covered by anything above, and not deferred either
+
+Written 2026-09-18 in answer to "what work is not being covered or explicitly
+deferred here?".
+Everything in this section is open, unowned, and outside both in-flight workers
+(a guest `Compartment`; the #1294 rebase).
+
+**The parity axis is unenforced.** See the re-opened ratchet item in § Known
+Gaps. This is the largest of them, because it is the measurement every other
+claim about the shim route rests on.
+
+**Two of this document's own open gaps were never carried into the triage.**
+Neither is assigned:
+
+- The prelude's `@endo/harden` interaction **on the node host**. #1294 solves
+  the IronHorse half with `install-pre-lockdown-harden.js`, and its own
+  description says wiring the same repair to node "is a separate change with
+  its own baseline to move". Until someone does, node stays at 14/16 for a
+  reason we have already diagnosed and fixed elsewhere. The item's second
+  clause -- porting SES's own lockdown/`Compartment` assertions into the
+  `ses-xs-parity` corpus -- is untouched.
+- The stage-4 bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`,
+  so it cannot see a divergence in how the two engines settle what
+  `@endo/eventual-send`'s shim leaves pending.
+
+**The endor daemon's own question is still open, and D1 did not answer it.**
+D1 chose a profile for `packages/thixotrope`'s worker. The endor daemon runs XS,
+calls neither `fx_harden` nor `fx_lockdown`, and has no IronHorse worker at all;
+`ironhorse-native-lockdown.md` § Decisions records this separately as decision 5
+("Does the daemon want this at all? **Still open**"). That is Phase 4 of
+[ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
+and neither worker is on it. The risk is specifically that D1's answer sits
+next to it and reads as covering it.
+
+**A predictable three-way collision on one file.** `ses_boot_intrinsics.rs`'s
+census pins `Compartment=undefined`. When a guest `Compartment` lands, that term
+stops discriminating in exactly the way `lockdown=function` did once the engine
+bound one -- #1295 had to replace that assertion with an identity comparison for
+the same reason. #1294 is also editing that file. Whoever lands second pays for
+it, and nobody has been told.
+
+**Adjacent tracks this document does not cover and should not be read as
+covering.** `designs/ironhorse-known-defects.md` has 111 of 208 findings open or
+partial at `fa3ecfcfd`, 83 of them P1 -- roughly 48 metering calibration and 63
+guest-observable divergences. The architecture review has 61 open findings at its
+last revision, worked by
+[#1302](https://github.com/endojs/endo-but-for-bots/pull/1302). **The unasked
+question between them and this thread is R2**: the `-l` sweep's 3,691 failures
+are classified but undiagnosed, and nobody has checked whether they are a subset
+of that catalog or a distinct population. If they are a subset, R2 is already
+someone's work; if they are not, it is nobody's.
+
 ### Closed since this document was last revised, by work landing elsewhere
 
 - **A CI lane runs `ses_boot_intrinsics.rs`.** `.github/workflows/ci.yml`
@@ -1207,14 +1259,22 @@ Flagged, not touched.
       assertions into the `ses-xs-parity` corpus (§ Why SES's own suite is not
       the gate yet). Clearing `Object[Symbol.for('harden')]` in the prelude is
       measured NOT to work.
-- [x] Record the `ses-xs-parity` ratchet somewhere a regression is visible.
+- [ ] Record the `ses-xs-parity` ratchet somewhere a regression is visible.
       The axis is deliberately not a CI gate and does not need to fail a build;
       what it needs is a captured per-lane count to ratchet against.
-      Closed: `packages/test262-runner/README.md` gained § Ratchet, not a gate,
-      which states the direction-of-travel reading explicitly and carries a
-      per-lane table — `node` 14/16, `ironhorse-host` 14/16 (the number the
-      ratchet tracks), `ironhorse` 0/8 covered — with the reason each lane
-      reports what it does. `"test"` is still `exit 0` by design.
+      **Closed on 2026-09-18 and re-opened the same day; the closure was
+      wrong.** It cited `packages/test262-runner/README.md`'s new § Ratchet, not
+      a gate and its per-lane table. But this item's complaint was never that
+      the README lacked counts -- it was that "the only counts recorded anywhere
+      are the prose baselines in that package's README, which nothing checks".
+      Better prose is still prose. `"test"` is still `exit 0`, nothing compares
+      a run against a committed number, and **no CI lane runs any `test262:*`
+      lane at all**: `.github/workflows/ci.yml` builds `@endo/test262-runner`
+      only for the prelude artifact the oracle lane consumes, and the `endot-ih`
+      invocation there walks the corpus directory rather than this axis. So
+      every parity figure in circulation is hand-run, including the 16/16 that
+      [#1294](https://github.com/endojs/endo-but-for-bots/pull/1294) exists to
+      deliver -- a number nothing will notice losing.
 - [x] Wire the Ironhorse prelude into `endot-ih` — landed as a `--prelude`
       flag, with `effective_skip_features` dropping `lockdown`/`Compartment`
       when one is supplied. `SesMode::unimplemented_skip` deliberately still
