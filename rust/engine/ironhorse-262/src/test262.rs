@@ -622,8 +622,16 @@ mod tests {
         // Raising these is the point: when the guest `Compartment`/`lockdown`
         // globals land, `covered` reaches `total` and this fails until the
         // ledger is updated with it.
+        //
+        // 6 -> 7 when the guest `Compartment` landed
+        // (`designs/ironhorse-guest-compartment.md`). It moved ONE case, not
+        // two: `Symbol.toStringTag.js` is now covered, and
+        // `Symbol.toStringTag-lockdown.js` still is not -- it is the remaining
+        // `oracle-shim-unsafe:lockdown` skip, held out of the oracle run for a
+        // reason that is about `lockdown`, not about `Compartment`. The last
+        // case is therefore not this work's to take.
         const SES_PARITY_TOTAL: usize = 8;
-        const SES_PARITY_COVERED: usize = 6;
+        const SES_PARITY_COVERED: usize = 7;
         assert_eq!(
             (rep.total, rep.covered),
             (SES_PARITY_TOTAL, SES_PARITY_COVERED),
