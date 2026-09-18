@@ -2072,10 +2072,50 @@ pub mod engine {
                     .unwrap(),
                 "42"
             );
-            assert_eq!(
-                machine.eval("(()=>{}).constructor('return 42')()").unwrap(),
-                "42"
-            );
+            // The dynamic-function route, which needs the source compiler
+            // `with_bounds` wired above: its completion renders through the
+            // same job drain. Through the compartment's OWN `Function`
+            // binding, which is what a guest has -- NOT through
+            // `(()=>{}).constructor`, which `VmMachine::new` locks down at
+            // construction and `the_prototype_chain_evaluator_is_denied`
+            // below pins as refused.
+            assert_eq!(machine.eval("Function('return 42')()").unwrap(), "42");
+        }
+
+        /// The prototype-chain route to the ORIGINAL `Function` is closed.
+        ///
+        /// `VmMachine::new` performs the whole lockdown operation at
+        /// construction, and its step 2 replaces the five function-family and
+        /// `Date` prototypes' `constructor` with an inert stand-in. Reaching an
+        /// evaluator that way is the cross-compartment leak lockdown exists to
+        /// deny, so an ephemeral `Machine` must refuse it rather than compile.
+        ///
+        /// This asserts the refusal rather than merely avoiding the shape: the
+        /// assertion above once read `(()=>{}).constructor('return 42')()` and
+        /// expected `"42"`, i.e. it pinned the bypass. Nothing caught that when
+        /// lockdown closed it, because `ci.yml`'s `-p endo` step names three
+        /// `--test` targets and never runs `--lib`.
+        #[test]
+        fn the_prototype_chain_evaluator_is_denied_on_an_ephemeral_machine() {
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            for family in [
+                "(()=>{}).constructor",
+                "({}).constructor.constructor",
+                "(function(){}).constructor",
+                "Object.getPrototypeOf(function*(){}).constructor",
+                "Object.getPrototypeOf(async function(){}).constructor",
+                "Object.getPrototypeOf(async function*(){}).constructor",
+            ] {
+                let source = format!(
+                    "try {{ {family}('return 1')(); 'REACHED' }} \
+                     catch (e) {{ e.name + ': ' + e.message }}"
+                );
+                assert_eq!(
+                    machine.eval(&source).unwrap(),
+                    "TypeError: secure mode",
+                    "{family} still reaches an evaluator on an ephemeral machine"
+                );
+            }
         }
 
         #[test]
