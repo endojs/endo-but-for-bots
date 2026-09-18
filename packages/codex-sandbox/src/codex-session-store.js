@@ -43,12 +43,17 @@ import {
   parseCanonicalAuditJson,
 } from './audit-journal.js';
 
-/** The four methods `makeStoredAuditJournal` asks of its powers. */
+/**
+ * The methods `makeStoredAuditJournal` asks of its powers. `remove` is what
+ * lets the anchor store keep only the newest head, so it stops being a second
+ * copy of the whole journal.
+ */
 export const ValueStoreInterface = M.interface('CodexValueStore', {
   list: M.call().returns(M.promise()),
   has: M.call(M.string()).returns(M.promise()),
   lookup: M.call(M.string()).returns(M.promise()),
   storeValue: M.call(M.any(), M.string()).returns(M.promise()),
+  remove: M.call(M.string()).returns(M.promise()),
 });
 
 // Journal names are `<prefix>-<20 digits>` and `<prefix>-head-<20 digits>`
@@ -178,11 +183,27 @@ export const makeDirectoryValueStore = async (directory, label = 'store') => {
     }
   };
 
+  /** @param {string} name */
+  const remove = async name => {
+    // Never through a symlink, and absent is not an error: a removal is only
+    // ever of a value a newer one has superseded.
+    const path = pathFor(name);
+    const info = await lstat(path).catch(error => {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
+        return undefined;
+      throw error;
+    });
+    if (info === undefined) return;
+    info.isFile() || Fail`Codex value ${q(name)} is not a stored value`;
+    await rm(path, { force: true });
+  };
+
   return makeExo('CodexValueStore', ValueStoreInterface, {
     list,
     has,
     lookup,
     storeValue,
+    remove,
   });
 };
 harden(makeDirectoryValueStore);

@@ -50,15 +50,12 @@ const brief = (value, limit) => {
   return `${text.slice(0, limit)}… [truncated ${text.length - limit} chars]`;
 };
 
-const auditProjection = (value, limit = 4 * 1024 * 1024) => {
-  const text =
-    typeof value === 'string'
-      ? value
-      : (JSON.stringify(value) ?? String(value));
-  const size = new TextEncoder().encode(text).byteLength;
-  if (size > limit) throw Error(`Audit payload exceeded ${limit} bytes`);
-  return text;
-};
+// The text an audit entry records for a value. Its size is the journal's
+// business: a field beyond the inline bound is stored by reference there, and
+// only a value beyond one storage value is refused — by the journal, which
+// is what makes the refusal a recording failure the client quarantines on.
+const auditProjection = value =>
+  typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
 
 /**
  * Project a successful tool fulfillment to JSON without silently collapsing

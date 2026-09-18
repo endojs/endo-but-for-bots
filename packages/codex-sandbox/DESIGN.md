@@ -36,11 +36,13 @@ want queuing must make that policy visible above the capability boundary.
   turn starts.
 - Endowed dynamic Endo tools are handled directly through app-server and every
   intent/result is durably audited.
-- Audit payloads are stored completely up to the documented bound; oversized
-  dynamic results become an audited boundary failure and are not exposed to
-  the model. The journal never substitutes a lossy prefix for an operation it
-  reports as successful. Dynamic tool intent/result payloads have a separate
-  4 MiB bound inside the 16 MiB complete-entry bound.
+- Audit payloads are stored completely. A payload text field over 64 KiB is
+  stored as its own content value, named by its hash, and the entry carries
+  the reference, the byte count and a 4 KiB preview; the chain hash covers the
+  reference and the reference covers the content. A result the journal cannot
+  store as one value (16 MiB) becomes an audited boundary failure and is not
+  exposed to the model. The journal never substitutes a lossy prefix for an
+  operation it reports as successful.
 - Shell-command and file-change operation requests correlated to the active
   turn are automatically approved because the attested outer Endo sandbox is
   the enforcement boundary.

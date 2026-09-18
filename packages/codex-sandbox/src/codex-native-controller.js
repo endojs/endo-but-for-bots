@@ -143,13 +143,13 @@ export const makeCodexNativeController = ({
       const state = await openState(records.directory);
       const saved = await state.readThread();
       assertOpen();
+      // No lifetime ceiling: a session's journal grows with what it did,
+      // large payloads are stored by reference, and the anchor store keeps
+      // only the newest head. See the bounds note in audit-journal.js.
       const journal = makeStoredAuditJournal(state.entries, {
         journalId: `codex-${plan.sessionId}`,
         sessionId: plan.sessionId,
         anchorPowers: state.anchors,
-        maxEntryBytes: 1024 * 1024,
-        maxTotalBytes: 16 * 1024 * 1024,
-        maxAnchorBytes: 16 * 1024 * 1024,
       });
       const mounter = own(
         'mounter',

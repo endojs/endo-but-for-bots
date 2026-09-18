@@ -2110,6 +2110,9 @@ test('late non-JSON tool fulfillments remain call-correlated unknowns', async t 
 });
 
 test('an unauditable successful Endo result quarantines instead of inviting replay', async t => {
+  // The journal, not the client, decides what it can record: here it refuses
+  // the result as one storage value, which is the recording failure the
+  // client must treat as an effect it cannot vouch for.
   const fixture = makeFixture({
     clientOptions: {
       dynamicTools: [
@@ -2120,7 +2123,14 @@ test('an unauditable successful Endo result quarantines instead of inviting repl
           inputSchema: { type: 'object' },
         },
       ],
-      callTool: async () => 'x'.repeat(4 * 1024 * 1024 + 1),
+      callTool: async () => 'mutated',
+      auditEvent: async (kind, payload) => {
+        if (kind === 'tool-result' && payload.result === 'mutated') {
+          throw Error(
+            'audit payload result of 17000000 bytes exceeds the 16777216-byte storage value bound',
+          );
+        }
+      },
     },
   });
   const reader = await fixture.client.send('mutate once');
@@ -2138,7 +2148,7 @@ test('an unauditable successful Endo result quarantines instead of inviting repl
   });
   const events = await drain(reader);
   t.is(events.at(-1).type, 'abort');
-  t.regex(events.at(-1).reason, /Audit payload exceeded/);
+  t.regex(events.at(-1).reason, /storage value bound/);
   t.falsy(fixture.sent.find(message => message.id === 952));
   t.true(fixture.isClosed());
 });
