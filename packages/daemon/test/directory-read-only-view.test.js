@@ -167,7 +167,7 @@ test('empty and multi-segment path arguments forward verbatim to the backing hub
   ]);
 });
 
-test('the liveness gate severs every read once the backing capability is cancelled', async t => {
+test('the liveness gate severs every read once the backing capability is canceled', async t => {
   const { hub, calls } = makeStubHub();
   let cancelled = false;
   const assertLive = () => {

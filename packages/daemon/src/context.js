@@ -118,13 +118,24 @@ export const makeContextMaker = ({
     };
 
     /**
-     * Registers a function to be called when this context is cancelled.
+     * Registers a function to be called when this context is canceled.
      *
      * @param {() => void | Promise<void>} hook - A function with no parameters to execute during disposal.
      */
     const onCancel = hook => {
       if (done) {
-        // Already cancelled – hooks have already fired.
+        // The context was already canceled by the time this hook registered —
+        // e.g. cancellation fired during an `await` in the registrant's async
+        // constructor, which resumes only after `cancel` has drained `hooks`.
+        // Fire the hook immediately rather than dropping it, so a late-
+        // registered liveness gate still observes revocation. Dropping it
+        // silently latches such a gate open forever. Mirrors the already-
+        // canceled path of `thatDiesIfThisDies` above, and swallows failures
+        // the same way, since a hook registered after cancellation has no
+        // `disposed` channel left to surface through.
+        Promise.resolve()
+          .then(hook)
+          .catch(() => {});
         return;
       }
       hooks.push(hook);

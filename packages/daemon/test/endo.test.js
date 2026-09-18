@@ -7896,7 +7896,7 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
   // Malformed arguments are rejected at THIS boundary by the ReadableNameHub
   // interface guard (makeExo), not only downstream at the backing directory.
   // `lookup` requires a string or string[]; a number must be refused by the
-  // guard before it forwards. This is the behavioural proof the interface
+  // guard before it forwards. This is the behavioral proof the interface
   // guard is live on the guest-facing view.
   await t.throwsAsync(
     E(/** @type {any} */ (readOnlyDirectory)).lookup(42),

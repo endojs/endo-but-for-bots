@@ -2762,8 +2762,19 @@ const makeDaemonCore = async (
     // Minted through the shared `makeReadOnlyDirectoryView` factory so all three
     // read-only views (this, the message hub's, and `EndoDirectory.readOnly()`)
     // carry an identical guard and a `ReadableNameHub`-specific `help`. The
-    // liveness gate severs the view when this hub's context is cancelled, so a
+    // liveness gate severs the view when this hub's context is canceled, so a
     // guest's read-only view does not outlive collection of the mailbox.
+    //
+    // The shallow-attenuation caveat on `ReadableNameHub.lookup` (see
+    // types.d.ts) bites HARDER here than on a plain directory. A mailbox's
+    // reachable graph is, by construction, exactly where arbitrary
+    // sender-supplied capabilities land: a message's `@slots`, `@value`, and
+    // package-message names resolve through `provide` to the full-strength live
+    // object the sender named, not a further-attenuated handle. So a holder of
+    // this "read-only" view can still reach a fully writable capability via
+    // `lookup(['<message>', '@slots'])` (etc.). Withholding the mailbox's own
+    // mutators does NOT confine what a looked-up message payload hands back;
+    // grant this view only where that one-hop escape is acceptable.
     let mailboxCancelled = false;
     context.onCancel(() => {
       mailboxCancelled = true;
@@ -3168,7 +3179,14 @@ const makeDaemonCore = async (
     // over `__getMethodNames__` sees the declared `ReadableNameHub` contract
     // and not the full `MessageHub`/`EndoDirectory` surface. Minted through the
     // shared `makeReadOnlyDirectoryView` factory for one guard and one `help`.
-    // The liveness gate severs the view when this hub's context is cancelled.
+    // The liveness gate severs the view when this hub's context is canceled.
+    //
+    // Same shallow-attenuation caveat as the mailbox hub above: this message's
+    // names (`@slots`, `@value`, package-message names) resolve through
+    // `provide` to the full-strength live capabilities the sender transmitted,
+    // so `lookup`/`maybeLookup` on this "read-only" view can hand back a fully
+    // writable capability. The read-only surface withholds this hub's own
+    // mutators only; it does not attenuate what a looked-up payload returns.
     let messageCancelled = false;
     context.onCancel(() => {
       messageCancelled = true;

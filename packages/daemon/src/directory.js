@@ -78,7 +78,7 @@ import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
  *
  * @param {Pick<NameHub, 'has' | 'list' | 'lookup' | 'maybeLookup'>} hub
  * @param {() => void} [assertLive] Throws if the backing capability has been
- *   cancelled; defaults to a no-op for a hub with no collection lifecycle.
+ *   canceled; defaults to a no-op for a hub with no collection lifecycle.
  * @returns {ReadableNameHub}
  */
 export const makeReadOnlyDirectoryView = (hub, assertLive = () => {}) => {
@@ -740,7 +740,7 @@ export const makeDirectoryMaker = ({
 
     // Liveness gate for the read-only view: the view carries no formula identity,
     // so formula collection's sever path cannot reach it. Trip a flag when this
-    // directory's context is cancelled so the view stops forwarding reads once
+    // directory's context is canceled so the view stops forwarding reads once
     // the backing directory is collected — a capability handed to a less-trusted
     // holder must not outlive revocation of the capability it attenuates.
     let cancelled = false;
