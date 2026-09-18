@@ -617,14 +617,25 @@ Each line is a claim, and each was measured.
       An earlier revision of this line counted the blob and seal once each,
       which is the exact miscount the two-armed fix exists to prevent.)
 - [x] `ses_prelude_reach` stays at its 7/8 pin and `ses_boot_intrinsics`'s
-      three realm profiles still pass — with one change in each, `lockdown`
-      going from `undefined` to `function` in the pre-shim census, which is the
-      engine binding its own and is the only thing that moved.
+      three realm profiles still pass, with `lockdown` going from `undefined` to
+      `function` in the pre-shim census where the engine binds its own.
 
-      **That census term stopped discriminating in the process, and the tests
-      now say so.** `lockdown=function` used to mean "the shim installed one";
-      with the engine binding one on every realm it is `function` on both sides
-      of the shim's evaluation and carries no information. The unfrozen profile
+      **Corrected 2026-09-18: that is two of the three profiles, not all three,
+      and an earlier revision of this item said "one change in each" and "the
+      engine binding one on every realm".** `create_hardened_globals` binds
+      `lockdown` for every `Interp`, but
+      `new_shared_realm_machine_configured` REMOVES it again when
+      `freeze == false` (`interp/realm.rs:703`): an unfrozen machine exists so
+      the SES shim can repair and freeze the graph, the shim installs its own,
+      and until it does the engine's would be a realm-wide mutation reachable
+      from any compartment of a machine that has not locked down yet. So the
+      two plain-`Interp` profiles moved and the unfrozen-`Machine` profile still
+      pins `lockdown=undefined` deliberately.
+
+      **Where the term did move, it stopped discriminating, and the tests now
+      say so.** `lockdown=function` used to mean "the shim installed one"; where
+      the engine binds one it is `function` on both sides of the shim's
+      evaluation and carries no information. The unfrozen profile
       pins object identity across the shim's evaluation instead, and the frozen
       profile CALLS the binding and pins `TypeError: lockdown already called` —
       the engine's message, where the shim's would have been
