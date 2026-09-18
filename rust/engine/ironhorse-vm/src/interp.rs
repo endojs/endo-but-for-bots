@@ -290,6 +290,14 @@ pub const STACK_SLOT_COUNT: usize = 4096;
 /// this ceiling before the next instruction and returns `Halt::StepLimit`.
 /// Ordinary runs use the arena and allocation-admission limits instead.
 const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
+
+/// Dispatch budget for one opt-in guest render of an escaping thrown value
+/// ([`Interp::run_rendering_throws_in_guest`]). Generous by orders of
+/// magnitude for any `toString` a diagnostic would meet -- test262's is a
+/// string concatenation -- while still bounding a `toString` that does not
+/// terminate. Exceeding it is `Halt::StepLimit`, which the render propagates
+/// rather than turning into text.
+const RENDER_DISPATCH_BUDGET: u64 = 10_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
 /// (`mxGlobal`/`mxException`/`mxProgram`/… — the `*StackIndex` slots in
 /// `xsAll.h`) plus the frame scratch `fxOverflow` guards against; the
@@ -2382,6 +2390,19 @@ impl Interp {
     /// cost depend on rendering work. Those are the guarantees an embedder
     /// relies on and they are unchanged here; this entry point trades them away
     /// deliberately, for the one caller that needs the oracle's string.
+    ///
+    /// **What it does NOT put back.** The meter index and the dispatch count
+    /// are snapshotted and restored, and the render is bounded by
+    /// [`RENDER_DISPATCH_BUDGET`]. Everything else a guest `toString` does
+    /// persists: heap slots and chunks it allocated, globals and the thrown
+    /// object it mutated, a promise job it enqueued (the run's only drain has
+    /// already happened by then, so such a job waits for the next crank), and
+    /// the unhandled-rejection latch. An armed meter host is also CONSULTED
+    /// during the render even though the index is rolled back afterwards --
+    /// the consultation cannot be undone. Both current callers bail out on
+    /// `!completed` before touching the machine again, so none of this is live
+    /// today; a second caller must read this list rather than assume the meter
+    /// snapshot covers it.
     ///
     /// That caller is the test262 differential. The oracle's side of the
     /// comparison does not come from XS either: `xs_shim.c`'s

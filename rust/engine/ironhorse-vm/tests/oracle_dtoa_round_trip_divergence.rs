@@ -77,8 +77,12 @@
 //! That is the `finding_*_large_integer_dtoa` family, and it is not a separate
 //! phenomenon. Six generated upper-tie values in the `ulp == 8` band split
 //! exactly on parity (even: port takes the tie, XS refuses; odd: both refuse,
-//! no divergence), and all four values the family pins are even-mantissa upper
-//! ties:
+//! no divergence). The family is ten test files pinning NINE distinct doubles,
+//! and the property holds for every one of them: each has an even mantissa and
+//! an upper tie that is a strictly shorter decimal round-tripping back to it.
+//! Four of the nine are tabulated here; the other five are 51298814505517056,
+//! 26177172834091008, 186617910456745984, 383157721332973568 and
+//! 22799472811573248.
 //!
 //! ```text
 //! value                 ulp  mantissa  port (= the tie)      XS
@@ -169,13 +173,25 @@ fn the_oracle_rendering_is_shorter_and_does_not_round_trip() {
     );
 }
 
-/// One member of the class: `x`, its exact midpoint down, and the mantissa
-/// parity that decides which spelling round-trips.
+/// One member of the class: `x`, the shorter decimal sitting exactly on its
+/// lower boundary, and the mantissa parity that decides which of the two
+/// round-trips.
 struct Tie {
     value: f64,
-    /// `x - ulp/2`: the exact boundary between `x - ulp` and `x`, and a decimal
-    /// one significant digit shorter than `x` because it ends in `0`.
-    midpoint: f64,
+    /// `x - ulp/2` as a DECIMAL STRING, built by exact integer arithmetic.
+    ///
+    /// Never `(x - ulp/2) as f64`. That cast is the whole difficulty of this
+    /// finding pointed at the test itself: the boundary is not representable,
+    /// so the cast rounds it ties-to-even and lands back on ONE OF THE TWO
+    /// NEIGHBOURS — on `x` when the mantissa is even, on `x - ulp` when it is
+    /// odd. The first version of this file held the boundary in an `f64`, so
+    /// its even-mantissa branch compared `number_to_ecma_string(x)` against
+    /// `number_to_ecma_string(x)` and asserted nothing at all. It passed
+    /// against `format!("{v:.0}")`, a renderer that never shortens anything.
+    shorter: String,
+    /// `x` itself as a decimal string: the longer spelling, 17 significant
+    /// digits where `shorter` has 16.
+    longer: String,
     mantissa_is_odd: bool,
 }
 
@@ -192,7 +208,8 @@ fn ulp_eight_ties(count: usize) -> Vec<Tie> {
         assert!(x < 1 << 56, "left the ulp == 8 band");
         ties.push(Tie {
             value: x as f64,
-            midpoint: (x - 4) as f64,
+            shorter: (x - 4).to_string(),
+            longer: x.to_string(),
             mantissa_is_odd: (x / 8) % 2 == 1,
         });
         x += 40;
@@ -204,44 +221,62 @@ fn ulp_eight_ties(count: usize) -> Vec<Tie> {
 ///
 /// At an exact decimal tie the shorter spelling round-trips if and only if the
 /// mantissa is even, so a conformant dtoa emits it in exactly that case. Both
-/// halves are asserted: which spelling comes out, and that it round-trips.
+/// directions are pinned against literal decimal strings, so the test
+/// constrains the renderer rather than restating arithmetic:
 ///
-/// Without the round-trip half this test would pass on an engine that always
-/// emitted the longer spelling; without the parity half, on one that always
-/// emitted the shorter.
+/// * even mantissa — the port MUST emit the 16-digit boundary spelling. A
+///   renderer that never shortens (`format!("{v:.0}")`) fails here.
+/// * odd mantissa — the port must emit the 17-digit spelling and must NOT
+///   emit the boundary. A `ROUND_BIASED`-style renderer, which takes the
+///   boundary whatever the parity, fails here.
 #[test]
 fn at_an_exact_tie_the_shorter_spelling_is_used_exactly_when_the_mantissa_is_even() {
     let ties = ulp_eight_ties(24);
     let mut odd = 0;
     let mut even = 0;
     for tie in &ties {
+        // The boundary really is a boundary: it is not representable, and the
+        // two candidates either side are one ulp apart. Stated here so the
+        // rest of the test cannot quietly stop being about a tie.
+        assert_eq!(
+            tie.shorter.parse::<f64>().unwrap(),
+            if tie.mantissa_is_odd {
+                tie.value - 8.0
+            } else {
+                tie.value
+            },
+            "{}: ties-to-even sends the boundary to the even mantissa",
+            tie.longer,
+        );
+
         let rendered = number_to_ecma_string(tie.value);
         // Whatever comes out, it must denote the value it came from.
         assert_eq!(
             rendered.parse::<f64>().unwrap().to_bits(),
             tie.value.to_bits(),
             "{rendered} does not round-trip to {}",
-            tie.value,
+            tie.longer,
         );
-        let shorter = number_to_ecma_string(tie.midpoint);
         if tie.mantissa_is_odd {
             odd += 1;
-            assert_ne!(
-                rendered, shorter,
-                "the shorter spelling is a tie that reads back one ulp low",
-            );
-            // And that is precisely why: the boundary belongs to the neighbour.
             assert_eq!(
-                shorter.parse::<f64>().unwrap(),
-                tie.value - 8.0,
-                "ties-to-even sends the boundary to the even mantissa",
+                rendered, tie.longer,
+                "an odd mantissa must spend the extra digit",
+            );
+            assert_ne!(
+                rendered, tie.shorter,
+                "the shorter spelling is a tie that reads back one ulp low",
             );
         } else {
             even += 1;
             assert_eq!(
-                rendered, shorter,
+                rendered, tie.shorter,
                 "with an even mantissa the boundary reads back to this value, \
                  so the shorter spelling is the conformant answer",
+            );
+            assert_ne!(
+                rendered, tie.longer,
+                "an even mantissa must NOT spend the extra digit",
             );
         }
     }
@@ -263,7 +298,7 @@ fn reading_a_tie_back_resolves_to_the_even_mantissa() {
     assert_ne!(XS_LOSSY.parse::<f64>().unwrap(), FINDING_VALUE);
 
     for tie in ulp_eight_ties(8) {
-        let read_back = number_to_ecma_string(tie.midpoint).parse::<f64>().unwrap();
+        let read_back = tie.shorter.parse::<f64>().unwrap();
         let expected = if tie.mantissa_is_odd {
             tie.value - 8.0
         } else {
@@ -273,7 +308,7 @@ fn reading_a_tie_back_resolves_to_the_even_mantissa() {
             read_back.to_bits(),
             expected.to_bits(),
             "the boundary below {} must resolve to the even mantissa",
-            tie.value,
+            tie.longer,
         );
     }
 }

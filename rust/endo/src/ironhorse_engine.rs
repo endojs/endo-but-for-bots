@@ -2094,7 +2094,20 @@ pub mod engine {
         /// assertion above once read `(()=>{}).constructor('return 42')()` and
         /// expected `"42"`, i.e. it pinned the bypass. Nothing caught that when
         /// lockdown closed it, because `ci.yml`'s `-p endo` step names three
-        /// `--test` targets and never runs `--lib`.
+        /// `--test` targets and never ran the unit tests.
+        ///
+        /// Four distinct poisoned slots, not six: the first three spellings all
+        /// resolve to `Function.prototype.constructor` (measured in-engine —
+        /// `(()=>{}).constructor === (function(){}).constructor` and
+        /// `=== ({}).constructor.constructor` are both `true`), and only the
+        /// generator / async / async-generator rows reach constructors of their
+        /// own. They are kept because they are the spellings a guest actually
+        /// writes, not because each is a separate slot.
+        ///
+        /// `ironhorse-vm`'s `realms.rs` covers the same five evaluator families
+        /// against a bare VM machine; what this adds is the endo `Machine`
+        /// wrapper's ephemeral path, where `with_bounds` builds the machine and
+        /// each `eval` gets a fresh Realm.
         #[test]
         fn the_prototype_chain_evaluator_is_denied_on_an_ephemeral_machine() {
             let machine = Machine::with_bounds(MeterBounds::Unbounded);
@@ -2116,6 +2129,24 @@ pub mod engine {
                     "{family} still reaches an evaluator on an ephemeral machine"
                 );
             }
+            // `Date` is the fifth prototype lockdown poisons and the one that is
+            // not an evaluator. Dropped from the loop above because it takes no
+            // source argument; asserted here so all five are covered.
+            assert_eq!(
+                machine
+                    .eval(
+                        "try { Date.prototype.constructor(); 'REACHED' } \
+                         catch (e) { e.name + ': ' + e.message }"
+                    )
+                    .unwrap(),
+                "TypeError: secure mode",
+            );
+            // And `Date` itself must keep working through its own binding, so
+            // the poisoning is the constructor edge and not the intrinsic.
+            assert_eq!(
+                machine.eval("typeof new Date().getTime()").unwrap(),
+                "number"
+            );
         }
 
         #[test]
