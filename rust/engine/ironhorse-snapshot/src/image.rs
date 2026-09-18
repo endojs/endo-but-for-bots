@@ -5797,7 +5797,10 @@ mod tests {
             enum_keys: vec![],
             str_bytes: vec![],
         };
-        for kind in 0..=9 {
+        // 10-14 are the lazy Iterator helpers, whose self-contained shape
+        // gate the fixture row already satisfies (a live iterable, a holder
+        // in `result`, and empty for-in and string payloads).
+        for kind in 0..=14 {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])).unwrap(),
                 vec![row(kind)]
@@ -5816,11 +5819,40 @@ mod tests {
                 ))
             );
         }
-        for kind in [10, 255] {
+        for kind in [15, 255] {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])),
                 Err(SnapshotError::Corrupt("iterator cursors: unknown kind"))
             );
+        }
+        // A lazy helper row missing its underlying iterator or its holder is
+        // refused by shape, not by kind.
+        for kind in 10..=14 {
+            for broken in [
+                IteratorRow {
+                    iterable: u32::MAX,
+                    ..row(kind)
+                },
+                IteratorRow {
+                    result: u32::MAX,
+                    ..row(kind)
+                },
+                IteratorRow {
+                    str_bytes: vec![0, b'a'],
+                    ..row(kind)
+                },
+                IteratorRow {
+                    enum_keys: vec![(0, 0)],
+                    ..row(kind)
+                },
+            ] {
+                assert_eq!(
+                    decode_iterators(&encode_iterators(&[broken])),
+                    Err(SnapshotError::Corrupt(
+                        "iterator cursors: malformed lazy Iterator helper"
+                    ))
+                );
+            }
         }
         for value in [2, 255] {
             let mut bytes = encode_iterators(&[row(0)]);
