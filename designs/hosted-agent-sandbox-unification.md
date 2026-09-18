@@ -2262,6 +2262,48 @@ together; what it found and what changed:
   `codex exec`. (The network-policy audit's lifetime cap, listed here
   earlier, is removed — see "Protection and limit justification".)
 
+  What each would take, so the choice is a decision and not a backlog:
+
+  - **MCP socket access control.** Both Claude and OpenCode reach the
+    session's Endo tools over the shared NDJSON socket under `/endo-mcp`,
+    and the bind is the whole access control: any process in the slice's
+    mount namespace can issue a tool call, and the socket cannot say which
+    one did. Option 2 above — the MCP endpoint on the listener sidecar's
+    loopback, behind a bearer token the bridge mints per session — is the
+    recorded recommendation and also retires the `endo-mcp` mount row and
+    the stdio shim. It touches the listener image, both bridges and the
+    mount table; a week of work with its own conformance run. Until then
+    the residual is what "one process per slice, one slice per session"
+    already bounds: a compromised CLI process can call its own session's
+    tools, which it can do through the CLI anyway.
+  - **Offline pre-deploy conformance.** Drive each pinned CLI in Podman with
+    a store the adapter wrote and read it back through the CLI, no
+    inference, before the switch. OpenCode can: `opencode serve` with
+    `OPENCODE_DB=:memory:`, the import route, then the session's messages
+    over its HTTP API. Codex can: `app-server`, `thread/inject_items`, then
+    the thread read. Claude cannot cleanly — the CLI has no command that
+    prints a resumed transcript without a model turn — so its offline
+    variant would read the CLI's own store from the outside, which proves
+    the file, not the CLI's reading of it. A day for OpenCode and Codex; the
+    gate stays a live, post-switch run for Claude.
+  - **`keep-id` posture.** Recovering Codex's stronger pre-convergence
+    posture (slice at a subordinate uid that owns nothing) needs every
+    shared root to be usable by both the daemon and an unmapped uid:
+    `keep-id:uid=<unmapped>,gid=<daemon>` over `0770` roots, or the
+    loopback MCP endpoint above, which removes the one shared root that is
+    a socket. Choose it with the MCP item; alone it is a policy-table change
+    plus the three adapters' storage owners.
+  - **Ownership marker across restart.** Tested and deliberate: the runtime's
+    exclusive marker survives `endo restart` and refuses revival, so a
+    stale incarnation never adopts a live one's state. Changing it means
+    defining what proves the old holder dead; nothing here needs that.
+  - **`codex exec`.** The supervisor migration it was deferred behind has
+    landed, so it is now revisitable on its own: one process per turn would
+    retire the app-server transport, thread revival and the single-writer
+    constraint, at the cost of per-turn startup, which Claude already pays.
+    Worth a spike against the pinned CLI (`exec resume` with the injected
+    thread) before deciding.
+
 ## Validation
 
 Tests must establish behavior at boundaries rather than mirror option generation.
