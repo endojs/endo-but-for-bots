@@ -18,20 +18,6 @@
 // because there `polyfills.js` has already replaced it with a deep-freeze
 // shim; this prelude omits that section of `polyfills.js` entirely.
 
-// Ironhorse advertises every `Iterator.prototype` helper, but the five lazy
-// ones — map, filter, take, drop, flatMap — halt the machine with
-// `NotImplemented("Iterator.helper")` when called, which `try`/`catch` cannot
-// recover. Present the pre-helper iterator profile rather than leave half the
-// proposal reachable.
-if (globalThis.Iterator) {
-  for (const key of Reflect.ownKeys(globalThis.Iterator.prototype)) {
-    if (key !== Symbol.iterator) delete globalThis.Iterator.prototype[key];
-  }
-  // Removing the global is the point, so the cast is the assertion: tsc types
-  // `globalThis.Iterator` as always-present.
-  /** @type {any} */ (globalThis).Iterator = undefined;
-}
-
 // The start realm has no host console. SES expects one even when reporting is
 // disabled; diagnostics confer no external I/O capability.
 if (!globalThis.console) {
