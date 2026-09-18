@@ -318,18 +318,18 @@ impl Parser<'_> {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Const, 0)?;
+                self.variable_statement(Token::Const, 0, false)?;
                 self.semicolon()?;
             }
             Token::Let => {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Let, 0)?;
+                self.variable_statement(Token::Let, 0, false)?;
                 self.semicolon()?;
             }
             Token::Var => {
-                self.variable_statement(Token::Var, 0)?;
+                self.variable_statement(Token::Var, 0, false)?;
                 self.semicolon()?;
             }
             Token::Do => self.do_statement()?,
@@ -382,7 +382,7 @@ impl Parser<'_> {
                     if block_it <= 0 {
                         return Err(self.error("no block"));
                     }
-                    self.variable_statement(Token::Using, flags::AWAITING)?;
+                    self.variable_statement(Token::Using, flags::AWAITING, false)?;
                     self.flags |= flags::AWAITING;
                     self.semicolon()?;
                 } else {
@@ -429,7 +429,7 @@ impl Parser<'_> {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Let, 0)?;
+                self.variable_statement(Token::Let, 0, false)?;
                 self.semicolon()?;
                 return Ok(());
             }
@@ -446,7 +446,7 @@ impl Parser<'_> {
             if block_it <= 0 {
                 return Err(self.error("no block"));
             }
-            self.variable_statement(Token::Using, 0)?;
+            self.variable_statement(Token::Using, 0, false)?;
             self.semicolon()?;
             return Ok(());
         }
@@ -704,23 +704,36 @@ impl Parser<'_> {
     /// `fxVariableStatement` — `var`/`let`/`const` binding list. Leaves the
     /// single binding node, or a `Statements` wrapping several.
     ///
+    /// `for_binding` says whether THIS call is parsing a `for` head's own
+    /// binding list, which only the caller knows.
+    ///
     /// Returns whether any binding was a destructuring pattern with NO
     /// initializer. Outside a `for` head that is rejected here; inside one it
     /// cannot be decided yet, because `for (var [a] of …)` is legal and
     /// `for (var [a]; …)` is not, so the answer is handed back to
     /// [`Self::for_statement`] to settle once the head's shape is known.
-    pub(crate) fn variable_statement(&mut self, token: Token, binding_flags: u32) -> PResult<bool> {
+    ///
+    /// The caller passes it rather than this function reading `flags::FOR`.
+    /// That flag is ambient over the WHOLE head, nested function bodies
+    /// included, and a declaration inside one of those is an ordinary
+    /// `VariableStatement` however the head reached it. Reading it let
+    /// `for (()=>{ var [a]; };;)` through: the arrow body's declaration saw the
+    /// flag set and deferred its rejection to `for_statement`, which never
+    /// received the answer, because that call is nested inside
+    /// `comma_expression` rather than being one of the head's own. The flag did
+    /// not even mean one thing — a function EXPRESSION body clears it and an
+    /// arrow body does not, so `for ((function(){ var [a]; });;)` was rejected
+    /// while the arrow form was not. An argument is positional and cannot leak.
+    pub(crate) fn variable_statement(
+        &mut self,
+        token: Token,
+        binding_flags: u32,
+        for_binding: bool,
+    ) -> PResult<bool> {
         let line = self.cur.line;
         let mut comma_flag = false;
         let mut count = 0usize;
         let mut bare_pattern = false;
-        // `flags::FOR` is set by `for_statement` around the head and cleared
-        // again once the head is parsed, so at ENTRY it says whether these
-        // bindings are a `ForBinding`. It cannot be read later in this function:
-        // `binding` clears it as soon as it consumes an `=`, including the `=`
-        // of a default NESTED in a pattern, so by the end of
-        // `for (const [v, m = f(v)] of xs)`'s head binding the flag is gone.
-        let for_binding = self.flags & flags::FOR != 0;
         self.match_token(token)?;
         while has_flag(self.cur.token, BEGIN_BINDING) {
             comma_flag = false;
@@ -803,12 +816,12 @@ impl Parser<'_> {
         if self.cur.token == Token::Semicolon {
             self.push_null();
         } else if self.cur.token == Token::Const {
-            bare_pattern = self.variable_statement(Token::Const, 0)?;
+            bare_pattern = self.variable_statement(Token::Const, 0, true)?;
         } else if self.cur.token == Token::Let {
-            bare_pattern = self.variable_statement(Token::Let, 0)?;
+            bare_pattern = self.variable_statement(Token::Let, 0, true)?;
         } else if self.is_keyword("let")? && has_flag(self.ahead_token(), BEGIN_BINDING) {
             self.cur.token = Token::Let;
-            bare_pattern = self.variable_statement(Token::Let, 0)?;
+            bare_pattern = self.variable_statement(Token::Let, 0, true)?;
         } else if self.cur.token == Token::Identifier
             && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("using")
             && !self.cur.escaped
@@ -831,7 +844,7 @@ impl Parser<'_> {
                 expression_flag = true;
             } else {
                 self.cur.token = Token::Using;
-                bare_pattern = self.variable_statement(Token::Using, 0)?;
+                bare_pattern = self.variable_statement(Token::Using, 0, true)?;
             }
         } else if self.cur.token == Token::Await {
             let maybe_await_using = !self.ahead_crlf()
@@ -854,14 +867,14 @@ impl Parser<'_> {
             if is_await_using {
                 self.get_next_token()?;
                 self.cur.token = Token::Using;
-                bare_pattern = self.variable_statement(Token::Using, flags::AWAITING)?;
+                bare_pattern = self.variable_statement(Token::Using, flags::AWAITING, true)?;
                 self.flags |= flags::AWAITING;
             } else {
                 self.comma_expression()?;
                 expression_flag = true;
             }
         } else if self.cur.token == Token::Var {
-            bare_pattern = self.variable_statement(Token::Var, 0)?;
+            bare_pattern = self.variable_statement(Token::Var, 0, true)?;
         } else {
             self.comma_expression()?;
             expression_flag = true;
@@ -2148,7 +2161,7 @@ impl Parser<'_> {
             Token::Const | Token::Let | Token::Var => {
                 let a_token = self.cur.token;
                 let before = self.stack.len();
-                self.variable_statement(a_token, 0)?;
+                self.variable_statement(a_token, 0, false)?;
                 // Collect specifiers from the just-parsed declaration.
                 let decl = self.stack[before..].to_vec();
                 let mut specs = Vec::new();
