@@ -1933,6 +1933,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/endo-fs-asset-server@workspace:packages/endo-fs-asset-server"
   dependencies:
+    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -1940,6 +1941,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
