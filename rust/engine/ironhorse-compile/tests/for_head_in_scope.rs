@@ -111,13 +111,12 @@ fn the_head_declaration_list_still_excludes_in() {
     }
 }
 
-/// The Annex B form this pass does NOT change, pinned so the scope is explicit
-/// and a later fix has to come here and say so.
+/// Annex B.3.5, which a later pass did come here and change: see
+/// `annex_b_for_in_initializer.rs`. Kept as a cross-reference so this file's
+/// `[~In]` story and that one's initializer story stay adjacent.
 #[test]
-fn the_annex_b_initializer_in_a_for_in_head_is_still_refused() {
-    let result = compile_atoms_goal("for (var x = 0 in {}) ;", Goal::Script, false);
-    assert!(
-        matches!(result, Err(ref e) if e.kind == ParseErrorKind::Syntax),
-        "pre-existing divergence changed: {result:?}"
-    );
+fn the_annex_b_initializer_is_admitted_in_sloppy_code_only() {
+    assert!(compile_atoms_goal("for (var x = 0 in {}) ;", Goal::Script, false).is_ok());
+    let strict = compile_atoms_goal("for (var x = 0 in {}) ;", Goal::Script, true);
+    assert!(matches!(strict, Err(ref e) if e.kind == ParseErrorKind::Syntax));
 }
