@@ -103,13 +103,17 @@ Endo records remain outside that domain.
 - Core dumps: zero bytes.
 - Aggregate writable storage: 16 GiB.
 - Prompt: 1 MiB; outbound JSON request: 2 MiB; individual JSONL record: 1 MiB.
-- Turn: 30 minutes wall time, and at most 16,384 distinct item, call and
-  request identities retained for deduplication. A turn is not bounded in
-  events or bytes: delivery is bounded by credit at the reader, and what the
-  host keeps of a turn is bounded where it is kept (Floot's hosted turn,
-  16 Mi characters).
+- Turn: at most 16,384 distinct item, call and request identities retained
+  for deduplication. A turn is not bounded in events, bytes or wall time:
+  delivery is bounded by credit at the reader, what the host keeps of a turn
+  is bounded where it is kept (Floot's hosted turn, 16 Mi characters), and a
+  long turn is the user's to interrupt. `turnWallTimeoutMs` is an operator
+  option, off by default.
 - Process stdout: 64 MiB; stderr: 1 MiB; displayed tool result: 64 KiB.
-- Endo dynamic tools: 128 calls per turn and two minutes per call.
+- Endo dynamic tools: no count per turn (their ids count among the retained
+  identities above) and no time per call by default; `toolCallTimeoutMs` is
+  an operator option, and when set, a call that exceeds it is recorded as an
+  unknown outcome and poisons the session against a successor overlapping it.
 - Audit journal: no lifetime ceiling. One stored value — an entry or a
   content value — is at most 16 MiB; a payload text field over 64 KiB is
   stored by reference, named by its hash, with a 4 KiB preview inline. The

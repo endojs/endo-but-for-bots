@@ -133,7 +133,6 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @property {(turnId: string) => void} resolveStarted
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
  * @property {ReturnType<typeof setTimeout>} [wallTimer]
- * @property {number} toolCalls
  * @property {Set<string>} serverRequestIds
  * @property {Set<string>} toolCallIds
  * @property {Set<string>} textItems
@@ -178,9 +177,14 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @param {number} [options.maxToolResultChars]
  * @param {number} [options.maxPromptBytes]
  * @param {number} [options.maxRequestBytes]
- * @param {number} [options.maxToolCalls]
- * @param {number} [options.toolCallTimeoutMs]
- * @param {number} [options.turnWallTimeoutMs]
+ * @param {number} [options.toolCallTimeoutMs] How long one Endo tool call
+ *   may run before its outcome is recorded unknown and the session poisoned
+ *   against a successor overlapping it. Off by default: a slow tool is the
+ *   user's to interrupt, and a timeout that ends the session for a build
+ *   that took three minutes is not a bound on anything the host retains.
+ *   An operator with an explicit budget sets it.
+ * @param {number} [options.turnWallTimeoutMs] Likewise for a whole turn.
+ *   Off by default; neither the Claude nor the OpenCode adapter has one.
  */
 export const makeCodexClient = ({
   start,
@@ -207,9 +211,8 @@ export const makeCodexClient = ({
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
   maxRequestBytes = 2 * 1024 * 1024,
-  maxToolCalls = 128,
-  toolCallTimeoutMs = 120_000,
-  turnWallTimeoutMs = 30 * 60_000,
+  toolCallTimeoutMs = 0,
+  turnWallTimeoutMs = 0,
 }) => {
   /** @type {AppServerTransport | undefined} */
   let transport;
@@ -771,14 +774,19 @@ export const makeCodexClient = ({
     if (typeof params.callId !== 'string' || params.callId === '') {
       throw Error('Dynamic tool call omitted its stable call id');
     }
-    if (!active || active.toolCalls >= maxToolCalls) {
-      throw Error(`Dynamic tool call limit exceeded (${maxToolCalls})`);
+    if (!active) {
+      throw Error('Dynamic tool call outside an active turn');
     }
     if (active.toolCallIds.has(params.callId)) {
       throw Error(`Dynamic tool call id was replayed: ${params.callId}`);
     }
-    active.toolCallIds.add(params.callId);
-    active.toolCalls += 1;
+    // No count of calls per turn: the ids are the one thing retained, and
+    // they are bounded with the turn's other identities.
+    if (!retainIdentity(active.toolCallIds, params.callId)) {
+      throw Error(
+        `Codex turn retained more than ${maxTurnItems} item identities`,
+      );
+    }
     await audit('tool-intent', {
       threadId: params.threadId,
       turnId: params.turnId,
@@ -792,7 +800,9 @@ export const makeCodexClient = ({
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      if (toolCallTimeoutMs > 0) {
+        timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      }
     });
     const operation = Promise.resolve().then(() =>
       callTool(params.tool, params.arguments),
@@ -1717,7 +1727,6 @@ export const makeCodexClient = ({
         resolveTerminal,
         started,
         resolveStarted,
-        toolCalls: 0,
         serverRequestIds: new Set(),
         toolCallIds: new Set(),
         textItems: new Set(),
@@ -1727,13 +1736,15 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
-      turn.wallTimer = setTimeout(() => {
-        if (active === turn) {
-          void interruptActive(
-            `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
-          );
-        }
-      }, turnWallTimeoutMs);
+      if (turnWallTimeoutMs > 0) {
+        turn.wallTimer = setTimeout(() => {
+          if (active === turn) {
+            void interruptActive(
+              `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
+            );
+          }
+        }, turnWallTimeoutMs);
+      }
       channel.setOnClose(() => {
         if (active === turn) void interruptActive('Codex turn interrupted');
       });
