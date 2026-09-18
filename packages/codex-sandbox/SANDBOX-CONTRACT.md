@@ -5,16 +5,12 @@ state, not merely against requested command-line flags.
 `makeCodexBackendFactory` fails closed unless the provisioner returns this exact
 `HostedAgentPolicyV1` attestation.
 
-The trusted computing base is the host provisioner, credential broker, audit
-anchor, and the digest-pinned image including Codex CLI/app-server 0.152.0.
-Prompts, dynamic-tool arguments, workspace contents, and every
-model-launched command are untrusted.
-App-server itself is not sandboxed away from its own state: it must write the
-credential-free `/codex-home` and is trusted to apply the pinned per-turn
-`workspaceWrite` policy before starting untrusted commands.
-Compromise of that pinned runtime invalidates the inner command boundary and
-requires revoking its image digest; the outer slice still protects the host and
-other sessions.
+The host provisioner, credential broker, audit anchor, container runtime, and
+kernel enforce confinement.
+The digest-pinned Codex CLI/app-server 0.152.0 and its commands share one guest
+authority domain, including writable `/codex-home` and inference access.
+The CLI's native state and notifications are guest-controlled; host-mediated
+Endo records remain outside that domain.
 
 ## Isolation
 
@@ -25,25 +21,17 @@ other sessions.
 - The process runs as UID and GID 1000, with `no-new-privileges`, every Linux
   capability dropped, the default seccomp profile loaded, and a read-only root
   filesystem.
-- Every turn uses the pinned Codex `workspaceWrite` sandbox with network access
-  disabled and writable roots exactly `/workspace`, `/tmp`, `/run`, and
-  `/scratch`.
-  Model-launched commands may read the session's `/codex-home` but cannot modify
-  its configuration or rollout history; production must verify this against
-  symlink, rename, hardlink, and subprocess escape attempts.
-  This is an inner sandbox guarantee supplied by the trusted pinned app-server,
-  not a read-only outer mount: the outer mount is necessarily writable by
-  app-server so it can maintain thread and rollout state.
-  Automatic `/tmp` and `TMPDIR` writable-root expansion is disabled; the
-  app-server transport sets exactly `HOME`, `CODEX_HOME`, `TMPDIR`, `TMP`,
-  `TEMP`, `LANG`, `LC_ALL`, and `TZ`, and rejects every per-spawn addition,
-  including proxy and credential variables.
-  That is the whole of what the transport enforces: `@endo/sandbox` layers a
-  spawn's environment over the slice's own, and the policy attestation does not
-  cover the slice environment, so an operator's `makeSlice` must place no
-  credential or proxy setting there.
-  The sandbox enforcement work below landed without it, so attesting the slice
-  environment remains open.
+- Every turn uses Codex's `externalSandbox` policy with network access
+  `restricted` for public policy `off` and `enabled` for admitted public access.
+  Process/thread configuration uses `danger-full-access` inside the outer slice
+  because the pinned API has no external-sandbox mode at those levels.
+  Codex's managed proxy is disabled.
+  These values do not enforce confinement; the outer slice and host egress
+  service do, and native commands share all guest-granted writable mounts.
+  Launch environment is fixed and credential-free; admitted public sessions
+  additionally receive the explicit proxy configuration.
+  The runtime preflight checks the effective merged environment and rejects
+  unexpected entries before app-server is launched.
 - No host device, home, daemon socket, Podman/Docker socket, credential store,
   or path belonging to another session is mounted.
 - The attestation reports `devices: "none"`, `hostSockets: "none"`,
@@ -52,8 +40,12 @@ other sessions.
   unknown attestation fields are rejected.
 - The mount table has five fixed entries, all `nosuid,nodev`: a session
   workspace `workspace:<sessionId>` at `/workspace`; a credential-free,
-  session-durable `codex-state:<sessionId>` volume at `/codex-home`; and bounded
-  per-slice tmpfs mounts at `/tmp`, `/run`, and `/scratch`.
+  session-durable `codex-state:<sessionId>` host bind of the session's own
+  state directory at `/codex-home` (a directory the session storage owner
+  holds; there is no Podman volume, quota or lease — see `DURABLE-VOLUMES.md`);
+  and bounded per-slice tmpfs mounts at `/tmp`, `/run`, and `/scratch`. A
+  `public-internet` session adds one declared row, `resolver:public`, the
+  generated read-only `/etc/resolv.conf` (see `NETWORK-POLICY.md`).
 - Beyond those five, the table carries exactly the **runtime attaches** the
   session spec declares (`containerMounts`), each reported as `attach:<key>`
   at a destination under `/mnt/` in its declared `ro` or `rw` mode. An attach
@@ -64,14 +56,19 @@ other sessions.
   by a userspace server — rather than host data. An attach the table carries
   but the spec did not declare, or the reverse, is an undeclared mount. See
   `designs/runtime-container-fs-mount.md`.
-- The Codex-state volume survives slice replacement for the same logical
-  session so app-server can resume its rollout, but is destroyed at session
-  teardown. It must never contain `auth.json` or reusable credentials.
+- The Codex-state directory survives slice replacement for the same logical
+  session so app-server can resume its rollout, but is removed at session
+  teardown by the session storage owner. It must never contain `auth.json` or
+  reusable credentials. It is native conversation state, a cache: the
+  conversation itself is the stack's transcript records, restored into a new
+  thread through `thread/inject_items` on revival.
 - Initialization must report Linux/Unix and the exact `/codex-home` path before
   any thread or turn request is accepted.
 - No additional bind, volume, socket, device, secret, or capability mount is
-  permitted by this version of the contract. A declared attach is the one
-  bind, and it is proved to be a 9P projection before it is attested.
+  permitted by this version of the contract beyond the declared attaches, the
+  state bind and the resolver row above. A declared attach is proved to be a
+  9P projection before it is attested; the state bind's source must lie under
+  the request's `bindRoots`.
 - Mount path resolution must resist symlink, hardlink, `..`, and
   mount-replacement races.
 
@@ -79,19 +76,20 @@ other sessions.
 
 - The slice network is `broker-only`: it contains loopback and one
   credential-free provider sidecar, with no routable interface or other peer.
-- Broker reachability is process-scoped: app-server can reach its lease
-  endpoint, while every model-launched command and descendant is denied that
-  route even though it shares the slice.
+  Admitted public sessions additionally expose the constrained proxy and DNS
+  listeners described in [network policy](./NETWORK-POLICY.md).
+- Broker reachability is session-scoped: app-server and guest commands can
+  reach the same credential-free inference endpoint.
 - The only provider traffic crosses a unique per-session broker capability.
   Production uses the attested credential-free loopback sidecar, not a host
   socket mount.
-- Before slice start, `BrokerLeaseV1` must attest an exact lease ID, session ID,
+- Before slice start, `ProviderGrantV1` must report an exact grant ID, session ID,
   image digest, provider HTTPS origin, operator account reference, upstream
-  authentication mode, loopback endpoint, expiry, model allowlist, positive
-  request/byte/cost quotas, and the same network-namespace ID reported by the
-  slice.
-  The authentication mode is `api-key` or `oauth`; `subscription` is not a
-  supported value, for the reasons in
+  authentication mode, loopback endpoint, model allowlist, and the same
+  network-namespace ID reported by the slice.
+  The grant has no time-based expiry or cumulative usage budget.
+  Authentication modes are `api-key`, `oauth`, and the fixed ChatGPT
+  `subscription` profile; see
   [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md).
   An operator may pin the mode it will accept, and a lease issued in the other
   is refused rather than silently admitted.
@@ -102,29 +100,41 @@ other sessions.
   unknown routes.
 - Provider credentials and refresh state never enter the slice.
   The session capability is bound to provider, account reference, session ID,
-  image digest, expiration, model allowlist, and request/byte/cost quotas and is
+  image digest, and model allowlist, and is
   revoked during teardown.
 
 ## Resource and protocol limits
 
-- Memory: 4 GiB.
-- Processes: 512 PIDs.
-- CPU: quota equivalent to four cores.
+- Memory: 2 GiB.
+- Processes: 256 PIDs.
+- CPU: quota equivalent to two cores.
 - Open files: 4096.
 - Core dumps: zero bytes.
-- Aggregate writable storage: 16 GiB.
+- Aggregate writable storage: the sum over the mount table, computed and
+  re-checked by the attestation (`sliceWritableBytes`): each tmpfs twice, shm
+  twice, nothing for the workspace projection or the state bind. For Codex's
+  table that is 4 GiB of tmpfs; the workspace and the state directory have no
+  per-session kernel quota (see `DURABLE-VOLUMES.md`).
+  These are the shared `HOSTED_SLICE_RESOURCES` every hosted adapter runs
+  under, not Codex's own.
 - Prompt: 1 MiB; outbound JSON request: 2 MiB; individual JSONL record: 1 MiB.
-- Turn: 10,000 events, 16 MiB normalized output, and 30 minutes wall time.
+- Turn: at most 16,384 distinct item, call and request identities retained
+  for deduplication. A turn is not bounded in events, bytes or wall time:
+  delivery is bounded by credit at the reader, what the host keeps of a turn
+  is bounded where it is kept (Floot's hosted turn, 16 Mi characters), and a
+  long turn is the user's to interrupt. `turnWallTimeoutMs` is an operator
+  option, off by default.
 - Process stdout: 64 MiB; stderr: 1 MiB; displayed tool result: 64 KiB.
-- Endo dynamic tools: 128 calls per turn, two minutes per call, and 4 MiB per
-  complete intent/result audit payload.
-- Audit entry: 16 MiB; audit journal: 100,000 entries, at most 256 MiB of
-  canonical entry data in the bulk store, and at most 256 MiB of canonical
-  write-ahead data in the independent anchor store.
-  Each store independently preserves a 64-KiB reserve usable only for terminal
-  lifecycle events; the bulk store also preserves 16 entries for that purpose.
-  The combined logical payload bound is therefore 512 MiB, and the production
-  stores must separately bound storage-engine metadata.
+- Endo dynamic tools: no count per turn (their ids count among the retained
+  identities above) and no time per call by default; `toolCallTimeoutMs` is
+  an operator option, and when set, a call that exceeds it is recorded as an
+  unknown outcome and poisons the session against a successor overlapping it.
+- Audit journal: no lifetime ceiling. One stored value — an entry or a
+  content value — is at most 16 MiB; a payload text field over 64 KiB is
+  stored by reference, named by its hash, with a 4 KiB preview inline. The
+  independent anchor store keeps only the newest write-ahead head. The chain
+  is verified whole at every recovery, which is linear in the entries and
+  transient.
 
 Provisioning fails when any required control is unavailable.
 The attestation must include the exact operator-approved image digest and the
@@ -136,9 +146,14 @@ rlimit table no cgroup sees.
 The driver's `network: "broker-only"` slice policy is the one that does.
 It proves the isolation, identity, namespace, mount-table, and ceiling half of
 this section from effective container and kernel state and reports it as
-`SlicePolicyAttestationV1`; an operator's `makeSlice` composes
-`HostedAgentPolicyV1` from that plus the broker's and the pinned app-server's
-attestations for their own halves.
+`SlicePolicyAttestationV1`. The profile is the shared `hosted-agent-v1`
+(`@endo/hosted-agent/hosted-agent-policy.js`), the same for Claude, Codex and
+OpenCode, parameterised only by each adapter's fixed mount table
+(`CODEX_FIXED_MOUNTS`); the native controller re-asserts the returned slice's
+attestation against it with `hostedPolicyFromSlice` and
+`assertHostedAgentPolicyV1`. The attestation is read of a policy anchor whose
+argv is `HOSTED_ANCHOR_ARGV` — a shell that backgrounds `sleep infinity` and
+traps TERM, so the anchor ends when the daemon's cgroup is stopped.
 See `packages/sandbox/README.md` § "Slice policy and attestation" for what each
 control is proved from and what it deliberately leaves uncovered.
 
@@ -189,16 +204,25 @@ credentials, or undeclared mounts.
 They must also prove that `/codex-home` survives replacement of one slice for
 the same session, is absent after durable session deletion, never contains
 `auth.json` or a reusable credential, and is never shared across session IDs.
-Egress probes must fail for public IPv4/IPv6, loopback except the broker sidecar,
-RFC1918/ULA, link-local and metadata addresses, alternate DNS, rebinding,
-redirects, proxy CONNECT, and undeclared Unix sockets.
+Direct external sockets must fail for public IPv4/IPv6, RFC1918/ULA, link-local,
+metadata, and alternate DNS destinations.
+Guest-local listeners are within the session authority domain.
+With public policy off, public proxy authority is absent; when enabled, HTTP and
+CONNECT to allowed public destinations must work and private destinations,
+rebinding, and redirected private targets must remain denied by the host proxy.
+Undeclared host Unix sockets must remain inaccessible.
 
-Fork, memory, CPU, file-descriptor, disk, output, and never-EOF bombs must hit
-their configured bounds without affecting the host or another session.
+Fork, memory, CPU, file-descriptor, and never-EOF bombs must hit their
+configured bounds without affecting the host or another session; tmpfs bombs
+hit their mount sizes, and there is no per-session disk quota for the
+workspace or state directory to hit. Output has no bound to hit: delivery is
+bounded by credit at the reader and what the host retains of a turn is bounded
+where it is kept.
 SIGTERM-resistant, setsid, double-fork, inherited-pipe, background-terminal,
 startup/dispose race, daemon-crash/orphan, and cleanup-failure cases must all be
 reaped and journaled.
 Broker tests must additionally demonstrate that the sidecar is the only
-reachable peer from app-server, is unreachable from tool descendants, cannot be
-repurposed as a general proxy, and loses authority immediately when the session
-lease is revoked.
+provider peer from app-server and guest descendants, cannot be repurposed as a
+general proxy, and loses authority immediately when the session grant is revoked.
+Pinned app-server acceptance must cover native commands on thread start, resume,
+and subsequent turns under the external-sandbox policy.

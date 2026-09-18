@@ -20,9 +20,12 @@ decides what Floot's own tree must retain:
 `opaque` (the backend keeps the conversation and the tree is display-only),
 `opaque-reconciled` (as `opaque`, with per-turn checkpoints Floot acknowledges,
 so a stopped or failed turn is rolled back on both sides), and
-`transcript` (the backend's persisted transcript retains every delivered prompt
-and whatever streamed before a stop or a failure, so Floot mirrors those into
-the tree instead of dropping them).
+`transcript` (within an incarnation the CLI's live conversation retains every
+delivered prompt and whatever streamed before a stop or a failure, so Floot
+mirrors those into the tree instead of dropping them; across incarnations the
+stack's own transcript records, `@endo/hosted-agent/transcript-records.js`,
+are what the backend restores its CLI's store from — Claude as JSONL, OpenCode
+through its fork's import route, Codex through `thread/inject_items`).
 The validator in `@endo/hosted-agent` refuses any other value, so a typo on
 either side fails loudly instead of degrading to drop-on-stop.
 Each provider adapter translates its native model schema before the seam.
@@ -43,14 +46,40 @@ The provisioned backend is split into two facets:
 
 `interrupt()` is a terminal barrier: it resolves only after the backend can no
 longer emit events or mutate its opaque conversation for that turn.
-The factory-level `destroy({ sessionId })` operation is idempotent and is used
+The factory-level `stop({ sessionId })` operation reaches the durable owner even
 when lifecycle recovery has no surviving admin facet.
+It preserves workspace, transcript, and session records and is retryable after
+failed cleanup; completion means the owner's native cleanup has completed.
+It is ordered with creation and deletion for that session, not a bypass around
+an in-flight acquisition.
+The application must separately fence new work and recreation before invoking it.
+The idempotent `destroy({ sessionId })` operation additionally removes session state.
 
-Codex implements this seam in `@endo/codex-sandbox/backend-factory.js`.
-Claude Code should implement the same seam instead of adding another branch to
-Floot's logical-turn persistence.
-The existing Claude raw-event translator is a compatibility adapter until that
-migration lands.
+## Operator emergency stop
+
+The session facet exposes `getExecutionState()`, `emergencyStop()`, and `resume()`.
+The Settings panel keeps emergency stop separate from cooperative turn cancellation.
+Stop fences UI turns, hosted tool admission, and mount recreation on delivery,
+persists a stopping intent, and asks the backend's durable owner to stop.
+It reports stopped only after native cleanup and the session agent's shutdown finish.
+A late acquisition is observed and stopped before that completion is published.
+An acquisition that never settles can keep completion pending; no timeout is treated
+as evidence that local execution has ended.
+Already-dispatched remote effects can still finish.
+
+Stopped sessions keep their workspace and records.
+Reading their history after restart does not provision a backend or start an inbox.
+An incomplete stop is retried on restart; deletion recovery takes precedence.
+Only explicit resume permits a new incarnation, without replaying a prompt.
+Emergency stop can supersede an in-flight resume.
+These controls are on the operator session facet, never the model's tool catalog.
+
+Codex implements this seam in `@endo/codex-sandbox/src/codex-backend-factory.js`,
+Claude Code in `@endo/claude-sandbox/src/claude-backend-factory.js`, and OpenCode
+in `@endo/opencode-sandbox/src/opencode-backend-factory.js`; Floot's former
+direct Claude path and its raw-event translator are deleted. Every hosted
+turn runs through `src/hosted-turn.js`, which hands the backend the transcript
+records and records observed native tool activity in the turn journal.
 
 Every backend emits the same normalized stream: phase, commentary delta, answer
 delta, tool intent, tool result, usage, and exactly one end or abort terminal.
@@ -67,9 +96,12 @@ API providers receive the OpenAI-compatible schemas and run the shared
 Codex receives the corresponding app-server `dynamicTools` descriptors and can
 call only the pinned `EndoToolSet` capability.
 
-This is the intended Endo-to-Codex bridge.
-No MCP socket, bearer path, runtime-mounted daemon socket, host lookup power, or
-account/session-management API is projected into the sandbox.
+This is the intended Endo-to-Codex bridge. Claude and OpenCode take the same
+pinned tool set over a per-session MCP socket instead (`@endo/hosted-agent/mcp-bridge.js`,
+bound read-only at `/endo-mcp`), since those CLIs have no dynamic-tool
+protocol; the socket carries only that tool set. In no adapter is a bearer
+path, runtime-mounted daemon socket, host lookup power, or
+account/session-management API projected into the sandbox.
 Possession of a tool in the snapshot is the approval; the outer Endo sandbox
 and the tool capability itself enforce authority.
 
@@ -101,9 +133,10 @@ persists `ready`.
 Deletion persists `deleting`, terminates the backend through its admin facet,
 destroys its durable state through the factory, removes the session guest, then
 removes the registry entry.
-Termination alone is a stop: it releases the slice, the mount, and the lease
-but keeps the workspace and Codex state, which is what lets a session whose
-revival failed part-way be revived again with its contents intact.
+Termination alone is a stop: it releases the slice, the mounts, and the
+broker grant but keeps the workspace and the session's state directory, which
+is what lets a session whose revival failed part-way be revived again with its
+contents intact.
 A cleanup failure persists `error` and remains retriable rather than falsely
 reporting deletion.
 On revival, `creating` entries finish provisioning, `ready` entries revive,
@@ -124,12 +157,89 @@ journal snapshot exists.
 
 ## Atomic turns and recovery
 
+### Hosted event delivery
+
+Claude, Codex, and OpenCode use the credit-aware bounded push reader for their
+normalized event output, built by the one `@endo/hosted-agent/turn-channel.js`
+that also gives each turn its terminal barrier and each `interrupt` its
+deadline.
+The queue admits at most 1,024 undelivered data events and 16 MiB of accounting
+weight (twice JSON string length, plus 64 per event for small-event overhead).
+This is a conservative initial burst profile replacing eager, unbounded delivery;
+the slot allowance independently bounds floods of tiny events.
+It is not a measured heap limit or a UTF-8 wire-byte limit.
+A separate terminal slot reserves up to another 16 MiB of accounting weight.
+The pump may hold one value outside the queue, and consumer prefetch/retention
+must be budgeted separately; the queue does not bound the whole application.
+Consumed entries release their charges.
+Overflow fails delivery explicitly and requests producer cancellation, whose
+completion remains a separate backend barrier.
+The adapters' former cumulative per-turn limits are gone: what the host keeps
+of a turn is bounded where it is kept (`hosted-turn.js`, 16 Mi characters) and
+the turn journal stores long content by reference, so this queue and those
+two bounds are the resident-memory story for a turn.
+
+### Durable turns
+
 The conversation tree commits a hosted logical turn as one node after the
 backend terminal succeeds.
 Failed and cancelled turns are not presented as successful history.
-Provider-backed turns use the same rule: intermediate assistant/tool messages
-remain in memory and the complete logical turn plus cumulative usage is added
-to the tree once, only after a final answer is available.
+Provider-backed turns use the same completed-node rule, but a separate append-only
+turn journal records dispatch, Endo tool intent **before execution**, tool outcomes,
+and terminal disposition for every backend.
+Native runtime tool events are recorded as observed activity: their arrival is
+not proof of a write-ahead barrier inside the native runtime.
+Uncorrelated observations and Endo execution records are retained separately and
+labeled as potentially describing the same operation, not proof of duplicate effects.
+`getTurns()` exposes those two kinds of evidence separately, with completed,
+failed, cancelled, pending, or outcome-unknown state.
+`getHistory()` merges the journal and conversation tree chronologically, including
+failed-turn tool evidence and explicit error/status messages.
+An input-only mail node never suppresses the journal's later tool evidence.
+Provider context includes known effects from failed turns; hosted prompts carry
+bounded recovery evidence after incomplete turns, since transcript rollback does
+not undo external effects.
+Truncated recovery evidence is explicitly marked and instructs the model to
+verify outcomes rather than repeat uncertain operations.
+
+A lost result or unfinished recovered dispatch remains outcome-unknown but does
+not prevent unrelated new work.
+New turns receive their own dispatch records; prior work is never automatically
+replayed or marked resolved by a subsequent success.
+Unresolved hosted evidence remains in the bounded recovery prompt even after
+intervening completed turns; direct-provider history also preserves it.
+Runtime quarantine after an unconfirmed stop remains an independent admission
+barrier, as does operator emergency stop.
+An abnormal stream or lost send response also leaves an unknown outcome even if
+interruption succeeds, since the missing events may conceal external effects.
+The legacy Claude client cannot confirm process exit: its cancellation is therefore
+unknown, not proof that external effects stopped.
+After independently checking external effects, an operator may call
+`resolveTurn(turnId, note)` on an idle session to acknowledge the uncertainty.
+This preserves the original outcome and adds a resolution; it never replays work.
+A storage-write failure poisons the current incarnation until revival can read
+the durable prefix.
+The journal is cooperative, single-writer session state in the guest petstore,
+not a tamper-resistant audit log against a guest endowed with store/remove/exec.
+It has no lifetime ceiling. Each text field longer than 8,192 UTF-16 code units
+is stored as its own content value and the record carries a preview beside a
+`<field>Ref` that `getTurnContent` resolves; a field beyond 16 Mi code units —
+the bound on one storage value — fails that one append rather than the session.
+Replay is bounded by snapshots: every 64 events the record map is written as a
+snapshot, and a new incarnation reads the newest snapshot and only the events
+after it. Settled turns beyond a retained window of 256 are moved to archive
+chunks and read back through `getArchivedTurns`; a turn with an unresolved
+outcome is never archived. Nothing the conversation wrote is ever removed by
+the journal: events, content values and archive chunks are the transcript and
+are kept until the session is removed in Endo and collected; the only value it
+discards is a snapshot a newer one has superseded, since a snapshot is derived.
+A stale snapshot left by a crash is superseded by the newer one, never trusted.
+Partial answer text and reported usage are retained on ordinary failure/cancel;
+individual text deltas are not write-ahead durable, so a process crash may lose
+the last streamed text while preserving already stored tool records.
+Session cumulative usage remains the completed-turn total; per-turn records also
+retain partial usage when the backend reports it.
+
 Opaque hosted backends must reconcile their own history before accepting the
 next turn.
 Before dispatch, Codex durably records the previous backend turn ID.

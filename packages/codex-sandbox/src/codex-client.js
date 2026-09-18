@@ -1,14 +1,18 @@
 // @ts-check
 import { clearTimeout, setTimeout } from 'node:timers';
 
-import { makeError, X } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { responsesApiItems } from '@endo/hosted-agent/transcript-records.js';
+import {
+  awaitBarrier,
+  makeHostedTurnChannel,
+} from '@endo/hosted-agent/turn-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
-import { assertBrokerRuntimeConfig } from './broker-launch.js';
+import { assertBrokerRuntimeConfig } from './app-server-transport.js';
 import { renderToolResult, toolFromItem } from './codex-protocol.js';
 
 const CodexClientInterface = M.interface('CodexClient', {
@@ -49,15 +53,12 @@ const brief = (value, limit) => {
   return `${text.slice(0, limit)}… [truncated ${text.length - limit} chars]`;
 };
 
-const auditProjection = (value, limit = 4 * 1024 * 1024) => {
-  const text =
-    typeof value === 'string'
-      ? value
-      : (JSON.stringify(value) ?? String(value));
-  const size = new TextEncoder().encode(text).byteLength;
-  if (size > limit) throw Error(`Audit payload exceeded ${limit} bytes`);
-  return text;
-};
+// The text an audit entry records for a value. Its size is the journal's
+// business: a field beyond the inline bound is stored by reference there, and
+// only a value beyond one storage value is refused — by the journal, which
+// is what makes the refusal a recording failure the client quarantines on.
+const auditProjection = value =>
+  typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
 
 /**
  * Project a successful tool fulfillment to JSON without silently collapsing
@@ -105,11 +106,15 @@ const projectToolResult = root => {
   return visit(root);
 };
 
-const CODEX_SANDBOX_MODE = 'workspace-write';
+// The CLI runs inside an attested outer sandbox. The pinned thread API has
+// no external-sandbox mode; every turn separately selects externalSandbox.
+/** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
+const CODEX_SANDBOX_MODE = 'danger-full-access';
 
 /**
  * @typedef {object} AppServerTransport
  * @property {string} [brokerEndpoint]
+ * @property {any} [network]
  * @property {AsyncIterable<any>} messages
  * @property {(message: object) => Promise<void>} send
  * @property {() => Promise<void>} close
@@ -131,9 +136,6 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @property {(turnId: string) => void} resolveStarted
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
  * @property {ReturnType<typeof setTimeout>} [wallTimer]
- * @property {number} events
- * @property {number} bytes
- * @property {number} toolCalls
  * @property {Set<string>} serverRequestIds
  * @property {Set<string>} toolCallIds
  * @property {Set<string>} textItems
@@ -164,17 +166,28 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @param {(name: string, args: Record<string, unknown>) => Promise<unknown>} [options.callTool]
  * @param {string} [options.toolSetId]
  * @param {string} [options.savedToolSetId]
- * @param {{ baseTurnId: string | null, turnId?: string, status?: string }} [options.savedRecovery]
- * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>} [options.saveThreadState]
+ * @param {{ baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string }} [options.savedRecovery]
+ * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} [options.saveThreadState]
  * @param {number} [options.requestTimeoutMs]
- * @param {number} [options.maxTurnEvents]
- * @param {number} [options.maxTurnBytes]
+ * @param {number} [options.maxTurnItems] Distinct item, call and request
+ *   identities one turn may retain for deduplication; the one per-turn
+ *   allocation that grows with the stream. A turn is not bounded in events
+ *   or bytes: what it delivers is bounded by credit at the reader, and what
+ *   the host keeps of it is bounded where it is kept (Floot's hosted turn).
+ * @param {number} [options.maxEarlyEvents] Events queued for a turn the
+ *   app-server has announced before `turn/start` has answered with its id.
+ * @param {number} [options.maxEarlyBytes]
  * @param {number} [options.maxToolResultChars]
  * @param {number} [options.maxPromptBytes]
  * @param {number} [options.maxRequestBytes]
- * @param {number} [options.maxToolCalls]
- * @param {number} [options.toolCallTimeoutMs]
- * @param {number} [options.turnWallTimeoutMs]
+ * @param {number} [options.toolCallTimeoutMs] How long one Endo tool call
+ *   may run before its outcome is recorded unknown and the session poisoned
+ *   against a successor overlapping it. Off by default: a slow tool is the
+ *   user's to interrupt, and a timeout that ends the session for a build
+ *   that took three minutes is not a bound on anything the host retains.
+ *   An operator with an explicit budget sets it.
+ * @param {number} [options.turnWallTimeoutMs] Likewise for a whole turn.
+ *   Off by default; neither the Claude nor the OpenCode adapter has one.
  */
 export const makeCodexClient = ({
   start,
@@ -195,14 +208,14 @@ export const makeCodexClient = ({
   savedToolSetId,
   savedRecovery,
   requestTimeoutMs = 30_000,
-  maxTurnEvents = 10_000,
-  maxTurnBytes = 16 * 1024 * 1024,
+  maxTurnItems = 16_384,
+  maxEarlyEvents = 1024,
+  maxEarlyBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
   maxRequestBytes = 2 * 1024 * 1024,
-  maxToolCalls = 128,
-  toolCallTimeoutMs = 120_000,
-  turnWallTimeoutMs = 30 * 60_000,
+  toolCallTimeoutMs = 0,
+  turnWallTimeoutMs = 0,
 }) => {
   /** @type {AppServerTransport | undefined} */
   let transport;
@@ -210,13 +223,36 @@ export const makeCodexClient = ({
   let ready;
   /** @type {Promise<void> | undefined} */
   let shutdown;
+  let shutdownFailed = false;
+  let transportClosed = false;
   /** @type {Promise<void> | undefined} */
   let sessionFailureAudit;
+  /** @type {Promise<void> | undefined} */
+  let failureSettlement;
+  /** @type {unknown} */
+  let messageFailure;
+  // Admitted message handlers can still be writing host records after their
+  // process has stopped. Keep them until their writes settle.
+  /** @type {Set<Promise<unknown>>} */
+  const hostWrites = new Set();
+  /**
+   * @template T
+   * @param {Promise<T>} operation
+   */
+  const trackHostWrite = operation => {
+    hostWrites.add(operation);
+    void operation.then(
+      () => hostWrites.delete(operation),
+      () => hostWrites.delete(operation),
+    );
+    return operation;
+  };
   let terminated = false;
   let closing = false;
   let closeDeferredAudited = false;
   let closeRequestedAudited = false;
   let initialized = false;
+  let publicNetworkAdmitted = false;
   /** @type {string[]} */
   const cleanupFailures = [];
   /** @type {Set<Promise<unknown>>} */
@@ -230,7 +266,17 @@ export const makeCodexClient = ({
    */
   const detachedRequests = new Set();
   const audit = async (kind, payload = {}) => {
-    await auditEvent(kind, harden({ sessionId, ...payload }));
+    try {
+      await trackHostWrite(
+        Promise.resolve(auditEvent(kind, harden({ sessionId, ...payload }))),
+      );
+    } catch (auditError) {
+      // A failed required write during shutdown cannot be hidden by the
+      // pump's admission fence. Ordinary protocol errors and a timed-out tool
+      // that later settles are not themselves outstanding host writes.
+      if (closing || terminated) messageFailure = auditError;
+      throw auditError;
+    }
   };
   const recordCleanupFailure = error => {
     const failure = error instanceof Error ? error : Error(`${error}`);
@@ -273,7 +319,21 @@ export const makeCodexClient = ({
   );
   let nextRequestId = 1;
   let threadId = savedThreadId;
+  let boundToolSetId = savedToolSetId;
   let threadReady = false;
+  let replayContinuity =
+    !savedThreadId ||
+    Boolean(savedRecovery && savedRecovery.baseTurnId === null);
+  // A thread id that arrived in the saved state was written by a previous
+  // incarnation, so resuming it would let the CLI's own store decide the
+  // conversation -- the behaviour the stack's records exist to replace, and
+  // the one Claude's client stopped doing for the same reason. There is no
+  // "resume what we rebuilt" for Codex the way there is for Claude, because
+  // the rebuild *is* the injection into a thread. So an inherited thread is
+  // reconciled and then rotated away from, which is the path a changed tool
+  // catalog already takes. Cleared once this incarnation owns a thread.
+  let inheritedThread = Boolean(savedThreadId);
+  let continuityCheckpoint = savedRecovery?.previousCheckpoint;
   // Codex app-server 0.152.0 refuses `thread/turns/list` on a thread that has
   // had no user message: a thread is not materialized until its first turn
   // starts. A freshly started thread therefore may not be asked, and its
@@ -281,11 +341,11 @@ export const makeCodexClient = ({
   // first turn. A saved marker naming *some* turn — the base it built on, or
   // the turn itself — proves the saved thread was materialized; a marker with
   // neither was written between the write-ahead and `turn/start`, so that
-  // thread still has no turns to list.
+  // thread still has no turns to list. No marker means acknowledged history:
+  // new empty threads persist an explicit empty marker at creation instead.
   let threadHasTurns = Boolean(
     savedThreadId &&
-    savedRecovery &&
-    (savedRecovery.turnId || savedRecovery.baseTurnId),
+    (!savedRecovery || savedRecovery.turnId || savedRecovery.baseTurnId),
   );
   // The write-ahead / settle-once / reconcile protocol is @endo/hosted-agent's,
   // not this adapter's: it is the same for every hosted backend and it is where
@@ -311,7 +371,7 @@ export const makeCodexClient = ({
       await saveThreadState(
         harden({
           threadId,
-          ...(toolSetId ? { toolSetId } : {}),
+          ...(boundToolSetId ? { toolSetId: boundToolSetId } : {}),
           ...(record
             ? {
                 recovery: harden({
@@ -320,11 +380,24 @@ export const makeCodexClient = ({
                   ...(record.status === 'completed'
                     ? { status: 'completed' }
                     : {}),
+                  ...(continuityCheckpoint
+                    ? { previousCheckpoint: continuityCheckpoint }
+                    : {}),
                 }),
               }
-            : {}),
+            : !threadHasTurns
+              ? {
+                  recovery: {
+                    baseTurnId: null,
+                    ...(continuityCheckpoint
+                      ? { previousCheckpoint: continuityCheckpoint }
+                      : {}),
+                  },
+                }
+              : {}),
         }),
       );
+      if (!record && threadHasTurns) continuityCheckpoint = undefined;
     },
   });
   /** @type {Map<number, { resolve: (value: any) => void, reject: (error: Error) => void }>} */
@@ -393,27 +466,27 @@ export const makeCodexClient = ({
     signalTermination(failure);
     turnReserved = false;
     rejectPending(failure);
-    if (active) {
+    if (active && !failureSettlement) {
       const failedTurn = active;
-      const finish = () => {
-        void settleTurn(failedTurn, {
+      const finish = async () => {
+        await settleTurn(failedTurn, {
           type: 'failed',
           reason: failure.message,
         });
       };
-      if (sessionFailureAudit) {
-        sessionFailureAudit.then(finish, finish);
-      } else {
-        finish();
-      }
+      failureSettlement = sessionFailureAudit
+        ? sessionFailureAudit.then(finish, finish)
+        : finish();
+      failureSettlement.catch(() => undefined);
     }
     if (!shutdown) {
       shutdown = (async () => {
         await null;
         const failures = [];
-        if (transport) {
+        if (transport && !transportClosed) {
           try {
             await transport.close();
+            transportClosed = true;
           } catch (closeError) {
             failures.push(closeError);
           }
@@ -436,6 +509,20 @@ export const makeCodexClient = ({
             failures.push(auditError);
           }
         }
+        if (failureSettlement) {
+          try {
+            await failureSettlement;
+          } catch (settlementError) {
+            failures.push(settlementError);
+          }
+        }
+        while (hostWrites.size > 0) {
+          // Writers can admit subsequent writes before settling. Drain to a
+          // fixed point after protocol admission has closed.
+          // eslint-disable-next-line no-await-in-loop
+          await Promise.allSettled([...hostWrites]);
+        }
+        if (messageFailure) failures.push(messageFailure);
         if (failures.length > 0) {
           if (failures.length === 1) throw failures[0];
           throw new AggregateError(failures, 'Codex session shutdown failed');
@@ -444,7 +531,12 @@ export const makeCodexClient = ({
       // Automatic protocol-failure paths have no caller awaiting shutdown.
       // Preserve the rejecting promise for explicit terminate(), while also
       // making teardown failure visible to the provisioner.
-      shutdown.catch(recordCleanupFailure);
+      shutdown.catch(shutdownError => {
+        recordCleanupFailure(shutdownError);
+        // The admission fence stays closed. Only unfinished cleanup retries;
+        // required audit/settlement failures remain retained above.
+        shutdownFailed = true;
+      });
     }
     return shutdown;
   };
@@ -547,23 +639,15 @@ export const makeCodexClient = ({
       const timeoutFailure = Error(
         'Codex turn was not announced before the interrupt deadline',
       );
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
-      });
       try {
-        turnId = await Promise.race([
-          turn.started,
-          turn.terminal.then(() => undefined),
-          deadline,
-        ]);
+        turnId = await awaitBarrier(
+          Promise.race([turn.started, turn.terminal.then(() => undefined)]),
+          { deadlineMs: requestTimeoutMs, makeFailure: () => timeoutFailure },
+        );
       } catch {
         if (active !== turn) return undefined;
         failSession(timeoutFailure);
         return timeoutFailure;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     }
     if (turnId === undefined || active !== turn) return undefined;
@@ -590,19 +674,15 @@ export const makeCodexClient = ({
       const timeoutFailure = Error(
         'Codex turn did not confirm interruption before the deadline',
       );
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
-      });
       try {
-        await Promise.race([turn.terminal, deadline]);
+        await awaitBarrier(turn.terminal, {
+          deadlineMs: requestTimeoutMs,
+          makeFailure: () => timeoutFailure,
+        });
       } catch (error) {
         const failure = error instanceof Error ? error : timeoutFailure;
         failSession(failure);
         return failure;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     }
     return undefined;
@@ -611,13 +691,29 @@ export const makeCodexClient = ({
   const pushTurn = event => {
     const turn = active;
     if (!turn) return;
-    turn.events += 1;
-    turn.bytes += byteLength(event);
-    if (turn.events > maxTurnEvents || turn.bytes > maxTurnBytes) {
-      void interruptActive('Codex turn exceeded configured output bounds');
-      return;
-    }
     turn.push(harden(event));
+  };
+
+  /**
+   * Retain an identity the turn deduplicates on. The sets and the phase map
+   * are the per-turn allocations that grow with the stream, so they carry
+   * the bound; a turn that keeps naming new items past it is failed with a
+   * reason that says which allocation, not "output bounds".
+   *
+   * @param {Set<string> | Map<string, unknown>} retained
+   * @param {string} key
+   * @param {unknown} [value]
+   */
+  const retainIdentity = (retained, key, value = undefined) => {
+    if (!retained.has(key) && retained.size >= maxTurnItems) {
+      failSession(
+        Error(`Codex turn retained more than ${maxTurnItems} item identities`),
+      );
+      return false;
+    }
+    if (retained instanceof Map) retained.set(key, value);
+    else retained.add(key);
+    return true;
   };
 
   const sameTurn = params => {
@@ -669,14 +765,19 @@ export const makeCodexClient = ({
     if (typeof params.callId !== 'string' || params.callId === '') {
       throw Error('Dynamic tool call omitted its stable call id');
     }
-    if (!active || active.toolCalls >= maxToolCalls) {
-      throw Error(`Dynamic tool call limit exceeded (${maxToolCalls})`);
+    if (!active) {
+      throw Error('Dynamic tool call outside an active turn');
     }
     if (active.toolCallIds.has(params.callId)) {
       throw Error(`Dynamic tool call id was replayed: ${params.callId}`);
     }
-    active.toolCallIds.add(params.callId);
-    active.toolCalls += 1;
+    // No count of calls per turn: the ids are the one thing retained, and
+    // they are bounded with the turn's other identities.
+    if (!retainIdentity(active.toolCallIds, params.callId)) {
+      throw Error(
+        `Codex turn retained more than ${maxTurnItems} item identities`,
+      );
+    }
     await audit('tool-intent', {
       threadId: params.threadId,
       turnId: params.turnId,
@@ -690,7 +791,9 @@ export const makeCodexClient = ({
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      if (toolCallTimeoutMs > 0) {
+        timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      }
     });
     const operation = Promise.resolve().then(() =>
       callTool(params.tool, params.arguments),
@@ -717,48 +820,53 @@ export const makeCodexClient = ({
         // The Endo call cannot be assumed cancelled. Poison the session so no
         // successor can overlap it, and keep observing the late settlement for
         // the operator journal instead of reporting a false tool failure.
-        operation
-          .then(
-            async lateResult => {
-              try {
-                const lateProjected = projectToolResult(lateResult);
-                await audit('tool-late-settled', {
+        trackHostWrite(
+          operation
+            .then(
+              async lateResult => {
+                try {
+                  const lateProjected = projectToolResult(lateResult);
+                  await audit('tool-late-settled', {
+                    threadId: params.threadId,
+                    turnId: params.turnId,
+                    callId: params.callId,
+                    tool: params.tool,
+                    success: true,
+                    result: auditProjection(lateProjected),
+                  });
+                } catch (lateProjectionError) {
+                  await audit('tool-late-outcome-unknown', {
+                    threadId: params.threadId,
+                    turnId: params.turnId,
+                    callId: params.callId,
+                    tool: params.tool,
+                    reason: brief(
+                      lateProjectionError instanceof Error
+                        ? lateProjectionError.message
+                        : `${lateProjectionError}`,
+                      maxToolResultChars,
+                    ),
+                  });
+                }
+              },
+              lateError =>
+                audit('tool-late-settled', {
                   threadId: params.threadId,
                   turnId: params.turnId,
                   callId: params.callId,
                   tool: params.tool,
-                  success: true,
-                  result: auditProjection(lateProjected),
-                });
-              } catch (lateProjectionError) {
-                await audit('tool-late-outcome-unknown', {
-                  threadId: params.threadId,
-                  turnId: params.turnId,
-                  callId: params.callId,
-                  tool: params.tool,
+                  success: false,
                   reason: brief(
-                    lateProjectionError instanceof Error
-                      ? lateProjectionError.message
-                      : `${lateProjectionError}`,
+                    lateError instanceof Error ? lateError.message : lateError,
                     maxToolResultChars,
                   ),
-                });
-              }
-            },
-            lateError =>
-              audit('tool-late-settled', {
-                threadId: params.threadId,
-                turnId: params.turnId,
-                callId: params.callId,
-                tool: params.tool,
-                success: false,
-                reason: brief(
-                  lateError instanceof Error ? lateError.message : lateError,
-                  maxToolResultChars,
-                ),
-              }),
-          )
-          .catch(recordCleanupFailure);
+                }),
+            )
+            .catch(lateAuditError => {
+              messageFailure = lateAuditError;
+              recordCleanupFailure(lateAuditError);
+            }),
+        );
         failSession(timeoutFailure);
         throw timeoutFailure;
       }
@@ -848,7 +956,7 @@ export const makeCodexClient = ({
     if (active.serverRequestIds.has(requestKey)) {
       throw Error(`Codex server request id was replayed: ${id}`);
     }
-    active.serverRequestIds.add(requestKey);
+    if (!retainIdentity(active.serverRequestIds, requestKey)) return;
     if (method === 'item/tool/call') {
       const result = await runDynamicTool(params);
       await sendMessage({ id, result });
@@ -909,10 +1017,14 @@ export const makeCodexClient = ({
       active.earlyEvents += 1;
       active.earlyBytes += byteLength(message);
       if (
-        active.earlyEvents > maxTurnEvents ||
-        active.earlyBytes > maxTurnBytes
+        active.earlyEvents > maxEarlyEvents ||
+        active.earlyBytes > maxEarlyBytes
       ) {
-        failSession(Error('Codex early turn events exceeded output bounds'));
+        failSession(
+          Error(
+            `Codex queued more than ${maxEarlyEvents} events or ${maxEarlyBytes} bytes for a turn before turn/start answered`,
+          ),
+        );
         return;
       }
       const queued = active.earlyByTurn.get(`${eventTurnId}`) || [];
@@ -933,7 +1045,7 @@ export const makeCodexClient = ({
       case 'item/agentMessage/delta':
         if (active) {
           const itemId = `${params.itemId || ''}`;
-          active.textItems.add(itemId);
+          if (!retainIdentity(active.textItems, itemId)) break;
           pushTurn({
             type:
               active.messagePhases.get(itemId) === 'commentary'
@@ -945,10 +1057,14 @@ export const makeCodexClient = ({
         break;
       case 'item/started': {
         if (params.item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(
-            `${params.item.id || ''}`,
-            params.item.phase ?? null,
-          );
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${params.item.id || ''}`,
+              params.item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(params.item);
         if (tool) {
@@ -976,7 +1092,14 @@ export const makeCodexClient = ({
       case 'item/completed': {
         const { item } = params;
         if (item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(`${item.id || ''}`, item.phase ?? null);
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${item.id || ''}`,
+              item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(item);
         if (tool) {
@@ -1093,6 +1216,7 @@ export const makeCodexClient = ({
     await null;
     try {
       for await (const message of transport.messages) {
+        if (terminated) break;
         if ('id' in message && !('method' in message)) {
           const responseId = /** @type {number} */ (
             typeof message.id === 'number' ? message.id : Number.NaN
@@ -1140,10 +1264,15 @@ export const makeCodexClient = ({
               () => detachedRequests.delete(handled),
             );
           } else {
-            await handleServerRequest(message);
+            await trackHostWrite(handleServerRequest(message));
           }
         } else if ('method' in message) {
-          await onNotification(message);
+          await trackHostWrite(
+            onNotification(message).catch(error => {
+              messageFailure = error;
+              throw error;
+            }),
+          );
         }
       }
       if (!terminated) failSession(Error('Codex app-server stdout closed'));
@@ -1248,7 +1377,9 @@ export const makeCodexClient = ({
             assertBrokerRuntimeConfig(
               observed?.config,
               transport.brokerEndpoint,
+              transport.network,
             );
+            publicNetworkAdmitted = transport.network !== undefined;
           }
           // A signed-out app-server accepts `initialize` and `thread/start`
           // alike and fails only when the first turn opens its model
@@ -1288,7 +1419,8 @@ export const makeCodexClient = ({
           await audit('session-open', {
             approvalPolicy,
             sandbox: CODEX_SANDBOX_MODE,
-            toolNetworkAccess: false,
+            executionDomain: 'guest',
+            publicNetworkAccess: publicNetworkAdmitted,
             toolSetId: toolSetId || '',
             // The kind of credential, never the credential: `apiKey`,
             // `chatgpt`, `amazonBedrock`, or `none` for a provider that needs
@@ -1304,9 +1436,41 @@ export const makeCodexClient = ({
     return ready;
   };
 
-  const ensureThread = async (opts = {}) => {
+  const catalogChanged = () =>
+    Boolean(
+      threadId &&
+      boundToolSetId !== toolSetId &&
+      (dynamicTools.length > 0 || boundToolSetId),
+    );
+  // Two reasons to abandon the current thread, one mechanism. They differ in
+  // what they demand of the caller: a catalog change *requires* the records,
+  // because a conversation is being carried across an authority boundary and
+  // silently dropping it would rebind old context to new tools. An inherited
+  // thread does not -- if the stack holds no records then no turn is known to
+  // have happened, and a fresh empty thread is the honest result rather than
+  // a refusal.
+  const mustRotate = () => catalogChanged() || inheritedThread;
+
+  const transcriptRecords = opts =>
+    Array.isArray(opts.transcript)
+      ? /** @type {TranscriptRecord[]} */ (opts.transcript)
+      : [];
+  // Records are the only channel. `continuityContext` used to stand in for
+  // them as text; it carried nothing a tool call survives, and gating on it
+  // let a rotation proceed on a conversation that could not actually be
+  // handed over.
+  const assertContinuity = (opts, required = false) => {
+    if (required && transcriptRecords(opts).length === 0) {
+      throw Error(
+        'Codex context rotation requires this conversation as transcript records; the stack handed none, and a rotated thread cannot be given a history it did not receive',
+      );
+    }
+  };
+
+  const ensureThread = async (opts = {}, preserveCatalog = false) => {
     await ensureReady();
-    if (threadReady && threadId) return threadId;
+    if (threadReady && threadId && (preserveCatalog || !mustRotate()))
+      return threadId;
     const common = {
       cwd,
       approvalPolicy,
@@ -1324,18 +1488,36 @@ export const makeCodexClient = ({
         : {}),
     };
     let rotatedFrom;
-    if (threadId && dynamicTools.length > 0 && savedToolSetId !== toolSetId) {
+    /** @type {'catalog-changed' | 'thread-inherited' | undefined} */
+    let rotationReason;
+    if (!preserveCatalog && mustRotate()) {
+      assertContinuity(opts, catalogChanged());
+      if (ledger.status().needsReconciliation) {
+        throw Error(
+          'Codex must reconcile the old thread before context rotation',
+        );
+      }
       // A schema/capability change gets a fresh conversation rather than
-      // silently rebinding old model context to new authority. The old thread
-      // remains intact for audit/recovery.
+      // silently rebinding old model context to new authority; an inherited
+      // thread gets one so that the records, not the surviving store, decide
+      // what the conversation is. Either way the old thread remains intact
+      // for audit and recovery -- it is superseded, never rewritten.
+      rotationReason = catalogChanged()
+        ? 'catalog-changed'
+        : 'thread-inherited';
       rotatedFrom = threadId;
+      continuityCheckpoint =
+        opts.acknowledgedCheckpoint || continuityCheckpoint;
       threadId = undefined;
+      inheritedThread = false;
       threadHasTurns = false;
+      replayContinuity = true;
       // The marker names a turn in the thread being abandoned; the new thread
       // starts with nothing outstanding. The old thread is left intact for
       // audit and recovery.
       ledger.forget();
       await audit('thread-rotation-required', {
+        reason: rotationReason || 'catalog-changed',
         oldThreadId: rotatedFrom,
         oldToolSetId: savedToolSetId || '',
         newToolSetId: toolSetId || '',
@@ -1373,6 +1555,14 @@ export const makeCodexClient = ({
             harden({
               threadId: created,
               ...(toolSetId ? { toolSetId } : {}),
+              // A crash after creation but before first dispatch must not
+              // revive this empty thread as though it retained the dialogue.
+              recovery: {
+                baseTurnId: null,
+                ...(continuityCheckpoint
+                  ? { previousCheckpoint: continuityCheckpoint }
+                  : {}),
+              },
             }),
           );
         } else {
@@ -1383,6 +1573,7 @@ export const makeCodexClient = ({
         throw error;
       }
       threadId = created;
+      boundToolSetId = toolSetId;
     }
     await audit('thread-bound', {
       threadId: /** @type {string} */ (threadId),
@@ -1395,7 +1586,7 @@ export const makeCodexClient = ({
   };
 
   const readLatestTurnId = async () => {
-    const currentThreadId = await ensureThread();
+    const currentThreadId = await ensureThread({}, true);
     // Asking an unmaterialized thread is an error, not an empty answer, and
     // the honest answer for one is that it has no turns.
     if (!threadHasTurns) return null;
@@ -1416,12 +1607,13 @@ export const makeCodexClient = ({
     if (latest !== undefined && (typeof latest !== 'string' || latest === '')) {
       throw Error('Codex returned an invalid latest turn id');
     }
+    threadHasTurns = Boolean(latest);
     return latest || null;
   };
 
   const reconcileThread = async () => {
     if (!ledger.status().needsReconciliation) return;
-    const currentThreadId = await ensureThread();
+    const currentThreadId = await ensureThread({}, true);
     await ledger.reconcile({
       readLatestCheckpoint: readLatestTurnId,
       revertBefore: async beforeTurnId => {
@@ -1444,6 +1636,18 @@ export const makeCodexClient = ({
     await ledger.acknowledge(checkpoint);
   };
 
+  const acknowledgeContinuityCheckpoint = async checkpoint => {
+    if (
+      checkpoint === continuityCheckpoint &&
+      ledger.getRecord()?.baseCheckpoint === null
+    ) {
+      // This exact checkpoint belongs to the prior catalog's native thread.
+      // It remains Floot's committed checkpoint until a replacement turn commits.
+      return;
+    }
+    await acknowledgeCheckpoint(checkpoint);
+  };
+
   return makeExo('CodexClient', CodexClientInterface, {
     async send(prompt, opts = {}) {
       if (terminated) throw Error('Codex session terminated');
@@ -1458,9 +1662,27 @@ export const makeCodexClient = ({
       let currentThreadId;
       await null;
       try {
+        const rotating = mustRotate();
+        if (rotating || (replayContinuity && !threadHasTurns)) {
+          assertContinuity(opts, catalogChanged());
+        }
+        if (rotating) {
+          // Reconcile the old native thread under its original catalog before
+          // abandoning it. Never clear its recovery marker on a failed check.
+          await ensureThread(opts, true);
+          if (opts.acknowledgedCheckpoint) {
+            await acknowledgeContinuityCheckpoint(
+              String(opts.acknowledgedCheckpoint),
+            );
+          }
+          await reconcileThread();
+          threadReady = false;
+        }
         currentThreadId = await ensureThread(opts);
-        if (opts.acknowledgedCheckpoint) {
-          await acknowledgeCheckpoint(String(opts.acknowledgedCheckpoint));
+        if (!rotating && opts.acknowledgedCheckpoint) {
+          await acknowledgeContinuityCheckpoint(
+            String(opts.acknowledgedCheckpoint),
+          );
         }
         await reconcileThread();
       } catch (error) {
@@ -1471,30 +1693,27 @@ export const makeCodexClient = ({
         turnReserved = false;
         throw Error('Codex session terminated');
       }
-      const channel = makeBufferedReader();
-      let resolveTerminal = () => {};
-      const terminal = /** @type {Promise<void>} */ (
-        new Promise(resolve => {
-          resolveTerminal = () => resolve(undefined);
-        })
-      );
+      /** @type {any} */
+      let turn;
+      const channel = makeHostedTurnChannel({
+        onConsumerClosed: () => {
+          if (active === turn) void interruptActive('Codex turn interrupted');
+        },
+      });
       let resolveStarted = (/** @type {string} */ _turnId) => {};
       const started = /** @type {Promise<string>} */ (
         new Promise(resolve => {
           resolveStarted = resolve;
         })
       );
-      const turn = {
+      turn = {
         threadId: currentThreadId,
         push: channel.push,
         interrupted: false,
-        terminal,
-        resolveTerminal,
+        terminal: channel.terminal,
+        resolveTerminal: channel.settle,
         started,
         resolveStarted,
-        events: 0,
-        bytes: 0,
-        toolCalls: 0,
         serverRequestIds: new Set(),
         toolCallIds: new Set(),
         textItems: new Set(),
@@ -1504,16 +1723,15 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
-      turn.wallTimer = setTimeout(() => {
-        if (active === turn) {
-          void interruptActive(
-            `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
-          );
-        }
-      }, turnWallTimeoutMs);
-      channel.setOnClose(() => {
-        if (active === turn) void interruptActive('Codex turn interrupted');
-      });
+      if (turnWallTimeoutMs > 0) {
+        turn.wallTimer = setTimeout(() => {
+          if (active === turn) {
+            void interruptActive(
+              `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
+            );
+          }
+        }, turnWallTimeoutMs);
+      }
       try {
         await audit('turn-requested', {
           threadId: currentThreadId,
@@ -1527,19 +1745,54 @@ export const makeCodexClient = ({
         // about to be dispatched is written ahead first: the marker names the
         // checkpoint the thread must be rolled back to if nothing acknowledges
         // it.
-        turn.ledgerTurn = await ledger.begin({
-          baseCheckpoint: await readLatestTurnId(),
-        });
+        const baseCheckpoint = await readLatestTurnId();
+        const restoreContext = replayContinuity && baseCheckpoint === null;
+        if (restoreContext) {
+          assertContinuity(opts);
+        }
+        // Faithful restoration, when the thread is new and the stack has a
+        // record of it. `thread/inject_items` appends raw Responses API items
+        // "without starting a user turn" — the app-server's own words — so a
+        // tool call restores as a `function_call` with its output rather than
+        // as a line describing one, and nothing here queues work.
+        //
+        // There is no second path. An app-server that cannot take the items
+        // fails the turn: putting the conversation in the prompt instead
+        // would keep the session answering while the mechanism meant to
+        // carry it is broken, and a degraded answer is indistinguishable
+        // from a good one until someone reads the transcript.
+        if (restoreContext) {
+          const records = transcriptRecords(opts);
+          const items = responsesApiItems(records);
+          if (items.length > 0) {
+            try {
+              await request('thread/inject_items', {
+                threadId: currentThreadId,
+                items,
+              });
+            } catch (cause) {
+              // The app-server's own words are the useful part of this: a
+              // schema refusal and an unavailable method read very
+              // differently, and only one of them is worth retrying.
+              const failure = makeError(
+                X`Codex app-server refused ${q(items.length)} restored items for a new thread (${cause}); this session's ${q(records.length)} records cannot be handed over, and answering without them would be answering a different question.`,
+              );
+              failSession(failure);
+              throw failure;
+            }
+          }
+        }
+        turn.ledgerTurn = await ledger.begin({ baseCheckpoint });
         const response = await request('turn/start', {
           threadId: currentThreadId,
+          // The prompt, and only the prompt. A restored conversation reached
+          // the thread through `inject_items` above or the turn never got
+          // here.
           input: [{ type: 'text', text: prompt, text_elements: [] }],
           approvalPolicy,
           sandboxPolicy: {
-            type: 'workspaceWrite',
-            writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
-            networkAccess: false,
-            excludeSlashTmp: true,
-            excludeTmpdirEnvVar: true,
+            type: 'externalSandbox',
+            networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
           },
           ...(opts.model || model ? { model: opts.model || model } : {}),
           ...(opts.reasoningEffort || reasoningEffort
@@ -1582,7 +1835,7 @@ export const makeCodexClient = ({
       return channel.reader;
     },
     async acknowledge(checkpoint) {
-      await ensureThread();
+      await ensureThread({}, true);
       await acknowledgeCheckpoint(checkpoint);
     },
     async models() {
@@ -1646,6 +1899,10 @@ export const makeCodexClient = ({
         });
         closeRequestedAudited = true;
       }
+      if (shutdownFailed) {
+        shutdown = undefined;
+        shutdownFailed = false;
+      }
       const done = failSession(Error('Codex session terminated'), false);
       await done;
     },
@@ -1667,7 +1924,7 @@ export const makeCodexClient = ({
     },
     help(method = '') {
       const methods = harden({
-        send: 'send(prompt, options?) -> streamed provider-neutral events',
+        send: 'send(prompt, options?) -> streamed provider-neutral events. options.transcript is the stack’s transcript records; a new thread is restored from them through thread/inject_items before the prompt runs, and a thread that cannot take them fails the turn rather than answering without them.',
         models: 'models() -> app-server model catalog',
         interrupt: 'interrupt() -> interrupt the active turn',
         acknowledge:

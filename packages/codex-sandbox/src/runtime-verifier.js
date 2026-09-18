@@ -9,38 +9,8 @@ import { M } from '@endo/patterns';
 import {
   assertBrokerEndpoint,
   makeBrokerAppServerArgv,
-} from './broker-launch.js';
-
-const INNER = String.raw`
-import errno,json,os,socket,subprocess,sys
-p=json.loads(sys.argv[1])
-def denied(action):
-    try:
-        action()
-    except OSError as e:
-        assert e.errno in (errno.EPERM,errno.EACCES,errno.EROFS), "wrong denial"
-    else:
-        raise AssertionError("operation allowed")
-status=dict(line.split(":",1) for line in open("/proc/self/status") if ":" in line)
-assert status["NoNewPrivs"].strip()=="1"
-assert status["Seccomp"].strip()=="2"
-with open(p["workspace"]+"/allowed","w") as f: f.write("ok")
-with open(p["tmp"]+"/allowed","w") as f: f.write("ok")
-with open(p["run"]+"/allowed","w") as f: f.write("ok")
-with open(p["scratch"]+"/allowed","w") as f: f.write("ok")
-denied(lambda: open(p["home"]+"/sentinel","w"))
-denied(lambda: open(p["workspace"]+"/alias","w"))
-denied(lambda: os.rename(p["home"]+"/rename-source",p["home"]+"/sentinel"))
-denied(lambda: open(p["home"]+"/hardlink","w"))
-denied(lambda: os.link(p["home"]+"/sentinel",p["home"]+"/linked"))
-denied(lambda: socket.create_connection((p["host"],p["port"]),timeout=2))
-child=subprocess.run([sys.executable,"-I","-c",
-    "import os; open("+repr(p["home"]+"/sentinel")+",'w').write('bad')"],
-    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
-assert child.returncode != 0
-assert open(p["home"]+"/sentinel").read()=="sentinel"
-print("INNER_OK")
-`;
+  makeBrokerEnvironment,
+} from './app-server-transport.js';
 
 const PROBE = String.raw`
 import json,os,re,select,shutil,socket,subprocess,sys,tempfile,time
@@ -85,19 +55,21 @@ assert run(["codex","--version"],5).strip()=="codex-cli 0.152.0"
 for name in ("auth.json","auth.json.lock"):
     assert not os.path.exists("/codex-home/"+name), "codex home holds "+name
 with socket.create_connection((p["host"],p["port"]),timeout=2): pass
+if p.get("network"):
+    assert open('/etc/resolv.conf').read()=='nameserver 127.0.0.53\noptions attempts:1 timeout:2\n'
+    status=dict(line.split(':',1) for line in open('/proc/self/status') if ':' in line)
+    assert all(int(status[key].strip(),16)==0 for key in ('CapEff','CapPrm','CapBnd'))
 created=[]
 try:
     for root in ("/workspace","/codex-home","/tmp","/run","/scratch"):
         created.append(tempfile.mkdtemp(prefix=".endo-runtime-probe-",dir=root))
     workspace,home,tmp,run_dir,scratch=created
-    with open(home+"/sentinel","w") as f: f.write("sentinel")
-    with open(home+"/rename-source","w") as f: f.write("replacement")
-    os.symlink(home+"/sentinel",workspace+"/alias")
-    os.link(home+"/sentinel",home+"/hardlink")
-    inner=dict(workspace=workspace,home=home,tmp=tmp,run=run_dir,scratch=scratch,host=p["host"],port=p["port"])
-    result=run(p["sandboxArgv"]+["--",sys.executable,"-I","-c",p["inner"],json.dumps(inner)],15)
-    assert result.strip()=="INNER_OK"
-    assert open(home+"/sentinel").read()=="sentinel"
+    # All granted writable state belongs to the guest, including its native
+    # conversation state. A child inherits the same outer container boundary.
+    for directory in created:
+        assert run([sys.executable,"-I","-c",
+            "import sys; open(sys.argv[1], 'w').write('ok')",directory+"/allowed"],3)==""
+        assert open(directory+"/allowed").read()=="ok"
 finally:
     for directory in reversed(created): shutil.rmtree(directory)
 print("CODEX_RUNTIME_PROBE_V1_OK")
@@ -105,7 +77,7 @@ print("CODEX_RUNTIME_PROBE_V1_OK")
 
 /**
  * Probe the exact slice before admitting its pinned runtime. This is a live
- * preflight of the trusted image's sandbox implementation, not continuous
+ * preflight of the trusted image inside the outer sandbox, not continuous
  * observation of the later app-server. The caller must bind that process to the
  * same launch argv/environment and validate its merged configuration.
  * Known image metadata is exact; Podman container metadata is fixed, and
@@ -139,16 +111,6 @@ export const makeCodexRuntimeVerifier = ({
     (Object.hasOwn(knownImageEnv, key) && knownImageEnv[key] === value) ||
       Fail`Unapproved image environment`;
   }
-  const approvedEnvironment = harden({
-    CODEX_HOME: '/codex-home',
-    HOME: '/home/node',
-    LANG: 'C.UTF-8',
-    LC_ALL: 'C.UTF-8',
-    TEMP: '/tmp',
-    TMP: '/tmp',
-    TMPDIR: '/tmp',
-    TZ: 'UTC',
-  });
   return makeExo(
     'CodexRuntimeVerifier',
     M.interface('CodexRuntimeVerifier', {
@@ -157,14 +119,19 @@ export const makeCodexRuntimeVerifier = ({
     {
       /** @param {any} context */
       async attest(context) {
+        const expectedEnvironment = makeBrokerEnvironment(context.network);
         (Object.keys(context.launchEnvironment).length ===
-          Object.keys(approvedEnvironment).length &&
-          Object.entries(approvedEnvironment).every(
+          Object.keys(expectedEnvironment).length &&
+          Object.entries(expectedEnvironment).every(
             ([key, value]) => context.launchEnvironment[key] === value,
           )) ||
           Fail`Runtime environment mismatch`;
         const endpoint = new URL(assertBrokerEndpoint(context.brokerEndpoint));
-        const expectedArgv = makeBrokerAppServerArgv(endpoint.origin);
+        const expectedArgv = makeBrokerAppServerArgv(
+          endpoint.origin,
+          'codex',
+          context.network,
+        );
         (Array.isArray(context.launchArgv) &&
           JSON.stringify(context.launchArgv) ===
             JSON.stringify(expectedArgv)) ||
@@ -173,8 +140,7 @@ export const makeCodexRuntimeVerifier = ({
           environment: { ...imageEnv, ...context.launchEnvironment },
           host: endpoint.hostname === '[::1]' ? '::1' : endpoint.hostname,
           port: Number(endpoint.port || 80),
-          sandboxArgv: [...expectedArgv.slice(0, -3), 'sandbox'],
-          inner: INNER,
+          ...(context.network ? { network: context.network } : {}),
         });
         /** @type {any} */
         let proc;
@@ -241,12 +207,13 @@ export const makeCodexRuntimeVerifier = ({
             version: 'CodexRuntimeEvidenceV1',
             sessionId: context.sessionId,
             imageDigest: context.imageDigest,
-            leaseId: context.leaseId,
+            grantId: context.grantId,
             networkNamespaceId: context.networkNamespaceId,
-            toolSandbox: 'codex-workspace-write',
-            toolCodexHomeAccess: 'read-only',
-            toolBrokerAccess: 'denied',
-            environment: 'credential-and-proxy-free',
+            executionDomain: 'guest',
+            environment: context.network
+              ? 'credential-free-proxy'
+              : 'credential-and-proxy-free',
+            ...(context.network ? { network: context.network } : {}),
             // Named for exactly what ran: the probe looked in the session's
             // actual `CODEX_HOME` for `auth.json` and did not find it. That is
             // where the pinned CLI caches a ChatGPT login under the

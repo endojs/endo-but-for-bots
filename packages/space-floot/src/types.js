@@ -35,6 +35,7 @@ export {};
  *   status?: 'idle' | 'streaming' | 'error',
  *   messageCount?: number,
  *   loaded?: boolean,
+ *   lifecycle?: string,
  * }} FlootSessionMeta
  */
 
@@ -52,6 +53,7 @@ export {};
  *   default?: boolean,
  *   defaultReasoningEffort?: string | null,
  *   backendId?: string,
+ *   backendTitle?: string,
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],
@@ -111,6 +113,10 @@ export {};
  *   status: string,
  *   input: string,
  *   settingsOpen: boolean,
+ *   recovery?: FlootRecovery,
+ *   network?: FlootNetwork,
+ *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
+ *   unavailable?: boolean,
  *   usage: { inputTokens: number, outputTokens: number } | null,
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
@@ -136,5 +142,29 @@ export {};
  *   'sentenceSilence', value: string | number) => void} setTtsSetting
  * @property {(text: string) => void} replayMessage
  * @property {() => void} toggleSettings
+ * @property {() => void} [emergencyStop]
+ * @property {() => void} [resumeSession]
  * @property {(text: string) => void} setInput
+ * @property {() => void} [refreshRecovery]
+ * @property {(turnId: string, note: string, confirmed: boolean) => void} [resolveTurn]
+ * @property {() => void} [refreshNetworkPolicy]
+ * @property {(policy: string) => void} [setNetworkPolicy]
+ * @property {(id: string, approve: boolean, note: string) => void} [resolveNetworkPolicyRequest]
+ */
+
+/**
+ * @typedef {{ status: string, message: string, policy: string | null,
+ *   supportedPolicies: string[], changing: boolean, canSet: boolean,
+ *   pendingPolicy?: string, blocked?: boolean,
+ *   canResolve: boolean, current?: boolean,
+ *   request?: { id: string, policy: string, reason: string } }} FlootNetwork
+ */
+
+/**
+ * @typedef {{ turnId: string, state: string, error?: string,
+ *   tools?: unknown[], activity?: unknown[], resolution?: string }} FlootJournalTurn
+ * @typedef {{ status: string, message: string, turns: FlootJournalTurn[],
+ *   canResolve: boolean, resolving: boolean, blocked?: boolean, current?: boolean,
+ *   capacity?: { usedEvents: string, retainedTurns: number, archivedTurns: number,
+ *     storage: string } | null }} FlootRecovery
  */

@@ -6,7 +6,7 @@ import test from 'ava';
 import {
   canonicalAuditJson,
   makeAuditJournal,
-  makePetstoreAuditJournal,
+  makeStoredAuditJournal,
   verifyAuditEntries,
 } from '../src/audit-journal.js';
 
@@ -159,27 +159,6 @@ test('audit recovery rejects a valid chain from another session', async t => {
   });
 });
 
-test('audit journal enforces its durable retention quota', async t => {
-  const durable = [];
-  const heads = makeHeadStore();
-  const { writer } = makeAuditJournal({
-    ...heads,
-    journalId: 'bounded',
-    sessionId: 'bounded-session',
-    maxEntries: 1,
-    reservedLifecycleEntries: 0,
-    reservedLifecycleBytes: 0,
-    readEntries: async () => durable,
-    appendEntry: async entry => {
-      durable.push(entry);
-    },
-  });
-  await writer.append('one');
-  await t.throwsAsync(() => writer.append('two'), {
-    message: /audit journal exceeded.*entries/,
-  });
-});
-
 test('audit recovery completes only an anchor-prepared entry', async t => {
   const durable = [];
   const heads = makeHeadStore();
@@ -270,30 +249,6 @@ test('an empty audit journal verifies without a synthetic head', async t => {
   t.true((await journal.reader.verify()).ok);
 });
 
-test('ordinary quota exhaustion preserves terminal lifecycle capacity', async t => {
-  const durable = [];
-  const heads = makeHeadStore();
-  const journal = makeAuditJournal({
-    ...heads,
-    journalId: 'reserved',
-    sessionId: 'reserved-session',
-    maxEntries: 3,
-    reservedLifecycleEntries: 2,
-    reservedLifecycleBytes: 0,
-    readEntries: async () => durable,
-    appendEntry: async entry => {
-      durable.push(entry);
-    },
-  });
-  await journal.writer.append('turn-requested');
-  await t.throwsAsync(() => journal.writer.append('tool-intent'), {
-    message: /lifecycle reserve/,
-  });
-  await journal.writer.append('session-close-requested');
-  await journal.writer.append('session-closed');
-  t.true((await journal.reader.verify()).ok);
-});
-
 test('audit head repairs one authorized deletion and rejects a longer rollback', async t => {
   const durable = [];
   const heads = makeHeadStore();
@@ -375,14 +330,14 @@ test('petstore audit journal survives reconstruction outside the session', async
     });
   const powers = makePowers(values);
   const anchorPowers = makePowers(anchors);
-  const first = makePetstoreAuditJournal(powers, {
+  const first = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
   });
   await first.writer.append('session-open', { policyVersion: 'v1' });
 
-  const recovered = makePetstoreAuditJournal(powers, {
+  const recovered = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
@@ -398,7 +353,7 @@ test('petstore audit journal survives reconstruction outside the session', async
   // One deleted tail entry is restored from the independently protected
   // write-ahead anchor.
   values.delete('codex-audit-session-3-00000000000000000001');
-  const rolledBack = makePetstoreAuditJournal(powers, {
+  const rolledBack = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
@@ -409,7 +364,7 @@ test('petstore audit journal survives reconstruction outside the session', async
   // A longer rollback cannot be mistaken for a single prepared append.
   values.delete('codex-audit-session-3-00000000000000000001');
   values.delete('codex-audit-session-3-00000000000000000002');
-  const longerRollback = makePetstoreAuditJournal(powers, {
+  const longerRollback = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
@@ -440,12 +395,12 @@ test('petstore journals do not cross-select overlapping head prefixes', async t 
     });
   const powers = makePowers(values);
   const anchorPowers = makePowers(anchors);
-  const short = makePetstoreAuditJournal(powers, {
+  const short = makeStoredAuditJournal(powers, {
     journalId: 'short',
     sessionId: 'a',
     anchorPowers,
   });
-  const overlapping = makePetstoreAuditJournal(powers, {
+  const overlapping = makeStoredAuditJournal(powers, {
     journalId: 'overlapping',
     sessionId: 'a-head-z',
     anchorPowers,
@@ -474,44 +429,13 @@ test('petstore audit journal rejects one capability for entries and heads', t =>
   });
   t.throws(
     () =>
-      makePetstoreAuditJournal(powers, {
+      makeStoredAuditJournal(powers, {
         journalId: 'not-separated',
         sessionId: 'same-powers',
         anchorPowers: powers,
       }),
     { message: /must be distinct/ },
   );
-});
-
-test('petstore anchor storage has an independent durable byte bound', async t => {
-  const values = new Map();
-  const anchors = new Map();
-  const makePowers = valuesMap =>
-    harden({
-      async list() {
-        return [...valuesMap.keys()];
-      },
-      async has(name) {
-        return valuesMap.has(name);
-      },
-      async lookup(name) {
-        return valuesMap.get(name);
-      },
-      async storeValue(value, name) {
-        valuesMap.set(name, value);
-      },
-    });
-  const journal = makePetstoreAuditJournal(makePowers(values), {
-    journalId: 'bounded-anchor',
-    sessionId: 'anchor-quota',
-    anchorPowers: makePowers(anchors),
-    maxAnchorBytes: 256,
-    reservedAnchorBytes: 0,
-  });
-  await t.throwsAsync(() => journal.writer.append('too-large-for-anchor'), {
-    message: /anchor store exceeded.*bytes/,
-  });
-  t.is(values.size, 0, 'entry is not exposed unless its anchor is durable');
 });
 
 test('concurrent readers share one recovery of a prepared append', async t => {
@@ -540,7 +464,7 @@ test('concurrent readers share one recovery of a prepared append', async t => {
     });
   const powers = makePowers(values, true);
   const anchorPowers = makePowers(anchors);
-  const journal = makePetstoreAuditJournal(powers, {
+  const journal = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-4',
     anchorPowers,
@@ -555,7 +479,7 @@ test('concurrent readers share one recovery of a prepared append', async t => {
 
   // Two readers arrive at once — an operator health check racing the next
   // append. Both used to take the replay branch and both call appendEntry.
-  const reopened = makePetstoreAuditJournal(powers, {
+  const reopened = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-4',
     anchorPowers,
@@ -570,4 +494,129 @@ test('concurrent readers share one recovery of a prepared append', async t => {
     [0n],
   );
   t.is(entryWrites, 1, 'the prepared entry is replayed exactly once');
+});
+
+const makeMapPowers = valuesMap =>
+  harden({
+    async list() {
+      return [...valuesMap.keys()];
+    },
+    async has(name) {
+      return valuesMap.has(name);
+    },
+    async lookup(name) {
+      return valuesMap.get(name);
+    },
+    async storeValue(value, name) {
+      if (valuesMap.has(name)) throw Error('already exists');
+      valuesMap.set(name, value);
+    },
+    async remove(name) {
+      valuesMap.delete(name);
+    },
+  });
+
+test('a journal has no lifetime ceiling, and the anchor store keeps only the newest head', async t => {
+  const values = new Map();
+  const anchors = new Map();
+  const journal = makeStoredAuditJournal(makeMapPowers(values), {
+    journalId: 'long',
+    sessionId: 'long-session',
+    anchorPowers: makeMapPowers(anchors),
+  });
+  for (let i = 0; i < 300; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await journal.writer.append('tool-result', { result: 'x'.repeat(4096) });
+  }
+  t.is(values.size, 300);
+  t.is(
+    anchors.size,
+    1,
+    'a head that authorized an appended entry is discarded',
+  );
+  // Recovery from the newest head alone, then the chain verifies whole.
+  const revived = makeStoredAuditJournal(makeMapPowers(values), {
+    journalId: 'long',
+    sessionId: 'long-session',
+    anchorPowers: makeMapPowers(anchors),
+  });
+  await revived.writer.append('session-closed');
+  t.true((await revived.reader.verify()).ok);
+  t.is((await revived.reader.entries(300, 1))[0].kind, 'session-closed');
+});
+
+test('a stale head a failed discard left behind is read past, never trusted over the newest', async t => {
+  const values = new Map();
+  const anchors = new Map();
+  const anchorPowers = makeMapPowers(anchors);
+  const journal = makeStoredAuditJournal(makeMapPowers(values), {
+    journalId: 'stale',
+    sessionId: 'stale-session',
+    anchorPowers,
+  });
+  await journal.writer.append('one');
+  const [firstHead] = [...anchors.entries()];
+  await journal.writer.append('two');
+  // Put the discarded head back, as a removal that failed would leave it.
+  anchors.set(firstHead[0], firstHead[1]);
+  t.is(anchors.size, 2);
+  const revived = makeStoredAuditJournal(makeMapPowers(values), {
+    journalId: 'stale',
+    sessionId: 'stale-session',
+    anchorPowers,
+  });
+  await revived.writer.append('three');
+  t.true((await revived.reader.verify()).ok);
+  t.is((await revived.reader.entries()).length, 3);
+});
+
+test('a large payload field is stored by reference, attested by its hash, once per content', async t => {
+  const values = new Map();
+  const anchors = new Map();
+  const journal = makeStoredAuditJournal(makeMapPowers(values), {
+    journalId: 'refs',
+    sessionId: 'refs-session',
+    anchorPowers: makeMapPowers(anchors),
+    inlineBytes: 1024,
+  });
+  const big = 'result '.repeat(1000);
+  await journal.writer.append('tool-result', { small: 'ok', result: big });
+  await journal.writer.append('tool-result', { result: big });
+  const [first, second] = await journal.reader.entries();
+  t.is(first.payload.small, 'ok', 'a small field stays inline');
+  t.like(first.payload.result, { bytes: big.length });
+  t.regex(first.payload.result.ref, /^sha256:[0-9a-f]{64}$/);
+  t.is(first.payload.result.preview.length, 1024 * 4, 'the preview is bounded');
+  t.deepEqual(second.payload.result, first.payload.result);
+  t.is(
+    [...values.keys()].filter(name => name.includes('-content-')).length,
+    1,
+    'the same content is stored once',
+  );
+  t.is(await journal.reader.content(first.payload.result.ref), big);
+  // The chain covers the reference, and the reference covers the content.
+  t.true((await journal.reader.verify()).ok);
+  const name = [...values.keys()].find(key => key.includes('-content-'));
+  values.set(name, `${big}tampered`);
+  await t.throwsAsync(journal.reader.content(first.payload.result.ref), {
+    message: /does not match its reference/,
+  });
+  // A journal with nowhere to put content refuses the field rather than
+  // attesting a reference to nothing.
+  const durable = [];
+  const heads = makeHeadStore();
+  const bare = makeAuditJournal({
+    ...heads,
+    journalId: 'bare',
+    sessionId: 'bare-session',
+    inlineBytes: 1024,
+    readEntries: async () => durable,
+    appendEntry: async entry => {
+      durable.push(entry);
+    },
+  });
+  await t.throwsAsync(bare.writer.append('tool-result', { result: big }), {
+    message: /stores no content/,
+  });
+  t.is(durable.length, 0);
 });

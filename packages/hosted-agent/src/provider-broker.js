@@ -5,22 +5,29 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
+import {
+  INFERENCE_PATHS,
+  forwardableHeaders,
+  splitInferenceTarget,
+} from './provider-paths.js';
 import { makeSecretRotator } from './secret-rotator.js';
 
 /**
  * @typedef {{ method: string, path: string }} Route
- * @typedef {{ origin: string, routes: Route[], models: string[], expiresAt: number,
- * maxRequests: bigint, maxRequestBytes: bigint, maxResponseBytes: bigint,
- * maxTotalBytes: bigint, maxCostMicrounits: bigint,
- * maxCostMicrounitsPerRequest: bigint, credentialHeader?: 'bearer' | 'x-api-key',
+ * @typedef {{ origin: string, routes: Route[], models: string[],
+ * clientAuthorization?: 'reject' | 'strip',
+ * maxConcurrentRequests: number, maxRequestBytes: bigint, maxResponseBytes: bigint,
+ * credentialHeader?: 'bearer' | 'x-api-key',
  * anthropicVersion?: string, anthropicBeta?: string,
  * authMode?: 'api-key' | 'oauth', accountRef?: string }} BrokerPolicy
+ * @typedef {(request: {path: string, data: Readonly<Record<string, unknown>>}) =>
+ *   {path: string, headers?: Readonly<Record<string, string>>}} ProviderRequestAdapter
  * @typedef {{ startedAt: number }} BrokerRefreshIntent
  * @typedef {{ version: 'BrokerOAuthStateV1', accessToken: string,
  * refreshToken?: string, expiresAt: number, accountId: string,
  * pendingRefresh?: BrokerRefreshIntent }} BrokerOAuthState
  * @typedef {{next(): Promise<{done: boolean, value: string}>, return(): void}} ProviderReader
- * @typedef {{status: number, reader: ProviderReader}} ProviderStream
+ * @typedef {{status: number, reader: ProviderReader, closed?: Promise<void>}} ProviderStream
  * @typedef {{ url: string, method: string, headers: Record<string, string>,
  * body: string, redirect: 'error', maxResponseBytes: bigint }} UpstreamRequest
  */
@@ -84,7 +91,7 @@ harden(isUndispatchedRefresh);
  * The document, not a bare bearer string, is what `authMode: 'oauth'` stores:
  * refreshing rotates every field at once, and a state that named a different
  * account after a rotation would silently move a session's billing, so the
- * account travels with the tokens and is checked against the lease's binding.
+ * account travels with the tokens and is checked against the grant's binding.
  *
  * `pendingRefresh` is the write-ahead intent: present, it says this record's
  * refresh token was handed to a token endpoint and nothing recorded the
@@ -152,8 +159,8 @@ harden(assertBrokerOAuthState);
  * excludes what shares this object: two of them over one record each redeem the
  * same refresh token, and a provider that invalidates a refresh token on use
  * reads the second redemption as a replay and revokes the whole grant. It is
- * built here, by whoever composes the deployment, rather than inside a lease or
- * a lease issuer, so that sharing it across every lease and every issuer over
+ * built here, by whoever composes the deployment, rather than inside a grant or
+ * a grant issuer, so that sharing it across every grant and every issuer over
  * that record is a visible act rather than an accident of construction.
  *
  * Ownership cannot be enforced from inside this module — a second daemon over
@@ -188,14 +195,14 @@ harden(assertBrokerOAuthState);
  * - SecretBlob read facet. The generation-carrying read is required: a
  * rotation that cannot name the version it read cannot be made conditional.
  * @param {{ refresh(request: {refreshToken: string, accountId: string}): Promise<unknown> }} powers.refresh
- * - Token exchange on the broker's own outbound authority, never a lease's.
+ * - Token exchange on the broker's own outbound authority, never a grant's.
  * @param {{ replaceBase64(base64: string, options?: {ifGeneration?: bigint}): Promise<unknown> }} powers.rotate
  * - A secret administration facet, attenuated here to replacement alone. It
  * must resolve to the generation it committed, as `SecretAdmin` does: the
  * write-ahead protocol below pins its second write to the version the first
  * produced, and re-reading to learn it would reopen the window that pin closes.
- * @param {string} powers.accountRef - The operator's selected account.
  * @param {() => number} powers.now - Trusted epoch-millisecond clock
+ * @param {string} powers.accountRef - The operator's selected account.
  * @param {number} [powers.refreshSkewMs] - Refresh this long before expiry.
  */
 export const makeBrokerOAuthCredential = ({
@@ -307,7 +314,7 @@ export const makeBrokerOAuthCredential = ({
     const started = (async () => {
       await null;
       // Re-read inside the guard. A caller that lost the race to another
-      // lease, or to an operator's re-grant, is holding a refresh token that
+      // grant, or to an operator's re-grant, is holding a refresh token that
       // is already spent; exchanging it again is the replay this guard
       // exists to prevent. Whatever is in the record now wins.
       const { state, generation, base64 } = await read();
@@ -389,7 +396,7 @@ export const makeBrokerOAuthCredential = ({
         }),
       );
       // A refreshed credential that names another account would move the
-      // session's billing and quota to one the lease was never bound to.
+      // session's billing and quota to one the grant was never bound to.
       next.accountId === accountRef || Fail`Broker account binding changed`;
       // The refreshed credential must not itself be spent. An `expires_in`
       // duration mistaken for an instant, a badly skewed clock, or a token
@@ -461,7 +468,7 @@ export const makeBrokerOAuthCredential = ({
      * The credential to present now, refreshed if the stored one is spent.
      *
      * The read is per call by design: a credential rotated by this broker, by
-     * a concurrent lease, or by an operator is picked up on the next request
+     * a concurrent grant, or by an operator is picked up on the next request
      * with no re-delegation.
      *
      * @param {object} [options]
@@ -486,16 +493,16 @@ harden(makeBrokerOAuthCredential);
  * The trusted transport MUST enforce redirect:'error' before following any
  * redirect and maxResponseBytes while reading, and must not forward ambient
  * cookies or credentials. It alone receives the upstream credential.
- * The operator must supply a conservative upper cost bound for each request;
- * reservations are never refunded, including on failure. This is admission
- * accounting, not a claim about actual provider billing.
+ * Admission bounds simultaneous requests, not lifetime usage or spending.
  * Revocation prevents new dispatch and delivery, but cannot undo a request
  * already dispatched. Production transports must separately support teardown.
+ * A transport with independent termination (such as a deadline) must expose
+ * `closed` so an abandoned reader cannot keep an admission slot forever.
  * Literal token echoes are rejected as defense in depth; the upstream remains
  * trusted not to encode or otherwise disclose its own authorization credential.
  *
  * With `authMode: 'oauth'` the secret holds a `BrokerOAuthStateV1` document
- * instead of a bare credential, and the broker — never the lease — refreshes
+ * instead of a bare credential, and the broker — never the grant — refreshes
  * and rotates it. Refresh travels on `powers.refresh`, a separate outbound
  * authority, because the route allowlist below admits inference paths only and
  * a token endpoint is neither that origin nor those paths.
@@ -504,35 +511,25 @@ harden(makeBrokerOAuthCredential);
  * @param {object} powers
  * @param {{ readBase64(): Promise<string> }} powers.secret - SecretBlob read facet
  * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} powers.transport
- * @param {() => number} powers.now - Trusted epoch-millisecond clock
  * @param {(event: {event: string, requests: bigint}) => void} [powers.audit]
  * @param {ReturnType<typeof makeBrokerOAuthCredential>} [powers.credential]
  * - The shared refreshing credential for this secret record, required by
- * `authMode: 'oauth'`. Shared rather than per lease so that concurrent
+ * `authMode: 'oauth'`. Shared rather than per grant so that concurrent
  * sessions cannot each redeem the same refresh token.
+ * @param {ProviderRequestAdapter} [powers.adaptRequest]
+ * Trusted provider code, never guest data or serialized operator policy.
+ * Runs after route/model/body admission and before reading credentials.
+ * May translate the path within the pinned origin and add non-credential
+ * headers; cannot change the method, body, credential, or response bounds.
  */
-export const makeProviderBrokerLease = (
+export const makeProviderBrokerGrant = (
   policy,
-  { secret, transport, now, audit = () => {}, credential },
+  { secret, transport, audit = () => {}, credential, adaptRequest },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
-  const {
-    origin,
-    expiresAt,
-    maxRequests,
-    maxRequestBytes,
-    maxResponseBytes,
-    maxTotalBytes,
-    maxCostMicrounits,
-    maxCostMicrounitsPerRequest,
-  } = policy;
+  const { origin, maxConcurrentRequests, maxRequestBytes, maxResponseBytes } =
+    policy;
   const authMode = policy.authMode ?? 'api-key';
-  // 'subscription' is deliberately absent. Neither vendor documents a
-  // configuration in which the broker holds an individual subscription
-  // credential and the slice does not: Codex's proxy mode
-  // (`requires_openai_auth`) authenticates with the CLI's own `auth.json`, and
-  // a Claude Code gateway credential replaces the claude.ai login rather than
-  // carrying it. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
   authMode === 'api-key' ||
     authMode === 'oauth' ||
     Fail`Unsupported broker authentication mode`;
@@ -558,9 +555,8 @@ export const makeProviderBrokerLease = (
       accountRef.length > 0 &&
       accountRef.length <= 256) ||
     Fail`Invalid broker account binding`;
-  // Provisioning, not preference: an OAuth lease with no usable refreshing
-  // credential is an API-key lease with a shorter life, and would fail its
-  // first turn rather than at admission. Binding it here also makes its
+  // Require refresh capability at admission so an OAuth session does not fail
+  // its first turn merely because provisioning omitted that capability. Binding it here also makes its
   // presence the mode: everything below asks whether there is an `oauth`
   // record rather than re-reading a mode string.
   //
@@ -572,7 +568,7 @@ export const makeProviderBrokerLease = (
   // so a remote presence to it would not be the guard this mode needs anyway.
   if (authMode === 'oauth') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
-    // The lease's account is the operator's selection; a credential for some
+    // The grant's account is the operator's selection; a credential for some
     // other account is a different session's, not this one's.
     (credential !== undefined &&
       typeof credential.current === 'function' &&
@@ -589,14 +585,19 @@ export const makeProviderBrokerLease = (
     !parsedOrigin.username &&
     !parsedOrigin.password) ||
     Fail`Invalid provider origin`;
+  const clientAuthorization = policy.clientAuthorization ?? 'reject';
+  clientAuthorization === 'reject' ||
+    clientAuthorization === 'strip' ||
+    Fail`Unsupported client authorization mode`;
   const routes = policy.routes.map(({ method, path }) => {
-    // Exact paths only: no normalization, query, fragment, percent escaping,
-    // alternate authority or dot segments can affect dispatch.
+    // Exact targets only: no normalization, fragment, percent escaping,
+    // alternate authority or dot segments can affect dispatch. A query is
+    // admitted, but as part of the exact target — never as a wildcard.
+    const target = splitInferenceTarget(path);
     (method === 'POST' &&
-      ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
-        path,
-      ) &&
-      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+      target !== undefined &&
+      INFERENCE_PATHS.includes(target.pathname) &&
+      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
       Fail`Invalid inference route`;
     return `${method} ${path}`;
   });
@@ -605,27 +606,21 @@ export const makeProviderBrokerLease = (
   (models.length > 0 &&
     models.every(model => typeof model === 'string' && model.length > 0)) ||
     Fail`Models required`;
-  Number.isFinite(expiresAt) || Fail`Invalid expiry`;
-  for (const limit of [
-    maxRequests,
-    maxRequestBytes,
-    maxResponseBytes,
-    maxTotalBytes,
-    maxCostMicrounits,
-    maxCostMicrounitsPerRequest,
-  ]) {
+  // Simultaneous request slots are a deployment allocation, not a usage budget.
+  (Number.isInteger(maxConcurrentRequests) &&
+    maxConcurrentRequests > 0 &&
+    maxConcurrentRequests <= 0xffff_ffff) ||
+    Fail`Invalid provider concurrency limit`;
+  for (const limit of [maxRequestBytes, maxResponseBytes]) {
     (typeof limit === 'bigint' && limit > 0n) || Fail`Positive quota required`;
   }
   /** @type {Set<() => void>} */
   const streams = new Set();
   let revoked = false;
   let requests = 0n;
-  let reservedBytes = 0n;
-  let reservedCostMicrounits = 0n;
+  let activeRequests = 0;
   const checkLive = () => {
-    const time = now();
-    (!revoked && Number.isFinite(time) && time < expiresAt) ||
-      Fail`Broker lease inactive`;
+    !revoked || Fail`Broker grant inactive`;
   };
   /** @param {string} event */
   const record = event => {
@@ -637,31 +632,50 @@ export const makeProviderBrokerLease = (
       revoked = true;
     }
   };
+  // Keep the existing small-body admission envelope, but allow configured
+  // larger prompts up to the private pipe's 8MiB frame ceiling. UTF-8 byte
+  // accounting below remains authoritative (characters are not bytes).
+  const BodyShape = M.string({
+    stringLengthLimit: Math.max(
+      100_000,
+      Number(maxRequestBytes < 8_388_608n ? maxRequestBytes : 8_388_608n),
+    ),
+  });
   const endpoint = makeExo(
-    'ProviderInferenceLease',
-    M.interface('ProviderInferenceLease', {
+    'ProviderInferenceGrant',
+    M.interface('ProviderInferenceGrant', {
+      // `headers` is optional, not merely nullable: a caller that curates no
+      // headers of its own — every in-process caller before the listener
+      // existed — omits the key, and `M.opt` inside the required half would
+      // still demand it be present.
       request: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: M.string(),
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
 
       requestStream: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: M.string(),
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
     }),
     {
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async request(request) {
         return perform(request, false);
       },
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async requestStream(request) {
         return perform(request, true);
       },
@@ -682,7 +696,7 @@ export const makeProviderBrokerLease = (
   };
 
   /**
-   * Everything the upstream could echo back that the lease must not deliver.
+   * Everything the upstream could echo back that the grant must not deliver.
    * The base64 spellings are included because the broker itself is the only
    * place either form exists, so either form appearing downstream is a leak.
    *
@@ -700,7 +714,7 @@ export const makeProviderBrokerLease = (
    * good for the request about to be dispatched.
    *
    * The read is per dispatch by design: a credential rotated by this broker, by
-   * a concurrent lease, or by an operator is picked up on the next request
+   * a concurrent grant, or by an operator is picked up on the next request
    * without re-delegation, and every length derived below is derived from that
    * read rather than cached across it.
    *
@@ -746,13 +760,16 @@ export const makeProviderBrokerLease = (
    * @returns {Promise<ProviderStream & {contentType: string}>}
    */
   /**
-   * @param {{method: string, path: string, body: string}} request
+   * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
    */
-  const perform = async ({ method, path, body }, streaming) => {
+  const perform = async ({ method, path, body, headers }, streaming) => {
+    // Re-screen on this side of the seam: the listener already dropped the
+    // owned headers, and the broker does not take its word for it.
+    const forwarded = forwardableHeaders(headers ?? {});
     checkLive();
     routes.includes(`${method} ${path}`) || Fail`Inference route denied`;
-    let requestBytes = BigInt(new TextEncoder().encode(body).length);
+    const requestBytes = BigInt(new TextEncoder().encode(body).length);
     requestBytes <= maxRequestBytes || Fail`Request byte quota exceeded`;
     let data;
     try {
@@ -771,18 +788,30 @@ export const makeProviderBrokerLease = (
       new TextEncoder().encode(canonicalBody).length,
     );
     canonicalBytes <= maxRequestBytes || Fail`Request byte quota exceeded`;
-    if (canonicalBytes > requestBytes) requestBytes = canonicalBytes;
-    const reservation = requestBytes + maxResponseBytes;
-    (requests < maxRequests &&
-      reservedBytes + reservation <= maxTotalBytes &&
-      reservedCostMicrounits + maxCostMicrounitsPerRequest <=
-        maxCostMicrounits) ||
-      Fail`Broker quota exhausted`;
-    // Reserve synchronously, before retrieving the secret: concurrent calls
-    // cannot each spend the same remaining quota.
+    const adapted = adaptRequest
+      ? adaptRequest(harden({ path, data }))
+      : { path };
+    const upstreamPath = adapted.path;
+    const target = splitInferenceTarget(upstreamPath);
+    (target &&
+      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
+      Fail`Invalid adapted inference target`;
+    const adapterHeaders = forwardableHeaders(adapted.headers ?? {});
+    Object.entries(adapted.headers ?? {}).every(
+      ([name, value]) => adapterHeaders[name] === value,
+    ) || Fail`Invalid adapted inference headers`;
+    activeRequests < maxConcurrentRequests ||
+      Fail`Provider concurrency limit reached`;
+    // Reserve before the secret read; an open stream retains its slot until
+    // upstream EOF, cancellation, or failure. Completed requests consume no slot.
+    activeRequests += 1;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      activeRequests -= 1;
+    };
     requests += 1n;
-    reservedBytes += reservation;
-    reservedCostMicrounits += maxCostMicrounitsPerRequest;
     record('admitted');
     /**
      * Every credential this request has handed the upstream, in every form it
@@ -808,19 +837,28 @@ export const makeProviderBrokerLease = (
         if (!exposed.includes(screen)) exposed.push(screen);
       }
       const upstream = harden({
-        url: `${origin}${path}`,
+        url: `${origin}${upstreamPath}`,
         method,
         headers: {
-          ...(credentialHeader === 'bearer'
-            ? { authorization: `Bearer ${token}` }
-            : { 'x-api-key': token }),
-          ...(anthropicVersion === undefined
+          // The harness describes its own request; the broker authenticates it.
+          // Re-screened here rather than trusted from the listener, so the
+          // owned set is enforced on this side of the seam too. Policy values
+          // fill in only what the harness did not send, and the credential is
+          // applied last and unconditionally.
+          ...forwarded,
+          ...(anthropicVersion === undefined ||
+          forwarded['anthropic-version'] !== undefined
             ? {}
             : { 'anthropic-version': anthropicVersion }),
-          ...(anthropicBeta === undefined
+          ...(anthropicBeta === undefined ||
+          forwarded['anthropic-beta'] !== undefined
             ? {}
             : { 'anthropic-beta': anthropicBeta }),
           'content-type': 'application/json',
+          ...adapterHeaders,
+          ...(credentialHeader === 'bearer'
+            ? { authorization: `Bearer ${token}` }
+            : { 'x-api-key': token }),
         },
         body: canonicalBody,
         redirect: /** @type {const} */ ('error'),
@@ -833,11 +871,20 @@ export const makeProviderBrokerLease = (
         const cancel = () => {
           // Release ownership before the eventual send, including if it fails.
           if (!streams.delete(cancel)) return;
+          finish();
           void E(response.reader)
             .return()
             .catch(() => {});
         };
         streams.add(cancel);
+        if (response.closed !== undefined) {
+          // The transport can terminate while the consumer is not pulling.
+          // Do not discard buffered final output when normal EOF closes it.
+          void response.closed.then(() => {
+            streams.delete(cancel);
+            finish();
+          }, cancel);
+        }
         let held = '';
         let bytes = 0n;
         let reading = false;
@@ -874,6 +921,7 @@ export const makeProviderBrokerLease = (
                   if (chunk.done) {
                     ended = true;
                     streams.delete(cancel);
+                    finish();
                     record('completed');
                     checkLive();
                     const value = held;
@@ -940,8 +988,9 @@ export const makeProviderBrokerLease = (
         Fail`Invalid provider response`;
       record('completed');
       checkLive();
+      finish();
       // No upstream headers (including cookies or authentication challenges)
-      // escape through the lease. Upstream error bodies are never returned.
+      // escape through the grant. Upstream error bodies are never returned.
       return harden({ status: response.status, body: response.body });
     };
     try {
@@ -958,18 +1007,19 @@ export const makeProviderBrokerLease = (
         if (!oauth || !isCredentialRejection(error)) throw error;
         record('credential-rejected');
         // Naming the refused token is what lets the shared credential tell
-        // "replace this one" from "another lease already replaced it": it
+        // "replace this one" from "another grant already replaced it": it
         // exchanges only if the record still holds the token that just failed.
         return await dispatch(await resolveCredential(first.credential));
       }
     } catch (_error) {
+      finish();
       record('failed');
       return Fail`Provider request failed`;
     }
   };
   const admin = makeExo(
-    'ProviderInferenceLeaseAdmin',
-    M.interface('ProviderInferenceLeaseAdmin', {
+    'ProviderInferenceGrantAdmin',
+    M.interface('ProviderInferenceGrantAdmin', {
       revoke: M.call().returns(M.undefined()),
       getStatus: M.call().returns(M.record()),
     }),
@@ -983,9 +1033,7 @@ export const makeProviderBrokerLease = (
         return harden({
           revoked,
           requests,
-          reservedBytes,
-          reservedCostMicrounits,
-          expiresAt,
+          activeRequests,
           authMode,
         });
       },
@@ -993,4 +1041,4 @@ export const makeProviderBrokerLease = (
   );
   return harden({ endpoint, admin });
 };
-harden(makeProviderBrokerLease);
+harden(makeProviderBrokerGrant);

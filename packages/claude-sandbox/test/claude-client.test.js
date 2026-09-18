@@ -179,19 +179,17 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
-test('resumePriorConversation makes the first send use --continue', async t => {
-  const fake = makeFakeSlice([[]]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { resumePriorConversation: true }),
-  );
-  await drain(await client.send('after restart'));
-  t.is(fake.spawned.length, 1);
-  // A session reincarnated after a daemon restart, whose persistent config dir
-  // already held a transcript, resumes it on its very first post-restart turn
-  // rather than forking a fresh, context-free conversation.
-  t.true(fake.spawned[0].argv.includes('--continue'));
-  const status = await client.status();
-  t.true(status.conversationStarted);
+test('an undrained event queue fails explicitly and kills its producer', async t => {
+  t.timeout(5000);
+  const fake = makeFakeSlice([
+    [enc.encode('{"type":"system"}\n'.repeat(1025))],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const reader = await client.send('work');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await t.throwsAsync(drain(reader), { message: /queue capacity exceeded/ });
+  t.true(procKilled.get(fake.spawned[0]));
 });
 
 test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
@@ -329,10 +327,19 @@ test('interrupt() throws when idle and closes-and-kills the in-flight turn', asy
   const first = await replies.next();
   t.is(first.value.type, 'system');
 
-  await client.interrupt();
+  // interrupt() is a barrier: it kills the process and returns only once the
+  // turn has ended. The fake's stdout ends when unblocked, as a killed
+  // process's would.
+  let interrupted = false;
+  const interrupting = client.interrupt().then(() => {
+    interrupted = true;
+  });
+  await null;
   t.true(procKilled.get(fake.spawned[0]));
-
-  unblock(); // let the (now-orphaned) producer task drain and exit
+  t.false(interrupted, 'not over while the producer is still running');
+  unblock();
+  await interrupting;
+  t.true(interrupted);
 });
 
 test('interrupt() with a queued turn kills the in-flight turn, not the queued one', async t => {
@@ -359,12 +366,13 @@ test('interrupt() with a queued turn kills the in-flight turn, not the queued on
   t.is(first.value.type, 'system'); // A is producing
   t.is(fake.spawned.length, 1, 'only the in-flight turn has spawned');
 
-  await client.interrupt();
+  const interrupting = client.interrupt();
+  await null;
   // interrupt targeted the in-flight A (killing its process), not the
   // still-queued B — which would previously have been closed instead.
   t.true(procKilled.get(fake.spawned[0]));
-
   unblock();
+  await interrupting;
 });
 
 test('a stream-error abort folds claude stderr into the reason', async t => {
@@ -539,7 +547,77 @@ test('initialPrompt is skipped when a prior conversation exists', async t => {
   await drain(await client.send('next'));
   t.is(fake.spawned.length, 1);
   t.is(fake.spawned[0].argv[2], 'next');
-  t.true(fake.spawned[0].argv.includes('--continue'));
+});
+
+test('within one incarnation a session resumes what it started, not the records again', async t => {
+  // The other half of the rule. Across incarnations the records decide, and
+  // the test above pins that. Within one, the conversation this incarnation
+  // built is the live one, so a second turn continues it rather than
+  // rewriting the store underneath a model that is holding it -- restoring
+  // twice would fork a second conversation out of the same history.
+  const written = [];
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => true,
+      resolveResumeSessionId: () => 'the-one-this-incarnation-made',
+      restoreTranscript: async records => {
+        written.push(records.length);
+        return 'rebuilt-from-records';
+      },
+    }),
+  );
+  const transcript = [{ kind: 'message', role: 'user', content: 'earlier' }];
+  await drain(await client.send('first', { transcript }));
+  t.deepEqual(written, [1], 'the first turn of the incarnation restores');
+  t.true(fake.spawned[0].argv.includes('rebuilt-from-records'));
+
+  await drain(await client.send('second', { transcript }));
+  t.deepEqual(written, [1], 'the second turn does not restore again');
+  t.true(
+    fake.spawned[1].argv.includes('the-one-this-incarnation-made'),
+    'it resumes the conversation this incarnation created',
+  );
+  t.false(fake.spawned[1].argv.includes('rebuilt-from-records'));
+});
+
+test('a store that outlived the daemon does not decide the conversation', async t => {
+  // The config directory is a host bind, so after a restart the CLI's own
+  // copy is still sitting there and `--continue` would find it. That is the
+  // behaviour this design replaces: a store that survives is not the same
+  // claim as a record the stack owns. With records in hand the stack's copy
+  // is written and resumed by id; with none, there is no conversation to
+  // continue and the turn starts clean rather than adopting whatever the
+  // store happens to hold.
+  const written = [];
+  const make = extra =>
+    makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        detectPriorConversation: () => true,
+        resolveResumeSessionId: () => 'stale-from-the-store',
+        restoreTranscript: async records => {
+          written.push(records.length);
+          return 'rebuilt-from-records';
+        },
+        ...extra,
+      }),
+    );
+  let fake = makeFakeSlice([[]]);
+  await drain(
+    await make({}).send('next', {
+      transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
+    }),
+  );
+  t.deepEqual(written, [1]);
+  t.true(fake.spawned[0].argv.includes('--resume'));
+  t.true(fake.spawned[0].argv.includes('rebuilt-from-records'));
+  t.false(fake.spawned[0].argv.includes('stale-from-the-store'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+
+  fake = makeFakeSlice([[]]);
+  await drain(await make({}).send('next'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.false(fake.spawned[0].argv.includes('--resume'));
 });
 
 test('initialPrompt is fired and drained at construction', async t => {

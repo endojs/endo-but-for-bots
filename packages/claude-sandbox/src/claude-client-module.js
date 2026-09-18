@@ -52,8 +52,8 @@
  *   INITIAL_PROMPT        Optional one-shot prompt fired on creation.
  *
  * This caplet does **not** run with `@agent`. The factory builds a
- * **per-session powers** cap (factory.js, via `evaluate`) that is a total
- * attenuation: it bundles the four caps the client needs **by reference**
+ * **per-session powers** cap through the shared static session-powers module.
+ * It bundles the four caps the client needs **by reference**
  * and exposes only `sandboxFactory()` / `fsMounter()` / `filesystem()` /
  * `credentials()` accessors plus a `provideMount(path, name)` bounded to
  * *this session's* workspace mountpoint. There is **no `lookup`**, so the
@@ -64,30 +64,15 @@
  * @module
  */
 
-import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
-import nodePath from 'node:path';
-
 import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
 
 import { makeClaudeClient } from './claude-client.js';
+import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
+import { makeTranscriptResume } from './claude-transcripts.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-
-/**
- * Map a credential kind to the environment variable Claude Code reads
- * it from inside the slice. See `claude-sandbox-factory.js` for the
- * peer-hosted, short-lived-secret rationale.
- */
-const CREDENTIAL_ENV_VARS = harden({
-  apiKey: 'ANTHROPIC_API_KEY',
-  oauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
-});
-
-/** Claude Code names each conversation transcript `<session-uuid>.jsonl`. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Create a cancellation context kit: an in-process passable context and
@@ -156,7 +141,7 @@ const cancellationPromiseOf = resolvedContext => {
  * @returns {object}
  */
 export const make = (powers, context, contextWrapper = {}) => {
-  // The per-session powers cap (factory.js builds it via `evaluate`): a
+  // The per-session powers cap (the shared static module builds it): a
   // total attenuation that exposes only `sandboxFactory()` / `fsMounter()`
   // / `filesystem()` / `credentials()` accessors (the caps bundled by
   // reference at creation) and a `provideMount(path, name)` bounded to
@@ -215,110 +200,15 @@ export const make = (powers, context, contextWrapper = {}) => {
   // construction would silently fall back to "fresh" on a transient read
   // failure, and could not notice a first turn that was killed before Claude
   // persisted anything (which must not `--continue`).
-  /** @type {(() => string[]) | undefined} */
-  let listTranscripts;
-  /** @type {(() => string | undefined) | undefined} */
-  let resolveResumeSessionId;
-  /** @type {(() => boolean) | undefined} */
-  let detectPriorConversation;
-  if (persistConfig && configHostDir) {
-    const projectsDir = nodePath.join(configHostDir, 'projects');
-    listTranscripts = () => {
-      if (!existsSync(projectsDir)) return [];
-      return readdirSync(projectsDir, { withFileTypes: true })
-        .filter(entry => entry.isDirectory())
-        .flatMap(entry => {
-          const projectDir = nodePath.join(projectsDir, entry.name);
-          return readdirSync(projectDir)
-            .filter(file => file.endsWith('.jsonl'))
-            .map(file => nodePath.join(projectDir, file));
-        });
-    };
-    // The newest non-empty transcript, named for the Claude Code session it
-    // holds. Only a non-empty `*.jsonl` counts: Claude Code creates the per-cwd
-    // project directory (and sibling scratch dirs such as `memory/`) as soon as
-    // it starts, so a merely non-empty `projects/` is true even for a spawn that
-    // died before writing a resumable turn — and resuming that errors out or
-    // silently forks a fresh, context-free conversation.
-    resolveResumeSessionId = () =>
-      /** @type {() => string[]} */ (listTranscripts)()
-        .map(file => ({
-          // Claude Code names each transcript for its session id. Anything
-          // else is not ours to resume by name.
-          id: nodePath.basename(file, '.jsonl'),
-          // lstat, not stat: the config dir is guest-writable, so a planted
-          // symlink or FIFO must read as "not a transcript", never be
-          // followed.
-          stat: lstatSync(file),
-        }))
-        .filter(
-          ({ id, stat }) => stat.isFile() && stat.size > 0 && UUID_RE.test(id),
-        )
-        .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)[0]?.id;
-    // Deliberately broader than the resolver: any non-empty transcript means a
-    // turn already ran, even one this code cannot name. Such a session still
-    // resumes, via the `--continue` fallback, rather than reading as fresh.
-    detectPriorConversation = () =>
-      /** @type {() => string[]} */ (listTranscripts)().some(file => {
-        const stat = lstatSync(file);
-        return stat.isFile() && stat.size > 0;
-      });
-  }
-
-  // Opt-in resume diagnostics. Reads `process.env` rather than the formula env
-  // so it can be turned on for sessions whose env was frozen at provision time
-  // (set ENDO_CLAUDE_DEBUG_RESUME on the daemon and restart). Reports, per
-  // spawn, the transcripts the detector saw and whether the newest external
-  // user entry chained onto earlier turns — the ground truth for "did the model
-  // actually resume its history".
-  /** @type {(() => unknown) | undefined} */
-  let describeTranscripts;
-  if (listTranscripts && process.env.ENDO_CLAUDE_DEBUG_RESUME) {
-    describeTranscripts = () =>
-      /** @type {() => string[]} */ (listTranscripts)()
-        // Regular files only: a FIFO planted in the guest-writable config dir
-        // would otherwise block the worker in the read below.
-        .filter(file => lstatSync(file).isFile())
-        .map(file => {
-          const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-          // A human turn: an external, non-sidechain user entry whose content is
-          // plain text. Tool results are also `user` entries, with array content.
-          const prompts = lines
-            .flatMap(line => {
-              try {
-                return [JSON.parse(line)];
-              } catch {
-                return [];
-              }
-            })
-            .filter(
-              entry =>
-                entry.type === 'user' &&
-                entry.userType === 'external' &&
-                !entry.isSidechain &&
-                typeof entry.message?.content === 'string',
-            );
-          return {
-            file: nodePath.basename(file),
-            entries: lines.length,
-            prompts: prompts.length,
-            // How many turns saw the conversation so far. Anything short of
-            // `prompts - 1` means context was lost mid-session.
-            chained: prompts.filter(entry => entry.parentUuid).length,
-            lastChained: prompts.length
-              ? Boolean(prompts[prompts.length - 1].parentUuid)
-              : null,
-          };
-        });
-  }
-  let resumePriorConversation = false;
-  if (detectPriorConversation) {
-    try {
-      resumePriorConversation = detectPriorConversation();
-    } catch {
-      // Unreadable backing dir (first run, races): treat as a fresh session.
-    }
-  }
+  const resume =
+    persistConfig && configHostDir
+      ? makeTranscriptResume(configHostDir, {
+          debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),
+        })
+      : undefined;
+  const resolveResumeSessionId = resume?.resolveResumeSessionId;
+  const detectPriorConversation = resume?.detectPriorConversation;
+  const describeTranscripts = resume?.describeTranscripts;
 
   // Parse (and validate) the rootfs synchronously so a bad value fails
   // at construction rather than on first use.
@@ -403,7 +293,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       mountHandle = await E(fsMounter).mount(
         fs,
         workspaceMountPoint,
-        harden({ lazyUnmount: true }),
+        harden({}),
       );
       const workspaceCap = await E(sessionPowers).provideMount(
         workspaceMountPoint,
@@ -427,7 +317,7 @@ export const make = (powers, context, contextWrapper = {}) => {
         configMountHandle = await E(fsMounter).mount(
           configFs,
           configMountPoint,
-          harden({ lazyUnmount: true }),
+          harden({}),
         );
         configCap = await E(sessionPowers).provideMount(
           configMountPoint,
@@ -546,7 +436,6 @@ export const make = (powers, context, contextWrapper = {}) => {
       IS_SANDBOX: '1',
     }),
     initialPrompt,
-    resumePriorConversation,
     detectPriorConversation,
     resolveResumeSessionId,
     describeTranscripts,

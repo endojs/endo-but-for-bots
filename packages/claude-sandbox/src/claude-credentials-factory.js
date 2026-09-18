@@ -60,7 +60,8 @@ import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { toCurrentSpecifier } from './current-specifier.js';
+import { toCurrentSpecifier } from '@endo/hosted-agent/current-specifier.js';
+import { CREDENTIAL_KINDS } from './claude-credential-kinds.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 
@@ -117,14 +118,6 @@ const CredentialsInterface = M.interface('ClaudeCredentials', {
   rotate: M.call(M.string()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
-
-/**
- * Credential kinds. `apiKey` is a raw Anthropic API key
- * (`ANTHROPIC_API_KEY`); `oauthToken` is the short-lived OAuth access
- * token Claude Code accepts headlessly (`CLAUDE_CODE_OAUTH_TOKEN`, as
- * minted by `claude setup-token`).
- */
-const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
 
 const FORM_DESCRIPTION = 'Create Claude Credentials';
 
@@ -408,7 +401,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
+           
           console.error('[claude-credentials-factory]', errorMessage);
           try {
             await E(powers).reply(
@@ -426,7 +419,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   };
 
   runFactory().catch(error => {
-    // eslint-disable-next-line no-console
+     
     console.error('[claude-credentials-factory] Factory error:', error);
   });
 

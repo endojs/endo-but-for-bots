@@ -87,13 +87,11 @@ context** (how it tears down).
 
 ### Two create paths — who supplies the caps
 
-The caps a session needs (`Filesystem`, `ClaudeCredentials`) must be endowed
-into the per-session powers **by name**, because `evaluate` endows by name and a
-remote formula id is a valid endowment. The constraint is how a caller's cap
-acquires a host name — and a cap **cannot** be passed as a method argument
-across a daemon boundary (it arrives as a bare CapTP presence with no formula
-id: `No corresponding formula`), so there is no cap-argument entry point. Both
-create paths are therefore mailbox-based and **host-rooted**:
+The factory must first obtain formula-backed dependencies that the host can persist.
+For mailbox imports, adopting the resource establishes its tracked import identity.
+The factory resolves these references once, persists a capability bundle, and constructs
+shared static session powers from that bundle.
+Both mailbox create paths remain host-rooted:
 
 - **A remote peer (or any agent) `send`s a session-request package** to the
   host: a `package` message with a `filesystem` (+ optional `credentials`) edge
@@ -139,10 +137,13 @@ never-used session cancels for free.
   `CLAUDE_CONFIG_DIR`) — separate from `/workspace` so the transcript never
   lands in a new-project git worktree or a `publishWorkspace` static site, and
   crucially _outside_ the container's ephemeral tmpfs so it survives a restart.
-  On reincarnation the client reads that config dir's host backing directory
-  before every spawn; when it holds a transcript the turn resumes it by name
+  Within an incarnation the client reads that config dir's host backing
+  directory before every spawn and names the live conversation
   (`claude --resume <id>`, falling back to `--continue` for a transcript it
-  cannot name) rather than forking a fresh, context-free conversation. (Older
+  cannot name). Across incarnations the stack's transcript records decide: the
+  controller writes the CLI's JSONL from them (`src/claude-transcript-writer.js`)
+  and resumes that, so a store that happened to survive does not outrank the
+  record the stack owns. (Older
   sessions minted before the config mount existed carry no
   `CONFIG_MOUNT_POINT`, keep the tmpfs config dir, and therefore still lose
   history across a restart until re-provisioned.)
@@ -196,7 +197,7 @@ one interface guard: both consume `makeBufferedReader` from
 
 ### How floot does it (three layers)
 
-1. **Buffered reply channel** (`floot/src/buffered-channel.js` → `makeBufferedReader`):
+1. **Buffered reply channel** (`@endo/exo-stream/buffered-channel.js` → `makeBufferedReader`; the hosted path uses the credit-bounded `@endo/hosted-agent/turn-channel.js`):
    a `Far` reader (`next`/`return`/`throw`) fed by an imperative `push`/`writer`,
    buffering so a producer can run ahead of a slow consumer. When the **consumer
    stops pulling** (`return`/`throw`), `finalize()` fires an **`onClose`** hook.
@@ -246,6 +247,13 @@ resolved: `makeBufferedReader` now lives in `@endo/exo-stream` and both floot
 and this package import it (see the §"LLM backend layer" open questions).
 
 ## LLM backend layer — one Session interface over container _or_ API
+
+*Superseded, kept as history (2026-09-18).* The seam that landed is
+`@endo/hosted-agent/src/hosted-backend.js` (`HostedBackendFactoryInterface`),
+implemented by `src/claude-backend-factory.js` beside the Codex and OpenCode
+factories, with the normalized event vocabulary of `src/claude-hosted-events.js`
+(`phase | commentary-delta | text-delta | tool-call | tool-result | usage |
+end | abort`). `makeApiSession` / `makeContainerSession` were never written.
 
 The longer-term goal is a backend-agnostic **Session**: the same capability
 surface whether a session is powered by the **container** (this package — the
@@ -411,6 +419,107 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
     and a `result` event (`is_error:true`), exit 1;
   - `ClaudeClient.send()` parsed those same three events via
     `parseStreamJsonLines`, validating the client path against real output.
+
+### Phase 3 — daemon-owned sessions
+
+The hosted backend path now runs on the daemon session owner, the way
+`@endo/opencode-sandbox` does (see
+`designs/hosted-agent-sandbox-unification.md`):
+
+- `src/claude-broker.js` and `src/claude-broker-service-agent.js` — the
+  Anthropic provider broker over the shared
+  `@endo/hosted-agent/provider-broker-service.js`: one retained operator
+  service (`claude-sandbox/broker-service`) whose only powers dependency is
+  the managed credential's SecretBlob read facet, and whose persisted profile
+  fixes the digest-pinned slice image, the listener image, the model
+  allowlist (the CLI catalog's Anthropic ids), and the credential kind.
+  The policy admits `POST /v1/messages` on `https://api.anthropic.com`,
+  sends the credential upstream as `x-api-key` for an API key or as a Bearer
+  token with the `oauth-2025-04-20` beta for a subscription token
+  (`anthropicBeta` overrides the capability list), and strips whatever
+  credential the CLI insists on sending (`clientAuthorization: 'strip'`).
+- `src/claude-session-plan.js` — the passive record of one logical session
+  (owned or operator-supplied workspace, mount point, private socket
+  directories, native profile, optional mounter settings, model, system
+  prompt) over the shared primitives in `@endo/hosted-agent/session-plan.js`,
+  plus the request's `networkPolicy` (`off` or `public-internet`, attested by
+  the broker) and the broker's `credentialKind`, which selects the variable
+  the CLI reads its placeholder from.
+- `src/claude-native-controller.js` — the record's `client` role: native
+  sandbox scope, then the broker grant (started, its attestation and sandbox
+  evidence checked against the recorded image digest and network policy),
+  persistent config directory from the state provider (bound directly as
+  `CLAUDE_CONFIG_DIR`), the workspace through the session's own 9P mounter,
+  the Endo tool bridge, then `makeClaudeClient` over a slice that joins the
+  broker sidecar's network namespace (`network: 'join'`) with
+  `ANTHROPIC_BASE_URL` at the listener's loopback endpoint and a placeholder
+  under `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; a public-internet
+  grant adds the attested proxy environment and resolver file. The real
+  credential never enters the slice. The controller releases every owner
+  itself after the client has disposed its slice, revoking the grant beside
+  the scope; failed release is retained for retry, and reconstruction after
+  a restart looks up the scope and grant but refuses to invent lost local
+  ownership.
+- `src/claude-backend-module.js` — reads the native sandbox, broker service,
+  state provider, and storage owner formulas by verified entrypoint, takes
+  the slice image and credential kind from the broker's persisted profile,
+  reprovides the daemon owner on `claude-sandbox/session-records`, records
+  one plan per Floot session with those exact dependencies, refuses a changed
+  workspace, image, credential kind, or private layout for an existing
+  record, stops and revises it in place otherwise (network policy, model,
+  and persona may change), and heals the session directories on every
+  start. `src/claude-backend-factory.js` wraps the owner's stop/remove behind
+  the unchanged Floot facets, defaults the network policy to `off`, and
+  advertises `supportedNetworkPolicies`; declared container mounts are
+  refused, as the OpenCode backend refuses them.
+- `src/claude-session-storage-module.js` and `src/claude-state-provider-module.js`
+  — the `storage` role and the state provider over
+  `@endo/hosted-agent/session-storage.js` and `session-state-storage.js`.
+- `setup-host.js` mints `claude-sandbox/native-sandbox` (slot-free null
+  powers) over `ENDO_SANDBOX_RUNTIME_DIR` itself under the host label with a
+  `-native` suffix — the inbox-form factory keeps no runtime directory, only
+  its Podman label — and `claude-sandbox/state-provider` under
+  `ENDO_CLAUDE_STATE_DIR`. `setup-hosted.js` requires both, seeds the managed
+  credential into the daemon's Secrets manager on first setup only (a
+  subscription token or an API key; the kind is inferred from the token
+  prefix or named with `ENDO_CLAUDE_CREDS_KIND`), pins the slice image
+  through Podman, mints the broker service over the secret's delegated read
+  facet with `ENDO_CLAUDE_BROKER_LISTENER_IMAGE`, refuses before any mint
+  what a minted owner would refuse, retains an existing broker with its
+  persisted kind (a run naming the other kind is refused rather than
+  silently re-credentialed), mints the storage owner over the state
+  provider, and mints the backend under a temporary name before rebinding
+  it. The per-session provisioner, its client-formula creation module, and
+  the sidecar credential file are gone from the hosted path;
+  `src/claude-client-module.js` and `src/claude-credentials-module.js` remain
+  for the inbox-form factory.
+- Shared with the other adapters: `@endo/hosted-agent/hosted-setup.js`
+  (verified formula reads, runtime placement, leftover probes, private
+  directories, powers-by-path mints, image pinning),
+  `@endo/hosted-agent/managed-credentials.js` (the Secrets-backed credential
+  caplet), and `@endo/hosted-agent/provider-broker-service.js`.
+
+A Node daemon test (`packages/daemon/test/endo.test.js`, "the Claude backend
+records a session through the daemon owner and destroy reaches its
+storage") mints these services and the backend in `@node` workers over a
+SecretBlob, creates a session, observes activation fail at the broker's
+listener start (no Podman) while the record keeps its plan, its four exact
+dependencies, and its directories, and then removes everything through
+destroy. It is wiring evidence on the development host, not native
+acceptance.
+
+Live Linux/rootless Podman acceptance has run on Tokyo (see
+`../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md` and the restoration acceptances in
+the endo-host repository). Points that were watched there:
+the per-session 9P socket path `<mcpRoot>/<sandboxSessionId>/9p/endo-9p-…sock`
+must stay under the Unix socket path limit, which a deep
+`ENDO_CLAUDE_MCP_DIR` would breach; the broker's model allowlist is the CLI
+catalog, so a CLI build that issues side requests under another model id is
+refused by the listener until the catalog names it; and the listener forwards
+none of the CLI's own headers, so the beta capabilities the CLI pinned in the
+slice image needs, for either credential kind, must be configured with
+`ENDO_CLAUDE_ANTHROPIC_BETA` (the OAuth capability is the default only for
+subscription tokens).
 
 ## Environment gotchas
 
@@ -612,33 +721,19 @@ errors surface as `abort` events, not `send()` rejections.
 ### 8. Least authority for the client worker — FIXED
 
 **Caps as arguments.**
-The per-session `claude-client` formula does not run with `@agent`. The factory
-builds a **per-session powers** cap for each session (via `E(hostAgent).evaluate`,
-`buildSessionPowersSource` in `claude-sandbox-factory.js`) that is a **total
-attenuation**: it closes over the four caps the client needs — resolved once, by
-reference, from the endowed pet names — and `@agent`, and exposes only
+The per-session `claude-client` formula does not run with `@agent`.
+Both creation paths use the shared static `@endo/hosted-agent/session-powers.js` module.
+The host resolves dependencies once and persists the exact capability references with
+`storeValue`; no generated powers source or nested lookup formulas remain.
+Factory, mounter, workspace, credentials, and optional config/MCP references therefore
+retain their original identities across name rebinding and daemon restart.
 
-- `sandboxFactory()` / `fsMounter()` / `filesystem()` / `credentials()` —
-  accessors returning the bundled caps (no name lookup; `credentials()` is a
-  baked `null` when the session has none). Note: the `filesystem` and
-  `credentials` endowments are single host names, so they are pinned to a
-  formula id at `evaluate` time. The infra endowments (`sandbox-factory` /
-  `fs-mounter`) are now **path** endowments (under the factory's
-  `SANDBOX_NAMESPACE` directory), which the daemon resolves with a `lookup`
-  formula against the **live** host directory on each incarnation — so a
-  reincarnated session re-resolves the current infra caps rather than stale
-  ids. This is benign (rebinding `<ns>/sandbox-factory` requires full host
-  authority, above the factory in the TCB) but is a deliberate asymmetry with
-  the eagerly-pinned `filesystem` / `credentials`;
-- `provideMount(path, name)` — bounded to **exactly this session's** workspace
-  mountpoint, so a client cannot `provideMount('/etc', …)` (or any other path)
-  and recover host paths through a slice.
-
-There is **no `lookup`** and nothing else of the host surface, so a client worker
-cannot resolve any host name beyond its own four caps, nor reach `makeUnconfined`
-/ `provideHostPath` / `provideGuest` / `remove` / `store` / `evaluate`. This is
-the "caps as arguments" shape: the client receives its authority as object
-references, not as names it resolves.
+The powers expose selected resource accessors and mount registration restricted to
+this session's exact path/name pairs.
+The host agent stays inside the construction bundle; no host lookup is exposed.
+The shared module can also scope a state provider to one session ID when required by
+an adapter; Claude does not supply one.
+This is a host-side attenuation, not an isolation boundary between guest processes.
 
 The client module's call sites changed from `E(powers).lookup(name)` to the
 accessors; the cap-name env vars (`FILESYSTEM_NAME`, `SANDBOX_FACTORY_NAME`,
@@ -649,10 +744,10 @@ not `env`.
 **Host-only** (the `EndoGuest` interface has `evaluate` / `lookup` / `storeValue`
 but **not** `makeUnconfined` / `provideMount`) and resolves `powersName` against
 the **host** petstore, so the per-session powers must be named to be used. The
-factory therefore **unnames it immediately after `makeUnconfined`**: the
+factory therefore drops the temporary bundle and powers names after client construction: the
 `make-unconfined` formula declares `['powers', …]` as a dependency
 (`daemon.js`), which `onFormulaAdded` turns into a group **reachability** edge
-client→powers (`graph.js`). So once the client references it, dropping the pet
+client→powers→bundle→dependencies (`graph.js`). So once the client references it, dropping the pet
 name leaves the powers rooted **only** by that edge — it stays alive for exactly
 the client's lifetime and is collected **with** the client. No per-session
 host-petstore residue. `test/live-daemon.test.js` proves this end to end: after a
@@ -684,6 +779,14 @@ cap-arguments. The infra caps (`sandbox-factory` / `fs-mounter`) remain
 host-named by construction (they are the host's own).
 
 ### 9. Credential exposure through the sandbox environment
+
+*Scope (2026-09-18): this section describes the legacy inbox-form factory path
+(`factory.js`, `src/claude-client-module.js`), which materialises a credential
+into the slice environment. The hosted backend Floot actually routes sessions
+to does not: `src/claude-native-controller.js` injects a placeholder and the
+broker holds the credential (see § Phase 3 above, "The real credential never
+enters the slice"), and its egress is `broker-only` under the shared attested
+policy rather than the `none`/`private` profiles below.*
 
 Where the secret goes, and what can read it.
 

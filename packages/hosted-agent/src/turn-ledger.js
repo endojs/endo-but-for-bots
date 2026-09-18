@@ -217,12 +217,22 @@ export const makeTurnLedger = ({
      * twice after a crash must not be told it did something wrong — but a
      * checkpoint that is not the one awaiting acknowledgement is refused,
      * because clearing the marker for it would strand a real turn.
+     * Repeating the recorded base checkpoint is also a no-op: a retrying
+     * consumer still holds that durable checkpoint while the newer failed or
+     * unacknowledged turn must remain available for reconciliation.
      *
      * @param {string} checkpoint
      */
     async acknowledge(checkpoint) {
       await null;
       if (!record) {
+        await audit('turn-commit-already-acknowledged', { checkpoint });
+        return;
+      }
+      if (
+        typeof checkpoint === 'string' &&
+        record.baseCheckpoint === checkpoint
+      ) {
         await audit('turn-commit-already-acknowledged', { checkpoint });
         return;
       }

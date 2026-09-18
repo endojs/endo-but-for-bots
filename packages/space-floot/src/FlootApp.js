@@ -8,6 +8,7 @@ import { SessionSidebar } from './SessionSidebar.js';
 import { MessageList } from './MessageList.js';
 import { ComposeBar } from './ComposeBar.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { RecoveryPanel } from './RecoveryPanel.js';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootController, FlootPreset, FlootModel, FlootSafeEvent } from './types.js' */
@@ -53,6 +54,11 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   // Pre-select the factory's default model (falling back to the first listed),
   // so picking a preset alone still creates a session with a sensible model.
   const preferred = models.find(m => m.default) || models[0];
+  const [backend, setBackend] = useState(preferred?.backendId || 'provider');
+  const backends = [...new Set(models.map(m => m.backendId || 'provider'))];
+  const backendModels = models.filter(
+    m => (m.backendId || 'provider') === backend,
+  );
   const [model, setModel] = useState(preferred ? preferred.id : '');
   const [reasoningEffort, setReasoningEffort] = useState(
     preferred?.defaultReasoningEffort || preferred?.reasoningEfforts?.[0] || '',
@@ -74,11 +80,48 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
         ? h(
             'label',
             { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Backend'),
+            h(
+              'select',
+              {
+                class: 'floot-model-select',
+                'aria-label': 'Backend',
+                value: backend,
+                onChange: (/** @type {FlootSafeEvent} */ e) => {
+                  const candidates = models.filter(
+                    m => (m.backendId || 'provider') === e.target.value,
+                  );
+                  const next = candidates.find(m => m.default) || candidates[0];
+                  setBackend(e.target.value);
+                  setModel(next?.id || '');
+                  setReasoningEffort(
+                    next?.defaultReasoningEffort ||
+                      next?.reasoningEfforts?.[0] ||
+                      '',
+                  );
+                },
+              },
+              backends.map(id =>
+                h(
+                  'option',
+                  { key: id, value: id },
+                  models.find(m => (m.backendId || 'provider') === id)
+                    ?.backendTitle || (id === 'provider' ? 'Fae' : id),
+                ),
+              ),
+            ),
+          )
+        : null,
+      models.length
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
             h('span', { class: 'floot-modal-label' }, 'Model'),
             h(
               'select',
               {
                 class: 'floot-model-select',
+                'aria-label': 'Model',
                 value: model,
                 onChange: (/** @type {FlootSafeEvent} */ e) => {
                   const next = models.find(
@@ -92,7 +135,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   );
                 },
               },
-              models.map(m =>
+              backendModels.map(m =>
                 h(
                   'option',
                   { key: m.id, value: m.id },
@@ -157,9 +200,13 @@ export const FlootApp = ({ controller }) => {
   // tool calls and results) as JSON. Local to this mount — a pure view toggle
   // over the same snapshot, so it needs no controller/host plumbing.
   const [debug, setDebug] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
 
   const { sessions, activeSessionId, presets, models, usage, status } = state;
   const active = sessions.find(s => s.id === activeSessionId);
+  const needsRecovery = state.recovery?.turns.some(
+    turn => turn.state === 'outcome-unknown' && !turn.resolution,
+  );
 
   const onNew = () => {
     // Skip the modal only when there is nothing to choose — a single preset and
@@ -200,6 +247,56 @@ export const FlootApp = ({ controller }) => {
       ? `↑${formatTokens(usage.inputTokens)} ↓${formatTokens(usage.outputTokens)}`
       : '';
 
+  // The journal and a pending network request are labels, not glyphs, so they
+  // render as chips beside the icon buttons. A badge carries the part that
+  // needs the operator (an unknown outcome, an approval to decide) and
+  // collapses to a dot where the header is too narrow for the words.
+  const journalButton = state.recovery
+    ? h(
+        'button',
+        {
+          type: 'button',
+          class: `floot-header-btn chip${recoveryOpen ? ' on' : ''}${
+            needsRecovery ? ' attention' : ''
+          }`,
+          'aria-label': needsRecovery
+            ? 'Turn journal and recovery: recovery needed'
+            : 'Turn journal and recovery',
+          'aria-pressed': recoveryOpen ? 'true' : 'false',
+          title: needsRecovery
+            ? 'A turn has an unknown outcome; inspect the journal before repeating its effects'
+            : 'Turn journal and recovery',
+          onClick: () => {
+            setRecoveryOpen(!recoveryOpen);
+            controller.refreshRecovery?.();
+          },
+        },
+        'Journal',
+        needsRecovery
+          ? h('span', { class: 'floot-header-badge' }, 'recovery needed')
+          : null,
+      )
+    : null;
+  const networkButton = state.network?.request
+    ? h(
+        'button',
+        {
+          type: 'button',
+          class: 'floot-header-btn chip attention',
+          'aria-label': 'Network approval requested',
+          title:
+            'The agent asked for sandbox network access; decide in settings',
+          onClick: () => {
+            setRecoveryOpen(false);
+            if (!state.settingsOpen) controller.toggleSettings();
+            controller.refreshNetworkPolicy?.();
+          },
+        },
+        'Network',
+        h('span', { class: 'floot-header-badge' }, 'approval requested'),
+      )
+    : null;
+
   const header = h(
     'div',
     { class: 'floot-header' },
@@ -239,6 +336,8 @@ export const FlootApp = ({ controller }) => {
           },
           active ? active.title : 'Floot',
         ),
+    networkButton,
+    journalButton,
     h(
       'button',
       {
@@ -257,7 +356,10 @@ export const FlootApp = ({ controller }) => {
         type: 'button',
         class: `floot-header-btn${state.settingsOpen ? ' on' : ''}`,
         'aria-label': 'Settings & transcription',
-        onClick: () => controller.toggleSettings(),
+        onClick: () => {
+          setRecoveryOpen(false);
+          controller.toggleSettings();
+        },
       },
       '⚙',
     ),
@@ -288,9 +390,15 @@ export const FlootApp = ({ controller }) => {
       'div',
       { class: 'floot-main' },
       header,
-      state.settingsOpen
-        ? h(SettingsPanel, { state, controller })
-        : h(MessageList, { state, controller, debug }),
+      recoveryOpen && state.recovery
+        ? h(RecoveryPanel, {
+            key: activeSessionId || '',
+            recovery: state.recovery,
+            controller,
+          })
+        : state.settingsOpen
+          ? h(SettingsPanel, { state, controller })
+          : h(MessageList, { state, controller, debug }),
       statusBar,
       h(ComposeBar, { state, controller }),
     ),

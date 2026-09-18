@@ -7,9 +7,10 @@
  * Detect the provider kind from a base URL.
  *
  * @param {string} baseURL
- * @returns {'anthropic' | 'gemini' | 'openai-compatible' | 'ollama'}
+ * @returns {'anthropic' | 'gemini' | 'openrouter' | 'openai-compatible' | 'ollama'}
  */
 export const detectProviderKind = baseURL => {
+  if (/^https:\/\/openrouter\.ai(?:\/|$)/.test(baseURL)) return 'openrouter';
   if (baseURL.includes('anthropic.com')) {
     return 'anthropic';
   }
@@ -28,6 +29,7 @@ harden(detectProviderKind);
 
 /** @type {Record<string, string>} */
 const defaultModels = {
+  openrouter: '', // Require an operator-selected, organization-qualified model.
   anthropic: 'claude-sonnet-4-6-20250514',
   gemini: 'gemini-2.5-pro',
   'openai-compatible': 'qwen3',
@@ -45,7 +47,7 @@ harden(defaultModels);
  */
 export const getDefaultModelForHost = baseURL => {
   const kind = detectProviderKind(baseURL);
-  return defaultModels[kind] || 'qwen3.6';
+  return defaultModels[kind] ?? 'qwen3.6';
 };
 harden(getDefaultModelForHost);
 

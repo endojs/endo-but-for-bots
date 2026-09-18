@@ -18,6 +18,7 @@
  * @property {string | null} [content]
  * @property {ChatToolCall[]} [tool_calls]
  * @property {string} [tool_call_id]
+ * @property {object[]} [reasoning_details]
  */
 
 /** @import { ChatCompletionMessageParam } from 'openai/resources/chat/completions' */
@@ -61,6 +62,9 @@ export const toOpenAICompatibleMessages = messages =>
           role: 'assistant',
           content: message.content || null,
           tool_calls: toolCalls,
+          ...(message.reasoning_details
+            ? { reasoning_details: message.reasoning_details }
+            : {}),
         };
       }
       return { role: 'assistant', content: message.content || '' };

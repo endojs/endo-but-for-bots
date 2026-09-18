@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 // eslint-disable-next-line import/no-relative-packages
 import { makePodmanDriver } from '../../sandbox/src/drivers/podman.js';
 
-import { makeBrokerAppServerArgv } from '../src/broker-launch.js';
+import { makeBrokerAppServerArgv } from '../src/app-server-transport.js';
 import { makeCodexRuntimeVerifier } from '../src/runtime-verifier.js';
 
 const execute = promisify(execFile);
@@ -151,6 +151,7 @@ try {
           destination,
           sizeBytes: size * mib,
         })),
+        bindRoots: [],
         attestationArgv: ['/bin/sleep', '600'],
       },
     }),
@@ -187,11 +188,14 @@ try {
       launchArgv: makeBrokerAppServerArgv('http://127.0.0.1:12345'),
       launchEnvironment: env,
       sessionId: identity,
-      leaseId: identity,
+      grantId: identity,
       imageDigest,
       networkNamespaceId: (await E(slice).policy()).networkNamespaceId,
     }),
   );
+  if (evidence.grantId !== identity) {
+    throw Error('Runtime evidence omitted its provider grant identity');
+  }
   acceptedEvidence = evidence;
 } catch (error) {
   console.error('LIVE RUNTIME REFUSED', diagnostic);

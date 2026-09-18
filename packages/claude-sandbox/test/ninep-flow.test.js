@@ -197,11 +197,7 @@ test.serial(
     );
     tmpdirs.push(mountPoint);
 
-    const handle = await E(mounter).mount(
-      fs,
-      mountPoint,
-      harden({ lazyUnmount: true }),
-    );
+    const handle = await E(mounter).mount(fs, mountPoint, harden({}));
     t.teardown(() => E(handle).unmount());
 
     // The real verdict: a read of the mountpoint path round-trips through
@@ -259,11 +255,7 @@ test.serial(
       nodePath.join(nodeOs.tmpdir(), 'ninep-flow-mnt-'),
     );
     tmpdirs.push(mountPoint);
-    const handle = await E(mounter).mount(
-      fs,
-      mountPoint,
-      harden({ lazyUnmount: true }),
-    );
+    const handle = await E(mounter).mount(fs, mountPoint, harden({}));
     t.teardown(() => E(handle).unmount());
 
     // 2. Project the 9P mountpoint into a podman slice. The stub scratch

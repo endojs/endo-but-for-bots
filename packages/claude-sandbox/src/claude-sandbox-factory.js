@@ -32,8 +32,8 @@
  *
  * The factory is unconfined and trusted: it holds full host authority
  * via `host-agent` (the `@agent` cap). The credential secret never
- * passes through the factory — only the credential's pet name does, in
- * the client formula's `env`. Treat its source as part of the trusted
+ * passes through the factory — only its capability is retained in the
+ * persisted powers bundle. Treat the factory source as part of the trusted
  * compute base.
  *
  * @module
@@ -49,75 +49,16 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 
+import { toCurrentSpecifier } from '@endo/hosted-agent/current-specifier.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
-import { toCurrentSpecifier } from './current-specifier.js';
 
 const clientModuleSpecifier = toCurrentSpecifier(
   new URL('./claude-client-module.js', import.meta.url).href,
 );
 
-/**
- * Source for a **per-session powers** cap, built by the factory via
- * `E(hostAgent).evaluate(...)`. It is a total attenuation of the host: it
- * closes over the four caps the client needs (resolved once, by reference,
- * from the endowed pet names) and `@agent`, and exposes **only** four
- * accessors plus a `provideMount` bounded to *this session's* workspace
- * mountpoint. There is no `lookup`, so the client cannot reach any host
- * name beyond its own caps.
- *
- * Endowed in the eval compartment (see `packages/daemon/src/worker.js`):
- * `makeExo`, `M`, `E`, plus `agent` / `sandboxFactory` / `fsMounter` /
- * `filesystem` / `credentials` (the last omitted when the session has no
- * credential — the accessor is then a baked `null`).
- *
- * @param {string} mountPoint - the session's host 9P mountpoint; the only
- *   path `provideMount` will accept.
- * @param {string} mountName - the session's workspace Mount pet name; the only
- *   name `provideMount` will register (and the one `removeMount` reclaims).
- * @param {boolean} hasCredentials
- * @returns {string}
- */
-const buildSessionPowersSource = (
-  mountPoint,
-  mountName,
-  hasCredentials,
-) => `makeExo(
-  'ClaudeSessionPowers',
-  M.interface('ClaudeSessionPowers', {
-    sandboxFactory: M.call().returns(M.any()),
-    fsMounter: M.call().returns(M.any()),
-    filesystem: M.call().returns(M.any()),
-    credentials: M.call().returns(M.any()),
-    provideMount: M.call(M.string(), M.string()).returns(M.promise()),
-    removeMount: M.call().returns(M.promise()),
-    help: M.call().returns(M.string()),
-  }),
-  {
-    sandboxFactory: () => sandboxFactory,
-    fsMounter: () => fsMounter,
-    filesystem: () => filesystem,
-    credentials: () => ${hasCredentials ? 'credentials' : 'null'},
-    provideMount: (path, name) => {
-      // Bound to *exactly* this session's mountpoint AND its workspace Mount
-      // pet name. Without the name bound, this accessor would be a
-      // host-namespace write gadget (provideMount registers 'name' at the
-      // host root), defeating the "no other host reach" attenuation.
-      if (path !== ${JSON.stringify(mountPoint)}) {
-        throw Error('claude-sandbox session powers: provideMount restricted to this session workspace mountpoint');
-      }
-      if (name !== ${JSON.stringify(mountName)}) {
-        throw Error('claude-sandbox session powers: provideMount restricted to this session workspace Mount name');
-      }
-      return E(agent).provideMount(path, name);
-    },
-    // Scoped teardown: remove *only* this session's workspace Mount pet name
-    // (which provideMount registered at the host root) so it does not leak a
-    // live Mount formula after the client is torn down.
-    removeMount: () => E(agent).remove(${JSON.stringify(mountName)}),
-    help: () =>
-      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials accessors + provideMount/removeMount bounded to this session workspace. No lookup.',
-  },
-)`;
+const sessionPowersModuleSpecifier = toCurrentSpecifier(
+  new URL('../../hosted-agent/src/session-powers.js', import.meta.url).href,
+);
 
 /**
  * Subset of the inbox message shape this caplet reads. The `@host`
@@ -310,17 +251,17 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
   /**
    * Core: formulate the per-session powers cap + `claude-client` from caps
-   * that already carry a host **pet name** (or path). The powers `evaluate`
-   * endows its caps **by name**, so the caller must have given each cap a host
-   * name first — an existing operator pet name (the form path) or an `adopt`ed
-   * name (a remote peer's caps; the mailbox session-request path). A bare CapTP
+   * that already carry a host **pet name** (or path). The persisted bundle
+   * retains each resolved capability by identity, so the caller must have
+   * established its local formula identity first — an existing operator pet
+   * name (the form path) or an `adopt`ed name (a remote peer's caps; the mailbox session-request path). A bare CapTP
    * presence has no formula id and cannot be endowed, which is why a cap is
    * never wired in directly and there is no cap-argument entry point.
    *
    * `removeNames` are the *temporary* endowment names the caller minted (the
    * adopt path's `*-fscap`/`*-credcap`); the core removes them (with
-   * `powersName`) after `makeUnconfined`. Each stays reachable for the client's
-   * lifetime via the powers→endowment and client→powers dependency edges, so
+   * `powersName` and its input bundle) after `makeUnconfined`. Each stays
+   * reachable via client→powers→bundle→dependency formula edges, so
    * dropping the names leaves no host-petstore residue. (An adopted cap is
    * *additionally* pinned by the host's `thisDiesIfThatDies` import edge, which
    * is scoped to the **host's** lifetime, not the client's — a superset, so it
@@ -362,7 +303,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
     // Best-effort cleanup of every temporary name this formulation touches
     // (the caller's adopt names plus the per-session powers) so a
-    // failure at *any* step — validation, evaluate, makeUnconfined — strands
+    // failure at *any* step — validation, storeValue, makeUnconfined — strands
     // nothing on the host. Names not (yet) present are ignored.
     /** @type {Array<string | string[]>} */
     let toCleanup = [...removeNames];
@@ -385,17 +326,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       );
       const workspacePetName = `claude-${sessionId}-workspace`;
 
-      // Least authority: the client runs as a **per-session powers** cap that
-      // bundles its four caps by reference and a `provideMount` bounded to this
-      // session's mountpoint — no `lookup`, no other host reach. `evaluate`
-      // endows them **by name**: the infra caps (`@agent`, `sandbox-factory`,
-      // `fs-mounter`) are the host's own (under the factory's directory), and
-      // the `filesystem` / `credentials` names are an existing operator name
-      // (the form path) or an `adopt`ed name (the peer's package). The powers
-      // name is removed right after `makeUnconfined`; it stays reachable
-      // for the client's lifetime via the make-unconfined→powers edge.
+      // Resolve the adopted/operator names once and retain exact dependency
+      // identities in a persisted bundle for the shared static powers module.
+      // The client receives only its bounded accessors, not host lookup.
       const powersName = `claude-${sessionId}-powers`;
-      toCleanup = [powersName, ...removeNames];
+      const inputName = `${powersName}-input`;
+      toCleanup = [powersName, inputName, ...removeNames];
       const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
       const petNames = [
         '@agent',
@@ -407,16 +343,20 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         codeNames.push('credentials');
         petNames.push(credentialsName);
       }
-      await E(hostAgent).evaluate(
-        '@main',
-        buildSessionPowersSource(
-          hostMountPoint,
-          workspacePetName,
-          Boolean(credentialsName),
+      const dependencies = await Promise.all(
+        petNames.map(petName => E(hostAgent).lookup(petName)),
+      );
+      const bundle = harden({
+        ...Object.fromEntries(
+          codeNames.map((key, index) => [key, dependencies[index]]),
         ),
-        harden(codeNames),
-        harden(petNames),
-        powersName,
+        mounts: [{ mountPoint: hostMountPoint, mountName: workspacePetName }],
+      });
+      await E(hostAgent).storeValue(bundle, inputName);
+      await E(hostAgent).makeUnconfined(
+        '@main',
+        sessionPowersModuleSpecifier,
+        harden({ powersName: inputName, resultName: powersName }),
       );
 
       /** @type {Record<string, any>} */
@@ -446,8 +386,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       );
 
       // Unname the per-session powers and any temporary endowment names. Each
-      // formula's dependency edge (make-unconfined→powers, powers→endowment)
-      // keeps it reachable for exactly the client's lifetime, so dropping the
+      // formula chain (client→powers→bundle→dependency) retains it for the
+      // client's lifetime, so dropping the
       // names leaves no host-petstore residue. This runs *after* the client is
       // created and stored, so cleanup is strictly best-effort: a failed
       // `remove` must not turn a completed session into a reported failure
@@ -640,7 +580,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
+
           console.error(
             '[claude-sandbox-factory] session-request:',
             errorMessage,
@@ -714,9 +654,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           // Operator/form path: the submitter *is* the host operator, so the
           // form's `filesystem` / `credentials` are existing **host pet names**
           // (resolving them with host authority is legitimate — not a confused
-          // deputy). Endow those names directly into the per-session powers
-          // (no `storeValue`, no temp names — they are durable operator names,
-          // so `removeNames` is empty). Store the client under the chosen pet
+          // deputy). Resolve those names into the persisted powers bundle.
+          // The operator names are durable, so `removeNames` is empty.
+          // Store the client under the chosen pet
           // name, a host-side GC root.
           const hostAgent = await getHostAgent();
           if (!(await E(hostAgent).has(submission.filesystem))) {
@@ -764,7 +704,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
+
           console.error('[claude-sandbox-factory]', errorMessage);
           try {
             await E(powers).reply(
@@ -793,12 +733,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   };
 
   runFactory().catch(error => {
-    // eslint-disable-next-line no-console
     console.error('[claude-sandbox-factory] Factory error:', error);
   });
 
   runSessionRequestLoop().catch(error => {
-    // eslint-disable-next-line no-console
     console.error(
       '[claude-sandbox-factory] session-request loop error:',
       error,

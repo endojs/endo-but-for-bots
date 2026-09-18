@@ -1,7 +1,13 @@
 // @ts-check
-import process from 'node:process';
+import '@endo/init';
+
 import { hostname } from 'node:os';
+import process from 'node:process';
+
 import { startProviderListenerWorker } from './provider-worker.js';
+
+import { makePublicDnsListener } from './public-dns-listener.js';
+import { makePublicEgressListener } from './public-egress-listener.js';
 
 const expected = harden({
   PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -29,7 +35,30 @@ if (
   throw Error('Provider worker environment rejected');
 }
 // stdout belongs exclusively to CapTP. Only fixed failure text reaches stderr.
-startProviderListenerWorker({ input: process.stdin, output: process.stdout })
+startProviderListenerWorker({
+  input: process.stdin,
+  output: process.stdout,
+  async makeNetworkListeners({ endpoint }) {
+    const dns = await makePublicDnsListener({ endpoint });
+    let proxy;
+    try {
+      proxy = await makePublicEgressListener({ endpoint, host: '127.0.0.1' });
+    } catch (error) {
+      await dns.dispose();
+      throw error;
+    }
+    return harden({
+      evidence: {
+        policy: 'public-internet',
+        proxyUrl: proxy.url,
+        dnsHost: dns.host,
+      },
+      async dispose() {
+        await Promise.all([proxy.dispose(), dns.dispose()]);
+      },
+    });
+  },
+})
   .then(({ closed }) => closed)
   .catch(() => {
     process.stderr.write('Provider listener worker failed\n');

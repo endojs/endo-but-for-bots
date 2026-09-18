@@ -18,7 +18,51 @@ const options = harden({
 });
 
 test.serial(
-  'HTTP listener forwards incremental chunks and strips caller headers',
+  'HTTP admission diagnostics expose fixed checks but never request data',
+  async t => {
+    t.timeout(5000);
+    const diagnostics = [];
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('must not dispatch', {
+        requestStream() {
+          t.fail('must not dispatch');
+        },
+      }),
+      onDiagnostic: diagnostic => {
+        diagnostics.push(diagnostic);
+        throw Error('observer-canary-secret');
+      },
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers: { ...headers, 'content-encoding': 'encoding-canary-secret' },
+      body: 'body-canary-secret',
+    });
+    t.is(response.statusCode, 502);
+    t.is(await readHttpText(response), 'Inference request failed');
+    t.deepEqual(diagnostics, [
+      {
+        stage: 'headers',
+        checks: {
+          method: true,
+          path: true,
+          host: true,
+          origin: true,
+          cookie: true,
+          authorization: true,
+          encoding: false,
+          contentType: true,
+        },
+      },
+    ]);
+    t.false(JSON.stringify(diagnostics).includes('canary'));
+  },
+);
+
+test.serial(
+  'HTTP listener forwards incremental chunks and the caller\u2019s own headers',
   async t => {
     t.timeout(5000);
     /** @type {() => void} */
@@ -31,6 +75,8 @@ test.serial(
     });
     let calls = 0;
     let returned = false;
+    /** @type {any} */
+    let seen;
     const reader = Far('reader', {
       async next() {
         calls += 1;
@@ -48,7 +94,7 @@ test.serial(
       ...options,
       endpoint: Far('endpoint', {
         requestStream(request) {
-          t.deepEqual(request, { method: 'POST', path: '/v1/responses', body });
+          seen = request;
           return harden({
             status: 200,
             contentType: 'text/event-stream',
@@ -60,7 +106,10 @@ test.serial(
     t.teardown(() => listener.dispose());
     const response = await requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
-      headers: { ...headers, 'x-secret': 'not-forwarded' },
+      headers: {
+        ...headers,
+        'anthropic-beta': 'context-management-2026-01-01',
+      },
       body,
     });
     t.is(response.statusCode, 200);
@@ -71,6 +120,25 @@ test.serial(
     finish();
     t.true((await stream.next()).done);
     t.true(returned);
+    // The harness describes its own request, including a capability this
+    // listener has never heard of. What it cannot do is authenticate that
+    // request: a client credential is refused outright before admission (see
+    // the credentials case below), and the broker-owned names the transport
+    // adds — `host` and `content-length` — are dropped here and re-supplied
+    // by the broker against the pinned authority and the body it actually
+    // read.
+    t.is(seen.method, 'POST');
+    t.is(seen.path, '/v1/responses');
+    t.is(seen.body, body);
+    t.is(seen.headers['content-type'], 'application/json');
+    t.is(
+      seen.headers['anthropic-beta'],
+      'context-management-2026-01-01',
+      'a capability the listener has never heard of still reaches the broker',
+    );
+    for (const owned of ['authorization', 'host', 'content-length']) {
+      t.false(owned in seen.headers, `${owned} is the broker's`);
+    }
   },
 );
 
@@ -126,6 +194,115 @@ test.serial(
     });
     t.is(rejectedHost, 502);
     t.is(calls, 0);
+  },
+);
+
+test.serial(
+  'HTTP listener refuses invalid path allowlists and authorization modes',
+  async t => {
+    const endpoint = Far('endpoint', {
+      requestStream() {
+        t.fail('must not dispatch');
+      },
+    });
+    await t.throwsAsync(
+      () =>
+        makeProviderHttpListener({ ...options, endpoint, allowedPaths: [] }),
+      { message: /Invalid inference paths/ },
+    );
+    // A bounded query is now part of an exact target, because real routes
+    // carry one: Anthropic's subscription route is `/v1/messages?beta=true`.
+    // Admission is still an exact comparison against the whole request target,
+    // so this widens what an operator may ALLOWLIST, never what a slice may
+    // reach: a request whose target is not listed is refused either way.
+    // Unlike every other case here, this one SUCCEEDS, so it binds a real
+    // server on a real port. Await it for the handle rather than asserting it
+    // does not throw: an undisposed listener keeps the ava worker alive after
+    // the tests pass, which reads as "Failed to exit", not as a failure.
+    const accepted = await makeProviderHttpListener({
+      ...options,
+      endpoint,
+      allowedPaths: ['/v1/responses?admin=true'],
+    });
+    t.teardown(() => accepted.dispose());
+    t.regex(accepted.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+    // What stays refused is a target that is not a single exact one: a
+    // fragment, a repeated `?`, or a query outside the admitted shape.
+    for (const badPath of [
+      '/v1/responses#admin',
+      '/v1/responses?a=b?c=d',
+      '/v1/responses?',
+      '/v1/responses?admin=%2e%2e',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        () =>
+          makeProviderHttpListener({
+            ...options,
+            endpoint,
+            allowedPaths: [badPath],
+          }),
+        { message: /Invalid inference path/ },
+        badPath,
+      );
+    }
+    await t.throwsAsync(
+      () =>
+        makeProviderHttpListener({
+          ...options,
+          endpoint,
+          clientAuthorization: /** @type {any} */ ('forward'),
+        }),
+      { message: /Invalid client authorization mode/ },
+    );
+  },
+);
+
+test.serial(
+  'strip mode admits a placeholder client credential on the configured path only',
+  async t => {
+    t.timeout(5000);
+    const paths = [];
+    const listener = await makeProviderHttpListener({
+      ...options,
+      clientAuthorization: 'strip',
+      allowedPaths: ['/api/v1/chat/completions'],
+      endpoint: Far('endpoint', {
+        requestStream(request) {
+          paths.push(request.path);
+          return harden({
+            status: 200,
+            contentType: 'application/json',
+            reader: Far('reader', {
+              async next() {
+                return harden({ done: true });
+              },
+            }),
+          });
+        },
+      }),
+    });
+    t.teardown(() => listener.dispose());
+    const admitted = await requestHttp(
+      `${listener.url}/api/v1/chat/completions`,
+      {
+        method: 'POST',
+        headers: { ...headers, authorization: 'Bearer placeholder-key' },
+        body,
+      },
+    );
+    t.is(admitted.statusCode, 200);
+    await readHttpText(admitted);
+    t.deepEqual(paths, ['/api/v1/chat/completions']);
+    // The strip mode does not widen the path allowlist.
+    const rejected = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(rejected.statusCode, 502);
+    await readHttpText(rejected);
+    t.deepEqual(paths, ['/api/v1/chat/completions']);
   },
 );
 

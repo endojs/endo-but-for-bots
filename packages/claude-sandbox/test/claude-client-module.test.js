@@ -199,7 +199,7 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
   t.is(host.mountCalls.length, 1);
   t.is(host.mountCalls[0].fs, host.fsCap);
   t.is(host.mountCalls[0].mountPoint, '/tmp/claude-sandbox-my-claude-abc');
-  t.true(host.mountCalls[0].opts.lazyUnmount);
+  t.is(host.mountCalls[0].opts.lazyUnmount, undefined);
 
   t.is(host.provideMountCalls.length, 1);
   t.is(host.provideMountCalls[0].path, '/tmp/claude-sandbox-my-claude-abc');
@@ -266,7 +266,7 @@ test('without a config mount CLAUDE_CONFIG_DIR stays on the ephemeral tmpfs', as
   );
 });
 
-test('a config mount persists CLAUDE_CONFIG_DIR and resumes a prior transcript', async t => {
+test('a config mount persists CLAUDE_CONFIG_DIR without adopting what it holds', async t => {
   // A fake config backing dir that already holds a Claude transcript, as it
   // would after a pre-restart turn.
   const configHostDir = await mkdtemp(
@@ -303,18 +303,29 @@ test('a config mount persists CLAUDE_CONFIG_DIR and resumes a prior transcript',
   // CLAUDE_CONFIG_DIR points at the persistent mount, not the ephemeral tmpfs.
   t.is(host.spawnCalls[0].opts.env.CLAUDE_CONFIG_DIR, '/claude-config');
 
-  // The pre-restart transcript is detected, so the first turn resumes it — by
-  // name, so the CLI cannot silently pick a different conversation or none.
+  // The pre-restart transcript is still sitting there — the mount is the
+  // point — but it is not a claim the stack owns, so it does not decide the
+  // first turn of this incarnation. With no records handed in, there is no
+  // conversation to resume and the turn starts clean.
   const { argv } = host.spawnCalls[0];
-  t.true(argv.includes('--resume'));
-  t.is(argv[argv.indexOf('--resume') + 1], PRIOR_SESSION_ID);
+  t.false(argv.includes('--resume'));
   t.false(argv.includes('--continue'));
+
+  // The second turn resumes by name, because by then the live conversation is
+  // one this incarnation started rather than one it inherited.
+  await drain(await client.send('and again'));
+  const next = host.spawnCalls[1].argv;
+  t.true(next.includes('--resume'));
+  t.is(next[next.indexOf('--resume') + 1], PRIOR_SESSION_ID);
 });
 
-test('a transcript that is not named for a session id falls back to --continue', async t => {
+test('a transcript not named for a session id continues only within the incarnation', async t => {
   // Claude Code names transcripts `<session-uuid>.jsonl`. Anything else cannot
-  // be resumed by name, but it still proves a turn already ran, so the session
-  // must resume via --continue rather than read as fresh and lose its history.
+  // be resumed by name, so a turn that must resume falls back to --continue.
+  // Which turns those are is the question this pins: not the first of an
+  // incarnation, whose conversation the stack's records decide and which
+  // therefore starts clean when there are none, but a later one, continuing
+  // what this incarnation itself began.
   const configHostDir = await mkdtemp(
     nodePath.join(os.tmpdir(), 'claude-cfg-'),
   );
@@ -336,8 +347,18 @@ test('a transcript that is not named for a session id falls back to --continue',
     }),
   });
   await drain(await client.send('after restart'));
-  t.true(host.spawnCalls[0].argv.includes('--continue'));
+  t.false(
+    host.spawnCalls[0].argv.includes('--continue'),
+    'the surviving store does not decide the first turn',
+  );
   t.false(host.spawnCalls[0].argv.includes('--resume'));
+
+  await drain(await client.send('and again'));
+  t.true(
+    host.spawnCalls[1].argv.includes('--continue'),
+    'the second turn continues what this incarnation started',
+  );
+  t.false(host.spawnCalls[1].argv.includes('--resume'));
 });
 
 test('the newest transcript wins when a config dir holds several', async t => {
@@ -370,8 +391,11 @@ test('the newest transcript wins when a config dir holds several', async t => {
       CLAUDE_CONFIG_HOST_DIR: configHostDir,
     }),
   });
+  // Resumption by name happens within the incarnation, so it takes a second
+  // turn to reach it; the newest transcript is the one it names.
   await drain(await client.send('after restart'));
-  const { argv } = host.spawnCalls[0];
+  await drain(await client.send('and again'));
+  const { argv } = host.spawnCalls[1];
   t.is(argv[argv.indexOf('--resume') + 1], PRIOR_SESSION_ID);
 });
 

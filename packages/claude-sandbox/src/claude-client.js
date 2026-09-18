@@ -13,10 +13,12 @@
  * Claude config dir (a dedicated per-session mount that survives daemon
  * restarts — see `claude-client-module.js`), letting a sequence of
  * `send()` calls build on each other (no long-lived stdin plumbing).
- * A client reincarnated after a restart is constructed with
- * `resumePriorConversation: true` when that config dir already holds a
- * transcript, so its very first post-restart turn resumes instead of
- * forking a fresh, context-free conversation.
+ * A client reincarnated after a restart does **not** resume that config
+ * dir. The store outlives the daemon, so it is still sitting there, but a
+ * store that survived is not the same claim as a record the stack owns:
+ * across incarnations the stack's records decide and the conversation is
+ * rebuilt from them. Within one incarnation a session resumes what it
+ * started, which is what `--continue` is for.
  *
  * `send()` returns a **buffered reply reader** immediately (consume it
  * with `makeRefIterator`): it yields the parsed stream-json events, then
@@ -44,7 +46,10 @@ import { mapReader } from '@endo/stream';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import {
+  awaitBarrier,
+  makeHostedTurnChannel,
+} from '@endo/hosted-agent/turn-channel.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -211,13 +216,6 @@ const defaultStderrIterable = proc =>
  *   runs under the caller's persona/instructions in addition to Claude
  *   Code's built-in prompt. Overridable per turn via `send(prompt, {
  *   systemPrompt })`. Omitted argv when neither is set.
- * @property {boolean} [resumePriorConversation] - Seed
- *   `conversationStarted` so the very first `send()` passes `--continue`.
- *   Set by `claude-client-module.js` when a reincarnated session's
- *   persistent Claude config dir already holds a transcript, so a
- *   post-restart turn resumes the pre-restart conversation instead of
- *   starting a fresh, context-free one. Defaults to `false` (a brand-new
- *   session has nothing to resume).
  * @property {() => boolean} [detectPriorConversation] - Ground-truth
  *   check for a persisted transcript, consulted before *every* spawn
  *   (not once at construction). When provided it decides `--continue`
@@ -230,6 +228,13 @@ const defaultStderrIterable = proc =>
  *   back to the in-memory flag. Also gates `initialPrompt`, so a
  *   reincarnated formula does not re-fire its initial prompt as a
  *   spurious extra turn on every daemon restart.
+ * @property {(records: readonly any[]) => Promise<string | undefined>} [restoreTranscript] -
+ *   Write this conversation into the session's config directory from the
+ *   stack's own transcript records, and answer the session id the CLI should
+ *   resume. Consulted only when the config directory holds no conversation of
+ *   its own, so a live conversation is continued rather than overwritten.
+ *   Without it the session starts context-free, which is what happens today
+ *   whenever a revived worker finds an empty store.
  * @property {() => string | undefined} [resolveResumeSessionId] - The id
  *   of the newest persisted conversation, read from the session's config
  *   dir before every spawn. When it yields an id the turn resumes that
@@ -288,9 +293,9 @@ export const makeClaudeClient = ({
   mcpConfigPath,
   env = {},
   initialPrompt,
-  resumePriorConversation = false,
   detectPriorConversation,
   resolveResumeSessionId,
+  restoreTranscript,
   describeTranscripts,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
@@ -325,11 +330,12 @@ export const makeClaudeClient = ({
   // `--continue` resumes the most recent conversation persisted in the
   // session's Claude config dir. A brand-new session has nothing to
   // resume, so `--continue` is omitted until one prompt has been
-  // dispatched. A session reincarnated after a daemon restart, whose
-  // persistent config dir already holds a transcript, is constructed with
-  // `resumePriorConversation: true` so its first post-restart turn
-  // resumes the pre-restart conversation rather than forking a fresh one.
-  let conversationStarted = resumePriorConversation;
+  // Sends this incarnation made, and nothing else. It is deliberately not
+  // seeded from the surviving store: seeding it from a detector that reads
+  // that store makes `liveConversation` true on the first post-restart turn,
+  // which skips the restore branch below and resumes the stale store --
+  // precisely the behaviour the records exist to replace.
+  let conversationStarted = false;
   // Whether the *next* spawn should resume at all, and whether `initialPrompt`
   // has already been answered. The detector, when present, is the ground truth
   // (it reads the persisted transcript), so a turn killed before Claude
@@ -350,6 +356,10 @@ export const makeClaudeClient = ({
   };
   /** @type {ProcessHandle | null} */
   let inFlight = null;
+  // How long an interrupt waits for the killed process to end before it is
+  // reported as a failed cancellation; a `claude` that ignores SIGKILL for
+  // this long is a wedged runtime, not a slow one.
+  const INTERRUPT_DEADLINE_MS = 15_000;
   // Closes the reply channel of the most recent turn (queued or running).
   // Closing is the producer-side half of a consumer close: it discards
   // undelivered events and fires the channel's onClose, which kills the turn.
@@ -362,6 +372,14 @@ export const makeClaudeClient = ({
   // kills the running `claude` process rather than bailing the queued turn.
   /** @type {(() => void) | null} */
   let inFlightClose = null;
+  // The terminal barrier of the turn `interrupt()` targets: settles when the
+  // turn's process has actually ended, so an interrupt returns only once a
+  // later `send()` cannot race the turn it ended. Reader closure alone is
+  // not exit.
+  /** @type {Promise<void> | null} */
+  let currentTerminal = null;
+  /** @type {Promise<void> | null} */
+  let inFlightTerminal = null;
   // Serialize turns so two `claude -p` processes never race the same
   // workspace conversation: each `send()` queues behind the previous turn.
   /** @type {Promise<void>} */
@@ -465,7 +483,7 @@ export const makeClaudeClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {
@@ -505,25 +523,51 @@ export const makeClaudeClient = ({
     if (useSystemPrompt) {
       argv.push('--append-system-prompt', String(useSystemPrompt));
     }
-    // Resume the conversation by its own id when we can read one off the
-    // persisted transcript. `--continue` asks the CLI to pick "the most recent
-    // conversation" by its own reckoning; naming the session removes that
-    // inference and fails loudly ("No conversation found with session ID")
-    // instead of silently starting a fresh, context-free one. Sessions with no
-    // persistent config dir (older ones, on the ephemeral tmpfs) have no id to
-    // read, so they keep the `--continue` behaviour.
+    // Which conversation this turn continues, and whose copy of it decides.
+    //
+    // Within one incarnation the CLI holds the live conversation: this client
+    // started it, every turn since has appended to it, and continuing it is
+    // the only correct thing to do — rewriting it underneath the model would
+    // be editing a conversation it is holding.
+    //
+    // Across incarnations the stack's records decide. The CLI's store is a
+    // host bind and outlives the daemon, so it is still sitting there after a
+    // restart and `--continue` would find it; that is exactly the behaviour
+    // this design exists to replace. A store that survives is not the same
+    // claim as a record the stack owns, and when they disagree the stack is
+    // right — it is the one that saw every turn, including the ones that
+    // failed before the CLI persisted anything.
     let resumeSessionId;
-    if (resolveResumeSessionId) {
+    const liveConversation = conversationStarted && priorConversation();
+    if (liveConversation && resolveResumeSessionId) {
+      // Name the live conversation by its id rather than asking `--continue`
+      // to pick "the most recent" by its own reckoning: naming it fails
+      // loudly instead of silently continuing a different one.
       try {
         resumeSessionId = resolveResumeSessionId();
       } catch {
         // Unreadable backing dir (transient fs race): fall back to --continue.
       }
     }
-    const resuming = resumeSessionId !== undefined || priorConversation();
+    if (!liveConversation) {
+      const records = Array.isArray(opts.transcript) ? opts.transcript : [];
+      if (records.length > 0) {
+        if (!restoreTranscript) {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): this session holds ${q(records.length)} records and this incarnation cannot write them into the CLI's store, so the conversation cannot be handed over.`,
+          );
+        }
+        resumeSessionId = await restoreTranscript(records);
+        if (resumeSessionId === undefined) {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): restoring ${q(records.length)} records produced no conversation to resume.`,
+          );
+        }
+      }
+    }
     if (resumeSessionId !== undefined) {
       argv.push('--resume', resumeSessionId);
-    } else if (resuming) {
+    } else if (liveConversation) {
       argv.push('--continue');
     }
     if (describeTranscripts) {
@@ -533,10 +577,11 @@ export const makeClaudeClient = ({
         '[claude-sandbox] spawn',
         JSON.stringify({
           sessionId,
-          resuming,
+          liveConversation,
           resumeSessionId,
           detector: Boolean(detectPriorConversation),
           conversationStarted,
+          records: Array.isArray(opts.transcript) ? opts.transcript.length : 0,
           promptChars: String(prompt).length,
           argv: argv.filter(arg => arg !== String(prompt)),
           transcripts: describeTranscripts(),
@@ -576,18 +621,30 @@ export const makeClaudeClient = ({
     /** @type {ProcessHandle | null} */
     let proc = null;
     let closed = false;
-    const { push, reader, close, setOnClose } = makeBufferedReader();
-    setOnClose(() => {
-      closed = true;
-      if (proc) {
-        E(proc)
-          .kill()
-          .catch(() => {});
-      }
+    const channel = makeHostedTurnChannel({
+      onConsumerClosed: () => {
+        closed = true;
+        if (proc) {
+          E(proc)
+            .kill()
+            .catch(() => {});
+        }
+      },
     });
+    const { push, reader, close } = channel;
     currentClose = close;
+    currentTerminal = channel.terminal;
 
     const turn = turnChain.then(async () => {
+      try {
+        await runQueuedTurn();
+      } finally {
+        // Whatever ended the turn — a terminal delivered, a bail before the
+        // spawn, a kill — its process is gone or never was.
+        channel.settle();
+      }
+    });
+    async function runQueuedTurn() {
       if (closed || terminated) {
         // The consumer closed the reader, or the session was terminated,
         // before this queued turn ran. Finalize the reader with a terminal
@@ -620,6 +677,7 @@ export const makeClaudeClient = ({
       }
       inFlight = proc;
       inFlightClose = close;
+      inFlightTerminal = channel.terminal;
       try {
         for await (const event of parseStreamJsonLines(
           makeStdoutIterable(proc),
@@ -698,15 +756,17 @@ export const makeClaudeClient = ({
         if (inFlight === proc) {
           inFlight = null;
           inFlightClose = null;
+          inFlightTerminal = null;
         }
         // Drop the finished turn's closer so a later `interrupt()` reports
         // "nothing in flight" instead of silently no-op'ing against a closed
         // channel.
         if (currentClose === close) {
           currentClose = null;
+          currentTerminal = null;
         }
       }
-    });
+    }
     // Keep the chain alive even if a turn rejects (errors are surfaced as
     // `abort` events, but be defensive).
     turnChain = turn.catch(() => {});
@@ -907,12 +967,23 @@ export const makeClaudeClient = ({
       // Prefer the executing turn (kills its `claude` process); fall back
       // to the most-recent queued turn (which bails before it spawns).
       const target = inFlightClose || currentClose;
+      const terminal = inFlightClose ? inFlightTerminal : currentTerminal;
       if (!target) {
         throw makeError(
           X`ClaudeClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
         );
       }
       target();
+      // Closing the reader kills the process; the turn is over only when the
+      // process has ended, which is what a caller treating this as its
+      // cancellation barrier needs to be true.
+      if (terminal) {
+        await awaitBarrier(terminal, {
+          deadlineMs: INTERRUPT_DEADLINE_MS,
+          makeFailure: () =>
+            makeError(X`ClaudeClient(${q(sessionId)}): interrupt timed out.`),
+        });
+      }
     },
 
     /**

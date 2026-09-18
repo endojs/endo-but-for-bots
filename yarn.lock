@@ -1335,6 +1335,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/9p-server@workspace:packages/9p-server"
   dependencies:
+    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -1344,6 +1345,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
   languageName: unknown
@@ -1790,6 +1792,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/codex-sandbox@workspace:packages/codex-sandbox"
   dependencies:
+    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -2433,6 +2436,7 @@ __metadata:
     "@endo/lal": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/workflow": "workspace:^"
     ava: "catalog:dev"
@@ -2621,14 +2625,17 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/hosted-agent@workspace:packages/hosted-agent"
   dependencies:
+    "@endo/9p-server": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/netstring": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/sandbox": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream-node": "workspace:^"
@@ -3033,6 +3040,29 @@ __metadata:
     ses: "workspace:^"
     typescript: "catalog:dev"
     ws: "npm:^8.21.3"
+  languageName: unknown
+  linkType: soft
+
+"@endo/opencode-sandbox@workspace:packages/opencode-sandbox":
+  version: 0.0.0-use.local
+  resolution: "@endo/opencode-sandbox@workspace:packages/opencode-sandbox"
+  dependencies:
+    "@endo/9p-server": "workspace:^"
+    "@endo/cli": "workspace:^"
+    "@endo/daemon": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/hosted-agent": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/sandbox": "workspace:^"
+    "@endo/stream": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
   languageName: unknown
   linkType: soft
 

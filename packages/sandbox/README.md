@@ -99,6 +99,121 @@ The podman driver shells out to a rootless `podman` binary. The
 driver `probe()` returns `available: false` when any of these is
 missing; `make()` then refuses the slice with a structured error.
 
+Every Podman invocation requires the local Linux engine: `/proc` observations
+and bind paths belong to the daemon's host.
+The driver prefixes `--remote=false --syslog=false`, including on probes and
+cleanup commands, and never retries without those flags.
+On the source-reviewed Podman 4.9.3 and 5.8.0 versions, configuration can still
+force remote mode despite `--remote=false`.
+The `--syslog` flag is registered only for the local engine; passing its default
+false value makes remote configurations and remote-only builds refuse argument
+parsing without enabling logging.
+See Podman's [engine selection][podman-engine-selection] and
+[local-only flag registration][podman-local-flags].
+Recheck this behavior when upgrading Podman, using the native remote-configuration
+refusal test in `test/podman.test.js`.
+Local engine selection does not prove that killing a Podman command terminates
+its descendants or finishes outstanding container creation.
+
+The driver owns each preparation before acquiring its resources.
+A rejected preparation retains failed anchor removal and temporary seccomp
+directory cleanup for retry through the host-only `closeSlices()` method.
+This method permanently fences probe, preparation, and spawn admission, starts
+cleanup of completed slices immediately, and drains pending preparations.
+Successful slice teardown releases its driver registration.
+Anchor producers and operation creation share the same lifetime accounting.
+Removal waits for their native closure; failed or interrupted producers retain
+uncertain effects and operation admission slots even if removal succeeds.
+Proven no-child acquisition failures can release without operation removal.
+Repeated removal is not evidence that detached OCI/conmon work has finished.
+After successful creation, a narrow inspection resolves the full container ID;
+policy inspection, startup, signaling, and removal then use that identity.
+Cleanup uses the reserved unique name only until identity resolution succeeds.
+This supports create output suppressed by passthrough logging and prevents later
+name rebinding from retargeting an operation; the initial lookup trusts the host.
+Admission observes cancellation through policy checks and immediately before
+attached start, including when only an asynchronous cancellation token is provided.
+The attached host process remains owned until native stdio closes, not just until
+an exit or error event.
+Fresh containers request `--restart=no --no-healthcheck`, excluding automatic
+restarts and inherited image healthchecks from the single-start lifecycle.
+Before operation removal, a bounded inspection of the immutable ID seeks Podman's
+positive startup timestamp, recorded after successful OCI startup on that path.
+An arbitrary workload exit code is separate from this startup evidence.
+Without a positive witness, removal still prevents delayed startup, but ownership
+remains uncertain even after native attach closure.
+Successful removal can erase the remaining observation opportunity; reconciliation,
+not repeated removal, is then required to establish release safety.
+A positive witness survives failed removal, and successful removal is not repeated.
+Resolver attestation's `exec` also uses the anchor producer scope: its fixed read-only
+payload still creates a process whose uncertain effects must remain owned.
+The host-only `close()` composes slice cleanup with shared native-command accounting.
+It fences ordinary commands and aborts outstanding observations and image pulls,
+retaining their direct native closure even if their result has already failed.
+Already admitted producers retain their existing deadlines, and attached processes
+are stopped through container removal rather than a blanket proxy kill.
+Cleanup commands remain available on failed close retries; after successful slice
+cleanup all command admission is sealed, and pending native closure prevents release.
+Historical observation, pull, signal, and removal failures do not invent permanent
+guest-producer uncertainty.
+Orphan cleanup validates full IDs before removal, preventing delayed cleanup from
+retargeting a reused name; an orphan sweep still cannot prove predecessor quiescence.
+
+`makeSandboxFactoryKit` also provides a local host-only `makeResolved(opts)` method.
+It accepts already authorized rootfs/bind paths and optional explicit scratch, sharing
+the factory's driver selection, admission, and retryable cleanup.
+It never asks daemon powers to resolve or acquire mounts.
+Its handle supports process execution, policy inspection, reset, and disposal, with
+no dynamic mount or scratch acquisition methods.
+This method is not exposed by the public factory: native paths grant host filesystem
+authority and must come from an administrative owner, which retains their backing
+formulas until native disposal completes.
+Hosted runtime and adapter wiring to this entry point remains pending.
+
+The host-only `makeSandboxRuntime` from `@endo/sandbox/runtime.js` composes Podman,
+the factory, generated-file storage, and exclusive incarnation ownership.
+The generic factory continues to offer bwrap separately; this hosted composition
+requires the Podman driver and its explicit lifetime cleanup authority.
+The constructor returns an `open()`/`close()` controller before acquiring resources.
+Retain that controller through failed initialization or cleanup, and retry failed
+close before attempting to replace its owner.
+Close fences factory and driver admission immediately, attempts both shutdown paths,
+and releases storage followed by the ownership marker only after both succeed.
+The host supplies a stable private directory, a stable owner ID, and aggregate
+generated-file byte and entry budgets.
+The directory and its replaceable ancestors must remain outside guest writes.
+Existing markers and storage roots refuse startup without a probe or stale sweep;
+this controller does not infer safe recovery from parent death or container absence.
+The host-only `@endo/sandbox/owned-agent.js` unconfined entrypoint retains these
+controllers across formula reconstructions in the same native module instance.
+It observes daemon cancellation before queued acquisition, closes outside the
+construction queue, and retries a failed predecessor's cleanup before replacement.
+An overlapping live owner is refused; an old or refused caller's cancellation
+cannot close a successor.
+Only the public factory is returned to the daemon's callers.
+Separate module instances and workers still rely on the exclusive filesystem marker;
+an empty in-memory registry grants no authority to take over stale resources.
+Cancellation is eventual: publication is fenced after cancellation is observed locally.
+Automatic cleanup failures are reported on stderr and retained for a later construction
+to retry; daemon disposal completion is not proof that this cleanup succeeded.
+The persisted formula must supply `ENDO_SANDBOX_RUNTIME_DIR`, `ENDO_SANDBOX_OWNER_ID`,
+`ENDO_SANDBOX_GENERATED_MAX_BYTES`, and `ENDO_SANDBOX_GENERATED_MAX_ENTRIES`.
+Budgets are explicit decimal bigint quantities, with nonnegative bytes and positive
+entries; the entrypoint invents no default quota or spending policy.
+The runtime parent must already exist and remain outside guest write authority.
+OpenCode host provisioning now uses this entrypoint and persists explicit runtime
+configuration; standalone hosted setup also refuses a generic factory.
+Setup reads the effective runtime and state-provider roots through the host-only
+persisted-environment reader, checking both against prospective guest storage roots.
+Ordinary diagnostics remain environment-blind; retained settings are not reapplied.
+Host provisioning must be serialized, and factory/provider bindings must remain stable
+while their dependent backends and sessions persist.
+Durable identity pinning for session powers remains pending.
+Resolver integration and live Linux acceptance remain pending.
+
+[podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
+[podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go
+
 | Tool            | Phase | Tested version | Notes                                                                |
 | --------------- | ----- | -------------- | -------------------------------------------------------------------- |
 | `podman`        | 2     | 5.8.x          | <https://podman.io>; rootful installs are rejected by the probe.     |

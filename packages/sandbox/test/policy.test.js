@@ -78,6 +78,7 @@ const makeRequest = (overrides = {}) =>
         sizeBytes: 1n * GIB,
       }),
     ]),
+    bindRoots: harden([]),
     attestationArgv: harden(['/bin/sleep', 'infinity']),
     ...overrides,
   });
@@ -210,6 +211,74 @@ test('parseByteSize reads the forms container tooling writes back', t => {
   t.is(parseByteSize(-1), null);
 });
 
+test('only the fixed generated resolver is admitted, read-only with observed exact contents', t => {
+  const resolver = harden({
+    role: 'resolver',
+    kind: 'resolver',
+    source: '/private/provider/public-resolv.conf',
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  });
+  const request = makeRequest();
+  const policy = assertSlicePolicyRequest({
+    ...request,
+    mounts: [...request.mounts, resolver],
+  });
+  t.true(
+    assemblePolicyArgv(policy).includes(
+      'type=bind,source=/private/provider/public-resolv.conf,destination=/etc/resolv.conf,ro,nosuid,nodev,bind-propagation=rprivate',
+    ),
+  );
+  const inspect = makeInspect(record =>
+    record.Mounts.push({
+      Type: 'bind',
+      Source: resolver.source,
+      Destination: resolver.destination,
+      Options: ['ro', 'nodev', 'nosuid'],
+      RW: false,
+    }),
+  );
+  const state = makeState({
+    inspect,
+    resolverContents: 'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n',
+    attachMounts: new Map([
+      [
+        resolver.destination,
+        {
+          fstype: 'ext4',
+          root: '/public-resolv.conf',
+          options: ['ro', 'nodev', 'nosuid'],
+        },
+      ],
+    ]),
+  });
+  t.is(attestSlicePolicy(policy, state).mounts.at(-1)?.mode, 'ro');
+  for (const change of [
+    { resolverContents: 'nameserver 1.1.1.1\n' },
+    { resolverContents: undefined },
+    { attachMounts: new Map() },
+  ]) {
+    t.throws(() => attestSlicePolicy(policy, { ...state, ...change }), {
+      message: /resolver mount/,
+    });
+  }
+  for (const change of [
+    { mode: 'rw' },
+    { source: '/etc/shadow' },
+    { destination: '/codex-home' },
+    { role: 'workspace' },
+  ]) {
+    t.throws(
+      () =>
+        assertSlicePolicyRequest({
+          ...request,
+          mounts: [...request.mounts, { ...resolver, ...change }],
+        }),
+      { message: /resolver/ },
+    );
+  }
+});
+
 test('a well-formed request normalizes and hardens', t => {
   const policy = assertSlicePolicyRequest(makeRequest());
   t.is(policy.profile, 'hosted-agent-v1');
@@ -328,6 +397,25 @@ test('brokerNetworkArg joins the namespace the operator named', t => {
   );
 });
 
+test('the slice is mapped onto the identity that owns its declared mounts', t => {
+  // The whole reason `--userns keep-id` is here: a bind or 9P projection
+  // belongs to the daemon, so the slice's declared uid has to be the
+  // container id the daemon maps to. Without the mapping the daemon lands
+  // on container uid 0, the slice runs as an unmapped subordinate id, and
+  // every declared mount reads back root-owned — the slice cannot read its
+  // MCP configuration or write its workspace. Pinned against a uid other
+  // than the default so a literal cannot pass for the policy's own value.
+  const policy = assertSlicePolicyRequest(
+    makeRequest({ uid: 1234, gid: 5678 }),
+  );
+  const argv = assemblePolicyArgv(policy);
+  const valueAfter = flag => argv[argv.indexOf(flag) + 1];
+  t.is(valueAfter('--user'), '1234:5678');
+  t.is(valueAfter('--userns'), 'keep-id:uid=1234,gid=5678');
+  // `private` would ask a rootless engine to nest a second namespace.
+  t.false(argv.includes('private') && valueAfter('--userns') === 'private');
+});
+
 test('policy argv carries every ceiling the request named', t => {
   const policy = assertSlicePolicyRequest(makeRequest());
   const argv = assemblePolicyArgv(policy);
@@ -336,6 +424,8 @@ test('policy argv carries every ceiling the request named', t => {
     [
       '--user',
       '1000:1000',
+      '--userns',
+      'keep-id:uid=1000,gid=1000',
       '--pid',
       'private',
       '--ipc',
@@ -1064,7 +1154,7 @@ const makeAttachState = ({
         }),
   });
 
-test('an attach is validated as a bounded /mnt/ bind with a declared mode', t => {
+test('an attach is validated as a bounded bind with a declared mode', t => {
   const policy = assertSlicePolicyRequest(makeAttachRequest());
   t.deepEqual(policy.mounts.at(-1), ATTACH);
   // An attach is not host storage, so it adds nothing to the writable
@@ -1074,15 +1164,9 @@ test('an attach is validated as a bounded /mnt/ bind with a declared mode', t =>
   /** @type {[string, Record<string, unknown>, RegExp][]} */
   const rejected = [
     [
-      'a destination outside /mnt/',
-      { destination: '/workspace' },
-      /under \/mnt\//,
-    ],
-    ['/mnt itself', { destination: '/mnt' }, /under \/mnt\//],
-    [
       'a traversing destination',
       { destination: '/mnt/../etc' },
-      /under \/mnt\//,
+      /absolute normal destination/,
     ],
     ['a relative source', { source: 'claude-attach-a1' }, /host mountpoint/],
     ['a source with a separator', { source: '/host/a,b' }, /host mountpoint/],
@@ -1096,6 +1180,42 @@ test('an attach is validated as a bounded /mnt/ bind with a declared mode', t =>
       label,
     );
   }
+  // A capability-backed *fixed* role is the point of dropping the `/mnt/`
+  // prefix: a workspace served over 9P is then attestable rather than an
+  // unverified host bind. The old rule refused this destination outright.
+  // The attach replaces the workspace volume rather than joining it — two
+  // mounts at one destination is the nesting the table refuses below.
+  const base = makeRequest();
+  const attachedWorkspace = assertSlicePolicyRequest(
+    makeRequest({
+      mounts: harden([
+        ...base.mounts.filter(mount => mount.role !== 'workspace'),
+        harden({ ...ATTACH, role: 'workspace', destination: '/workspace' }),
+      ]),
+      // An attach is capability-backed storage the table does not bound, so
+      // the workspace volume's ceiling leaves with it. Declaring the old total
+      // would be attesting a number nothing enforces, which the sum check
+      // below refuses — that refusal is the reason this has to be restated.
+      resources: harden({
+        ...base.resources,
+        writableBytes: base.resources.writableBytes - 8n * GIB,
+      }),
+    }),
+  );
+  t.is(attachedWorkspace.mounts.at(-1)?.destination, '/workspace');
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          mounts: harden([
+            ...base.mounts.filter(mount => mount.role !== 'workspace'),
+            harden({ ...ATTACH, role: 'workspace', destination: '/workspace' }),
+          ]),
+        }),
+      ),
+    { message: /does not equal what its writable paths add up to/ },
+  );
+
   // The same host mountpoint bound twice is a duplicate, like a volume.
   t.throws(
     () =>
@@ -1109,6 +1229,49 @@ test('an attach is validated as a bounded /mnt/ bind with a declared mode', t =>
         }),
       ),
     { message: /mounted twice/ },
+  );
+
+  // What the `/mnt/` prefix stood in for, now checked directly — and unlike the
+  // prefix, it holds between two attaches as well as between an attach and a
+  // fixed role. An ordered table could say which projection wins at the
+  // shadowed path; an attested set cannot, so it refuses to describe one.
+  for (const [outer, inner] of [
+    ['/mnt/project', '/mnt/project/src'],
+    ['/srv', '/srv/pkg'],
+  ]) {
+    t.throws(
+      () =>
+        assertSlicePolicyRequest(
+          makeRequest({
+            mounts: harden([
+              ...makeRequest().mounts,
+              harden({ ...ATTACH, destination: outer }),
+              harden({
+                ...ATTACH,
+                role: 'attach-a2',
+                source: '/host/mounts/claude-attach-a2',
+                destination: inner,
+              }),
+            ]),
+          }),
+        ),
+      { message: /nests with/ },
+      `${inner} inside ${outer}`,
+    );
+  }
+
+  // A fixed role is not special here: an attach may not swallow one either.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          mounts: harden([
+            ...makeRequest().mounts,
+            harden({ ...ATTACH, destination: '/workspace/vendor' }),
+          ]),
+        }),
+      ),
+    { message: /nests with/ },
   );
 });
 
@@ -1247,4 +1410,117 @@ test('an attach attests the hardening the kernel shows, not the one the runtime 
   const attach = attestation.mounts.find(mount => mount.role === 'attach-a1');
   t.deepEqual(attach?.options, ['nodev', 'nosuid']);
   t.false(attach?.options.includes('noexec'));
+});
+
+test('a bind is attested as a bind, and only from a declared root', t => {
+  const bind = harden({
+    role: 'cli-state',
+    kind: 'bind',
+    source: '/var/lib/endo/claude-state/s1',
+    destination: '/claude-config',
+    mode: 'rw',
+  });
+  const request = makeRequest({
+    bindRoots: harden(['/var/lib/endo/claude-state']),
+    mounts: harden([...makeRequest().mounts, bind]),
+  });
+  const policy = assertSlicePolicyRequest(request);
+  t.deepEqual(policy.mounts.at(-1), bind);
+  // A bind claims no projection and adds no local writable storage: the
+  // ceiling the other mounts sum to is unchanged by it.
+  t.is(policy.resources.writableBytes, request.resources.writableBytes);
+
+  // The root is what makes the row worth attesting. Without it a table could
+  // say "and also this", for any host path, with the attestation agreeing.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['/var/lib/endo/claude-state']),
+          mounts: harden([
+            ...makeRequest().mounts,
+            { ...bind, source: '/etc/shadow' },
+          ]),
+        }),
+      ),
+    { message: /outside every declared bind root/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden([]),
+          mounts: harden([...makeRequest().mounts, bind]),
+        }),
+      ),
+    { message: /outside every declared bind root/ },
+  );
+  // A sibling whose name merely starts with the root is not under it.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['/var/lib/endo/claude']),
+          mounts: harden([...makeRequest().mounts, bind]),
+        }),
+      ),
+    { message: /outside every declared bind root/ },
+  );
+});
+
+test('a bind obeys the same shape and non-nesting rules as every other mount', t => {
+  const base = makeRequest().mounts;
+  const bind = harden({
+    role: 'cli-state',
+    kind: 'bind',
+    source: '/srv/state/s1',
+    destination: '/config',
+    mode: 'rw',
+  });
+  const withBind = overrides =>
+    makeRequest({
+      bindRoots: harden(['/srv/state']),
+      mounts: harden([...base, { ...bind, ...overrides }]),
+    });
+  t.throws(() => assertSlicePolicyRequest(withBind({ mode: 'rwx' })), {
+    message: /mode must be/,
+  });
+  t.throws(() => assertSlicePolicyRequest(withBind({ source: 'srv/state' })), {
+    message: /absolute normal host mountpoint/,
+  });
+  t.throws(
+    () => assertSlicePolicyRequest(withBind({ destination: '/workspace/in' })),
+    { message: /nests with/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['/srv/state']),
+          mounts: harden([
+            ...base,
+            bind,
+            { ...bind, role: 'cli-cache', destination: '/other' },
+          ]),
+        }),
+      ),
+    { message: /mounted twice/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({ bindRoots: 'srv', mounts: harden([...base, bind]) }),
+      ),
+    { message: /bindRoots must be an array/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['srv/state']),
+          mounts: harden([...base, bind]),
+        }),
+      ),
+    { message: /bind root must be an absolute normal path/ },
+  );
 });

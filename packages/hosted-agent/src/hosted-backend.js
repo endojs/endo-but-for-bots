@@ -15,8 +15,9 @@ harden(HostedToolSetInterface);
 /**
  * Provider-neutral facets for a hosted agent backend.
  *
- * `interrupt()` is a terminal barrier. `destroy()` is idempotent for lifecycle
- * replay when no live admin facet survives.
+ * `interrupt()` is a turn-terminal barrier, not session shutdown.
+ * Factory `stop()` preserves durable state; `destroy()` removes it.
+ * Both reach the durable owner when no live admin facet survives.
  */
 export const HostedTurnBackendInterface = M.interface('HostedTurnBackend', {
   send: M.call(M.string())
@@ -49,6 +50,7 @@ export const HostedBackendFactoryInterface = M.interface(
     create: M.call(M.record(), M.remotable('HostedToolSet')).returns(
       M.promise(),
     ),
+    stop: M.call(M.record()).returns(M.promise()),
     destroy: M.call(M.record()).returns(M.promise()),
     help: M.call().returns(M.string()),
   },
@@ -87,8 +89,10 @@ export const CONTINUITY_MODES = harden([
 export const assertHostedBackendDescriptor = descriptor => {
   (descriptor &&
     typeof descriptor === 'object' &&
-    Object.keys(descriptor).sort().join(',') ===
-      'continuity,id,kind,title,toolOwnership') ||
+    [
+      'continuity,id,kind,title,toolOwnership',
+      'continuity,id,kind,supportedNetworkPolicies,title,toolOwnership',
+    ].includes(Object.keys(descriptor).sort().join(','))) ||
     Fail`Hosted backend descriptor must be a record`;
   (typeof descriptor.id === 'string' &&
     /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(descriptor.id)) ||
@@ -104,12 +108,24 @@ export const assertHostedBackendDescriptor = descriptor => {
   (typeof descriptor.toolOwnership === 'string' &&
     descriptor.toolOwnership !== '') ||
     Fail`Hosted backend descriptor must declare tool ownership`;
+  if (descriptor.supportedNetworkPolicies !== undefined) {
+    (Array.isArray(descriptor.supportedNetworkPolicies) &&
+      descriptor.supportedNetworkPolicies.every(policy =>
+        ['off', 'public-internet'].includes(policy),
+      ) &&
+      new Set(descriptor.supportedNetworkPolicies).size ===
+        descriptor.supportedNetworkPolicies.length) ||
+      Fail`Invalid supported network policies`;
+  }
   return harden({
     id: descriptor.id,
     title: descriptor.title,
     kind: descriptor.kind,
     continuity: descriptor.continuity,
     toolOwnership: descriptor.toolOwnership,
+    ...(descriptor.supportedNetworkPolicies === undefined
+      ? {}
+      : { supportedNetworkPolicies: [...descriptor.supportedNetworkPolicies] }),
   });
 };
 harden(assertHostedBackendDescriptor);

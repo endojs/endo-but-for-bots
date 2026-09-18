@@ -9,6 +9,9 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { FlootApp } from '@endo/space-floot';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
+import { makeFlootRecovery } from './floot-recovery.js';
+import { makeFlootNetwork } from './floot-network.js';
+import { makeFlootExecution } from './floot-execution.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -557,11 +560,13 @@ export const flootComponent = (
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
-   *   model: string, messages: HistoryMessage[], facet: any, loaded: boolean }}
+   *   model: string, messages: HistoryMessage[], facet: any, loaded: boolean,
+   *   lifecycle?: string }}
    *   FlootSession
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
-   *   default: boolean }} FlootModel
+   *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
+   *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[] }} FlootModel
    */
 
   /** @type {FlootPreset[]} */
@@ -655,6 +660,27 @@ export const flootComponent = (
     return turn && !turn.done ? turn : null;
   };
 
+  const recovery = makeFlootRecovery({
+    notify,
+    isBusy: () =>
+      Boolean(
+        activeSessionId &&
+        (liveTurnFor(activeSessionId) ||
+          queuedSends.some(q => q.sessionId === activeSessionId)),
+      ),
+  });
+  const network = makeFlootNetwork({
+    notify,
+    isBusy: () =>
+      Boolean(
+        recovery.getState().resolving ||
+        (activeSessionId &&
+          (liveTurnFor(activeSessionId) ||
+            queuedSends.some(q => q.sessionId === activeSessionId))),
+      ),
+  });
+  const execution = makeFlootExecution({ notify });
+
   /** @param {any[]} history
    * @returns {HistoryMessage[]} */
   const historyMessages = history => {
@@ -701,14 +727,21 @@ export const flootComponent = (
    * @param {string} [reasoningEffort]
    */
   const createSession = async (title, presetId, model, reasoningEffort) => {
+    const selected = models.find(candidate => candidate.id === model);
     const requiresRecordForm = Boolean(
-      reasoningEffort || (model && model.includes(':')),
+      selected?.backendId || reasoningEffort || (model && model.includes(':')),
     );
     const facet = requiresRecordForm
       ? await E(factory).createSession({
           title: title || DEFAULT_TITLE,
           ...(presetId ? { presetId } : {}),
           ...(model ? { model } : {}),
+          ...(selected?.backendId
+            ? {
+                backendId: selected.backendId,
+                modelId: selected.modelId || model,
+              }
+            : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
         })
       : await E(factory).createSession(title || DEFAULT_TITLE, presetId, model);
@@ -801,6 +834,7 @@ export const flootComponent = (
           : sessionStatus.get(s.id) || 'idle',
         messageCount: s.messages.length,
         loaded: s.loaded,
+        lifecycle: s.lifecycle,
       })),
       activeSessionId,
       presets: presets.map(p => ({
@@ -813,6 +847,10 @@ export const flootComponent = (
         title: m.title,
         description: m.description,
         default: m.default,
+        backendId: m.backendId,
+        backendTitle: m.backendTitle,
+        defaultReasoningEffort: m.defaultReasoningEffort,
+        reasoningEfforts: m.reasoningEfforts,
       })),
       messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
@@ -822,6 +860,10 @@ export const flootComponent = (
       status,
       input: inputText,
       settingsOpen,
+      recovery: recovery.getState(),
+      network: network.getState(),
+      execution: execution.getState(),
+      unavailable: Boolean(session?.lifecycle && session.lifecycle !== 'ready'),
       usage: usage
         ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
         : null,
@@ -997,6 +1039,8 @@ export const flootComponent = (
           sessionStatus.set(turn.sessionId, 'error');
           notify();
         } else if (ev.type === 'done') {
+          void recovery.refresh();
+          void network.refresh();
           const stopped = turnCancelled;
           if (turn.error) {
             sessionStatus.set(turn.sessionId, 'error');
@@ -1065,6 +1109,31 @@ export const flootComponent = (
   // Serialize submissions so an auto-sent voice utterance can't overlap a typed
   // message: each turn waits for the previous.
   const submit = (/** @type {string} */ raw) => {
+    if (execution.getState().blocked) {
+      setStatus(
+        'Session stopped or stopping. Inspect Settings before resuming.',
+      );
+      return submitChain;
+    }
+    if (network.getState().changing || network.getState().blocked) {
+      setStatus(
+        'Finish or retry the sandbox network policy change before sending.',
+      );
+      return submitChain;
+    }
+    const selected = getActiveSession();
+    if (selected?.lifecycle && selected.lifecycle !== 'ready') {
+      setStatus(
+        'Session unavailable. Inspect its lifecycle and service before sending.',
+      );
+      return submitChain;
+    }
+    if (recovery.getState().resolving || recovery.getState().blocked) {
+      setStatus(
+        'Sending is blocked while a journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
+      );
+      return submitChain;
+    }
     // An explicit send supersedes any buffered voice continuation.
     if (resumeTimer) {
       clearTimeout(resumeTimer);
@@ -1112,6 +1181,24 @@ export const flootComponent = (
           )
             return;
           if (ready === viewReady && previous === turnPromise) break;
+        }
+        if (execution.getState().blocked) {
+          setStatus(
+            'Queued message not sent: session stopped. Resume explicitly in Settings.',
+          );
+          return;
+        }
+        if (network.getState().changing || network.getState().blocked) {
+          setStatus(
+            'Queued message not sent: finish the sandbox network policy change in Settings before retrying.',
+          );
+          return;
+        }
+        if (recovery.getState().resolving || recovery.getState().blocked) {
+          setStatus(
+            'Queued message not sent: journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
+          );
+          return;
         }
         // Read the text back off the placeholder at the moment the turn starts,
         // rather than closing over what was typed: a queued message can be
@@ -1173,10 +1260,33 @@ export const flootComponent = (
     // Opening a session starts at the latest message.
     stick = true;
     const session = getActiveSession();
+    void execution.select(session ? facetFor(session) : null);
+    void recovery.select(
+      session && (!session.lifecycle || session.lifecycle === 'ready')
+        ? facetFor(session)
+        : null,
+      session?.lifecycle && session.lifecycle !== 'ready'
+        ? `Session unavailable (${session.lifecycle}). Inspect the service; no recovery action is safe here.`
+        : '',
+    );
+    void network.select(
+      session && (!session.lifecycle || session.lifecycle === 'ready')
+        ? facetFor(session)
+        : null,
+      session?.lifecycle && session.lifecycle !== 'ready'
+        ? 'Session unavailable. Network policy changes are disabled.'
+        : '',
+    );
     if (!session) {
       viewReady = Promise.resolve();
       usage = null;
       notify();
+      return;
+    }
+    if (session.lifecycle && session.lifecycle !== 'ready') {
+      session.loaded = true;
+      viewReady = Promise.resolve();
+      setStatus(`Session unavailable (${session.lifecycle}).`);
       return;
     }
     showSessionTokens(session);
@@ -2055,6 +2165,39 @@ export const flootComponent = (
   // ── Controller (the view's only handle on the host engine) ───────────────────
   const controller = harden({
     getState,
+    emergencyStop() {
+      // Queued prompts are not a request to resume a stopped session.
+      queuedSends = queuedSends.filter(q => q.sessionId !== activeSessionId);
+      stopTts();
+      void execution.stop();
+    },
+    resumeSession() {
+      void execution.resume();
+    },
+    refreshNetworkPolicy() {
+      void network.refresh();
+    },
+    setNetworkPolicy(/** @type {string} */ policy) {
+      void network.set(policy);
+    },
+    resolveNetworkPolicyRequest(
+      /** @type {string} */ id,
+      /** @type {boolean} */ approve,
+      /** @type {string} */ note,
+    ) {
+      void network.resolve(id, approve, note);
+    },
+    refreshRecovery() {
+      void recovery.refresh();
+    },
+    resolveTurn(
+      /** @type {string} */ turnId,
+      /** @type {string} */ note,
+      /** @type {boolean} */ confirmed,
+    ) {
+      if (network.getState().changing) return;
+      void recovery.resolve(turnId, note, confirmed);
+    },
     subscribe(/** @type {() => void} */ listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -2119,6 +2262,8 @@ export const flootComponent = (
     },
     toggleSettings() {
       settingsOpen = !settingsOpen;
+      if (settingsOpen) void network.refresh();
+      if (settingsOpen) void execution.refresh();
       notify();
     },
     setInput(/** @type {string} */ text) {
@@ -2260,35 +2405,28 @@ export const flootComponent = (
   // ── Initial load ─────────────────────────────────────────────────────────────
   // Load the session list from the factory (most-recent first), seeding a
   // default session if the factory has none, then repaint the active history.
-  let recoveryRefreshTimer;
-  // A session stuck in a non-ready lifecycle (a failed creation, a hosted
-  // backend that is no longer installed) never becomes ready on its own, and
-  // the factory only recovers at startup. Poll a bounded number of times with
-  // a widening delay, then stop and let the user get on with a new session
-  // rather than spinning on three CapTP round trips forever.
-  const RECOVERY_ATTEMPTS = 8;
-  let recoveryAttempt = 0;
   const loadInitialSessions = async () => {
     try {
       factory = await factory;
-      const [metas, presetList, modelList] = await Promise.all([
+      const [metas, presetList, modelList, backendList] = await Promise.all([
         E(factory).listSessions(),
         E(factory)
           .listPresets()
           .catch(() => []),
         E(factory).listModels(),
+        E(factory)
+          .listBackends()
+          .catch(() => []),
       ]);
       presets = presetList;
-      models = modelList;
+      models = modelList.map(m => ({
+        ...m,
+        backendTitle: backendList.find(b => b.id === m.backendId)?.title,
+      }));
       // `listSessions()` is a remote call, so its result is unknown here;
-      // materialize it once as an array both the filter and the recovery
-      // check below can read.
+      // retain unavailable sessions too: hiding them would hide recovery work.
       const allMetas = /** @type {any[]} */ ([...metas]);
-      const readyMetas = allMetas.filter(
-        (/** @type {any} */ meta) =>
-          !meta.lifecycle || meta.lifecycle === 'ready',
-      );
-      sessions = readyMetas
+      sessions = allMetas
         .sort(
           (/** @type {any} */ a, /** @type {any} */ b) =>
             (b.createdAt || 0) - (a.createdAt || 0),
@@ -2302,33 +2440,18 @@ export const flootComponent = (
           messages: [],
           facet: null,
           loaded: false,
+          lifecycle: m.lifecycle,
         }));
-      if (
-        !sessions.length &&
-        allMetas.length > 0 &&
-        recoveryAttempt < RECOVERY_ATTEMPTS
-      ) {
-        recoveryAttempt += 1;
-        setStatus(
-          `Recovering sessions… (${recoveryAttempt}/${RECOVERY_ATTEMPTS})`,
-        );
-        recoveryRefreshTimer = setTimeout(
-          () => {
-            // The user may have created a session and started talking while
-            // this was armed. Reloading would replace the session list and
-            // reset the active session out from under them.
-            if (!cancelled && !sessions.length) void loadInitialSessions();
-          },
-          250 * 2 ** (recoveryAttempt - 1),
-        );
-        return;
-      }
-      recoveryAttempt = 0;
-      const strandedCount = allMetas.length - sessions.length;
+      const strandedCount = allMetas.filter(
+        m => m.lifecycle && m.lifecycle !== 'ready',
+      ).length;
       if (!sessions.length) {
         await createSession();
       } else {
-        activeSessionId = sessions[0].id;
+        activeSessionId = (
+          sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
+          sessions[0]
+        ).id;
       }
       // Say so rather than reporting a clean "Ready." over sessions the
       // factory could not revive; they are still listed by the factory and an
@@ -2350,8 +2473,15 @@ export const flootComponent = (
   // Never overwrite an optimistic/in-flight user turn with an older snapshot.
   let historyTimer;
   const refreshMailHistory = async () => {
+    void execution.refresh();
+    void network.refresh();
     const session = getActiveSession();
-    if (session && !busy && !liveTurnFor(session.id)) {
+    if (
+      session &&
+      (!session.lifecycle || session.lifecycle === 'ready') &&
+      !busy &&
+      !liveTurnFor(session.id)
+    ) {
       const previousCount = session.messages.length;
       await loadHistory(
         session,
@@ -2372,13 +2502,13 @@ export const flootComponent = (
 
   return () => {
     cancelled = true;
+    void recovery.select(null);
+    void network.select(null);
+    void execution.select(null);
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();
     clearTimeout(historyTimer);
-    if (recoveryRefreshTimer !== undefined) {
-      clearTimeout(recoveryRefreshTimer);
-    }
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.

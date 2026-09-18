@@ -341,6 +341,9 @@ export const makeAssetServer = async ({
   let stopped = false;
 
   /**
+   * Mount a Filesystem under a fresh capability path. Async because the cap is
+   * verified to answer `root()` before a URL is minted for it.
+   *
    * @param {object} filesystem  endo-fs Filesystem cap (or eref).
    * @param {object} [serveOpts]
    * @param {string | string[]} [serveOpts.subPath]  sub-path within
@@ -348,7 +351,8 @@ export const makeAssetServer = async ({
    * @param {string} [serveOpts.index]  directory index file name;
    *   defaults to `index.html`.
    */
-  const serve = (filesystem, serveOpts = {}) => {
+  const serve = async (filesystem, serveOpts = {}) => {
+    await null;
     if (stopped) {
       throw makeError(X`asset-server has been stopped`);
     }
@@ -361,6 +365,28 @@ export const makeAssetServer = async ({
     const index = serveOpts.index ?? 'index.html';
     if (typeof index !== 'string' || index === '') {
       throw makeError(X`serve index must be a non-empty string`);
+    }
+    // Refuse a cap this server cannot walk, here, rather than minting a URL
+    // whose every request 404s at `root()`. A Mount and an `@endo/exo-git`
+    // workspace are both plausible things to hand a "serve this directory"
+    // method and neither answers `root()`; the caller projects them (see
+    // `@endo/platform/fs/extended/from-mount.js`) before serving. The probe
+    // costs one round trip per mount, not per request, and is the same
+    // `__getMethodNames__` introspection the request path already uses to
+    // tell a File from a Directory.
+    let rootNames;
+    try {
+      // eslint-disable-next-line no-underscore-dangle
+      rootNames = await E(filesystem).__getMethodNames__();
+    } catch (cause) {
+      throw makeError(
+        X`serve requires a Filesystem cap; the given capability could not be introspected: ${q(/** @type {Error} */ (cause).message)}`,
+      );
+    }
+    if (!rootNames.includes('root')) {
+      throw makeError(
+        X`serve requires a Filesystem cap with a root() method; got one with ${q(rootNames)}`,
+      );
     }
 
     const token = mintToken();

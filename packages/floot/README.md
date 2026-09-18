@@ -1,5 +1,33 @@
 # @endo/floot
 
+For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](./OPENROUTER.md).
+
+## Durable turn recovery
+
+Factory-created sessions keep append-only turn journals in factory-owned storage,
+outside ordinary guest powers. `getTurns()` exposes evidence; on an idle session,
+`resolveTurn(turnId, note)` acknowledges unknown outcomes after independent checks
+of external effects. It never replays or undoes work. Endo tool intents precede
+dispatch; provider-native activity is observation, not write-ahead authorization.
+
+Existing guest journals are copied incrementally. Copied events are immutable on
+retry, and later guest edits are ignored. Legacy provenance remains untrusted:
+acknowledge `legacy-import` with a substantive verification note before continuing,
+then resolve other unknown outcomes separately. Malformed journals fail closed.
+Uncertain storage writes fence the incarnation; revival reads durable evidence.
+
+This boundary excludes ordinary guests, not administrators: full-control and
+machine-admin presets deliberately receive factory-host powers. Standalone
+`makeStreamingAgent` callers must supply separate `journalPowers` for isolation;
+the compatibility default uses cooperative guest storage.
+
+`getJournalStatus()` reports the event count as a decimal string, the retained and
+archived turn counts, and `private` or `legacy` storage. There is no event limit:
+long text is stored by reference (`getTurnContent`), replay is bounded by
+snapshots, and settled turns beyond the retained window are archived
+(`getArchivedTurns`). Legacy-import acknowledgement uses separate metadata;
+ordinary outcome acknowledgement consumes an event.
+
 A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.
 

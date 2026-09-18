@@ -34,7 +34,7 @@ test('agent.js make() loads and returns a factory matching the documented shape'
 
   const factory = await agentModule.make(
     /** @type {any} */ (stubScratchProvider),
-    null,
+    undefined,
     {},
   );
   t.truthy(factory, 'make() returns a factory');
@@ -52,7 +52,7 @@ test('listBackends() round-trips the registered backends', async t => {
   const agentModule = await import('../src/agent.js');
   const factory = await agentModule.make(
     /** @type {any} */ (stubScratchProvider),
-    null,
+    undefined,
     {},
   );
   const backends = await E(factory).listBackends();
@@ -69,7 +69,7 @@ test('agent.js handles missing options gracefully', async t => {
   // argument; the agent must default `options` cleanly.
   const factory = await agentModule.make(
     /** @type {any} */ (stubScratchProvider),
-    null,
+    undefined,
   );
   const backends = await E(factory).listBackends();
   t.true(Array.isArray(backends));
@@ -77,4 +77,16 @@ test('agent.js handles missing options gracefully', async t => {
     backends.map(b => b.name).includes('bwrap'),
     'bwrap driver is registered without an options argument',
   );
+});
+
+test('an invalid owner context fences backend probes', async t => {
+  const agentModule = await import('../src/agent.js');
+  const factory = await agentModule.make(
+    /** @type {any} */ (stubScratchProvider),
+    null,
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  await t.throwsAsync(E(factory).listBackends(), {
+    message: /owner has been cancelled/,
+  });
 });

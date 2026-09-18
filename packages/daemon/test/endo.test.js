@@ -25,6 +25,7 @@ import { ZipReader } from '@endo/zip/reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { makeSessionRecordStore } from '../src/session-record-store.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
@@ -597,6 +598,889 @@ test('store formula values', async t => {
     t.is(2, await E(counter).incr());
   }
 });
+
+test.serial(
+  'session records retain exact references without activating clients',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const plan = '{"sessionId":"session-a"}';
+    let references;
+    let recordId;
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const activations = await E(host).makeDirectory('activations');
+      const directory = await E(host).makeDirectory('session-records');
+      const store = makeSessionRecordStore(directory);
+      const providerSource = label => `
+      E(activations).writeText(${JSON.stringify(label)}, 'activated').then(() =>
+        makeExo('Provider', M.interface('Provider', {
+          identity: M.call().returns(M.string()),
+          removeSession: M.call(M.string()).returns(M.promise()),
+        }), {
+          identity: () => ${JSON.stringify(label)},
+          removeSession: sessionId => E(activations).writeText('cleaned',
+            ${JSON.stringify(label)} + ':' + sessionId),
+        })
+      )
+    `;
+      await E(host).evaluate(
+        '@main',
+        providerSource('provider-a'),
+        ['activations'],
+        ['activations'],
+        'provider',
+      );
+      const providerId = await E(host).identify('provider');
+      await t.throwsAsync(
+        () =>
+          E(host).evaluate(
+            '@main',
+            `
+      E(activations).writeText('client', 'activated').then(() => {
+        throw Error('Client cannot initialize');
+      })
+    `,
+            ['activations'],
+            ['activations'],
+            'client',
+          ),
+        {
+          message: /Client cannot initialize/,
+        },
+      );
+      const clientId = await E(host).identify('client');
+      references = harden({ provider: providerId, client: clientId });
+      await store.create('session-a', plan, references);
+      recordId = (await store.inspect('session-a')).identifier;
+
+      await E(host).evaluate(
+        '@main',
+        providerSource('provider-b'),
+        ['activations'],
+        ['activations'],
+        'provider',
+      );
+      await E(host).remove('client');
+      t.true(formulaExistsInDb(config.statePath, providerId));
+      t.true(formulaExistsInDb(config.statePath, clientId));
+      await E(activations).remove('provider-a');
+      await E(activations).remove('provider-b');
+      await E(activations).remove('client');
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const activations = await E(host).lookup('activations');
+      const store = makeSessionRecordStore(
+        await E(host).lookup('session-records'),
+      );
+      const expected = harden({ identifier: recordId, plan, references });
+      t.deepEqual(await store.inspect('session-a'), expected);
+      t.false(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-a'));
+      t.false(await E(activations).has('provider-b'));
+
+      await t.throwsAsync(
+        () => E(host).lookupById(expected.references.client),
+        { message: /Client cannot initialize/ },
+      );
+      t.true(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-a'));
+      t.false(await E(activations).has('provider-b'));
+      await E(activations).remove('client');
+
+      await t.throwsAsync(
+        () =>
+          store.remove('session-a', async record => {
+            t.is(record.plan, plan);
+            t.deepEqual(record.references, references);
+            const provider = await E(host).lookupById(
+              record.references.provider,
+            );
+            t.is(await E(provider).identity(), 'provider-a');
+            throw Error('Cleanup must be retried');
+          }),
+        { message: /Cleanup must be retried/ },
+      );
+      t.deepEqual(await store.inspect('session-a'), expected);
+      t.false(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-b'));
+
+      await store.remove('session-a', async record => {
+        const provider = await E(host).lookupById(record.references.provider);
+        await E(provider).removeSession('session-a');
+      });
+      t.is(await E(activations).readText('cleaned'), 'provider-a:session-a');
+      t.is(await store.inspect('session-a'), undefined);
+      t.false(await E(activations).has('provider-b'));
+      t.false(formulaExistsInDb(config.statePath, references.provider));
+      t.false(formulaExistsInDb(config.statePath, references.client));
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'daemon-local session owner removes one session while sibling workers survive',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const modulePath = url.fileURLToPath(
+      new URL('./_session-owner-probe.js', import.meta.url),
+    );
+    const plan = 'original approved workspace and storage';
+    const sendText = async (client, text) => {
+      await null;
+      const events = [];
+      for await (const event of iterateReader(await E(client).send(text))) {
+        events.push(event);
+      }
+      return events;
+    };
+    let original;
+    let recordId;
+    let referencesId;
+    let siblingId;
+    const makeProbe = async (host, name) => {
+      await E(host).provideWorker(name);
+      return E(host).makeUnconfined(name, modulePath, {
+        powersName: '@agent',
+        resultName: `${name}-probe`,
+      });
+    };
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      for (const label of ['a', 'b']) {
+        // Distinct worker formulas prevent same-worker placement from hiding
+        // collection that would otherwise kill a shared supervisor.
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).provideWorker(`client-worker-${label}`);
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).makeUnconfined(`client-worker-${label}`, modulePath, {
+          powersName: 'audit',
+          resultName: `client-${label}`,
+          env: harden({ ROLE: 'client', LABEL: label }),
+        });
+      }
+      await E(host).provideWorker('storage-worker');
+      await E(host).evaluate(
+        'storage-worker',
+        `makeExo('Storage', M.interface('Storage', {
+          remove: M.callWhen(M.string()).returns(M.undefined()),
+        }), {
+          remove: async plan => {
+            await E(audit).writeText('removed-plan', plan);
+            if (!(await E(audit).has('allow-remove'))) {
+              throw Error('Storage removal pending');
+            }
+            await E(audit).writeText('storage-removed', 'yes');
+          },
+        })`,
+        ['audit'],
+        ['audit'],
+        'storage-a',
+      );
+      await E(host).makeDirectory('private-a');
+      original = harden({
+        client: await E(host).identify('client-a'),
+        storage: await E(host).identify('storage-a'),
+        directory: await E(host).identify('private-a'),
+      });
+      siblingId = await E(host).identify('client-b');
+      const probe = await makeProbe(host, 'administration');
+      const record = await E(probe).create('a', plan, original);
+      recordId = record.identifier;
+      referencesId = await E(host).identify(
+        'owned-sessions',
+        'a',
+        'references',
+      );
+      await E(probe).create('b', 'sibling plan', { client: siblingId });
+      t.deepEqual(record.references, original);
+      // Retire public bindings. Only the records retain original resources.
+      for (const name of ['client-a', 'storage-a', 'private-a', 'client-b']) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).storeValue('replacement must not be used', name);
+      }
+      for (const identifier of Object.values(original)) {
+        t.true(formulaExistsInDb(config.statePath, identifier));
+      }
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const probe = await makeProbe(host, 'recovered-administration');
+      const peer = await makeProbe(host, 'other-administration');
+      const audit = await E(host).lookup('audit');
+      const record = await E(probe).inspect('a');
+      t.like(record, { identifier: recordId, plan, phase: 'ready' });
+      t.deepEqual(record.references, original);
+      t.false(await E(audit).has('stopped-a'));
+      const clientA = await E(probe).client('a');
+      const clientB = await E(peer).client('b');
+      t.deepEqual(await sendText(clientA, 'before stop'), [
+        { type: 'text', text: 'a:before stop' },
+      ]);
+      t.is(await E(peer).client('a'), clientA);
+      await E(peer).stop('a');
+      t.is(await E(audit).readText('stopped-a'), 'yes');
+      t.is((await E(probe).inspect('a')).references.client, undefined);
+      t.false(formulaExistsInDb(config.statePath, original.client));
+      await t.throwsAsync(() => E(clientA).status(), { message: /stopped/ });
+      t.deepEqual(await sendText(clientB, 'still running'), [
+        { type: 'text', text: 'b:still running' },
+      ]);
+      t.is(await E(probe).ping(), 'alive');
+
+      await t.throwsAsync(() => E(probe).remove('a'), {
+        message: /Storage removal pending/,
+      });
+      t.like(await E(peer).inspect('a'), { plan, phase: 'removing' });
+      await t.throwsAsync(() => E(peer).client('a'), {
+        message: /stopped|removal/,
+      });
+      await t.throwsAsync(() => E(peer).revise('a', 'new defaults'), {
+        message: /removal/,
+      });
+      for (const identifier of [
+        recordId,
+        referencesId,
+        original.storage,
+        original.directory,
+      ]) {
+        t.true(formulaExistsInDb(config.statePath, identifier));
+      }
+      t.is(await E(audit).readText('removed-plan'), plan);
+      await E(audit).writeText('allow-remove', 'yes');
+      await E(peer).remove('a');
+      t.is(await E(audit).readText('storage-removed'), 'yes');
+      t.is(await E(probe).inspect('a'), undefined);
+      for (const identifier of [
+        recordId,
+        referencesId,
+        ...Object.values(original),
+      ]) {
+        t.false(formulaExistsInDb(config.statePath, identifier));
+      }
+      t.true(formulaExistsInDb(config.statePath, siblingId));
+      t.is(await E(clientB).status(), 'ready-b');
+      t.deepEqual(await sendText(clientB, 'after removal'), [
+        { type: 'text', text: 'b:after removal' },
+      ]);
+      t.is(await E(probe).ping(), 'alive');
+      t.is(await E(peer).ping(), 'alive');
+      await t.throwsAsync(() => E(clientA).send('stale'), {
+        message: /stopped/,
+      });
+    }
+  },
+);
+
+test.serial(
+  'session owners fence retained clients when their original directory dies',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('records-cancel');
+      await E(host).makeDirectory('records-collect');
+      await E(host).evaluate(
+        '@main',
+        `makeExo('RetainedClient', M.interface('RetainedClient', {
+        status: M.callWhen().returns(M.string()),
+      }), { status: () => 'alive' })`,
+        [],
+        [],
+        'retained-client',
+      );
+    }
+    // Exercise persisted roots, without any construction-time transient pins.
+    await restart(config);
+    const { host } = await makeHost(config, cancelled);
+    const client = await E(host).lookup('retained-client');
+    const clientId = await E(host).identify('retained-client');
+    for (const action of ['cancel', 'collect']) {
+      const name = `records-${action}`;
+      // eslint-disable-next-line no-await-in-loop
+      const owner = await E(host).provideSessionOwner(name);
+      // eslint-disable-next-line no-await-in-loop
+      const directoryId = await E(host).identify(name);
+      // eslint-disable-next-line no-await-in-loop
+      await E(owner).create('session', 'plan', { client: clientId });
+      // eslint-disable-next-line no-await-in-loop
+      const forwarded = await E(owner).client('session');
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(forwarded).status(), 'alive');
+      if (action === 'cancel') {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).cancel(name, Error('Original records cancelled'));
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).remove(name);
+        t.false(formulaExistsInDb(config.statePath, directoryId));
+      }
+      // A public name still retains this client. Only the owner incarnation
+      // loses its authority; directory collection is not client termination.
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(client).status(), 'alive');
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(forwarded).status(), {
+        message: /Session owner directory is cancelled/,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(owner).inspect('session'), {
+        message: /Session owner directory is cancelled/,
+      });
+    }
+  },
+);
+
+test.serial(
+  'session owner directory claims reject another host and share same-host aliases',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    const first = await E(host).provideSessionOwner(['private', 'records']);
+    const directoryId = await E(host).identify('private', 'records');
+    await E(host).storeIdentifier('same-host-alias', directoryId);
+    t.is(await E(host).provideSessionOwner('same-host-alias'), first);
+    const child = await E(host).provideHost('other-host');
+    await E(child).storeIdentifier('other-host-alias', directoryId);
+    await t.throwsAsync(
+      () => E(child).provideSessionOwner('other-host-alias'),
+      { message: /already owned by another host/ },
+    );
+    await E(first).create('one', 'original plan', {});
+    t.is((await E(first).inspect('one')).plan, 'original plan');
+  },
+);
+
+test.serial(
+  'session owner claims survive host cancellation while admitted cleanup is pending',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    // This storage formula belongs to the root host and remains usable when
+    // the administrative child host is cancelled.
+    const storage = await E(host).evaluate(
+      '@main',
+      `(() => {
+        let enter;
+        let resume;
+        const entered = new Promise(resolve => { enter = resolve; });
+        const gate = new Promise(resolve => { resume = resolve; });
+        return makeExo('HeldStorage', M.interface('HeldStorage', {
+          remove: M.callWhen(M.string()).returns(M.undefined()),
+          whenEntered: M.callWhen().returns(M.undefined()),
+          release: M.callWhen().returns(M.undefined()),
+        }), {
+          remove: async () => { enter(); await gate; },
+          whenEntered: () => entered,
+          release: () => resume(),
+        });
+      })()`,
+      [],
+      [],
+      'held-storage',
+    );
+    t.teardown(() =>
+      E(storage)
+        .release()
+        .catch(() => {}),
+    );
+    const child = await E(host).provideHost('child-handle', {
+      agentName: 'child-agent',
+    });
+    const hostId = await E(host).identify('child-agent');
+    const owner = await E(child).provideSessionOwner('records');
+    const directoryId = await E(child).identify('records');
+    await E(owner).create('one', 'original cleanup plan', {
+      storage: await E(host).identify('held-storage'),
+    });
+    const removing = E(owner).remove('one');
+    await E(storage).whenEntered();
+    await E(host).cancel('child-agent');
+    const revived = await E(host).lookup('child-agent');
+    t.not(revived, child);
+    t.is(await E(host).identify('child-agent'), hostId);
+    t.is(await E(revived).identify('records'), directoryId);
+    await t.throwsAsync(() => E(revived).provideSessionOwner('records'), {
+      message: /earlier host incarnation/,
+    });
+    await t.throwsAsync(() => E(owner).inspect('one'), {
+      message: /host is cancelled/,
+    });
+    // The cancellation fence has not claimed to interrupt this native call.
+    // It can finish its original cleanup without a competing owner queue.
+    await E(storage).release();
+    await removing;
+    await t.throwsAsync(() => E(revived).provideSessionOwner('records'), {
+      message: /earlier host incarnation/,
+    });
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native session owner activates exact dependencies after inert construction and restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const specifier = new URL(
+      './_native-session-controller.js',
+      import.meta.url,
+    ).href;
+    const probeSpecifier = new URL('./_session-owner-probe.js', import.meta.url)
+      .href;
+    const dependencySpecifier = new URL(
+      './_native-session-dependency.js',
+      import.meta.url,
+    ).href;
+    let originalA;
+    let originalB;
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      const backend = await E(host).makeUnconfined('@node', probeSpecifier, {
+        powersName: '@agent',
+        resultName: 'native-backend',
+        env: { CONTROLLER_SPECIFIER: specifier },
+      });
+      const auditId = await E(host).identify('audit');
+      await E(host).storeIdentifier(
+        'native-records-alias',
+        await E(host).identify('owned-sessions', 'sessions'),
+      );
+      for (const label of ['a', 'b']) {
+        // This dependency has its own worker; its revivals produce an audit
+        // effect and cannot hide in the shared backend's module cache.
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).makeUnconfined(
+          `dependency-${label}`,
+          dependencySpecifier,
+          {
+            powersName: 'audit',
+            resultName: `dependency-${label}-value`,
+            env: { LABEL: label },
+          },
+        );
+        // eslint-disable-next-line no-await-in-loop
+        const dependency = await E(host).identify(`dependency-${label}-value`);
+        // eslint-disable-next-line no-await-in-loop
+        await E(backend).create(label, label, { audit: auditId, dependency });
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).remove(`dependency-${label}-value`);
+      }
+      t.is((await E(backend).inspect('a')).phase, 'planned');
+      await t.throwsAsync(
+        E(host).provideSessionOwner(['owned-sessions'], `${specifier}?changed`),
+        {
+          message: /configuration does not match/,
+        },
+      );
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      // The nested records cannot reconstruct a different lifecycle owner,
+      // even when their alias is opened before the configured root.
+      const otherHost = await E(host).provideHost('alias-first-host');
+      await E(otherHost).storeIdentifier(
+        'nested-records',
+        await E(host).identify('native-records-alias'),
+      );
+      await t.throwsAsync(E(otherHost).provideSessionOwner('nested-records'), {
+        message: /configured owner directory/,
+      });
+      await t.throwsAsync(E(host).provideSessionOwner('native-records-alias'), {
+        message: /configured owner directory/,
+      });
+      await t.throwsAsync(
+        E(host).provideSessionOwner('native-records-alias', specifier),
+        { message: /configured owner directory/ },
+      );
+      const backend = await E(host).lookup('native-backend');
+      const audit = await E(host).lookup('audit');
+      await E(backend).inspect('a');
+      t.is(await E(audit).readText('revivals-a'), '1');
+      t.is(await E(backend).client('a'), undefined);
+      const a = await E(backend).start('a');
+      const b = await E(backend).start('b');
+      t.is(await E(a).status(), 'ready');
+      t.is(await E(b).status(), 'ready');
+      t.is(await E(audit).readText('revivals-a'), '2');
+      originalA = (await E(backend).inspect('a')).references;
+      originalB = (await E(backend).inspect('b')).references;
+      t.not(originalA.worker, originalB.worker);
+      t.not(originalA.worker, await E(host).identify('@node'));
+      t.like(readFormulaFromDb(config.statePath, originalA.worker), {
+        type: 'worker',
+        kind: 'node',
+      });
+      t.like(readFormulaFromDb(config.statePath, originalA.client), {
+        type: 'make-unconfined',
+        worker: originalA.worker,
+      });
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const backend = await E(host).lookup('native-backend');
+      const audit = await E(host).lookup('audit');
+      t.deepEqual((await E(backend).inspect('a')).references, originalA);
+      t.is(await E(audit).readText('revivals-a'), '2');
+      await t.throwsAsync(E(backend).client('a'), {
+        message: /Explicit session start/,
+      });
+      await E(backend).start('a');
+      const b = await E(backend).start('b');
+      t.deepEqual((await E(backend).inspect('a')).references, originalA);
+      t.is(await E(audit).readText('revivals-a'), '3');
+      await E(backend).stop('a');
+      await E(backend).remove('a');
+      t.is(await E(audit).readText('stopped-a'), 'yes');
+      t.is(await E(backend).ping(), 'alive');
+      t.is(await E(b).status(), 'ready');
+      t.false(formulaExistsInDb(config.statePath, originalA.client));
+      t.false(formulaExistsInDb(config.statePath, originalA.worker));
+      t.true(formulaExistsInDb(config.statePath, originalB.worker));
+      await E(backend).remove('b');
+      t.is(await E(backend).ping(), 'alive');
+    }
+  },
+);
+
+test.serial(
+  'native owner claims and fences its nested record directory',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    const specifier = new URL(
+      './_native-session-controller.js',
+      import.meta.url,
+    ).href;
+    const owner = await E(host).provideSessionOwner(
+      'native-records',
+      specifier,
+    );
+    const recordsId = await E(host).identify('native-records', 'sessions');
+    await E(host).storeIdentifier('record-alias', recordsId);
+    t.is(await E(host).provideSessionOwner('record-alias', specifier), owner);
+    await t.throwsAsync(E(host).provideSessionOwner('record-alias'), {
+      message: /configuration does not match/,
+    });
+    const child = await E(host).provideHost('other-record-host');
+    await E(child).storeIdentifier('record-alias', recordsId);
+    await t.throwsAsync(
+      E(child).provideSessionOwner('record-alias', specifier),
+      { message: /already owned by another host/ },
+    );
+    await E(owner).create('one', 'original plan', {});
+    await E(host).cancel('record-alias', Error('Nested records cancelled'));
+    await t.throwsAsync(E(owner).inspect('one'), {
+      message: /record directory is cancelled/,
+    });
+    await t.throwsAsync(
+      E(host).provideSessionOwner('native-records', specifier),
+      { message: /record directory is cancelled/ },
+    );
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native sandbox service mints over slot-free null powers and refuses stale revival after restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const specifier = new URL(
+      '../../sandbox/src/native-agent.js',
+      import.meta.url,
+    ).href;
+    const runtimeDir = path.join(config.statePath, 'native-runtime');
+    await fsp.mkdir(runtimeDir, { mode: 0o700 });
+    const env = {
+      ENDO_SANDBOX_RUNTIME_DIR: runtimeDir,
+      ENDO_SANDBOX_OWNER_ID: 'native-null-powers-acceptance',
+      ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+      ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+    };
+    let serviceId;
+    let powersId;
+    {
+      const { host } = await makeHost(config, cancelled);
+      // The service's powers is a stored literal null: a marshal formula with
+      // no capability slots, which setup names only for the mint.
+      await E(host).storeValue(null, 'null-powers');
+      powersId = await E(host).identify('null-powers');
+      await E(host).makeUnconfined('@node', specifier, {
+        powersName: 'null-powers',
+        resultName: 'native-sandbox',
+        env,
+      });
+      serviceId = await E(host).identify('native-sandbox');
+      t.like(readFormulaFromDb(config.statePath, serviceId), {
+        type: 'make-unconfined',
+        powers: powersId,
+      });
+      t.like(readFormulaFromDb(config.statePath, powersId), {
+        type: 'marshal',
+        slots: [],
+      });
+      await E(host).remove('null-powers');
+      const service = await E(host).lookup('native-sandbox');
+      // Scopes are inert: no probe or Podman command is issued to acquire one.
+      const scope = await E(service).provideScope('a');
+      t.is(await E(service).lookupScope('a'), scope);
+      await E(scope).close();
+      t.is(await E(service).lookupScope('a'), undefined);
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      t.is(await E(host).identify('native-sandbox'), serviceId);
+      t.true(formulaExistsInDb(config.statePath, powersId));
+      // The earlier incarnation's exclusive ownership marker survives an
+      // `endo restart`, whose stop escalates to killing workers rather than
+      // awaiting the runtime's release. The owned service opens its runtime
+      // at construction, so revival itself refuses stale takeover, by design
+      // and without a sweep: recovery is operator reconciliation, and the
+      // formula and its powers stay intact meanwhile.
+      await t.throwsAsync(E(host).lookup('native-sandbox'), {
+        message: /EEXIST.*\.owner/,
+      });
+      const markers = (await fsp.readdir(runtimeDir)).filter(name =>
+        name.endsWith('.owner'),
+      );
+      t.deepEqual(markers, ['native-null-powers-acceptance.owner']);
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native session stop closes a worker with a pending inert constructor',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t);
+    const sibling = await E(host).evaluate(
+      '@node',
+      "makeExo('Sibling', M.interface('Sibling', { ping: M.call().returns(M.string()) }), { ping: () => 'alive' })",
+      [],
+      [],
+      'construction-sibling',
+    );
+    const owner = await E(host).provideSessionOwner(
+      'pending-session',
+      new URL('./_native-session-pending.js', import.meta.url).href,
+    );
+    await E(owner).create('one', 'plan', {});
+    const starting = E(owner).start('one');
+    const rejected = t.throwsAsync(starting, {
+      message: /cancel|stopped|disconnect|terminated/i,
+    });
+    let workerId;
+    await waitForCondition(async () => {
+      workerId = await E(host).identify(
+        'pending-session',
+        'sessions',
+        'one',
+        'references',
+        'worker',
+      );
+      return workerId !== undefined;
+    });
+    const { number } = parseId(workerId);
+    await waitForText(
+      path.join(config.statePath, 'worker', number, 'worker.log'),
+      'Native session constructor is pending',
+    );
+    const pidPath = path.join(
+      config.ephemeralStatePath,
+      'worker',
+      number,
+      'worker.pid',
+    );
+    const pid = Number(await fsp.readFile(pidPath, 'utf8'));
+    await E(owner).stop('one');
+    await rejected;
+    t.like(await E(owner).inspect('one'), {
+      phase: 'stopped',
+      references: {},
+    });
+    t.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    t.false(formulaExistsInDb(config.statePath, workerId));
+    t.is(await E(sibling).ping(), 'alive');
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native session tools are transient across daemon restart',
+  async t => {
+    t.timeout(30_000);
+    const { config, cancelled } = await prepareConfig(t);
+    const specifier = new URL('./_native-session-tools.js', import.meta.url)
+      .href;
+    const tools = label =>
+      Far('TransientToolSet', {
+        describe: async () => harden({ toolSetId: label }),
+      });
+    {
+      const { host } = await makeHost(config, cancelled);
+      const owner = await E(host).provideSessionOwner(
+        'tool-sessions',
+        specifier,
+      );
+      await E(owner).create('one', 'plan', {});
+      const originalTools = tools('original');
+      const client = await E(owner).start('one', originalTools);
+      t.is(await E(client).status(), 'original');
+      await E(client).interrupt();
+      t.is(await E(owner).start('one', originalTools), client);
+      await t.throwsAsync(E(owner).start('one', tools('replacement')), {
+        message: /tool authority cannot change/,
+      });
+      t.false('tools' in (await E(owner).inspect('one')).references);
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const owner = await E(host).provideSessionOwner(
+        'tool-sessions',
+        specifier,
+      );
+      await t.throwsAsync(E(owner).start('one'), {
+        message: /No tool authority is attached/,
+      });
+      await E(owner).stop('one');
+      const client = await E(owner).start('one', tools('rebound'));
+      t.is(await E(client).status(), 'rebound');
+      await E(owner).remove('one');
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'static session powers retain exact dependencies across rebinding and restart',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const modulePath = url.fileURLToPath(
+      new URL('../../hosted-agent/src/session-powers.js', import.meta.url),
+    );
+    let originalIds;
+    let bundleId;
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('dependencies');
+      const factory = await E(host).makeDirectory(['dependencies', 'factory']);
+      const mounter = await E(host).makeDirectory(['dependencies', 'mounter']);
+      const filesystem = await E(host).makeDirectory('filesystem');
+      await E(factory).writeText('identity', 'original-factory');
+      await E(mounter).writeText('identity', 'original-mounter');
+      await E(filesystem).writeText('identity', 'original-filesystem');
+      const stateProvider = await E(host).evaluate(
+        '@main',
+        `makeExo('SessionState', M.interface('SessionState', {
+          provideSessionMount: M.call(M.string()).returns(M.promise()),
+          removeSession: M.call(M.string()).returns(M.promise()),
+        }), {
+          provideSessionMount: sessionId => E(filesystem).readText(sessionId),
+          removeSession: sessionId => E(filesystem).writeText('removed', sessionId),
+        })`,
+        ['filesystem'],
+        ['filesystem'],
+        'state-provider',
+      );
+      await E(filesystem).writeText('session-a', 'original-state');
+      originalIds = await Promise.all([
+        E(host).identify('dependencies', 'factory'),
+        E(host).identify('dependencies', 'mounter'),
+        E(host).identify('filesystem'),
+        E(host).identify('state-provider'),
+      ]);
+      await E(host).storeValue(
+        harden({
+          agent: await E(host).lookup('@agent'),
+          sandboxFactory: factory,
+          fsMounter: mounter,
+          filesystem,
+          stateProvider,
+          sessionId: 'session-a',
+          mounts: [],
+        }),
+        'powers-input',
+      );
+      bundleId = await E(host).identify('powers-input');
+      await E(host).makeUnconfined('@main', modulePath, {
+        powersName: 'powers-input',
+        resultName: 'session-powers',
+      });
+      const powersId = await E(host).identify('session-powers');
+      t.is(readFormulaFromDb(config.statePath, powersId).powers, bundleId);
+
+      // Remove all staging and original public bindings; only the static
+      // powers formula retains the marshal bundle and its original slots.
+      await E(host).remove('powers-input');
+      await E(host).remove('dependencies');
+      await E(host).remove('filesystem');
+      await E(host).remove('state-provider');
+      await E(host).makeDirectory('dependencies');
+      const replacement = await E(host).makeDirectory([
+        'dependencies',
+        'factory',
+      ]);
+      await E(replacement).writeText('identity', 'replacement-factory');
+      await E(host).storeValue('replacement', 'filesystem');
+      await E(host).storeValue('replacement', 'state-provider');
+      await E(host).storeValue('replacement', 'powers-input');
+      for (const id of [...originalIds, bundleId]) {
+        t.true(formulaExistsInDb(config.statePath, id));
+      }
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const powers = await E(host).lookup('session-powers');
+      t.is(
+        await E(E(powers).sandboxFactory()).readText('identity'),
+        'original-factory',
+      );
+      t.is(
+        await E(E(powers).fsMounter()).readText('identity'),
+        'original-mounter',
+      );
+      const filesystem = await E(powers).filesystem();
+      t.is(await E(filesystem).readText('identity'), 'original-filesystem');
+      const provider = await E(powers).stateProvider();
+      t.is(await E(provider).provideSessionMount(), 'original-state');
+      await t.throwsAsync(() => E(provider).removeSession('session-b'), {
+        message: /restricted to its approved session/,
+      });
+      t.false(await E(filesystem).has('removed'));
+      await E(provider).removeSession();
+      t.is(await E(filesystem).readText('removed'), 'session-a');
+      // eslint-disable-next-line no-underscore-dangle
+      const methods = await E(powers).__getMethodNames__();
+      t.false(methods.includes('lookup'));
+      t.false(methods.includes('lookupById'));
+      t.false(methods.includes('agent'));
+      t.is(await E(powers).credentials(), null);
+
+      await E(host).remove('session-powers');
+      for (const id of [...originalIds, bundleId]) {
+        t.false(formulaExistsInDb(config.statePath, id));
+      }
+    }
+  },
+);
 
 test('fail to store non-formula exos', async t => {
   const noFormulaExo = makeExo('Exo', M.interface('Exo', {}), {});
@@ -1465,6 +2349,480 @@ const testNeedsNodeManager =
   process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE
     ? test.serial.skip
     : test.serial;
+
+testNeedsNodeManager(
+  'the OpenCode backend records a session through the daemon owner and destroy reaches its storage',
+  async t => {
+    t.timeout(120_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
+    const base = config.statePath;
+    const roots = {
+      workspaceDir: path.join(base, 'opencode-workspaces'),
+      mcpDir: path.join(base, 'opencode-private'),
+    };
+    const stateDir = path.join(base, 'opencode-state');
+    const nativeRuntime = path.join(base, 'opencode-native-runtime');
+    const brokerDir = path.join(base, 'opencode-broker');
+    for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const profile = {
+      uid: 1000,
+      gid: 1000,
+      memoryBytes: '536870912',
+      cpuQuotaMicros: '200000',
+      pids: 128,
+      cpuPeriodMicros: 100_000,
+      maxConcurrentOperations: 1,
+    };
+    const { host } = await makeHost(config, cancelled);
+    await E(host).makeDirectory('opencode-sandbox');
+    // The same services setup-host.js and setup-hosted.js mint, over the
+    // same powers shapes: host powers, a stored null, a SecretBlob, and the
+    // state provider.
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-state-provider-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['opencode-sandbox', 'state-provider'],
+        env: { ENDO_OPENCODE_STATE_DIR: stateDir },
+      },
+    );
+    await E(host).storeValue(null, 'opencode.null-powers');
+    await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
+      powersName: 'opencode.null-powers',
+      resultName: ['opencode-sandbox', 'native-sandbox'],
+      env: {
+        ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
+        ENDO_SANDBOX_OWNER_ID: 'opencode-acceptance-native',
+        ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+        ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+      },
+    });
+    await E(host).remove('opencode.null-powers');
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'opencode-auth',
+      'OpenRouter credential',
+      encodeBase64(new TextEncoder().encode('acceptance-credential')),
+    );
+    await E(host).copy(
+      ['secrets', 'opencode-auth'],
+      ['opencode-auth.broker-read'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-broker-service-agent.js'),
+      {
+        powersName: 'opencode-auth.broker-read',
+        resultName: ['opencode-sandbox', 'broker-service'],
+        env: {
+          OPENCODE_BROKER_CONFIG: JSON.stringify({
+            ownerId: 'opencode-acceptance',
+            directory: brokerDir,
+            imageRef: `localhost/opencode@${digest}`,
+            imageDigest: digest,
+            listenerImageRef: `localhost/listener@${digest}`,
+            models: ['deepseek/deepseek-v4.1-flash'],
+          }),
+        },
+      },
+    );
+    await E(host).remove('opencode-auth.broker-read');
+    await E(host).copy(
+      ['opencode-sandbox', 'state-provider'],
+      ['opencode.state-provider-powers'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-session-storage-module.js'),
+      {
+        powersName: 'opencode.state-provider-powers',
+        resultName: ['opencode-sandbox', 'session-storage'],
+        env: {
+          OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          OPENCODE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    await E(host).remove('opencode.state-provider-powers');
+    const backend = await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-backend-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['opencode-sandbox', 'backend'],
+        env: {
+          OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          OPENCODE_MCP_DIR: roots.mcpDir,
+          OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
+        },
+      },
+    );
+    t.is((await E(backend).describe()).id, 'opencode');
+    const tools = Far('HostedToolSet', {
+      describe: async () =>
+        harden({ dynamicTools: [], toolSetId: 'acceptance' }),
+      execute: async () => 'ok',
+      help: () => 'acceptance tools',
+    });
+    // Starting reaches the native controller in its own worker. Without
+    // Podman the provider listener cannot start, so activation rejects; the
+    // owner keeps the record, its exact dependencies, and the private
+    // directories the backend prepared. This is wiring evidence only. On a
+    // host without procfs (macOS) the runtime refuses before admission; on
+    // Linux the grant is admitted and the listener's start failure is
+    // reported as a failed admission.
+    const refused = /procfs process identity|Provider grant admission failed/;
+    await t.throwsAsync(
+      E(backend).create(
+        harden({ sessionId: 'one', networkPolicy: 'off' }),
+        tools,
+      ),
+      { message: refused },
+    );
+    // The interrupted start is retried through its own cleanup on the next
+    // request, which then fails at the same native boundary rather than being
+    // refused for an unfinished startup.
+    await t.throwsAsync(
+      E(backend).create(
+        harden({ sessionId: 'one', networkPolicy: 'off' }),
+        tools,
+      ),
+      { message: refused },
+    );
+    const recordPath = [
+      'opencode-sandbox',
+      'session-records',
+      'sessions',
+      'one',
+    ];
+    const record = await E(host).lookup(recordPath);
+    const plan = JSON.parse(await E(record).readText('plan'));
+    t.is(plan.sessionId, 'one');
+    t.is(plan.rootfs, `oci:localhost/opencode@${digest}`);
+    t.deepEqual(plan.nativeProfile, profile);
+    t.is(await E(record).maybeReadText('lifecycle'), 'starting');
+    t.deepEqual([...(await E(record).list('references'))].sort(), [
+      'brokerService',
+      'client',
+      'sandboxService',
+      'stateProvider',
+      'storage',
+      'worker',
+    ]);
+    t.is(
+      await E(host).identify(...recordPath, 'references', 'sandboxService'),
+      await E(host).identify('opencode-sandbox', 'native-sandbox'),
+    );
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.access(directory);
+    }
+    // Destroy stops through the controller, which closes the scopes it
+    // acquired, then the recorded storage owner removes the directories and
+    // the record releases its dependencies.
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+    t.false(await E(host).has(...recordPath));
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(fsp.access(directory), { code: 'ENOENT' });
+    }
+    await t.throwsAsync(
+      fsp.access(path.join(roots.mcpDir, plan.sandboxSessionId)),
+      {
+        code: 'ENOENT',
+      },
+    );
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+  },
+);
+
+testNeedsNodeManager(
+  'the Claude backend records a session through the daemon owner and destroy reaches its storage',
+  async t => {
+    t.timeout(120_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
+    const base = config.statePath;
+    const roots = {
+      workspaceDir: path.join(base, 'claude-workspaces'),
+      mcpDir: path.join(base, 'claude-private'),
+    };
+    const stateDir = path.join(base, 'claude-state');
+    const nativeRuntime = path.join(base, 'claude-native-runtime');
+    const brokerDir = path.join(base, 'claude-broker');
+    for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const profile = {
+      uid: 1000,
+      gid: 1000,
+      memoryBytes: '536870912',
+      cpuQuotaMicros: '200000',
+      pids: 128,
+      cpuPeriodMicros: 100_000,
+      maxConcurrentOperations: 1,
+    };
+    const { host } = await makeHost(config, cancelled);
+    await E(host).makeDirectory('claude-sandbox');
+    // The same services setup-host.js and setup-hosted.js mint, over the
+    // same powers shapes: no powers, a stored null, a SecretBlob, the state
+    // provider, and host powers for the backend.
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-state-provider-module.js'),
+      {
+        powersName: '@none',
+        resultName: ['claude-sandbox', 'state-provider'],
+        env: { ENDO_CLAUDE_STATE_DIR: stateDir },
+      },
+    );
+    await E(host).storeValue(null, 'claude.null-powers');
+    await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
+      powersName: 'claude.null-powers',
+      resultName: ['claude-sandbox', 'native-sandbox'],
+      env: {
+        ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
+        ENDO_SANDBOX_OWNER_ID: 'claude-acceptance-native',
+        ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+        ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+      },
+    });
+    await E(host).remove('claude.null-powers');
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'claude-creds',
+      'Anthropic oauthToken',
+      encodeBase64(new TextEncoder().encode('sk-ant-oat01-acceptance')),
+    );
+    await E(host).copy(
+      ['secrets', 'claude-creds'],
+      ['claude-creds.broker-read'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-broker-service-agent.js'),
+      {
+        powersName: 'claude-creds.broker-read',
+        resultName: ['claude-sandbox', 'broker-service'],
+        env: {
+          CLAUDE_BROKER_CONFIG: JSON.stringify({
+            ownerId: 'claude-acceptance',
+            directory: brokerDir,
+            imageRef: `localhost/claude@${digest}`,
+            imageDigest: digest,
+            listenerImageRef: `localhost/listener@${digest}`,
+            models: ['claude-sonnet-4-6'],
+            credentialKind: 'oauthToken',
+          }),
+        },
+      },
+    );
+    await E(host).remove('claude-creds.broker-read');
+    await E(host).copy(
+      ['claude-sandbox', 'state-provider'],
+      ['claude.state-provider-powers'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-session-storage-module.js'),
+      {
+        powersName: 'claude.state-provider-powers',
+        resultName: ['claude-sandbox', 'session-storage'],
+        env: {
+          CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          CLAUDE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    await E(host).remove('claude.state-provider-powers');
+    const backend = await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-backend-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['claude-sandbox', 'backend'],
+        env: {
+          CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          CLAUDE_MCP_DIR: roots.mcpDir,
+          CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
+        },
+      },
+    );
+    t.is((await E(backend).describe()).id, 'claude');
+    const tools = Far('HostedToolSet', {
+      describe: async () =>
+        harden({ dynamicTools: [], toolSetId: 'acceptance' }),
+      execute: async () => 'ok',
+      help: () => 'acceptance tools',
+    });
+    // Starting reaches the native controller in its own worker. Without
+    // Podman the provider listener cannot start, so activation rejects; the
+    // owner keeps the record, its exact dependencies, and the private
+    // directories the backend prepared. This is wiring evidence only. On a
+    // host without procfs (macOS) the runtime refuses before admission; on
+    // Linux the grant is admitted and the listener's start failure is
+    // reported as a failed admission.
+    const refused = /procfs process identity|Provider grant admission failed/;
+    await t.throwsAsync(
+      E(backend).create(harden({ sessionId: 'one' }), tools),
+      { message: refused },
+    );
+    // The interrupted start is retried through its own cleanup on the next
+    // request, which then fails at the same native boundary rather than being
+    // refused for an unfinished startup.
+    await t.throwsAsync(
+      E(backend).create(harden({ sessionId: 'one' }), tools),
+      { message: refused },
+    );
+    const recordPath = ['claude-sandbox', 'session-records', 'sessions', 'one'];
+    const record = await E(host).lookup(recordPath);
+    const plan = JSON.parse(await E(record).readText('plan'));
+    t.is(plan.sessionId, 'one');
+    // The plan carries the broker's pinned image and credential kind and the
+    // request's network policy; no credential and no image reach the backend
+    // environment.
+    t.is(plan.rootfs, `oci:localhost/claude@${digest}`);
+    t.is(plan.networkPolicy, 'off');
+    t.is(plan.credentialKind, 'oauthToken');
+    t.deepEqual(plan.nativeProfile, profile);
+    t.is(await E(record).maybeReadText('lifecycle'), 'starting');
+    t.deepEqual([...(await E(record).list('references'))].sort(), [
+      'brokerService',
+      'client',
+      'sandboxService',
+      'stateProvider',
+      'storage',
+      'worker',
+    ]);
+    t.is(
+      await E(host).identify(...recordPath, 'references', 'brokerService'),
+      await E(host).identify('claude-sandbox', 'broker-service'),
+    );
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.access(directory);
+    }
+    // Activation stops at the broker, before the state provider is asked for
+    // the session's persistent config directory, so none exists yet.
+    await t.throwsAsync(
+      fsp.access(path.join(stateDir, plan.sandboxSessionId)),
+      { code: 'ENOENT' },
+    );
+    // Destroy stops through the controller, which closes the scope and
+    // revokes the grant it acquired, then the recorded storage owner removes
+    // the directories, and the record releases its dependencies.
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+    t.false(await E(host).has(...recordPath));
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+      path.join(roots.mcpDir, plan.sandboxSessionId),
+      path.join(stateDir, plan.sandboxSessionId),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(fsp.access(directory), { code: 'ENOENT' });
+    }
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+  },
+);
+
+testNeedsNodeManager(
+  'native OpenCode broker retains its exact secret after name replacement and restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config, host } = await prepareHost(t);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'broker-original',
+      'Original broker credential',
+      encodeBase64(new TextEncoder().encode('original-test-credential')),
+    );
+    await E(importer).createBase64(
+      'broker-replacement',
+      'Replacement broker credential',
+      encodeBase64(new TextEncoder().encode('replacement-test-credential')),
+    );
+    const original = await E(host).identify('secrets', 'broker-original');
+    const replacement = await E(host).identify('secrets', 'broker-replacement');
+    await E(host).storeIdentifier('broker-key', original);
+    const imageDigest = `sha256:${'a'.repeat(64)}`;
+    const directory = path.join(config.statePath, 'broker-runtime');
+    const env = {
+      OPENCODE_BROKER_CONFIG: JSON.stringify({
+        ownerId: 'native-broker-acceptance',
+        directory,
+        imageRef: `localhost/opencode@${imageDigest}`,
+        imageDigest,
+        listenerImageRef: `localhost/provider@${imageDigest}`,
+        models: ['test/model'],
+      }),
+    };
+    const specifier = new URL(
+      '../../opencode-sandbox/src/opencode-broker-service-agent.js',
+      import.meta.url,
+    ).href;
+    const service = await E(host).makeUnconfined('broker-operator', specifier, {
+      powersName: 'broker-key',
+      resultName: 'broker-service',
+      env,
+    });
+    const serviceId = await E(host).identify('broker-service');
+    const formula = readFormulaFromDb(config.statePath, serviceId);
+    t.like(formula, { type: 'make-unconfined', powers: original, env });
+    t.false(JSON.stringify(formula).includes('original-test-credential'));
+    const scopeSpec = harden({
+      providerOrigin: 'https://openrouter.ai',
+      accountRef: 'openrouter',
+      model: 'test/model',
+    });
+    const a = await E(service).provideScope('a', scopeSpec);
+    const b = await E(service).provideScope('b', scopeSpec);
+    await E(a).revoke();
+    t.is(await E(service).lookupScope('b'), b);
+    t.false(fs.existsSync(directory));
+    await E(host).remove('broker-key');
+    await E(host).storeIdentifier('broker-key', replacement);
+    await E(host).remove('secrets', 'broker-original');
+    t.true(formulaExistsInDb(config.statePath, original));
+
+    await restart(config);
+    const { host: recoveredHost } = await makeHost(config, cancelled);
+    t.is(await E(recoveredHost).identify('broker-key'), replacement);
+    t.is(readFormulaFromDb(config.statePath, serviceId).powers, original);
+    const recovered = await E(recoveredHost).lookup('broker-service');
+    // Only inert handles were issued: this does not claim native crash cleanup.
+    const recoveredScope = await E(recovered).provideScope(
+      'after-restart',
+      scopeSpec,
+    );
+    await E(recoveredScope).revoke();
+    t.false(fs.existsSync(directory));
+    t.true(formulaExistsInDb(config.statePath, original));
+    const audit = await E(recoveredHost).lookup(['@secrets', 'audit']);
+    t.false((await E(audit).list()).some(event => event.operation === 'read'));
+  },
+);
 
 testNeedsNodeManager(
   'secret lookup capabilities and values survive restart',
@@ -2936,6 +4294,7 @@ testNeedsNodeWorker(
     await E(host).makeUnconfined('worker', counterPath, {
       powersName: '@none',
       resultName: 'counter',
+      env: { ENDO_TEST_PRIVATE_ENV: 'environment-canary' },
     });
 
     const counterId = await E(host).identify('counter');
@@ -2946,6 +4305,42 @@ testNeedsNodeWorker(
     t.is(record.properties.specifier.value, counterPath);
     t.is(record.properties.worker.kind, 'reference');
     t.is(record.properties.powers.kind, 'reference');
+    t.false('env' in record.properties);
+    t.false(JSON.stringify(record).includes('environment-canary'));
+    t.deepEqual(await E(host).getFormulaEnvironment(counterId), {
+      ENDO_TEST_PRIVATE_ENV: 'environment-canary',
+    });
+    await t.throwsAsync(
+      E(E(host).diagnostics()).getFormulaEnvironment(counterId),
+      {
+        message: /target has no method "getFormulaEnvironment"/u,
+      },
+    );
+  },
+);
+
+test.serial(
+  'getFormulaEnvironment reads persisted environment after startup failure',
+  async t => {
+    const { host } = await prepareHost(t);
+    const missing = path.join(
+      dirname,
+      'test',
+      'missing-environment-fixture.js',
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined(undefined, missing, {
+        powersName: '@none',
+        resultName: 'failed-caplet',
+        env: { ENDO_RUNTIME_DIRECTORY: '/host/private/runtime' },
+      }),
+    );
+    const identifier = await E(host).identify('failed-caplet');
+    t.truthy(identifier);
+    t.deepEqual(await E(host).getFormulaEnvironment(identifier), {
+      ENDO_RUNTIME_DIRECTORY: '/host/private/runtime',
+    });
+    await t.throwsAsync(E(host).lookup('failed-caplet'));
   },
 );
 
@@ -2978,6 +4373,7 @@ testNeedsNodeWorker(
     // direct `getFormula` call that exposes the `worker` reference.
     const counterId = await E(host).identify('counter');
     const counterRecord = await E(E(host).diagnostics()).getFormula(counterId);
+    t.deepEqual(await E(host).getFormulaEnvironment(counterId), {});
     t.is(counterRecord.properties.worker.kind, 'reference');
     const workerId = counterRecord.properties.worker.identifier;
 
@@ -3204,6 +4600,12 @@ test('the diagnostics facet is absent on the guest facet', async t => {
   await t.throwsAsync(() => E(guest).getFormula(tenId), {
     message: /target has no method "getFormula"/u,
   });
+  await t.throwsAsync(() => E(guest).getFormulaEnvironment(tenId), {
+    message: /target has no method "getFormulaEnvironment"/u,
+  });
+  await t.throwsAsync(() => E(host).getFormulaEnvironment(tenId), {
+    message: /has no construction environment/u,
+  });
 });
 
 test('getFormula rejects cross-peer locators', async t => {
@@ -3223,6 +4625,9 @@ test('getFormula rejects cross-peer locators', async t => {
     number: formulaNumber,
   });
   await t.throwsAsync(() => E(E(host).diagnostics()).getFormula(crossPeerId), {
+    message: /cross-peer/u,
+  });
+  await t.throwsAsync(() => E(host).getFormulaEnvironment(crossPeerId), {
     message: /cross-peer/u,
   });
 });
@@ -7349,6 +8754,46 @@ testNeedsNodeWorker(
   },
 );
 
+testNeedsNodeWorker.serial(
+  'failed caplet publication does not formulate its fresh native worker',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t);
+    const modulePath = path.join(dirname, 'test', 'move-hub.js');
+    await t.throwsAsync(
+      () =>
+        E(host).makeUnconfined('unpublished-worker', modulePath, {
+          powersName: '@none',
+          resultName: ['missing-parent', 'client'],
+        }),
+      { message: /missing-parent/ },
+    );
+    // Worker-name publication is a separate deferred task and can succeed
+    // before result-name publication fails. The retained identity must not
+    // have acquired a process: no worker formula was persisted/evaluated.
+    const workerId = await E(host).identify('unpublished-worker');
+    t.is(typeof workerId, 'string');
+    t.false(formulaExistsInDb(config.statePath, workerId));
+
+    await E(host).makeUnconfined('published-worker', modulePath, {
+      powersName: '@none',
+      resultName: 'published-client',
+    });
+    const publishedWorkerId = await E(host).identify('published-worker');
+    const clientId = await E(host).identify('published-client');
+    t.like(readFormulaFromDb(config.statePath, publishedWorkerId), {
+      type: 'worker',
+      kind: 'node',
+      label: 'published-worker',
+    });
+    t.like(readFormulaFromDb(config.statePath, clientId), {
+      type: 'make-unconfined',
+      worker: publishedWorkerId,
+    });
+    t.not(publishedWorkerId, await E(host).identify('@node'));
+  },
+);
+
 test('Phase 6: guest.lookup("@node") rejects', async t => {
   const { host } = await prepareHost(t);
 
@@ -7849,5 +9294,79 @@ test.serial(
     t.true((await messages.return()).done);
     t.true((await pendingName).done);
     t.true((await pendingMessage).done);
+  },
+);
+
+test.serial(
+  'fresh concurrent directories collect after removal without a restart',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { host } = await makeHost(config, cancelled);
+    const directories = await Promise.all(
+      ['first', 'second', 'third'].map(async name => {
+        const directory = await E(host).makeDirectory(name);
+        await E(directory).writeText('value', name);
+        const id = await E(host).identify(name);
+        const formula = readFormulaFromDb(config.statePath, id);
+        const valueId = await E(directory).identify('value');
+        return { name, directory, ids: [id, formula.petStore, valueId] };
+      }),
+    );
+    for (const { ids } of directories) {
+      for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    }
+    const [first, ...siblings] = directories;
+    await E(host).remove(first.name);
+    for (const id of first.ids)
+      t.false(formulaExistsInDb(config.statePath, id));
+    for (const { name, directory, ids } of siblings) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(directory).readText('value'), name);
+      for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    }
+    await Promise.all(siblings.map(({ name }) => E(host).remove(name)));
+    for (const { ids } of siblings) {
+      for (const id of ids) t.false(formulaExistsInDb(config.statePath, id));
+    }
+  },
+);
+
+test.serial(
+  'fresh agent directory dependencies collect with their owning agents',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { host } = await makeHost(config, cancelled);
+    const [child, guest] = await Promise.all([
+      E(host).provideHost('child-handle', { agentName: 'child-agent' }),
+      E(host).provideGuest('guest-handle', { agentName: 'guest-agent' }),
+    ]);
+    const directoryIds = await Promise.all([
+      E(child).identify('@planes'),
+      E(guest).identify('@nets'),
+      E(guest).identify('@planes'),
+    ]);
+    const ids = directoryIds.flatMap(id => [
+      id,
+      readFormulaFromDb(config.statePath, id).petStore,
+    ]);
+    for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    await Promise.all(
+      ['child-handle', 'child-agent', 'guest-handle', 'guest-agent'].map(name =>
+        E(host).remove(name),
+      ),
+    );
+    await waitForCondition(() =>
+      ids.every(id => !formulaExistsInDb(config.statePath, id)),
+    );
+    for (const id of ids) t.false(formulaExistsInDb(config.statePath, id));
+    // Bootstrap dependencies remain retained by the rooted Endo/host formulas.
+    for (const name of ['@planes', '@nets', '@pins']) {
+      // eslint-disable-next-line no-await-in-loop
+      const directory = await E(host).lookup(name);
+      // eslint-disable-next-line no-await-in-loop
+      t.true(Array.isArray(await E(directory).list()));
+    }
   },
 );

@@ -14,17 +14,60 @@ the whole container stack.
 ## Quick start
 
 ```js
+import { mkdtemp, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { makeFsBridge9p } from '@endo/9p-server';
+import { E } from '@endo/eventual-send';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended/in-memory.js';
 
 const fs = makeInMemoryFilesystem();
 // ... populate fs ...
 
-const bridge = makeFsBridge9p({ fs, socketPath: '/tmp/9p.sock' });
-await bridge.start();
-// Any 9P client connecting to /tmp/9p.sock now serves `fs`.
-// bridge.stop() closes the UDS and severs every live connection.
+const socketDirectory = await mkdtemp(join(tmpdir(), 'endo-9p-'));
+const socketPath = join(socketDirectory, 'bridge.sock');
+const bridge = makeFsBridge9p({ fs, socketPath });
+await E(bridge).start();
+// A client connecting to socketPath can now use `fs`.
+// When the owner is ready to release this projection:
+await E(bridge).stop();
+await rmdir(socketDirectory);
 ```
+
+## Cleanup ownership
+
+The bridge needs a private socket directory and exclusive ownership of the socket
+path until cleanup succeeds.
+Keep the bridge reference after a failed start or stop and retry `stop()` before
+removing its directory or releasing the backing filesystem.
+Stop fences input, closes the native listener, and waits for admitted filesystem
+calls and acquired resources to finish.
+Closing a socket alone does not prove that filesystem work has stopped.
+A hung backing operation can therefore keep stop pending.
+
+Native session controllers use `makeFsMounterKit` from `mount-caplet.js` and retain
+its local `close()` alongside the public `mounter` capability.
+The kit owns cleanup even when mount acquisition fails before returning a handle.
+It reserves each resolved mount point and socket path until all cleanup succeeds;
+the caller must also prevent aliases and overlapping owners outside the kit.
+Configure a private socket directory through `NINEP_SOCKET_DIR` or
+`XDG_RUNTIME_DIR`; the legacy shared temporary-directory fallback is not a private
+socket ancestry guarantee.
+
+Stop all users, including sandbox bind mounts, before closing the mounter.
+Cleanup then performs normal kernel unmount, drains the bridge, and optionally
+removes the mount directory.
+Each failed stage stays owned for retry without repeating successful stages.
+Lazy unmount is rejected because detached kernel users can outlive that command.
+A failed mount command is treated as uncertain until unmount succeeds; this
+increment does not reconcile native effects after worker death or daemon restart.
+
+Cancellation starts cleanup in the capability-only `makeFsMounter` entrypoint.
+Only an awaited kit `close()` establishes completion and provides an explicit
+retry path for failed acquisitions that returned no mount handle.
+The shared sandbox adapters still need to adopt the per-session native controller
+before these primitives establish complete session teardown.
 
 ## What gets pipelined
 

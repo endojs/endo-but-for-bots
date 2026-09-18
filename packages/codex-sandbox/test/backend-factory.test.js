@@ -2,7 +2,6 @@
 import '@endo/init';
 
 import test from 'ava';
-import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import {
   HostedToolSetInterface,
@@ -12,13 +11,11 @@ import {
 
 import {
   HOSTED_AGENT_POLICY_V1,
-  assertBrokerLeaseV1,
+  assertProviderGrantV1,
   assertContainerMounts,
   assertHostedAgentPolicyV1,
-  makeCodexBackendFactory,
-  makeCodexResourceProvisioner,
   normalizeCodexModelDescriptor,
-} from '../src/backend-factory.js';
+} from '../backend-factory.js';
 
 const validPolicy = () =>
   harden({
@@ -79,8 +76,8 @@ const validLeaseRequirements = () => ({
 
 const validLease = () =>
   harden({
-    version: 'BrokerLeaseV1',
-    leaseId: 'lease-session-1',
+    version: 'ProviderGrantV1',
+    grantId: 'lease-session-1',
     sessionId: 'session-1',
     imageDigest,
     networkNamespaceId: 'netns-session-1',
@@ -88,13 +85,7 @@ const validLease = () =>
     endpoint: 'http://127.0.0.1:4317/',
     accountRef,
     authMode: 'api-key',
-    expiresAt: '2999-01-01T00:00:00.000Z',
     modelAllowlist: harden(['gpt-test']),
-    limits: harden({
-      requests: 100,
-      bytes: 1_000_000n,
-      costMicrounits: 1_000_000n,
-    }),
   });
 
 const makeToolSet = () =>
@@ -108,6 +99,22 @@ const makeToolSet = () =>
     help() {
       return 'Test hosted tool set.';
     },
+  });
+
+const ATTACH_DECLARED = harden({
+  key: 'a1',
+  source: '/host/mounts/claude-attach-a1',
+  destination: '/mnt/project',
+  mode: 'rw',
+});
+const attachRow = (overrides = {}) =>
+  harden({
+    role: 'attach-a1',
+    destination: '/mnt/project',
+    mode: 'rw',
+    source: 'attach:a1',
+    options: harden(['nosuid', 'nodev']),
+    ...overrides,
   });
 
 test('sandbox contract rejects a tag and an unenforced resource limit', t => {
@@ -239,9 +246,9 @@ test('Codex model schema is translated at the backend boundary', t => {
   );
 });
 
-test('broker lease is bound to session, namespace, model, and quotas', t => {
+test('broker lease is bound to session, namespace, and model', t => {
   t.deepEqual(
-    assertBrokerLeaseV1(validLease(), {
+    assertProviderGrantV1(validLease(), {
       ...validLeaseRequirements(),
       model: 'gpt-test',
     }),
@@ -249,7 +256,7 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
   );
   t.throws(
     () =>
-      assertBrokerLeaseV1(
+      assertProviderGrantV1(
         harden({ ...validLease(), networkNamespaceId: 'shared-netns' }),
         validLeaseRequirements(),
       ),
@@ -261,7 +268,7 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
   ]) {
     t.throws(
       () =>
-        assertBrokerLeaseV1(
+        assertProviderGrantV1(
           harden({ ...validLease(), endpoint }),
           validLeaseRequirements(),
         ),
@@ -274,7 +281,7 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
   ]) {
     t.throws(
       () =>
-        assertBrokerLeaseV1(
+        assertProviderGrantV1(
           harden({ ...validLease(), ...replacement }),
           validLeaseRequirements(),
         ),
@@ -282,643 +289,6 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
     );
   }
 });
-
-test('backend factory requires an approved image and exact workspace cwd', async t => {
-  t.throws(
-    () =>
-      makeCodexBackendFactory({
-        imageDigest: '',
-        destroy: async () => undefined,
-        listModels: async () => [],
-        provision: async () => {
-          throw Error('must not provision');
-        },
-      }),
-    { message: /operator-approved image digest/ },
-  );
-
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async () => undefined,
-    listModels: async () => [],
-    provision: async () => {
-      throw Error('must not provision');
-    },
-  });
-  await t.throwsAsync(
-    () =>
-      factory.create({ sessionId: 'session-1', cwd: '/etc' }, makeToolSet()),
-    { message: /cwd must be \/workspace/ },
-  );
-  for (const sessionId of ['.', '..', '.hidden', 'a.b', 'x'.repeat(129)]) {
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => factory.create({ sessionId }, makeToolSet()), {
-      message: /bounded portable path component/,
-    });
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => factory.destroy({ sessionId }), {
-      message: /bounded portable path component/,
-    });
-  }
-});
-
-test('failed attestation disposes provisioned resources', async t => {
-  let disposed = 0;
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async () => undefined,
-    listModels: async () => [],
-    provision: async () => ({
-      start: async () => {
-        throw Error('must not start');
-      },
-      dispose: async () => {
-        disposed += 1;
-      },
-      policy: { ...validPolicy(), network: 'private' },
-      auditWriter: harden({ append: async () => undefined }),
-    }),
-  });
-  await t.throwsAsync(
-    () => factory.create({ sessionId: 'session-1' }, makeToolSet()),
-    { message: /field.*network.*not enforced/ },
-  );
-  t.is(disposed, 1);
-});
-
-test('run and admin facets separate turn authority from teardown', async t => {
-  let disposed = 0;
-  const events = [];
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async () => undefined,
-    listModels: async () => [
-      {
-        id: 'gpt-test',
-        displayName: 'GPT Test',
-        description: '',
-        isDefault: true,
-        defaultReasoningEffort: 'high',
-        supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
-      },
-    ],
-    provision: async () => ({
-      start: async () => {
-        throw Error('not started by this lifecycle test');
-      },
-      dispose: async () => {
-        disposed += 1;
-      },
-      policy: validPolicy(),
-      auditWriter: harden({
-        append: async (kind, payload) => {
-          events.push({ kind, payload });
-        },
-      }),
-    }),
-  });
-  t.deepEqual(await factory.listModels(), [
-    {
-      id: 'gpt-test',
-      title: 'GPT Test',
-      description: '',
-      default: true,
-      defaultReasoningEffort: 'high',
-      reasoningEfforts: ['high'],
-    },
-  ]);
-  const session = await factory.create(
-    { sessionId: 'session-1' },
-    makeToolSet(),
-  );
-  t.deepEqual(
-    // eslint-disable-next-line no-underscore-dangle
-    [.../** @type {any} */ (session.run).__getMethodNames__()].sort(),
-    [
-      '__getInterfaceGuard__',
-      '__getMethodNames__',
-      'acknowledge',
-      'help',
-      'interrupt',
-      'models',
-      'send',
-      'status',
-    ],
-  );
-  t.false(
-    // eslint-disable-next-line no-underscore-dangle
-    /** @type {any} */ (session.run).__getMethodNames__().includes('terminate'),
-  );
-  t.true(events.some(event => event.kind === 'sandbox-attested'));
-  await session.admin.terminate();
-  await session.admin.terminate();
-  t.is(disposed, 1);
-});
-
-test('create() for a session the factory still runs stops the old instance first', async t => {
-  let provisions = 0;
-  let disposed = 0;
-  const events = [];
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async () => undefined,
-    listModels: async () => [],
-    provision: async () => {
-      provisions += 1;
-      return {
-        start: async () => {
-          throw Error('not started by this lifecycle test');
-        },
-        dispose: async () => {
-          disposed += 1;
-        },
-        policy: validPolicy(),
-        auditWriter: harden({
-          append: async (kind, payload) => {
-            events.push({ kind, payload });
-          },
-        }),
-      };
-    },
-  });
-  // A Floot factory rebuilt without a daemon restart revives the session by
-  // creating it again; the instance the old factory owned must not run on
-  // beside it over the same workspace and journal.
-  const first = await factory.create({ sessionId: 'session-1' }, makeToolSet());
-  const second = await factory.create(
-    { sessionId: 'session-1' },
-    makeToolSet(),
-  );
-  t.is(provisions, 2);
-  t.is(disposed, 1, 'the first instance was torn down before the second');
-  t.true(events.some(event => event.kind === 'session-closed'));
-  // The superseded admin facet has nothing left to do; the new one owns the
-  // session.
-  await first.admin.terminate();
-  t.is(disposed, 1);
-  await second.admin.terminate();
-  t.is(disposed, 2);
-});
-
-test('destroy() stops a live instance before removing durable state', async t => {
-  let disposed = 0;
-  const destroyed = [];
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async spec => {
-      destroyed.push({ sessionId: spec.sessionId, stoppedFirst: disposed });
-    },
-    listModels: async () => [],
-    provision: async () => ({
-      start: async () => {
-        throw Error('not started by this lifecycle test');
-      },
-      dispose: async () => {
-        disposed += 1;
-      },
-      policy: validPolicy(),
-      auditWriter: harden({ append: async () => undefined }),
-    }),
-  });
-  await factory.create({ sessionId: 'session-1' }, makeToolSet());
-  await factory.destroy({ sessionId: 'session-1' });
-  t.is(disposed, 1);
-  t.deepEqual(destroyed, [{ sessionId: 'session-1', stoppedFirst: 1 }]);
-  // Lifecycle replay with nothing live is an idempotent destroy.
-  await factory.destroy({ sessionId: 'session-1' });
-  t.is(disposed, 1);
-  t.is(destroyed.length, 2);
-});
-
-test('resource provisioner unwinds every completed stage in reverse order', async t => {
-  const cleanup = [];
-  const provision = makeCodexResourceProvisioner({
-    imageDigest,
-    providerOrigin,
-    accountRef,
-    makeAuditJournal: async () => ({
-      writer: harden({ append: async () => undefined }),
-    }),
-    makeWorkspace: async () =>
-      harden({
-        remove: async () => {
-          cleanup.push('workspace');
-        },
-      }),
-    mountWorkspace: async () =>
-      harden({
-        unmount: async () => {
-          cleanup.push('mount');
-        },
-      }),
-    issueBrokerLease: async () =>
-      harden({
-        attestation: async () => validLease(),
-        revoke: async () => {
-          cleanup.push('broker');
-        },
-      }),
-    makeSlice: async () =>
-      harden({
-        policy: async () => ({ ...validPolicy(), network: 'private' }),
-        dispose: async () => {
-          cleanup.push('slice');
-        },
-      }),
-    startTransport: async () => {
-      throw Error('not reached');
-    },
-    loadThreadState: async () => ({}),
-    saveThreadState: async () => undefined,
-  });
-  await t.throwsAsync(() => provision({ sessionId: 'session-1' }), {
-    message: /field.*network.*not enforced/,
-  });
-  // The workspace is durable: a session revived after a restart reopens the
-  // one it had, so a failure past that point must not remove it. Its removal
-  // belongs to the factory's destroy.
-  t.deepEqual(cleanup, ['slice', 'broker', 'mount']);
-});
-
-test('resource provisioner journals rollback failures', async t => {
-  const events = [];
-  const provision = makeCodexResourceProvisioner({
-    imageDigest,
-    providerOrigin,
-    accountRef,
-    makeAuditJournal: async () => ({
-      writer: harden({
-        append: async (kind, payload) => {
-          events.push({ kind, payload });
-        },
-      }),
-    }),
-    makeWorkspace: async () => harden({ remove: async () => undefined }),
-    mountWorkspace: async () => harden({ unmount: async () => undefined }),
-    issueBrokerLease: async () =>
-      harden({
-        attestation: async () => validLease(),
-        revoke: async () => undefined,
-      }),
-    makeSlice: async () =>
-      harden({
-        policy: async () => ({ ...validPolicy(), network: 'private' }),
-        dispose: async () => {
-          throw Error('slice reap failed');
-        },
-      }),
-    startTransport: async () => {
-      throw Error('not reached');
-    },
-    loadThreadState: async () => ({}),
-    saveThreadState: async () => undefined,
-  });
-
-  await t.throwsAsync(() => provision({ sessionId: 'session-1' }), {
-    instanceOf: AggregateError,
-    message: /provisioning and rollback failed/,
-  });
-  t.like(
-    events.find(event => event.kind === 'session-provisioning-cleanup-failed'),
-    {
-      payload: {
-        sessionId: 'session-1',
-        failures: [
-          'slice reap failed',
-          'Workspace remains leased until slice is reaped',
-        ],
-      },
-    },
-  );
-});
-
-for (const failedStage of [
-  'slice',
-  'broker',
-  'mount',
-  'slice-creation',
-  'slice-creation-and-broker',
-]) {
-  test(`failed provisioning retains ${failedStage} cleanup before admission`, async t => {
-    t.timeout(5000);
-    const calls = { workspace: 0, slice: 0, broker: 0, mount: 0 };
-    let failing = true;
-    let hiddenSlice = false;
-    const provision = makeCodexResourceProvisioner({
-      imageDigest,
-      providerOrigin,
-      accountRef,
-      makeAuditJournal: async () => ({
-        writer: harden({ append: async () => undefined }),
-      }),
-      makeWorkspace: async () => {
-        calls.workspace += 1;
-        return harden({});
-      },
-      mountWorkspace: async () =>
-        harden({
-          unmount: async () => {
-            calls.mount += 1;
-            if (failing && failedStage === 'mount') throw Error('mount failed');
-          },
-        }),
-      issueBrokerLease: async () =>
-        harden({
-          attestation: async () => validLease(),
-          revoke: async () => {
-            calls.broker += 1;
-            if (failing && failedStage === 'broker')
-              throw Error('broker failed');
-            if (
-              failedStage === 'slice-creation-and-broker' &&
-              calls.broker === 1
-            ) {
-              throw Error('broker transiently failed');
-            }
-          },
-        }),
-      makeSlice: async () => {
-        if (failedStage.startsWith('slice-creation')) {
-          hiddenSlice = true;
-          throw Error('slice creation failed');
-        }
-        return harden({
-          policy: async () => ({ ...validPolicy(), network: 'private' }),
-          dispose: async () => {
-            calls.slice += 1;
-            if (failing && failedStage === 'slice') throw Error('slice failed');
-          },
-        });
-      },
-      retrySliceCleanup: async () => {
-        if (!hiddenSlice) return;
-        if (failing) throw Error('hidden slice remains');
-        hiddenSlice = false;
-      },
-      startTransport: async () => {
-        throw Error('not reached');
-      },
-      loadThreadState: async () => ({}),
-      saveThreadState: async () => undefined,
-    });
-    await t.throwsAsync(() => provision({ sessionId: 'session-1' }), {
-      instanceOf: AggregateError,
-      message: /provisioning and rollback failed/,
-    });
-    if (failedStage.startsWith('slice')) {
-      t.is(calls.mount, 0, 'workspace lease survives incomplete slice cleanup');
-      t.is(calls.broker, 1, 'orphan inference authority is revoked promptly');
-    }
-    await t.throwsAsync(() => provision({ sessionId: 'session-2' }), {
-      message: /cleanup remains pending|hidden slice remains/,
-    });
-    t.is(calls.workspace, 1, 'no acquisition can overtake failed cleanup');
-    if (failedStage === 'slice-creation-and-broker') {
-      t.is(
-        calls.broker,
-        2,
-        'revocation retries despite persistent slice failure',
-      );
-      t.is(calls.mount, 0, 'workspace still remains leased');
-    }
-    failing = false;
-    await Promise.all([provision.retryCleanup(), provision.retryCleanup()]);
-    t.false(hiddenSlice);
-    t.is(calls.mount, failedStage === 'mount' ? 3 : 1);
-    const expectedBrokerCalls = {
-      slice: 1,
-      broker: 3,
-      mount: 1,
-      'slice-creation': 1,
-      'slice-creation-and-broker': 2,
-    };
-    t.is(calls.broker, expectedBrokerCalls[failedStage]);
-    const afterCleanup = { ...calls };
-    await provision.retryCleanup();
-    t.deepEqual(calls, afterCleanup, 'settled inverses are not repeated');
-  });
-}
-
-test('resource disposal retries only unfinished cleanup stages', async t => {
-  const calls = { slice: 0, broker: 0, mount: 0, workspace: 0 };
-  const provision = makeCodexResourceProvisioner({
-    imageDigest,
-    providerOrigin,
-    accountRef,
-    makeAuditJournal: async () => ({
-      writer: harden({ append: async () => undefined }),
-    }),
-    makeWorkspace: async () =>
-      harden({
-        remove: async () => {
-          calls.workspace += 1;
-        },
-      }),
-    mountWorkspace: async () =>
-      harden({
-        unmount: async () => {
-          calls.mount += 1;
-        },
-      }),
-    issueBrokerLease: async () =>
-      harden({
-        attestation: async () => validLease(),
-        revoke: async () => {
-          calls.broker += 1;
-          if (calls.broker === 1) throw Error('retry broker revoke');
-        },
-      }),
-    makeSlice: async () =>
-      harden({
-        policy: async () => validPolicy(),
-        dispose: async () => {
-          calls.slice += 1;
-        },
-      }),
-    startTransport: async () => {
-      throw Error('not reached');
-    },
-    loadThreadState: async () => ({}),
-    saveThreadState: async () => undefined,
-  });
-  const resources = await provision({ sessionId: 'session-1' });
-  await t.throwsAsync(() => resources.dispose(), {
-    message: /did not fully dispose/,
-  });
-  await resources.dispose();
-  t.deepEqual(calls, { slice: 1, broker: 2, mount: 1, workspace: 0 });
-});
-
-test('an unsettled tool call blocks teardown without destroying the session', async t => {
-  let disposed = 0;
-  /** @type {(value: string) => void} */
-  let releaseTool = () => {};
-  const toolRunning = new Promise(resolve => {
-    releaseTool = resolve;
-  });
-  /** @type {(value?: any) => void} */
-  let toolStarted = () => {};
-  const started = new Promise(resolve => {
-    toolStarted = resolve;
-  });
-  // Never leave the tool pending: a failing assertion below would otherwise
-  // strand the client's message pump and keep the worker alive.
-  t.teardown(() => releaseTool('torn down'));
-
-  // A transport that answers enough of the protocol to reach a live tool call.
-  const outbound = [];
-  const inbound = [];
-  const waiters = [];
-  let closed = false;
-  const push = message => {
-    inbound.push(message);
-    while (waiters.length) waiters.shift()();
-  };
-  const transport = {
-    messages: {
-      async *[Symbol.asyncIterator]() {
-        for (;;) {
-          if (inbound.length) yield inbound.shift();
-          else if (closed) return;
-          // eslint-disable-next-line no-await-in-loop
-          else await new Promise(resolve => waiters.push(resolve));
-        }
-      },
-    },
-    send: async message => {
-      outbound.push(message);
-      if (!('id' in message) || !('method' in message)) return;
-      if (message.method === 'initialize') {
-        push({
-          id: message.id,
-          result: {
-            codexHome: '/codex-home',
-            platformFamily: 'unix',
-            platformOs: 'linux',
-            userAgent: 'codex-test',
-          },
-        });
-      } else if (message.method === 'account/read') {
-        push({
-          id: message.id,
-          result: { account: { type: 'apiKey' }, requiresOpenaiAuth: true },
-        });
-      } else if (message.method === 'thread/start') {
-        push({ id: message.id, result: { thread: { id: 'thread-1' } } });
-      } else if (message.method === 'turn/start') {
-        push({
-          id: message.id,
-          result: { turn: { id: 'turn-1', status: 'inProgress' } },
-        });
-      }
-    },
-    close: async () => {
-      closed = true;
-      while (waiters.length) waiters.shift()();
-    },
-  };
-
-  const toolSet = makeExo('TestHostedToolSet', HostedToolSetInterface, {
-    async describe() {
-      return harden({
-        dynamicTools: harden([
-          harden({
-            type: 'function',
-            name: 'slow',
-            description: 'A tool that takes a while.',
-            inputSchema: harden({
-              type: 'object',
-              properties: harden({}),
-              required: harden([]),
-            }),
-          }),
-        ]),
-        toolSetId: 'tools-v1',
-      });
-    },
-    async execute() {
-      toolStarted();
-      return toolRunning;
-    },
-    help() {
-      return 'Test hosted tool set.';
-    },
-  });
-
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async () => undefined,
-    listModels: async () => [],
-    provision: async () => ({
-      start: async () => transport,
-      dispose: async () => {
-        disposed += 1;
-      },
-      policy: validPolicy(),
-      auditWriter: harden({ append: async () => undefined }),
-    }),
-  });
-  const session = await factory.create({ sessionId: 'session-1' }, toolSet);
-  await E(session.run).send('do the slow thing', harden({}));
-  // Pushed after the turn is bound, so the request correlates to it.
-  push({
-    id: 7,
-    method: 'item/tool/call',
-    params: {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      callId: 'call-1',
-      namespace: null,
-      tool: 'slow',
-      arguments: {},
-    },
-  });
-  await started;
-
-  // Teardown must refuse while an Endo tool call is unsettled — and, crucially,
-  // must not have destroyed the slice, the workspace, or the broker lease on
-  // the way to refusing.
-  const refusal = /** @type {AggregateError} */ (
-    await t.throwsAsync(session.admin.terminate())
-  );
-  t.regex(
-    refusal.errors.map(error => `${error.message}`).join('\n'),
-    /unsettled Endo tool call/,
-  );
-  t.is(disposed, 0, 'the session was left intact for a lifecycle retry');
-
-  releaseTool('done');
-  for (let tries = 0; tries < 200; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const status = await E(session.run).status();
-    if (status.pendingToolCalls === 0) break;
-    // eslint-disable-next-line no-await-in-loop
-    await Promise.resolve();
-  }
-  await session.admin.terminate();
-  t.is(disposed, 1, 'and the retry tears it down');
-});
-
-// ---------------------------------------------------------------------------
-// Runtime attaches at the attested boundary
-// (designs/runtime-container-fs-mount.md)
-// ---------------------------------------------------------------------------
-
-const ATTACH_DECLARED = harden({
-  key: 'a1',
-  source: '/host/mounts/claude-attach-a1',
-  destination: '/mnt/project',
-  mode: 'rw',
-});
-const attachRow = (overrides = {}) =>
-  harden({
-    role: 'attach-a1',
-    destination: '/mnt/project',
-    mode: 'rw',
-    source: 'attach:a1',
-    options: harden(['nosuid', 'nodev']),
-    ...overrides,
-  });
 
 test('assertContainerMounts admits a bounded declaration and nothing else', t => {
   t.deepEqual(assertContainerMounts(undefined), []);
@@ -942,9 +312,24 @@ test('assertContainerMounts admits a bounded declaration and nothing else', t =>
       /host mountpoint/,
     ],
     [
-      'a destination outside /mnt/',
+      'a destination that shadows a fixed role',
       { ...ATTACH_DECLARED, destination: '/workspace' },
-      /under \/mnt\//,
+      /shadows the "workspace" role/,
+    ],
+    [
+      'a destination inside a fixed role',
+      { ...ATTACH_DECLARED, destination: '/codex-home/config' },
+      /shadows the "codex-state" role/,
+    ],
+    [
+      'a relative destination',
+      { ...ATTACH_DECLARED, destination: 'mnt/project' },
+      /destination must be an absolute normal path/,
+    ],
+    [
+      'a destination with a traversal segment',
+      { ...ATTACH_DECLARED, destination: '/mnt/../etc' },
+      /destination must be an absolute normal path/,
     ],
     ['an unknown mode', { ...ATTACH_DECLARED, mode: 'rwx' }, /mode must be/],
   ];
@@ -1032,137 +417,6 @@ test('the attested table is the five roles plus exactly the declared attaches', 
         { containerMounts: [ATTACH_DECLARED] },
       ),
     { message: /exact session table/ },
-  );
-});
-
-test('the provisioner declares attaches to the slice and keeps them out of the lease', async t => {
-  /** @type {{ makeSlice?: any, lease?: any }} */
-  const seen = {};
-  const provision = makeCodexResourceProvisioner({
-    imageDigest,
-    providerOrigin,
-    accountRef,
-    makeAuditJournal: async () => ({
-      writer: harden({ append: async () => undefined }),
-    }),
-    makeWorkspace: async () => harden({}),
-    mountWorkspace: async () => harden({ unmount: async () => undefined }),
-    issueBrokerLease: async spec => {
-      seen.lease = spec;
-      return harden({
-        revoke: async () => undefined,
-        attestation: async () => validLease(),
-      });
-    },
-    makeSlice: async options => {
-      seen.makeSlice = options;
-      return harden({
-        policy: async () =>
-          harden({
-            ...validPolicy(),
-            mounts: harden([...validPolicy().mounts, attachRow()]),
-          }),
-        dispose: async () => undefined,
-      });
-    },
-    startTransport: async () => harden({}),
-    loadThreadState: async () => harden({}),
-    saveThreadState: async () => undefined,
-  });
-  const resources = await provision(
-    harden({ sessionId: 'session-1', containerMounts: [ATTACH_DECLARED] }),
-  );
-  t.teardown(() => resources.dispose());
-  t.deepEqual(seen.makeSlice.spec.containerMounts, [ATTACH_DECLARED]);
-  t.false('containerMounts' in seen.lease);
-  t.is(resources.policy.mounts.length, 6);
-
-  // A slice that came back without the declared attach is refused at this
-  // boundary, before app-server can start.
-  const refusing = makeCodexResourceProvisioner({
-    imageDigest,
-    providerOrigin,
-    accountRef,
-    makeAuditJournal: async () => ({
-      writer: harden({ append: async () => undefined }),
-    }),
-    makeWorkspace: async () => harden({}),
-    mountWorkspace: async () => harden({ unmount: async () => undefined }),
-    issueBrokerLease: async () =>
-      harden({
-        revoke: async () => undefined,
-        attestation: async () => validLease(),
-      }),
-    makeSlice: async () =>
-      harden({
-        policy: async () => validPolicy(),
-        dispose: async () => undefined,
-      }),
-    startTransport: async () => harden({}),
-    loadThreadState: async () => harden({}),
-    saveThreadState: async () => undefined,
-  });
-  await t.throwsAsync(
-    () =>
-      refusing(
-        harden({ sessionId: 'session-1', containerMounts: [ATTACH_DECLARED] }),
-      ),
-    { message: /undeclared mount/ },
-  );
-});
-
-test('the backend factory attests the declared attaches at the authority handoff', async t => {
-  const events = [];
-  const factory = makeCodexBackendFactory({
-    imageDigest,
-    destroy: async () => undefined,
-    listModels: async () => [],
-    provision: async spec => ({
-      start: async () => {
-        throw Error('not started by this lifecycle test');
-      },
-      dispose: async () => undefined,
-      policy: harden({
-        ...validPolicy(),
-        mounts: harden([
-          ...validPolicy().mounts,
-          ...(spec.containerMounts || []).map(attach =>
-            attachRow({
-              role: `attach-${attach.key}`,
-              source: `attach:${attach.key}`,
-              destination: attach.destination,
-              mode: attach.mode,
-            }),
-          ),
-        ]),
-      }),
-      auditWriter: harden({
-        append: async (kind, payload) => {
-          events.push({ kind, payload });
-        },
-      }),
-    }),
-  });
-  const session = await factory.create(
-    harden({ sessionId: 'session-1', containerMounts: [ATTACH_DECLARED] }),
-    makeToolSet(),
-  );
-  t.teardown(() => session.admin.terminate());
-  const attested = events.find(event => event.kind === 'sandbox-attested');
-  t.deepEqual(attested?.payload.containerMounts, [
-    { key: 'a1', destination: '/mnt/project', mode: 'rw' },
-  ]);
-  // A malformed declaration is refused before anything is provisioned.
-  await t.throwsAsync(
-    () =>
-      factory.create(
-        harden({
-          sessionId: 'session-2',
-          containerMounts: [{ ...ATTACH_DECLARED, destination: '/etc' }],
-        }),
-        makeToolSet(),
-      ),
-    { message: /under \/mnt\// },
   );
 });
 

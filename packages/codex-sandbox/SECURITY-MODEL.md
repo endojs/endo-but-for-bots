@@ -1,20 +1,13 @@
 # Security model
 
-The trusted computing base includes the host provisioner, credential broker,
-audit anchor, and digest-pinned Codex CLI/app-server runtime.
-Prompts, workspace data, dynamic-tool arguments, and model-launched commands
-are untrusted.
-App-server must write its credential-free state volume and is trusted to apply
-the pinned per-turn `workspaceWrite` sandbox; compromise of that runtime is
-outside the inner command-boundary threat model and requires revoking the image
-digest.
-
-`@endo/codex-sandbox` trusts only the digest-pinned Codex app-server component
-described above, not the model or the commands that app-server launches on its
-behalf.
-The outer Endo slice is the host and cross-session authority boundary; the
-pinned app-server's inner sandbox is the boundary between its own control state
-and model-launched commands.
+The host provisioner, credential broker, audit anchor, container runtime, and
+kernel enforce the host and cross-session authority boundary.
+The entire guest workload is one authority domain: the digest-pinned Codex CLI,
+native tools, plugins, and subprocesses share the granted mounts and listeners.
+Guest code may modify its credential-free `/codex-home` and use the inference
+endpoint; native conversation state is not an authoritative effects record.
+The adapter relies on the pinned app-server protocol for compatibility and
+conversation handling, without treating the CLI as a boundary against commands.
 Codex's approval UI is not an authority boundary.
 
 The lifecycle owner refuses to start a session unless the sandbox returns the
@@ -41,14 +34,21 @@ The per-session provider broker described in
 channel.
 
 The durable audit journal is outside the workspace and slice.
-Every append advances a head checkpoint through independently protected anchor
-powers, so rolling back or deleting a valid suffix in the mutable entry store is
-detectable on recovery.
+Every append first authorizes the exact entry through a write-ahead head in
+independently protected anchor powers; only the newest head is kept, and it is
+what recovery checks the entry store's tail against, so rolling back or
+deleting a valid suffix in the mutable entry store is detectable on recovery,
+and an entry-store holder cannot synthesize a suffix the anchor never named.
+The whole chain is verified at every recovery.
 The client awaits journal durability before dispatching a prompt, answering an
 approval or Endo tool call, or reporting a terminal result.
-Complete operation payloads are retained within the explicit audit-entry bound;
-an oversized successful dynamic result quarantines the session instead of being
-truncated or returned as an ordinary retryable tool error.
+Complete operation payloads are retained: a payload text field over 64 KiB is
+stored as its own content value named by its hash, with the reference, byte
+count and a 4 KiB preview in the entry, so the chain hash covers the reference
+and the reference covers the content. There is no journal-lifetime ceiling. A
+successful dynamic result the journal cannot store as one value (16 MiB)
+quarantines the session instead of being truncated or returned as an ordinary
+retryable tool error.
 Built-in Codex item notifications are forensic: app-server may emit them only
 after execution starts.
 No code here claims write-ahead audit for built-in shell or file activity.
