@@ -14,8 +14,12 @@
 //! ) ;")` and `staging/sm/regress/regress-699682.js`'s `"var {''};"`) sit
 //! INSIDE string literals, so the files compile cleanly and the sweep is
 //! honestly green; the 262 harness, which would run them, excludes `staging/`.
-//! The one test262 wrote for this defect class is titled "Don't assert trying
-//! to parse any of these", and it was never reached.
+//! The test262 file carrying the second of those has the line-11 comment "Don't
+//! assert trying to parse any of these", and it was never reached. Of the two,
+//! only `for (const [z]; ; ) ;` exercises THIS rule: `var {''};` was already
+//! rejected as `missing identifier`, because a string-literal property name is
+//! not a valid shorthand `BindingProperty`, so the pattern never survives to
+//! the initializer check.
 //!
 //! The `const`-requires-an-initializer rule for a plain `BindingIdentifier` was
 //! already enforced — `const x;` is rejected — which is why only the pattern
@@ -120,15 +124,22 @@ fn a_pattern_declaration_without_an_initializer_is_a_syntax_error() {
         // consults it, because a `ForBinding` legitimately has no initializer.
         "for ((() => { var [a]; })().b of xs) ;",
         "for ((() => { var [a]; })().b in xs) ;",
-        // Exported, which is a separate declaration path.
-        "export var [a];",
-        "export let [a];",
-        "export const {x};",
     ] {
         for &(goal, strict) in MODES {
             let owned = source.to_string();
             let result = std::panic::catch_unwind(move || compile_atoms_goal(&owned, goal, strict));
-            if !matches!(result, Ok(Err(ref error)) if error.kind == ParseErrorKind::Syntax) {
+            // The MESSAGE, not just the kind. Asserting only `Syntax` lets a
+            // rejection for an unrelated reason pass as coverage — which it
+            // did: three `export` entries were rejected at the `export` keyword
+            // with `invalid token` in the four non-Module modes, so twelve
+            // asserted cells said nothing about this rule. They now have their
+            // own Module-goal test below.
+            if !matches!(
+                result,
+                Ok(Err(ref error))
+                    if error.kind == ParseErrorKind::Syntax
+                        && error.message == "missing binding initializer"
+            ) {
                 failures.push(format!(
                     "{source:?} ({goal:?}, strict={strict}): {result:?}"
                 ));
@@ -136,6 +147,25 @@ fn a_pattern_declaration_without_an_initializer_is_a_syntax_error() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// `export` declarations, which reach the rule by a separate path — and only
+/// in a module.
+///
+/// These were in the all-modes roster, "passing" in the four non-Module modes
+/// through a rejection at the `export` keyword itself (`invalid token`), which
+/// is not this rule firing.
+#[test]
+fn an_exported_pattern_declaration_without_an_initializer_is_a_syntax_error() {
+    for source in ["export var [a];", "export let [a];", "export const {x};"] {
+        match compile_atoms_goal(source, Goal::Module, false) {
+            Err(error) => {
+                assert_eq!(error.kind, ParseErrorKind::Syntax, "{source}");
+                assert_eq!(error.message, "missing binding initializer", "{source}");
+            }
+            Ok(_) => panic!("{source}: expected a rejection"),
+        }
+    }
 }
 
 /// The controls, without which the rule above could be "reject every pattern".
@@ -167,6 +197,19 @@ fn an_initialized_pattern_and_every_for_binding_still_compile() {
         "for (() => { var [a] = []; } ;;) ;",
         "for (() => { for (var [a] of xs) ; } ;;) ;",
         "for (function () { var {x} = {}; } ;;) ;",
+        // `ForBinding` patterns carrying a NESTED default. These are the
+        // load-bearing controls: a version of this rule that consults
+        // `flags::FOR` after the binding rather than being told by the caller
+        // rejects every one of them, because `binding` clears that flag on the
+        // `=` of a default inside the pattern. Without these the roster had no
+        // case for the exact trap the implementation comment names.
+        "for (const [v, m = 0] of []);",
+        "for (var [a = 1] of []);",
+        "for (let {x = 1} of []);",
+        "for (var {x: y = 1} in {});",
+        "for (const [a, [b = 1]] of []);",
+        "for (const {a: {b = 1}} of []);",
+        "for (let [a = () => 0] of []);",
         // `ForBinding`: no initializer, and legal.
         "for (var [a] in {});",
         "for (var [a] of []);",
