@@ -678,7 +678,16 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
+        #
+        # --lib for the same reason one level up: naming only --test
+        # targets runs NO unit tests, and this is the only lane that
+        # builds the endo crate at all. That gap let an assertion
+        # pinning a lockdown bypass -- `(()=>{}).constructor('return
+        # 42')()` returning "42" -- stay green through the commits that
+        # closed it, because nothing ran it. The unit tests are the
+        # crate's own, need no bundle beyond the ones above, and take
+        # about a second.
+        run: cargo test --locked -p endo --features ironhorse-engine --lib --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
