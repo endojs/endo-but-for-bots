@@ -185,6 +185,8 @@ const FlootSessionInterface = M.interface('FlootSession', {
   getHistory: M.callWhen().returns(M.any()),
   getTranscript: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
+  getArchivedTurns: M.callWhen().returns(M.any()),
+  getTurnContent: M.callWhen(M.record()).returns(M.string()),
   getJournalStatus: M.callWhen().returns(M.any()),
   getNetworkPolicy: M.callWhen().returns(M.any()),
   setNetworkPolicy: M.callWhen(M.string()).returns(M.any()),
@@ -926,6 +928,8 @@ const provisionPresetObjects = async (
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getTranscript: () => Promise<Array<Record<string, any>>>,
  *   getTurns: () => Promise<Array<Record<string, any>>>,
+ *   getArchivedTurns: () => Promise<Array<Record<string, any>>>,
+ *   getTurnContent: (ref: { name: string, chars: number }) => Promise<string>,
  *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
  *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
@@ -2518,6 +2522,8 @@ export const makeStreamingAgent = async (
   };
 
   const getTurns = () => turnJournal.list();
+  const getArchivedTurns = () => turnJournal.listArchived();
+  const getTurnContent = ref => turnJournal.readContent(ref);
   const getJournalStatus = async () =>
     harden({
       ...(await turnJournal.status()),
@@ -2549,6 +2555,8 @@ export const makeStreamingAgent = async (
     getHistory,
     getTranscript,
     getTurns,
+    getArchivedTurns,
+    getTurnContent,
     getJournalStatus,
     resolveTurn,
     getUsage,
@@ -4047,6 +4055,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
           await assertSessionReady(id);
           return (await getAgent(id, { observeOnly: true })).getTurns();
         },
+        async getArchivedTurns() {
+          await assertSessionReady(id);
+          return (await getAgent(id, { observeOnly: true })).getArchivedTurns();
+        },
+        async getTurnContent(ref) {
+          await assertSessionReady(id);
+          return (await getAgent(id, { observeOnly: true })).getTurnContent(
+            ref,
+          );
+        },
         async getJournalStatus() {
           await assertSessionReady(id);
           return (await getAgent(id, { observeOnly: true })).getJournalStatus();
@@ -4146,9 +4164,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
           if (methodName === 'resolveNetworkPolicyRequest')
             return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
           if (methodName === 'getTurns')
-            return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions.';
+            return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
+          if (methodName === 'getArchivedTurns')
+            return 'getArchivedTurns() — Settled turn records beyond the retained window, oldest first, read from storage on request.';
+          if (methodName === 'getTurnContent')
+            return 'getTurnContent(ref) — The full text a turn record refers to by a `<field>Ref` ({ name, chars }).';
           if (methodName === 'getJournalStatus')
-            return 'getJournalStatus() — Journal event capacity and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
+            return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
           return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';

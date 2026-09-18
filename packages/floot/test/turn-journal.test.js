@@ -15,6 +15,10 @@ const fixture = () => {
       store.set(name, value);
       if (fail) throw Error('Lost acknowledgement');
     },
+    remove: name => {
+      if (!store.has(name)) throw Error('Unknown name');
+      store.delete(name);
+    },
   });
   return {
     store,
@@ -443,13 +447,15 @@ test('invalid or excessive values never persist capabilities or partial events',
     }),
     { message: /inert JSON/ },
   );
+  // A field beyond the storage-value bound fails the append and persists
+  // nothing; a field beyond the preview bound is stored by reference below.
   await t.throwsAsync(
     journal.append(id, {
       type: 'finish',
       state: 'completed',
-      output: 'x'.repeat(131_072),
+      output: 'x'.repeat(16 * 1024 * 1024 + 1),
     }),
-    { message: /too large/ },
+    { message: /storage value bound/ },
   );
   t.is(store.size, 1);
   await journal.append(id, {
@@ -458,4 +464,193 @@ test('invalid or excessive values never persist capabilities or partial events',
     output: 'ok',
   });
   t.is((await journal.list())[0].state, 'completed');
+});
+
+test('large text is stored by reference: the record keeps a preview, the content is readable', async t => {
+  const { powers, store } = fixture();
+  const journal = makeTurnJournal(powers);
+  const big = 'y'.repeat(131_072);
+  const id = await journal.begin({ ...options, input: big });
+  await journal.append(id, {
+    type: 'tool-intent',
+    callId: 'a',
+    name: 'read',
+    args: '{}',
+  });
+  await journal.append(id, { type: 'tool-result', callId: 'a', result: big });
+  await journal.append(id, { type: 'finish', state: 'completed', output: big });
+  const [record] = await journal.list();
+  t.is(record.input.length, 8192);
+  t.is(record.inputRef.chars, big.length);
+  t.is(record.tools[0].result.length, 8192);
+  t.is(record.output.length, 8192);
+  t.is(await journal.readContent(record.inputRef), big);
+  t.is(await journal.readContent(record.tools[0].resultRef), big);
+  t.is(await journal.readContent(record.outputRef), big);
+  // The content was written before the event that refers to it, and no
+  // stored event approaches the event bound.
+  for (const [name, value] of store) {
+    if (name.startsWith('floot-turn-event-')) {
+      t.true(JSON.stringify(value).length <= 131_072, name);
+    }
+  }
+  // A revival reads the same previews and can still reach the content.
+  const revived = makeTurnJournal(powers);
+  t.deepEqual(await revived.list(), await journal.list());
+  t.is(await revived.readContent(record.outputRef), big);
+  // A reference is data, not a capability: only names this journal wrote
+  // resolve, and content must match what the reference claims.
+  await t.throwsAsync(
+    revived.readContent({
+      name: 'floot-turn-content-00000000000000000009-output',
+      chars: 9000,
+    }),
+    { message: /Unknown turn journal content/ },
+  );
+  await t.throwsAsync(
+    revived.readContent({ name: 'floot-usage', chars: 9000 }),
+    {
+      message: /Invalid turn journal content reference/,
+    },
+  );
+});
+
+test('replay is bounded by snapshots: covered events are removed and history survives', async t => {
+  const { powers, store } = fixture();
+  const journal = makeTurnJournal(powers);
+  const ids = [];
+  for (let i = 0; i < 40; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    ids.push(id);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, {
+      type: 'finish',
+      state: 'completed',
+      output: `out ${i}`,
+    });
+  }
+  // 80 events: a snapshot at 64, so at most 16 events remain in storage.
+  const events = [...store.keys()].filter(name =>
+    name.startsWith('floot-turn-event-'),
+  );
+  const snapshots = [...store.keys()].filter(name =>
+    name.startsWith('floot-turn-snapshot-'),
+  );
+  t.is(snapshots.length, 1);
+  t.is(events.length, 16);
+  t.true(events.every(name => BigInt(name.slice(-20)) > 64n));
+  const expected = await journal.list();
+  t.is(expected.length, 40);
+  const revived = makeTurnJournal(powers);
+  t.deepEqual(await revived.list(), expected);
+  t.like(await revived.status(), {
+    usedEvents: '80',
+    retainedTurns: 40,
+    archivedTurns: 0,
+  });
+  // A turn pending at the snapshot is recovered as outcome-unknown, and a
+  // later event still settles it.
+  const pending = await revived.begin(options);
+  for (let i = 0; i < 64; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await revived.append(pending, {
+      type: 'observed-tool-call',
+      callId: `c${i}`,
+      name: 'shell',
+      args: '{}',
+    });
+  }
+  const midTurn = makeTurnJournal(powers);
+  t.is((await midTurn.get(pending)).state, 'outcome-unknown');
+  t.is((await midTurn.get(pending)).activity.length, 64);
+});
+
+test('a stale snapshot left by a crash is superseded, never trusted over the newer one', async t => {
+  const { powers, store } = fixture();
+  const journal = makeTurnJournal(powers);
+  for (let i = 0; i < 64; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await journal
+      .begin(options)
+      .then(id => journal.append(id, { type: 'finish', state: 'completed' }));
+  }
+  // Two snapshots have been taken (at 64 and 128) and the first was removed;
+  // put a stale copy of it back, as a crash between the second write and the
+  // first's removal would leave it.
+  const [newest] = [...store.keys()].filter(name =>
+    name.startsWith('floot-turn-snapshot-'),
+  );
+  t.is(newest, 'floot-turn-snapshot-00000000000000000128');
+  const stale = { ...store.get(newest), through: '64', records: [] };
+  store.set('floot-turn-snapshot-00000000000000000064', harden(stale));
+  const revived = makeTurnJournal(powers);
+  t.is((await revived.list()).length, 64);
+  // The next snapshot clears the stale one.
+  for (let i = 0; i < 32; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await revived
+      .begin(options)
+      .then(id => revived.append(id, { type: 'finish', state: 'completed' }));
+  }
+  t.deepEqual(
+    [...store.keys()].filter(name => name.startsWith('floot-turn-snapshot-')),
+    ['floot-turn-snapshot-00000000000000000192'],
+  );
+});
+
+test('settled turns beyond the retained window are archived; unresolved ones never are', async t => {
+  const { powers, store } = fixture();
+  const journal = makeTurnJournal(powers);
+  // One unresolved turn at the very start, then enough settled turns to push
+  // the window.
+  const unknown = await journal.begin(options);
+  await journal.append(unknown, {
+    type: 'tool-intent',
+    callId: 'a',
+    name: 'exec',
+    args: '{}',
+  });
+  await journal.append(unknown, { type: 'finish', state: 'completed' });
+  t.is((await journal.get(unknown)).state, 'outcome-unknown');
+  for (let i = 0; i < 300; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await journal
+      .begin(options)
+      .then(id =>
+        journal.append(id, {
+          type: 'finish',
+          state: 'completed',
+          output: `${i}`,
+        }),
+      );
+  }
+  const status = await journal.status();
+  t.is(status.retainedTurns + status.archivedTurns, 301);
+  // The window is enforced at snapshot points, so up to a snapshot's worth of
+  // turns (64 events, two per turn here) may sit above it between them.
+  t.true(
+    status.retainedTurns <= 256 + 1 + 32,
+    'the window, the unresolved turn, and at most one snapshot interval',
+  );
+  t.true(status.archivedTurns > 0);
+  const live = await journal.list();
+  t.truthy(
+    live.find(record => record.turnId === unknown),
+    'unresolved stays in front',
+  );
+  const archived = await journal.listArchived();
+  t.is(archived.length, status.archivedTurns);
+  t.true(archived.every(record => record.state === 'completed'));
+  t.is(archived[0].output, '0', 'oldest settled turn archived first');
+  t.true(
+    [...store.keys()].some(name => name.startsWith('floot-turn-archive-')),
+  );
+  // Archived turns are not in memory, but the whole history is still there.
+  const revived = makeTurnJournal(powers);
+  t.deepEqual(await revived.list(), live);
+  t.deepEqual(await revived.listArchived(), archived);
+  await t.throwsAsync(revived.get(archived[0].turnId), {
+    message: /Unknown turn/,
+  });
 });

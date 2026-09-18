@@ -21,12 +21,12 @@ machine-admin presets deliberately receive factory-host powers. Standalone
 `makeStreamingAgent` callers must supply separate `journalPowers` for isolation;
 the compatibility default uses cooperative guest storage.
 
-`getJournalStatus()` reports used, remaining and maximum events as decimal strings,
-a near-capacity flag, and `private` or `legacy` storage. The limit is 10,000 events
-of at most 131,072 UTF-16 code units each. Warnings are advisory: archive and start
-a new session before exhaustion; never delete journal events to reclaim capacity.
-Legacy-import acknowledgement uses separate metadata and works at the event cap;
-ordinary outcome acknowledgement still consumes an event.
+`getJournalStatus()` reports the event count as a decimal string, the retained and
+archived turn counts, and `private` or `legacy` storage. There is no event limit:
+long text is stored by reference (`getTurnContent`), replay is bounded by
+snapshots, and settled turns beyond the retained window are archived
+(`getArchivedTurns`). Legacy-import acknowledgement uses separate metadata;
+ordinary outcome acknowledgement consumes an event.
 
 A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.

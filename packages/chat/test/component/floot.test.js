@@ -394,9 +394,8 @@ test.serial(
       getJournalStatus: () =>
         harden({
           usedEvents: '9990',
-          eventLimit: '10000',
-          remainingEvents: '10',
-          nearCapacity: true,
+          retainedTurns: 256,
+          archivedTurns: 3000,
           storage: 'private',
         }),
       getCurrentTurn: () => null,
@@ -470,7 +469,9 @@ test.serial(
     t.true(parent.textContent.includes(hostile));
     t.falsy(parent.querySelector('img'));
     t.true(parent.textContent.includes('Observed native/backend activity'));
-    t.true(parent.textContent.includes('Near capacity'));
+    t.true(
+      parent.textContent.includes('3000 earlier settled turns are archived'),
+    );
     const buttons = () => [...parent.querySelectorAll('button')];
     t.true(
       [...parent.querySelectorAll('.floot-recovery pre')].every(

@@ -210,10 +210,16 @@ A storage-write failure poisons the current incarnation until revival can read
 the durable prefix.
 The journal is cooperative, single-writer session state in the guest petstore,
 not a tamper-resistant audit log against a guest endowed with store/remove/exec.
-It bounds replay to 10,000 events and each serialized event to 131,072 UTF-16 code
-units; exhaustion fails closed and requires an operator-managed new session or
-archival, not automatic deletion of evidence.
-Arbitrary tool output exceeding that bound is rejected, not silently truncated.
+It has no lifetime ceiling. Each text field longer than 8,192 UTF-16 code units
+is stored as its own content value and the record carries a preview beside a
+`<field>Ref` that `getTurnContent` resolves; a field beyond 16 Mi code units —
+the bound on one storage value — fails that one append rather than the session.
+Replay is bounded by snapshots: every 64 events the record map is written as a
+snapshot, a new incarnation reads the newest snapshot and only the events after
+it, and the events a durable snapshot covers are removed. Settled turns beyond a
+retained window of 256 are moved to archive chunks and read back through
+`getArchivedTurns`; a turn with an unresolved outcome is never archived.
+A stale snapshot left by a crash is superseded by the newer one, never trusted.
 Partial answer text and reported usage are retained on ordinary failure/cancel;
 individual text deltas are not write-ahead durable, so a process crash may lose
 the last streamed text while preserving already stored tool records.

@@ -165,6 +165,6 @@ export {};
  *   tools?: unknown[], activity?: unknown[], resolution?: string }} FlootJournalTurn
  * @typedef {{ status: string, message: string, turns: FlootJournalTurn[],
  *   canResolve: boolean, resolving: boolean, blocked?: boolean, current?: boolean,
- *   capacity?: { usedEvents: string, eventLimit: string, remainingEvents: string,
- *     nearCapacity: boolean, storage: string } | null }} FlootRecovery
+ *   capacity?: { usedEvents: string, retainedTurns: number, archivedTurns: number,
+ *     storage: string } | null }} FlootRecovery
  */
