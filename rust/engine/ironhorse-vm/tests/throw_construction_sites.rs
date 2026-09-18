@@ -323,9 +323,15 @@ fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
             ("ironhorse-vm/src/interp.rs", "Halt::synthetic_throw") => {
                 &[("pub fn host_coerced(", 1)]
             }
-            ("ironhorse-262/src/lib.rs", "Halt::synthetic_throw") => {
-                &[("pub fn dual_run_with(", 1), ("pub fn dual_run_cranks(", 1)]
-            }
+            ("ironhorse-262/src/lib.rs", "Halt::synthetic_throw") => &[
+                ("pub fn dual_run_with(", 1),
+                ("pub fn dual_run_cranks(", 1),
+                // The phased runner's own compile-rejection arm, the same
+                // one the two above carry: a source IronHorse's compiler
+                // refused becomes an early SyntaxError halt rather than the
+                // execution of empty bytecode.
+                ("fn run_compiled_script(", 1),
+            ],
             _ => &[],
         };
         let mut accepted = Vec::new();

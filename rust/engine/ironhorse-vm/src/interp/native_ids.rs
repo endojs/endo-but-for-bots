@@ -630,8 +630,11 @@ pub enum NativeMethod {
     /// freeze worklist over the slot arena — prevent extensions and stamp
     /// every own data property non-writable/non-configurable (accessors
     /// non-configurable), then queue the prototype and every reference-valued
-    /// property, marking each reached instance `XS_DONT_MARSHALL_FLAG`. Returns
-    /// `x`. `xsLockdown.c` calls no `mxMeter`, so the cost is allocation-driven
+    /// property, marking each reached instance `XS_DONT_MARSHALL_FLAG`. That
+    /// mark is PROVISIONAL until the outermost walk completes, so a walk that
+    /// fails revokes the marks of every walk nested inside it
+    /// (`revoke_harden_marks`, `interp/property/integrity.rs`). Returns `x`.
+    /// `xsLockdown.c` calls no `mxMeter`, so the cost is allocation-driven
     /// (the worklist `fxNewSlot`s + the two `fxNewInstance` ownKeys holders per
     /// object). Ironhorse's intrinsics are modeled sparsely, so the transitive
     /// object count diverges from the pin — the freeze *result* is faithful,
@@ -1106,10 +1109,9 @@ pub enum Native {
     /// instance, reserving "strict mode" for the arguments-object poison. The
     /// oracle compares thrown messages, so this is not a free choice.
     ///
-    /// Minted at `lockdown()` time, never at boot, so no snapshot carries one
-    /// and [`Interp::boot_fingerprint`] does not see it. (Binding
-    /// [`NativeMethod::GlobalLockdown`] *does* move the fingerprint; that is a
-    /// separate consequence, recorded on `create_hardened_globals`.)
+    /// Minted during boot so snapshots retain native identities by boot index.
+    /// Lockdown freezes their metadata and wires their prototype edges before
+    /// exposing them. Their identities participate in [`Interp::boot_fingerprint`].
     LockedDownConstructor,
 }
 

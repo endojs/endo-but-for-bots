@@ -565,6 +565,137 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
     Some(out)
 }
 
+/// Run separately compiled scripts in one realm with one final microtask
+/// checkpoint. Every script uses IronHorse's own compiler; the oracle supplies
+/// independent execution and compile evidence. The sequence stops when either
+/// engine refuses a phase. Callers must check its length before attributing an
+/// early setup error to the final subject (especially for negative tests).
+/// `signal_name` optionally reads an async completion latch from each phase.
+pub fn dual_run_scripts(sources: &[&str], signal_name: Option<&str>) -> Option<Vec<AsyncDualRun>> {
+    dual_run_scripts_checkpoint(sources, signal_name, true)
+}
+
+pub(crate) fn dual_run_scripts_checkpoint(
+    sources: &[&str],
+    signal_name: Option<&str>,
+    checkpoint: bool,
+) -> Option<Vec<AsyncDualRun>> {
+    let oracles = xs_oracle::run_scripts_with_checkpoint(sources, checkpoint)?;
+    let mut interp = interp_with_source_bridge(&[]);
+    let mut result = Vec::new();
+    for (i, (source, oracle)) in sources.iter().zip(oracles).enumerate() {
+        let (bytecode, symbols, compile) = compile_for(Compiler::default(), source, &oracle);
+        let mut run = run_compiled_script(
+            &mut interp,
+            &bytecode,
+            &symbols,
+            &compile,
+            checkpoint && i + 1 == sources.len(),
+        );
+        run.computrons = run.computrons_this_run;
+        run.meter_raw = run.meter_raw_this_run;
+        run.dispatched = run.dispatched_this_run;
+        let stop = !oracle.completed || !run.completed;
+        result.push(AsyncDualRun {
+            ironhorse_signal: signal_name.and_then(|name| interp.global_string(name)),
+            ironhorse_unhandled_rejection: interp.has_unhandled_rejection(),
+            run: build_dual_run(source, oracle, run, compile, bytecode, symbols),
+        });
+        if stop {
+            break;
+        }
+    }
+    Some(result)
+}
+
+/// Relink independently compiled source into a retained interpreter. Compilation
+/// rejection remains an early SyntaxError, never execution of empty bytecode.
+fn run_compiled_script(
+    interp: &mut ironhorse_vm::Interp,
+    bytecode: &[u8],
+    symbols: &[u8],
+    compile: &IronhorseCompile,
+    pump_jobs: bool,
+) -> RunOutcome {
+    let halt = if matches!(compile, IronhorseCompile::Rejected(_)) {
+        Halt::synthetic_throw("SyntaxError")
+    } else {
+        let names = ironhorse_vm::parse_symbols(symbols);
+        match interp.relink_crank(bytecode, &names) {
+            Ok(code) => {
+                return if pump_jobs {
+                    interp.run(&code).host_coerced()
+                } else {
+                    // Setup sources end in undefined, so coercion cannot invoke
+                    // a guest callback between setup and the subject.
+                    interp
+                        .run_script_shared(std::rc::Rc::from(code))
+                        .host_coerced()
+                };
+            }
+            Err(error) => Halt::Decode(ironhorse_vm::DecodeError::Relink(error)),
+        }
+    };
+    RunOutcome {
+        meter_raw_this_run: 0,
+        computrons_this_run: 0,
+        dispatched_this_run: 0,
+        completed: false,
+        result: String::new(),
+        coercion_error: None,
+        host_render_halt: None,
+        unhandled_rejection: interp.unhandled_rejection(),
+        computrons: 0,
+        dispatched: 0,
+        meter_raw: 0,
+        halt,
+    }
+}
+
+/// Execute setup with the native compiler before another Script or Module,
+/// retaining pending jobs for the subject's final checkpoint.
+pub(crate) fn run_setup(interp: &mut ironhorse_vm::Interp, setup: &str) -> RunOutcome {
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms(setup)
+    }));
+    match compiled {
+        Ok(Ok((code, names))) => {
+            run_compiled_script(interp, &code, &names, &IronhorseCompile::Accepted, false)
+        }
+        _ => run_compiled_script(
+            interp,
+            &[],
+            &[],
+            &IronhorseCompile::Rejected("setup compilation failed".into()),
+            false,
+        ),
+    }
+}
+
+/// Run the same setup/subject phases without an oracle for timeout attribution.
+pub(crate) fn ironhorse_only_scripts(setup: &str, source: &str) -> Halt {
+    let mut interp = interp_with_source_bridge(&[]);
+    let setup_result = run_setup(&mut interp, setup);
+    if !setup_result.completed {
+        return setup_result.halt;
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms(source)
+    })) {
+        Ok(Ok((code, names))) => {
+            run_compiled_script(
+                &mut interp,
+                &code,
+                &names,
+                &IronhorseCompile::Accepted,
+                true,
+            )
+            .halt
+        }
+        _ => Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode),
+    }
+}
+
 /// Assemble a [`DualRun`] record from an oracle outcome and ironhorse's run of
 /// (the compiler-selected) `bytecode`, computing the four-valued agreement plus
 /// the result/computron/error comparisons. Shared by [`dual_run_with`] and

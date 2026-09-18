@@ -36,6 +36,15 @@ pub struct Intrinsics {
     pub(crate) locked_down: std::cell::Cell<bool>,
     /// A transient guard: no quiescent snapshot can contain an active lockdown.
     pub(crate) locking_down: std::cell::Cell<bool>,
+    /// An unfinished harden walk has queued objects that are not yet frozen.
+    pub(crate) hardening: std::cell::Cell<bool>,
+    /// Instances marked hardened by walks that have not all completed yet: a
+    /// walk that fails revokes its own entries and those of every walk that
+    /// completed inside it, and the outermost walk's completion empties the
+    /// list (`interp::property::integrity`). So it is empty between walks --
+    /// unless one was unwound by a panic, which is the residue the next
+    /// outermost walk sweeps before trusting any mark.
+    pub(crate) harden_marks: RefCell<Vec<crate::SlotIndex>>,
 }
 
 impl Intrinsics {

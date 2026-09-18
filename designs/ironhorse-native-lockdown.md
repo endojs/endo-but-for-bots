@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-16 |
-| **Updated** | 2026-09-17 |
+| **Updated** | 2026-09-18 |
 | **Author** | kumavis (prompted) |
 | **Status** | Implemented (`lockdown`); `Compartment` not started |
 | **Source** | The gap [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) sized and Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) sequenced |
@@ -15,10 +15,12 @@ Landed, within the scope boundary below.
 `Interp::do_lockdown` (`ironhorse-vm/src/interp/realm.rs`) implements
 `fx_lockdown` steps 1, 2 and 5; `create_hardened_globals` binds it as the guest
 global `lockdown`, beside `harden` and `petrify`. `endot-ih -l` runs instead of
-refusing, and `test262:ironhorse` with it. Pinned by
-`ironhorse-vm/tests/native_lockdown.rs` (30 cases), most of which were written
+refusing -- evaluating the harness and the `lockdown()` call as their own
+Script, ahead of the case, so nothing in the case can shadow or outrank them --
+and `test262:ironhorse` with it. Pinned by
+`ironhorse-vm/tests/native_lockdown.rs` (35 cases), most of which were written
 from defects adversarial review found after the first revision called this
-section "Landed".
+section "Landed", and the last four from a review round after the second.
 
 The same operation runs on the two HOST paths — `Machine::new()`, which locks
 down at construction, and `Machine::lock_down()`, which performs the one a
@@ -686,6 +688,67 @@ so the divergence is one of integrity, not of confinement — no reach opens or
 closes on it. Narrowing to XS's exact set would trade a security property for
 a conformance digit.
 
+**Open by decision: a failing harden walk revokes the marks of walks that
+completed inside it, where XS undoes only its own.**
+
+| # | What diverges | XS | IronHorse |
+|---|---|---|---|
+| 6 | a walk fails after a nested walk completed under it | `fx_harden`'s `mxCatch` clears the marks of its OWN worklist; the nested walk's marks stay | every mark placed since that walk began is revoked, the nested walk's included |
+
+The mark (`XS_DONT_MARSHALL_FLAG`) is what every later `harden()` and every
+`lockdown()` root short-circuits on, so what it promises matters more than when
+it is written. XS writes it per instance during the walk and undoes one walk's
+worth on failure. That is coherent while only one walk exists, and a Proxy trap
+reached from the freeze can always arrange two: the trap runs arbitrary guest
+code, `harden()` included.
+
+Under re-entry the mark means less than a nested walk reads into it. It means
+"queued, and frozen by whichever walk queued it" — not "the graph under this is
+frozen". The nested walk reads the latter, skips that subgraph, completes, and
+marks its own roots. When the outer walk then fails and undoes only its own
+marks, what is left is a root carrying a mark that promises a freeze nobody
+performed.
+
+Measured, before the fix (`a_nested_harden_cannot_inherit_an_unfinished_walks_marks`,
+reduced to one leaf object the outer walk had queued and not yet frozen):
+
+```text
+outer=TypeError: extensible object | harden(nestedRoot) returns=true |
+isFrozen(leaf)=false | leaf.mutable=2
+```
+
+and through `lockdown()`, where a guest object attached to `Object.prototype`
+before the walks survives step 5 mutable because the root carrying it was
+marked (`lockdown_refreezes_an_intrinsic_a_failed_nested_walk_marked`):
+
+```text
+outer=TypeError: extensible object | isFrozen(Object.prototype)=true |
+isFrozen(smuggled)=false | smuggled.mutable=2
+```
+
+Both now read `... | true | 1`. A mark is provisional until the OUTERMOST walk
+completes: `Intrinsics::harden_marks` records them in order, a failing walk
+revokes every mark placed since it began, and only the outermost walk's
+completion makes the survivors permanent
+(`revoke_harden_marks`, `interp/property/integrity.rs`).
+`a_walk_that_fails_inside_another_walk_revokes_what_completed_under_it` is the
+case that needs the scope to be the failing walk rather than the outermost one:
+there the outermost walk SUCCEEDS, so nothing later would sweep a mark its
+nested failure left behind.
+
+**Revoking rather than withholding is a deliberate second choice.** The
+obvious alternative — write no mark until the walk finishes — gives a stronger
+invariant and needs no bookkeeping at all. It was implemented, and it breaks
+re-entrant termination: a trap that hardens the walk's own root finds it
+unmarked, starts a second walk, re-enters the same trap, and the run halts with
+`ReentryLimit { depth: 2062, limit: 2048 }` where XS and this port both return.
+`a_trap_that_hardens_the_walks_own_root_terminates` pins that. A soundness fix
+that turns a terminating program into a halt is a trade, not a fix.
+
+For a walk that is not re-entered, nothing moves: the same instances are
+queued, in the same order, at the same metered cost, and the failure path
+revokes exactly the marks XS's does.
+
 **Open by decision: a refused harden fails HARD, where XS's is catchable.**
 
 | # | What diverges | XS | IronHorse |
@@ -858,6 +921,89 @@ Thus the earlier Boolean-only explanation does not account for the whole lane.
 The per-case report and generated expectations preserve the measured failures
 instead of treating them as passes.
 
+## Validation on 2026-09-18
+
+This revision adds the provisional harden mark and its revocation, the phased
+262 runner, and the two shared-corpus gates. Everything below was re-run on
+this tree; the 2026-09-17 section above measured `c5e349ca3` and its numbers do
+not carry to this head.
+
+- Full engine workspace, including compile/regexp parity and store-integrity:
+  **3413 passed, 0 failed, 41 ignored** over 429 suites.
+  `IRONHORSE_SES_BOOT_REQUIRED`, `IRONHORSE_SES_SHIM_REQUIRED` and
+  `IRONHORSE_SES_PRELUDE_REQUIRED` were set, so the SES lanes could not skip
+  silently; their bundles were generated with `yarn bundle:xs`,
+  `yarn workspace @endo/test262-runner build` and
+  `yarn workspace @endo/thixotrope build:ironhorse-bundles`.
+  The run includes the **35 native-lockdown** regressions, the **5**
+  lockdown-carry persistence tests, all **14 SES boot-intrinsic** tests, the
+  **6** runner phase regressions, and the **2** shared-corpus gates
+  (47 hardened262 files / 90 scenarios, and 29 stage4-harden files).
+- Deterministic-math VM and snapshot suites: **1661 passed, 0 failed, 33
+  ignored**.
+- The CI-pinned lint gates, all clean: `cargo +1.88.0 build --locked
+  --workspace` under `RUSTFLAGS=-D warnings`, `cargo +1.88.0 clippy --locked
+  --workspace --no-deps -- -D warnings` (and again with `--all-targets`), and
+  `cargo +1.88.0 fmt --all --check`. Rust 1.91 Clippy reports only the
+  pre-existing `is_multiple_of` and `from_ref` lints, in files this change does
+  not touch.
+- Outer-workspace Endo integrations, `ironhorse_store_worker` and
+  `ironhorse_runtime_compiler`: **14 passed, 0 failed**. That workspace needs
+  `rust/endo/xsnap/src/archive_text_endowments.js`, which is generated and
+  gitignored; `node packages/daemon/scripts/bundle-archive-text-endowments-xs.mjs`
+  produces it.
+- `corpus_conversion_equivalence`: **1711 total, 1645 covered, 0 failed** on the
+  regenerated raw meter pins. It was RED at the previous checkpoint -- 66 of the
+  145 pinned cases, each off by the same 9,182,752 raw units, because the pin
+  measured the concatenated harness+case Script and the subject is now its own.
+
+The XS oracle was built from the pinned `c/moddable` submodule with the host's
+gcc; the `CFLAGS=-fno-strict-float-cast-overflow` the 2026-09-17 section
+records is an Apple-clang correction and was not needed here.
+
+**The whole checked-in corpus was re-swept under `-l` on the phased runner.**
+The 2026-09-17 sweep measured the concatenating runner, so the phase split
+invalidated its interpretation rather than its arithmetic, and this replaces it.
+Batches of 100 files, a ten-second per-case bound, and IronHorse's own
+discovery (`ironhorse-262-report discover`): 1296 batches over 39,668 case
+files, of which 1292 ran (see the exclusion below). The corpus holds 39,759 non-fixture files; discovery excludes
+`test/harness`'s 91 self-test files, which are harness, not cases.
+
+| Outcome | Files |
+|---|---:|
+| Covered | 31,901 |
+| Failed | 3,691 |
+| Named skips | 3,681 |
+| **Executed** | **39,273** |
+
+No selected strict variant was omitted anywhere in the sweep
+(`strict-skipped-by-policy=0` in every batch).
+
+**The lane this work targets is green on the phased runner:** `test/ironhorse`
+is **1712 files, 1712 covered, 0 failed, 0 skipped** -- the result § Status
+reports, re-established after the runner stopped concatenating.
+
+**395 files did not run**, and the exclusion is a property of this host rather
+than of the corpus: the four `built-ins/RegExp/property-escapes/generated`
+batches. Each case builds a ~1.1M-code-point subject and runs it on BOTH
+engines, and each batch holds 3.5-6 GB of oracle RSS, so three of four are
+killed by the OOM reaper when run in parallel on a 15 GB box and a single batch
+exceeds an hour of CPU alone. `ironhorse-262/scripts/README.md` describes the
+same batches as the reason its own sweep carries a 900-second watchdog and a
+quarantine path. They are named here rather than folded into the totals.
+
+**The wider lane is not green and is not claimed to be.** The largest failure
+classes are thrown-value rendering differences (`abort-value-differs`, 2409),
+cases where IronHorse throws and the oracle completes (797), and error-message
+differences (207); `ironhorse-hang` accounts for 31 at the ten-second bound.
+The largest named skips are aborts both engines reach
+(`shared-positive-test-failure`, 1180 + 127 strict), the oracle host's absent
+`Intl` (422 + 274), and unimplemented module surfaces (dynamic import 383,
+top-level await 196, static linking 122). None of that set is claimed
+diagnosed here, and none of it moved with this change in a way this sweep can
+attribute: it is a baseline for the phased runner, not a comparison against the
+retracted one.
+
 ## Known Gaps and TODOs
 
 - [x] Settle the open decisions before writing code. Done; see § Decisions, as
@@ -991,6 +1137,49 @@ instead of treating them as passes.
       It is separate from the persisted successful-completion marker.
       Regressions cover successful outer completion and a nested attempt followed
       by refusal, another crank, and snapshot restore.
+- [x] **A nested harden walk's marks outlived the failed walk they rested on.**
+      Found by static review of the re-entry guard above, then reproduced. That guard stops a nested `lockdown()`; it says nothing about
+      a nested `harden()`, which any Proxy trap reached from step 5 can call.
+      The outer walk's queued-but-unfrozen instances looked hardened to that
+      nested walk, which skipped them, completed, and marked its own roots; the
+      outer walk's failure then undid only its own marks. What was left is a
+      root carrying a mark that makes every later `harden()` -- and every
+      `lockdown()` root that reaches it -- return immediately over a graph that
+      is not frozen. Measured: `isFrozen(leaf)=false` after `harden(nestedRoot)`
+      returns, and `smuggled.mutable=2` after a successful `lockdown()`.
+
+      Fixed by making a mark provisional until the OUTERMOST walk completes.
+      `Intrinsics::harden_marks` records them in order; a failing walk revokes
+      every mark placed since it began, nested walks' included, and only the
+      outermost walk's completion makes the survivors permanent. § Oracle
+      divergences row 6 carries the departure from XS, which has the same shape
+      of hole, and why withholding the mark instead -- the stronger and simpler
+      invariant -- was implemented, measured and rejected: it costs re-entrant
+      termination.
+
+      Three regressions, each mutation-verified against a different way of
+      getting this wrong: `a_nested_harden_cannot_inherit_an_unfinished_walks_marks`
+      and `lockdown_refreezes_an_intrinsic_a_failed_nested_walk_marked` for the
+      finding itself, `a_walk_that_fails_inside_another_walk_revokes_what_
+      completed_under_it` for the revocation's scope (the outermost walk
+      succeeds there, so nothing sweeps later), and
+      `a_trap_that_hardens_the_walks_own_root_terminates` for the termination
+      the alternative design lost.
+- [x] **Worklist marks surviving an abnormal unwind.** Raised as unverified
+      beside the finding above: a `harden()` walk unwound by a Rust panic runs
+      no cleanup, so an interpreter a supervisor keeps and reuses would carry
+      marks for a freeze that never happened. `Halt::HeapExhausted` was never
+      the case in question -- it is an ordinary `Err` and takes the revoke path
+      -- so the concern was only ever about a panic.
+
+      The provisional-mark record answers it: marks with no walk running are
+      exactly the residue such an unwind leaves, so an outermost walk drops any
+      it finds before the short-circuit that would trust them.
+      `harden_drops_marks_left_by_a_walk_that_never_returned` reproduces that
+      state and pins the sweep; removing the sweep turns it red.
+      Holding queued indices across a trap is safe for the reason it already
+      was -- `collect_garbage` admits only a quiescent machine, so no collection
+      can recycle one mid-walk.
 - [x] **Stand-ins were guest-writable during step 5.**
       Step 2 exposes the inert constructors before the harden walk enters guest
       proxy traps.
@@ -1018,6 +1207,39 @@ instead of treating them as passes.
       expectation file; the aggregate has exact manifest coverage.
       Wider test262 conformance remains incomplete and is not claimed by this
       native-lockdown implementation.
+- [x] **`lockdown();` was spliced into the case body, where the case could
+      reach it.** The splice `endot-ih -l` gained in § Status was inside the
+      executed Script, and three things follow from that which no amount of
+      ordering fixes. A case that declares `function lockdown() {}` shadows the
+      call (hoisting puts the declaration before it either way). A `raw` case
+      loses its hashbang and its directive prologue, because neither is first
+      any more. An `async, onlyStrict` case loses the strictness it asked for,
+      for the same reason.
+
+      Setup -- the harness includes, `--prelude`, then `lockdown()` -- is now
+      compiled and evaluated as its OWN Script in the same realm, and the
+      subject is compiled separately, which is what `xst262.c` does. The two
+      share one microtask checkpoint, at the end, so a case that queues a job
+      in setup sees it drain where it did before. A setup failure is reported
+      as `setup failed:` and can never satisfy a negative case's expectation.
+      `ironhorse-262/tests/lockdown_setup.rs` covers the hashbang and prologue
+      files from the corpus, both shadowing declarations, async strictness, the
+      shared checkpoint, module subjects, and the negative-case case.
+
+      **One corpus consequence, and it is a real change rather than a
+      bookkeeping one.** A case's `ironhorse-meter-5-raw-N` pin measured the
+      whole concatenated Script, harness included. It now measures the case,
+      which is what the pin is for. The 66 harness-using pins were regenerated
+      against the case script alone -- each dropping the same 9,182,752 raw
+      units, the harness's own cost -- and the 79 `raw`-flagged pins, which
+      never had a harness, are unchanged. `corpus_conversion_equivalence` is
+      green on the regenerated set and was red on 66 of 145 before it.
+
+      `SesMode::prelude()` is gone rather than kept as documentation. It was
+      the `"lockdown();\n{body}"` template whose only callers were its own unit
+      tests -- the exact shape that let § Status's disconnected wire pass for a
+      measurement -- and `assemble` now writes what the mode contributes once,
+      with `a_lockdown_mode_actually_splices_the_call` asserting on the output.
 - [ ] **`packages/thixotrope`'s Ironhorse worker still runs the SES shim, and
       moving it to the native `lockdown()` is blocked on the compartment
       environment — not on lockdown.** `scripts/bundle-ironhorse-worker.mjs`
@@ -1111,6 +1333,20 @@ instead of treating them as passes.
       oracle fidelity. Recorded rather than fixed; SES itself states it
       "provides security only if it runs first in a given realm". Pinned by
       `native_lockdown.rs::the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown`.
+- [ ] **Widen the shared-corpus gates past hardened262 and stage4-harden.**
+      The two gates that exist reuse sources, harnesses and committed baselines
+      rather than restating assertions, which is the shape to keep. The obvious
+      next candidate -- `packages/hardened262`'s 255 `test/Object` integrity
+      cases -- is not a directory to point the gate at: some of those cases
+      require MUTABLE intrinsics and would fail under lockdown for the reason
+      the lockdown exists, so adding them means selecting the behavioural ones
+      case by case and writing down why each excluded one is excluded. The SES
+      AVA suites are further still: they depend on SES options, override
+      enablement and a guest `Compartment`, so they need a real adapter rather
+      than source stripping. Deliberately not started here -- an unselected
+      directory would either go red for the wrong reason or need an exclusion
+      list nobody could read. The `-l` sweep below already executes those files
+      as part of the whole corpus; what a gate would add is curation.
 - [ ] A guest `Compartment` (`fx_Compartment`, `xsModule.c:2864`) is the next
       piece, and the one that makes the parity corpus's lockdown case runnable
       natively. It needs its own definition.

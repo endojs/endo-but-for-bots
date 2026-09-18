@@ -156,6 +156,9 @@ impl Interp {
         }
         let _guard =
             LockdownGuard::enter(self.realm.intrinsics()).ok_or(crate::Halt::MachineBusy)?;
+        if self.realm.intrinsics().hardening.get() {
+            return Err(crate::Halt::MachineBusy);
+        }
         // Step 2 before step 5, the same order and the same operation the guest
         // `lockdown()` performs -- a graph hardened WITHOUT it still hands
         // `({}).constructor.constructor` the real evaluator. See
@@ -173,8 +176,10 @@ impl Interp {
             // Unlike the construction-time freeze this can legitimately fail:
             // the graph has been reachable by a guest, which may have made an
             // intrinsic non-extensible or installed a Proxy that refuses the
-            // definition. `do_harden` clears its temporary traversal marks on
-            // failure; it cannot undo property freezes already performed.
+            // definition. A failed `do_harden` revokes the traversal marks
+            // placed under it, so a later walk retries rather than
+            // short-circuiting, but it cannot undo property freezes already
+            // performed.
             // Earlier roots and part of this root's graph may remain frozen
             // while `locked_down` is still false. Calling again does not fix
             // that -- see the retraction above.
@@ -234,14 +239,23 @@ impl Interp {
         if self.realm.intrinsics().locked_down.get() {
             return Err(self.catchable_type_error_msg("lockdown already called".into()));
         }
-        // `do_harden` marks queued objects before traversing them. A nested
-        // lockdown could skip the outer walk's unfinished roots and report
-        // success, even if the outer proxy trap subsequently refuses freezing.
-        // XS's early mxProgram flag also refuses reentry; keep our transient
-        // guard separate from the persisted successful-completion marker.
+        // A nested lockdown reached from a Proxy trap inside step 5 would
+        // report success over the outer call's unfinished roots. XS's early
+        // mxProgram flag also refuses reentry; keep our transient guard
+        // separate from the persisted successful-completion marker.
         let Some(_guard) = LockdownGuard::enter(self.realm.intrinsics()) else {
             return Err(self.catchable_type_error_msg("lockdown already called".into()));
         };
+        // A first lockdown can also arrive from an unrelated outer `harden`,
+        // whose trap is running guest code in a graph it has not finished
+        // freezing. Refuse before step 2 rather than rewire the constructors
+        // underneath a walk that can still throw. `revoke_harden_marks` is
+        // what keeps that walk's marks from being mistaken for a completed
+        // freeze; this guard is the narrower statement that `lockdown()` does
+        // not start from inside one, which is also XS's answer.
+        if self.realm.intrinsics().hardening.get() {
+            return Err(self.catchable_type_error_msg("lockdown cannot start during harden".into()));
+        }
 
         // **No compartment check here: neither SES nor XS has one.** An
         // earlier revision refused when
@@ -775,6 +789,8 @@ impl Interp {
                 roots,
                 locked_down: std::cell::Cell::new(freeze),
                 locking_down: std::cell::Cell::new(false),
+                hardening: std::cell::Cell::new(false),
+                harden_marks: std::cell::RefCell::new(Vec::new()),
             }),
             default_global: machine.environment.global_obj,
         });
