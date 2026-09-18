@@ -1290,11 +1290,34 @@ retracted one.
       only one.** It said "what is genuinely still missing is ATTENUATION, not
       isolation", which understated the distance to the shim.
 
-      Attenuation is the first: a host-made compartment's `Date.now()` answers
-      from the real clock instead of the NaN an `fx_lockdown` compartment global
-      would give, and `Math` is likewise unsecured. That is steps 3 and 4 — a
+      Attenuation is the first: a host-made compartment shares the start
+      compartment's `Date` rather than getting the NaN an `fx_lockdown`
+      compartment global would give, and `Math` is likewise unsecured. That is
+      steps 3 and 4.
+
+      **Corrected 2026-09-18 on two points, both of which change the
+      sequencing.** This paragraph read "a host-made compartment's `Date.now()`
+      answers from the real clock", and closed by calling steps 3 and 4 "a
       narrower gap than a guest `Compartment` constructor, and the one to close
-      if guest source must not read a clock.
+      if guest source must not read a clock". Neither survives measurement.
+
+      IronHorse's clock is already fixed: `Date.now()` returns `0.0`
+      unconditionally (`interp/natives/date.rs:50`), and `Math.random` does not
+      exist at all -- `create_math` (`interp/boot.rs:2512`) installs 34 methods
+      and `random` is not among them. § Step 4 above and
+      `native_lockdown.rs::the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment`
+      both already said so, and the oracle divergence they record is the same
+      fact from the other side: `Date.now() > 0` is `true` on XS and `false`
+      here. So step 4 is nearly empty as a port, and no guest reads a live
+      clock today.
+
+      What a confined guest is actually missing is a compartment global to
+      attenuate INTO, which is step 3, which is `mxCompartmentGlobal`, which is
+      the guest `Compartment`'s own template. Steps 3 and 4 are therefore not a
+      smaller piece to land ahead of the next item; they are the same piece,
+      and they belong in its design rather than before it.
+      `designs/ironhorse-ses-compartment-equivalence.md` § The work #1295
+      deferred, triaged carries this as G1.
 
       The second is that the worker calls the SHIM's
       `lockdown({errorTaming: 'safe', reporting: 'none', overrideTaming:
@@ -1335,21 +1358,60 @@ retracted one.
       `native_lockdown.rs::the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown`.
 - [ ] **Widen the shared-corpus gates past hardened262 and stage4-harden.**
       The two gates that exist reuse sources, harnesses and committed baselines
-      rather than restating assertions, which is the shape to keep. The obvious
-      next candidate -- `packages/hardened262`'s 255 `test/Object` integrity
-      cases -- is not a directory to point the gate at: some of those cases
-      require MUTABLE intrinsics and would fail under lockdown for the reason
-      the lockdown exists, so adding them means selecting the behavioural ones
-      case by case and writing down why each excluded one is excluded. The SES
+      rather than restating assertions, which is the shape to keep.
+
+      **Corrected 2026-09-18: the candidate this item named does not exist.**
+      It said the obvious next one was "`packages/hardened262`'s 255
+      `test/Object` integrity cases", which "is not a directory to point the
+      gate at" because some of them require MUTABLE intrinsics. There is no
+      `test/Object` directory in that package, and the 255 figure matches
+      nothing in the tree: `packages/hardened262/test` is 123 files in ten
+      directories -- 68 `Compartment`, 30 `intrinsics`, 12 `harden`, 7
+      `modules`, and one each of `ArrayBuffer`, `TextDecoder`, `TextEncoder`,
+      `freeze`, `ironhorse` and `lockdown`.
+
+      What the gate actually leaves out is smaller and differently shaped:
+      `native_lockdown_corpora.rs:130` excludes `test/Compartment/` and
+      `test/modules/` -- 75 files -- and asserts each is already `false` in the
+      committed IronHorse baseline, which is why it runs 47. So the residue is
+      not a curation problem at all; it is blocked on a guest `Compartment`,
+      the next item below. What this item still wants first is an inventory of
+      what the two existing gates do not cover and why, not a directory to
+      point at.
+      `designs/ironhorse-ses-compartment-equivalence.md` § The work #1295
+      deferred, triaged carries it as R1. The SES
       AVA suites are further still: they depend on SES options, override
       enablement and a guest `Compartment`, so they need a real adapter rather
-      than source stripping. Deliberately not started here -- an unselected
-      directory would either go red for the wrong reason or need an exclusion
-      list nobody could read. The `-l` sweep below already executes those files
-      as part of the whole corpus; what a gate would add is curation.
+      than source stripping. Deliberately not started here. The `-l` sweep
+      below already executes every one of these files as part of the whole
+      corpus; what a gate would add is curation, and the correction above is
+      why that curation cannot be scoped yet.
 - [ ] A guest `Compartment` (`fx_Compartment`, `xsModule.c:2864`) is the next
       piece, and the one that makes the parity corpus's lockdown case runnable
       natively. It needs its own definition.
+
+      What that definition owes, beyond transliterating `fx_Compartment`, is
+      scoped in `designs/ironhorse-ses-compartment-equivalence.md` § The work
+      #1295 deferred, triaged (G1): there is no template object to snapshot
+      because IronHorse builds each compartment's globals from `global_props`
+      at `create_environment` (`interp/realm.rs:879`); two of
+      `CompartmentOptions`' hooks are booleans rather than callables; relative
+      specifiers are inexpressible because `ModuleGraph::resolve` takes no
+      referrer and `Realm` has no parent; and a new intrinsic moves the boot
+      fingerprint again, forcing the golden-fixture regeneration this work
+      measured once already. Steps 3 and 4 fold into it rather than preceding
+      it, per the correction two items above.
+
+      What it unblocks, measured: the 75 `packages/hardened262` files the
+      shared-corpus gate excludes, and 2 of the 8 cases on the
+      `test262:ironhorse` engine lane -- not all 8; the other six need
+      `frozenBytes`, `compareBytes`, `concatBytes`, `passStyleOf` and
+      `environment`, which no engine has natively
+      (`packages/test262-runner/README.md` § The engine lane's zero).
+
+      Blocked on it in turn, and NOT on lockdown: moving
+      `packages/thixotrope`'s IronHorse worker off the SES shim, two items
+      above.
 - [x] Decide where the oracle-divergence record for a deliberate departure from
       `fx_lockdown` lives. It lives in § Oracle divergences, measured, below.
       An earlier revision closed this as moot, reasoning that decision 4 is a
