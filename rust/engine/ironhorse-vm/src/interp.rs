@@ -2372,17 +2372,38 @@ impl Interp {
         self.run_shared(std::rc::Rc::from(code))
     }
 
+    /// [`Self::run`], but an escaping thrown value is rendered by running the
+    /// guest's own `toString`, as ECMAScript `String()` would.
+    ///
+    /// **Opt in, and only a differential harness should.** The ordinary
+    /// boundary is deliberately guest-free: `host_rendering_meter.rs` pins that
+    /// a diagnostic render cannot run guest work past an exhausted meter
+    /// ceiling, cannot allocate past the chunk ceiling, and cannot make a run's
+    /// cost depend on rendering work. Those are the guarantees an embedder
+    /// relies on and they are unchanged here; this entry point trades them away
+    /// deliberately, for the one caller that needs the oracle's string.
+    ///
+    /// That caller is the test262 differential. The oracle's side of the
+    /// comparison does not come from XS either: `xs_shim.c`'s
+    /// `endor_error_from_exception` runs `fxToString` on `mxException` after
+    /// `mxCatch`, in the SHIM. Comparing a guest-free approximation against a
+    /// guest-run `ToString` measures the two harnesses, not the two engines, so
+    /// the port's harness has to render the same way to compare at all.
+    pub fn run_rendering_throws_in_guest(&mut self, code: &[u8]) -> RunOutcome {
+        self.run_operation(std::rc::Rc::from(code), true, true, true)
+    }
+
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(shared, true, true)
+        self.run_operation(shared, true, true, false)
     }
 
     /// Evaluate a script without pumping the machine's job queue.
     /// Hosts evaluating several scripts in one job must finish with `run`,
     /// `run_shared`, or `run_promise_jobs` to perform the microtask checkpoint.
     pub fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(code, true, false)
+        self.run_operation(code, true, false, false)
     }
 
     /// Whether this machine has queued promise jobs. This is distinct from
@@ -2405,7 +2426,7 @@ impl Interp {
             .top_level_code
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
-        self.run_operation(code, false, true)
+        self.run_operation(code, false, true, false)
     }
 
     fn run_operation(
@@ -2413,10 +2434,12 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let start_raw = self.meter.raw();
         let start_dispatched = self.n_dispatched;
-        let mut outcome = self.run_shared_outcome(shared, execute_script, pump_jobs);
+        let mut outcome =
+            self.run_shared_outcome(shared, execute_script, pump_jobs, guest_thrown_rendering);
         outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
         outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
         outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
@@ -2428,6 +2451,7 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
@@ -2446,7 +2470,7 @@ impl Interp {
             };
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_inner(shared, execute_script, pump_jobs)
+            self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
@@ -2517,6 +2541,7 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let code: &[u8] = &shared;
         if self.slots.capacity() > self.slots.ceiling()
@@ -2578,7 +2603,7 @@ impl Interp {
             }
             self.result = script_result;
         }
-        let halt = self.finish_step(step);
+        let halt = self.finish_step_rendering_throws(code, step, guest_thrown_rendering);
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the

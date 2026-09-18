@@ -626,7 +626,12 @@ fn run_compiled_script(
         match interp.relink_crank(bytecode, &names) {
             Ok(code) => {
                 return if pump_jobs {
-                    interp.run(&code).host_coerced()
+                    // The SUBJECT case: an escaping thrown value is rendered by
+                    // running the guest's `toString`, because the oracle side of
+                    // this comparison is `xs_shim.c`'s `endor_error_from_exception`
+                    // doing exactly that. The engine's ordinary boundary stays
+                    // guest-free and keeps its meter- and heap-ceiling guarantees.
+                    interp.run_rendering_throws_in_guest(&code).host_coerced()
                 } else {
                     // Setup sources end in undefined, so coercion cannot invoke
                     // a guest callback between setup and the subject.
