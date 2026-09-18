@@ -258,6 +258,7 @@ impl Interp {
         term(format!("regexp_split_method={:?}", self.regexp_split_method).as_bytes());
         term(format!("iterator_proto={:?}", self.iterator_proto).as_bytes());
         term(format!("iterator_wrapper_proto={:?}", self.iterator_wrapper_proto).as_bytes());
+        term(format!("iterator_helper_proto={:?}", self.iterator_helper_proto).as_bytes());
         term(format!("map_iterator_proto={:?}", self.map_iterator_proto).as_bytes());
         term(format!("set_iterator_proto={:?}", self.set_iterator_proto).as_bytes());
         term(

@@ -126,6 +126,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // and seal asserts at the end of this fixture branch on
     // `ironhorse_vm::MATH_PROVIDER`; BOTH arms were re-measured, each under
     // its own provider.
+    // `%Iterator.prototype%`'s five lazy helpers (map/filter/take/drop/flatMap)
+    // stopped halting and gained a real implementation, which adds
+    // `%IteratorHelperPrototype%` and its `next`/`return` to the boot heap.
+    // That is a boot-heap CONTENT move of the same class as every one above,
+    // not a format change, so each marker restamps the same changed heap.
+    // BOTH provider arms were re-measured, each under its own provider.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     // Historical hashes describe the platform profile. Normalize only SIGN.
     let mut platform_signature = sig.encode();
@@ -137,13 +143,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "0c8da4396dd5e6dfa2191a9f9c85ecb50e87dd5a7ea770fafadf6084fbcca160"
+        "a7c29a32dec8c1f333550ed2c7cf868eea7233d9401328a53225972376d5c345"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "c3b5bda4e4617b95d30f4db48efc3d095a9445c883037e8a2f59976b6e4f84f5"
+        "51fc33d00d8f858e3468bbc4b59aa625138923b3783f2f461951225985cf2896"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -151,7 +157,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "5339663238c5412c565863fb2be14e559670ad06db20100c627a21f10a8befe8"
+        "281cf09033bdb4af16f7d657fa55d0cc9b2f3a28e1aa922d01a3294b6757e6f1"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -159,7 +165,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "dc490a7c84f88dc5ee978ddc9bdc9ad2c49828996c04023934a014cc04dea230"
+        "149ff2988f4b5ba2c6e26c6e599c5faf55f9efb203534ef85c83d86412e369c3"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -167,7 +173,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "ef35fbbb174f397efa8ef4d07d2db4c92c71f5b1fd3dca84b078e58d91afa484"
+        "55beec21d835c05b924feeb41093bf627173820cab8e65ddad86bc937f0787e8"
     );
 
     let blob = session
@@ -405,7 +411,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // last clause of F127). Same story: this fixture holds none, so
             // only the VERS payload moves. Re-measured on top of the guest
             // `lockdown()` work, which moves the boot heap under both pins.
-            "1b26c5ca32d0c58d60df8127ea3fb2b733a3afde91dfb0e32eebaf522d4cf1b3"
+            "4162b4784c5a74f5f4c69cffe159cf716eaf7ce299351ef71e8ccfa97c77b9ef"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin,
@@ -424,7 +430,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // `derive_boot_fingerprint` folds `MATH_PROVIDER` in only when
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized.
-            "440fdd411edf1e2063c0ca89fbf044f659a771f2005e1087b525adb631015395"
+            "93018f97ba2244ebca32b5fbe96e92c0f0e6275dff74544494f834d217754a4d"
         },
         "canonical final blob hash"
     );
@@ -668,7 +674,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // reason: the stamp and the schema are in the manifest, and this
             // machine holds no accumulation. Re-measured on top of the guest
             // `lockdown()` work, which moves the boot heap the seal covers.
-            "91fd121ae8949885793186b0b5aa5186997b222b479ebd7e92b11013f7dc977a"
+            "c2279d3e57f181025fe768171c18c38cd3aa191bb1b84bc75d9427d65cff4d56"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
             // the platform pin, and again for format version 24 / store
@@ -684,7 +690,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // format version 24, measured under this provider rather than
             // copied from the platform arm, for the reason given on the blob's
             // else-arm above.
-            "e8c6083413854b3e55c711f23e74bd9f0c452a4a0b71361bfb487ea87e4668d5"
+            "60552afbaf98a9d35576b2e87b2aaeb23b53201c9067f922a200df5fb18bf8d7"
         },
         "epoch-3 seal chain"
     );
