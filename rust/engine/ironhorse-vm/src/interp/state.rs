@@ -2047,6 +2047,23 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
+    /// The realm's `%IteratorHelperPrototype%` (a boot object chaining to
+    /// `%Iterator.prototype%`): the prototype every lazy helper instance
+    /// produced by `map`/`filter`/`take`/`drop`/`flatMap` chains to. Like the
+    /// sibling built-in iterator prototypes, it carries `next` and `return`
+    /// only; its own `Symbol.toStringTag` is unread on the covered surface and
+    /// omitted.
+    iterator_helper_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
     map_iterator_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
