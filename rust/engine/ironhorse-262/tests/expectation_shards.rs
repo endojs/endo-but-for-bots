@@ -309,7 +309,12 @@ exit 1
     // successfully afterward. Only the build command remains stubbed here.
     fs::write(
         corpus.join("test/language/probe.js"),
-        "/*---\nflags: [raw]\n---*/\nif (typeof Compartment === 'undefined') throw 'Test262Error: baseline failure';\n",
+        // `mutabilities`, not `Compartment`: ironhorse binds a guest
+        // `Compartment` now (`designs/ironhorse-guest-compartment.md`), so
+        // that probe stopped failing and stopped exercising the gate.
+        // `mutabilities` is the remaining Hardened-JavaScript global the
+        // oracle binds and ironhorse deliberately does not.
+        "/*---\nflags: [raw]\n---*/\nif (typeof mutabilities === 'undefined') throw 'Test262Error: baseline failure';\n",
     )
     .unwrap();
     commit(&corpus);

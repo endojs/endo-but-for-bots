@@ -1171,7 +1171,7 @@ fn a_native_lockdown_does_not_enable_property_override() {
 }
 
 #[test]
-fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() {
+fn the_post_lockdown_start_compartment_keeps_its_date_and_has_a_compartment() {
     assert_eq!(
         result(
             r#"
@@ -1201,15 +1201,36 @@ fn the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment() 
               return Date.prototype.constructor !== Date;
             });
             t('reachViaCtor', function () { return ({}).constructor.constructor('return 1')(); });
+            // A compartment made AFTER lockdown is usable, and reaches the same
+            // frozen graph. `designs/ironhorse-guest-compartment.md` says why a
+            // compartment sees `Compartment` at all: SES's `permits.js` lists
+            // it in `universalPropertyNames` and `fx_lockdown` builds
+            // `mxCompartmentGlobal` itself (`xsLockdown.c:139`), so both
+            // references treat that as normal.
+            t('newCompartmentWorks', function () {
+              return new Compartment().evaluate('1+1');
+            });
+            t('compartmentSeesFrozenProto', function () {
+              var c = new Compartment();
+              return c.evaluate('Object.isFrozen(Object.prototype)');
+            });
+            t('compartmentDateCtorInert', function () {
+              var c = new Compartment();
+              return c.evaluate('Date.prototype.constructor !== Date');
+            });
             out.join(' | ');
         "#
         ),
-        "harden=function | Compartment=undefined | eval=function | Function=function | \
+        "harden=function | Compartment=function | eval=function | Function=function | \
          evalWorks=2 | FunctionWorks=2 | globalThisFrozen=false | ObjProtoFrozen=true | \
          hardenWorks=true | canEndowGlobal=1 | DateNowIsNumber=true | DateNowIsNaN=false | \
-         newDateWorks=0 | DateProtoCtorInert=true | reachViaCtor=TypeError: secure mode",
-        "the start compartment keeps a working Date and gains no Compartment; \
-         the attenuated Date belongs to the compartment template, which is out of scope"
+         newDateWorks=0 | DateProtoCtorInert=true | reachViaCtor=TypeError: secure mode | \
+         newCompartmentWorks=2 | compartmentSeesFrozenProto=true | \
+         compartmentDateCtorInert=true",
+        "the start compartment keeps a working Date and now HAS a `Compartment`; \
+         a compartment made after lockdown reaches the same frozen graph. The \
+         attenuated Date still belongs to the step-3 compartment template, \
+         which this phase does not build"
     );
 }
 

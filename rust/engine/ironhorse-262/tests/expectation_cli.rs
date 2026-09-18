@@ -39,10 +39,15 @@ fn exact_expected_failures_are_green_but_changed_or_skipped_failures_are_red() {
     fs::create_dir(fixture.0.join("harness")).unwrap();
     fs::write(fixture.0.join("harness/sta.js"), "").unwrap();
     let source = fixture.0.join("test/language/fixture.js");
-    // The pinned oracle binds Compartment and Ironhorse deliberately does not.
-    // A raw fixture turns that known difference into an assertion-style error
-    // only on Ironhorse, producing a real gating failure without harness files.
-    fs::write(&source, "/*---\nflags: [raw]\n---*/\nif (typeof Compartment === 'undefined') throw 'Test262Error: fixture failure';").unwrap();
+    // The pinned oracle binds `mutabilities` and Ironhorse deliberately does
+    // not (`create_hardened_globals`). A raw fixture turns that known
+    // difference into an assertion-style error only on Ironhorse, producing a
+    // real gating failure without harness files.
+    //
+    // This used to probe `Compartment`, which Ironhorse now binds
+    // (`designs/ironhorse-guest-compartment.md`), so the fixture stopped
+    // failing and the gate stopped being exercised.
+    fs::write(&source, "/*---\nflags: [raw]\n---*/\nif (typeof mutabilities === 'undefined') throw 'Test262Error: fixture failure';").unwrap();
     let baseline = fixture.0.join("expected.txt");
     let baseline = baseline.to_str().unwrap();
     let generated = fixture.run(&["--update-expectations", baseline]);

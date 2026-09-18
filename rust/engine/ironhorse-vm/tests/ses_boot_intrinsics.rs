@@ -314,8 +314,8 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
 
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=function harden=function Compartment=undefined frozenObjectProto=false",
-                "the engine binds its own harden and lockdown, but no Compartment"
+                "lockdown=function harden=function Compartment=function frozenObjectProto=false",
+                "the engine binds its own harden, lockdown and Compartment"
             );
             // **`lockdown=function` no longer discriminates, so pin identity
             // too.** Before the engine bound a `lockdown`, that census term
@@ -323,7 +323,17 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
             // sides of the shim's evaluation and says nothing about whose it
             // is; only `Compartment` and `frozenObjectProto` still move.
             // Stash the engine's and compare by identity, which does move.
-            crank("globalThis.__engineLockdown = globalThis.lockdown; 0");
+            //
+            // **`Compartment=function` no longer discriminates either**, for
+            // the same reason and since the same change: the engine now binds
+            // a guest `Compartment` (`designs/ironhorse-guest-compartment.md`),
+            // so that term reads `function` before the shim has run. It is
+            // pinned by identity below exactly as `lockdown` is; only
+            // `frozenObjectProto` still moves on its own.
+            crank(
+                "globalThis.__engineLockdown = globalThis.lockdown; \
+                 globalThis.__engineCompartment = globalThis.Compartment; 0",
+            );
             assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
             assert_eq!(
                 crank(SES_CENSUS),
@@ -333,10 +343,12 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
             assert_eq!(
                 crank(
                     "[globalThis.lockdown === globalThis.__engineLockdown, \
-                      globalThis.harden === globalThis.__engineLockdown].join(' ')"
+                      globalThis.harden === globalThis.__engineLockdown, \
+                      globalThis.Compartment === globalThis.__engineCompartment].join(' ')"
                 ),
-                "false false",
-                "the shim REPLACED the engine's lockdown; a typeof census cannot see that"
+                "false false false",
+                "the shim REPLACED the engine's lockdown AND its Compartment; a \
+                 typeof census cannot see either"
             );
             // Not merely present: usable, with its own globals and its own
             // evaluator. The `__options__` sigil selects the modern
@@ -381,6 +393,10 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
                 "Machine::new freezes the intrinsic graph at construction"
             );
+            // Stash the engine's `Compartment` BEFORE the shim runs, so the
+            // census term below can be read by identity rather than by
+            // `typeof` -- which now says `function` either way.
+            crank("globalThis.__engineCompartment = globalThis.Compartment; 0");
             // `repairIntrinsics` rewrites descriptors on the intrinsics the
             // native freeze has already sealed.
             assert_eq!(
@@ -412,8 +428,17 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             // work the refused call would have done.
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=function harden=undefined Compartment=undefined \
+                "lockdown=function harden=undefined Compartment=function \
                  frozenObjectProto=true"
+            );
+            // `Compartment=function` here is the ENGINE's, like `lockdown`
+            // beside it: the shim aborted before installing its own. Identity
+            // says so where `typeof` cannot -- this realm stashed the engine's
+            // binding before the shim ran, and it is still the same object.
+            assert_eq!(
+                crank("globalThis.Compartment === globalThis.__engineCompartment"),
+                "true",
+                "the bound Compartment is the ENGINE's; the shim installed nothing"
             );
             // `lockdown=function` above is the weak term: the engine binds one
             // on every realm, so it is `function` whether the shim ran or not.
@@ -464,11 +489,20 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
             };
             assert_eq!(
                 crank(&start, SES_CENSUS),
-                "lockdown=undefined harden=function Compartment=undefined \
+                "lockdown=undefined harden=function Compartment=function \
                  frozenObjectProto=false",
                 "an UNFROZEN machine does not bind the engine's `lockdown`: \
                  `freeze == false` means the SES shim owns the operation, and \
-                 the shim installs its own when it evaluates"
+                 the shim installs its own when it evaluates. It DOES bind the \
+                 engine's `Compartment`: unlike `lockdown`, constructing one \
+                 mutates nothing in the shared graph, so it neither widens the \
+                 pre-freeze window `new_shared_realm_machine_configured` \
+                 documents nor depends on the freeze having happened. \
+                 `designs/ironhorse-guest-compartment.md` states the rule"
+            );
+            crank(
+                &start,
+                "globalThis.__engineCompartment = globalThis.Compartment; 0",
             );
             assert_eq!(
                 crank(&start, &wrapped(&boot)),
@@ -480,6 +514,15 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
                 "lockdown=function harden=function Compartment=function \
                  frozenObjectProto=true",
                 "the guest's own lockdown must install and freeze"
+            );
+            assert_eq!(
+                crank(
+                    &start,
+                    "globalThis.Compartment === globalThis.__engineCompartment"
+                ),
+                "false",
+                "the shim REPLACED the engine's Compartment; the census term \
+                 reads `function` on both sides and cannot see that"
             );
             // The engine's multi-compartment API still works, and the guest's
             // freeze reached the graph the sibling shares.

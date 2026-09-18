@@ -4453,27 +4453,34 @@ mod tests {
 
     #[test]
     fn an_unlanded_intrinsic_is_a_named_missing_global_skip() {
-        // The pinned oracle binds `Compartment` in an empty program; the
+        // The pinned oracle binds `mutabilities` in an empty program; the
         // port does not. That is a host intrinsic the port lacks: an honest
         // coverage gap that names the intrinsic to land.
+        //
+        // This used to probe `Compartment`, which ironhorse now binds
+        // (`designs/ironhorse-guest-compartment.md`). `mutabilities` is the
+        // remaining member of the Hardened-JavaScript global set that XS's
+        // shim installs and ironhorse does not -- `create_hardened_globals`
+        // records the decision to leave it as an ordinary `ReferenceError`
+        // rather than a refusing stub.
         assert_eq!(
-            probe_global("Compartment"),
+            probe_global("mutabilities"),
             Ok(GlobalBinding {
                 oracle: true,
                 ironhorse: false
             })
         );
         let run = synthetic_oracle_only(Halt::synthetic_throw(
-            "ReferenceError: get Compartment: undefined variable",
+            "ReferenceError: get mutabilities: undefined variable",
         ));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
-            Verdict::RunSkip("ironhorse-missing-global:Compartment".into())
+            Verdict::RunSkip("ironhorse-missing-global:mutabilities".into())
         );
         assert_eq!(
             crate::report::classify(
                 crate::report::Verdict::RunSkip,
-                "ironhorse-missing-global:Compartment"
+                "ironhorse-missing-global:mutabilities"
             ),
             crate::report::Category::Unsupported
         );
@@ -4482,13 +4489,13 @@ mod tests {
     #[test]
     fn a_program_declared_name_the_oracle_also_binds_is_still_a_failure() {
         // The probe alone would call this a missing intrinsic (the oracle
-        // binds `Compartment`, ironhorse does not), but the program declared
-        // its own `Compartment`, so ironhorse failing to resolve it is a
+        // binds `mutabilities`, ironhorse does not), but the program declared
+        // its own `mutabilities`, so ironhorse failing to resolve it is a
         // scope-resolution lie about the program's binding.
         let mut run = synthetic_oracle_only(Halt::synthetic_throw(
-            "ReferenceError: get Compartment: undefined variable",
+            "ReferenceError: get mutabilities: undefined variable",
         ));
-        run.source = "var Compartment = {}; Compartment.x = 1;".into();
+        run.source = "var mutabilities = {}; mutabilities.x = 1;".into();
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(detail) if detail.starts_with("spurious ReferenceError")

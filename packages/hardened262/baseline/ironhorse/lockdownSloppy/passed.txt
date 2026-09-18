@@ -1,3 +1,7 @@
+test/Compartment/evaluate.js
+test/Compartment/import-now-hook/module-source-descriptor-sees-globals.js
+test/Compartment/import-now-hook/namespace-descriptor.js
+test/Compartment/import-now-hook/returns-undefined.js
 test/harden/cycle.js
 test/harden/exists.js
 test/harden/getter.js

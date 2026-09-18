@@ -106,12 +106,25 @@ impl Interp {
         self.environment.shared_compiler = Some(std::rc::Rc::downgrade(compiler));
     }
 
+    /// Mint this environment's own copy of an intrinsic that must be bound to
+    /// it rather than shared -- `eval`, `Function`, and `Compartment`.
+    ///
+    /// XS mints exactly these three per compartment (`fx_Compartment`,
+    /// `xsModule.c:2923-2956`), and `test/Compartment/prototype/globalThis/defaults.js`
+    /// observes it: every own global of a fresh compartment is the outer
+    /// realm's BY IDENTITY except `Compartment`, `Function`, `eval` and the
+    /// value globals. The copy shares the original's `ctor_prototype`, so
+    /// `%Compartment.prototype%` stays one object and a compartment made by a
+    /// nested compartment carries the same brand.
     pub(super) fn compartment_evaluator(&mut self, original: crate::SlotIndex) -> crate::SlotIndex {
         let Some(mut info) = self.functions.get(&original).cloned() else {
             return original;
         };
         if !self.shared_compartments
-            || !matches!(info.native, Some(Native::Eval | Native::Function))
+            || !matches!(
+                info.native,
+                Some(Native::Eval | Native::Function | Native::Compartment)
+            )
         {
             return original;
         }

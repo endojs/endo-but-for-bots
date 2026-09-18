@@ -135,6 +135,8 @@ const FRESH_ORDER: &[&str] = &[
     "disposable_stacks",
     "collections",
     "side_refs",
+    "guest_compartments",
+    "compartment_proto",
     "map_proto",
     "set_proto",
     "weakmap_proto",

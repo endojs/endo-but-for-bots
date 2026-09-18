@@ -969,6 +969,15 @@ impl Interp {
                 };
                 return Err(self.catchable_type_error_msg(format!("call: {name}")));
             }
+            // `new Compartment(options)` (`fx_Compartment`, `xsModule.c:2864`):
+            // a fresh global object holding references to the one shared
+            // intrinsic graph, plus a fresh `eval`/`Function` bound to it.
+            // See `interp/natives/compartment.rs`.
+            Native::Compartment if has_target => self.construct_compartment(code, argc, arg(0))?,
+            // Constructor-only, like `Map`/`Set`/`Proxy` above.
+            Native::Compartment => {
+                return Err(self.catchable_type_error_msg("call: Compartment".into()));
+            }
             // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
             // `fxNewArrayBufferInstance`): a fresh zero-filled buffer. The
             // instance is `fxNewObjectInstance` + two internal `fxNewSlot`s
@@ -3878,6 +3887,8 @@ impl Interp {
             // `designs/ironhorse-native-lockdown.md` for why matching XS and
             // matching SES are different projects).
             NativeMethod::GlobalLockdown => self.do_lockdown(code)?,
+            NativeMethod::CompartmentEvaluate => self.compartment_evaluate(code, this, arg0)?,
+            NativeMethod::CompartmentGlobalThisGetter => self.compartment_global_this(this)?,
             NativeMethod::Test262DetachArrayBuffer => {
                 let buffer = match arg0.value {
                     Payload::Reference(r)

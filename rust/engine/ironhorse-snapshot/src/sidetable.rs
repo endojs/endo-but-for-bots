@@ -670,6 +670,13 @@ mod tests {
             // FUNC's shared extension carries environment/lease identities and
             // pending report candidates. Rc/Weak policy is rebuilt on adoption.
             "inactive_environments",
+            // The guest `Compartment` instance-to-environment table. It holds
+            // cross-crank state and rides NO section: a machine holding a live
+            // guest compartment is refused at the persist gate by presence
+            // (`Interp::stored_unpersistable_row_inner`), which is what
+            // accounts for it here. `designs/ironhorse-guest-compartment.md`
+            // § 7 specifies the table that would let it travel.
+            "guest_compartments",
             "identity_roots",
             "restored_leases",
             "restored_environment_leases",
@@ -795,6 +802,7 @@ mod tests {
             "object_proto",
             "function_proto",
             "array_proto",
+            "compartment_proto",
             "map_proto",
             "set_proto",
             "weakmap_proto",

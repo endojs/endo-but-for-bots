@@ -137,13 +137,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "0c8da4396dd5e6dfa2191a9f9c85ecb50e87dd5a7ea770fafadf6084fbcca160"
+        "bd1be9ad4abfd629bed49ea54c56140325179ed92e97d84e7f5189003c9731f2"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "c3b5bda4e4617b95d30f4db48efc3d095a9445c883037e8a2f59976b6e4f84f5"
+        "88bc396819ee6a17974a5e9bd491e5343d66bb7e227797721939c5f17bbd4945"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -151,7 +151,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "5339663238c5412c565863fb2be14e559670ad06db20100c627a21f10a8befe8"
+        "16ff99837bf235721263eab4ce5917d85289962f96b960655d0513c7fd4ae781"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -159,7 +159,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "dc490a7c84f88dc5ee978ddc9bdc9ad2c49828996c04023934a014cc04dea230"
+        "657993f3dac5bee8a5f821beceaffda931fbb34586242a522cb6b5d6f46a248b"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -167,7 +167,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "ef35fbbb174f397efa8ef4d07d2db4c92c71f5b1fd3dca84b078e58d91afa484"
+        "8780766e7534e3f03381b9f1b203f7b25a1c6f37e647bad77d4ff9616c0d6152"
     );
 
     let blob = session
@@ -400,7 +400,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // Re-pinned for format version 23, which lets `ASYN` carry
             // async generator instances (architecture review F127). This
             // fixture holds none, so only the VERS payload changes.
-            "c0e16ad94b444384b294a9ff577e0ec45a6acd274d3a15d41cc355b4d2cb8d86"
+            "a6942e5a897c454c822838e050b1de1ce91671966c74bc5baed03d930e141b38"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin.
@@ -416,7 +416,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // `derive_boot_fingerprint` folds `MATH_PROVIDER` in only when
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized.
-            "7a5acb87016de123175d2e7d8ebd8356b6bb3386a823e671d28025e0dbf140e3"
+            "81fc3bc16813d817e53b7bb33d97c89368af7531f528ac375767c8ecd07ff62a"
         },
         "canonical final blob hash"
     );
@@ -655,7 +655,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // the `VERS` stamp and the schema, so the seal moves with the blob
             // while the small state itself is unchanged (this machine holds no
             // async generator).
-            "b8bdae6ab380f0d3ef09f1f99461efb42a336601077d33662d59e23117f2c6ec"
+            "8df12d3382488af3a165397a8b6e3df04db5d01cffb68cfd1201f7ec0a4d6444"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
             // the platform pin.
@@ -668,7 +668,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // The digest below is the guest `lockdown()` one, measured under
             // this provider rather than copied from the platform arm, for the
             // reason given on the blob's else-arm above.
-            "f7368a2df1611cc087a0d58c33e14e09c098bbe86f3b19e7e8f3a3633742a8a9"
+            "aaaf864345b39cf1f2df67ef5708ba7fbc20827c15f304120bd44a6cdeaeabb9"
         },
         "epoch-3 seal chain"
     );

@@ -220,6 +220,7 @@ impl Interp {
         term(format!("object_proto={:?}", self.object_proto).as_bytes());
         term(format!("function_proto={:?}", self.function_proto).as_bytes());
         term(format!("array_proto={:?}", self.array_proto).as_bytes());
+        term(format!("compartment_proto={:?}", self.compartment_proto).as_bytes());
         term(format!("map_proto={:?}", self.map_proto).as_bytes());
         term(format!("set_proto={:?}", self.set_proto).as_bytes());
         term(format!("weakmap_proto={:?}", self.weakmap_proto).as_bytes());
@@ -409,6 +410,11 @@ impl Interp {
                 Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
+                // `%Compartment.prototype%`: a plain boot object chaining to
+                // %Object.prototype%, carrying the members `create_compartment`
+                // binds below. The per-instance environment handle lives in the
+                // `guest_compartments` side table, not on the prototype.
+                Native::Compartment => self.slots.alloc(Slot::instance(object_proto)),
                 Native::Iterator => self.slots.alloc(Slot::instance(object_proto)),
                 // `%ArrayBuffer.prototype%`: a plain boot object chaining to
                 // %Object.prototype%, carrying the `byteLength` accessor and
@@ -1552,6 +1558,7 @@ impl Interp {
         self.create_atomics();
         self.create_reflect();
         self.create_proxy();
+        self.create_compartment();
         self.create_eval();
         self.create_intl();
         self.create_temporal();
@@ -2356,6 +2363,59 @@ impl Interp {
     /// of `%Date.prototype%`. The embedding supplies no time-zone database;
     /// local-time operations therefore use UTC, matching the engine's existing
     /// deterministic Intl/Temporal host profile.
+    /// Register `%Compartment.prototype%`'s members (`fx_Compartment`,
+    /// `xsModule.c:2864`), scoped in `designs/ironhorse-guest-compartment.md`.
+    ///
+    /// Phase 1 binds the non-module surface: `evaluate`, the `globalThis`
+    /// getter, and `Symbol.toStringTag`. `import`/`importNow` are phase 2 and
+    /// are deliberately absent rather than present-and-refusing -- an absent
+    /// method reads as absent, which is the same judgement
+    /// `create_hardened_globals` records for `mutabilities`.
+    ///
+    /// `Symbol.toStringTag` is NOT installed here. It is a symbol-keyed data
+    /// property and the well-known symbol key ids do not exist until
+    /// `link_intrinsics` mints them, so it is installed there
+    /// ([`Self::install_intrinsic_bindings`]) against `compartment_proto`.
+    ///
+    /// `alloc_named_method`, not `alloc_method`: the latter hard-codes
+    /// `name_chunk = ""` and arity 0, and these are observable guest functions
+    /// whose `name` and `length` the corpus reads.
+    ///
+    /// **Adding a member here moves [`Self::boot_fingerprint`]**, like
+    /// `create_hardened_globals`; see that function's note.
+    fn create_compartment(&mut self) {
+        let Some(&ctor) = self.intrinsics.get("Compartment") else {
+            return;
+        };
+        let Some(proto) = self.prototype_of(ctor) else {
+            return;
+        };
+        self.compartment_proto = proto;
+        let evaluate = self.alloc_named_method(NativeMethod::CompartmentEvaluate, "evaluate", 1);
+        self.proto_methods.push((proto, "evaluate", evaluate));
+        // `globalThis` is an ACCESSOR on the prototype, not a data property on
+        // the instance: `getOwnPropertyDescriptor(Compartment.prototype,
+        // 'globalThis')` must report `{get, set: undefined, enumerable: false,
+        // configurable: true}`, and an instance must carry no own property of
+        // that name at all (`prototype/globalThis/defaults.js` enumerates a
+        // compartment's globals and compares them by identity with the outer
+        // realm's, so an own `globalThis` on the INSTANCE would not be seen,
+        // but `evaluate.js` reads `parent.globalThis.Compartment` through the
+        // prototype's getter).
+        let global_this = self.alloc_named_method(
+            NativeMethod::CompartmentGlobalThisGetter,
+            "get globalThis",
+            0,
+        );
+        self.proto_accessors.push((
+            proto,
+            ProtoAccessorKey::String("globalThis"),
+            global_this,
+            None,
+            "Compartment",
+        ));
+    }
+
     fn create_date(&mut self) {
         let Some(&ctor) = self.intrinsics.get("Date") else {
             return;

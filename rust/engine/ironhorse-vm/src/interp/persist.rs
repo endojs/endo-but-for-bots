@@ -539,6 +539,35 @@ impl Interp {
         if self.intrinsics.contains_key("$262") {
             return Some("a test262 `$262` host object, which no snapshot carries");
         }
+        // A live guest `Compartment` ([`Interp::guest_compartments`]),
+        // refused on PRESENCE for the same reason `$262` is, and with the same
+        // shape of defect behind it.
+        //
+        // The compartment's ENVIRONMENT already travels -- the `Environments`
+        // section carries every entry of `inactive_environments`, with the
+        // `host_owned` flag deciding which get a restored lease. What does not
+        // travel is the instance-to-global association this table holds, nor
+        // the lease that keeps the environment out of `reap_environments`'s
+        // reach. A resumed machine would therefore hold a `Compartment`
+        // instance that is no longer branded: `c.evaluate(...)` on it would be
+        // `TypeError: not a compartment`, and its environment would be
+        // collectable while the guest still references the object that used to
+        // own it.
+        //
+        // The doomed-set walk below cannot see this either. It refuses a
+        // machine that stored an unpersistable NATIVE; a compartment instance
+        // is an ordinary `Kind::Instance` slot whose entire compartment-ness
+        // is membership here, so the walk finds nothing to object to and the
+        // checkpoint would succeed. Presence is the honest question.
+        //
+        // This is phase 1's stated cost, not a permanent one:
+        // `designs/ironhorse-guest-compartment.md` § 7 specifies the two-column
+        // table that lifts it.
+        if !self.guest_compartments.is_empty() {
+            return Some(
+                "a live guest `Compartment`, whose environment binding no snapshot carries",
+            );
+        }
         // A pending reaction whose KIND names an `Array.fromAsync` step
         // points at `from_async` state the image does not carry. Every
         // such in-flight accumulation is anchored by exactly one
@@ -654,8 +683,14 @@ impl Interp {
         self.functions.get(&function).is_some_and(|info| {
             (info.native.is_none() && info.method.is_none())
                 || (self.shared_compartments
-                    && (matches!(info.native, Some(Native::Eval | Native::Function))
-                        || (info.native == Some(Native::Host) && info.host.is_some())))
+                    && (matches!(
+                        info.native,
+                        // The three per-compartment copies `compartment_evaluator`
+                        // mints. Each is re-derived at restore from its boot
+                        // primordial plus an `EvaluatorRow` (`shared_persist.rs`),
+                        // so a stored reference to one is not a dangling native.
+                        Some(Native::Eval | Native::Function | Native::Compartment)
+                    ) || (info.native == Some(Native::Host) && info.host.is_some())))
         })
     }
 
