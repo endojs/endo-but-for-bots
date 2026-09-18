@@ -1972,7 +1972,19 @@ impl Parser<'_> {
                     if a_symbol.as_ref().and_then(SymbolName::as_str) == Some("constructor") {
                         return Err(self.error("invalid field: constructor"));
                     }
-                    if a_symbol.as_ref().and_then(SymbolName::as_str) == Some("prototype") {
+                    // ONLY when static. `ClassElement : static FieldDefinition ;`
+                    // is the production whose early error forbids `prototype`
+                    // (ECMA-262 §15.7.1); a non-static `prototype` field is
+                    // ordinary and `class C { prototype = 1; }` is valid source.
+                    // `fxClassExpression` (`xsSyntaxical.c:2733`) tests the
+                    // symbol without consulting its own `aStaticFlag`, and the
+                    // port had carried that over, so both engines refused it.
+                    // A deliberate divergence from the pinned oracle toward the
+                    // spec, the same direction as `for (let x, y in {})` and the
+                    // Annex B `for-in` head initializer on this branch.
+                    if static_flag
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("prototype")
+                    {
                         return Err(self.error("invalid field: prototype"));
                     }
                     self.class_field(prop_line, a_token1, static_flag)?;
