@@ -216,3 +216,21 @@ test('snapshot of empty file has zero size and the known sha256(empty)', async t
   // base64-encoded:
   t.is(info.hash, '47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=');
 });
+
+test('BlobRef.range: a fetch starting past the selection reads nothing', async t => {
+  const blob = await snapshotOf(utf8('hello world\n')); // 12 bytes
+  const inner = await E(blob).range(6n, 11n); // 'world', 5 bytes
+  // An offset at or past the ATTENUATED length is empty even though the
+  // parent snapshot still holds bytes there: the derived cap clamps against
+  // its own view, never the source.
+  t.is(fromUtf8(await collectBytes(await E(inner).fetch(5n, 4n))), '');
+  t.is(fromUtf8(await collectBytes(await E(inner).fetch(100n, 4n))), '');
+  t.is(fromUtf8(await collectBytes(await E(inner).fetch(4n, 4n))), 'd');
+});
+
+test('BlobRef.range: help falls back to the default text and declines unknown methods', async t => {
+  const blob = await snapshotOf(utf8('hello world\n'));
+  const inner = await E(blob).range(0n, 5n);
+  t.regex(await E(inner).help(), /BlobRef/);
+  t.regex(await E(inner).help('nonesuch'), /No documentation available/);
+});

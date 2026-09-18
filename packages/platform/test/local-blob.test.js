@@ -257,3 +257,44 @@ test('LocalBlob.rangeReadText rejects a negative or non-integer line index', asy
     message: /EINVAL/,
   });
 });
+
+test('LocalBlob.streamBase64 confines an attenuated view to its selected bytes', async t => {
+  const payload = 'hello world\n'; // 12 bytes
+  const blob = makeLocalBlob(makeTempFile(t, payload));
+  // The unattenuated blob streams the whole file straight off disk.
+  t.is(fromUtf8(await collectBytes(blob)), payload);
+  // An attenuated view streams ONLY the selected bytes: streaming is the one
+  // read path that could bypass the interval by re-opening the file, so a
+  // derived cap that streamed the whole file would hand back authority its
+  // holder never received.
+  const suffix = await E(blob).range(6n, 100n);
+  t.is(fromUtf8(await collectBytes(suffix)), 'world\n');
+  const inner = await E(suffix).range(0n, 5n);
+  t.is(fromUtf8(await collectBytes(inner)), 'world');
+  // An empty selection streams nothing rather than a zero-length chunk.
+  const empty = await E(blob).range(4n, 4n);
+  t.is(fromUtf8(await collectBytes(empty)), '');
+});
+
+test('LocalBlob.help documents the surface and declines unknown methods', async t => {
+  const blob = makeLocalBlob(makeTempFile(t, 'hi'));
+  t.regex(await E(blob).help(), /LocalBlob:.*\brange\b.*\btextRange\b/);
+  t.is(await E(blob).help('nonesuch'), 'No documentation for method nonesuch.');
+});
+
+test('LocalBlob: json and rangeReadText read an attenuated view, not the whole file', async t => {
+  // The file holds two JSON documents; the selection covers only the second,
+  // so a derived cap that fell back to the whole file would either parse the
+  // wrong document or fail outright.
+  const payload = '{"secret":1}\n{"ok":2}\n';
+  const blob = makeLocalBlob(makeTempFile(t, payload));
+  const second = await E(blob).range(13n, 21n); // '{"ok":2}'
+  t.deepEqual(await E(second).json(), { ok: 2 });
+  await t.throwsAsync(() => E(blob).json()); // the whole file is not one document
+
+  const lines = makeLocalBlob(makeTempFile(t, 'a\nb\nc\nd\n'));
+  const tail = await E(lines).range(4n, 8n); // 'c\nd\n'
+  t.is(await E(tail).rangeReadText(0, 1), 'c');
+  t.is(await E(tail).rangeReadText(0, 100), 'c\nd\n');
+  t.is(await E(tail).rangeReadText(1, 1), '');
+});
