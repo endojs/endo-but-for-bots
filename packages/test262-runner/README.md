@@ -53,7 +53,7 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
 | `test262:node` | 14 / 16 | the 2 failures are `lockdown()` cases, below |
 | `test262:ironhorse-host` | 14 / 16 | the number this ratchet tracks |
-| `test262:ironhorse` | 0 / 8 covered | starts now; every case a named skip, below |
+| `test262:ironhorse` | 0 / 8 covered, 1 failed | the two `Compartment` cases now RUN; see below |
 
 Ironhorse now matches the node host's 14/16, and on the same file:
 `Symbol.toStringTag-lockdown.js`, whose sloppy and strict runs are the two.
@@ -110,12 +110,44 @@ running all 35891 files, pre-skipping every one with a truthful
 passing third host while testing nothing. A ratchet needs a real number more
 than a green tick.
 
-The number it now reports on this corpus is **0 of 8 covered, 8 named skips**,
-and that is not a lockdown result. Two cases skip on `feature:Compartment`
-(`Symbol.toStringTag.js` and `Symbol.toStringTag-lockdown.js`), the constructor
-Ironhorse models as a host-side Rust API rather than a guest intrinsic. The
-other six are `shared-positive-test-failure`, and they do not all want the same
-thing:
+The number it now reports on this corpus is **0 of 8 covered, 7 named skips and
+1 failure**, and that is not a lockdown result.
+
+Ironhorse binds a guest `Compartment` since
+`designs/ironhorse-guest-compartment.md`, so `Compartment` left
+`DEFAULT_ENDOR_SKIP_FEATURES` and the two cases that declare
+`features: [Compartment]` now RUN rather than pre-skipping on a name that had
+stopped being true. **Neither became `covered`, and that is not the
+constructor's fault:** this lane runs `-l`, so `lockdown()` has frozen
+`Compartment.prototype` before the case reads it, and
+`verifyProperty(..., { configurable: true })` therefore fails on BOTH engines.
+
+- `Symbol.toStringTag-lockdown.js` fails identically on both and joins the
+  `shared-positive-test-failure` group — an honest shared skip.
+- `Symbol.toStringTag.js` fails on both too, but the ABORT VALUES render
+  differently: `Test262Error: Expected obj[Symbol(Symbol.toStringTag)] to have
+  configurable:true.` on the oracle against `Object: ` + the same message on
+  Ironhorse. The differential reads that as `abort-value-differs` and the bar
+  reports one failure.
+
+  That divergence is not about `Compartment`. `Interp::render_uncaught` labels
+  a thrown non-`Error` with its `Object.prototype.toString` tag rather than its
+  constructor's `name`, because it is a host boundary that must not run guest
+  code — and for an ordinary guest constructor BOTH hops it would need
+  (`constructor` on the prototype, `name` on the function) are virtual
+  properties materialized on demand, which a `&self` render cannot do.
+  `packages/hardened262/scripts/agents/ironhorse.js` works around the same gap
+  by rewriting `Test262Error.prototype.toString` in the harness source.
+  Closing it means teaching the render boundary to read those two virtual
+  properties, which is its own change.
+
+An earlier revision of this paragraph said the two cases skip on
+`feature:Compartment` and that the tally "closes as those land". Half of that
+was right: the pre-skip is gone. The cases did not become covered, because
+under `-l` they fail on both engines.
+
+The other six are `shared-positive-test-failure`, and they do not all want the
+same thing:
 
 | Case | Needs | Supplied by |
 |---|---|---|
@@ -128,14 +160,19 @@ thing:
 No engine has any of these natively, so Ironhorse and the XS oracle fail them
 identically — which is agreement, which is a skip rather than a divergence.
 
-So the engine lane measures the guest surface, and the guest surface is **six
-names short**: `Compartment`, `frozenBytes`, `compareBytes`, `concatBytes`,
-`passStyleOf` and `environment`. An earlier revision of this paragraph said
-"one name short" and that `Compartment` landing would move it. Both are wrong,
-and the second is the one that matters: `Compartment` moves **2 of the 8**, and
-the remaining 6 need globals a prelude currently supplies, one of which
-(`ses-hosts.js`) is not in the bytes family at all. For a compatibility count
-today, read `test262:ironhorse-host`.
+So the engine lane measures the guest surface, and the guest surface is **five
+names short**: `frozenBytes`, `compareBytes`, `concatBytes`, `passStyleOf` and
+`environment`, each supplied by a prelude today and by no engine natively. One
+of them (`ses-hosts.js`) is not in the bytes family at all.
+
+`Compartment` was the sixth and has landed, which is the correction this
+paragraph owes twice over. An earlier revision said "one name short" and that
+`Compartment` landing would move the tally; a later one said it "moves 2 of the
+8". Measured after it landed, it moves **neither** — both cases run now, and
+both fail on both engines because `-l` freezes `Compartment.prototype` before
+the case asks whether it is configurable. What the lane gained is honesty about
+two cases, not coverage of them. For a compatibility count today, read
+`test262:ironhorse-host`.
 
 What `-l` bought is a differential gate on the lockdown itself. An earlier
 revision of this paragraph claimed that gate had already reported agreement
