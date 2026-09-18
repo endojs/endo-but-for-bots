@@ -763,7 +763,9 @@ impl Parser<'_> {
             }
             count += 1;
             if self.cur.token == Token::Comma {
-                self.flags &= !flags::FOR;
+                // `[~In]` covers the whole list, so the flag stays set across
+                // the comma too; clearing it here let `for (var x = 1, y = "a"
+                // in {};;)` through (F063).
                 self.get_next_token()?;
                 comma_flag = true;
             } else {
@@ -1009,7 +1011,11 @@ impl Parser<'_> {
             return Err(self.error("missing identifier"));
         }
         if flags_arg & 1 != 0 && self.cur.token == Token::Assign {
-            self.flags &= !flags::FOR;
+            // `[~In]` covers the WHOLE `VariableDeclarationList`, initializers
+            // included: `for ( var VariableDeclarationList[~In] ; … )`. Clearing
+            // the flag here let `for (var x = "a" in {};;)` — a spec early
+            // error — compile. Leaving it set makes the `in` end the head, and
+            // `for_statement`'s existing `Binding` arm rejects it (F063).
             self.get_next_token()?;
             self.assignment_expression()?;
             self.push_node_struct(2, Token::Binding, line)?;
@@ -1746,7 +1752,7 @@ impl Parser<'_> {
     pub(crate) fn arrow_expression(&mut self, flag: u32) -> PResult<()> {
         let line = self.cur.line;
         let saved = self.flags;
-        self.flags &= !(flags::ASYNC | flags::GENERATOR);
+        self.flags &= !(flags::ASYNC | flags::GENERATOR | flags::FOR);
         self.flags |= flags::ARROW | flag;
         self.match_token(Token::Arrow)?;
         self.push_null();

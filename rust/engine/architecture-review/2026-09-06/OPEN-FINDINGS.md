@@ -148,8 +148,10 @@ adapter.
 The inventory stays at 21 AST-shape sites: `code_node_inner`'s fifth is a catch-all
 over every unhandled node kind, which one kind's reachability does not discharge.
 Two pre-existing defects of the same ambient-flag root cause were found beside it and
-left open — `in` suppressed inside an arrow body in a `for` head (valid code refused)
-and `in` permitted after the head's first `=` (an early error accepted).
+fixed with it: `in` refused wherever a `[+In]` production should have reset the flag
+(parentheses, arguments, computed members, template substitutions, arrow bodies), and
+`in` permitted inside a head declaration list that `[~In]` covers whole.
+`for_head_in_scope.rs` pins both directions.
 F063 stays open.
 Five checked-in matrices require all 17,534 generated compilations to succeed;
 180 runtime cases separately pin the changed logical-assignment behavior.

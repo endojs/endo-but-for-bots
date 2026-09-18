@@ -1173,8 +1173,12 @@ impl<'a> Parser<'a> {
                         }
                     }
                     Token::LeftBracket => {
+                        // `MemberExpression [ Expression[+In] ]`.
+                        let saved = self.flags & flags::FOR;
+                        self.flags &= !flags::FOR;
                         self.get_next_token()?;
                         self.comma_expression()?;
+                        self.flags |= saved;
                         self.push_node_struct(2, Token::MemberAt, line)?;
                         self.match_token(Token::RightBracket)?;
                     }
@@ -1238,9 +1242,13 @@ impl<'a> Parser<'a> {
                                 self.get_next_token()?;
                             }
                             Token::LeftBracket => {
+                                // `OptionalChain [ Expression[+In] ]`.
+                                let saved = self.flags & flags::FOR;
+                                self.flags &= !flags::FOR;
                                 self.push_node_struct(1, Token::Option, line)?;
                                 self.get_next_token()?;
                                 self.comma_expression()?;
+                                self.flags |= saved;
                                 self.push_node_struct(2, Token::MemberAt, line)?;
                                 self.match_token(Token::RightBracket)?;
                             }
@@ -1356,7 +1364,15 @@ impl<'a> Parser<'a> {
                 self.array_expression()?;
                 self.flags |= saved;
             }
-            Token::LeftParenthesis => self.group_expression(0)?,
+            Token::LeftParenthesis => {
+                // `( Expression[+In] )` — a parenthesized expression resets
+                // `[In]`, so `for ((a in b);;)` is legal. Same save/clear/
+                // restore the class/object/array arms above use (F063).
+                let saved = self.flags & flags::FOR;
+                self.flags &= !flags::FOR;
+                self.group_expression(0)?;
+                self.flags |= saved;
+            }
             Token::Template => {
                 self.push_null();
                 let (s, r) = self.cur_template_strings();
@@ -1902,6 +1918,10 @@ impl<'a> Parser<'a> {
         self.push_raw(r, line);
         self.push_node_struct(2, Token::TemplateMiddle, line)?;
         count += 1;
+        // `${ Expression[+In] }` — a substitution resets `[In]`, so
+        // `for (`${a in b}`;;)` is legal (F063).
+        let saved_for = self.flags & flags::FOR;
+        self.flags &= !flags::FOR;
         loop {
             self.get_next_token()?;
             // `TemplateSubstitutionTail` requires an `Expression`, so `${}` is
@@ -1936,6 +1956,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        self.flags |= saved_for;
         self.push_node_list(count)?;
         Ok(())
     }
@@ -1969,6 +1990,10 @@ impl<'a> Parser<'a> {
         let mut count = 0usize;
         let line = self.cur.line;
         let mut spread_flag = false;
+        // `Arguments : ( ArgumentList[+In] )` — an argument list resets `[In]`,
+        // so `for (f(a in b);;)` is legal (F063).
+        let saved_for = self.flags & flags::FOR;
+        self.flags &= !flags::FOR;
         self.match_token(Token::LeftParenthesis)?;
         while self.cur.token == Token::Spread || has_flag(self.cur.token, BEGIN_EXPRESSION) {
             let param_line = self.cur.line;
@@ -1986,6 +2011,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.match_token(Token::RightParenthesis)?;
+        self.flags |= saved_for;
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::Params, line)?;
         if spread_flag {
@@ -2040,8 +2066,12 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Token::LeftBracket => {
+                    // `MemberExpression [ Expression[+In] ]`.
+                    let saved = self.flags & flags::FOR;
+                    self.flags &= !flags::FOR;
                     self.get_next_token()?;
                     self.comma_expression()?;
+                    self.flags |= saved;
                     self.push_node_struct(2, Token::MemberAt, member_line)?;
                     self.match_token(Token::RightBracket)?;
                 }

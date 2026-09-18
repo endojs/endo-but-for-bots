@@ -189,7 +189,7 @@ const CONTEXTS: &[&str] = &[
     "switch(FRAG){}",
     "switch(0){case FRAG:}",
     "throw FRAG;",
-    "return FRAG;",
+    "function f(){return FRAG;}",
     "with({})FRAG;",
     "async function f(){await FRAG;}",
     "function*f(){yield FRAG;}",
