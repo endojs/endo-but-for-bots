@@ -2514,6 +2514,36 @@ mod tests {
         }
     }
 
+    /// Regression for the CI tripwire crash of 2026-09-18 (target
+    /// `differential_source`, artifact
+    /// `crash-7fc45770f3c4e8e481b84f9caca3f0a5408c319b`, 101 bytes).
+    ///
+    /// NOT the rendering-only class the neighbours above pin, and not the
+    /// one-ulp ARITHMETIC divergence it first looks like. Both engines computed
+    /// the SAME double: byte-identical IEEE-754
+    /// (`247,255,255,255,255,199,102,195`), and both answer `true` to
+    /// `expr === -51298814505516984`.
+    ///
+    /// XS rendered `-51298814505516980`, which is the exact midpoint between
+    /// that double and its neighbour `-51298814505516976`. Its mantissa is odd,
+    /// so ties-to-even reads that spelling back as the neighbour and
+    /// `results_agree` saw two different doubles. The cause is `ROUND_BIASED`
+    /// (`xsdtoa.c:56`), which lets XS accept a boundary spelling whatever the
+    /// parity and read it back by rounding up --
+    /// `ironhorse-vm/tests/oracle_dtoa_round_trip_divergence.rs` characterises
+    /// the class. `results_agree` now treats a boundary spelling as ambiguous,
+    /// which is what it is.
+    #[test]
+    fn finding_7fc45770f3c4e8e4_biased_tie_spelling_agrees() {
+        // The PROGRAM the crash input folded to under the generator of the
+        // day, which is the durable lock rather than the bytes.
+        let prog = r#"(-(((((-70 || 26) + (true - true)) + ((true - true) - (true - true))) + (((true - true) - (true - true)) - ((0 + 1) - (226492416 * 226492416)))) + ((((226492416 * 226492416) * (226492416 * 2088763392)) * (!(226492416 || 226492416))) * (((false ^ 176160768) + (true + 104)) * (~(true % 1.44))))))"#.to_string();
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7fc45770f3c4e8e4 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `5c29667cc15d6d93` (target
     /// `differential_source`). The 5-byte input `e1 1b dc dc dc` folds into
     /// `((-(-(-226492416))) * (-(-(-226492416))))`, i.e. `226492416^2` where
