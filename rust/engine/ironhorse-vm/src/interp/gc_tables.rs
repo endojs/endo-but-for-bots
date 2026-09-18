@@ -454,6 +454,12 @@ macro_rules! gc_slot_row {
 
         }
     };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, guest_compartment) => {
+        $emit! {
+            $visit($row.global);
+
+        }
+    };
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, disposal) => {
         $emit! {
             for r in &$row.records {

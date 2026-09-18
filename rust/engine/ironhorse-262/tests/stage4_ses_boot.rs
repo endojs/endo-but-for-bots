@@ -46,7 +46,9 @@ fn wrapped(code: &str) -> String {
 /// `xs-oracle/csrc/xs_shim.c:373-381`, ironhorse's `create_hardened_globals`
 /// at `ironhorse-vm/src/interp/boot.rs:2086`). `Compartment` is the exception:
 /// XS builds it into every realm (`xsModule.c:207`), so it is the one name
-/// here that no embedder chose.
+/// here that no embedder chose -- and, since
+/// `designs/ironhorse-guest-compartment.md`, ironhorse builds it into every
+/// realm too.
 const CENSUS: &str = "['lockdown','harden','petrify','mutabilities','Compartment',\
     'HandledPromise','assert']\
     .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ') \
@@ -71,8 +73,11 @@ const IRONHORSE_PRISTINE: &[(&str, &str)] = &[
     // `Halt::NotImplemented` rather than a wrong value", which was never
     // measured and was not true of either.
     ("mutabilities", "undefined"),
-    // XS builds this into the realm; ironhorse has no equivalent.
-    ("Compartment", "undefined"),
+    // XS builds this into the realm, and ironhorse now does too
+    // (`Native::Compartment`, `designs/ironhorse-guest-compartment.md`). It is
+    // a realm intrinsic on both sides rather than an embedder's choice, so it
+    // is the one row here that no host installs and none can decline.
+    ("Compartment", "function"),
 ];
 
 #[test]
@@ -180,31 +185,41 @@ fn ses_boot_bundle_agrees_and_installs_only_handled_promise() {
 
     // (4) The gap, pinned so it can neither widen nor close silently.
     //
-    //     `Compartment` is now the WHOLE of it, and it is the one entry XS
-    //     builds into every realm — so it is also the one name the DAEMON's XS
-    //     actually has that ironhorse lacks. `rust/endo/xsnap` declares
-    //     `fx_lockdown`/`fx_harden` in `ffi.rs:274` and calls neither
-    //     (`lib.rs:917`), so the daemon's realm has no `lockdown` either. The
-    //     oracle's `lockdown`/`mutabilities` are `xs_shim.c`'s installs,
-    //     present for differential testing — they are NOT what the daemon runs
-    //     on.
+    //     `mutabilities` is now the WHOLE of it, and it is an embedder's
+    //     choice rather than a realm intrinsic: `xs_shim.c` installs it for
+    //     differential testing and `create_hardened_globals` declines it, with
+    //     its reason recorded there. `Compartment` used to be this row --
+    //     the one entry XS builds into every realm and ironhorse lacked --
+    //     and is not any more.
+    //
+    //     `rust/endo/xsnap` declares `fx_lockdown`/`fx_harden` in `ffi.rs:274`
+    //     and calls neither (`lib.rs:917`), so the daemon's realm has no
+    //     `lockdown` either. The oracle's `lockdown`/`mutabilities` are
+    //     `xs_shim.c`'s installs, present for differential testing — they are
+    //     NOT what the daemon runs on.
     //
     //     So stage 4's remaining work is not "make the bundle run", it is not
-    //     "match the oracle's globals", and it is no longer "plus whatever
+    //     "match the oracle's globals", it is no longer "plus whatever
     //     guest-visible `lockdown` the daemon decides it needs" — ironhorse
-    //     binds one (`designs/ironhorse-native-lockdown.md`). It is
-    //     `Compartment`, which no boot bundle here supplies. See
+    //     binds one (`designs/ironhorse-native-lockdown.md`) — and it is no
+    //     longer `Compartment` either
+    //     (`designs/ironhorse-guest-compartment.md`). See
     //     `designs/ironhorse-ses-compartment-equivalence.md`.
     assert!(
         pristine.oracle_result.contains("Compartment=function"),
         "XS builds Compartment into every realm (xsModule.c:207): {}",
         pristine.oracle_result
     );
+    // Rewritten to REQUIRE it, as the previous revision of this assertion
+    // asked whoever landed it to do: it used to demand
+    // `Compartment=undefined` and to say that a bar requiring the opposite
+    // was the right response to a guest `Compartment` landing. A regression
+    // that unbinds the global has to fail here rather than quietly reopening
+    // the gap.
     assert!(
-        after.ironhorse_result.contains("Compartment=undefined"),
-        "ironhorse is expected to still lack Compartment (named skip \
-         `compartment:intrinsic-surface`); if it now has one, this bar must \
-         be rewritten to require it: {}",
+        after.ironhorse_result.contains("Compartment=function"),
+        "ironhorse binds a guest Compartment (`Native::Compartment`), and the \
+         boot bundle must not disturb it: {}",
         after.ironhorse_result
     );
     // Rewritten to REQUIRE it, as the previous revision of this assertion
