@@ -1,4 +1,14 @@
 //! Public aliases for the canonical meter weights and their execution contracts.
+//!
+//! **Doctrine fence (accuracy over parity).** The calibration notes below
+//! record how each constant was measured — typically against the pinned XS
+//! source or oracle during bring-up. That is *provenance*, not a standing
+//! requirement: Iron Horse's metering objective is to approximate actual CPU
+//! time with its own deterministic, release-versioned cost model, and it MAY
+//! diverge from XS's computron counts. XS-computron parity is a non-goal —
+//! not a deferred goal (`designs/ironhorse-engine.md` § Metering). A future
+//! recalibration may change any of these weights at a meter-version bump;
+//! nothing in these notes obliges equality with XS.
 #[cfg(doc)]
 use super::{Interp, RegExpData};
 /// The raw 16.16 cost XS accrues unwinding an **uncaught** throw across

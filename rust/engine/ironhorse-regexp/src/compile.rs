@@ -6,8 +6,9 @@
 //!
 //! Offsets (`step`, `completion`, `loop_off`, `sequel`) are kept in
 //! **bytes** exactly as XS keeps them (`sizeof(txInteger) == 4`), so
-//! the emitted graph is structurally identical to XS, which in
-//! turn makes the matcher's per-step meter bit-exact.
+//! the emitted graph is structurally identical to XS, which in turn
+//! keeps the matcher's per-step meter structurally comparable to XS's
+//! (a calibration aid — XS-computron parity is a non-goal).
 //!
 //! Astral (`> 0xFFFF`) code points remain scalar values under `u`/`v` and are
 //! split into their UTF-16 surrogate pair outside Unicode mode, matching

@@ -1,6 +1,6 @@
 [package]
 name = "xs-oracle"
-description = "Differential oracle: compiles JS to XS bytecode and runs it on XS, returning (bytecode, result, run-only computrons) for parity comparison. Dev/CI only; the sole engine crate that links unsafe C."
+description = "Differential oracle: compiles JS to XS bytecode and runs it on XS, returning (bytecode, result, run-only computrons) for result-parity comparison; computrons are advisory calibration telemetry (XS-computron parity is a non-goal). Dev/CI only; the sole engine crate that links unsafe C."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

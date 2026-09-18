@@ -135,9 +135,8 @@ fn gen_expr(b: &mut Bytes, depth: u8) -> String {
 /// returning one of the bindings. Every generated program is valid and
 /// terminating (the loop bound is a small literal and the counter only
 /// increments), exercising the frame/scope/variable/loop opcodes the
-/// differential harness compares on results. Computrons are not yet
-/// bit-exact for this surface (run-time allocation metering awaits the
-/// faithful heap), so [`differential_check_result_only`] drives it.
+/// differential harness compares on results (XS cost drift is advisory
+/// everywhere), so [`differential_check_result_only`] drives it.
 pub fn gen_statement_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let seed0 = (b.next() % 20) as i32 - 5;
@@ -164,7 +163,7 @@ pub fn gen_statement_program(data: &[u8]) -> String {
 /// Structure-aware generator for the **stage-2b surface**: valid,
 /// terminating programs that exercise the object model, user-function
 /// calls, closures, and thrown-and-caught exceptions — the machinery this
-/// stage made **bit-exact** (result AND computron), so the generated
+/// stage made **result-gated** (XS cost drift advisory), so the generated
 /// programs are driven by the full [`differential_check`], not the
 /// result-only variant. Every branch stays inside the small-integer domain
 /// (values bounded, only `+`/`-`/`*`, no division) so results and their
@@ -251,7 +250,7 @@ fn gen_closure_program(b: &mut Bytes) -> String {
 /// Thrown-and-caught exceptions: a caught throw whose value is used, a try
 /// with no throw, or a try/catch/finally that observes both paths.
 /// Exercises `catch`/`throw`/`exception`/`uncatch` and the finally
-/// status-temporary skeleton — all caught (so `BothComplete`, bit-exact).
+/// status-temporary skeleton — all caught (so `BothComplete`, result-gated).
 fn gen_exception_program(b: &mut Bytes) -> String {
     let n = small_int(b);
     let m = small_int(b);
@@ -267,7 +266,7 @@ fn gen_exception_program(b: &mut Bytes) -> String {
 }
 
 /// Structure-aware generator for the **stage-3 arrays surface**: the array
-/// exotic object's grammar that is **bit-exact** (result AND computron) —
+/// exotic object's grammar that is **result-gated** (XS cost drift advisory) —
 /// array literals (with holes), computed index get/set over the item chunk,
 /// and the `length` accessor get/set. Deliberately excludes the honest-skip
 /// cases (integer-indexed *ordinary* objects, runtime-minted string keys,
@@ -327,8 +326,7 @@ pub fn gen_stage3_arrays_program(data: &[u8]) -> String {
 }
 
 /// Structure-aware generator for the **dense `Array.prototype` mutation
-/// methods** (`push`/`pop`/`indexOf`) — the fast paths that are bit-exact
-/// (result AND computron). It always builds a **dense** literal (no holes, so
+/// methods** (`push`/`pop`/`indexOf`) — the fast paths that are result-gated (XS cost drift advisory). It always builds a **dense** literal (no holes, so
 /// `fxCheckArray`'s fast path applies), then applies a method and observes its
 /// return value, the resulting array, or the length. Excludes `join` (its
 /// per-element `ToString` metering is a later increment) and sparse receivers
@@ -496,7 +494,7 @@ pub fn gen_stage3_array_methods_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **array iterator objects**
 /// (`values`/`keys`/`entries` + `next` over the reused result object) — the
-/// bit-exact (result AND computron) explicit-iterator grammar. Builds a dense
+/// result-gated (XS cost drift advisory) explicit-iterator grammar. Builds a dense
 /// literal, opens an iterator of one of the three kinds, advances it a bounded
 /// number of `next()` calls (possibly past the end to reach `done`), and reads
 /// `.value` or `.done` off the final result. Rides the full symbol-linking
@@ -522,7 +520,7 @@ pub fn gen_stage3_array_iterators_program(data: &[u8]) -> String {
 }
 
 /// Structure-aware generator for **`for-of` over an array literal** — the
-/// bit-exact (result AND computron) iteration grammar. Builds a dense literal
+/// result-gated (XS cost drift advisory) iteration grammar. Builds a dense literal
 /// and a bounded reduce/count loop over it. The loop body stays inside the
 /// overflow-safe small-integer domain (`+`/`-`/`*`), so results are
 /// unambiguous. Rides the full symbol-linking differential check.
@@ -571,7 +569,7 @@ pub fn gen_stage3_string_for_of_program(data: &[u8]) -> String {
 /// Structure-aware generator for the **stage-3 text-math-json** surface: the
 /// `Math` statics, `String.prototype` methods over the CESU-8 chunk, the
 /// `Number` predicates, `parseInt`/`parseFloat`/`isNaN`, and `JSON.stringify`
-/// of a primitive — every emitted program bit-exact (result AND computron)
+/// of a primitive — every emitted program result-gated (XS cost drift advisory)
 /// against the pin. Only the raw-clean subset is drawn (numeric `Math` args,
 /// ASCII strings so case/`.length`/index math stays byte==unit, string search/
 /// parse arguments, non-negative small `repeat` counts, decimal `toString`),
@@ -655,8 +653,7 @@ pub fn gen_stage3_text_math_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b json-metering** surface:
 /// `JSON.stringify` over a structured (object/array) value built recursively
-/// from primitives, objects, and arrays — every emitted program bit-exact
-/// (serialized value AND computron) against the pin. Draws only the raw-clean
+/// from primitives, objects, and arrays — every emitted program result-gated on the serialized value (XS cost drift advisory) against the pin. Draws only the raw-clean
 /// subset: numeric/boolean/null/ASCII-string leaves, string keys, and bounded
 /// depth/breadth, avoiding the self-named corners (callable values,
 /// `toJSON`/wrapper objects, a replacer/space argument). Depth and breadth are
@@ -717,8 +714,7 @@ pub fn gen_json_structured_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b json-metering** parse surface:
 /// `JSON.parse(text)` over well-formed JSON text built recursively from
-/// primitives, arrays, and objects — every emitted program bit-exact (result
-/// AND computron) against the pin. The JSON is emitted as a JS double-quoted
+/// primitives, arrays, and objects — every emitted program result-gated (XS cost drift advisory) against the pin. The JSON is emitted as a JS double-quoted
 /// string literal (the parser reads its bytes); depth/breadth can go deeper than
 /// the stringify arm because the argument is a single string literal, not a
 /// nested object literal (so the object-literal construction drift is absent).
@@ -773,8 +769,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b promises** surface: a
 /// fulfilled resolution chain over `Promise`, its `resolve` static, and
-/// `then`/`catch`, driven to the pump-loop drain — bit-exact (result AND
-/// computron) against the pin. A source promise (`Promise.resolve(n)`, a
+/// `then`/`catch`, driven to the pump-loop drain — result-gated (XS cost drift advisory) against the pin. A source promise (`Promise.resolve(n)`, a
 /// `new Promise` whose executor synchronously resolves, or a never-settling
 /// pending promise) is followed by a bounded chain of reactions; each handler
 /// is either an assignment to the observed variable `x`, an integer return
@@ -788,7 +783,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
 /// `mxMeter` site in `xsPromise.c`, whose per-entry cost grows with the
 /// unhandled-list length) never fires more than the single-entry case the
 /// constants absorb. Rejection routing (`then(undefined, h)` / `catch`) is
-/// covered bit-exact by the curated corpus, which bounds it to a single
+/// covered by the curated corpus, which bounds it to a single
 /// rejection. Rides the full symbol-linking differential check.
 pub fn gen_stage3b_promise_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
@@ -948,7 +943,7 @@ pub fn gen_stage3_for_in_program(data: &[u8]) -> String {
 }
 
 /// Structure-aware generator for the **re-entrant `Array.prototype.forEach`** —
-/// the callback-taking method driven bit-exactly by `run_callback`. Builds a
+/// the callback-taking method driven through `run_callback`. Builds a
 /// dense array and a `forEach` whose callback accumulates over an outer
 /// closed-over variable (`+`/`-`/`*`, overflow-safe), observing the result.
 /// Rides the full symbol-linking differential check.
@@ -1012,8 +1007,7 @@ pub fn gen_stage3_reentrant_program(data: &[u8]) -> String {
 
 /// Structure-aware generator for the **stage-3b keyed-collection iteration**
 /// surface — Map/Set `forEach`, `entries`/`keys`/`values` iterators, and
-/// `for-of` / spread over a Map or Set, every emitted program bit-exact (result
-/// AND computron) against the pin. Builds a small Map or Set of distinct small
+/// `for-of` / spread over a Map or Set, every emitted program result-gated (XS cost drift advisory) against the pin. Builds a small Map or Set of distinct small
 /// integer entries (so the covered `SameValueZero` / allocation path is
 /// exercised without a mid-iteration mutation), then draws one observation:
 /// a `forEach` accumulation, a stepped iterator, a `for-of` reduce/count, or a
@@ -1125,8 +1119,7 @@ fn bigint_operand(b: &mut Bytes) -> String {
 /// (same-type only — a mixed BigInt/Number arithmetic op is a TypeError, so it
 /// is deliberately never generated), unary minus, strict/loose equality
 /// (including BigInt-vs-Number `==`/`!=`), both-BigInt relational order,
-/// `typeof`, and decimal rendering — every form bit-exact (result AND
-/// computron). Rides the plain [`differential_check`] (no built-in symbol
+/// `typeof`, and decimal rendering — every form result-gated (XS cost drift advisory). Rides the plain [`differential_check`] (no built-in symbol
 /// references appear). Composes an accumulation chain so the digit-step and
 /// allocation metering ride the hot path.
 pub fn gen_stage3_bigint_program(data: &[u8]) -> String {
@@ -1187,8 +1180,7 @@ pub fn gen_stage3_bigint_program(data: &[u8]) -> String {
 }
 
 /// Stage-3b binary-data grammar (child 3/9): the ArrayBuffer construct +
-/// `byteLength` accessor surface that is **bit-exact** (result AND
-/// computron) against XS. Every arm builds `new ArrayBuffer(n)` over a
+/// `byteLength` accessor surface that is **result-gated** (XS cost drift advisory) against XS. Every arm builds `new ArrayBuffer(n)` over a
 /// spread of byte lengths (so the 8-byte chunk-alignment boundary is
 /// crossed) and reads `.byteLength`, exercising the constant native frame
 /// plus the `fxNewChunk(n)` backing store. Rides the full symbol-linking
@@ -1321,11 +1313,11 @@ pub fn gen_stage3b_binary_program(data: &[u8]) -> String {
 }
 
 /// Stage-3b fundamentals-followup grammar (child 4/9): the post-arrays
-/// fundamentals surfaces that are **bit-exact** (result AND computron) vs
+/// fundamentals surfaces that are **result-gated** (XS cost drift advisory) vs
 /// XS — a user function's `.length`/`.name`, `Function.prototype.bind`
 /// (create + call), `Function.prototype.apply` with a dense array,
 /// `Symbol.prototype.toString`/`String(symbol)`/`Symbol.for`/`keyFor`, and
-/// `AggregateError`. Every arm is a valid, always-bit-exact program (the
+/// `AggregateError`. Every arm is a valid, always-covered program (the
 /// honest-skip corners — `new boundFn`, a primitive `this`, a sparse array,
 /// a non-array apply argument, a bound-of-bound *call* — are deliberately not
 /// generated). Rides [`differential_check_with_symbols`] (the built-ins and
@@ -1428,7 +1420,7 @@ pub fn gen_stage3b_fundamentals_followup_program(data: &[u8]) -> String {
         // the target (dispatch the target with the bound this/args prepended),
         // NOT re-execute the program from pc 0 (the whole-program-from-pc-0
         // abort / divergent completion this arm regresses). Emits the
-        // bit-exact callback-driving Array-method sites over a bound callback,
+        // covered callback-driving Array-method sites over a bound callback,
         // with 0 or 1 bound leading args.
         8 => {
             let bound_list = if b.choice(2) == 0 {
@@ -1505,7 +1497,7 @@ pub fn gen_stage3b_object_statics_program(data: &[u8]) -> String {
         .copied();
     let absent_key = ABSENT[(b.next() as usize) % ABSENT.len()];
     // Genuinely-novel names (absent from XS's boot key table AND the literal)
-    // — a computed read/`hasOwnProperty` of one is bit-exact `undefined`/false,
+    // — a computed read/`hasOwnProperty` of one is exactly `undefined`/false,
     // interning exactly one key slot. A boot default key (`toString`, …) read
     // by a *computed* key self-names (ironhorse cannot tell an unlinked inherited
     // built-in from an absent own), so the computed-access arms draw only from
@@ -1574,7 +1566,7 @@ pub fn gen_stage3b_object_statics_program(data: &[u8]) -> String {
             None => format!("var o={}; var k=\"{}\"; typeof o[k]", obj, novel_key),
         },
         // Computed string member read of a genuinely-novel key: interns one
-        // key slot and reads bit-exact `undefined` (absent-own, no inherited).
+        // key slot and reads exactly `undefined` (absent-own, no inherited).
         8 => format!("var o={}; var k=\"{}\"; typeof o[k]", obj, novel_key),
         // `key in o` for a present key ⇒ `true` (an own-hit chain walk).
         9 => match present_key {
@@ -1788,9 +1780,8 @@ fn differential_check_symbols_mode(source: &str) -> Result<(), Divergence> {
 }
 
 /// Differential check for the **stage-2 allocating surface**: compares
-/// completion kind and result string, but not computrons, which are not
-/// yet bit-exact while run-time slot/chunk allocation metering awaits
-/// the faithful heap (`ironhorse_vm::interp` § Metering scope). A result or
+/// completion kind and result string, never computrons (XS cost drift is
+/// advisory everywhere — XS-computron parity is a non-goal). A result or
 /// completion divergence on a valid generated program is still a real
 /// finding — the frame/scope/loop semantics must match XS.
 pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
@@ -2557,7 +2548,7 @@ mod tests {
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
-        // hold bit-exact (result, computron) agreement.
+        // hold result agreement (XS cost drift is advisory).
         let mut checked = 0;
         for seed in 0u32..300 {
             let data = seed.to_le_bytes();
@@ -2596,7 +2587,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_arrays_programs_agree_bit_exact() {
+    fn generated_stage3_arrays_programs_agree() {
         // The stage-3 arrays generator's literals, indexed get/set, grow, and
         // length get/set programs must ALL agree with XS bit-for-bit
         // (result AND computron): the array item chunk's allocation metering
@@ -2654,7 +2645,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_array_methods_agree_bit_exact() {
+    fn generated_stage3_array_methods_agree() {
         // The dense push/pop/indexOf fast paths meter their mxMeterSome
         // annotations and chunk (re)size faithfully, so they ride the full
         // result+computron differential (symbol-linked, since the method
@@ -2699,7 +2690,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_array_iterators_agree_bit_exact() {
+    fn generated_stage3_array_iterators_agree() {
         // The array iterator objects (values/keys/entries + next over the
         // reused result object) meter their fxNewIteratorInstance creation and
         // per-next yield/element-read faithfully, so they ride the full
@@ -2745,7 +2736,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_for_of_programs_agree_bit_exact() {
+    fn generated_stage3_for_of_programs_agree() {
         // for-of over an array literal drives fxGetIterator + the values
         // iterator's per-element next() protocol, all metered faithfully, so
         // it rides the full result+computron differential. Sweep a spread of
@@ -2790,7 +2781,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_string_for_of_programs_agree_bit_exact() {
+    fn generated_stage3_string_for_of_programs_agree() {
         // for-of over a string drives fxGetIterator + the string iterator's
         // per-code-point next() (a fresh one-char result string per step), all
         // metered faithfully over an ASCII (single-byte BMP) alphabet, so it
@@ -2834,10 +2825,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_text_math_programs_agree_bit_exact() {
+    fn generated_stage3_text_math_programs_agree() {
         // The stage-3 text-math-json surface (Math statics, String.prototype,
         // Number predicates, parseInt/parseFloat/isNaN, JSON.stringify of a
-        // primitive) is bit-exact (result AND computron); sweep a spread of
+        // primitive) is result-gated (XS cost drift advisory); sweep a spread of
         // seeds across all five shapes and assert zero divergence.
         let mut checked = 0;
         // Coverage flags for the built-in families the arm must reach.
@@ -2988,10 +2979,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_promise_programs_agree_bit_exact() {
+    fn generated_stage3b_promise_programs_agree() {
         // The stage-3b promises surface — a fulfilled resolution chain over
         // Promise/`resolve`/`then`/`catch` driven to the pump-loop drain — is
-        // bit-exact (result AND computron), INCLUDING the reactions run at the
+        // result-gated (XS cost drift advisory), INCLUDING the reactions run at the
         // drain. Sweep a spread of seeds, reaching the resolve-static,
         // executor-resolve, and pending sources and chains of length 0..3.
         let mut checked = 0;
@@ -3097,7 +3088,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_spread_programs_agree_bit_exact() {
+    fn generated_stage3_spread_programs_agree() {
         // Single-segment array spread desugars to the for-of iterator loop
         // appending each element; raw-exact against the pin. Sweep a spread of
         // seeds over the three observation shapes and a range of lengths and
@@ -3173,10 +3164,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_collections_programs_agree_bit_exact() {
+    fn generated_stage3_collections_programs_agree() {
         // Map/Set forEach, entries/keys/values iterators, for-of, and spread —
-        // the stage-3b keyed-collection iteration surface, bit-exact (result
-        // AND computron). Sweep a spread of seeds over Map vs Set, a range of
+        // the stage-3b keyed-collection iteration surface, result-gated (XS
+        // cost drift advisory). Sweep a spread of seeds over Map vs Set, a range of
         // entry counts (including empty), and every observation shape.
         let mut checked = 0;
         let mut kinds = [false; 2]; // Set, Map
@@ -3215,11 +3206,11 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_bigint_programs_agree_bit_exact() {
+    fn generated_stage3_bigint_programs_agree() {
         // The stage-3b BigInt grammar — literals, `+`/`-`/`*` (same-type),
         // unary minus, strict/loose equality (including BigInt-vs-Number),
-        // relational order, typeof, and decimal rendering — bit-exact (result
-        // AND computron) vs XS. Sweep a spread of seeds so every arm and a
+        // relational order, typeof, and decimal rendering — result-gated (XS
+        // cost drift advisory) vs XS. Sweep a spread of seeds so every arm and a
         // range of operand magnitudes (single- and multi-limb) are reached.
         let mut checked = 0;
         let mut saw_typeof = false;
@@ -3264,11 +3255,11 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_binary_programs_agree_bit_exact() {
+    fn generated_stage3b_binary_programs_agree() {
         // The stage-3b binary-data grammar — `new ArrayBuffer(n)` over a
         // spread of byte lengths (crossing the 8-byte chunk-alignment
-        // boundary) and the `byteLength` accessor — bit-exact (result AND
-        // computron) vs XS. Rides the symbol-linking differential check
+        // boundary) and the `byteLength` accessor — result-gated (XS cost
+        // drift advisory) vs XS. Rides the symbol-linking differential check
         // (the `ArrayBuffer` global and `byteLength` are program symbols).
         let mut checked = 0;
         let mut saw_buffer = false;
@@ -3431,7 +3422,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_for_in_programs_agree_bit_exact() {
+    fn generated_stage3_for_in_programs_agree() {
         // for-in over an object literal or array drives the enumerator's key
         // collection + per-key yield, computron-exact. Sweep a spread of seeds
         // over object/array targets, a range of key counts (including empty),
@@ -3473,7 +3464,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage2b_programs_agree_bit_exact() {
+    fn generated_stage2b_programs_agree() {
         // The stage-2b generator's object / call / closure / exception
         // programs must ALL agree with XS bit-for-bit (result AND
         // computron) — the object model, call frames, closure cells, and

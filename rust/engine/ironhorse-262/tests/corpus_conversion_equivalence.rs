@@ -56,8 +56,10 @@ fn generated_cases_reproduce_corpus_coverage() {
         "test/ironhorse/ tree must contain generated cases"
     );
 
-    // Gate observable agreement and engine-versioned pins. The legacy flag
-    // requests an advisory XS cost report, not an equality acceptance gate.
+    // Gate observable agreement and the engine-versioned
+    // `ironhorse-meter-5-raw-N` pins (Iron Horse's OWN frozen costs). The
+    // legacy flag requests an advisory XS cost report, not an equality
+    // acceptance gate: XS-computron parity is a non-goal.
     let cfg = Config {
         gate_meter_exact: true,
         ..Config::default()
@@ -92,7 +94,7 @@ fn generated_cases_reproduce_corpus_coverage() {
     // Observable divergences and stale engine-versioned pins remain failures.
     assert!(
         rep.met_bar() && rep.failures.is_empty(),
-        "corpus-conversion coverage equivalence: {} failure(s) under --gate-meter-exact",
+        "corpus-conversion coverage equivalence: {} failure(s) (observable divergences or stale engine-versioned raw pins; XS cost drift is advisory)",
         rep.failures.len(),
     );
 

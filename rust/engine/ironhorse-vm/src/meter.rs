@@ -42,9 +42,11 @@ pub use ironhorse_meter::CODE_METERING;
 /// allocation during a run (`xsMemory.c`). Once a program allocates at
 /// run time (a `var` environment, an
 /// object literal, a closure cell), its computron count depends on the
-/// exact number of slots the engine allocates, so **computron parity
-/// requires the allocation-faithful object heap**, not just dispatch
-/// counting. A `var` declaration, for instance, meters
+/// exact number of slots the engine allocates, so a **cost model faithful
+/// to allocation work requires the allocation-faithful object heap**, not
+/// just dispatch counting. (This is about the fidelity of Iron Horse's own
+/// meter to real work — XS-computron parity is a non-goal.) A `var`
+/// declaration, for instance, meters
 /// `1<<14` (the set's `mxMeterOne`) + `2 * (1<<8)` (a closure cell + a
 /// property slot, per `fxRunEvalEnvironment`) + the property-name chunk
 /// bytes — the "16920 per var" the differential probe measured.

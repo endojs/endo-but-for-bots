@@ -288,8 +288,9 @@ pub enum Verdict {
     /// extension over `xst`).
     RunSkip(String),
     /// A real failure the bar forbids: a divergence from the oracle verdict
-    /// or observable, an over-acceptance, a gated meter-exact violation, or
-    /// a determinism failure. The report's `fail:` section.
+    /// or observable, an over-acceptance, a stale engine-versioned raw meter
+    /// pin (Iron Horse's OWN frozen cost — never XS's), or a determinism
+    /// failure. The report's `fail:` section.
     Fail(String),
 }
 
@@ -576,9 +577,14 @@ struct Eval {
 /// frontmatter (the negative/positive split). Shared by the synchronous
 /// [`evaluate`] path and the async path ([`run_async_case`]), which supplies
 /// its own dual-run so it can additionally read the completion latch.
-// Proprietary corpus cases may pin an engine-versioned raw total rather than
-// XS computrons: ironhorse-meter-5-raw-N. Keep semantics and strict-mode rules
-// identical, and reject malformed/conflicting pins when the gate is enabled.
+// Proprietary corpus cases may pin an engine-versioned raw total —
+// `ironhorse-meter-5-raw-N`, Iron Horse's OWN frozen cost, the only meter
+// value the gate can fail on. The historical `ironhorse-meter-exact` tag
+// (XS-computron evidence) also matches this predicate but activates no gate:
+// XS cost drift is always advisory (XS-computron parity is a non-goal), and
+// the generator no longer emits that tag. Keep semantics and strict-mode
+// rules identical, and reject malformed/conflicting pins when the gate is
+// enabled.
 fn is_exact_meter_feature(feature: &str) -> bool {
     feature.starts_with("ironhorse-meter-") && feature != "ironhorse-meter-determinism"
 }

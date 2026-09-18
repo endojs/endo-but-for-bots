@@ -28,8 +28,13 @@
 //! nothing dropped silently — and the run prints the count the conversion
 //! commit records. The meter contract never enters a case body: it is the
 //! runner's job (design § "The meter assertion never enters the test body"),
-//! carried here only as the `ironhorse-meter-exact` feature marker on the
-//! bit-exact corpora.
+//! carried here only as the `ironhorse-meter-determinism` feature marker
+//! (identical costs across repeated runs of the same build — Iron Horse's
+//! own hard requirement). The generator no longer emits the historical
+//! `ironhorse-meter-exact` marker: XS-computron parity is a non-goal, and a
+//! marker naming it re-seeds the retired framing. Committed cases still
+//! carrying that tag predate this change; the runner treats it as advisory
+//! telemetry only.
 //!
 //! Usage: `corpus-to-262 [OUT_DIR]` (default shared `test/ironhorse/` tree).
 
@@ -39,28 +44,30 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// One corpus file's placement and metering axis. `bucket` mirrors the
-/// test262 directory idiom (`language/`, `built-ins/`); `meter_exact` is the
-/// corpora that historically metered bit-exactly against the pin (everything
-/// but the result-parity-only corpora — utf16 string values, transitive
-/// harden, cross-compartment evaluation).
+/// test262 directory idiom (`language/`, `built-ins/`); `meter_determinism`
+/// marks the corpora whose cases join the determinism set (identical costs
+/// across repeated runs of the same build). The set's membership is
+/// historical — everything but the result-parity-only corpora (utf16 string
+/// values, transitive harden, cross-compartment evaluation), which were
+/// excluded when the marker also asserted XS-computron evidence. That
+/// XS-parity meaning is retired; the marker now claims determinism only.
 struct Entry {
     stem: &'static str,
     bucket: &'static str,
-    meter_exact: bool,
+    meter_determinism: bool,
 }
 
-const fn e(stem: &'static str, bucket: &'static str, meter_exact: bool) -> Entry {
+const fn e(stem: &'static str, bucket: &'static str, meter_determinism: bool) -> Entry {
     Entry {
         stem,
         bucket,
-        meter_exact,
+        meter_determinism,
     }
 }
 
 /// The corpus manifest: every `corpora/*.js` line-corpus file, its case
-/// bucket, and whether it carries the bit-exact meter evidence. The three
-/// `false` entries are the result-parity-only corpora (their accessors assert
-/// result agreement, not computron equality).
+/// bucket, and whether its cases join the determinism set. The three `false`
+/// entries are the historically result-parity-only corpora.
 const MANIFEST: &[Entry] = &[
     e("arithmetic", "language", true),
     e("logic", "language", true),
@@ -130,10 +137,13 @@ enum Shape {
 
 /// The harness prelude (`sta.js` + `assert.js`) used to verify at conversion
 /// time that a chosen `assert` body actually dual-runs the way the runner
-/// will see it — bit-exact for a meter-exact corpus, result-agreeing
-/// otherwise. A body that fails verification is downgraded to a verbatim
-/// `raw` case so the generated set reproduces the corpus's covered / bit-exact
-/// coverage exactly rather than introducing a wrapper-induced skip or gap.
+/// will see it — result-agreeing on both engines. A body that fails
+/// verification is downgraded to a verbatim `raw` case so the generated set
+/// reproduces the corpus's covered coverage exactly rather than introducing
+/// a wrapper-induced skip or gap. (Computron agreement with the oracle is
+/// deliberately NOT part of this verification: XS-computron parity is a
+/// non-goal, and requiring it here would let the oracle's costs veto an
+/// Iron Horse cost-table recalibration.)
 struct Harness {
     prelude: String,
 }
@@ -148,20 +158,16 @@ impl Harness {
         })
     }
 
-    /// Would the runner see this `assert` body as Covered — and, when
-    /// `meter_exact`, bit-exact against the oracle? Assembles the prelude +
-    /// body exactly as `xst::assemble` does for a non-`raw` case and checks
-    /// the dual run.
-    fn assert_holds(&self, body: &str, meter_exact: bool) -> bool {
+    /// Would the runner see this `assert` body as Covered? Assembles the
+    /// prelude + body exactly as `xst::assemble` does for a non-`raw` case
+    /// and checks the dual run for result agreement — nothing more.
+    fn assert_holds(&self, body: &str) -> bool {
         let assembled = format!("{}{}", self.prelude, body);
         let run = match dual_run(&assembled) {
             Some(r) => r,
             None => return false,
         };
-        if run.agreement != Agreement::BothComplete || !run.result_agrees {
-            return false;
-        }
-        !meter_exact || run.computrons_agree
+        run.agreement == Agreement::BothComplete && run.result_agrees
     }
 }
 
@@ -220,14 +226,14 @@ fn main() {
                     Shape::Raw
                 }
             };
-            // Verify a spec-anchored body against the harness the runner uses:
-            // if the wrapper perturbs the metering (a meter-exact corpus) or
-            // the completion (result-only), downgrade to a verbatim `raw` body
-            // that reproduces the corpus's exact dual-run. This is what keeps
-            // the generated bit-exact/covered set identical to the corpus's.
+            // Verify a spec-anchored body against the harness the runner
+            // uses: if the wrapper perturbs the completion, downgrade to a
+            // verbatim `raw` body that reproduces the corpus's exact
+            // dual-run. This is what keeps the generated covered set
+            // identical to the corpus's.
             if let (Shape::Assert { lit }, Some(h)) = (&shape, &harness) {
                 let body = format!("assert.sameValue(({}), {});\n", src, lit);
-                if !h.assert_holds(&body, entry.meter_exact) {
+                if !h.assert_holds(&body) {
                     n_downgraded += 1;
                     shape = Shape::Raw;
                 }
@@ -237,8 +243,8 @@ fn main() {
                     .as_ref()
                     .expect("throw assertion needs the test262 harness");
                 assert!(
-                    h.assert_holds(&assert_throw_body(src, rendered), entry.meter_exact),
-                    "primitive-throw wrapper must preserve completion and meter parity: {}:{}",
+                    h.assert_holds(&assert_throw_body(src, rendered)),
+                    "primitive-throw wrapper must preserve the completion: {}:{}",
                     entry.stem,
                     i + 1
                 );
@@ -406,16 +412,18 @@ fn assert_throw_body(src: &str, rendered: &str) -> String {
 /// Render one test262 case file: frontmatter + body.
 fn render_case(entry: &Entry, line_no: usize, src: &str, shape: &Shape) -> String {
     let mut features = vec!["ironhorse-dual-run".to_string()];
-    // The bit-exact corpora carry the historical computron evidence; the
-    // negatives do not claim it (their abort verdict is constructor-name
-    // shaped, never meter-gated), matching the runner's `evaluate_negative`.
-    let claims_meter = entry.meter_exact
+    // The determinism-set corpora claim identical costs across repeated runs
+    // of the same build (Iron Horse's own hard requirement); the negatives do
+    // not (their abort verdict is constructor-name shaped, never
+    // meter-gated), matching the runner's `evaluate_negative`. The
+    // historical `ironhorse-meter-exact` marker (XS-computron evidence) is
+    // no longer emitted: XS-computron parity is a non-goal.
+    let claims_meter = entry.meter_determinism
         && matches!(
             shape,
             Shape::Assert { .. } | Shape::AssertThrow { .. } | Shape::Raw
         );
     if claims_meter {
-        features.push("ironhorse-meter-exact".to_string());
         features.push("ironhorse-meter-determinism".to_string());
     }
 

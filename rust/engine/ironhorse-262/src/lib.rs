@@ -7,11 +7,25 @@
 //! and, post stage-6 seam flip, runs ironhorse's **own** bytecode (compiled by
 //! the default `ironhorse-compile` pipeline; the oracle's exact bytes remain a
 //! selectable differential reference via [`Compiler::Oracle`]) on
-//! `ironhorse-vm`, then records four-valued agreement plus computron
-//! agreement. Matching the oracle's *fail*
-//! vector matters as much as its pass vector: a program ironhorse completes
-//! that XS throws on (or vice versa) is a divergence, never a silent
+//! `ironhorse-vm`, then records four-valued agreement. Matching the oracle's
+//! *fail* vector matters as much as its pass vector: a program ironhorse
+//! completes that XS throws on (or vice versa) is a divergence, never a silent
 //! improvement.
+//!
+//! **What the differential gates — and what it does not.** The oracle
+//! certifies *observable results*: completion kind, completion value, and
+//! thrown-value identity ([`DualRun::observables_agree`]). Computron counts
+//! are recorded from both engines as **advisory calibration telemetry only**.
+//! Iron Horse's metering objective is to approximate actual CPU time with a
+//! deterministic, release-versioned cost model; to that end it MAY diverge
+//! from XS's computron counts, and **XS-computron parity is a non-goal — not
+//! a deferred goal** (maintainer directive, `designs/ironhorse-engine.md`
+//! § Metering). No predicate in this crate treats
+//! `oracle_computrons == ironhorse_computrons` as a success criterion.
+//! Determinism of Iron Horse's *own* meter (identical computrons across
+//! repeated runs of the same binary on the same platform) is a separate, hard
+//! requirement and is gated elsewhere (`--repeat`, the golden own-cost
+//! vectors).
 //!
 //! The bespoke per-stage corpus (`corpora/*.js` + the `stage*_corpus()`
 //! accessors) that drove bring-up has **retired** into a test262-shaped
@@ -209,7 +223,11 @@ pub struct DualRun {
     pub result_agrees: bool,
     pub oracle_result: String,
     pub ironhorse_result: String,
-    /// Computron agreement (only meaningful when both completed).
+    /// Computron agreement (only meaningful when both completed). **Advisory
+    /// calibration telemetry only**: XS-computron parity is a non-goal, and no
+    /// verdict predicate reads this as a success criterion. A large,
+    /// unexpected drift is worth a look as an allocation-faithfulness canary;
+    /// equality is never required.
     pub computrons_agree: bool,
     pub oracle_computrons: u64,
     pub ironhorse_computrons: u64,
@@ -260,43 +278,27 @@ pub struct DualRun {
 }
 
 impl DualRun {
-    /// The result-correctness gate. XS computation costs remain advisory.
+    /// The result-correctness gate — the ONLY success predicate this record
+    /// offers. XS computation costs are advisory telemetry, never part of it.
+    ///
+    /// A shared abort agrees only when ironhorse aborted for a reason the
+    /// oracle can share: a JS-level `Throw` whose rendered value matches. An
+    /// `Unsupported` (opcode outside the subset) or `Decode`
+    /// (truncated/invalid bytecode) halt means ironhorse bailed on bytecode it
+    /// cannot model — the oracle "also aborting" (a parse error, a different
+    /// throw) is not agreement and must never pass silently.
+    ///
+    /// (A historical `is_bit_exact` predicate additionally required
+    /// `oracle_computrons == ironhorse_computrons`. It was removed
+    /// deliberately: a harness-level concept that treats computron equality
+    /// with the XS oracle as a success criterion re-seeds the retired
+    /// XS-computron-parity framing — accuracy over parity,
+    /// `designs/ironhorse-engine.md` § Metering. Do not reintroduce it.)
     pub fn observables_agree(&self) -> bool {
         match self.agreement {
             Agreement::BothComplete => self.result_agrees,
             Agreement::BothAbort => {
                 matches!(self.ironhorse_halt, Halt::Throw { .. }) && self.error_agrees
-            }
-            _ => false,
-        }
-    }
-
-    /// Advisory historical parity predicate: same completion, result and costs.
-    pub fn is_bit_exact(&self) -> bool {
-        match self.agreement {
-            Agreement::BothComplete => self.result_agrees && self.computrons_agree,
-            // A shared abort is bit-exact only when ironhorse aborted for a
-            // reason the oracle can share: a JS-level `Throw`. An
-            // `Unsupported` (opcode outside the subset) or `Decode`
-            // (truncated/invalid bytecode) halt means ironhorse bailed on
-            // bytecode it cannot model — the oracle "also aborting"
-            // (a parse error, a different throw) is not agreement and
-            // must never pass silently.
-            //
-            // Now that 2b models real exceptions, the shared-abort arm is
-            // tightened to the same standard as `BothComplete` (stage-2a
-            // review observation 3): the thrown value must match (the
-            // oracle's `String(exception)` == ironhorse's `Halt::Throw`
-            // string) AND the computrons must match — the uncaught-throw
-            // host-escape path is metered exactly (`interp` §
-            // `THROW_HOST_ESCAPE_METERING`), and the oracle shim now
-            // records the run-only computron count at the throw. A `Throw`
-            // whose value or computrons diverge is a divergence, not a
-            // silent pass.
-            Agreement::BothAbort => {
-                matches!(self.ironhorse_halt, Halt::Throw { .. })
-                    && self.error_agrees
-                    && self.oracle_computrons == self.ironhorse_computrons
             }
             _ => false,
         }
@@ -767,11 +769,12 @@ fn build_dual_run(
 /// `async`-flagged test262 case needs (design § Part 2, the async row): the
 /// `$DONE` completion sentinel a pure-JS async prelude records into a global,
 /// and the unhandled-rejection latch mirroring XS's `the->rejection`. The
-/// oracle shim already drains the promise job queue with metering accumulating
-/// (`fxRunPromiseJobs`), and ironhorse's [`ironhorse_vm::Interp::run`] drains its own
-/// (the stage-3b promise pump), so a computron agreement in `run` certifies
-/// ironhorse reproduced the oracle's whole execution *including* the microtask
-/// drain — the gate the async verdict layers on top of.
+/// oracle shim already drains the promise job queue (`fxRunPromiseJobs`), and
+/// ironhorse's [`ironhorse_vm::Interp::run`] drains its own (the stage-3b
+/// promise pump), so the observable agreement in `run` covers the oracle's
+/// whole execution *including* the microtask drain — the gate the async
+/// verdict layers on top of. (Computron counts from the two engines remain
+/// advisory telemetry here as everywhere; they gate nothing.)
 #[derive(Debug, Clone)]
 pub struct AsyncDualRun {
     pub run: DualRun,
@@ -1058,8 +1061,9 @@ pub struct CompartmentDualRun {
     /// intrinsics into a fresh `Interp`, so no intrinsic *object* is
     /// shared — see `ironhorse_vm::compartment`'s realm decision.
     pub shared_intrinsics: bool,
-    /// Compartment A's computrons (same bytecode → same as the oracle's
-    /// run-only count for a bit-exact program).
+    /// Compartment A's computrons, retained beside the oracle's as advisory
+    /// calibration telemetry (XS-computron parity is a non-goal; nothing
+    /// gates on these).
     pub a_computrons: u64,
     pub oracle_computrons: u64,
     pub a_halt: ironhorse_vm::Halt,
@@ -1076,14 +1080,6 @@ impl CompartmentDualRun {
             && self.shared_intrinsics
             && self.a_result == self.oracle_result
             && self.b_result == self.oracle_result
-    }
-
-    /// The same bytecode evaluated in a compartment reproduces the
-    /// oracle's run-only computron count (stricter telemetry the branch
-    /// runner still gates — the compartment evaluator seeds no globals
-    /// here, so it is byte-identical to the top-level realm run).
-    pub fn computrons_agree(&self) -> bool {
-        self.oracle_completed && self.both_completed && self.a_computrons == self.oracle_computrons
     }
 }
 
@@ -1125,24 +1121,6 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
         oracle_computrons: oracle.computrons,
         a_halt: ra.halt,
     })
-}
-
-/// A summary over a corpus run.
-#[derive(Debug, Default, Clone)]
-pub struct Summary {
-    pub total: usize,
-    pub bit_exact: usize,
-    pub result_divergences: usize,
-    pub computron_divergences: usize,
-    pub completion_divergences: usize,
-    pub unsupported: usize,
-}
-
-impl Summary {
-    /// Historical parity summary for diagnostics; not a release acceptance gate.
-    pub fn met_bar(&self) -> bool {
-        self.total > 0 && self.bit_exact == self.total
-    }
 }
 
 #[cfg(test)]
@@ -1376,9 +1354,9 @@ mod tests {
     }
 
     // A `DualRun` with the given agreement and ironhorse halt. For a
-    // `Halt::Throw`, the oracle is modeled as throwing the same value with
-    // the same computrons (the agreeing case), so `is_bit_exact` turns on
-    // the halt kind; a non-`Throw` halt never agrees.
+    // `Halt::Throw`, the oracle is modeled as throwing the same value (the
+    // agreeing case), so `observables_agree` turns on the halt kind; a
+    // non-`Throw` halt never agrees.
     fn abort_run(agreement: Agreement, ironhorse_halt: Halt) -> DualRun {
         let ironhorse_error = match &ironhorse_halt {
             Halt::Throw { rendered, .. } => rendered.clone(),
@@ -1451,20 +1429,20 @@ mod tests {
     }
 
     #[test]
-    fn both_abort_bit_exact_only_when_endor_throws() {
+    fn both_abort_agrees_only_when_endor_throws() {
         // A matching JS-level throw is a genuine shared abort.
         let throwing = abort_run(Agreement::BothAbort, Halt::synthetic_throw("boom"));
         assert!(
-            throwing.is_bit_exact(),
-            "BothAbort with a Throw is bit-exact"
+            throwing.observables_agree(),
+            "BothAbort with a matching Throw agrees"
         );
 
         // An `Unsupported` bail is not agreement even if the oracle also
         // aborted (finding 3): it must never pass silently.
         let unsupported = abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL"));
         assert!(
-            !unsupported.is_bit_exact(),
-            "BothAbort with an Unsupported halt is not bit-exact"
+            !unsupported.observables_agree(),
+            "BothAbort with an Unsupported halt is not agreement"
         );
 
         // A `Decode` bail (truncated/invalid bytecode) is likewise not
@@ -1474,69 +1452,47 @@ mod tests {
             Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
         );
         assert!(
-            !decode.is_bit_exact(),
-            "BothAbort with a Decode halt is not bit-exact"
+            !decode.observables_agree(),
+            "BothAbort with a Decode halt is not agreement"
         );
-    }
 
-    #[test]
-    fn both_abort_throw_requires_error_and_computron_agreement() {
-        // Observation 3: a shared `Throw` abort is bit-exact only when the
-        // thrown value AND the computrons match, exactly like the
-        // `BothComplete` arm — a matching halt kind alone is not enough.
-        let mut r = abort_run(Agreement::BothAbort, Halt::synthetic_throw("7"));
-        r.oracle_computrons = 6;
-        r.ironhorse_computrons = 6;
-        assert!(r.is_bit_exact(), "matching value + computrons is bit-exact");
-
-        // Divergent thrown value: the oracle threw "8" where ironhorse threw "7".
-        let mut wrong_value = r.clone();
+        // Divergent thrown value: the oracle threw "8" where ironhorse
+        // threw "boom".
+        let mut wrong_value = throwing.clone();
         wrong_value.oracle_error = "8".into();
         wrong_value.error_agrees = false;
         assert!(
-            !wrong_value.is_bit_exact(),
-            "a divergent thrown value is not bit-exact"
-        );
-
-        // Divergent computrons on an otherwise-matching throw.
-        let mut wrong_cost = r.clone();
-        wrong_cost.ironhorse_computrons = 7;
-        assert!(
-            !wrong_cost.is_bit_exact(),
-            "a divergent computron count is not bit-exact"
+            !wrong_value.observables_agree(),
+            "a divergent thrown value is not agreement"
         );
     }
 
     #[test]
-    fn non_throw_both_abort_is_counted_not_silent() {
-        // The summary must count a non-`Throw` `BothAbort` (here under
-        // `unsupported`) rather than let it slip through as bit-exact.
-        let runs = [
-            abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL")),
-            abort_run(
-                Agreement::BothAbort,
-                Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
-                    pc: 0,
-                    len: 0,
-                }),
-            ),
-        ];
-        let mut s = Summary::default();
-        for r in &runs {
-            s.total += 1;
-            if r.is_bit_exact() {
-                s.bit_exact += 1;
-            } else {
-                match r.agreement {
-                    Agreement::BothComplete => {}
-                    Agreement::BothAbort => s.unsupported += 1,
-                    _ => s.completion_divergences += 1,
-                }
-            }
-        }
-        assert_eq!(s.bit_exact, 0, "neither run may count as bit-exact");
-        assert_eq!(s.unsupported, 2, "both non-Throw aborts are counted");
-        assert!(!s.met_bar());
+    fn observable_agreement_ignores_computron_drift() {
+        // The doctrine pin (accuracy over parity): a run whose observables
+        // match is agreement REGARDLESS of how far the two engines' computron
+        // counts drift apart. XS-computron parity is a non-goal, and no
+        // harness predicate may treat computron equality with the oracle as a
+        // success criterion. If a change makes this test fail, the myth has
+        // regrown — remove the parity gate, do not adjust this test.
+        let mut r = abort_run(Agreement::BothAbort, Halt::synthetic_throw("7"));
+        r.oracle_computrons = 6;
+        r.ironhorse_computrons = u64::MAX;
+        r.computrons_agree = false;
+        assert!(
+            r.observables_agree(),
+            "computron drift must not break shared-abort agreement"
+        );
+
+        let mut completed = abort_run(Agreement::BothComplete, Halt::Return);
+        completed.result_agrees = true;
+        completed.oracle_computrons = 1;
+        completed.ironhorse_computrons = u64::MAX;
+        completed.computrons_agree = false;
+        assert!(
+            completed.observables_agree(),
+            "computron drift must not break completed-run agreement"
+        );
     }
 
     // Arm a fresh ironhorse interpreter on the oracle's bytecode for `src`,
