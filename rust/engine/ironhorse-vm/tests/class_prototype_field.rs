@@ -85,3 +85,44 @@ fn the_initializer_runs_once_per_instance_and_in_a_derived_class() {
         "2"
     );
 }
+
+/// A field literally named `static` is an INSTANCE field.
+///
+/// `class C { static = 1 }` has no modifier: the token after `static` is `=`,
+/// so no `ClassElementName` followed it and `static` is the name. The port's
+/// `static`-as-name path passed a hardcoded `true` for its static flag, so the
+/// field landed on the constructor. `fxClassExpression` reaches its `field:`
+/// label with `aStaticFlag` still 0 (`xsSyntaxical.c:2666-2671`), so this
+/// diverged from the pinned oracle as well as from the spec — not a deliberate
+/// divergence like the `prototype` gate above, just a mistranslation.
+///
+/// Node 22 gives every expectation below.
+#[test]
+fn a_field_named_static_is_an_instance_field() {
+    // Not on the constructor, on the instance, with its initializer.
+    assert_eq!(
+        run("class C { static = 1 } String(Object.hasOwn(C,'static'))"),
+        "false"
+    );
+    assert_eq!(
+        run("class C { static = 1 } String(Object.hasOwn(new C(),'static'))"),
+        "true"
+    );
+    assert_eq!(run("class C { static = 1 } String(new C().static)"), "1");
+    // Without an initializer, and with ASI rather than a semicolon.
+    assert_eq!(
+        run("class C { static; } String(Object.hasOwn(new C(),'static'))"),
+        "true"
+    );
+    assert_eq!(run("class C { static\n= 1 } String(new C().static)"), "1");
+    // The control: `static static` really is static, so the fix did not simply
+    // delete static-ness from this branch.
+    assert_eq!(
+        run("class C { static static = 1 } String(Object.hasOwn(C,'static'))"),
+        "true"
+    );
+    assert_eq!(
+        run("class C { static static = 1 } String(Object.hasOwn(new C(),'static'))"),
+        "false"
+    );
+}
