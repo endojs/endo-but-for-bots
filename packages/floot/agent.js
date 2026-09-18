@@ -53,6 +53,8 @@ import {
 import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
+import { makePendingQueue } from './src/pending-queue.js';
+import { makeSessionSubmissions } from './src/session-submissions.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
 import { projectTranscript } from './src/transcript-projection.js';
@@ -170,6 +172,8 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
+const MESSAGE_LIMITS = harden({ stringLengthLimit: 100_000_000 });
+
 // The session facet handed to the UI. `startTurn` is synchronous (it hands back
 // the turn immediately, before the turn runs), so it is guarded with `M.call`;
 // the rest are async (`M.callWhen`). Guards are permissive — the daemon path is
@@ -183,6 +187,15 @@ const FlootSessionInterface = M.interface('FlootSession', {
   startTurn: M.call(M.any()).returns(M.remotable()),
   getCurrentTurn: M.callWhen().returns(M.or(M.null(), M.record())),
   watch: M.callWhen().returns(M.remotable()),
+  // A message is whatever a person pasted; the default 100k-character limit
+  // on a guarded string would refuse a long log. `startTurn` has none either.
+  enqueue: M.callWhen(M.string(MESSAGE_LIMITS)).returns(M.record()),
+  listPending: M.callWhen().returns(M.record()),
+  editPending: M.callWhen(M.string(), M.string(MESSAGE_LIMITS)).returns(
+    M.undefined(),
+  ),
+  cancelPending: M.callWhen(M.string()).returns(M.boolean()),
+  sendPending: M.callWhen(M.string()).returns(M.undefined()),
   getHistory: M.callWhen().returns(M.any()),
   getTranscript: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
@@ -929,6 +942,7 @@ const provisionPresetObjects = async (
  *     meta?: object,
  *     signal?: AbortSignal,
  *     onStart?: (history: Array<Record<string, any>>) => void,
+ *     onBegun?: () => Promise<void>,
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getSettledHistory: () => Promise<Array<Record<string, any>>>,
@@ -1789,7 +1803,7 @@ export const makeStreamingAgent = async (
   };
 
   const admissionErrors = new WeakSet();
-  const runTurn = async (input, writer, meta, signal) => {
+  const runTurn = async (input, writer, meta, signal, onBegun) => {
     const text = await resolveUserText(input);
     try {
       await turnJournal.assertReady();
@@ -1835,6 +1849,16 @@ export const makeStreamingAgent = async (
       },
     };
     try {
+      if (onBegun) {
+        // The journal has the input. Whoever queued it may let go of its
+        // copy; that bookkeeping failing is theirs to log, never this turn's
+        // to fail. Inside the `try` so the turn still settles whatever it does.
+        try {
+          await onBegun();
+        } catch (error) {
+          console.error('[floot-agent] turn-begun observer failed:', error);
+        }
+      }
       if (signal?.aborted) {
         await turnJournal.append(turnId, {
           type: 'finish',
@@ -1900,7 +1924,7 @@ export const makeStreamingAgent = async (
     }
   };
 
-  const converse = (input, writer, meta, signal, onStart) => {
+  const converse = (input, writer, meta, signal, onStart, onBegun) => {
     if (stopped || quarantineError) {
       const error =
         quarantineError || Error('Floot session agent is shutting down');
@@ -1917,35 +1941,37 @@ export const makeStreamingAgent = async (
       if (onStart) onStart(await getHistory());
       return stopped
         ? Promise.reject(Error('Floot session agent is shutting down'))
-        : runTurn(input, writer, meta, turnController.signal).catch(err => {
-            // Failed containment is independent of historical uncertainty.
-            // Broken transports can fail this barrier without a user abort.
-            if (
-              err?.name === 'HostedTurnCancellationError' ||
-              `${err?.message || ''}`.includes(
-                'Hosted turn cancellation failed:',
-              )
-            ) {
-              quarantineError = err;
-              stopped = true;
-              stopInbox();
-              writer.abort(err.message);
+        : runTurn(input, writer, meta, turnController.signal, onBegun).catch(
+            err => {
+              // Failed containment is independent of historical uncertainty.
+              // Broken transports can fail this barrier without a user abort.
+              if (
+                err?.name === 'HostedTurnCancellationError' ||
+                `${err?.message || ''}`.includes(
+                  'Hosted turn cancellation failed:',
+                )
+              ) {
+                quarantineError = err;
+                stopped = true;
+                stopInbox();
+                writer.abort(err.message);
+                throw err;
+              }
+              // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
+              // `signal`, tearing down the in-flight provider stream. That's a
+              // clean stop, not a failure, and the turn's owner has already
+              // closed the reply channel, so swallow it.
+              if (turnController.signal.aborted) {
+                if (stopped) writer.abort('Floot session agent shut down');
+                return;
+              }
+              // runTurn has no internal catch, so on failure the writer is still
+              // unsettled — abort it here or every consumer (UI stream and the mail
+              // inbox's turnDone) would hang forever. Rethrow so callers still see it.
+              writer.abort(err instanceof Error ? err.message : String(err));
               throw err;
-            }
-            // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
-            // `signal`, tearing down the in-flight provider stream. That's a
-            // clean stop, not a failure, and the turn's owner has already
-            // closed the reply channel, so swallow it.
-            if (turnController.signal.aborted) {
-              if (stopped) writer.abort('Floot session agent shut down');
-              return;
-            }
-            // runTurn has no internal catch, so on failure the writer is still
-            // unsettled — abort it here or every consumer (UI stream and the mail
-            // inbox's turnDone) would hang forever. Rethrow so callers still see it.
-            writer.abort(err instanceof Error ? err.message : String(err));
-            throw err;
-          });
+            },
+          );
     });
     const releaseTurn = () => {
       signal?.removeEventListener('abort', forwardAbort);
@@ -3594,6 +3620,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const turnSlots = new Map();
   /** @type {Map<string, ReturnType<typeof makeSessionWatch>>} */
   const sessionWatches = new Map();
+  /** @type {Map<string, ReturnType<typeof makeSessionSubmissions>>} */
+  const submissions = new Map();
   // Sessions whose agent is running a turn of any origin — UI, mail, queue —
   // each with that turn's own record, so a late "settled" clears only its own.
   /** @type {Map<string, { input: string, from?: string }>} */
@@ -3619,7 +3647,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (!current) return null;
     let view = turnViews.get(current);
     if (!view) {
-      view = harden({ input: current.input, turn: current.turn });
+      view = harden({
+        input: current.input,
+        turn: current.turn,
+        ...(current.pendingId ? { pendingId: current.pendingId } : {}),
+      });
       turnViews.set(current, view);
     }
     return view;
@@ -3695,6 +3727,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
       parentSessionId: parentSessionId || '',
       subagentName: subagentName || '',
       activity: activityOf(entry),
+      // Submissions waiting their turn (see `submissionsFor`), so a list can
+      // say a session has messages held for the user without opening it.
+      pendingCount: submissions.get(id)?.read().entries.length || 0,
     });
   };
   const projectSessions = async () => {
@@ -3787,6 +3822,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
     stopFences.add(id);
     resumeTokens.delete(id);
     touchSession(id);
+    // Whatever is queued waits for the user, even after a resume: resuming
+    // never replays a prompt, queued or not.
+    void submissionsFor(id)
+      .holdForStop()
+      .catch(error => {
+        console.error('[floot-factory] could not hold the queue:', error);
+      });
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
       if (!entry.backendId) {
@@ -3864,6 +3906,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     stopFences.delete(id);
     touchSession(id, 'transcript');
     await getAgent(id);
+    void submissions.get(id)?.pump();
     return executionState(id);
   };
   const networkControllers = new Map();
@@ -3919,6 +3962,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
       result = await operation(networkController(id));
     } finally {
       networkChanges.delete(id);
+      // A submission that waited out the change may run now — whether the
+      // change succeeded or not: either way the session admits work again.
+      void submissions.get(id)?.pump();
     }
     // Mail-only sessions must resume without depending on a UI history read.
     if (!agents.has(id)) await getAgent(id);
@@ -4306,16 +4352,68 @@ export const make = (hostPowers, _context, { env } = {}) => {
     let slot = turnSlots.get(id);
     if (!slot) {
       slot = makeSessionTurnSlot(
-        async (input, writer, signal, setHistory) => {
+        async (input, writer, signal, setHistory, options) => {
           await assertSessionReady(id);
           const agent = await getAgent(id);
-          await agent.converse(input, writer, undefined, signal, setHistory);
+          await agent.converse(
+            input,
+            writer,
+            undefined,
+            signal,
+            setHistory,
+            options.onBegun,
+          );
         },
-        () => touchSession(id),
+        () => {
+          touchSession(id);
+          // The slot emptied (or filled): the head of the queue may run now.
+          void submissions.get(id)?.pump();
+        },
       );
       turnSlots.set(id, slot);
     }
     return slot;
+  };
+  // A session's submissions that are waiting their turn: a durable queue and
+  // the pump that starts its head (src/pending-queue.js,
+  // src/session-submissions.js). Held here, not in a page, so a message sent
+  // behind a running turn outlives the tab that sent it.
+  const submissionsFor = id => {
+    let entry = submissions.get(id);
+    if (!entry) {
+      entry = makeSessionSubmissions({
+        queue: makePendingQueue({
+          host: getHost(),
+          id,
+          onChange: () => touchSession(id),
+        }),
+        getCurrentTurn: () => turnSlots.get(id)?.getCurrent() || null,
+        // Why the session admits no work right now. Transient: the pump is
+        // run again from wherever one of these can change.
+        refusal: () => {
+          const registered = (registry || []).find(item => item.id === id);
+          if (!registered) return 'Unknown session';
+          if ((registered.lifecycle || 'ready') !== 'ready')
+            return `Session is ${registered.lifecycle}`;
+          if (
+            stopFences.has(id) ||
+            (registered.executionState &&
+              registered.executionState !== 'running')
+          )
+            return 'Session is stopped or stopping';
+          if (networkChanges.has(id))
+            return 'Network policy change in progress';
+          return '';
+        },
+        startTurn: (text, options) => {
+          assertSessionAdmission(id);
+          return turnSlotFor(id).start(text, options);
+        },
+        onChange: () => touchSession(id),
+      });
+      submissions.set(id, entry);
+    }
+    return entry;
   };
   const sessionWatchFor = id => {
     let watch = sessionWatches.get(id);
@@ -4328,7 +4426,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
         },
         readTurn: () => turnViewOf(id),
         readRunning: () => workingSessions.get(id) || null,
-        readPending: () => harden({ entries: [], hold: null }),
+        // Not `submissionsFor`: a sync running after the session was deleted
+        // must not bring its queue back.
+        readPending: () =>
+          submissions.get(id)?.read() || harden({ entries: [], hold: null }),
         readExecution: () => {
           const entry = (registry || []).find(session => session.id === id);
           return projectExecution(id, entry);
@@ -4401,7 +4502,52 @@ export const make = (hostPowers, _context, { env } = {}) => {
          */
         async watch() {
           await assertSessionReady(id);
+          // Read the queue first, so the snapshot says what is waiting.
+          await submissionsFor(id).ready();
           return sessionWatchFor(id).watch();
+        },
+        /**
+         * Accept a message. It becomes a turn at once if nothing is ahead of
+         * it, and otherwise waits here — durably, whether or not the caller
+         * stays connected — and runs when its turn comes. Returns `{ id }`,
+         * the id the queue and the eventual turn (`turn.pendingId`) carry.
+         *
+         * @param {string} text
+         */
+        async enqueue(text) {
+          await assertSessionReady(id);
+          assertSessionAdmission(id);
+          return submissionsFor(id).submit(text);
+        },
+        async listPending() {
+          await assertSessionReady(id);
+          const entry = submissionsFor(id);
+          await entry.ready();
+          return entry.read();
+        },
+        async editPending(entryId, text) {
+          await assertSessionReady(id);
+          await submissionsFor(id).edit(entryId, text);
+        },
+        async cancelPending(entryId) {
+          await assertSessionReady(id);
+          return submissionsFor(id).cancel(entryId);
+        },
+        /**
+         * "Send this now": releases a held queue, sends an interrupted
+         * message again, and — for the head of the queue only — cuts the
+         * running turn short so it can start.
+         *
+         * @param {string} entryId
+         */
+        async sendPending(entryId) {
+          await assertSessionReady(id);
+          assertSessionAdmission(id);
+          const { cancelCurrent } = await submissionsFor(id).sendNow(entryId);
+          const current = turns.getCurrent();
+          // Never the message's own turn, should it have started meanwhile.
+          if (cancelCurrent && current && current.pendingId !== entryId)
+            await E(current.turn).cancel();
         },
         async getHistory() {
           await assertSessionReady(id);
@@ -4530,6 +4676,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')
             return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
+          if (methodName === 'enqueue')
+            return 'enqueue(text) — Accept a message and return { id }. It becomes a turn at once if nothing is ahead of it; otherwise it waits in the session’s durable queue, whether or not the caller stays connected, and runs when its turn comes. The turn it becomes carries the same id as turn.pendingId. Dispatch is at most once: a message the service was sending when it restarted comes back "interrupted" and is never sent again on its own. A queue that comes back from a restart non-empty, a refused turn, or an emergency stop holds the queue until sendPending() or a new enqueue(). Prefer this to startTurn() for anything a person typed.';
+          if (methodName === 'listPending')
+            return 'listPending() — { entries: [{ id, text, createdAt, state: "queued" | "dispatching" | "interrupted" }], hold: { reason, message } | null }. The same record watch() publishes as "pending".';
+          if (methodName === 'editPending')
+            return 'editPending(id, text) — Rewrite a queued message. Refused once it is being sent.';
+          if (methodName === 'cancelPending')
+            return 'cancelPending(id) — Drop a queued message; true if it was there. Refused once it is being sent.';
+          if (methodName === 'sendPending')
+            return 'sendPending(id) — Send this now: release a held queue, send an interrupted message again, and, for the head of the queue only, cancel the running turn so it can start.';
           if (methodName === 'watch')
             return 'watch() — A disposable stream of this session’s state; subscribe rather than polling getHistory(). First { type: "snapshot", transcript, transcriptError?, turn, running, pending, execution, network, usage, journalVersion }, where transcript is { version, base: 0, keep: 0, append: messages } or null when it could not be read (transcriptError says why; it is retried). Then one event per change: "transcript" { version, base, keep, append } — keep the first `keep` messages you hold and append the rest; `base` is the version it follows, and an event whose base is not the version you hold means you missed one: reopen. Settled turns only: a running turn is rendered from turn.watch(). "transcript-error" { message }; "turn" { turn: { input, turn, pendingId? } | null } for the UI turn in flight; "running" { running: { input, from? } | null } for whatever the agent is running, including mail turns, which have no FlootTurn; "pending" { pending: { entries, hold } }; "execution"; "network"; "usage"; "journal" { version } (turn records changed: re-read getTurns() if you show them); and "end" when the session is deleted. A turn already in flight when you subscribe is in the snapshot, not in a later "turn" event. Open the stream promptly: a reader not opened within two minutes is closed, and a stream that finishes without "end" (or an event whose base you do not hold) means subscribe again. Closing the stream detaches this viewer only.';
           if (methodName === 'getTurns')
@@ -4542,7 +4698,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -4646,6 +4802,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
       );
       failures.push(error);
     }
+    // The queue's record goes with the session, like the rest of what it
+    // owned. A record that cannot be removed is a failed deletion, retried at
+    // the next start, rather than a stray message outliving its session.
+    try {
+      await submissionsFor(id).destroy();
+    } catch (error) {
+      failures.push(error);
+    }
     const host = getHost();
     for (const name of [`session-${id}`, `session-agent-${id}`]) {
       try {
@@ -4662,6 +4826,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         `Floot session ${id} resources did not fully clean up`,
       );
     }
+    submissions.delete(id);
     agents.delete(id);
     facets.delete(id);
     // Whoever is still watching is told the session is gone.
@@ -5053,6 +5218,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const startAllInboxes = async () => {
     const reg = await loadRegistry();
     for (const s of reg) {
+      // Read each queue, so the list can say which sessions have messages
+      // held over from before the restart. Nothing is dispatched: a queue
+      // that comes back non-empty is held until the user sends.
+      if ((s.lifecycle || 'ready') === 'ready') {
+        void submissionsFor(s.id)
+          .ready()
+          .then(touchSessionList, error => {
+            console.error(
+              `[floot-factory] could not read the queue of session-${s.id}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+      }
       if (
         (!s.lifecycle || s.lifecycle === 'ready') &&
         (s.executionState === 'stopping' || s.executionState === 'stopped')
@@ -5139,7 +5317,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, parentSessionId: string, subagentName: string, effectiveModelId: string, activity: 'passive' | 'working' | 'error' }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, parentSessionId: string, subagentName: string, effectiveModelId: string, activity: 'passive' | 'working' | 'error', pendingCount: number }>>}
      */
     async listSessions() {
       return harden(await projectSessions());
@@ -5434,7 +5612,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors.',
         listSessions:
-          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, lifecycle, activity}] for all sessions. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error.',
+          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, lifecycle, activity, pendingCount}] for all sessions. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:

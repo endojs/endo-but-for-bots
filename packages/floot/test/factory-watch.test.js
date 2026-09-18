@@ -12,7 +12,8 @@ import { applyTranscript } from '../src/session-watch.js';
  * A factory over an in-memory host with one hosted session, `one`, whose
  * backend replies with whatever the test pushes into `backendEvents`.
  */
-const makeWorld = () => {
+/** @param {Map<string, unknown>} [existingStore] the host store of an earlier factory: a restart */
+const makeWorld = existingStore => {
   const inbox = makeBufferedReader();
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const runs = [];
@@ -56,21 +57,22 @@ const makeWorld = () => {
     destroy: () => undefined,
   });
   /** @type {Map<string, unknown>} */
-  const hostStore = new Map();
-  hostStore.set(
-    'floot-sessions',
-    harden([
-      {
-        id: 'one',
-        title: 'One',
-        createdAt: 1,
-        presetId: 'general',
-        lifecycle: 'ready',
-        backendId: 'test',
-        modelId: 'm',
-      },
-    ]),
-  );
+  const hostStore = existingStore || new Map();
+  if (!existingStore)
+    hostStore.set(
+      'floot-sessions',
+      harden([
+        {
+          id: 'one',
+          title: 'One',
+          createdAt: 1,
+          presetId: 'general',
+          lifecycle: 'ready',
+          backendId: 'test',
+          modelId: 'm',
+        },
+      ]),
+    );
   hostStore.set('codex-backend', backend);
   const host = Far('TestHost', {
     list: () => harden([...hostStore.keys()]),
@@ -313,4 +315,179 @@ test('a session being made or removed is working, not in error', async t => {
   // An unpinned provider session runs what the factory is configured with.
   t.is(byId.unpinned.modelId, '');
   t.is(byId.unpinned.effectiveModelId, 'configured/model');
+});
+
+const pendingOf = async session => {
+  const { entries, hold } = await E(session).listPending();
+  return {
+    texts: entries.map(entry => `${entry.text}:${entry.state}`),
+    hold: hold ? hold.reason : null,
+  };
+};
+
+test('a message sent to an idle session becomes a turn at once', async t => {
+  t.timeout(10_000);
+  const { factory, inbox, nextRun } = makeWorld();
+  t.teardown(async () => {
+    inbox.close();
+    await E(factory).deleteSession('one');
+  });
+  const session = await E(factory).getSession('one');
+  const view = iterateReader(await E(session).watch());
+  t.deepEqual((await next(view)).pending, { entries: [], hold: null });
+  const { id } = await E(session).enqueue('hello');
+  const started = (await until(view, 'turn')).event.turn;
+  t.is(started.input, 'hello');
+  t.is(
+    started.pendingId,
+    id,
+    'a view can tell its own message became this turn',
+  );
+  const run = await nextRun();
+  // The journal has the input: the queue has let go of it.
+  t.deepEqual((await pendingOf(session)).texts, []);
+  run.push(harden({ type: 'text-delta', text: 'hi' }));
+  run.push(harden({ type: 'end', checkpoint: 'committed' }));
+  t.is((await until(view, 'turn')).event.turn, null);
+  t.deepEqual(await E(session).getHistory(), [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'hi' },
+  ]);
+  await view.return();
+});
+
+test('messages sent behind a running turn wait on the daemon and run in order', async t => {
+  t.timeout(10_000);
+  const { factory, inbox, nextRun } = makeWorld();
+  t.teardown(async () => {
+    inbox.close();
+    await E(factory).deleteSession('one');
+  });
+  const session = await E(factory).getSession('one');
+  await E(session).enqueue('one');
+  const first = await nextRun();
+  const two = await E(session).enqueue('two');
+  const three = await E(session).enqueue('three');
+  t.deepEqual((await pendingOf(session)).texts, ['two:queued', 'three:queued']);
+  const list = await E(factory).listSessions();
+  t.is(list[0].pendingCount, 2);
+  // Edited and cancelled while they wait, by whoever holds the session.
+  await E(session).editPending(three.id, 'three, revised');
+  t.true(await E(session).cancelPending(two.id));
+  // Nobody is watching. The turn ends; the daemon starts the next on its own.
+  first.push(harden({ type: 'end', checkpoint: 'committed' }));
+  const second = await nextRun();
+  t.is((await E(session).getCurrentTurn()).input, 'three, revised');
+  second.push(harden({ type: 'end', checkpoint: 'committed' }));
+  await E((await E(session).getCurrentTurn()).turn).whenFinished();
+  const history = await E(session).getHistory();
+  t.deepEqual(
+    history.filter(message => message.role === 'user').map(m => m.content),
+    ['one', 'three, revised'],
+  );
+});
+
+test('only the head of the queue can cut the running turn short', async t => {
+  t.timeout(10_000);
+  const { factory, inbox, nextRun } = makeWorld();
+  t.teardown(async () => {
+    inbox.close();
+    await E(factory).deleteSession('one');
+  });
+  const session = await E(factory).getSession('one');
+  await E(session).enqueue('one');
+  await nextRun();
+  const two = await E(session).enqueue('two');
+  const three = await E(session).enqueue('three');
+  const running = (await E(session).getCurrentTurn()).turn;
+  await E(session).sendPending(three.id);
+  t.false((await E(running).getStatus()).done, 'not the head: nothing is cut');
+  await E(session).sendPending(two.id);
+  await E(running).whenFinished();
+  t.is((await E(running).getStatus()).phase, 'cancelled');
+  const next2 = await nextRun();
+  t.is((await E(session).getCurrentTurn()).input, 'two');
+  next2.push(harden({ type: 'end', checkpoint: 'committed' }));
+});
+
+test('what was queued survives a restart, and waits for the user', async t => {
+  t.timeout(10_000);
+  const before = makeWorld();
+  const session = await E(before.factory).getSession('one');
+  await E(session).enqueue('one');
+  await before.nextRun();
+  await E(session).enqueue('two');
+  await E(session).enqueue('three');
+  before.inbox.close();
+
+  // The daemon restarts: a new factory over the same store.
+  const after = makeWorld(before.hostStore);
+  t.teardown(async () => {
+    after.inbox.close();
+    await E(after.factory).deleteSession('one');
+  });
+  const revived = await E(after.factory).getSession('one');
+  const view = iterateReader(await E(revived).watch());
+  const snapshot = await next(view);
+  t.deepEqual(
+    snapshot.pending.entries.map(entry => `${entry.text}:${entry.state}`),
+    ['two:queued', 'three:queued'],
+  );
+  t.is(snapshot.pending.hold.reason, 'restart');
+  t.is(snapshot.turn, null, 'nothing is sent at boot with nobody watching');
+  // The turn that was running is the journal's to account for, and it does.
+  t.true(snapshot.transcript.append.some(m => m.content === 'one'));
+  // The user says go.
+  await E(revived).sendPending(snapshot.pending.entries[0].id);
+  t.is((await until(view, 'turn')).event.turn.input, 'two');
+  await view.return();
+});
+
+test('a dispatch a restart interrupted is shown, and never repeated on its own', async t => {
+  t.timeout(10_000);
+  const before = makeWorld();
+  // A record as it is left when the daemon dies between claiming a message
+  // and the turn journal recording it.
+  before.hostStore.set(
+    'floot-pending-3-one',
+    harden({
+      version: 1,
+      nextSequence: 3n,
+      entries: [
+        { id: 'pa-1', text: 'maybe sent', createdAt: 1, state: 'dispatching' },
+        { id: 'pa-2', text: 'behind it', createdAt: 2, state: 'queued' },
+      ],
+    }),
+  );
+  t.teardown(async () => {
+    before.inbox.close();
+    await E(before.factory).deleteSession('one');
+  });
+  const session = await E(before.factory).getSession('one');
+  t.deepEqual((await pendingOf(session)).texts, [
+    'maybe sent:interrupted',
+    'behind it:queued',
+  ]);
+  // A new message releases the restart hold, not this one.
+  await E(session).enqueue('newer');
+  t.is(await E(session).getCurrentTurn(), null);
+  t.is((await pendingOf(session)).hold, 'interrupted');
+  // Deleting it is the user's decision; the rest then run in order.
+  await E(session).cancelPending('pa-1');
+  await before.nextRun();
+  t.is((await E(session).getCurrentTurn()).input, 'behind it');
+});
+
+test('a queue goes with its session', async t => {
+  t.timeout(10_000);
+  const { factory, inbox, nextRun, hostStore } = makeWorld();
+  t.teardown(() => inbox.close());
+  const session = await E(factory).getSession('one');
+  await E(session).enqueue('one');
+  const run = await nextRun();
+  await E(session).enqueue('two');
+  t.true(hostStore.has('floot-pending-3-one'));
+  run.push(harden({ type: 'abort', reason: 'going away' }));
+  await E(factory).deleteSession('one');
+  t.false(hostStore.has('floot-pending-3-one'));
 });

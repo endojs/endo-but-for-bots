@@ -554,3 +554,58 @@ test('a mail turn reaches a view: running, then the transcript it leaves', async
   await view.return();
   await list.return();
 });
+
+test('an emergency stop keeps the queue and holds it past the resume', async t => {
+  const world = await makeWorld(t);
+  world.setMode('hold');
+  await E(world.session).enqueue('one');
+  await until(() => world.sends.length === 1);
+  await E(world.session).enqueue('two');
+  await E(world.session).emergencyStop();
+  // A stopped session takes nothing new…
+  await t.throwsAsync(() => E(world.session).enqueue('three'), {
+    message: /stopped or stopping/,
+  });
+  // …and keeps what it had, held.
+  const stopped = await E(world.session).listPending();
+  t.deepEqual(
+    stopped.entries.map(entry => `${entry.text}:${entry.state}`),
+    ['two:queued'],
+  );
+  t.is(stopped.hold.reason, 'stopped');
+  await E(world.session).resume();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(world.sends.length, 1, 'resume never replays a prompt, queued or not');
+  t.is((await E(world.session).listPending()).hold.reason, 'stopped');
+  // The user sends it.
+  world.setMode('complete');
+  await E(world.session).sendPending(stopped.entries[0].id);
+  await until(() => world.sends.length === 2);
+  t.deepEqual((await E(world.session).listPending()).entries, []);
+});
+
+test('a message that waited out a network change runs when it ends', async t => {
+  const world = await makeWorld(t);
+  // The change is under way when the message arrives, so it waits…
+  let release = () => {};
+  world.blockCreate(
+    new Promise(resolve => {
+      release = () => resolve(undefined);
+    }),
+  );
+  t.teardown(() => release());
+  const changing = E(world.session)
+    .setNetworkPolicy('public-internet')
+    .catch(error => error);
+  await until(
+    () => world.events.includes('terminate:1') || world.creates.length > 1,
+  );
+  await E(world.session)
+    .enqueue('sent during the change')
+    .catch(() => undefined);
+  release();
+  await changing;
+  // …and runs once the session admits work again, with nobody pressing Send.
+  await until(() => world.sends.length >= 1);
+  t.deepEqual((await E(world.session).listPending()).entries, []);
+});

@@ -192,7 +192,9 @@ const makeViewers = (timers, onEmpty = () => {}) => {
     },
     /** @param {unknown} event */
     publish(event) {
-      const hardened = harden(event);
+      const hardened = /** @type {import('@endo/pass-style').Passable} */ (
+        harden(event)
+      );
       for (const view of [...views]) view.push(hardened);
     },
     end() {
