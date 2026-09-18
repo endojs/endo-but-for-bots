@@ -2899,16 +2899,51 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return undefined;
   };
 
-  // Per-session bounded workspace publishers. Held so the served mount can be
-  // revoked when the session is rebuilt or deleted.
+  // Per-session bounded workspace publishers. A publication is the session's
+  // and is recorded in its registry entry; it is released when the session is
+  // deleted, by the session's tool instance if this incarnation built one and
+  // from the record if it did not (a stopped session has no agent).
   /** @type {Map<string, { revoke: () => Promise<void> }>} */
   const publishers = new Map();
   const stopPublisher = async id => {
     const publisher = publishers.get(id);
     if (publisher) {
+      await publisher.revoke();
       publishers.delete(id);
-      await publisher.revoke().catch(() => {});
+      // eslint-disable-next-line no-use-before-define
+      publishChains.delete(id);
+      return;
     }
+    // No tool instance in this incarnation: release from the record.
+    // eslint-disable-next-line no-use-before-define
+    await loadRegistry();
+    // eslint-disable-next-line no-use-before-define
+    const entry = (registry || []).find(session => session.id === id);
+    if (!entry?.publication) return;
+    const assetServer = await getAssetServer();
+    if (!assetServer) {
+      throw Error(
+        `no asset server is bound, so the published route of session ${id} (label "floot session ${id}") could not be released`,
+      );
+    }
+    await E(assetServer).release(entry.publication.id);
+  };
+  // One publish chain per session, not per tool instance: a rebuilt agent
+  // has a new tool while a call on the old one may still be settling, and two
+  // chains would each find no publication, each serve, and record only one.
+  /** @type {Map<string, Promise<unknown>>} */
+  const publishChains = new Map();
+  /**
+   * @param {string} id
+   * @returns {<T>(thunk: () => Promise<T>) => Promise<T>}
+   */
+  const serializePublishing = id => thunk => {
+    const next = (publishChains.get(id) || Promise.resolve()).then(thunk, thunk);
+    publishChains.set(
+      id,
+      next.catch(() => {}),
+    );
+    return next;
   };
   /**
    * The session-scoped extra tools for a session: a bounded workspace
@@ -2925,9 +2960,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
    * @returns {Promise<Map<string, any>>}
    */
   const buildExtraTools = async (id, sessionGuest, preset) => {
-    // A fresh agent replaces the tool instance, so drop the prior publisher
-    // (and its served mount) first.
-    await stopPublisher(id);
+    // A fresh agent replaces the tool instance and nothing else: the
+    // publication belongs to the session, is recorded with it, and is served
+    // by the asset server whether or not any tool instance exists. It ends
+    // when the session is deleted (`stopPublisher`).
     const workspaceObject = preset.objects.find(
       object => object.kind === 'git-workspace',
     );
@@ -2940,6 +2976,29 @@ export const make = (hostPowers, _context, { env } = {}) => {
         }
         return undefined;
       },
+      loadPublication: async () => {
+        await loadRegistry();
+        // eslint-disable-next-line no-use-before-define
+        return (registry || []).find(session => session.id === id)?.publication;
+      },
+      savePublication: async publication => {
+        await loadRegistry();
+        // Read, modify and write the live array with no await between, like
+        // every other registry writer: one captured across the await can be
+        // a rebound, stale array, and the write would be lost.
+        // eslint-disable-next-line no-use-before-define
+        const live = registry;
+        /** @type {number} */
+        const index = (live || []).findIndex(session => session.id === id);
+        if (index < 0 || !live) throw Error('Unknown Floot session');
+        const { publication: _previous, ...rest } = live[index];
+        live[index] = harden(
+          publication ? { ...rest, publication } : { ...rest },
+        );
+        await saveRegistry();
+      },
+      serialize: serializePublishing(id),
+      label: `floot session ${id}`,
     });
     publishers.set(id, { revoke: publishTool.revoke });
     return new Map([['publishWorkspace', publishTool]]);
@@ -3262,7 +3321,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string, executionState?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -4237,8 +4296,21 @@ export const make = (hostPowers, _context, { env } = {}) => {
       );
     }
     // Release any published workspace URL before the guest that owns the
-    // workspace goes.
-    await stopPublisher(id);
+    // workspace goes. A release that fails is a failed deletion: the registry
+    // entry holds the only copy of the route's id, and the asset server
+    // retains the workspace for as long as the route stands, so dropping the
+    // entry now would leave a deleted session's files published with nobody
+    // able to release them. Kept as a failure, the deletion is retried at the
+    // next start.
+    try {
+      await stopPublisher(id);
+    } catch (error) {
+      console.error(
+        `[floot-factory] published route of session ${id} was not released:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      failures.push(error);
+    }
     const host = getHost();
     for (const name of [`session-${id}`, `session-agent-${id}`]) {
       try {
