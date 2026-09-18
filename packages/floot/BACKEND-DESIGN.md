@@ -215,10 +215,13 @@ is stored as its own content value and the record carries a preview beside a
 `<field>Ref` that `getTurnContent` resolves; a field beyond 16 Mi code units —
 the bound on one storage value — fails that one append rather than the session.
 Replay is bounded by snapshots: every 64 events the record map is written as a
-snapshot, a new incarnation reads the newest snapshot and only the events after
-it, and the events a durable snapshot covers are removed. Settled turns beyond a
-retained window of 256 are moved to archive chunks and read back through
-`getArchivedTurns`; a turn with an unresolved outcome is never archived.
+snapshot, and a new incarnation reads the newest snapshot and only the events
+after it. Settled turns beyond a retained window of 256 are moved to archive
+chunks and read back through `getArchivedTurns`; a turn with an unresolved
+outcome is never archived. Nothing the conversation wrote is ever removed by
+the journal: events, content values and archive chunks are the transcript and
+are kept until the session is removed in Endo and collected; the only value it
+discards is a snapshot a newer one has superseded, since a snapshot is derived.
 A stale snapshot left by a crash is superseded by the newer one, never trusted.
 Partial answer text and reported usage are retained on ordinary failure/cancel;
 individual text deltas are not write-ahead durable, so a process crash may lose

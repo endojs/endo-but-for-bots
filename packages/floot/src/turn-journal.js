@@ -37,11 +37,14 @@ const SNAPSHOT_VERSION = 1;
  * needs in front of it.
  *
  * `SNAPSHOT_EVERY` bounds replay. A snapshot is the record map at an event
- * sequence; replay reads the newest snapshot and only the events after it,
- * and the events a snapshot covers are removed from storage once it is
- * durable. Storage is therefore bounded by the retained window, the archive
- * chunks, and the content values records reference — each of which grows
- * only with what the session actually kept.
+ * sequence; replay reads the newest snapshot and only the events after it.
+ *
+ * Nothing the conversation wrote is ever removed here. Events, content
+ * values and archive chunks are the transcript, and the transcript is kept
+ * until the session itself is removed in Endo and collected; a snapshot is a
+ * derived accelerator, so the only value this journal ever discards is a
+ * snapshot a newer one has superseded. Storage grows with the conversation
+ * — that is what keeping it means — while memory and replay do not.
  */
 const MAX_EVENT_SIZE = 131_072;
 const PREVIEW_CHARS = 8192;
@@ -404,9 +407,10 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
   };
 
   /**
-   * Remove a value whose loss costs nothing: an event a snapshot covers, or a
-   * snapshot a newer one supersedes. A failure here leaves a harmless extra
-   * value and is not ambiguous about the history, so it does not poison.
+   * Remove a derived value a newer one supersedes: a superseded snapshot, or
+   * an archive chunk a crash left uncounted. Never an event or content value.
+   * A failure here leaves a harmless extra value and is not ambiguous about
+   * the history, so it does not poison.
    *
    * @param {string} name
    */
@@ -454,10 +458,10 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
   };
 
   /**
-   * Write the record map as of the last event, then drop what it covers.
-   * Ordered so that a crash at any point leaves a replayable history: the
-   * chunk before the snapshot that counts it, the snapshot before the events
-   * it replaces are removed, the new snapshot before the old one goes.
+   * Write the record map as of the last event. Ordered so that a crash at any
+   * point leaves a replayable history: the chunk before the snapshot that
+   * counts it, the new snapshot before the old one goes. The events it covers
+   * stay where they are; they are simply not read again.
    */
   const snapshot = async () => {
     await archive();
@@ -477,10 +481,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
     through = covered;
     sinceSnapshot = 0;
     for (const stale of [...names]) {
-      if (
-        (stale.startsWith(PREFIX) && sequenceOf(stale) <= covered) ||
-        (stale.startsWith(SNAPSHOT_PREFIX) && stale !== name)
-      ) {
+      if (stale.startsWith(SNAPSHOT_PREFIX) && stale !== name) {
         // eslint-disable-next-line no-await-in-loop
         await discard(stale);
       }

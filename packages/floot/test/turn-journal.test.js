@@ -6,10 +6,15 @@ import { makeTurnJournal } from '../src/turn-journal.js';
 
 const fixture = () => {
   const store = new Map();
+  /** @type {string[]} */
+  const reads = [];
   let fail = false;
   const powers = Far('JournalStorage', {
     list: () => harden([...store.keys()]),
-    lookup: name => store.get(name),
+    lookup: name => {
+      reads.push(name);
+      return store.get(name);
+    },
     storeValue: (value, name) => {
       if (store.has(name)) throw Error('Overwrite forbidden');
       store.set(name, value);
@@ -22,6 +27,7 @@ const fixture = () => {
   });
   return {
     store,
+    reads,
     powers,
     fail: () => {
       fail = true;
@@ -515,8 +521,8 @@ test('large text is stored by reference: the record keeps a preview, the content
   );
 });
 
-test('replay is bounded by snapshots: covered events are removed and history survives', async t => {
-  const { powers, store } = fixture();
+test('replay is bounded by snapshots: covered events are kept but not read again', async t => {
+  const { powers, store, reads } = fixture();
   const journal = makeTurnJournal(powers);
   const ids = [];
   for (let i = 0; i < 40; i += 1) {
@@ -530,7 +536,9 @@ test('replay is bounded by snapshots: covered events are removed and history sur
       output: `out ${i}`,
     });
   }
-  // 80 events: a snapshot at 64, so at most 16 events remain in storage.
+  // 80 events and a snapshot at 64. Every event is still there — the
+  // transcript is kept until the session is removed — but a revival reads
+  // the snapshot and only the 16 events after it.
   const events = [...store.keys()].filter(name =>
     name.startsWith('floot-turn-event-'),
   );
@@ -538,12 +546,15 @@ test('replay is bounded by snapshots: covered events are removed and history sur
     name.startsWith('floot-turn-snapshot-'),
   );
   t.is(snapshots.length, 1);
-  t.is(events.length, 16);
-  t.true(events.every(name => BigInt(name.slice(-20)) > 64n));
+  t.is(events.length, 80);
   const expected = await journal.list();
   t.is(expected.length, 40);
+  reads.length = 0;
   const revived = makeTurnJournal(powers);
   t.deepEqual(await revived.list(), expected);
+  const replayed = reads.filter(name => name.startsWith('floot-turn-event-'));
+  t.is(replayed.length, 16);
+  t.true(replayed.every(name => BigInt(name.slice(-20)) > 64n));
   t.like(await revived.status(), {
     usedEvents: '80',
     retainedTurns: 40,
@@ -615,15 +626,13 @@ test('settled turns beyond the retained window are archived; unresolved ones nev
   t.is((await journal.get(unknown)).state, 'outcome-unknown');
   for (let i = 0; i < 300; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await journal
-      .begin(options)
-      .then(id =>
-        journal.append(id, {
-          type: 'finish',
-          state: 'completed',
-          output: `${i}`,
-        }),
-      );
+    await journal.begin(options).then(id =>
+      journal.append(id, {
+        type: 'finish',
+        state: 'completed',
+        output: `${i}`,
+      }),
+    );
   }
   const status = await journal.status();
   t.is(status.retainedTurns + status.archivedTurns, 301);
