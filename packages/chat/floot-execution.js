@@ -85,6 +85,23 @@ export const makeFlootExecution = ({ notify }) => {
     }
   };
   return harden({
+    /**
+     * Take a state the session pushed (`watch()`'s `execution`), instead of
+     * asking for it. A stop or resume this view has in flight still ends by
+     * adopting its own answer, which is the same state or a newer one.
+     *
+     * @param {unknown} value
+     */
+    adopt: value => {
+      if (!selected) return;
+      try {
+        accept(value);
+        error = '';
+      } catch {
+        return; // a shape this view does not understand changes nothing
+      }
+      notify();
+    },
     select: async facet => {
       epoch += 1n;
       selected = facet;

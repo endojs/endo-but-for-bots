@@ -84,6 +84,7 @@
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
+    "@endo/floot": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@playwright/test": "^1.63.0",

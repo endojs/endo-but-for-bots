@@ -6,10 +6,14 @@ import test from 'ava';
 
 /** @import { ExecutionContext } from 'ava' */
 import { Far } from '@endo/pass-style';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { flootComponent } from '../../floot-component.js';
+import {
+  makeFakeDaemon,
+  staticSessionListWatch,
+  staticSessionWatch,
+} from '../helpers/fake-floot.js';
 import {
   createDOM,
   tick,
@@ -31,6 +35,25 @@ globalThis.cancelAnimationFrame = id => clearTimeout(id);
 testWindow.confirm = () => true;
 const waitFor = predicate => waitForDOM(predicate, 10, 2000);
 
+// A hand-written fake session or factory, given the subscription the space
+// opens on it: one snapshot assembled from its own getters, and no events. A
+// test that needs the daemon to say more uses `makeFakeDaemon` (see `setup`).
+/**
+ * @param {string} name
+ * @param {Record<string, (...args: any[]) => any>} methods
+ */
+const farSession = (name, methods) =>
+  Far(name, { ...methods, watch: staticSessionWatch(methods) });
+/**
+ * @param {string} name
+ * @param {Record<string, (...args: any[]) => any>} methods
+ */
+const farFactory = (name, methods) =>
+  Far(name, {
+    ...methods,
+    watchSessions: staticSessionListWatch(() => methods.listSessions()),
+  });
+
 test.serial(
   'new session filters models by backend and resets reasoning',
   async t => {
@@ -38,13 +61,13 @@ test.serial(
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const created = [];
-    const facet = Far('PickerSession', {
+    const facet = farSession('PickerSession', {
       getInfo: () => harden({ id: 'one', title: 'One' }),
       getHistory: () => harden([]),
       getCurrentTurn: () => null,
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
     });
-    const factory = Far('PickerFactory', {
+    const factory = farFactory('PickerFactory', {
       listSessions: () => harden([{ id: 'one', title: 'One' }]),
       listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
       listBackends: () =>
@@ -188,13 +211,13 @@ test.serial('each session row says what backend and model it runs', async t => {
     },
   ];
   const facet = id =>
-    Far('LabelSession', {
+    farSession('LabelSession', {
       getInfo: () => harden(sessions.find(session => session.id === id)),
       getHistory: () => harden([]),
       getCurrentTurn: () => null,
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
     });
-  const factory = Far('LabelFactory', {
+  const factory = farFactory('LabelFactory', {
     listSessions: () => harden(sessions),
     listPresets: () => harden([]),
     listBackends: () =>
@@ -252,7 +275,7 @@ test.serial(
     let resumes = 0;
     let stops = 0;
     const execution = state => harden({ supported: true, state });
-    const facet = Far('ExecutionUiSession', {
+    const facet = farSession('ExecutionUiSession', {
       __getMethodNames__: () =>
         harden(['getExecutionState', 'emergencyStop', 'resume']),
       getExecutionState: () => execution('stopped'),
@@ -268,7 +291,7 @@ test.serial(
         return execution('stopped');
       },
     });
-    const factory = Far('ExecutionUiFactory', {
+    const factory = farFactory('ExecutionUiFactory', {
       listSessions: () =>
         harden([{ id: 'one', title: 'Stopped session', createdAt: 1 }]),
       listPresets: () => harden([]),
@@ -327,7 +350,7 @@ test.serial(
         reason: '<img src=x onerror="alert(1)">',
       },
     };
-    const facet = Far('NetworkUiSession', {
+    const facet = farSession('NetworkUiSession', {
       __getMethodNames__: () =>
         harden([
           'getNetworkPolicy',
@@ -360,7 +383,7 @@ test.serial(
         };
       },
     });
-    const unsupported = Far('UnsupportedNetworkUiSession', {
+    const unsupported = farSession('UnsupportedNetworkUiSession', {
       __getMethodNames__: () => harden(['getNetworkPolicy', 'getCurrentTurn']),
       getNetworkPolicy: () =>
         harden({ policy: null, supportedPolicies: [], applies: 'next-turn' }),
@@ -368,7 +391,7 @@ test.serial(
       getHistory: () => harden([]),
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
     });
-    const factory = Far('NetworkUiFactory', {
+    const factory = farFactory('NetworkUiFactory', {
       listSessions: () =>
         harden([
           { id: 'network', title: 'Network session', createdAt: 2 },
@@ -467,7 +490,7 @@ test.serial(
     const calls = [];
     let starts = 0;
     const hostile = '<img src=x onerror="alert(1)">';
-    const facet = Far('JournalSession', {
+    const facet = farSession('JournalSession', {
       __getMethodNames__: () =>
         harden([
           'getTurns',
@@ -501,9 +524,9 @@ test.serial(
           storage: 'private',
         }),
       getCurrentTurn: () => null,
-      startTurn: () => {
+      enqueue: () => {
         starts += 1;
-        return null;
+        return harden({ id: 'p1' });
       },
       getHistory: () => harden([]),
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
@@ -511,7 +534,7 @@ test.serial(
         calls.push(args);
       },
     });
-    const factory = Far('JournalFactory', {
+    const factory = farFactory('JournalFactory', {
       listSessions: () =>
         harden([
           {
@@ -651,93 +674,36 @@ const textareaIn = (parent, selector) =>
     must(parent.querySelector(selector), selector)
   );
 
-/** @param {ExecutionContext} t
+/**
+ * A mounted Floot space over a fake daemon (test/helpers/fake-floot.js).
+ *
+ * @param {ExecutionContext} t
  * @param {number} [count]
- * @param {boolean} [recover]
+ * @param {boolean} [recover] a turn is already running when the page mounts
+ * @param {(daemon: ReturnType<typeof makeFakeDaemon>) => void} [prepare] runs
+ *   before the page mounts, to leave the daemon in some state
  */
-const setup = async (
-  t,
-  count = 2,
-  recover = false,
-  baseline = Promise.resolve(harden([])),
-) => {
+const setup = async (t, count = 2, recover = false, prepare = () => {}) => {
   t.timeout(5000);
   const parent = testDocument.createElement('div');
   testDocument.body.appendChild(parent);
-  /** @type {Array<{ id: string, title: string, createdAt: number }>} */
-  let sessions = Array.from({ length: count }, (value, index) => ({
-    id: `s${index}`,
-    title: `Session ${index}`,
-    createdAt: count - index,
-  }));
-  /** @type {Array<{ id: string, text: string, channel: ReturnType<typeof makeBufferedReader>, ref: object }>} */
-  const turns = [];
-  const deleted = [];
-  const cancelledTurns = [];
-  let currentOverride;
-  let nextId = count;
-  let failCreation = false;
-  const makeTurn = (id, text) => {
-    const channel = makeBufferedReader();
-    const status = () =>
-      harden({
-        messages: [],
-        streamingText: recover ? 'already running' : '',
-        phase: 'thinking',
-        usage: null,
-        error: null,
-        done: channel.isClosed(),
-      });
-    const ref = Far('TestFlootTurn', {
-      watch: () => channel.reader,
-      getStatus: status,
-      cancel: () => {
-        cancelledTurns.push(ref);
-      },
-    });
-    turns.push({ id, text, channel, ref });
-    channel.push(harden({ type: 'snapshot', status: status() }));
-    return ref;
-  };
-  if (recover) makeTurn('s0', 'submitted before reload');
-  /** @type {() => any} */
-  let readHistory = () => harden([]);
-  const facet = id =>
-    Far('TestFlootSession', {
-      getInfo: () => harden(sessions.find(session => session.id === id)),
-      getHistory: () => readHistory(),
-      getCurrentTurn: () => {
-        if (currentOverride) return currentOverride();
-        const turn = turns.find(
-          candidate => candidate.id === id && !candidate.channel.isClosed(),
-        );
-        return turn
-          ? harden({ input: turn.text, turn: turn.ref, history: baseline })
-          : null;
-      },
-      getUsage: () => harden({ inputTokens: 0, outputTokens: 0, turns: 0 }),
-      startTurn: text => makeTurn(id, text),
-    });
-  const factory = Far('TestFlootFactory', {
-    listSessions: () => harden(sessions.map(session => ({ ...session }))),
-    listPresets: () => harden([]),
-    listModels: () => harden([]),
-    getSession: id => facet(id),
-    renameSession: () => undefined,
-    deleteSession: id => {
-      deleted.push(id);
-      sessions = sessions.filter(session => session.id !== id);
-      // Deliberately leave the turn open: UI cleanup must not depend on how
-      // quickly the daemon shuts down a backend, or whether deletion succeeds.
-    },
-    createSession: () => {
-      if (failCreation) throw Error('creation unavailable');
-      const id = `s${nextId}`;
-      nextId += 1;
-      sessions.push({ id, title: `Session ${id}`, createdAt: nextId });
-      return facet(id);
-    },
+  const daemon = makeFakeDaemon({
+    count,
+    turnStatus: () =>
+      recover
+        ? {
+            messages: [],
+            streamingText: 'already running',
+            phase: 'thinking',
+            usage: null,
+            error: null,
+            done: false,
+          }
+        : undefined,
   });
+  const { factory, turns, deleted, cancelledTurns } = daemon;
+  if (recover) daemon.startTurn('s0', 'submitted before reload');
+  prepare(daemon);
   let cleanup = flootComponent(parent, factory, [], () => {}, [], []);
   t.teardown(() => {
     cleanup();
@@ -775,10 +741,14 @@ const setup = async (
   };
   return {
     parent,
+    // A sent message is the daemon's once its queue entry is on screen, which
+    // is when it grows controls; until then it is this page's request in
+    // flight and has none.
+    whenQueued: () => waitFor(() => buttonLabelled('Edit')),
     turns,
     deleted,
     cancelledTurns,
-    makeTurn,
+    daemon,
     buttonLabelled,
     click,
     // Rewrite the queued message currently open for editing. `save()` closes
@@ -798,14 +768,9 @@ const setup = async (
         }),
       );
     },
-    setCurrent: reader => {
-      currentOverride = reader;
-    },
     send,
     remove,
-    setCreationFailure: value => {
-      failCreation = value;
-    },
+    setCreationFailure: daemon.setCreationFailure,
     mountSibling: () => {
       const sibling = testDocument.createElement('div');
       testDocument.body.appendChild(sibling);
@@ -820,9 +785,14 @@ const setup = async (
       cleanup();
       cleanup = flootComponent(parent, factory, [], () => {}, [], []);
     },
-    setHistoryReader: (/** @type {() => any} */ reader) => {
-      readHistory = reader;
+    unmount: () => {
+      cleanup();
+      cleanup = () => {};
     },
+    mount: () => {
+      cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    },
+    setHistoryReader: daemon.setHistoryReader,
   };
 };
 
@@ -963,33 +933,29 @@ test.serial(
   },
 );
 
-test.serial(
-  'a delayed completed-turn history response cannot erase a new submission',
-  async t => {
-    const { parent, turns, send, setHistoryReader } = await setup(t);
-    await send('first');
-    await waitFor(() => turns.length === 1);
-    let release = () => {};
-    const history = new Promise(resolve => {
-      release = () =>
-        resolve(
-          harden([
-            { role: 'user', content: 'first' },
-            { role: 'assistant', content: 'first answer' },
-          ]),
-        );
-    });
-    t.teardown(release);
-    setHistoryReader(() => history);
-    turns[0].channel.push(harden({ type: 'end' }));
-    await waitFor(() => parent.querySelector('[aria-label="Send"]'));
-    await send('do not erase this input');
-    await waitFor(() => turns.length === 2);
-    release();
-    await tick(30);
-    t.true(parent.textContent.includes('do not erase this input'));
-  },
-);
+test.serial('a transcript update cannot erase the turn in flight', async t => {
+  const { parent, turns, send, daemon, setHistoryReader } = await setup(t);
+  await send('first');
+  await waitFor(() => turns.length === 1);
+  setHistoryReader(() =>
+    harden([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'first answer' },
+    ]),
+  );
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => parent.textContent.includes('first answer'));
+  await send('do not erase this input');
+  await waitFor(() => turns.length === 2);
+  // The settled transcript is published again while the second turn runs
+  // (a mail turn settling, a resolution). It holds settled turns only, and
+  // the prompt on screen belongs to the turn, not to the transcript.
+  daemon.touchTranscript('s0');
+  await tick(30);
+  t.true(parent.textContent.includes('do not erase this input'));
+  t.is(parent.textContent.split('first answer').length - 1, 1);
+  t.truthy(parent.querySelector('[aria-label="Stop"]'));
+});
 
 test.serial('a URL in a reply renders as a new-tab link', async t => {
   const { parent, turns, send, setHistoryReader } = await setup(t);
@@ -1046,68 +1012,54 @@ test.serial('remount restores the prompt for a cached live turn', async t => {
 });
 
 test.serial(
-  'recovery uses the turn baseline while committed output awaits teardown',
+  'a remount mid-turn shows the prompt and the reply so far once each',
   async t => {
-    const { parent, turns, send, remount, setHistoryReader } = await setup(t);
+    const { parent, turns, send, remount } = await setup(t);
     await send('one prompt');
     await waitFor(() => turns.length === 1);
     turns[0].channel.push(harden({ type: 'delta', text: 'one answer' }));
     await waitFor(() => parent.textContent.includes('one answer'));
-    setHistoryReader(() =>
-      harden([
-        { role: 'user', content: 'one prompt' },
-        { role: 'assistant', content: 'one answer' },
-      ]),
-    );
     remount();
-    await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
+    await waitFor(
+      () =>
+        parent.querySelector('[aria-label="Stop"]') &&
+        parent.textContent.includes('one answer'),
+    );
     t.is(parent.textContent.split('one prompt').length - 1, 1);
     t.is(parent.textContent.split('one answer').length - 1, 1);
   },
 );
 
-test.serial(
-  'queued recovery permits Stop before its history baseline resolves',
-  async t => {
-    let resolveHistory = history => {};
-    const baseline = new Promise(resolve => {
-      resolveHistory = resolve;
-    });
-    t.teardown(() => resolveHistory(harden([])));
-    const { parent, turns, cancelledTurns } = await setup(t, 2, true, baseline);
-    await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
-    parent
-      .querySelector('[aria-label="Stop"]')
-      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
-    await waitFor(() => cancelledTurns.length === 1);
-    t.is(cancelledTurns[0], turns[0].ref);
-    turns[0].channel.push(harden({ type: 'end' }));
-    await waitFor(() => parent.querySelector('[aria-label="Send"]'));
-    resolveHistory(
-      harden([{ role: 'user', content: 'late baseline must not overwrite' }]),
-    );
-    await tick(30);
-    t.false(parent.textContent.includes('late baseline must not overwrite'));
-  },
-);
+test.serial('a turn found running at mount can be stopped', async t => {
+  const { parent, turns, cancelledTurns } = await setup(t, 2, true);
+  await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
+  parent
+    .querySelector('[aria-label="Stop"]')
+    ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => cancelledTurns.length === 1);
+  t.is(cancelledTurns[0], turns[0].ref);
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+});
 
 test.serial(
-  'daemon completion retires a stale cache before loading canonical history',
+  'a turn that finished while the page was away is shown once, from the transcript',
   async t => {
-    const { parent, turns, send, remount, setCurrent, setHistoryReader } =
+    const { parent, turns, send, unmount, mount, setHistoryReader } =
       await setup(t);
     await send('saved prompt');
     await waitFor(() => turns.length === 1);
     turns[0].channel.push(harden({ type: 'delta', text: 'saved answer' }));
     await waitFor(() => parent.textContent.includes('saved answer'));
-    setCurrent(() => null);
+    unmount();
     setHistoryReader(() =>
       harden([
         { role: 'user', content: 'saved prompt' },
         { role: 'assistant', content: 'saved answer' },
       ]),
     );
-    remount();
+    turns[0].channel.push(harden({ type: 'end' }));
+    mount();
     await waitFor(
       () =>
         parent.querySelector('[aria-label="Send"]') &&
@@ -1119,30 +1071,16 @@ test.serial(
 );
 
 test.serial(
-  'daemon turn identity replaces an older observation for the same session',
+  'a turn the daemon started on its own reaches the page, and Stop stops that turn',
   async t => {
-    const {
-      parent,
-      turns,
-      send,
-      remount,
-      setCurrent,
-      makeTurn,
-      cancelledTurns,
-    } = await setup(t);
+    const { parent, turns, send, daemon, cancelledTurns } = await setup(t);
     await send('older prompt');
     await waitFor(() => turns.length === 1);
-    const replacement = makeTurn('s0', 'replacement prompt');
-    setCurrent(() =>
-      harden({
-        input: 'replacement prompt',
-        turn: replacement,
-        history: Promise.resolve(harden([])),
-      }),
-    );
-    remount();
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+    // Another page, or the queue, starts the next one. Nobody here asked.
+    const replacement = daemon.startTurn('s0', 'replacement prompt');
     await waitFor(() => parent.textContent.includes('replacement prompt'));
-    t.false(parent.textContent.includes('older prompt'));
     parent
       .querySelector('[aria-label="Stop"]')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
@@ -1151,117 +1089,320 @@ test.serial(
   },
 );
 
-test.serial(
-  'retiring a shared observation reconciles every mounted view',
-  async t => {
-    const { parent, turns, send, setCurrent, setHistoryReader, mountSibling } =
-      await setup(t);
-    await send('shared prompt');
-    await waitFor(() => turns.length === 1);
-    turns[0].channel.push(harden({ type: 'delta', text: 'shared answer' }));
-    await waitFor(() => parent.textContent.includes('shared answer'));
-    setCurrent(() => null);
-    setHistoryReader(() =>
-      harden([
-        { role: 'user', content: 'shared prompt' },
-        { role: 'assistant', content: 'shared answer' },
-      ]),
-    );
-    const sibling = mountSibling();
-    await waitFor(() => sibling.textContent.includes('shared answer'));
-    await waitFor(
-      () =>
-        parent.textContent.includes('shared answer') &&
-        parent.querySelector('[aria-label="Send"]'),
-    );
-    t.is(parent.textContent.split('shared answer').length - 1, 1);
-    t.is(sibling.textContent.split('shared answer').length - 1, 1);
-  },
-);
-
-test.serial(
-  'a superseded mounted view can cancel the replacement turn',
-  async t => {
-    const {
-      parent,
-      turns,
-      send,
-      setCurrent,
-      makeTurn,
-      mountSibling,
-      cancelledTurns,
-    } = await setup(t);
-    await send('old shared prompt');
-    await waitFor(() => turns.length === 1);
-    await send('queued after replacement');
-    const replacement = makeTurn('s0', 'new shared prompt');
-    setCurrent(() =>
-      harden({
-        input: 'new shared prompt',
-        turn: replacement,
-        history: Promise.resolve(harden([])),
-      }),
-    );
-    const sibling = mountSibling();
-    await waitFor(() => sibling.textContent.includes('new shared prompt'));
-    await waitFor(() => parent.textContent.includes('new shared prompt'));
-    parent
-      .querySelector('[aria-label="Stop"]')
-      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
-    await waitFor(() => cancelledTurns.length === 1);
-    t.is(cancelledTurns[0], replacement);
-    await tick(30);
-    t.is(turns.length, 2, 'queued submission still waits for the replacement');
-    turns[1].channel.push(harden({ type: 'end' }));
-    await waitFor(() => turns.length === 3);
-    t.is(turns[2].text, 'queued after replacement');
-  },
-);
-
-test.serial('idle conversations display workflow readiness mail', async t => {
-  const { parent, turns, setHistoryReader } = await setup(t);
-  t.timeout(10_000);
+test.serial('two pages on one session see the same conversation', async t => {
+  const { parent, turns, send, setHistoryReader, mountSibling } =
+    await setup(t);
+  await send('shared prompt');
+  await waitFor(() => turns.length === 1);
+  const sibling = mountSibling();
+  await waitFor(() => sibling.textContent.includes('shared prompt'));
+  turns[0].channel.push(harden({ type: 'delta', text: 'shared answer' }));
+  await waitFor(() => parent.textContent.includes('shared answer'));
+  await waitFor(() => sibling.textContent.includes('shared answer'));
   setHistoryReader(() =>
     harden([
-      {
-        role: 'user',
-        content: 'Your design is ready at commit abc123.',
-        meta: { mail: { from: 'workflow', messageNumber: '7' } },
-      },
+      { role: 'user', content: 'shared prompt' },
+      { role: 'assistant', content: 'shared answer' },
     ]),
   );
-  await waitForDOM(
-    () => parent.textContent.includes('Your design is ready at commit abc123.'),
-    10,
-    5000,
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(
+    () =>
+      parent.querySelector('[aria-label="Send"]') &&
+      sibling.querySelector('[aria-label="Send"]'),
   );
-  t.is(turns.length, 0, 'refreshing mail does not start a UI turn');
+  t.is(parent.textContent.split('shared answer').length - 1, 1);
+  t.is(sibling.textContent.split('shared answer').length - 1, 1);
 });
 
 test.serial(
-  'a delayed mail refresh cannot overwrite a new daemon-owned turn',
+  'a message queued from one page is on the other, which can stop the turn ahead of it',
   async t => {
-    const { parent, turns, send, setHistoryReader } = await setup(t);
-    t.timeout(10_000);
-    let refreshStarted = false;
-    let release = () => {};
-    const history = new Promise(resolve => {
-      release = () =>
-        resolve(harden([{ role: 'assistant', content: 'stale mail history' }]));
-    });
-    t.teardown(release);
-    setHistoryReader(() => {
-      refreshStarted = true;
-      return history;
-    });
-    await waitForDOM(() => refreshStarted, 10, 5000);
-    await send('Keep this active design discussion');
+    const { parent, turns, send, mountSibling, cancelledTurns } =
+      await setup(t);
+    await send('first');
     await waitFor(() => turns.length === 1);
-    release();
-    await tick(30);
-    t.true(parent.textContent.includes('Keep this active design discussion'));
-    t.false(parent.textContent.includes('stale mail history'));
+    const sibling = mountSibling();
+    await waitFor(() => sibling.querySelector('[aria-label="Stop"]'));
+    await send('queued from the first page');
+    await waitFor(
+      () =>
+        sibling.textContent.includes('queued from the first page') &&
+        [...sibling.querySelectorAll('button')].some(
+          button => button.textContent.trim() === 'Edit',
+        ),
+    );
+    sibling
+      .querySelector('[aria-label="Stop"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => cancelledTurns.length === 1);
+    t.is(cancelledTurns[0], turns[0].ref);
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 2);
+    t.is(turns[1].text, 'queued from the first page');
+    // And it runs with the first page closed just as well: see the daemon's
+    // own tests. Here, both pages follow it into its turn.
+    await waitFor(() => !sibling.querySelector('.floot-msg-row.pending'));
+    t.true(sibling.textContent.includes('queued from the first page'));
     t.truthy(parent.querySelector('[aria-label="Stop"]'));
+  },
+);
+
+test.serial(
+  'mail that arrives while the page is idle appears without being asked for',
+  async t => {
+    const { parent, turns, daemon, setHistoryReader } = await setup(t);
+    await tick(30);
+    setHistoryReader(() =>
+      harden([
+        {
+          role: 'user',
+          content: 'Your design is ready at commit abc123.',
+          meta: { mail: { from: 'workflow', messageNumber: '7' } },
+        },
+      ]),
+    );
+    // The daemon says the transcript moved. Nothing here runs on a timer, so
+    // this appears as fast as the event does, not within three seconds.
+    daemon.touchTranscript('s0');
+    await waitFor(() =>
+      parent.textContent.includes('Your design is ready at commit abc123.'),
+    );
+    t.is(turns.length, 0, 'showing mail does not start a UI turn');
+  },
+);
+
+test.serial('the page asks the daemon for nothing on a timer', async t => {
+  const { daemon } = await setup(t);
+  await tick(200);
+  const before = daemon.calls.length;
+  // Well past the old three-second poll, which re-read the transcript, the
+  // execution state and the network policy each time.
+  await new Promise(resolve => setTimeout(resolve, 3500));
+  t.deepEqual(daemon.calls.slice(before), []);
+});
+
+// ── A message is on screen exactly once, from the keystroke on ───────────────
+
+const occurrences = (parent, text) => parent.textContent.split(text).length - 1;
+
+/**
+ * Sample how many times `text` is on screen, every few milliseconds, until
+ * `done()` says stop. A message that blinks out or doubles shows up here.
+ */
+const watchCount = (parent, text, done) =>
+  new Promise(resolve => {
+    /** @type {Set<number>} */
+    const seen = new Set();
+    const sample = () => {
+      seen.add(occurrences(parent, text));
+      if (done()) resolve([...seen].sort());
+      else setTimeout(sample, 5);
+    };
+    sample();
+  });
+
+test.serial(
+  "a message stays on screen when its acknowledgement beats the daemon's report of it",
+  async t => {
+    const { parent, turns, send, daemon, setHistoryReader } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    setHistoryReader(() =>
+      harden([
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'done' },
+      ]),
+    );
+    // The turn ends and the daemon goes to read a long transcript. Its
+    // reports queue behind that read; the acknowledgement of a send does not.
+    daemon.setTranscriptDelay(400);
+    turns[0].channel.push(harden({ type: 'end' }));
+    await tick(50);
+    const input = textareaIn(parent, 'textarea.floot-input');
+    input.disabled = false;
+    await send('sent during the read');
+    const counts = await watchCount(
+      parent,
+      'sent during the read',
+      () =>
+        turns.length === 2 &&
+        Boolean(parent.querySelector('[aria-label="Stop"]')),
+    );
+    daemon.setTranscriptDelay(0);
+    t.deepEqual(counts, [1], 'never absent, never doubled');
+  },
+);
+
+test.serial(
+  'two identical messages sent back to back are two messages',
+  async t => {
+    const { parent, turns, send } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    await send('ok');
+    await send('ok');
+    const pendingRows = () =>
+      [...parent.querySelectorAll('.floot-msg-row.pending')].filter(row =>
+        row.textContent.includes('ok'),
+      ).length;
+    /** @type {Set<number>} */
+    const seen = new Set();
+    for (let i = 0; i < 60; i += 1) {
+      seen.add(pendingRows());
+      // eslint-disable-next-line no-await-in-loop
+      await tick(5);
+    }
+    t.deepEqual(
+      [...seen],
+      [2],
+      'both on screen throughout, neither hidden by the other',
+    );
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 2);
+    turns[1].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 3);
+    t.deepEqual(
+      turns.map(turn => turn.text),
+      ['first', 'ok', 'ok'],
+    );
+  },
+);
+
+test.serial(
+  'a send the daemon queued and then failed to acknowledge is not offered twice',
+  async t => {
+    const { parent, turns, send, daemon, whenQueued } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    daemon.setFailAfterAccepting(true);
+    await send('queued, then the reply was lost');
+    await whenQueued();
+    await waitFor(() => parent.textContent.includes('acknowledgement lost'));
+    daemon.setFailAfterAccepting(false);
+    t.is(
+      textareaIn(parent, 'textarea.floot-input').value,
+      '',
+      'it is in the queue; putting it back in the box would make two',
+    );
+    t.is(occurrences(parent, 'queued, then the reply was lost'), 1);
+  },
+);
+
+test.serial('a send the daemon refused goes back in the box', async t => {
+  // A queue record this release cannot read: the session opens all the same
+  // (the queue is reported as held), and a send is refused.
+  const { parent, send } = await setup(t, 2, false, daemon => {
+    daemon.store.set('floot-pending-2-s0', harden({ version: 99 }));
+  });
+  await send('could not be queued');
+  await waitFor(
+    () =>
+      textareaIn(parent, 'textarea.floot-input').value ===
+      'could not be queued',
+  );
+  t.falsy(parent.querySelector('.floot-msg-row.pending'));
+});
+
+test.serial(
+  'a reply stays on screen when the transcript cannot be read at the end of its turn',
+  async t => {
+    const { parent, turns, send, daemon, setHistoryReader } = await setup(t);
+    await send('the prompt');
+    await waitFor(() => turns.length === 1);
+    turns[0].channel.push(harden({ type: 'delta', text: 'the reply' }));
+    await waitFor(() => parent.textContent.includes('the reply'));
+    setHistoryReader(() =>
+      harden([
+        { role: 'user', content: 'the prompt' },
+        { role: 'assistant', content: 'the reply' },
+      ]),
+    );
+    daemon.failTranscript(1);
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => parent.textContent.includes('disk hiccup'));
+    t.is(occurrences(parent, 'the reply'), 1, 'still there, from the turn');
+    t.is(occurrences(parent, 'the prompt'), 1);
+    t.truthy(parent.querySelector('[aria-label="Send"]'), 'and not stoppable');
+    // The daemon retries the read; the transcript takes over, once.
+    await waitForDOM(
+      () => !parent.textContent.includes('disk hiccup'),
+      10,
+      5000,
+    );
+    t.is(occurrences(parent, 'the reply'), 1);
+    t.is(occurrences(parent, 'the prompt'), 1);
+  },
+);
+
+test.serial(
+  'deleting the session on screen mid-turn leaves no "thinking" behind',
+  async t => {
+    const { parent, turns, send, remove } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    await waitFor(() => parent.textContent.includes('thinking'));
+    remove(0);
+    await waitFor(() => activeTitle(parent) === 'Session 1');
+    await tick(50);
+    t.false(
+      parent
+        .querySelector('.floot-status-bar')
+        ?.textContent.includes('thinking'),
+    );
+    t.truthy(parent.querySelector('[aria-label="Send"]'));
+  },
+);
+
+test.serial(
+  'coming back to a session whose turn ended while away offers no Stop',
+  async t => {
+    const { parent, turns, send, daemon, setHistoryReader } = await setup(t);
+    await send('runs while away');
+    await waitFor(() => turns.length === 1);
+    selectSessionRow(parent, 'Session 1');
+    await waitFor(() => activeTitle(parent) === 'Session 1');
+    setHistoryReader(id =>
+      id === 's0'
+        ? harden([
+            { role: 'user', content: 'runs while away' },
+            { role: 'assistant', content: 'finished unwatched' },
+          ])
+        : harden([]),
+    );
+    turns[0].channel.push(harden({ type: 'end' }));
+    await tick(50);
+    // The way back is slow: what this page last knew of s0 is a running turn.
+    daemon.setTranscriptDelay(300);
+    selectSessionRow(parent, 'Session 0');
+    const stops = new Set();
+    for (let i = 0; i < 80; i += 1) {
+      stops.add(Boolean(parent.querySelector('[aria-label="Stop"]')));
+      // eslint-disable-next-line no-await-in-loop
+      await tick(5);
+    }
+    daemon.setTranscriptDelay(0);
+    await waitFor(() => parent.textContent.includes('finished unwatched'));
+    t.deepEqual([...stops], [false], 'never a Stop for a turn that is over');
+    t.is(occurrences(parent, 'runs while away'), 1);
+  },
+);
+
+test.serial(
+  'a new session is one row, and its first message is titled and sent',
+  async t => {
+    const { parent, turns, send } = await setup(t);
+    parent
+      .querySelector('button[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 3,
+    );
+    await tick(50);
+    await send('hello there');
+    await waitFor(() => turns.length === 1);
+    t.is(parent.querySelectorAll('.floot-session-item').length, 3);
+    t.is(turns[0].id, 's2');
   },
 );
 
@@ -1270,11 +1411,20 @@ test.serial(
 test.serial(
   'a message sent mid-turn stays visible while it waits its turn',
   async t => {
-    const { parent, turns, send, buttonLabelled } = await setup(t);
+    const { parent, turns, send, buttonLabelled, whenQueued } = await setup(t);
     await send('first');
     await waitFor(() => turns.length === 1);
     await send('second question');
+    // On screen from the keystroke: first as this page's own request in
+    // flight, then as the daemon's queue entry, with its controls.
     await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+    t.true(parent.textContent.includes('second question'));
+    await whenQueued();
+    t.is(
+      parent.querySelectorAll('.floot-msg-row.pending').length,
+      1,
+      'never both the placeholder and the entry',
+    );
     t.true(
       parent.textContent.includes('second question'),
       'the queued message renders in the transcript rather than vanishing',
@@ -1305,11 +1455,11 @@ test.serial(
 );
 
 test.serial('Send now cuts the running turn short', async t => {
-  const { parent, turns, cancelledTurns, send, click } = await setup(t);
+  const { turns, cancelledTurns, send, click, whenQueued } = await setup(t);
   await send('first');
   await waitFor(() => turns.length === 1);
   await send('jump the queue');
-  await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+  await whenQueued();
   click('Send now');
   await waitFor(() => cancelledTurns.length === 1);
   t.is(cancelledTurns[0], turns[0].ref, 'the turn ahead of it is cancelled');
@@ -1329,7 +1479,7 @@ test.serial(
     await send('queued A');
     await send('queued B');
     await waitFor(
-      () => parent.querySelectorAll('.floot-msg-row.pending').length === 2,
+      () => parent.querySelectorAll('button.floot-pending-action').length === 5,
     );
     // Every entry runs the message it was scheduled with, so a "Send now" on B
     // would cancel the turn in front of A — throwing away that reply — and
@@ -1360,11 +1510,11 @@ test.serial(
 );
 
 test.serial('editing a queued message is what actually runs', async t => {
-  const { parent, turns, send, click, retype } = await setup(t);
+  const { parent, turns, send, click, retype, whenQueued } = await setup(t);
   await send('first');
   await waitFor(() => turns.length === 1);
   await send('original wording');
-  await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+  await whenQueued();
   click('Edit');
   await waitFor(() => parent.querySelector('textarea.floot-pending-input'));
   await retype('rewritten before it ran');
@@ -1382,11 +1532,11 @@ test.serial('editing a queued message is what actually runs', async t => {
 test.serial(
   'an empty edit keeps the queued message rather than dropping it',
   async t => {
-    const { parent, turns, send, click, retype } = await setup(t);
+    const { parent, turns, send, click, retype, whenQueued } = await setup(t);
     await send('first');
     await waitFor(() => turns.length === 1);
     await send('do not lose me');
-    await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+    await whenQueued();
     click('Edit');
     await waitFor(() => parent.querySelector('textarea.floot-pending-input'));
     // Deleting has its own button; losing a message by clearing the box would
@@ -1401,26 +1551,168 @@ test.serial(
 );
 
 test.serial('deleting a queued message skips its turn entirely', async t => {
-  const { parent, turns, send, click } = await setup(t);
+  const { parent, turns, send, click, whenQueued } = await setup(t);
   await send('first');
   await waitFor(() => turns.length === 1);
   await send('never mind');
-  await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+  await whenQueued();
   click('Delete');
   await waitFor(() => !parent.querySelector('.floot-msg-row.pending'));
   t.false(parent.textContent.includes('never mind'));
   turns[0].channel.push(harden({ type: 'end' }));
   await waitFor(() => parent.querySelector('[aria-label="Send"]'));
-  t.is(
-    turns.length,
-    1,
-    'the scheduled chain entry finds nothing and skips its turn',
-  );
+  t.is(turns.length, 1, 'the daemon has nothing queued and starts nothing');
   // Dropping one must not poison the queue for what comes after it.
   await send('but this one runs');
   await waitFor(() => turns.length === 2);
   t.is(turns[1].text, 'but this one runs');
 });
+
+// ── Leaving a busy session ──────────────────────────────────────────────────
+
+const sessionRow = (parent, title) =>
+  [...parent.querySelectorAll('div.floot-session-item')].find(item =>
+    item.textContent.includes(title),
+  );
+const selectSessionRow = (parent, title) =>
+  sessionRow(parent, title)?.dispatchEvent(
+    new testWindow.Event('click', { bubbles: true }),
+  );
+const activeTitle = parent =>
+  parent.querySelector('.floot-session-item.active .floot-session-name')
+    ?.textContent;
+
+test.serial(
+  'a running turn does not lock the session list, and carries on unwatched',
+  async t => {
+    const { parent, turns, send } = await setup(t);
+    await send('long job');
+    await waitFor(() => turns.length === 1);
+    t.truthy(parent.querySelector('[aria-label="Stop"]'));
+    selectSessionRow(parent, 'Session 1');
+    await waitFor(() => activeTitle(parent) === 'Session 1');
+    // The other session is idle and says so; the one left behind is working.
+    await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+    t.false(parent.textContent.includes('long job'));
+    await waitFor(() =>
+      sessionRow(parent, 'Session 0')?.querySelector(
+        '.floot-status-dot-working',
+      ),
+    );
+    t.truthy(
+      sessionRow(parent, 'Session 1')?.querySelector(
+        '.floot-status-dot-passive',
+      ),
+    );
+    // It kept going, and coming back finds it where it has got to.
+    turns[0].channel.push(harden({ type: 'delta', text: 'still at it' }));
+    selectSessionRow(parent, 'Session 0');
+    await waitFor(() => parent.textContent.includes('still at it'));
+    t.truthy(parent.querySelector('[aria-label="Stop"]'));
+    t.is(
+      parent.textContent.split('long job').length - 1,
+      1,
+      'the prompt, once',
+    );
+  },
+);
+
+test.serial(
+  'a message queued behind a turn runs after the user has left the session',
+  async t => {
+    const { parent, turns, send, whenQueued } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    await send('second, sent before leaving');
+    await whenQueued();
+    selectSessionRow(parent, 'Session 1');
+    await waitFor(() => activeTitle(parent) === 'Session 1');
+    // A message in the other session is its own conversation.
+    await send('elsewhere');
+    await waitFor(() => turns.length === 2);
+    t.is(turns[1].id, 's1');
+    // The first turn ends with nobody looking at it. The daemon runs what was
+    // queued; the page that queued it is on another session.
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 3);
+    t.deepEqual(
+      { id: turns[2].id, text: turns[2].text },
+      { id: 's0', text: 'second, sent before leaving' },
+    );
+    t.is(activeTitle(parent), 'Session 1', 'and the view stayed put');
+  },
+);
+
+test.serial('a new session can be started while another is busy', async t => {
+  const { parent, turns, send } = await setup(t);
+  await send('busy');
+  await waitFor(() => turns.length === 1);
+  parent
+    .querySelector('button[aria-label="New session"]')
+    ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(
+    () => parent.querySelectorAll('.floot-session-item').length === 3,
+  );
+  await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+  await send('in the new one');
+  await waitFor(() => turns.length === 2);
+  t.is(turns[1].id, 's2');
+});
+
+// ── What a restart leaves behind ─────────────────────────────────────────────
+
+test.serial(
+  'messages held over a restart say why they wait, and go when told to',
+  async t => {
+    const { parent, turns, click, buttonLabelled } = await setup(
+      t,
+      2,
+      false,
+      daemon => {
+        daemon.store.set(
+          'floot-pending-2-s0',
+          harden({
+            version: 1,
+            nextSequence: 3n,
+            entries: [
+              {
+                id: 'pa-1',
+                text: 'was sending',
+                createdAt: 1,
+                state: 'dispatching',
+              },
+              {
+                id: 'pa-2',
+                text: 'was waiting',
+                createdAt: 2,
+                state: 'queued',
+              },
+            ],
+          }),
+        );
+      },
+    );
+    await waitFor(() => parent.querySelector('.floot-pending-hold'));
+    t.regex(
+      parent.querySelector('.floot-pending-hold')?.textContent || '',
+      /restarted/,
+    );
+    t.is(turns.length, 0, 'nothing is sent on its own');
+    // The list says so too, without the session having to be opened.
+    t.true(sessionRow(parent, 'Session 0')?.textContent.includes('2 queued'));
+    // The one the daemon was sending may or may not have arrived.
+    const interrupted = parent.querySelector('.floot-pending-interrupted');
+    t.truthy(interrupted);
+    t.regex(interrupted?.textContent || '', /May already have been sent/);
+    t.truthy(buttonLabelled('Send again'));
+    click('Send again');
+    await waitFor(() => turns.length === 1);
+    t.is(turns[0].text, 'was sending');
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 2);
+    t.is(turns[1].text, 'was waiting', 'and the rest follow, in order');
+  },
+);
 
 // ── Agent actions ────────────────────────────────────────────────────────────
 

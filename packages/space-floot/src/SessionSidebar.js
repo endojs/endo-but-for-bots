@@ -28,13 +28,17 @@ const STATUS_LABELS = harden({
  * a circle: a session that is doing nothing is `passive`, not blank.
  *
  * A session the factory could not make ready is an error whatever else is
- * known about it, and an unrecognised status reads as passive rather than
+ * known about it (one still being made, or being removed, is working), and an unrecognised status reads as passive rather than
  * leaking an arbitrary class name into the view.
  *
  * @param {Pick<FlootSessionMeta, 'status' | 'lifecycle'>} session
  * @returns {'passive' | 'working' | 'error'}
  */
 export const sessionStatusOf = session => {
+  // Being made or being removed is work in progress, not a fault: the daemon
+  // reports it as working, and the circle must not contradict it.
+  if (session.lifecycle === 'creating' || session.lifecycle === 'deleting')
+    return 'working';
   if (session.lifecycle && session.lifecycle !== 'ready') return 'error';
   if (session.status === 'working' || session.status === 'streaming')
     return 'working';
@@ -42,6 +46,19 @@ export const sessionStatusOf = session => {
   return 'passive';
 };
 harden(sessionStatusOf);
+
+/**
+ * What to say about a session that is not ready. In progress is not
+ * "unavailable": that word is for a session an operator has to look at.
+ *
+ * @param {string | undefined} lifecycle
+ */
+export const lifecycleNote = lifecycle => {
+  if (lifecycle === 'creating') return 'Starting…';
+  if (lifecycle === 'deleting') return 'Deleting…';
+  return `Unavailable: ${lifecycle}`;
+};
+harden(lifecycleNote);
 
 /**
  * What a session runs on, for its row: "Backend · Model", with the reasoning
@@ -58,6 +75,28 @@ export const sessionRuntimeLabel = session => {
   return [session.backendLabel, model].filter(Boolean).join(' · ');
 };
 harden(sessionRuntimeLabel);
+
+/**
+ * The small line under a session's title: how much is in it, where known, and
+ * how many messages are waiting their turn — which for a session left behind
+ * is the only sign that it has something held for the user.
+ *
+ * @param {Pick<FlootSessionMeta, 'messageCount' | 'loaded' | 'pendingCount'>} session
+ * @returns {string}
+ */
+export const sessionSubLabel = session => {
+  const parts = [];
+  if (session.messageCount) {
+    parts.push(
+      `${session.messageCount} message${session.messageCount === 1 ? '' : 's'}`,
+    );
+  } else if (session.loaded) {
+    parts.push('empty');
+  }
+  if (session.pendingCount) parts.push(`${session.pendingCount} queued`);
+  return parts.join(' · ');
+};
+harden(sessionSubLabel);
 
 /**
  * @param {{
@@ -98,8 +137,9 @@ export const SessionSidebar = ({
     if (title) controller.renameSession(id, title);
   };
 
+  // Selecting never waits for a turn: the daemon owns the turn and whatever is
+  // queued behind it, so leaving a busy session stops nothing and loses nothing.
   const select = (/** @type {string} */ id) => {
-    if (state.busy) return; // don't switch context mid-turn
     controller.selectSession(id);
     onAfterSelect();
   };
@@ -131,7 +171,7 @@ export const SessionSidebar = ({
             'div',
             { class: 'floot-session-meta' },
             unavailable
-              ? h('div', null, `Unavailable: ${session.lifecycle}`)
+              ? h('div', null, lifecycleNote(session.lifecycle))
               : null,
             editing
               ? h('input', {
@@ -166,15 +206,7 @@ export const SessionSidebar = ({
                   runtime,
                 )
               : null,
-            h(
-              'div',
-              { class: 'floot-session-sub' },
-              session.messageCount
-                ? `${session.messageCount} message${session.messageCount === 1 ? '' : 's'}`
-                : session.loaded
-                  ? 'empty'
-                  : '',
-            ),
+            h('div', { class: 'floot-session-sub' }, sessionSubLabel(session)),
             session.presetId && session.presetId !== DEFAULT_PRESET_ID
               ? h(
                   'span',

@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import test from 'ava';
 
 import {
+  lifecycleNote,
   sessionRuntimeLabel,
   sessionStatusOf,
+  sessionSubLabel,
 } from '../src/SessionSidebar.js';
 
 test('every session resolves to one of the three circle states', t => {
@@ -23,7 +25,12 @@ test('every session resolves to one of the three circle states', t => {
 
 test('a session that is not ready is an error whatever its turn is doing', t => {
   t.is(sessionStatusOf({ status: 'working', lifecycle: 'error' }), 'error');
-  t.is(sessionStatusOf({ lifecycle: 'deleting' }), 'error');
+  // In progress is not a fault: the daemon reports these as working.
+  t.is(sessionStatusOf({ lifecycle: 'deleting' }), 'working');
+  t.is(sessionStatusOf({ lifecycle: 'creating', status: 'error' }), 'working');
+  t.is(lifecycleNote('creating'), 'Starting…');
+  t.is(lifecycleNote('deleting'), 'Deleting…');
+  t.is(lifecycleNote('error'), 'Unavailable: error');
   t.is(sessionStatusOf({ status: 'working', lifecycle: 'ready' }), 'working');
 });
 
@@ -42,6 +49,19 @@ test('a row says what the session runs on', t => {
   );
   t.is(sessionRuntimeLabel({ backendLabel: 'Fae' }), 'Fae');
   t.is(sessionRuntimeLabel({}), '', 'an older host draws no runtime line');
+});
+
+test('a row says how much is in the session and how much is waiting', t => {
+  t.is(sessionSubLabel({ messageCount: 3, loaded: true }), '3 messages');
+  t.is(sessionSubLabel({ messageCount: 1, loaded: true }), '1 message');
+  t.is(sessionSubLabel({ loaded: true }), 'empty');
+  t.is(sessionSubLabel({}), '', 'not opened yet: nothing is claimed');
+  // A session left behind with messages held for the user says so unopened.
+  t.is(sessionSubLabel({ pendingCount: 2 }), '2 queued');
+  t.is(
+    sessionSubLabel({ messageCount: 4, loaded: true, pendingCount: 1 }),
+    '4 messages · 1 queued',
+  );
 });
 
 // The space renders inside chat's page, and its stylesheet is bundled into the
@@ -118,6 +138,9 @@ test('a class built from a runtime value is drawn from a closed set', t => {
     t.false(bareGlobals.has(`floot-status-dot-${status}`));
   }
   for (const role of ['user', 'assistant', 'tool']) {
-    t.false(bareGlobals.has(role), `MessageList writes the role "${role}" bare`);
+    t.false(
+      bareGlobals.has(role),
+      `MessageList writes the role "${role}" bare`,
+    );
   }
 });

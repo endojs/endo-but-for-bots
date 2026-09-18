@@ -8,9 +8,12 @@
 export {};
 
 /**
- * `pending` marks a submission the host has accepted but not yet run: it is
+ * `pending` marks a submission that has been accepted but not yet run: it is
  * queued behind the turn in flight, and `pendingId` identifies it to
- * `sendPendingNow`, `editPending` and `cancelPending`.
+ * `sendPendingNow`, `editPending` and `cancelPending`. The queue is the
+ * daemon's, so it survives the page; `pendingState` says where a message is:
+ * `queued`, `sending` (on its way, nothing left to edit) or `interrupted` (the
+ * daemon restarted while sending it, so it may or may not have arrived).
  *
  * @typedef {{
  *   role: 'user' | 'assistant' | 'tool',
@@ -20,7 +23,8 @@ export {};
  *   args?: string,
  *   result?: string | null,
  *   pending?: boolean,
- *   pendingId?: number,
+ *   pendingId?: number | string,
+ *   pendingState?: 'queued' | 'sending' | 'interrupted',
  *   meta?: { mail?: { from?: string } },
  * }} FlootMessage
  */
@@ -43,6 +47,7 @@ export {};
  *   reasoningEffort?: string,
  *   status?: 'passive' | 'working' | 'error' | 'idle' | 'streaming',
  *   messageCount?: number,
+ *   pendingCount?: number,
  *   loaded?: boolean,
  *   lifecycle?: string,
  * }} FlootSessionMeta
@@ -109,6 +114,10 @@ export {};
  */
 
 /**
+ * `busy` is a turn this page can stop; `working` is the session doing anything
+ * at all, which includes a turn that arrived by mail and has no Stop.
+ * `pendingHold` is why queued messages are not moving, when they are not.
+ *
  * @typedef {{
  *   sessions: FlootSessionMeta[],
  *   activeSessionId: string | null,
@@ -118,6 +127,8 @@ export {};
  *   streamingText: string,
  *   phase: string,
  *   busy: boolean,
+ *   working?: boolean,
+ *   pendingHold?: string,
  *   loaded: boolean,
  *   status: string,
  *   input: string,
@@ -138,9 +149,9 @@ export {};
  * @property {(listener: () => void) => () => void} subscribe
  * @property {(text?: string) => void} send
  * @property {() => void} stop
- * @property {(pendingId: number) => void} [sendPendingNow]
- * @property {(pendingId: number, text: string) => void} [editPending]
- * @property {(pendingId: number) => void} [cancelPending]
+ * @property {(pendingId: number | string) => void} [sendPendingNow]
+ * @property {(pendingId: number | string, text: string) => void} [editPending]
+ * @property {(pendingId: number | string) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
  * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession

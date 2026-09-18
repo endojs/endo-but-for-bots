@@ -1649,6 +1649,7 @@ __metadata:
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
+    "@endo/floot": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
@@ -2419,7 +2420,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/floot@workspace:packages/floot":
+"@endo/floot@workspace:^, @endo/floot@workspace:packages/floot":
   version: 0.0.0-use.local
   resolution: "@endo/floot@workspace:packages/floot"
   dependencies:

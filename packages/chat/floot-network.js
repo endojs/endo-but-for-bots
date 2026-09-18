@@ -24,6 +24,51 @@ export const makeFlootNetwork = ({ notify, isBusy }) => {
     policy: null,
     supportedPolicies: [],
   };
+  /**
+   * The view state for a policy projection the session reported. Throws on a
+   * shape this view does not understand, which the caller reports as
+   * unavailable: enforcement that cannot be read is not assumed.
+   *
+   * @param {any} value
+   * @param {boolean} current whether a turn is in flight
+   */
+  const project = (value, current) => {
+    if (
+      !value ||
+      !Array.isArray(value.supportedPolicies) ||
+      value.supportedPolicies.some(policy => !policies.includes(policy)) ||
+      (value.policy !== null &&
+        !value.supportedPolicies.includes(value.policy)) ||
+      value.applies !== 'next-turn' ||
+      (value.pendingPolicy !== undefined &&
+        !value.supportedPolicies.includes(value.pendingPolicy)) ||
+      (value.error !== undefined && typeof value.error !== 'string') ||
+      (value.request &&
+        (typeof value.request.id !== 'string' ||
+          !value.request.id ||
+          !policies.includes(value.request.policy) ||
+          typeof value.request.reason !== 'string'))
+    )
+      throw Error('Invalid policy response');
+    if (
+      !value.supportedPolicies.length ||
+      (value.policy === null && !value.pendingPolicy)
+    ) {
+      return {
+        status: 'unavailable',
+        message:
+          'This backend does not support enforced sandbox network policies. No off policy is implied.',
+        policy: null,
+        supportedPolicies: [],
+      };
+    }
+    return {
+      ...value,
+      status: 'ready',
+      message: value.error || '',
+      current,
+    };
+  };
   const refresh = async () => {
     if (!selected || changing || state.status === 'loading') return;
     epoch += 1n;
@@ -48,42 +93,7 @@ export const makeFlootNetwork = ({ notify, isBusy }) => {
           : Promise.resolve(true),
       ]);
       if (generation !== epoch) return;
-      if (
-        !value ||
-        !Array.isArray(value.supportedPolicies) ||
-        value.supportedPolicies.some(policy => !policies.includes(policy)) ||
-        (value.policy !== null &&
-          !value.supportedPolicies.includes(value.policy)) ||
-        value.applies !== 'next-turn' ||
-        (value.pendingPolicy !== undefined &&
-          !value.supportedPolicies.includes(value.pendingPolicy)) ||
-        (value.error !== undefined && typeof value.error !== 'string') ||
-        (value.request &&
-          (typeof value.request.id !== 'string' ||
-            !value.request.id ||
-            !policies.includes(value.request.policy) ||
-            typeof value.request.reason !== 'string'))
-      )
-        throw Error('Invalid policy response');
-      if (
-        !value.supportedPolicies.length ||
-        (value.policy === null && !value.pendingPolicy)
-      ) {
-        state = {
-          status: 'unavailable',
-          message:
-            'This backend does not support enforced sandbox network policies. No off policy is implied.',
-          policy: null,
-          supportedPolicies: [],
-        };
-      } else {
-        state = {
-          ...value,
-          status: 'ready',
-          message: value.error || '',
-          current: Boolean(current),
-        };
-      }
+      state = project(value, Boolean(current));
     } catch {
       if (generation !== epoch) return;
       state = {
@@ -146,6 +156,42 @@ export const makeFlootNetwork = ({ notify, isBusy }) => {
       return refresh();
     },
     refresh,
+    /**
+     * Take a projection the session pushed (`watch()`'s `network`), and
+     * whether a turn is in flight, instead of asking for them. Ignored while a
+     * change of this view's own is in flight: that ends with its own refresh.
+     *
+     * @param {unknown} value
+     * @param {boolean} current
+     */
+    adopt(value, current) {
+      if (!selected || changing || value === null || value === undefined)
+        return;
+      // Until the first read has said what this facet can do, a push has
+      // nothing to be shown against; that read carries the same projection.
+      if (!methods.length) return;
+      // A later read of this view's own may be in flight; the push is newer.
+      epoch += 1n;
+      try {
+        state = project(value, current);
+      } catch {
+        state = {
+          status: 'unavailable',
+          message:
+            'Sandbox network policy unavailable. Enforcement could not be verified; no policy change is possible here.',
+          policy: null,
+          supportedPolicies: [],
+        };
+      }
+      notify();
+    },
+    /** A turn started or ended: a policy cannot be changed during one. */
+    setCurrent(/** @type {boolean} */ current) {
+      if (state.status !== 'ready' || Boolean(state.current) === current)
+        return;
+      state = { ...state, current };
+      notify();
+    },
     getState: () =>
       harden({
         ...state,

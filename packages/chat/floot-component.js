@@ -12,6 +12,10 @@ import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
 import { makeFlootNetwork } from './floot-network.js';
 import { makeFlootExecution } from './floot-execution.js';
+import {
+  applyTranscriptEvent,
+  normalizePending,
+} from './floot-session-state.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -19,9 +23,10 @@ import { makeFlootExecution } from './floot-execution.js';
 // them.
 
 // ── Background turns ─────────────────────────────────────────────────────────
-// A Floot turn runs on the daemon (`session.startTurn`). This side is a view: it
-// pulls the turn's disposable `watch()` stream and stops the turn only by
-// calling `cancel()`. Dropping the stream — unmount, tab close, gateway loss —
+// A Floot turn runs on the daemon, which also decides when one starts: this
+// side submits text (`session.enqueue`) and is told of the turn through the
+// session's `watch()`. It is a view: it pulls the turn's disposable `watch()`
+// stream and stops the turn only by calling `cancel()`. Dropping the stream — unmount, tab close, gateway loss —
 // detaches this viewer and leaves the turn running to finish and persist.
 // The loop is kept HERE, outside any component instance, so a remounted
 // component reattaches to the accumulated state of a still-streaming reply and
@@ -33,6 +38,7 @@ import { makeFlootExecution } from './floot-execution.js';
  * @typedef {{
  *   sessionId: string,
  *   ref: Promise<any>,
+ *   target: any,
  *   retire: () => void,
  *   messages: TurnMessage[],
  *   streamingText: string,
@@ -107,6 +113,9 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   const turn = {
     sessionId,
     ref: Promise.resolve(turnRef),
+    // The turn itself, for telling one observation from another: the session
+    // names the turn in flight by this same presence.
+    target: turnRef,
     retire() {
       // Retiring an obsolete observation never cancels daemon execution.
       if (registry.get(key) === turn) registry.delete(key);
@@ -561,9 +570,23 @@ export const flootComponent = (
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
    *   model: string, backendId?: string, modelId?: string,
-   *   effectiveModelId?: string, reasoningEffort?: string, messages: HistoryMessage[], facet: any,
-   *   loaded: boolean, lifecycle?: string }}
+   *   effectiveModelId?: string, reasoningEffort?: string,
+   *   messages: HistoryMessage[], facet: any, loaded: boolean,
+   *   lifecycle?: string,
+   *   activity?: 'passive' | 'working' | 'error', pendingCount?: number,
+   *   transcript: { version: number, messages: readonly any[] } | null,
+   *   current: { input: string | null, turn: any, pendingId?: string } | null,
+   *   running: { input: string, from?: string } | null,
+   *   pending: import('./floot-session-state.js').PendingState,
+   *   displayTurn: FlootTurn | null,
+   *   tail?: { input: string | null, turn: FlootTurn } | null,
+   *   transcriptStale?: boolean }}
    *   FlootSession
+   *
+   * `messages` is the settled transcript the session pushes; `current` is the
+   * UI turn in flight and `displayTurn` this page's observation of it;
+   * `running` is whatever the agent is running, which for a mail turn is all
+   * there is; `pending` is the daemon's queue of submissions not yet run.
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
    *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
@@ -658,29 +681,22 @@ export const flootComponent = (
     return session.facet;
   };
 
-  const liveTurnFor = (/** @type {string} */ id) => {
-    const turn = turnsForFactory(factory).get(id);
-    return turn && !turn.done ? turn : null;
+  // A session has work outstanding while a turn is in flight or a submission
+  // waits behind one. Both are the daemon's to say (see `applySessionEvent`).
+  const hasOutstandingWork = () => {
+    const session = sessions.find(s => s.id === activeSessionId);
+    return Boolean(
+      session && (session.current || session.pending.entries.length > 0),
+    );
   };
-
   const recovery = makeFlootRecovery({
     notify,
-    isBusy: () =>
-      Boolean(
-        activeSessionId &&
-        (liveTurnFor(activeSessionId) ||
-          queuedSends.some(q => q.sessionId === activeSessionId)),
-      ),
+    isBusy: hasOutstandingWork,
   });
   const network = makeFlootNetwork({
     notify,
     isBusy: () =>
-      Boolean(
-        recovery.getState().resolving ||
-        (activeSessionId &&
-          (liveTurnFor(activeSessionId) ||
-            queuedSends.some(q => q.sessionId === activeSessionId))),
-      ),
+      Boolean(recovery.getState().resolving || hasOutstandingWork()),
   });
   const execution = makeFlootExecution({ notify });
 
@@ -696,30 +712,6 @@ export const flootComponent = (
             ...(m.meta ? { meta: m.meta } : {}),
           },
     );
-  };
-
-  // Pull the spoken transcript for a session from its guest into the cache.
-  const loadHistory = async (
-    /** @type {FlootSession} */ session,
-    historyP = E(facetFor(session)).getHistory(),
-    accept = () => true,
-  ) => {
-    const previousMessages = session.messages;
-    const previousLength = previousMessages.length;
-    try {
-      const history = await historyP;
-      // A new submission or refresh takes precedence over stale history I/O.
-      if (
-        !accept() ||
-        session.messages !== previousMessages ||
-        session.messages.length !== previousLength
-      )
-        return;
-      session.messages = historyMessages(history);
-    } catch {
-      // leave whatever we have; history just won't repaint
-    }
-    session.loaded = true;
   };
 
   // Create a new session on the factory and prepend it to the local list.
@@ -763,27 +755,24 @@ export const flootComponent = (
       messages: [],
       facet,
       loaded: true,
+      transcript: null,
+      current: null,
+      running: null,
+      pending: normalizePending(null),
+      displayTurn: null,
     };
+    // The session list's own subscription reports the new session too, and
+    // usually first (`getInfo` above is a second round trip). There must be
+    // one record per session: adopt what this call learned into that one.
+    const listed = sessions.find(existing => existing.id === session.id);
+    if (listed) {
+      Object.assign(listed, { facet, loaded: true });
+      activeSessionId = listed.id;
+      return listed;
+    }
     sessions.unshift(session);
     activeSessionId = session.id;
     return session;
-  };
-
-  // Pull a session's cumulative usage from its guest and show it (cost survives
-  // restarts; a live turn updates it again via the 'usage' reply event).
-  const showSessionTokens = (/** @type {FlootSession | null} */ session) => {
-    usage = null;
-    notify();
-    if (!session) return;
-    E(facetFor(session))
-      .getUsage()
-      .then((/** @type {any} */ u) => {
-        if (activeSessionId === session.id) {
-          usage = u;
-          notify();
-        }
-      })
-      .catch(() => {});
   };
 
   // ── Snapshot ────────────────────────────────────────────────────────────────
@@ -848,23 +837,78 @@ export const flootComponent = (
 
   const getState = () => {
     const session = getActiveSession();
-    const liveTurn = session ? liveTurnFor(session.id) : null;
-    const base = session ? session.messages : [];
-    const sent = liveTurn ? [...base, ...liveTurn.messages] : base;
-    // Queued submissions render after the live turn's output: they run after
-    // it, and hiding them until then reads as a swallowed message. The view
-    // lifts them out by `pending` and puts them below the thinking indicator.
-    const queued = session
-      ? queuedSends
-          .filter(q => q.sessionId === session.id)
-          .map(q => ({
-            role: /** @type {const} */ ('user'),
-            text: q.text,
-            pending: true,
-            pendingId: q.id,
-          }))
+    const current = session ? session.current : null;
+    const shown = session ? session.displayTurn : null;
+    // The settled transcript, then the turn in flight: its prompt and this
+    // page's observation of its output. With no UI turn, whatever the agent is
+    // running on its own (a mail turn) still shows its prompt, so a session
+    // that is working never looks idle.
+    /** @type {Array<HistoryMessage | TurnMessage>} */
+    const sent = session ? [...session.messages] : [];
+    if (current) {
+      if (typeof current.input === 'string') {
+        sent.push({ role: 'user', text: current.input });
+      }
+      if (shown) sent.push(...shown.messages);
+    } else if (session?.tail) {
+      // The turn is over but the transcript that contains it could not be
+      // read yet: what was on screen stays there until it can.
+      if (typeof session.tail.input === 'string') {
+        sent.push({ role: 'user', text: session.tail.input });
+      }
+      sent.push(...session.tail.turn.messages);
+    } else if (session?.running) {
+      sent.push({
+        role: 'user',
+        text: session.running.input,
+        ...(session.running.from
+          ? { meta: { mail: { from: session.running.from } } }
+          : {}),
+      });
+    }
+    // Submissions not yet run render after the live turn's output: they run
+    // after it, and hiding them until then reads as a swallowed message. The
+    // view lifts them out by `pending` and puts them below the thinking
+    // indicator. First the daemon's queue, then what this page has sent and
+    // the daemon has not yet acknowledged.
+    const queuedEntries = session
+      ? session.pending.entries.filter(
+          // The entry being dispatched IS the turn in flight.
+          entry => !(entry.state === 'dispatching' && current),
+        )
       : [];
+    const queued = [
+      ...queuedEntries.map(entry => ({
+        role: /** @type {const} */ ('user'),
+        text: entry.text,
+        pending: true,
+        pendingId: entry.id,
+        pendingState:
+          entry.state === 'dispatching'
+            ? /** @type {const} */ ('sending')
+            : /** @type {'queued' | 'interrupted'} */ (entry.state),
+      })),
+      // What this page has sent and the daemon has not yet been seen to have:
+      // shown until the daemon's own report of that very message arrives, so
+      // it is on screen exactly once throughout (see `reconcileSends`).
+      ...(session
+        ? inFlightSends
+            .filter(send => send.sessionId === session.id && !send.seen)
+            .map(send => ({
+              role: /** @type {const} */ ('user'),
+              text: send.text,
+              pending: true,
+              pendingId: `local-${send.id}`,
+              pendingState: /** @type {const} */ ('sending'),
+            }))
+        : []),
+    ];
     const allMessages = [...sent.map(toViewMessage), ...queued];
+    const liveTurn = current && shown && !shown.done ? shown : null;
+    // A turn this page has seen finish is not one it can stop, even while the
+    // session has yet to report it gone (that waits for the transcript).
+    const stoppable = Boolean(current) && !(shown && shown.done);
+    const working = stoppable || Boolean(!current && session?.running);
     return harden({
       sessions: sessions.map(s => ({
         id: s.id,
@@ -875,10 +919,19 @@ export const flootComponent = (
         backendLabel: backendLabelOf(s),
         modelLabel: modelLabelOf(s),
         reasoningEffort: s.reasoningEffort || '',
-        status: liveTurnFor(s.id)
-          ? /** @type {const} */ ('streaming')
-          : sessionStatus.get(s.id) || 'idle',
+        // The daemon says what each session is doing; for the one on screen
+        // this page knows of a turn the moment it is told, and of a failure
+        // the moment it sees one.
+        status:
+          s.id === activeSessionId && (s.current || s.running)
+            ? /** @type {const} */ ('working')
+            : sessionStatus.get(s.id) || s.activity || 'passive',
         messageCount: s.messages.length,
+        // For the session on screen the subscription is fresher than the list.
+        pendingCount:
+          s.id === activeSessionId
+            ? s.pending.entries.length
+            : s.pendingCount || 0,
         loaded: s.loaded,
         lifecycle: s.lifecycle,
       })),
@@ -900,8 +953,11 @@ export const flootComponent = (
       })),
       messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
-      phase: liveTurn ? liveTurn.phase : '',
-      busy: Boolean(liveTurn),
+      phase: liveTurn ? liveTurn.phase : (working && 'thinking') || '',
+      // `busy` offers Stop, which needs a turn this page can cancel.
+      busy: stoppable,
+      working,
+      pendingHold: session?.pending.hold?.message || '',
       loaded: session ? session.loaded : false,
       status,
       input: inputText,
@@ -941,36 +997,100 @@ export const flootComponent = (
   };
 
   // ── Conversation lifecycle ──────────────────────────────────────────────────
+  // The daemon owns the conversation: the transcript, the turn in flight, and
+  // the queue of submissions waiting for their turn. This page subscribes to
+  // the active session (`watch()`) and renders what it is told; sending is
+  // `enqueue`, and the daemon decides when that becomes a turn. Nothing here
+  // is a queue, a lock or a timer, so switching session, reloading or closing
+  // the tab loses nothing, and a second page sees the same thing.
   let cancelled = false;
-  let busy = false;
   let turnCancelled = false;
-  // Submissions accepted while a turn is still running (typed mid-stream, or a
-  // voice utterance after a soft barge-in) queue on submitChain. They must stay
-  // VISIBLE while queued: submit() clears the compose box immediately, and the
-  // optimistic session push only happens once the queued turn actually starts,
-  // so without this the message vanishes until the prior turn finishes.
-  //
-  // The queue is per-mount, unlike the turn registry above, which deliberately
-  // survives unmount. Leaving the space therefore drops whatever had not run
-  // yet, while the turn it was queued behind keeps going — the pre-existing
-  // behaviour, now more visible because the message looked accepted. Making it
-  // survive means holding the queue beside `inFlightTurns`; until then, a
-  // message queued behind a long turn is only as durable as the tab.
-  /** @type {Array<{ id: number, sessionId: string, text: string }>} */
-  let queuedSends = [];
-  let nextQueuedSendId = 1;
+
+  // Submissions this page has handed to the daemon and not yet had
+  // acknowledged. Not a queue — each is one request in flight — but the
+  // message must stay on screen for that round trip: `submit` clears the
+  // compose box at once, and the daemon's own report of it (a queued entry, or
+  // the turn it became) can arrive before or after the acknowledgement.
+  /**
+   * `pendingId` is the daemon's id for the message, once known (from the
+   * acknowledgement, or claimed from the daemon's report); `acked` is the
+   * acknowledgement having arrived; `seen` is the daemon having reported that
+   * very message, as a queue entry or as the turn it became; `before` is
+   * what the daemon had already reported when it was sent, which is therefore
+   * not it.
+   *
+   * @typedef {{ id: number, sessionId: string, text: string,
+   *   pendingId?: string, acked: boolean, seen: boolean,
+   *   before: Set<string> }} InFlightSend
+   */
+  /** @type {InFlightSend[]} */
+  let inFlightSends = [];
+  let nextInFlightId = 1;
+  // Queue ids of submissions this page made. The reply to one of them is
+  // spoken here; one made from another page is that page's to speak.
+  // Kept only while the daemon still reports the message: an id is dropped
+  // once it has been seen and is no longer queued or running.
+  /** @type {Map<string, { seen: boolean }>} */
+  const ownSubmissions = new Map();
+
+  /** @param {FlootSession} session */
+  const reportedSubmissions = session => [
+    ...session.pending.entries.map(entry => ({
+      id: entry.id,
+      text: entry.text,
+    })),
+    ...(session.current?.pendingId
+      ? [{ id: session.current.pendingId, text: session.current.input }]
+      : []),
+  ];
 
   /**
-   * Forget a queued placeholder. Reports whether it was still there, so the
-   * caller can repaint only when something actually changed.
+   * Match what the daemon reports against what this page has sent. By id once
+   * the acknowledgement has said what the id is; before that, the oldest
+   * unmatched send claims the first report with its text that was not there
+   * when it was sent and that no other send has claimed — so two identical
+   * messages sent back to back are two messages. A placeholder goes once its
+   * message has been both acknowledged and seen (or, after a fresh snapshot,
+   * acknowledged: whatever became of it is in that snapshot).
    *
-   * @param {number} id 0 for "no placeholder was made"
-   * @returns {boolean}
+   * @param {FlootSession} session
+   * @param {boolean} snapshot
    */
-  const dropQueued = id => {
-    if (!id || !queuedSends.some(q => q.id === id)) return false;
-    queuedSends = queuedSends.filter(q => q.id !== id);
-    return true;
+  const reconcileSends = (session, snapshot) => {
+    const reported = reportedSubmissions(session);
+    const claimed = new Set(
+      inFlightSends.map(send => send.pendingId).filter(Boolean),
+    );
+    for (const send of inFlightSends) {
+      if (send.sessionId === session.id && !send.seen) {
+        if (send.pendingId) {
+          send.seen = reported.some(item => item.id === send.pendingId);
+        } else {
+          const match = reported.find(
+            item =>
+              item.text === send.text &&
+              !send.before.has(item.id) &&
+              !claimed.has(item.id),
+          );
+          if (match) {
+            send.pendingId = match.id;
+            send.seen = true;
+            claimed.add(match.id);
+          }
+        }
+      }
+    }
+    inFlightSends = inFlightSends.filter(
+      send =>
+        send.sessionId !== session.id ||
+        !send.acked ||
+        !(send.seen || snapshot),
+    );
+    const live = new Set(reported.map(item => item.id));
+    for (const [id, record] of ownSubmissions) {
+      if (live.has(id)) record.seen = true;
+      else if (record.seen || snapshot) ownSubmissions.delete(id);
+    }
   };
 
   /** @type {FlootTurn | null} */
@@ -980,205 +1100,427 @@ export const flootComponent = (
   /** @type {(() => void) | null} */
   let detachActiveTurnView = null;
 
-  /** @type {Promise<void>} */
-  let submitChain = Promise.resolve();
-  /** @type {Promise<void> | null} */
-  let turnPromise = null;
-  let opening = harden({});
-  let viewReady = Promise.resolve();
-  /** @type {WeakMap<FlootSession, FlootTurn>} */
-  const displayedPrompts = new WeakMap();
+  const isBusy = () => {
+    const session = getActiveSession();
+    return Boolean(
+      session?.current && !(session.displayTurn && session.displayTurn.done),
+    );
+  };
 
-  // Cancel the in-flight turn (Stop button or voice barge-in). Returns a promise
-  // that resolves once the turn has fully unwound.
+  // Cancel the in-flight turn (Stop button). Unlike leaving the space, which
+  // lets the turn keep running, this tears it down.
   const cancelTurn = () => {
-    if (!busy) return Promise.resolve();
+    const session = getActiveSession();
+    if (!session?.current) return;
     turnCancelled = true;
-    // Stop button: explicitly tear the turn down (unlike leaving the space,
-    // which lets it keep running in the background).
-    if (activeTurn) activeTurn.stop();
+    if (activeTurn && activeTurn.target === session.current.turn) {
+      activeTurn.stop();
+    } else {
+      E(session.current.turn)
+        .cancel()
+        .catch((/** @type {Error} */ error) =>
+          setStatus(`error: ${error.message}`),
+        );
+    }
     stopTts(); // also silences any spoken reply in progress
-    return turnPromise || Promise.resolve();
   };
 
   // Voice barge-in: the user started speaking over a live reply. Unlike the Stop
   // button's hard cancel, don't abort the turn — just silence its spoken reply
   // (dropping the audio stream is what tells the daemon to stop speaking it)
   // and let it finish in the background (and in history). The user's
-  // interjection is queued after it (submitChain waits on the running turn).
+  // interjection is queued behind it by the daemon.
   const softBargeIn = () => {
-    if (!busy) return;
+    if (!isBusy()) return;
     stopTts();
     setStatus('continuing in background…');
   };
 
-  // Attach this component's view to a background turn — the one it just started,
-  // or one still running after a remount. Notifies the view as the turn's events
-  // arrive and resolves when the turn ends. Detaching (on unmount) leaves the
-  // turn running.
+  // Attach this component's view to the observation of a turn — one the daemon
+  // just reported, or one still running after a remount. Repaints as the
+  // turn's events arrive. Detaching (on unmount, or when another turn is
+  // attached) leaves the turn running.
   /**
    * @param {FlootTurn} turn
    * @param {FlootSession} session
-   * @returns {Promise<void>}
    */
   const attachTurnView = (turn, session) => {
-    busy = true;
+    if (detachActiveTurnView) detachActiveTurnView();
     turnCancelled = false;
     activeTurn = turn;
     sessionStatus.delete(session.id);
-    setStatus(`${turn.phase || 'thinking'}…`);
+    status = `${turn.phase || 'thinking'}…`;
     if (turn.usage) usage = turn.usage;
-    notify();
 
-    return new Promise(resolve => {
-      let detached = false;
-      let unsubscribe = () => {};
-      const detach = () => {
-        if (detached) return;
-        detached = true;
-        unsubscribe();
-        if (detachActiveTurnView === detach) {
-          detachActiveTurnView = null;
-          activeTurn = null;
-          busy = false;
-          notify();
-        }
-        resolve();
-      };
-      detachActiveTurnView = detach;
+    let detached = false;
+    let unsubscribe = () => {};
+    const detach = () => {
+      if (detached) return;
+      detached = true;
+      unsubscribe();
+      if (detachActiveTurnView === detach) {
+        detachActiveTurnView = null;
+        activeTurn = null;
+      }
+    };
+    detachActiveTurnView = detach;
 
-      /** @param {{ type: string }} ev */
-      const onEvent = ev => {
-        if (detached) return;
-        if (ev.type === 'superseded') {
-          detach();
-          // Another view may retire our shared observation. Reconcile this
-          // component too, before its released submissions resume.
-          // eslint-disable-next-line no-use-before-define
-          openActiveHistory();
-          return;
-        }
-        // Attachment completion is independent of selection and history I/O.
-        // Deletion can change selection while the old turn is still unwinding.
-        if (ev.type === 'done' && activeSessionId !== turn.sessionId) {
-          detach();
-          return;
-        }
-        if (activeSessionId !== turn.sessionId) return;
-        if (ev.type === 'snapshot') {
-          // The turn's state as of the moment this view opened. Repaint from
-          // it; speech, if any, is the daemon's own view of the same turn.
-          if (turn.usage) usage = turn.usage;
-          setStatus(`${turn.phase || 'thinking'}…`);
-        } else if (ev.type === 'delta' || ev.type === 'final') {
-          notify();
-        } else if (ev.type === 'tool_call') {
-          notify();
-        } else if (ev.type === 'tool_result') {
-          notify();
-        } else if (ev.type === 'phase') {
-          setStatus(`${turn.phase}…`);
-        } else if (ev.type === 'usage') {
-          usage = turn.usage;
-          notify();
-        } else if (ev.type === 'abort') {
+    /** @param {{ type: string }} ev */
+    const onEvent = ev => {
+      if (detached) return;
+      if (ev.type === 'superseded') {
+        // Another view retired the shared observation. The session's own
+        // subscription says what is current; nothing to reconcile here.
+        detach();
+        notify();
+        return;
+      }
+      if (activeSessionId !== turn.sessionId) {
+        if (ev.type === 'done') detach();
+        return;
+      }
+      if (ev.type === 'snapshot') {
+        // The turn's state as of the moment this view opened. Repaint from
+        // it; speech, if any, is the daemon's own view of the same turn.
+        if (turn.usage) usage = turn.usage;
+        setStatus(`${turn.phase || 'thinking'}…`);
+      } else if (ev.type === 'phase') {
+        setStatus(`${turn.phase}…`);
+      } else if (ev.type === 'usage') {
+        usage = turn.usage;
+        notify();
+      } else if (ev.type === 'abort') {
+        sessionStatus.set(turn.sessionId, 'error');
+        notify();
+      } else if (ev.type === 'done') {
+        const stopped = turnCancelled;
+        if (turn.error) {
           sessionStatus.set(turn.sessionId, 'error');
-          notify();
-        } else if (ev.type === 'done') {
-          void recovery.refresh();
-          void network.refresh();
-          const stopped = turnCancelled;
-          if (turn.error) {
-            sessionStatus.set(turn.sessionId, 'error');
-            status = `error: ${turn.error}`;
-          } else {
-            sessionStatus.set(turn.sessionId, 'idle');
-            status = stopped ? 'stopped.' : 'Ready.';
-          }
-          // Fold the finished turn's output into the session optimistically so
-          // the reply doesn't blink out between the turn ending (it leaves the
-          // registry) and the canonical history reload landing.
-          session.messages.push(.../** @type {any[]} */ (turn.messages));
-          notify();
-          // Repaint from the daemon's canonical transcript (now including this
-          // turn's persisted reply) so the turn's output is never double-shown.
-          detach();
-          void loadHistory(session).then(() => {
-            if (!cancelled && activeSessionId === session.id) notify();
-          });
+          status = `error: ${turn.error}`;
+        } else {
+          sessionStatus.delete(turn.sessionId);
+          status = stopped ? 'stopped.' : 'Ready.';
         }
-      };
-      unsubscribe = turn.subscribe(onEvent);
-      // Settle immediately if the turn finished between start and subscribe.
-      if (turn.done) onEvent({ type: 'done' });
-    });
+        // The turn's output stays on screen (it is `session.displayTurn`)
+        // until the session reports the turn gone, which it does only after
+        // publishing the transcript that contains it: the reply never blinks.
+        detach();
+        notify();
+      } else {
+        notify();
+      }
+    };
+    unsubscribe = turn.subscribe(onEvent);
+    // Settle immediately if the turn finished between start and subscribe.
+    if (turn.done) onEvent({ type: 'done' });
   };
 
   /**
-   * @param {string} text
-   * @param {number} [queuedId] the placeholder this turn is running, if any
+   * The session reported which UI turn is in flight (or that none is).
+   *
+   * @param {FlootSession} session
+   * @param {any} reported `{ input, turn, pendingId? }` or null
+   * @param {boolean} fresh false when this is the snapshot: the turn was
+   *   already under way when this page looked, so it is not this page's to
+   *   start speaking.
    */
-  const runConverse = async (text, queuedId = 0) => {
-    let session = getActiveSession();
-    if (!session) session = await createSession();
-
-    // The queued placeholder is superseded by the optimistic session push
-    // below — the same text, now part of the running turn's transcript.
-    dropQueued(queuedId);
-    session.messages.push({ role: 'user', text });
-    // Sending a message is an explicit "follow along" intent — re-stick.
+  const setCurrentTurn = (session, reported, fresh) => {
+    const next =
+      reported && reported.turn
+        ? {
+            input: typeof reported.input === 'string' ? reported.input : null,
+            turn: reported.turn,
+            ...(typeof reported.pendingId === 'string'
+              ? { pendingId: reported.pendingId }
+              : {}),
+          }
+        : null;
+    const previous = session.current;
+    session.current = next;
+    network.setCurrent(Boolean(next));
+    if (!next) {
+      // The transcript that contains the finished turn has normally arrived
+      // already. If it could not be read, what was on screen stays as a tail
+      // until it can, rather than the prompt and reply blinking out.
+      session.tail =
+        previous && session.displayTurn && session.transcriptStale
+          ? { input: previous.input, turn: session.displayTurn }
+          : null;
+      session.displayTurn = null;
+      if (previous && activeSessionId === session.id && !activeTurn) {
+        // Its observation never reported an end here (it was detached, or
+        // belonged to another page): leave a truthful status behind.
+        if (status.endsWith('…')) status = 'Ready.';
+      }
+      return;
+    }
+    if (previous && previous.turn === next.turn) return;
+    // This page's own submission has become a turn: the placeholder for the
+    // round trip has done its job.
+    const registry = turnsForFactory(factory);
+    let turn = registry.get(session.id) || null;
+    if (turn && turn.target !== next.turn) {
+      // An observation of an earlier turn; retiring it never cancels anything.
+      turn.retire();
+      turn = null;
+    }
+    if (!turn) {
+      turn = startFlootTurn(registry, session.id, session.id, next.turn);
+    }
+    session.displayTurn = turn;
     stick = true;
-    if (session.title === DEFAULT_TITLE) {
-      session.title = autoTitle(text);
-      E(factory)
-        .renameSession(session.id, session.title)
-        .catch(() => {});
+    if (activeSessionId === session.id) {
+      attachTurnView(turn, session);
+      // This page's own message: known by the id the acknowledgement gave,
+      // or, when the turn beat the acknowledgement here, by the placeholder
+      // that claimed it (`reconcileSends`, which has already run).
+      const own = Boolean(
+        next.pendingId &&
+        (ownSubmissions.has(next.pendingId) ||
+          inFlightSends.some(send => send.pendingId === next.pendingId)),
+      );
+      if (fresh && own && ttsEnabled && ttsServer) speakTurn(turn);
+    }
+  };
+
+  // ── The active session's subscription ───────────────────────────────────────
+  // The status line a transcript failure wrote, so its recovery clears that
+  // line and no other.
+  let transcriptErrorStatus = '';
+  /** @type {{ close: () => void } | null} */
+  let sessionView = null;
+  // A subscription that ends without saying why (the daemon gave up on a
+  // reader opened too late) is opened again, but not for ever: a stream that
+  // keeps ending at once is a fault to report, not a loop to spin in.
+  let quietEndings = 0;
+  // eslint-disable-next-line no-use-before-define
+  const reopenSessionView = () => openActiveSession(false);
+
+  /**
+   * @param {FlootSession} session
+   * @param {any} event
+   * @returns {boolean} false when the view must be reopened
+   */
+  const applySessionEvent = (session, event) => {
+    const snapshot = event.type === 'snapshot';
+    // Set by the block after the turn is adopted, so it sees both reports.
+    let reconcile = snapshot;
+    if (snapshot || event.type === 'transcript') {
+      const delta = snapshot ? event.transcript : event;
+      if (delta) {
+        const next = applyTranscriptEvent(
+          snapshot ? null : session.transcript,
+          delta,
+        );
+        // A gap: an event was missed. Reopen rather than guess.
+        if (!next) return false;
+        session.transcript = next;
+        session.messages = historyMessages(next.messages);
+        session.loaded = true;
+        session.tail = null;
+        if (session.transcriptStale) {
+          session.transcriptStale = false;
+          if (status === transcriptErrorStatus) status = 'Ready.';
+        }
+      } else if (snapshot) {
+        session.transcript = null;
+        session.loaded = true;
+        if (event.transcriptError) {
+          session.transcriptStale = true;
+          transcriptErrorStatus = `error: ${event.transcriptError}`;
+          status = transcriptErrorStatus;
+        }
+      }
+    }
+    if (event.type === 'transcript-error') {
+      session.transcriptStale = true;
+      transcriptErrorStatus = `error: ${event.message}`;
+      status = transcriptErrorStatus;
+    }
+    if (snapshot || event.type === 'pending') {
+      session.pending = normalizePending(event.pending);
+      reconcile = true;
+    }
+    if (snapshot || event.type === 'running') {
+      session.running =
+        event.running && typeof event.running.input === 'string'
+          ? {
+              input: event.running.input,
+              ...(typeof event.running.from === 'string'
+                ? { from: event.running.from }
+                : {}),
+            }
+          : null;
+    }
+    if (snapshot || event.type === 'turn') {
+      // Adopt the report first, so the reconciliation below can match this
+      // page's send to the turn before the turn asks whether it is its own.
+      const reported = event.turn;
+      if (reported && reported.turn && typeof reported.pendingId === 'string') {
+        const provisional = {
+          input: typeof reported.input === 'string' ? reported.input : null,
+          turn: reported.turn,
+          pendingId: reported.pendingId,
+        };
+        const held = session.current;
+        session.current = provisional;
+        reconcileSends(session, snapshot);
+        session.current = held;
+      }
+      setCurrentTurn(session, event.turn, !snapshot);
+      reconcile = true;
+    }
+    if (reconcile) reconcileSends(session, snapshot);
+    if ((snapshot || event.type === 'execution') && event.execution) {
+      execution.adopt(event.execution);
+    }
+    if ((snapshot || event.type === 'network') && event.network) {
+      network.adopt(event.network, Boolean(session.current));
+    }
+    if ((snapshot || event.type === 'usage') && event.usage) {
+      usage = event.usage;
+    }
+    if (event.type === 'journal') void recovery.refresh();
+    return true;
+  };
+
+  // Open (or reopen) the subscription on the active session, closing whichever
+  // one was open. Selection never waits for a turn: the session left behind
+  // keeps running on the daemon, and its queue with it.
+  /** @param {boolean} [reselect] false when reopening the same session */
+  const openActiveSession = (reselect = true) => {
+    if (sessionView) sessionView.close();
+    sessionView = null;
+    if (detachActiveTurnView) detachActiveTurnView();
+    // Opening a session starts at the latest message.
+    stick = true;
+    const session = getActiveSession();
+    const ready = Boolean(
+      session && (!session.lifecycle || session.lifecycle === 'ready'),
+    );
+    if (reselect) {
+      void execution.select(session ? facetFor(session) : null);
+      void recovery.select(
+        session && ready ? facetFor(session) : null,
+        session && !ready
+          ? `Session unavailable (${session.lifecycle}). Inspect the service; no recovery action is safe here.`
+          : '',
+      );
+      void network.select(
+        session && ready ? facetFor(session) : null,
+        session && !ready
+          ? 'Session unavailable. Network policy changes are disabled.'
+          : '',
+      );
+      usage = null;
+    }
+    if (!session) {
+      notify();
+      return;
+    }
+    if (!ready) {
+      session.loaded = true;
+      setStatus(`Session unavailable (${session.lifecycle}).`);
+      return;
+    }
+    // A turn this page was already observing (a remount, or a session it
+    // switched away from and back to) paints at once; the snapshot confirms.
+    if (session.displayTurn && !session.displayTurn.done) {
+      attachTurnView(session.displayTurn, session);
     }
     notify();
 
-    // Start the turn on the daemon — it keeps running if this space is left —
-    // then render it through the shared view. A spoken reply is a second view
-    // of the same turn, which the daemon speaks (see speakTurn).
-    const speakLive = ttsEnabled && Boolean(ttsServer);
-    const turnRef = E(facetFor(session)).startTurn(text);
-    const turn = startFlootTurn(
-      turnsForFactory(factory),
-      session.id,
-      session.id,
-      turnRef,
-    );
-    displayedPrompts.set(session, turn);
-    if (speakLive) speakTurn(turn);
-    await attachTurnView(turn, session);
+    let closed = false;
+    /** @type {{ return: () => Promise<unknown> } | null} */
+    let stream = null;
+    const view = {
+      close() {
+        closed = true;
+        if (stream) void Promise.resolve(stream.return()).catch(() => {});
+      },
+    };
+    sessionView = view;
+    const live = () => !cancelled && !closed && sessionView === view;
+    (async () => {
+      const reader = iterateReader(await E(facetFor(session)).watch(), {
+        buffer: 4,
+      });
+      stream = reader;
+      if (!live()) {
+        view.close();
+        return;
+      }
+      let ended = false;
+      for await (const event of reader) {
+        if (!live()) break;
+        const value = /** @type {any} */ (event);
+        if (value.type === 'end') {
+          ended = true;
+          break;
+        }
+        if (!applySessionEvent(session, value)) {
+          reopenSessionView();
+          return;
+        }
+        if (value.type !== 'snapshot') quietEndings = 0;
+        notify();
+      }
+      if (!ended && live()) {
+        quietEndings += 1;
+        if (quietEndings <= 3) {
+          reopenSessionView();
+        } else {
+          setStatus('error: the session stopped reporting; reload to retry.');
+        }
+        return;
+      }
+      if (ended && live()) {
+        // Deleted from somewhere else. The session list says so too; this
+        // just stops the view pretending the session is still there.
+        session.loaded = true;
+        setStatus('This session was deleted.');
+      }
+    })().catch((/** @type {Error} */ error) => {
+      if (live()) {
+        // Nothing is known about this session now; what was last known (a
+        // turn, a queue) may be long gone, and must not offer a Stop.
+        session.loaded = true;
+        session.current = null;
+        session.running = null;
+        session.displayTurn = null;
+        session.pending = normalizePending(null);
+        setStatus(`error: ${error.message}`);
+      }
+    });
   };
 
-  // Serialize submissions so an auto-sent voice utterance can't overlap a typed
-  // message: each turn waits for the previous.
+  // Hand a message to the daemon. It starts at once if the session is idle and
+  // otherwise waits its turn there — whether or not this page stays open.
   const submit = (/** @type {string} */ raw) => {
     if (execution.getState().blocked) {
       setStatus(
         'Session stopped or stopping. Inspect Settings before resuming.',
       );
-      return submitChain;
+      return;
     }
     if (network.getState().changing || network.getState().blocked) {
       setStatus(
         'Finish or retry the sandbox network policy change before sending.',
       );
-      return submitChain;
+      return;
     }
     const selected = getActiveSession();
     if (selected?.lifecycle && selected.lifecycle !== 'ready') {
       setStatus(
         'Session unavailable. Inspect its lifecycle and service before sending.',
       );
-      return submitChain;
+      return;
     }
     if (recovery.getState().resolving || recovery.getState().blocked) {
       setStatus(
         'Sending is blocked while a journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
       );
-      return submitChain;
+      return;
     }
     // An explicit send supersedes any buffered voice continuation.
     if (resumeTimer) {
@@ -1187,227 +1529,137 @@ export const flootComponent = (
     }
     pendingUtterance = '';
     const text = (raw || '').trim();
-    if (!text) return submitChain;
+    if (!text) return;
     // Create/resume the audio context now, still inside the user's Send
     // gesture: a browser refuses autoplay when the first resume happens only
     // after the remote round trips that start the turn and its speech.
     if (ttsEnabled && ttsServer) prepareTts();
     inputText = '';
-    const submittedSessionId = activeSessionId;
-    // Stand a placeholder up now, so the message is visible for as long as it
-    // waits. Without an active session nothing is queued ahead of it, so it
-    // dispatches straight away and needs none.
-    let queuedId = 0;
-    if (submittedSessionId) {
-      queuedId = nextQueuedSendId;
-      nextQueuedSendId += 1;
-      queuedSends.push({ id: queuedId, sessionId: submittedSessionId, text });
-    }
+    // Sending a message is an explicit "follow along" intent — re-stick.
+    stick = true;
+
+    /** @type {InFlightSend} */
+    const send = {
+      id: nextInFlightId,
+      sessionId: selected ? selected.id : '',
+      text,
+      acked: false,
+      seen: false,
+      before: new Set(
+        selected ? reportedSubmissions(selected).map(item => item.id) : [],
+      ),
+    };
+    nextInFlightId += 1;
+    inFlightSends.push(send);
     notify();
-    submitChain = submitChain.then(async () => {
-      try {
-        // A shared observation can be superseded while we await its completion.
-        // Join the replacement view and turn too before dispatching queued
-        // input.
-        for (;;) {
-          const ready = viewReady;
-          // eslint-disable-next-line no-await-in-loop
-          await ready;
-          if (
-            cancelled ||
-            (submittedSessionId && activeSessionId !== submittedSessionId)
-          )
-            return;
-          const previous = turnPromise;
-          // eslint-disable-next-line no-await-in-loop
-          if (previous) await previous;
-          if (
-            cancelled ||
-            (submittedSessionId && activeSessionId !== submittedSessionId)
-          )
-            return;
-          if (ready === viewReady && previous === turnPromise) break;
-        }
-        if (execution.getState().blocked) {
-          setStatus(
-            'Queued message not sent: session stopped. Resume explicitly in Settings.',
-          );
-          return;
-        }
-        if (network.getState().changing || network.getState().blocked) {
-          setStatus(
-            'Queued message not sent: finish the sandbox network policy change in Settings before retrying.',
-          );
-          return;
-        }
-        if (recovery.getState().resolving || recovery.getState().blocked) {
-          setStatus(
-            'Queued message not sent: journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
-          );
-          return;
-        }
-        // Read the text back off the placeholder at the moment the turn starts,
-        // rather than closing over what was typed: a queued message can be
-        // edited or deleted while it waits, and the edit has to be what
-        // actually runs. A missing placeholder means it was deleted — skip the
-        // turn entirely.
-        let queuedText = text;
-        if (queuedId) {
-          const queued = queuedSends.find(q => q.id === queuedId);
-          if (!queued) return;
-          queuedText = queued.text;
-        }
-        turnPromise = runConverse(queuedText, queuedId).catch(error => {
-          if (!cancelled) setStatus(`error: ${error.message}`);
-        });
-        await turnPromise;
-      } finally {
-        // However this entry exits — deleted, superseded session, or the turn
-        // having adopted it — the placeholder must not outlive it.
-        if (dropQueued(queuedId) && !cancelled) notify();
+
+    (async () => {
+      let session = selected;
+      if (!session) {
+        session = await createSession();
+        send.sessionId = session.id;
+        openActiveSession();
       }
-    });
-    return submitChain;
+      if (session.title === DEFAULT_TITLE) {
+        session.title = autoTitle(text);
+        E(factory)
+          .renameSession(session.id, session.title)
+          .catch(() => {});
+        notify();
+      }
+      const accepted = await E(facetFor(session)).enqueue(text);
+      send.acked = true;
+      if (accepted && typeof accepted.id === 'string') {
+        send.pendingId = accepted.id;
+        ownSubmissions.set(accepted.id, { seen: false });
+      }
+      // The placeholder stays until the daemon's own report of this message
+      // has been seen: the acknowledgement can arrive first (the report waits
+      // its turn behind a transcript read), and dropping the placeholder on
+      // it would take the message off the screen in between.
+      reconcileSends(session, false);
+    })()
+      .catch((/** @type {Error} */ error) => {
+        if (cancelled) return;
+        inFlightSends = inFlightSends.filter(other => other !== send);
+        // Nothing was accepted: the text goes back where it can be sent
+        // again. Unless the daemon has reported it after all (a failure after
+        // it was queued), in which case restoring it would make two of it.
+        if (!send.seen && !inputText) inputText = text;
+        setStatus(`error: ${error.message}`);
+      })
+      .finally(() => {
+        if (!cancelled) notify();
+      });
   };
 
   /**
-   * Rewrite a queued submission while it waits. No effect once its turn has
-   * started: the placeholder is gone by then.
+   * @param {string} action
+   * @param {Promise<unknown>} result
+   */
+  const reportQueueFailure = (action, result) => {
+    Promise.resolve(result).catch((/** @type {Error} */ error) => {
+      if (!cancelled) setStatus(`${action} failed: ${error.message}`);
+    });
+  };
+
+  /**
+   * Rewrite a queued submission while it waits. The daemon refuses once its
+   * turn has started.
    *
-   * @param {number} id
+   * @param {number | string} id
    * @param {string} raw
    */
   const editPending = (id, raw) => {
     const text = (raw || '').trim();
+    const session = getActiveSession();
     // An empty edit is a no-op rather than a delete: deleting has its own
     // button, and losing a message by clearing the box would be a surprising
     // way to lose one.
-    if (!text) return;
-    if (!queuedSends.some(q => q.id === id)) return;
-    queuedSends = queuedSends.map(q => (q.id === id ? { ...q, text } : q));
-    notify();
+    if (!text || !session || typeof id !== 'string') return;
+    reportQueueFailure('Edit', E(facetFor(session)).editPending(id, text));
   };
 
   /**
-   * Drop a queued submission before it runs. Its chain entry is already
-   * scheduled, so removing the placeholder is what cancels it: the entry finds
-   * nothing and skips its turn.
+   * Drop a queued submission before it runs.
    *
-   * @param {number} id
+   * @param {number | string} id
    */
   const cancelPending = id => {
-    if (dropQueued(id)) notify();
+    const session = getActiveSession();
+    if (!session || typeof id !== 'string') return;
+    reportQueueFailure('Delete', E(facetFor(session)).cancelPending(id));
+  };
+
+  /**
+   * "Send now": release a held queue, send an interrupted message again, or —
+   * for the head of the queue behind a running turn — cut that turn short.
+   * Which of those applies is the daemon's call; only the head may end a turn.
+   *
+   * @param {number | string} id
+   */
+  const sendPendingNow = id => {
+    const session = getActiveSession();
+    if (!session || typeof id !== 'string') return;
+    const [head] = session.pending.entries;
+    if (session.current && head && head.id === id) {
+      turnCancelled = true;
+      stopTts();
+    }
+    ownSubmissions.set(id, { seen: true });
+    reportQueueFailure('Send', E(facetFor(session)).sendPending(id));
   };
 
   // ── Session actions (controller callbacks) ──────────────────────────────────
-  const openActiveHistory = () => {
-    const generation = harden({});
-    opening = generation;
-    // Opening a session starts at the latest message.
-    stick = true;
-    const session = getActiveSession();
-    void execution.select(session ? facetFor(session) : null);
-    void recovery.select(
-      session && (!session.lifecycle || session.lifecycle === 'ready')
-        ? facetFor(session)
-        : null,
-      session?.lifecycle && session.lifecycle !== 'ready'
-        ? `Session unavailable (${session.lifecycle}). Inspect the service; no recovery action is safe here.`
-        : '',
-    );
-    void network.select(
-      session && (!session.lifecycle || session.lifecycle === 'ready')
-        ? facetFor(session)
-        : null,
-      session?.lifecycle && session.lifecycle !== 'ready'
-        ? 'Session unavailable. Network policy changes are disabled.'
-        : '',
-    );
-    if (!session) {
-      viewReady = Promise.resolve();
-      usage = null;
-      notify();
-      return;
-    }
-    if (session.lifecycle && session.lifecycle !== 'ready') {
-      session.loaded = true;
-      viewReady = Promise.resolve();
-      setStatus(`Session unavailable (${session.lifecycle}).`);
-      return;
-    }
-    showSessionTokens(session);
-    const stillSelected = () =>
-      !cancelled && opening === generation && activeSessionId === session.id;
-    viewReady = (async () => {
-      // Recover the daemon's handle after a reload or transport loss. The
-      // browser registry is only a cache; it is never the source of liveness.
-      const current = await E(facetFor(session)).getCurrentTurn();
-      if (!stillSelected()) return;
-      let turn = liveTurnFor(session.id);
-      if (turn && (!current || (await turn.ref) !== current.turn)) {
-        if (!stillSelected()) return;
-        turn.retire();
-        turn = null;
-      }
-      if (!stillSelected()) return;
-      if (!current) {
-        await loadHistory(session);
-        if (stillSelected()) notify();
-        return;
-      }
-      if (!turn) {
-        turn = startFlootTurn(
-          turnsForFactory(factory),
-          session.id,
-          session.id,
-          current.turn,
-        );
-      }
-      if (displayedPrompts.get(session) !== turn) {
-        const adoptedTurn = turn;
-        const prompt =
-          typeof current.input === 'string'
-            ? [{ role: /** @type {const} */ ('user'), text: current.input }]
-            : [];
-        session.messages = prompt;
-        session.loaded = false;
-        displayedPrompts.set(session, turn);
-        // Discovery exposes the handle before queued mail establishes history.
-        // Observe/cancel now; install only this turn's baseline when it arrives.
-        void Promise.resolve(current.history)
-          .then(history => {
-            if (
-              !stillSelected() ||
-              adoptedTurn.done ||
-              liveTurnFor(session.id) !== adoptedTurn ||
-              displayedPrompts.get(session) !== adoptedTurn
-            )
-              return;
-            session.messages = [...historyMessages(history), ...prompt];
-            session.loaded = true;
-            notify();
-          })
-          .catch(error => {
-            if (stillSelected() && liveTurnFor(session.id) === adoptedTurn)
-              setStatus(`error: ${error.message}`);
-          });
-      }
-      if (!busy) turnPromise = attachTurnView(turn, session);
-      notify();
-    })().catch(error => {
-      if (stillSelected()) setStatus(`error: ${error.message}`);
-    });
-  };
-
   const selectSession = (/** @type {string} */ id) => {
-    if (busy) return; // don't switch context mid-turn
-    // A per-message replay plays without setting busy; silence it so it doesn't
-    // keep speaking over the session we're switching to.
+    if (id === activeSessionId) return;
+    // A per-message replay, or the reply being spoken, belongs to the session
+    // being left; the turn itself carries on without this page.
     stopTts();
     activeSessionId = id;
-    turnPromise = null;
+    quietEndings = 0;
     setStatus('Ready.');
-    openActiveHistory();
+    openActiveSession();
   };
 
   const deleteSessionById = (/** @type {string} */ id) => {
@@ -1419,18 +1671,20 @@ export const flootComponent = (
     stopTts();
     sessions = sessions.filter(s => s.id !== id);
     sessionStatus.delete(id);
-    if (activeSessionId === id) {
-      // Deletion owns daemon teardown; the UI need not wait for it to release
-      // its attachment or submission queue. Late events cannot affect a new view.
-      if (detachActiveTurnView) detachActiveTurnView();
+    inFlightSends = inFlightSends.filter(send => send.sessionId !== id);
+    const wasActive = activeSessionId === id;
+    if (wasActive) {
+      // Deletion owns daemon teardown; the UI need not wait for it. The
+      // status line was the deleted session's turn's; its end will never be
+      // reported here.
       activeSessionId = sessions.length ? sessions[0].id : null;
-      turnPromise = null;
+      status = 'Ready.';
     }
     E(factory)
       .deleteSession(id)
       .catch(err => setStatus(`error: ${err.message}`));
     notify();
-    openActiveHistory();
+    if (wasActive) openActiveSession();
   };
 
   /**
@@ -1439,11 +1693,11 @@ export const flootComponent = (
    * @param {string} [reasoningEffort]
    */
   const newSession = (presetId, model, reasoningEffort) => {
-    if (busy) return;
     createSession(undefined, presetId, model, reasoningEffort)
       .then(() => {
         stick = true;
-        notify();
+        setStatus('Ready.');
+        openActiveSession();
       })
       .catch(err => setStatus(`error: ${err.message}`));
   };
@@ -1707,7 +1961,7 @@ export const flootComponent = (
         noiseFloor = (1 - VAD.EMA_ALPHA) * noiseFloor + VAD.EMA_ALPHA * vol;
       }
       // While the assistant is replying require a louder onset (barge-in).
-      let onsetThreshold = busy ? bargeThreshold : speechThreshold;
+      let onsetThreshold = isBusy() ? bargeThreshold : speechThreshold;
       // If our own TTS is audibly playing (even after the text turn finished),
       // demand more headroom still so speaker→mic leakage can't self-barge.
       if (ttsAudible()) {
@@ -1717,7 +1971,7 @@ export const flootComponent = (
         );
       }
       if (vol > onsetThreshold) {
-        if (busy) softBargeIn();
+        if (isBusy()) softBargeIn();
         beginUtterance();
       }
     } else if (vol > speechThreshold) {
@@ -1961,7 +2215,9 @@ export const flootComponent = (
   });
 
   updateWakeLock = () => {
-    screenWakeLock.set(!cancelled && Boolean(micActive || ttsSpeaking || busy));
+    screenWakeLock.set(
+      !cancelled && Boolean(micActive || ttsSpeaking || isBusy()),
+    );
   };
 
   // The browser drops the lock when the page is hidden and does not restore it.
@@ -2212,8 +2468,8 @@ export const flootComponent = (
   const controller = harden({
     getState,
     emergencyStop() {
-      // Queued prompts are not a request to resume a stopped session.
-      queuedSends = queuedSends.filter(q => q.sessionId !== activeSessionId);
+      // Queued prompts are not a request to resume a stopped session: the
+      // daemon holds them until the user sends one (they are kept, not lost).
       stopTts();
       void execution.stop();
     },
@@ -2254,24 +2510,17 @@ export const flootComponent = (
     stop() {
       cancelTurn();
     },
-    // Queue-jump for the pending submission at the head of the queue. It is
-    // already scheduled on submitChain directly behind the turn in flight, so
-    // "send now" is precisely "cut that turn short": cancelling releases it.
-    //
-    // Only the head. Every entry runs the message it was scheduled with, so
-    // cancelling on behalf of a LATER one would end a turn that is not in front
-    // of it — throwing away that reply — and still leave it waiting. The view
-    // offers the control on the head row alone; this is the check that makes
-    // that a rule rather than a convention.
-    sendPendingNow(/** @type {number} */ id) {
-      const head = queuedSends.find(q => q.sessionId === activeSessionId);
-      if (!busy || !head || head.id !== id) return;
-      cancelTurn();
+    // Queue-jump. For the head of the queue behind a running turn this cuts
+    // that turn short; the daemon enforces "only the head", since ending a
+    // turn on behalf of a later message would throw a reply away and still
+    // leave that message waiting. On a held queue it is what releases it.
+    sendPendingNow(/** @type {number | string} */ id) {
+      sendPendingNow(id);
     },
-    editPending(/** @type {number} */ id, /** @type {string} */ text) {
+    editPending(/** @type {number | string} */ id, /** @type {string} */ text) {
       editPending(id, text);
     },
-    cancelPending(/** @type {number} */ id) {
+    cancelPending(/** @type {number | string} */ id) {
       cancelPending(id);
     },
     selectSession(/** @type {string} */ id) {
@@ -2449,21 +2698,154 @@ export const flootComponent = (
   }
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  // Load the session list from the factory (most-recent first), seeding a
-  // default session if the factory has none, then repaint the active history.
+  // Subscribe to the factory's session list (most-recent first), seeding a
+  // default session if the factory has none, then open the active session.
+  // The list stays subscribed: a session made elsewhere (another page, an agent
+  // spawning a subagent), a rename, a deletion and each session's activity all
+  // arrive here without being asked for.
+  /** @param {any} m a session record as the factory reports it */
+  const adoptSessionMeta = m => {
+    const existing = sessions.find(s => s.id === m.id);
+    const fields = {
+      title: m.title || DEFAULT_TITLE,
+      createdAt: m.createdAt || 0,
+      presetId: m.presetId || DEFAULT_PRESET_ID,
+      model: m.model || '',
+      backendId: m.backendId || 'provider',
+      modelId: m.modelId || '',
+      effectiveModelId: m.effectiveModelId || '',
+      reasoningEffort: m.reasoningEffort || '',
+      lifecycle: m.lifecycle,
+      activity: m.activity,
+      pendingCount: Number(m.pendingCount) || 0,
+    };
+    if (existing) {
+      Object.assign(existing, fields);
+      return existing;
+    }
+    /** @type {FlootSession} */
+    const session = {
+      id: m.id,
+      ...fields,
+      messages: [],
+      facet: null,
+      loaded: false,
+      transcript: null,
+      current: null,
+      running: null,
+      pending: normalizePending(null),
+      displayTurn: null,
+    };
+    sessions.push(session);
+    return session;
+  };
+  const sortSessions = () => {
+    sessions.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  };
+  /** @type {{ return: () => Promise<unknown> } | null} */
+  let sessionListStream = null;
+
+  /** @param {any} event */
+  const applyListEvent = event => {
+    if (event.type === 'session' && event.session) {
+      const known = sessions.some(s => s.id === event.session.id);
+      const wasReady = sessions.find(s => s.id === event.session.id)?.lifecycle;
+      const session = adoptSessionMeta(event.session);
+      if (!known) sortSessions();
+      // The session on screen became usable (or stopped being): reopen it.
+      if (
+        session.id === activeSessionId &&
+        (wasReady || 'ready') !== (session.lifecycle || 'ready')
+      ) {
+        openActiveSession();
+      }
+      // A circle this page painted red gives way once the daemon says better.
+      if (session.activity !== 'error') sessionStatus.delete(session.id);
+    } else if (event.type === 'removed' && typeof event.id === 'string') {
+      const index = sessions.findIndex(s => s.id === event.id);
+      if (index >= 0) {
+        sessions = sessions.filter(s => s.id !== event.id);
+        sessionStatus.delete(event.id);
+        if (activeSessionId === event.id) {
+          activeSessionId = sessions.length ? sessions[0].id : null;
+          status = 'Ready.';
+          openActiveSession();
+        }
+      }
+    }
+  };
+
+  // Follow the list for the life of the mount. A stream that ends or fails is
+  // opened again (a few times, not for ever), and the fresh snapshot is
+  // reconciled against what is on screen, so the sidebar never freezes
+  // silently on a list that stopped reporting.
+  /** @param {AsyncIterator<any> & AsyncIterable<any>} first */
+  const followSessionList = async first => {
+    let list = first;
+    let failures = 0;
+    while (!cancelled) {
+      let heard = false;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        for await (const event of list) {
+          if (cancelled) return;
+          heard = true;
+          if (event.type === 'snapshot' && Array.isArray(event.sessions)) {
+            const listed = new Set(
+              event.sessions.map((/** @type {any} */ m) => m.id),
+            );
+            for (const meta of event.sessions) adoptSessionMeta(meta);
+            for (const gone of sessions.filter(s => !listed.has(s.id))) {
+              applyListEvent({ type: 'removed', id: gone.id });
+            }
+            sortSessions();
+          } else {
+            applyListEvent(event);
+          }
+          notify();
+        }
+      } catch {
+        // Falls through to the reopen below.
+      }
+      if (cancelled) return;
+      failures = heard ? 1 : failures + 1;
+      if (failures > 3) {
+        setStatus(
+          'error: the session list stopped reporting; reload to retry.',
+        );
+        return;
+      }
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        list = iterateReader(await E(factory).watchSessions(), { buffer: 4 });
+        sessionListStream = list;
+      } catch (error) {
+        setStatus(`error: ${/** @type {Error} */ (error).message}`);
+        return;
+      }
+    }
+  };
+
   const loadInitialSessions = async () => {
     try {
       factory = await factory;
-      const [metas, presetList, modelList, backendList] = await Promise.all([
-        E(factory).listSessions(),
-        E(factory)
-          .listPresets()
-          .catch(() => []),
-        E(factory).listModels(),
-        E(factory)
-          .listBackends()
-          .catch(() => []),
-      ]);
+      const [listReader, presetList, modelList, backendList] =
+        await Promise.all([
+          E(factory).watchSessions(),
+          E(factory)
+            .listPresets()
+            .catch(() => []),
+          E(factory).listModels(),
+          E(factory)
+            .listBackends()
+            .catch(() => []),
+        ]);
+      const list = iterateReader(listReader, { buffer: 4 });
+      sessionListStream = list;
+      if (cancelled) {
+        void Promise.resolve(list.return()).catch(() => {});
+        return;
+      }
       presets = presetList;
       backends = backendList.map((/** @type {any} */ b) => ({
         id: b.id,
@@ -2473,30 +2855,15 @@ export const flootComponent = (
         ...m,
         backendTitle: backendList.find(b => b.id === m.backendId)?.title,
       }));
-      // `listSessions()` is a remote call, so its result is unknown here;
-      // retain unavailable sessions too: hiding them would hide recovery work.
-      const allMetas = /** @type {any[]} */ ([...metas]);
-      sessions = allMetas
-        .sort(
-          (/** @type {any} */ a, /** @type {any} */ b) =>
-            (b.createdAt || 0) - (a.createdAt || 0),
-        )
-        .map((/** @type {any} */ m) => ({
-          id: m.id,
-          title: m.title || DEFAULT_TITLE,
-          createdAt: m.createdAt || 0,
-          presetId: m.presetId || DEFAULT_PRESET_ID,
-          model: m.model || '',
-          backendId: m.backendId || 'provider',
-          modelId: m.modelId || '',
-          effectiveModelId: m.effectiveModelId || '',
-          reasoningEffort: m.reasoningEffort || '',
-          messages: [],
-          facet: null,
-          loaded: false,
-          lifecycle: m.lifecycle,
-        }));
-      const strandedCount = allMetas.filter(
+      // The first event is the list as it stands. Unavailable sessions are
+      // retained too: hiding them would hide recovery work.
+      const first = /** @type {any} */ ((await list.next()).value);
+      const metas = /** @type {any[]} */ (
+        first && first.type === 'snapshot' ? first.sessions : []
+      );
+      for (const meta of metas) adoptSessionMeta(meta);
+      sortSessions();
+      const strandedCount = metas.filter(
         m => m.lifecycle && m.lifecycle !== 'ready',
       ).length;
       if (!sessions.length) {
@@ -2515,44 +2882,13 @@ export const flootComponent = (
           ? `Ready. ${strandedCount} session(s) could not be recovered.`
           : 'Ready.',
       );
-      openActiveHistory();
+      openActiveSession();
+      void followSessionList(list);
     } catch (err) {
-      setStatus(`error: ${/** @type {Error} */ (err).message}`);
+      if (!cancelled) setStatus(`error: ${/** @type {Error} */ (err).message}`);
     }
   };
   void loadInitialSessions();
-
-  // Mail-driven workflow completions do not have a UI reply stream. Refresh
-  // idle history so the readiness message appears while this space is open.
-  // Never overwrite an optimistic/in-flight user turn with an older snapshot.
-  let historyTimer;
-  const refreshMailHistory = async () => {
-    void execution.refresh();
-    void network.refresh();
-    const session = getActiveSession();
-    if (
-      session &&
-      (!session.lifecycle || session.lifecycle === 'ready') &&
-      !busy &&
-      !liveTurnFor(session.id)
-    ) {
-      const previousCount = session.messages.length;
-      await loadHistory(
-        session,
-        undefined,
-        () => !cancelled && !busy && !liveTurnFor(session.id),
-      );
-      if (
-        !cancelled &&
-        activeSessionId === session.id &&
-        session.messages.length > previousCount
-      ) {
-        notify();
-      }
-    }
-    if (!cancelled) historyTimer = setTimeout(refreshMailHistory, 3000);
-  };
-  historyTimer = setTimeout(refreshMailHistory, 3000);
 
   return () => {
     cancelled = true;
@@ -2562,7 +2898,11 @@ export const flootComponent = (
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();
-    clearTimeout(historyTimer);
+    // Closing a subscription detaches this page and nothing else.
+    if (sessionView) sessionView.close();
+    if (sessionListStream) {
+      void Promise.resolve(sessionListStream.return()).catch(() => {});
+    }
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.

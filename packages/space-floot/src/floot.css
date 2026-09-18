@@ -817,6 +817,23 @@
   background: #2a2a3e;
   color: #b8b8cc;
 }
+/* Why queued messages are not moving, above them. */
+.floot-pending-hold {
+  align-self: flex-end;
+  max-width: 80%;
+  margin: 0.2rem 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 2px solid var(--fl-accent);
+  font-size: 0.78rem;
+  color: var(--fl-text-muted);
+}
+.floot-pending-note {
+  font-size: 0.72rem;
+  color: var(--fl-text-faint);
+}
+.floot-pending-interrupted .floot-pending-note {
+  color: var(--fl-red);
+}
 .floot-pending-actions {
   display: flex;
   justify-content: flex-end;
