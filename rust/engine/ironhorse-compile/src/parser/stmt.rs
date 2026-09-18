@@ -703,14 +703,51 @@ impl Parser<'_> {
 
     /// `fxVariableStatement` — `var`/`let`/`const` binding list. Leaves the
     /// single binding node, or a `Statements` wrapping several.
-    pub(crate) fn variable_statement(&mut self, token: Token, binding_flags: u32) -> PResult<()> {
+    ///
+    /// Returns whether any binding was a destructuring pattern with NO
+    /// initializer. Outside a `for` head that is rejected here; inside one it
+    /// cannot be decided yet, because `for (var [a] of …)` is legal and
+    /// `for (var [a]; …)` is not, so the answer is handed back to
+    /// [`Self::for_statement`] to settle once the head's shape is known.
+    pub(crate) fn variable_statement(&mut self, token: Token, binding_flags: u32) -> PResult<bool> {
         let line = self.cur.line;
         let mut comma_flag = false;
         let mut count = 0usize;
+        let mut bare_pattern = false;
+        // `flags::FOR` is set by `for_statement` around the head and cleared
+        // again once the head is parsed, so at ENTRY it says whether these
+        // bindings are a `ForBinding`. It cannot be read later in this function:
+        // `binding` clears it as soon as it consumes an `=`, including the `=`
+        // of a default NESTED in a pattern, so by the end of
+        // `for (const [v, m = f(v)] of xs)`'s head binding the flag is gone.
+        let for_binding = self.flags & flags::FOR != 0;
         self.match_token(token)?;
         while has_flag(self.cur.token, BEGIN_BINDING) {
             comma_flag = false;
             self.binding(token, 1 | binding_flags)?;
+            // `VariableDeclaration : BindingPattern Initializer` and
+            // `LexicalBinding : BindingPattern Initializer` both REQUIRE the
+            // initializer, so `var [a];` and `let {x};` are spec early errors.
+            // `binding` wraps a binding that has one in a `Binding` node, so a
+            // bare `ArrayBinding`/`ObjectBinding` on the stack is one that has
+            // none — and it reached `code_node_inner`'s unsupported-node panic
+            // (coder.rs:1588), which a guest could raise with
+            // `eval("var [a];")` (F063).
+            //
+            // Rejecting is a deliberate divergence from the pinned oracle's
+            // parser, which does not check this either, in the direction of the
+            // spec — the same move as the `for (let x, y in {})` rejection
+            // below. The `ForBinding` grammars take NO initializer, so inside a
+            // `for` head the decision waits for `for_statement`.
+            if matches!(
+                self.top_token(),
+                Some(Token::ArrayBinding | Token::ObjectBinding)
+            ) {
+                if !for_binding {
+                    return Err(self.error("missing binding initializer"));
+                }
+                bare_pattern = true;
+            }
             count += 1;
             if self.cur.token == Token::Comma {
                 self.flags &= !flags::FOR;
@@ -730,7 +767,7 @@ impl Parser<'_> {
             self.push_node_list(count)?;
             self.push_node_struct(1, Token::Statements, line)?;
         }
-        Ok(())
+        Ok(bare_pattern)
     }
 
     // ================= for =================
@@ -739,6 +776,10 @@ impl Parser<'_> {
         let line = self.cur.line;
         let mut await_flag = false;
         let mut expression_flag = false;
+        // See `variable_statement`: a destructuring head binding with no
+        // initializer is legal for `for-in`/`for-of` and an early error for the
+        // three-part `for`, which is not known until the head is parsed.
+        let mut bare_pattern = false;
         self.push_null();
         self.match_token(Token::For)?;
         if self.cur.token == Token::Await {
@@ -762,12 +803,12 @@ impl Parser<'_> {
         if self.cur.token == Token::Semicolon {
             self.push_null();
         } else if self.cur.token == Token::Const {
-            self.variable_statement(Token::Const, 0)?;
+            bare_pattern = self.variable_statement(Token::Const, 0)?;
         } else if self.cur.token == Token::Let {
-            self.variable_statement(Token::Let, 0)?;
+            bare_pattern = self.variable_statement(Token::Let, 0)?;
         } else if self.is_keyword("let")? && has_flag(self.ahead_token(), BEGIN_BINDING) {
             self.cur.token = Token::Let;
-            self.variable_statement(Token::Let, 0)?;
+            bare_pattern = self.variable_statement(Token::Let, 0)?;
         } else if self.cur.token == Token::Identifier
             && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("using")
             && !self.cur.escaped
@@ -790,7 +831,7 @@ impl Parser<'_> {
                 expression_flag = true;
             } else {
                 self.cur.token = Token::Using;
-                self.variable_statement(Token::Using, 0)?;
+                bare_pattern = self.variable_statement(Token::Using, 0)?;
             }
         } else if self.cur.token == Token::Await {
             let maybe_await_using = !self.ahead_crlf()
@@ -813,14 +854,14 @@ impl Parser<'_> {
             if is_await_using {
                 self.get_next_token()?;
                 self.cur.token = Token::Using;
-                self.variable_statement(Token::Using, flags::AWAITING)?;
+                bare_pattern = self.variable_statement(Token::Using, flags::AWAITING)?;
                 self.flags |= flags::AWAITING;
             } else {
                 self.comma_expression()?;
                 expression_flag = true;
             }
         } else if self.cur.token == Token::Var {
-            self.variable_statement(Token::Var, 0)?;
+            bare_pattern = self.variable_statement(Token::Var, 0)?;
         } else {
             self.comma_expression()?;
             expression_flag = true;
@@ -889,6 +930,13 @@ impl Parser<'_> {
         } else {
             if expression_flag {
                 self.push_node_struct(1, Token::Statement, line)?;
+            }
+            if bare_pattern {
+                // `for (var [a];;)`. `ForBinding` never takes an initializer,
+                // so the pattern was let through above; a three-part `for`
+                // head is an ordinary `VariableStatement`/`LexicalDeclaration`,
+                // where `BindingPattern` requires one.
+                return Err(self.error("missing binding initializer"));
             }
             self.match_token(Token::Semicolon)?;
             if has_flag(self.cur.token, BEGIN_EXPRESSION) {
