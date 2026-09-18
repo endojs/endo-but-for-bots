@@ -35,10 +35,10 @@
 //     a present program is checked with the mounter's own program check, and
 //     a present NINEP_SUDO must be exactly `1` (the mounter would silently
 //     treat anything else as off)
-//   ENDO_OPENCODE_DIAGNOSTICS=1 — log host-side broker upstream failures
-//     and admission events. Off by default. The slice only ever sees a
-//     bare 502, so this is the only way to learn why one happened;
-//     applied only when a broker service is minted
+//   ENDO_OPENCODE_DIAGNOSTICS=1 — also log the broker's per-request admission
+//     events. Off by default; applied only when a broker service is
+//     minted. Failures are logged regardless (the slice only ever sees a
+//     bare 502, so the broker worker's log is where a cause is found)
 //   ENDO_OPENCODE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
 //   ENDO_OPENCODE_BROKER_DIR, ENDO_OPENCODE_BROKER_OWNER_ID,
@@ -124,9 +124,11 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const brokerDir =
     env.ENDO_OPENCODE_BROKER_DIR || path.join(os.homedir(), 'opencode-broker');
   const publicInternet = env.ENDO_OPENCODE_PUBLIC_INTERNET === '1';
-  // Host-side broker diagnostics. Off by default: the hooks log every
-  // upstream failure and admission event, which is operator-visible detail
-  // about a credentialed request path.
+  // The host-side admission trail: a line per request (admitted, completed,
+  // revoked) in the broker worker's log. Off by default, because it is
+  // volume, not because it is sensitive. Failures are not behind this
+  // switch: an upstream or listener failure is always logged there, since
+  // the slice is only ever told 502.
   const diagnostics = env.ENDO_OPENCODE_DIAGNOSTICS === '1';
   // The deployment resource profile is recorded into each session plan by the
   // backend. It has no defaults; validate the operator's value before any

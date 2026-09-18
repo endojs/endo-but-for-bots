@@ -2213,6 +2213,23 @@ unchanged: the listener's stderr is still a pipe to the runtime, drained for
 the child's lifetime and offered to `host.onStderr`, and the broker worker's
 `console.error` lines still land in the worker's `worker.log`.
 
+**Failures are logged unconditionally — same day.** Removing the journal copy
+took away the only production sink the listener's `Provider HTTP diagnostic`
+lines had, because `host.onStderr` was supplied only by tests. It also made
+plain that the rest of the failure record sat behind the operator's
+`diagnostics` boolean, which is recorded when a broker is minted: OpenCode's
+broker had none, so a 429 from an account out of quota and an outage were the
+same bare 502, and finding out which first took retiring the broker. The
+broker now always installs the transport's failure hook (`<label> upstream
+failure {stage, status, refusal}`: host-only, written only on failure, the
+refusal a bounded credential-screened excerpt of a body that was refused) and
+always reads the listener's stderr pipe for its failure lines (`<label>
+listener failure {stage, checks}`: a stage and boolean header checks, parsed
+and re-projected, never forwarded raw). Both go to the broker worker's
+`worker.log`. `diagnostics` now gates only the admission trail (`broker event
+admitted|completed|revoked <n>`), which is a line per request and is volume
+rather than evidence.
+
 What this does not do: it removes nothing already written. Existing journal
 entries stay until the operator vacuums or they age out. Podman's container
 lifecycle events (names, labels, image; no stdio) still follow

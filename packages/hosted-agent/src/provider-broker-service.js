@@ -88,6 +88,9 @@ harden(assertBrokerModels);
  * @param {number} [options.maxSessions]
  * @param {any} [options.audit]
  * @param {(diagnostic: any) => void} [options.onDiagnostic]
+ * @param {(diagnostic: any) => void} [options.onListenerDiagnostic] Host-only:
+ *   the listener's own per-request failure lines (a stage and header-check
+ *   booleans), read from its stderr pipe.
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {any} [options.runtime] - Injectable provider listener runtime (tests)
  * @param {ReturnType<typeof makePodmanProviderListenerRuntimeKit>} [options.runtimeKit]
@@ -113,6 +116,7 @@ export const makeProviderBrokerKit = ({
   publicInternet = false,
   audit,
   onDiagnostic,
+  onListenerDiagnostic,
   fetch: fetchAuthority = globalThis.fetch,
   runtime,
   runtimeKit,
@@ -161,6 +165,20 @@ export const makeProviderBrokerKit = ({
           publicInternet,
           env,
           ...(maxSessions === undefined ? {} : { maxListeners: maxSessions }),
+          // The listener's stderr is a pipe to this process and nothing else
+          // (its container keeps no log), so without a reader here its
+          // failure lines go nowhere.
+          ...(onListenerDiagnostic === undefined
+            ? {}
+            : {
+                host: harden({
+                  onStderr: chunk => {
+                    for (const diagnostic of listenerDiagnostics(chunk)) {
+                      onListenerDiagnostic(diagnostic);
+                    }
+                  },
+                }),
+              }),
         })
       : { open: async () => runtime, close: () => runtime.dispose() });
   /** @type {ReturnType<typeof makeProviderBrokerGrantIssuer> | undefined} */
@@ -244,6 +262,50 @@ export const makeProviderBrokerKit = ({
   return harden({ start, close });
 };
 harden(makeProviderBrokerKit);
+
+const LISTENER_DIAGNOSTIC_PREFIX = 'Provider HTTP diagnostic: ';
+
+/**
+ * The listener worker's failure lines out of one chunk of its stderr. The
+ * stream also carries whatever else the container's Node prints at startup;
+ * only lines the worker wrote as diagnostics, and that parse as the fixed
+ * shape it writes (a stage, optional boolean header checks), are returned.
+ *
+ * @param {Uint8Array} chunk
+ * @returns {Array<{ stage: string, checks?: Record<string, boolean> }>}
+ */
+export const listenerDiagnostics = chunk => {
+  const out = [];
+  for (const line of new TextDecoder().decode(chunk).split('\n')) {
+    if (line.startsWith(LISTENER_DIAGNOSTIC_PREFIX)) {
+      try {
+        const { stage, checks } = JSON.parse(
+          line.slice(LISTENER_DIAGNOSTIC_PREFIX.length),
+        );
+        if (typeof stage === 'string' && stage.length <= 32) {
+          out.push(
+            harden({
+              stage,
+              ...(checks && typeof checks === 'object'
+                ? {
+                    checks: Object.fromEntries(
+                      Object.entries(checks)
+                        .filter(([, value]) => typeof value === 'boolean')
+                        .slice(0, 16),
+                    ),
+                  }
+                : {}),
+            }),
+          );
+        }
+      } catch (_error) {
+        // A torn or foreign line is not a diagnostic.
+      }
+    }
+  }
+  return harden(out);
+};
+harden(listenerDiagnostics);
 
 /**
  * Retain one operator broker before exposing inert per-session scope facets.
@@ -336,6 +398,8 @@ harden(makeProviderBrokerServiceKit);
  *   The secret may include renewal CAS authority, never exposed to sessions.
  * @param {typeof makeProviderBrokerServiceKit} [options.makeServiceKit]
  * @param {(error: unknown) => void} [options.reportError]
+ * @param {(...args: string[]) => void} [options.log] Where the host-only
+ *   failure and admission lines go; the worker's stderr by default.
  */
 export const makeOwnedProviderBrokerService = ({
   label,
@@ -345,6 +409,7 @@ export const makeOwnedProviderBrokerService = ({
   makeServiceKit = makeProviderBrokerServiceKit,
   reportError = error =>
     console.error(`${label} broker cleanup pending`, error),
+  log = (...args) => console.error(...args),
 }) => {
   /**
    * @param {Config} config
@@ -353,23 +418,31 @@ export const makeOwnedProviderBrokerService = ({
    */
   const makeKit = (config, secret, env) => {
     const { policy, accountRef, adaptRequest } = makePolicy(config);
-    // Runtime hooks are not configuration fields: the operator profile carries
-    // only a boolean, and the hooks are constructed here. Without them an
-    // upstream failure reaches the slice as a bare 502 and reaches the operator
-    // as nothing at all — provider-http.js deliberately refuses to echo the
-    // cause, so this is the only channel that can carry it.
-    const hooks =
-      config.diagnostics === true
+    // Runtime hooks are not configuration fields, and the failure hooks are
+    // not optional. An upstream failure reaches the slice as a bare 502 —
+    // provider-http.js deliberately refuses to echo the cause — so these
+    // lines are the only place a cause exists: a 429 from an account out of
+    // quota and an outage are the same 502 without them. They are host-only,
+    // written only on a failure, and bounded: a stage, a status, and a
+    // credential-screened excerpt of a body that was refused, never one that
+    // was served. They used to sit behind the operator's `diagnostics`
+    // boolean, which is recorded when the broker is minted, so learning why
+    // a request failed first took retiring the broker.
+    //
+    // What `diagnostics` still gates is the admission trail, a line for every
+    // request whether or not anything went wrong.
+    const hooks = {
+      onDiagnostic: diagnostic =>
+        log(`${label} upstream failure`, JSON.stringify(diagnostic)),
+      onListenerDiagnostic: diagnostic =>
+        log(`${label} listener failure`, JSON.stringify(diagnostic)),
+      ...(config.diagnostics === true
         ? {
-            onDiagnostic: diagnostic =>
-              console.error(
-                `${label} upstream failure`,
-                JSON.stringify(diagnostic),
-              ),
             audit: ({ event, requests }) =>
-              console.error(`${label} broker event`, event, String(requests)),
+              log(`${label} broker event`, event, String(requests)),
           }
-        : {};
+        : {}),
+    };
     const kit = makeServiceKit({
       ...config,
       label,

@@ -42,10 +42,10 @@
 //     9P mounter. An empty value is unset; a present program is checked with
 //     the mounter's own program check, and a present NINEP_SUDO must be
 //     exactly `1`
-//   ENDO_CLAUDE_DIAGNOSTICS=1 — log host-side broker upstream failures
-//     and admission events. Off by default. The slice only ever sees a
-//     bare 502, so this is the only way to learn why one happened;
-//     applied only when a broker service is minted
+//   ENDO_CLAUDE_DIAGNOSTICS=1 — also log the broker's per-request admission
+//     events. Off by default; applied only when a broker service is
+//     minted. Failures are logged regardless (the slice only ever sees a
+//     bare 502, so the broker worker's log is where a cause is found)
 //   ENDO_CLAUDE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
 //   ENDO_CLAUDE_BROKER_DIR, ENDO_CLAUDE_BROKER_OWNER_ID,
@@ -152,9 +152,11 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const brokerDir =
     env.ENDO_CLAUDE_BROKER_DIR || path.join(os.homedir(), 'claude-broker');
   const publicInternet = env.ENDO_CLAUDE_PUBLIC_INTERNET === '1';
-  // Host-side broker diagnostics. Off by default: the hooks log every
-  // upstream failure and admission event, which is operator-visible detail
-  // about a credentialed request path.
+  // The host-side admission trail: a line per request (admitted, completed,
+  // revoked) in the broker worker's log. Off by default, because it is
+  // volume, not because it is sensitive. Failures are not behind this
+  // switch: an upstream or listener failure is always logged there, since
+  // the slice is only ever told 502.
   const diagnostics = env.ENDO_CLAUDE_DIAGNOSTICS === '1';
   const anthropicBeta = env.ENDO_CLAUDE_ANTHROPIC_BETA || '';
   // The deployment resource profile is recorded into each session plan by the
