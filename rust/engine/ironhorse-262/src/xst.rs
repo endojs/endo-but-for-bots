@@ -2932,9 +2932,16 @@ mod tests {
             setup_halt_verdict(&Halt::Refused("atomics:wait-notify")),
             Verdict::RunSkip("refused:atomics:wait-notify".into())
         );
+        // Drawn from the registry rather than named: this assertion is about
+        // the CLASSIFICATION, and hard-coding a label made it rot the day the
+        // lazy Iterator helpers were implemented and `Iterator.helper` was
+        // retired from `NOT_IMPLEMENTED_LABELS`.
+        let declined = ironhorse_vm::halt_labels::NOT_IMPLEMENTED_LABELS
+            .first()
+            .expect("the engine declines at least one thing");
         assert_eq!(
-            setup_halt_verdict(&Halt::NotImplemented("Iterator.helper")),
-            Verdict::RunSkip("unsupported-opcode:Iterator.helper".into())
+            setup_halt_verdict(&Halt::NotImplemented(declined)),
+            Verdict::RunSkip(format!("unsupported-opcode:{declined}"))
         );
         assert_eq!(
             setup_halt_verdict(&Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode)),
