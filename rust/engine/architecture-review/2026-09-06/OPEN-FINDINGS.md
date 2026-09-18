@@ -174,8 +174,40 @@ ironhorse and Node render `51298814505517064`, which round-trips.
 No port change can settle it, and the by-double comparison that suppresses the
 `finding_*_large_integer_dtoa` family cannot suppress this one, because the two
 spellings are genuinely different doubles.
-Pinned by `ironhorse-vm/tests/oracle_dtoa_round_trip_divergence.rs`; it wants a
-known-divergence entry in the differential targets rather than a fix.
+
+The cause has since been identified, and it is a build-configuration difference
+rather than an arithmetic defect.
+`xsdtoa.c:56` defines David Gay's `ROUND_BIASED`, which removes the mantissa
+parity test from the shortest-digit loop at `xsdtoa.c:6162` and `6181` and from
+`strtod` at `4413`, `4423`, `4703` and `4722`.
+A candidate spelling that sits exactly on the boundary between two doubles is
+then accepted whatever the parity, and read back by rounding up rather than to
+even — self-consistent inside XS, and non-conformant in both directions.
+So this is two divergences, not one: `Number::toString` and `Number(string)`.
+
+Measured: in the `ulp == 8` band, twelve values constructed to put the shorter
+spelling on the LOWER boundary split six/six exactly on mantissa parity, and the
+odd half is this finding's class; four more in the `ulp == 4` band agree with
+the law.
+The same macro also explains the sibling family, pointing the other way.
+On the UPPER boundary the spec accepts the shorter spelling for an even mantissa
+and XS refuses it, which is precisely the `finding_*_large_integer_dtoa` shape —
+six generated upper-tie values split on parity as predicted, and all four values
+that family pins are even-mantissa upper ties.
+The family is harmless because refusing a shorter spelling still denotes the same
+double; this class is not, because accepting a wrong one does not.
+
+The construction exhibits the class rather than characterizing it: for
+`ulp >= 16` the boundary spelling is not always where the digit loop stops, and
+`72057594037928048` is a measured odd-mantissa value that agrees anyway.
+
+Pinned by `ironhorse-vm/tests/oracle_dtoa_round_trip_divergence.rs`, which now
+carries the mechanism, both directions and the parity law over 24 generated
+values; it wants a known-divergence entry in the differential targets rather than
+a fix.
+Turning `ROUND_BIASED` off in `xsdtoa.c` would settle both directions at once,
+but that is a change to vendored Moddable source and belongs to whoever owns the
+submodule pin.
 
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a
