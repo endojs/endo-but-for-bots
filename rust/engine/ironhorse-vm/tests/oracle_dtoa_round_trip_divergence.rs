@@ -108,10 +108,19 @@
 //! that is a change to vendored Moddable source and belongs to whoever owns the
 //! submodule pin.
 //!
-//! Second, the by-double comparison that suppresses the rest of the family
-//! cannot suppress these, because the doubles genuinely differ once XS's string
-//! is read back. A reviewer meeting one of these reports should not reach for
-//! the same "rendering only" explanation.
+//! Second, the by-double comparison that suppresses the rest of the family did
+//! not suppress these, because XS's string READ BACK under ties-to-even is a
+//! different double — even though XS itself holds the same one. That is a false
+//! positive, not a real divergence, and it duly arrived as a red CI tripwire:
+//! `differential_source` crashed on an expression where both engines produced
+//! byte-identical IEEE-754 bits and XS rendered the exact midpoint down
+//! (`ironhorse-fuzz`, `finding_7fc45770f3c4e8e4_biased_tie_spelling_agrees`).
+//! `results_agree` now treats a boundary spelling as ambiguous — it denotes
+//! either neighbour depending on the reader's tie rule — which is what it is.
+//!
+//! So a reviewer meeting one of these reports should NOT reach for "the engines
+//! computed different numbers": they did not. They should reach for this file.
+//! What genuinely differs is the rendering, and that is what is pinned below.
 //!
 //! Needs neither the oracle nor the `c/moddable` submodule: it pins the port's
 //! own rendering and the round-trip property, which is the portable claim. The

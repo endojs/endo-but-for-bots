@@ -171,9 +171,17 @@ not what either engine returns from `String()`.
 `51298814505517056 + 8` is real and is the ORACLE's defect: XS renders
 `51298814505517060`, which parses back one ulp low to `51298814505517056`, while
 ironhorse and Node render `51298814505517064`, which round-trips.
-No port change can settle it, and the by-double comparison that suppresses the
-`finding_*_large_integer_dtoa` family cannot suppress this one, because the two
-spellings are genuinely different doubles.
+No port change can settle the RENDERING, which is the oracle's.
+The by-double comparison that suppresses the `finding_*_large_integer_dtoa`
+family did not suppress this one, because XS's spelling read back under
+ties-to-even is a different double — although XS itself holds the same one.
+That was a false positive rather than a real divergence, and it arrived as a red
+CI tripwire: `differential_source` crashed on an expression where both engines
+produced byte-identical IEEE-754 bits and XS rendered the exact midpoint down
+(pinned as `finding_7fc45770f3c4e8e4_biased_tie_spelling_agrees`).
+`results_agree` now treats a boundary spelling as ambiguous — it denotes either
+neighbour depending on the reader's tie rule — so the value comparison is right
+and the rendering divergence stays documented rather than re-reported.
 
 The cause has since been identified, and it is a build-configuration difference
 rather than an arithmetic defect.

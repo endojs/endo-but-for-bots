@@ -37,18 +37,64 @@ pub(crate) fn compare_observations(
 /// ironhorse reproduce XS's non-shortest, non-conformant rendering.
 ///
 /// Comparing the parsed doubles suppresses that spurious spelling divergence
-/// while still flagging every genuine value divergence: two *different*
-/// doubles never share a parse (a decimal string parses to exactly one
-/// nearest double), so `a.to_bits() == b.to_bits()` fails the moment the
-/// engines actually computed different numbers.
+/// while still flagging every genuine value divergence — ALMOST. The reasoning
+/// it rested on was "two *different* doubles never share a parse, so
+/// `a.to_bits() == b.to_bits()` fails the moment the engines actually computed
+/// different numbers". That holds only while both renderings round-trip, and
+/// XS's does not always: `xsdtoa.c:56` defines David Gay's `ROUND_BIASED`, so
+/// XS can emit a spelling sitting EXACTLY on the boundary between two doubles
+/// and read it back by rounding up rather than to even. Parsed here with
+/// ties-to-even, that spelling lands on the OTHER double, and the check
+/// reported a value divergence where there was none.
+///
+/// `differential_source` found one: the doubles were byte-identical
+/// (`247,255,255,255,255,199,102,195`) and both engines answered `true` to
+/// `expr === -51298814505516984`, yet XS rendered `-51298814505516980` — the
+/// exact midpoint down — and the comparison read that back as
+/// `-51298814505516976`. A false positive, and the exact inverse of the family
+/// this function was written for.
+///
+/// So a boundary spelling is treated as what it is: AMBIGUOUS. It denotes
+/// either neighbour depending on the reader's tie rule, and the engines agree
+/// if ironhorse's double is one of them. Restricted to integral values, where
+/// the midpoint is itself an integer and the comparison is exact; a genuine
+/// value divergence of more than one ulp, or between non-integral values, is
+/// unaffected.
 pub(crate) fn results_agree(oracle: &str, ironhorse: &str) -> bool {
     if oracle == ironhorse {
         return true;
     }
     match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
-        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
+        (Some(a), Some(b)) => a.to_bits() == b.to_bits() || oracle_spelling_is_a_tie(oracle, b),
         _ => false,
     }
+}
+
+/// Whether `oracle` is the exact decimal midpoint between `ironhorse` and one
+/// of its two adjacent doubles — the one shape a `ROUND_BIASED` renderer emits
+/// that a ties-to-even parser reads back as the neighbour.
+///
+/// Integral values only. Both doubles and the midpoint are then exact integers,
+/// so the test is done in `i128` and involves no rounding of its own.
+fn oracle_spelling_is_a_tie(oracle: &str, ironhorse: f64) -> bool {
+    let exact = |v: f64| -> Option<i128> {
+        (v.is_finite() && v.fract() == 0.0 && v.abs() < 9.0e18).then_some(v as i128)
+    };
+    let Some(here) = exact(ironhorse) else {
+        return false;
+    };
+    // The oracle's text must itself be an exact decimal integer; anything with
+    // an exponent or a fraction is not the shape this rule is about.
+    let Ok(spelled) = oracle.parse::<i128>() else {
+        return false;
+    };
+    [ironhorse.next_down(), ironhorse.next_up()]
+        .into_iter()
+        .filter_map(exact)
+        .any(|neighbour| {
+            let sum = here + neighbour;
+            sum % 2 == 0 && sum / 2 == spelled
+        })
 }
 
 /// Parse a completion string as the ECMAScript `String()` of a finite
@@ -94,6 +140,37 @@ mod tests {
         assert!(compare_observations((true, "42", 1), (true, "43", 2))
             .unwrap_err()
             .starts_with("result:"));
+    }
+
+    /// The `differential_source` crash of 2026-09-18
+    /// (`crash-7fc45770f3c4e8e481b84f9caca3f0a5408c319b`).
+    ///
+    /// Both engines held the SAME double: byte-identical IEEE-754
+    /// (`247,255,255,255,255,199,102,195`) and both answered `true` to
+    /// `expr === -51298814505516984`. XS rendered the exact midpoint down,
+    /// which ties-to-even reads back as `-51298814505516976`, so the by-double
+    /// comparison called it a value divergence and the target panicked.
+    #[test]
+    fn a_biased_boundary_spelling_is_not_a_value_divergence() {
+        assert!(results_agree("-51298814505516980", "-51298814505516984"));
+        // The positive-signed member of the same class.
+        assert!(results_agree("51298814505517060", "51298814505517064"));
+        // And it is genuinely the tie that does it, not mere proximity: the
+        // midpoint is 51298814505517060, so 51298814505517058 is not it.
+        assert!(!results_agree("51298814505517058", "51298814505517064"));
+    }
+
+    /// The suppression must not swallow a real one-ulp disagreement.
+    #[test]
+    fn an_adjacent_double_spelled_exactly_is_still_a_divergence() {
+        // Both spellings round-trip to DIFFERENT doubles one ulp apart. Only a
+        // spelling on the boundary between them is ambiguous; these are not.
+        assert!(!results_agree("51298814505517056", "51298814505517064"));
+        assert!(!results_agree("57632001481506816", "57632001481506824"));
+        // Two ulps away from the tie is not a tie either.
+        assert!(!results_agree("51298814505517052", "51298814505517064"));
+        // Non-integral values are outside the rule entirely.
+        assert!(!results_agree("0.5", "0.5000000000000001"));
     }
 
     #[test]
