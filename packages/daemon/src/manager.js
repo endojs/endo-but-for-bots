@@ -2761,9 +2761,20 @@ const makeDaemonCore = async (
     // misclassifies the view for a receiver feature-detecting a read-only hub.
     // Minted through the shared `makeReadOnlyDirectoryView` factory so all three
     // read-only views (this, the message hub's, and `EndoDirectory.readOnly()`)
-    // carry an identical guard and a `ReadableNameHub`-specific `help`.
+    // carry an identical guard and a `ReadableNameHub`-specific `help`. The
+    // liveness gate severs the view when this hub's context is cancelled, so a
+    // guest's read-only view does not outlive collection of the mailbox.
+    let mailboxCancelled = false;
+    context.onCancel(() => {
+      mailboxCancelled = true;
+    });
     const mailReadableView = makeReadOnlyDirectoryView(
       harden({ has, list, lookup, maybeLookup }),
+      () => {
+        if (mailboxCancelled) {
+          throw new Error('Mailbox directory has been revoked');
+        }
+      },
     );
 
     mailHub = /** @type {NameHub} */ (
@@ -3157,8 +3168,18 @@ const makeDaemonCore = async (
     // over `__getMethodNames__` sees the declared `ReadableNameHub` contract
     // and not the full `MessageHub`/`EndoDirectory` surface. Minted through the
     // shared `makeReadOnlyDirectoryView` factory for one guard and one `help`.
+    // The liveness gate severs the view when this hub's context is cancelled.
+    let messageCancelled = false;
+    context.onCancel(() => {
+      messageCancelled = true;
+    });
     const messageReadableView = makeReadOnlyDirectoryView(
       harden({ has, list, lookup, maybeLookup }),
+      () => {
+        if (messageCancelled) {
+          throw new Error('Message directory has been revoked');
+        }
+      },
     );
 
     messageHub = /** @type {NameHub} */ (

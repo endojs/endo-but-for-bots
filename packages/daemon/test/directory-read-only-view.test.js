@@ -105,7 +105,7 @@ test('the interface guard rejects malformed arguments at the view boundary', asy
   t.deepEqual(calls, [], 'no malformed call reached the backing hub');
 });
 
-test('help() falls back to the default for any unrecognized or prototype method name', async t => {
+test('help() returns a plain string, never an inherited prototype value', async t => {
   const { hub } = makeStubHub();
   const view = makeReadOnlyDirectoryView(hub);
 
@@ -119,9 +119,12 @@ test('help() falls back to the default for any unrecognized or prototype method 
 
   // The security contract: a caller-supplied method name that only resolves
   // through `Object.prototype` (`constructor`, `toString`, `hasOwnProperty`,
-  // `__proto__`, `valueOf`) must NOT reach an inherited value — it falls back
-  // to the overview. If `readOnlyHelp` ever loses its null prototype, these
-  // redden.
+  // `__proto__`, `valueOf`) must NOT reach an inherited value. `makeHelp` uses
+  // an own-property lookup, so each returns the shared "no documentation"
+  // string — a plain string that satisfies the `help(method?) -> string` return
+  // guard — rather than an `Object.prototype` function that would trip it. If
+  // `makeHelp` ever regresses to an `in` (prototype-walking) lookup, these
+  // redden with a return-guard rejection.
   const evilNames = [
     'constructor',
     'toString',
@@ -135,8 +138,65 @@ test('help() falls back to the default for any unrecognized or prototype method 
   evilDocs.forEach((doc, i) => {
     t.is(
       doc,
-      overview,
-      `help(${JSON.stringify(evilNames[i])}) must fall back to the overview`,
+      `No documentation available for method "${evilNames[i]}".`,
+      `help(${JSON.stringify(evilNames[i])}) must return a plain miss string`,
     );
   });
+});
+
+test('empty and multi-segment path arguments forward verbatim to the backing hub', async t => {
+  const { hub, calls } = makeStubHub();
+  const view = makeReadOnlyDirectoryView(hub);
+
+  // The guard admits `''`, `[]`, a multi-segment array, and a zero-length rest
+  // for `has`/`list`. None are rejected at THIS boundary (they are value, not
+  // type, confusion — `assertNamePath`/`assertName` reject them downstream at
+  // the backing hub), so each must forward through unchanged.
+  t.is(await E(view).lookup(''), 'looked-up');
+  t.is(await E(view).lookup([]), 'looked-up');
+  t.is(await E(view).maybeLookup(['a', 'b']), 'maybe');
+  await E(view).has();
+  await E(view).list();
+
+  t.deepEqual(calls, [
+    ['lookup', ['']],
+    ['lookup', [[]]],
+    ['maybeLookup', [['a', 'b']]],
+    ['has', []],
+    ['list', []],
+  ]);
+});
+
+test('the liveness gate severs every read once the backing capability is cancelled', async t => {
+  const { hub, calls } = makeStubHub();
+  let cancelled = false;
+  const assertLive = () => {
+    if (cancelled) {
+      throw new Error('Directory has been revoked');
+    }
+  };
+  const view = makeReadOnlyDirectoryView(hub, assertLive);
+
+  // Live: reads forward to the backing hub.
+  t.is(await E(view).has('one'), true);
+
+  // Cancel the backing capability. The view carries no formula identity, so
+  // formula collection's sever path cannot reach it; the liveness gate is what
+  // stops it forwarding. Every read must now reject and NOT reach the hub.
+  cancelled = true;
+  const callsAfterCancel = calls.length;
+  await t.throwsAsync(E(view).has('one'), { message: /revoked/ });
+  await t.throwsAsync(E(view).list(), { message: /revoked/ });
+  await t.throwsAsync(E(view).lookup('one'), { message: /revoked/ });
+  await t.throwsAsync(E(view).maybeLookup('one'), { message: /revoked/ });
+  t.is(
+    calls.length,
+    callsAfterCancel,
+    'no read reached the backing hub after cancellation',
+  );
+
+  // `help` is a pure self-description and stays available (it forwards to
+  // nothing), so it does not need the gate.
+  const overview = await E(view).help();
+  t.true(overview.startsWith('ReadableNameHub'));
 });

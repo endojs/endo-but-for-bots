@@ -7955,3 +7955,92 @@ test('EndoDirectory.readOnly() is memoized: repeated calls return the same view'
   // than minting a fresh worker + formula per invocation.
   t.is(first, second);
 });
+
+test('mailHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The mailbox hub (`@mail`) is one of the two guest-reachable `readOnly()`
+  // call sites in manager.js; its view is minted eagerly at hub construction
+  // from scope-captured has/list/lookup/maybeLookup, so this pins that closure
+  // capture and the guard round-trip through `makeExo` — not just the shared
+  // factory the unit test exercises in isolation.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  await hostMessages.next();
+
+  const mailHub = await E(host).lookup(['@mail']);
+  const readOnlyMail = await E(mailHub).readOnly();
+
+  // Reads round-trip against the backing mailbox hub.
+  const names = [...(await E(readOnlyMail).list())];
+  t.true(Array.isArray(names));
+
+  // No mutator survives on the view (they are present-but-throwing on the hub,
+  // absent entirely on the read-only view).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).remove('1'),
+    { message: /remove/ },
+    'remove is not available on the mailbox read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on the mailbox read-only view',
+  );
+  // The interface guard is live on this call site too: a wrong-typed argument
+  // is rejected at the view boundary.
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMail)).lookup(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('messageHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The per-message hub (`@mail/<number>`) is the second guest-reachable
+  // `readOnly()` call site in manager.js. Same eager-mint shape as the mailbox
+  // hub, exercised here through a real daemon.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await hostMessages.next();
+  await E(host).reply(hostMessage.number, ['hi'], [], []);
+  const { value: replyMessage } = await hostMessages.next();
+
+  const messageHub = await E(host).lookup([
+    '@mail',
+    String(replyMessage.number),
+  ]);
+  const readOnlyMessage = await E(messageHub).readOnly();
+
+  const names = [...(await E(readOnlyMessage).list())];
+  t.true(names.includes('@from'));
+
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMessage)).remove('@from'),
+    { message: /remove/ },
+    'remove is not available on the message read-only view',
+  );
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMessage)).has(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('EndoHost/EndoGuest do not carry readOnly() at runtime today', async t => {
+  // `EndoAgent extends EndoDirectory` at the type level and `EndoDirectory.readOnly`
+  // is declared optional, but the agent guards (GuestInterface/HostInterface) do
+  // NOT spread `readOnly`, so `E(host).readOnly()` / `E(guest).readOnly()` reject.
+  // This pins that documented gap: a future accidental widening of the agent
+  // interfaces to include `readOnly` would redden here rather than silently ship.
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await t.throwsAsync(
+    E(/** @type {any} */ (host)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the host agent interface',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (guest)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the guest agent interface',
+  );
+});

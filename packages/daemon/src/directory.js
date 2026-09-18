@@ -27,7 +27,7 @@ import {
   petNamePathFrom,
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
-import { directoryHelp, makeHelp } from './help-text.js';
+import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
 
@@ -44,57 +44,73 @@ import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
 // This is a plain local exo rather than a worker-hosted evaluation formula: it
 // carries no formula identity and pins no worker, so a less-trusted holder
 // cannot loop `readOnly()` into unbounded worker spawn or an unreclaimable pin.
-// It mirrors the sibling `ReadableNameHub` views the manager mints for the
-// mailbox and message hubs (`mailReadableView` / `messageReadableView`). A later
-// slice of the #1125 stack that needs a first-class formula identity for network
-// discovery introduces that identity in the slice that consumes it, rather than
-// shipping a forgeable recognizer ahead of any call site.
+// The consequence — the view cannot be pet-named, stored, or independently
+// revoked, and does not survive a daemon restart — is intentional for this
+// directory slice; a later slice of the #1125 stack that needs a first-class,
+// storable formula identity introduces it in the slice that consumes it. See
+// the reconciliation note in the PR body against kriskowal's #1125 direction.
 //
-// `readOnlyHelp` is a null-prototype record so a caller-supplied method name
-// (`help('constructor')`, `help('toString')`) cannot reach an inherited
-// `Object.prototype` value and defeat the `?? readOnlyHelp['']` default. `help`
+// `help` routes through the shared `@endo/helpdown` `makeHelp` over the
+// `help.md`-generated `readableNameHubHelp` record, exactly like every other
+// daemon exo (so `help.md` owns this text and it cannot drift). `makeHelp` does
+// an own-property lookup, so a caller-supplied method name (`help('constructor')`,
+// `help('toString')`) cannot reach an inherited `Object.prototype` value. `help`
 // is a synchronous self-description of the read-only surface (the guard requires
 // a string return, and a remote forward would resolve to a promise); the four
 // read methods forward to the backing hub and keep their promise/any returns.
-const readOnlyHelp = harden({
-  __proto__: null,
-  '': 'ReadableNameHub - A read-only view of a name hub.\n\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\nbacking directory; every mutator is withheld. Attenuation is shallow: looked-up\nnested directories are returned live and writable.',
-  help: 'help(method?) -> string\nDescribe this cap, or one of its methods.',
-  has: 'has(...path) -> Promise<boolean>\nWhether a name or path resolves in the backing hub.',
-  list: 'list(...path) -> Promise<string[]>\nThe names at a path in the backing hub.',
-  lookup:
-    'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value.',
-  maybeLookup:
-    'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\nResolve a name or path, or undefined if absent.',
-});
+//
+// `assertLive` is the liveness gate. The view forwards to a `hub` record that
+// closes over the backing directory's live machinery, but it carries no formula
+// identity, so formula collection's `disconnectRetainersHolding` sever path
+// (which only reaches formula-backed holders) cannot reach it. Without this
+// gate a holder's reads would keep resolving from the surviving closure after
+// the grantor collected the backing directory — a capability the daemon
+// believes it revoked. Gating every forward on the grantor's context
+// cancellation makes the view severable, mirroring `mount.js`'s `assertLive()`.
 
 /**
  * Mint a read-only `ReadableNameHub` view over a backing name hub. The view is
  * a local exo carrying the canonical `ReadableNameHubInterface` guard; it
  * forwards the five readable methods to `hub` and exposes no mutators. `help`
- * looks up its description through a null-prototype record so a caller-supplied
- * method name cannot walk `Object.prototype`.
+ * routes through the shared `makeHelp` (own-property lookup, so a caller-supplied
+ * method name cannot walk `Object.prototype`). Every forward is gated on
+ * `assertLive` so collection of the backing capability severs the view.
  *
  * @param {Pick<NameHub, 'has' | 'list' | 'lookup' | 'maybeLookup'>} hub
+ * @param {() => void} [assertLive] Throws if the backing capability has been
+ *   cancelled; defaults to a no-op for a hub with no collection lifecycle.
  * @returns {ReadableNameHub}
  */
-export const makeReadOnlyDirectoryView = hub =>
-  /** @type {ReadableNameHub} */ (
+export const makeReadOnlyDirectoryView = (hub, assertLive = () => {}) => {
+  const help = makeHelp(readableNameHubHelp);
+  return /** @type {ReadableNameHub} */ (
     /** @type {unknown} */ (
       makeExo(
         'ReadableNameHub',
         ReadableNameHubInterface,
         /** @type {any} */ ({
-          help: (/** @type {string | undefined} */ method) =>
-            readOnlyHelp[method ?? ''] ?? readOnlyHelp[''],
-          has: (...path) => E(hub).has(...path),
-          list: (...path) => E(hub).list(...path),
-          lookup: path => E(hub).lookup(path),
-          maybeLookup: path => E(hub).maybeLookup(path),
+          help: (/** @type {string | undefined} */ method) => help(method),
+          has: (...path) => {
+            assertLive();
+            return E(hub).has(...path);
+          },
+          list: (...path) => {
+            assertLive();
+            return E(hub).list(...path);
+          },
+          lookup: path => {
+            assertLive();
+            return E(hub).lookup(path);
+          },
+          maybeLookup: path => {
+            assertLive();
+            return E(hub).maybeLookup(path);
+          },
         }),
       )
     )
   );
+};
 
 /**
  * @param {object} args
@@ -714,11 +730,28 @@ export const makeDirectoryMaker = ({
 
     // The read-only view is memoized per directory: the first `readOnly()` call
     // mints the local exo; every later call returns the same object. The view is
-    // a plain in-daemon exo (no worker, no formula, no pin), so this memo is a
-    // convenience — returning a stable identity across calls — not a defense
-    // against resource amplification.
+    // a plain in-daemon exo (no worker, no formula, no pin). Because
+    // `@endo/captp` defaults `gcImports = false`, a guest looping `readOnly()`
+    // over an unmemoized mint would retain one export-table slot per call until
+    // the connection closes, so this memo is that bound, not merely a stable
+    // identity convenience.
     /** @type {ReadableNameHub | undefined} */
     let readOnlyView;
+
+    // Liveness gate for the read-only view: the view carries no formula identity,
+    // so formula collection's sever path cannot reach it. Trip a flag when this
+    // directory's context is cancelled so the view stops forwarding reads once
+    // the backing directory is collected — a capability handed to a less-trusted
+    // holder must not outlive revocation of the capability it attenuates.
+    let cancelled = false;
+    context.onCancel(() => {
+      cancelled = true;
+    });
+    const assertReadOnlyViewLive = () => {
+      if (cancelled) {
+        throw new Error('Directory has been revoked');
+      }
+    };
 
     return makeExo(
       'EndoDirectory',
@@ -753,17 +786,21 @@ export const makeDirectoryMaker = ({
         maybeReadText: directory.maybeReadText,
         writeText: directory.writeText,
         // Mint a read-only `ReadableNameHub` view. Attenuation is SHALLOW:
-        // the view withholds this directory's mutators, but `lookup`/
+        // the view withholds this directory's OWN mutators, but `lookup`/
         // `maybeLookup` on it forward to the backing directory and return any
         // nested directory / agent handle / worker as the live, fully-writable
-        // object — not a further-attenuated view. A holder of the read-only
-        // view can therefore mutate nested directories one level down. This is
+        // object — not a further-attenuated view. The narrowing therefore
+        // reaches only one hop: a holder can mutate any writable capability the
+        // backing directory names, including a name bound back to this directory
+        // itself or an ancestor, which voids the narrowing entirely. This is
         // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
         // a recursively read-only surface must re-attenuate results themselves.
         readOnly: async () => {
+          assertReadOnlyViewLive();
           if (readOnlyView === undefined) {
             readOnlyView = makeReadOnlyDirectoryView(
               harden({ has, list, lookup, maybeLookup: directory.maybeLookup }),
+              assertReadOnlyViewLive,
             );
           }
           return readOnlyView;

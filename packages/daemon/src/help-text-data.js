@@ -45,7 +45,20 @@ export const helpTextEntries = harden([
       writeText:
         'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
       readOnly:
-        'readOnly() -> Promise<ReadableNameHub>\nMint a read-only ReadableNameHub view of this directory.\nThe view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.\nAttenuation is shallow: a looked-up nested directory is returned live and writable, not a further read-only view.\nRepeated calls return the same view.',
+        "readOnly() -> Promise<ReadableNameHub>\nMint a read-only ReadableNameHub view of this directory.\nThe view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.\nAttenuation is shallow: only this directory's own mutators are withheld. A looked-up value is returned live, so a nested directory (or any name bound back to a writable capability, including one naming this directory itself or an ancestor) comes back fully writable; the narrowing reaches only one hop, not the transitively reachable name graph. A holder needing a recursively read-only surface must re-attenuate results itself.\nThe view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. It is also severed when the backing directory is collected, so it grants no authority the daemon believes it revoked.",
+    },
+  ],
+  [
+    'ReadableNameHub',
+    {
+      '': 'ReadableNameHub - A read-only view of a name hub.\n\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\nbacking directory; every mutator is withheld. Attenuation is shallow: a\nlooked-up nested directory (or any name bound back to a writable capability) is\nreturned live and writable, not a further read-only view.',
+      help: 'help(methodName?) -> string\nDescribe this cap, or one of its methods.',
+      has: 'has(...path) -> Promise<boolean>\nWhether a name or path resolves in the backing hub.',
+      list: 'list(...path) -> Promise<string[]>\nThe names at a path in the backing hub.',
+      lookup:
+        'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value. The result is live: a nested directory\ncomes back fully writable, so this narrowing reaches only one hop.',
+      maybeLookup:
+        'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\nResolve a name or path, or undefined if absent.',
     },
   ],
   [

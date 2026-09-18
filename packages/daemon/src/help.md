@@ -131,8 +131,36 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 
 Mint a read-only ReadableNameHub view of this directory.
 The view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.
-Attenuation is shallow: a looked-up nested directory is returned live and writable, not a further read-only view.
-Repeated calls return the same view.
+Attenuation is shallow: only this directory's own mutators are withheld. A looked-up value is returned live, so a nested directory (or any name bound back to a writable capability, including one naming this directory itself or an ancestor) comes back fully writable; the narrowing reaches only one hop, not the transitively reachable name graph. A holder needing a recursively read-only surface must re-attenuate results itself.
+The view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. It is also severed when the backing directory is collected, so it grants no authority the daemon believes it revoked.
+
+# ReadableNameHub - A read-only view of a name hub.
+
+Exposes only the readable surface (has, list, lookup, maybeLookup) of the
+backing directory; every mutator is withheld. Attenuation is shallow: a
+looked-up nested directory (or any name bound back to a writable capability) is
+returned live and writable, not a further read-only view.
+
+## help(methodName?) -> string
+
+Describe this cap, or one of its methods.
+
+## has(...path) -> Promise<boolean>
+
+Whether a name or path resolves in the backing hub.
+
+## list(...path) -> Promise<string[]>
+
+The names at a path in the backing hub.
+
+## lookup(nameOrPath) -> Promise<unknown>
+
+Resolve a name or path to its value. The result is live: a nested directory
+comes back fully writable, so this narrowing reaches only one hop.
+
+## maybeLookup(nameOrPath) -> Promise<unknown | undefined>
+
+Resolve a name or path, or undefined if absent.
 
 # Mail Operations - Send and receive messages between agents.
 
