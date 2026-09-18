@@ -903,11 +903,11 @@ alongside it.
    through (`:521-525`); `Iterator` is advertised before its helpers exist (see
    below); and there is no host `console`.
 
-   The `Iterator` one is an engine defect rather than a boot-script detail, and
-   it is worse than the workaround's comment suggests. All eleven helpers are
-   present on `Iterator.prototype` (`boot.rs:540-558`) and every one answers
-   `typeof` as `"function"`, but the five lazy ones — `map`, `filter`, `take`,
-   `drop`, `flatMap` — halt the machine with
+   ~~The `Iterator` one is an engine defect rather than a boot-script detail,
+   and it is worse than the workaround's comment suggests. All eleven helpers
+   are present on `Iterator.prototype` (`boot.rs:540-558`) and every one
+   answers `typeof` as `"function"`, but the five lazy ones — `map`, `filter`,
+   `take`, `drop`, `flatMap` — halt the machine with
    `NotImplemented("Iterator.helper")` when called.
    That is an engine halt, not a `TypeError`: `try`/`catch` does not recover,
    and the crank does not complete. The eager helpers (`reduce`,
@@ -919,7 +919,36 @@ alongside it.
    ledgered named skip with 326 `skip:unsupported-opcode` rows across fourteen
    files in `ironhorse-262/expectations/whole-tree`, and removing the bindings
    would convert those into ordinary conformance failures. Implementing the
-   lazy helpers is the honest fix, and it is its own piece of work.
+   lazy helpers is the honest fix, and it is its own piece of work.~~
+
+   Done — the honest fix was taken. The five lazy helpers are implemented as
+   instances of a new `%IteratorHelperPrototype%` boot root, with their state
+   in the existing `iterators` side table under kinds 10-14, so they survive
+   collection and resume like every other cursor. `Iterator.helper` is retired
+   from `NOT_IMPLEMENTED_LABELS`, which the halt-label registry enforces by
+   refusing an entry with no construction site left in the source.
+
+   The 326 ledgered rows became real outcomes: 288 pass, 28 are named skips
+   (mostly failures the XS oracle shares), and 10 are recorded failures — none
+   of them in the helpers. They are pre-existing gaps the uncatchable halt had
+   been masking, the largest two groups being `class E extends Error {}`
+   losing the subclass identity, and descriptor attributes on
+   `{Async,}GeneratorFunction`.
+
+   `ironhorse-pre-shim.js` no longer amputates the surface, so the shim
+   profile now presents a real `Iterator` global. Note that SES exercises the
+   helpers itself on the way through: `get-anonymous-intrinsics.js` discovers
+   `%IteratorHelperPrototype%` by evaluating `Iterator.from([]).take(0)`, so
+   `lockdown()` runs a lazy helper before any guest code does.
+   `bundle-ironhorse-worker.mjs` still deletes the surface by hand and is
+   deliberately left alone, being a shipping configuration.
+
+   One engine-profile divergence is retained deliberately:
+   `%IteratorHelperPrototype%` carries no own `Symbol.toStringTag`, so
+   `Object.prototype.toString.call(iter.map(f))` answers `[object Iterator]`
+   where Node answers `[object Iterator Helper]`. That matches the sibling
+   built-in iterator prototypes in this engine, which omit theirs too, and no
+   test262 case at the pinned tip reads it.
 3. ~~**If the native profile wins**, `fx_lockdown`'s five steps above are the
    specification, and step 2 needs a guest-callable `lockdown()` separate from
    machine construction before it can be attempted at all.~~
