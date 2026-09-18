@@ -1,3 +1,4 @@
+test/Compartment/constructor/globalLexicals-properties.js
 test/Compartment/constructor/globalLexicals-types.js
 test/Compartment/constructor/globals-properties.js
 test/Compartment/constructor/globals-types.js
@@ -7,6 +8,7 @@ test/Compartment/import-now-hook/module-source-descriptor-sees-globals.js
 test/Compartment/import-now-hook/namespace-descriptor.js
 test/Compartment/import-now-hook/returns-undefined.js
 test/Compartment/prototype/Symbol.toStringTag-lockdown.js
+test/Compartment/prototype/evaluate/environments.js
 test/harden/cycle.js
 test/harden/exists.js
 test/harden/frozen.js
