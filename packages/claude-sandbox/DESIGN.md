@@ -855,3 +855,20 @@ Net: the credential is exposed to the agent's own execution by construction;
 the package's job is to make that exposure **cheap to contain** (no-egress
 network + short-lived revocable secret + peer-held long-lived auth), not to
 hide the secret from the code running inside the box.
+
+### 10. Container stdio was copied to the host journal — FIXED
+
+*2026-09-18.* Each turn's `claude -p … --output-format stream-json` process
+writes its events to the operation's attached stdout, and the hosted backend's
+provider listener carries inference requests over its own attached stdio.
+Both hold prompts, tool results, and file contents. Neither launch named a log
+driver, so rootless Podman's default (journald on a systemd host) kept a second
+copy of every byte under the daemon's unit, where retention follows the journal
+rather than the session and deleting a session does not reach.
+
+Slice containers (`@endo/sandbox`'s create prefix) and the listener
+(`@endo/hosted-agent`'s `provider-listener-runtime.js`) are now launched with
+`--log-driver=none`. Attachment is conmon's socket, not the log, and nothing
+calls `podman logs`, so the turn reader is unchanged. Host-side diagnostics
+(the broker worker's `worker.log`) are unaffected. Entries written before this
+change remain until the operator removes them.

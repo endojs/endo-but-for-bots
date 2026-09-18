@@ -63,5 +63,16 @@ node and usage total are durable.
 Rollback does not undo filesystem, process, remote-capability, or network side
 effects; those remain in the workspace and audit record.
 
+Container stdio is not copied to the host journal.
+The app-server protocol travels over the operation's attached stdin and stdout,
+and the provider listener's inference pipe over its own; both carry prompts,
+tool results, and file contents.
+The slice containers and the listener are launched with `--log-driver=none`, so
+Podman keeps no second copy of those streams under the daemon's systemd unit,
+where retention would follow the journal rather than the session.
+Attachment does not depend on the log driver, and `podman logs` is not used.
+Host-side diagnostics (the broker worker's `worker.log`) are unaffected.
+Entries written before this change remain until the operator removes them.
+
 For private vulnerability reports, follow the repository-level Endo security
 policy.

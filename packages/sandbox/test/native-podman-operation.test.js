@@ -574,6 +574,7 @@ test('declared mounts launch with nodev and are observed before release', async 
   t.is(await readFile(effect, 'utf8'), 'started');
   const create = f.calls.find(args => args[0] === 'create') ?? [];
   t.true(create.includes('--image-volume=ignore'));
+  t.true(create.includes('--log-driver=none'));
   const mountFlags = create.filter((_, i) => create[i - 1] === '--mount');
   for (const target of ['/workspace', '/scratch']) {
     t.true(

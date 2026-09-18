@@ -217,6 +217,8 @@ test.serial(
     const started = nativeCalls.find(call => call.args[2] === 'run');
     if (!started) throw Error('Expected listener run');
     t.true(started.args.includes('--http-proxy=false'));
+    // The inference pipe is attached stdio; Podman keeps no second copy.
+    t.true(started.args.includes('--log-driver=none'));
     t.false(started.args.some(arg => arg.startsWith('REGISTRY_AUTH_FILE=')));
     t.true(
       started.args.includes('HOME=/home/node'),

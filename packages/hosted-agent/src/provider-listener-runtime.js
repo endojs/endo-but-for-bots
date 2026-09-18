@@ -355,6 +355,13 @@ export const makePodmanProviderListenerRuntimeKit = ({
         '--http-proxy=false',
         '--pull=never',
         '-i',
+        // The inference pipe is this process's attached stdio. Left to its
+        // default, Podman also copies every attached byte to its log driver,
+        // which on a systemd host is the journal: whole request bodies, kept
+        // under the daemon's unit for as long as the journal is. Attachment
+        // does not read the log, so the pipe and `host.onStderr` are as they
+        // were; only the second copy is gone.
+        '--log-driver=none',
         '--name',
         name,
         '--label',

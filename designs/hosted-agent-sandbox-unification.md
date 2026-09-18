@@ -2190,6 +2190,34 @@ bytes of stderr per listener lifetime in the runtime — which silenced the
 fifth failed request for as long as the listener lived; both are now bounded
 per line and per chunk, not in total.
 
+**Container stdio is no longer copied to the journal — landed 2026-09-18, not
+yet deployed.** Neither launch named a log driver, so rootless Podman used its
+default, which on a systemd host is journald, and conmon wrote a second copy of
+every attached byte there under the daemon's unit. For the provider listener
+(`podman run -i`, `provider-listener-runtime.js`) that is the CapTP inference
+pipe: whole request bodies, with system prompts, tool schemas and user
+messages, as `endo-provider-<uuid>` lines. For slices (`podman create`, the
+shared prefix in `drivers/podman.js`) it is each operation's stdout and stderr:
+the CLIs' event streams, tool results and file contents included, as
+`endo-sandbox-…` lines. Conversation content was therefore held in a store
+with its own retention, outside the session's storage, that deleting a
+session did not reach. Both launches now pass `--log-driver=none`. The flag is
+in the create prefix every slice container shares, so the policy anchor, policy
+operations, native-profile operations and generic operations get it alike;
+it is not an attested control, and `sliceConfigFingerprint` does not read it.
+
+Nothing read that copy: no code calls `podman logs`, and attachment is conmon's
+socket, not the log, so the inference pipe, each operation's three streams and
+the startup gate are unchanged. The channels meant for diagnostics are also
+unchanged: the listener's stderr is still a pipe to the runtime, drained for
+the child's lifetime and offered to `host.onStderr`, and the broker worker's
+`console.error` lines still land in the worker's `worker.log`.
+
+What this does not do: it removes nothing already written. Existing journal
+entries stay until the operator vacuums or they age out. Podman's container
+lifecycle events (names, labels, image; no stdio) still follow
+`events_logger`, and the daemon's own stdout and stderr still go to its unit.
+
 **Effects recording and transport admission/cancellation — landed
 2026-09-18.** One effects path: every Endo tool call, from whichever loop
 dispatches it, goes through `journaledToolCall` in Floot's agent — intent

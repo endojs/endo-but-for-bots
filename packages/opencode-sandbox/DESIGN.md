@@ -726,6 +726,14 @@ New package `packages/opencode-sandbox/`.
   bridge; the host validates shapes but does not authenticate content. Never
   base a recovery or authorization decision on bridge output alone.
 - MCP socket access control (mode, peer uid, connection bound) is a follow-up.
+- **Container stdio is not copied to the host journal.** The bridge's event
+  stream and the provider listener's inference pipe are attached stdio carrying
+  prompts, tool results, and file contents. Slice containers and the listener
+  are launched with `--log-driver=none`, so Podman keeps no second copy under
+  the daemon's systemd unit, where retention would follow the journal rather
+  than the session. Attachment does not depend on the log driver; host-side
+  diagnostics (the broker worker's `worker.log`) are unaffected. Entries
+  written before this change remain until the operator removes them.
 
 ## Testing
 
