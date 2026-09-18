@@ -1883,8 +1883,16 @@ impl Parser<'_> {
                 if self.cur.token == Token::Static && !self.cur.escaped {
                     self.get_next_token()?;
                     if self.cur.token == Token::Assign || self.cur.token == Token::Semicolon {
+                        // `static` is the FIELD NAME here, not a modifier: the
+                        // token after it is `=` or `;`, so no `ClassElementName`
+                        // followed. The field is therefore an ordinary instance
+                        // field, and `fxClassExpression` says so by reaching its
+                        // `field:` label with `aStaticFlag` still 0
+                        // (`xsSyntaxical.c:2666-2671`). Passing `true` here put
+                        // `class C { static = 1 }`'s field on the CONSTRUCTOR,
+                        // where Node and XS both put it on the instance.
                         self.push_symbol("static".to_string());
-                        self.class_field(prop_line, Token::Property, true)?;
+                        self.class_field(prop_line, Token::Property, false)?;
                         count += 1;
                         continue;
                     }

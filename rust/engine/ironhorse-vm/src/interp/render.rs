@@ -254,7 +254,8 @@ impl Interp {
     ///
     /// **The cost is not charged.** The shim reads `out->computrons`,
     /// `meter_raw`, `heap_count` and `chunks_size` from the machine BEFORE it
-    /// stringifies (`xs_shim.c:508-512`), so XS's reported meter excludes the
+    /// stringifies (`xs_shim.c:507-510`; 512 is the stringify call
+    /// those reads are contrasted with), so XS's reported meter excludes the
     /// diagnostic render. Snapshotting the meter and the dispatch count across
     /// it is therefore what makes the two engines comparable, not a
     /// convenience: charging it here would make every throwing case's
@@ -263,17 +264,41 @@ impl Interp {
     /// Callable only where a live `code` buffer exists, because `ToPrimitive`
     /// threads it into `call_primitive_method` to resume the dispatch loop.
     /// That is the throw's own exit in `run_inner`, which still holds both.
-    fn render_thrown_with_guest(&mut self, code: &[u8], value: Slot) -> String {
+    fn render_thrown_with_guest(&mut self, code: &[u8], value: Slot) -> Result<String, Step> {
         let meter = self.meter.state();
         let dispatched = self.n_dispatched;
-        let rendered = self.to_string_units(code, value).ok();
+        // Bound the window. The default boundary spends ZERO guest
+        // instructions, so opting in must not hand a thrown value unbounded
+        // execution: `throw {toString(){ while(true){} }}` otherwise never
+        // returns, and the in-repo harness suites run with `case_timeout` 0.
+        // A finite `step_limit` bounds dispatches AND, via the bounded-mode
+        // wedge guard (`dispatch.rs:193`), live slots at
+        // `BOUNDED_RUN_SLOT_CEILING` — so an allocating render trips
+        // `Halt::StepLimit` instead of panicking through `heap_exhausted()`
+        // and rewriting the run's verdict to `HeapExhausted`. Either way the
+        // halt propagates below rather than becoming a string.
+        let step_limit = self.step_limit;
+        self.step_limit = dispatched.saturating_add(RENDER_DISPATCH_BUDGET);
+        let rendered = self.to_string_units(code, value);
+        self.step_limit = step_limit;
         self.meter.restore(meter);
         self.n_dispatched = dispatched;
         match rendered {
-            Some(units) => SymbolName::from_units(&units).to_string(),
-            // The shim's own sentinel, verbatim: an `Object.create(null)` with
-            // no `toString` reaches it in both engines.
-            None => "(exception stringification threw)".to_string(),
+            Ok(units) => Ok(SymbolName::from_units(&units).to_string()),
+            // A GUEST throw inside `toString` is the shim's own sentinel case:
+            // `endor_error_from_exception` catches it and reports this literal.
+            // An `Object.create(null)` with no `toString` reaches it in both
+            // engines.
+            Err(Step::Threw { .. }) => Ok("(exception stringification threw)".to_string()),
+            // Anything else is the ENGINE saying it cannot continue --
+            // `NotImplemented`, `Refused`, `StepLimit`, `EngineInvariant`, an
+            // escaped control transfer. Collapsing those into the sentinel
+            // above would make a port coverage gap indistinguishable from a
+            // guest throw and record it as AGREEMENT with the oracle, which is
+            // the laundering this whole change exists to undo, one layer down.
+            // `finish_step` turns it into the honest halt instead, and the 262
+            // harness names it (`declined_verdict`, `xst.rs:891`).
+            Err(fault) => Err(fault),
         }
     }
 
@@ -291,12 +316,19 @@ impl Interp {
         // jump chain, and only its diagnostic text is replaced afterwards.
         if let (true, Step::Threw { value, .. }) = (enabled, &step) {
             let value = *value;
-            let text = self.render_thrown_with_guest(code, value);
-            let mut halt = self.finish_step(step);
-            if let Halt::Throw { rendered, .. } = &mut halt {
-                *rendered = text;
+            match self.render_thrown_with_guest(code, value) {
+                Ok(text) => {
+                    let mut halt = self.finish_step(step);
+                    if let Halt::Throw { rendered, .. } = &mut halt {
+                        *rendered = text;
+                    }
+                    return halt;
+                }
+                // The render faulted. Report the fault, not the throw: the
+                // guest's own verdict is no longer the whole story, and a
+                // silently sentinel-ised gap is worse than a named halt.
+                Err(fault) => return self.finish_step(fault),
             }
-            return halt;
         }
         self.finish_step(step)
     }

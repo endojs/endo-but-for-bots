@@ -33,6 +33,15 @@ use ironhorse_compile::compile_atoms;
 use ironhorse_vm::{parse_symbols_checked, Halt, Interp};
 
 fn thrown(source: &str, in_guest: bool) -> String {
+    match halt_of(source, in_guest).1 {
+        Halt::Throw { rendered, .. } => rendered,
+        other => panic!("{source}: expected a throw, got {other:?}"),
+    }
+}
+
+/// The machine and its halt, so a test can read a side effect back out of the
+/// same realm after the render.
+fn halt_of(source: &str, in_guest: bool) -> (Interp, Halt) {
     let (bytecode, symbols) = compile_atoms(source).unwrap();
     let mut vm = Interp::new();
     vm.link_intrinsics(&parse_symbols_checked(&symbols).unwrap());
@@ -41,10 +50,18 @@ fn thrown(source: &str, in_guest: bool) -> String {
     } else {
         vm.run(&bytecode)
     };
-    match outcome.halt {
-        Halt::Throw { rendered, .. } => rendered,
-        other => panic!("{source}: expected a throw, got {other:?}"),
-    }
+    (vm, outcome.halt)
+}
+
+/// Read `globalThis.seen` out of a machine that has already halted.
+fn global_seen(vm: &mut Interp) -> String {
+    let (bytecode, symbols) = compile_atoms("String(globalThis.seen)").unwrap();
+    let code = vm
+        .relink_crank(&bytecode, &parse_symbols_checked(&symbols).unwrap())
+        .unwrap();
+    let out = vm.run(&code);
+    assert!(out.completed, "reading the probe back: {:?}", out.halt);
+    out.result
 }
 
 /// `(source, what XS reports)`.
@@ -126,13 +143,27 @@ fn the_opt_in_render_matches_the_oracle_shim() {
 /// it must render identically either way.
 #[test]
 fn the_ordinary_boundary_still_refuses_to_run_guest_code() {
-    // The side effect proves the call did not happen: had `toString` run, the
-    // rendering would be `ran`.
+    // The side effect proves the call did not HAPPEN, where the rendered
+    // string alone proves only that its result was not used. Both halves are
+    // read: an earlier version of this test wrote the probe and never looked
+    // at it, so the comment claimed more than the code checked.
     let source =
         "globalThis.seen = 'no'; throw {toString(){ globalThis.seen = 'yes'; return 'ran' }}";
-    assert_eq!(thrown(source, false), "[object Object]");
+    let (mut vm, halt) = halt_of(source, false);
+    assert!(matches!(&halt, Halt::Throw { rendered, .. } if rendered == "[object Object]"));
+    assert_eq!(
+        global_seen(&mut vm),
+        "no",
+        "the default boundary ran guest code"
+    );
     // And with the opt-in it does run, so the probe is not inert.
-    assert_eq!(thrown(source, true), "ran");
+    let (mut vm, halt) = halt_of(source, true);
+    assert!(matches!(&halt, Halt::Throw { rendered, .. } if rendered == "ran"));
+    assert_eq!(
+        global_seen(&mut vm),
+        "yes",
+        "the opt-in did not run guest code"
+    );
 
     // Values needing no guest call render the same through both entry points.
     for source in [
@@ -147,4 +178,67 @@ fn the_ordinary_boundary_still_refuses_to_run_guest_code() {
             "{source}: the two entry points disagree on a value needing no guest call"
         );
     }
+}
+
+/// An ENGINE fault during the render is not the shim's sentinel.
+///
+/// `to_string_units` can fail two ways and they mean opposite things. A guest
+/// throw inside `toString` is what `endor_error_from_exception` catches, and
+/// `(exception stringification threw)` is the right answer. A host halt is the
+/// port saying it does not model something — rendering THAT as the same
+/// literal makes a coverage gap indistinguishable from a guest throw, so the
+/// differential records agreement with the oracle and the gap disappears.
+/// That is the laundering this file's own subject exists to undo, and the
+/// first version of the render reintroduced it one layer down.
+///
+/// Each halt below was confirmed to be the one the construct raises on its own.
+#[test]
+fn an_engine_fault_in_the_render_propagates_instead_of_becoming_the_sentinel() {
+    for (source, label) in [
+        (
+            "throw {toString(){ return eval('1+1') }}",
+            "eval:no-compiler",
+        ),
+        (
+            "throw {toString(){ var eval=1; return eval('1') }}",
+            "eval:shadowed-call",
+        ),
+        (
+            "throw {toString(){ return import('x') }}",
+            "module:dynamic-import",
+        ),
+    ] {
+        match halt_of(source, true).1 {
+            Halt::NotImplemented(op) => assert_eq!(op, label, "{source}"),
+            other => panic!("{source}: expected NotImplemented({label}), got {other:?}"),
+        }
+    }
+
+    // The guest-throw side still answers the shim's literal, so the split cost
+    // none of the oracle fidelity the rest of this file pins.
+    assert_eq!(
+        thrown("throw {toString(){ throw new TypeError('inner') }}", true),
+        "(exception stringification threw)"
+    );
+}
+
+/// The render is bounded, because the boundary it opts out of spends zero
+/// guest instructions.
+///
+/// Unbounded, `throw {toString(){ while(true){} }}` never returns: the 262
+/// machine is unmetered, `step_limit` is `u64::MAX` in production, and every
+/// in-repo harness suite runs with the per-case timeout disabled. The budget
+/// surfaces as `Halt::StepLimit`, which propagates as a fault rather than
+/// becoming text.
+#[test]
+fn a_render_that_does_not_terminate_is_bounded() {
+    match halt_of("throw {toString(){ while(true){} }}", true).1 {
+        Halt::StepLimit(n) => assert!(n >= 10_000_000, "budget not applied: {n}"),
+        other => panic!("expected StepLimit, got {other:?}"),
+    }
+    // The default boundary never had this problem and still does not.
+    assert_eq!(
+        thrown("throw {toString(){ while(true){} }}", false),
+        "[object Object]"
+    );
 }
