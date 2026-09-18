@@ -1133,9 +1133,17 @@ nothing on a guest path in this tree uses the idiom that does.
 `llm` at `7753a4b9`, which is **before** #1295 merged.
 Its description says "until [a native `lockdown()`] lands, the shim route is
 the SES profile and `test262:ironhorse` continues to refuse to start"; both
-clauses are now stale, and its `ses_boot_intrinsics.rs` census predates a realm
-that binds `lockdown` at boot for every profile
-(`interp/boot.rs:2144`, unconditional).
+clauses are now stale, and its `ses_boot_intrinsics.rs` census predates the
+engine binding `lockdown`.
+An earlier revision of this paragraph said the engine now binds it "for every
+profile, unconditional", which is wrong and matters for the rebase.
+`create_hardened_globals` (`interp/boot.rs:2144`) binds it for every `Interp`,
+and `new_shared_realm_machine_configured` REMOVES it again when
+`freeze == false` (`interp/realm.rs:703`), because an unfrozen machine exists
+for the SES shim and the shim owns the operation there.
+So of that file's three census sites, the two on a plain `Interp` moved from
+`lockdown=undefined` to `lockdown=function`, and the unfrozen-`Machine` site
+still reads `lockdown=undefined` by design.
 It wants a rebase and a reconciliation before its numbers can be read against
 this document.
 Flagged, not touched.
