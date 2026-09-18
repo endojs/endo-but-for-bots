@@ -1,15 +1,40 @@
 # @endo/opencode-sandbox — design
 
-Status: **proposed (2026-09-11, revised through adversarial review)** — the
-backend source is not written yet; the `oci/` build seed and the patched fork
-exist. Target lineage: the hosted-backend seam from PR #1248
-(`codex/claude-provisioning-fixes` @ `4b9fe52c0`).
+Status: **implemented and deployed (2026-09-18)**. What runs, in one place,
+because the design below was written before any of it existed and many of its
+sections describe a phase-1 posture that was never shipped as such:
 
-Implementation update (2026-09-13): backend and provisioning source now exist.
-Host setup uses the shared owned Podman runtime described in
-[the unification plan](../../designs/hosted-agent-sandbox-unification.md).
-The remaining sections preserve the original design context; the unification plan
-tracks current lifecycle, credential, networking, and acceptance gaps.
+- The backend runs under the **shared attested policy** `hosted-agent-v1`
+  (`@endo/hosted-agent/hosted-agent-policy.js`) with its own fixed mount table
+  (`src/opencode-hosted-policy.js`): read-only root, cap-drop, private
+  namespaces, every row `nosuid,nodev`, writable ceiling computed and
+  re-checked by the attestation. It is the same profile Claude and Codex run
+  under, not a weaker phase-1 one.
+- **No credential enters the slice.** `OPENROUTER_API_KEY` is a placeholder;
+  the broker (`src/opencode-broker*.js` over `@endo/hosted-agent`) holds the
+  key and the slice's egress is `broker-only`. `public-internet` is the
+  attested proxy and DNS listener path with host-side destination filtering,
+  not unfiltered NAT.
+- **No state volume.** `OPENCODE_DB=:memory:` and `HOME`/`XDG_*` live on the
+  slice's tmpfs. The conversation is the stack's transcript records
+  (`@endo/hosted-agent/transcript-records.js`), restored on every revival
+  through the fork's `POST /session/:id/messages/import`
+  (`src/opencode-transcript.js`, `src/opencode-client.js`); the descriptor's
+  `continuity: 'transcript'` names Floot mirroring a delivered-but-failed turn
+  into its history, which is what makes that restoration faithful.
+- Sessions are owned by the daemon session owner and the shared
+  `session-supervisor.js`; there is no per-session provisioner formula.
+- The managed-credentials cap (`src/managed-credentials*.js`) is in this
+  package; the lineage dependency below landed.
+- A turn has no wall clock by default (`ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS`
+  is an operator option) and no byte budget; delivery is bounded by credit at
+  the reader.
+
+The sections that follow are the **original design record** (2026-09-11,
+revised through adversarial review) and are kept for the reasoning; where they
+say "phase 1", "not yet", "unfiltered", "volume" or "env-injected", the bullets
+above are current. Target lineage: the hosted-backend seam from PR #1248
+(`codex/claude-provisioning-fixes`).
 
 ### Stop failure ownership
 
@@ -115,8 +140,9 @@ This active bundle excludes the client and does not replace passive session reco
 Backend defaults and cleanup backstops still use mutable names and current paths, so
 factory/state-provider bindings must remain stable until durable-record adoption lands.
 
-This provisioning change does not complete resolver integration, broker-only policy,
-durable volume quota attestation, or live Linux acceptance.
+(Historical: resolver integration and broker-only policy have since landed in
+`src/opencode-native-controller.js`; the volume/quota subsystem was retired
+rather than completed; live acceptance ran on Tokyo.)
 
 **Lineage dependencies that must land first.** The OpenCode backend needs the
 hosted-backend seam (`@endo/hosted-agent`, present in PR #1248) **and** a
@@ -146,12 +172,12 @@ Parity with the existing CLI backends (as-built, not aspirational):
 | Concern | claude-sandbox | codex-sandbox | opencode-sandbox (this) |
 |---|---|---|---|
 | Runtime substrate | rootless podman slice | rootless podman slice | rootless podman slice |
-| Workspace | 9P mount from an Endo `Filesystem` cap (raw host bind) | quota'd named volumes under a broker policy | 9P mount |
-| Session state | dedicated config `Filesystem` (9P) | quota'd named volumes | **host-backed volume; not 9P** (see State) |
+| Workspace | 9P mount from an Endo `Filesystem` cap | 9P projection of the session worktree | 9P projection |
+| Session state | host bind of a session directory (CLI JSONL, rewritten from the stack's records on revival) | host bind of a session directory (rollout, a cache) | none on disk: `OPENCODE_DB=:memory:` on tmpfs, restored from the stack's records |
 | Endo tools | per-session MCP socket bridge | app-server dynamic tools | per-session MCP socket bridge |
 | Transport | `claude -p --output-format stream-json` per turn | long-lived `codex app-server` over stdio JSONL | **long-lived in-slice `opencode serve` + stdio bridge** |
 | Continuity | CLI transcript (`transcript`) | app-server thread (`opaque-reconciled`) | opencode session store (`transcript`) |
-| Credential | env-injected (`ANTHROPIC_API_KEY` / OAuth token) | broker/lease, nothing in slice (`credentialInjection: 'broker-only'`) | env-injected `OPENROUTER_API_KEY` (phase 1) |
+| Credential | broker, placeholder in slice (`credentialInjection: 'broker-only'`) | broker, nothing in slice (`credentialInjection: 'broker-only'`) | broker, placeholder in slice (`credentialInjection: 'broker-only'`) |
 
 ## Why opencode
 
@@ -506,6 +532,10 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
 
 ## Network policy
 
+*(Original design; current: the slice is `network: 'broker-only'`, and
+`public-internet` joins the attested proxy/DNS listener path of
+`@endo/hosted-agent/public-egress.js` with host-side destination filtering.)*
+
 - Descriptor declares both `off` and `public-internet` (see Conformance).
   `off` provisions the sandbox `none` profile; a model turn under `off` fails
   fast with a clear error before spawn. The operator step to `public-internet`
@@ -518,6 +548,12 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
   an allowlist or the codex broker is the hardening.
 
 ## State, isolation, and teardown
+
+*(Original design; current: no state substrate exists — the CLI store is
+`OPENCODE_DB=:memory:` on the slice's tmpfs, every attested row is
+`nosuid,nodev`, the writable ceiling is computed by `sliceWritableBytes`, and
+"state replay" is not a threat because nothing the guest wrote outlives the
+guest: continuity is the stack's records replayed through the import route.)*
 
 - Workspace: 9P-projected `Filesystem` cap at `/workspace`; Floot owns it.
 - **State substrate (phase-1 prerequisite, not a hardening afterthought).**
@@ -552,7 +588,8 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
   (formula cancellation / daemon shutdown) runs the same teardown, so the
   in-flight turn and the server child are reaped on shutdown.
 - **`containerMounts` are refused in phase 1.** `assertContainerMounts`
-  (`codex-sandbox/src/backend-factory.js:204-255`) is shape validation only,
+  (now `@endo/hosted-agent/hosted-agent-policy.js`, re-exported from
+  `src/opencode-hosted-policy.js`) is shape validation only,
   and a phase-1 slice has no policy attestation. Refusal is the only available
   capability mode, but it is not immediate: Floot fires the mount recreate and
   reports attach success, with the refusal surfacing as a `pendingReport` on
@@ -636,11 +673,11 @@ New package `packages/opencode-sandbox/`.
 | `src/opencode-client.js` | Spawn/command the bridge; session-id handoff; pending-call count; terminal barrier | `codex-client.js` + `claude-client.js` |
 | `src/opencode-bridge.mjs` | In-slice: start `opencode serve`, parse listening line, subscribe SSE, nd-JSON commands/events, summary filtering, terminal derivation, turn bounds | new; baked into the image |
 | `src/opencode-protocol.js` | SSE + nd-JSON framing, event normalization, message registry | `codex-protocol.js` |
-| `src/opencode-hosted-events.js` | Translation to hosted vocabulary, ordering guarantees | `claude-hosted-events.js` |
+| (no separate hosted-events module: the bridge emits the hosted vocabulary directly, `src/opencode-transcript.js` maps transcript records to and from the import route's turns) | | |
 | `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-stdio-bridge.js`, `src/mcp-socket-server.js` | Shared protocol core + relay; opencode config generator | hosted-agent |
 | `src/managed-credentials*.js` | SecretBlob-backed cap; **ported from `f13c7cbd9`** | `f13c7cbd9:…/managed-credentials.js` |
 | `src/opencode-agent-config.js` | Host-side `OPENCODE_CONFIG_CONTENT` builder: hard-coded `provider.openrouter` block (baseURL, `models`, `whitelist`), agent `prompt`/`disable:false`/`mode`, MCP, permissions | new |
-| `src/parse-rootfs.js` (adapter default over `@endo/hosted-agent/parse-rootfs.js`), `src/container-mounts.js` (`assertContainerMounts`) | small shared helpers; `current-specifier.js` is imported from `@endo/hosted-agent` directly | claude/codex-sandbox |
+| `src/parse-rootfs.js` (adapter default over `@endo/hosted-agent/parse-rootfs.js`), `src/opencode-hosted-policy.js` (mount table + `assertContainerMounts`) | small shared helpers; `current-specifier.js` is imported from `@endo/hosted-agent` directly | claude/codex-sandbox |
 | `oci/Containerfile`, `oci/Containerfile.source`, `oci/build-reproducible.sh`, `oci/spike/` | Prebuilt and in-image fork builds (Bun 1.3.14, pinned commit + recorded digest); Tokyo slice spike harness | codex-sandbox `oci/` |
 | `test/*.test.js` | see Testing | claude/codex tests |
 
@@ -673,13 +710,15 @@ New package `packages/opencode-sandbox/`.
 ## Security summary
 
 - The slice is the enforcement boundary (read-only rootfs, cap-drop,
-  no-new-privileges, no host networking), as in claude.
-- Phase 1 has **no slice attestation**, **no `containerMounts` support** (and
-  its refusal is next-turn), **no quota**, and **no `nosuid,nodev`** on binds.
-  Do not present it as equivalent to codex's attested policy profile.
-- Credential-in-slice is a conscious phase-1 trade; broker-only egress is the
-  containment milestone.
-- Egress is unfiltered NAT unless the operator filters it.
+  no-new-privileges, private namespaces, no host networking), under the same
+  attested `hosted-agent-v1` profile as Claude and Codex, re-asserted on the
+  returned slice by `src/opencode-native-controller.js`; every attested row is
+  `nosuid,nodev` and the writable ceiling is computed by the attestation.
+- No credential is in the slice: the broker holds the key, the slice holds a
+  placeholder, and egress is `broker-only`. `public-internet` is the attested
+  proxy/DNS path with destination filtering.
+- `containerMounts` (runtime attaches) are declared rows proved to be 9P
+  projections before they are attested, as for the other adapters.
 - Workspace config, instructions, and state are untrusted; config is
   host-generated with project config disabled, and `auth.json` is neutralized.
 - **Bridge stdout is untrusted UI text, not attestation.** In-slice processes
@@ -740,10 +779,11 @@ New package `packages/opencode-sandbox/`.
    the state substrate; land the Floot discovery edit; no host wiring.
 3. **Live backend on Tokyo.** Setup scripts + NixOS env; operator sets the
    session policy; one real Floot session with compaction exercised.
-4. **Hardening.** State replay bounds/scrub, MCP socket access control,
-   daemon-shutdown reaping, crash/teardown tests; quota and bind flags only if
-   the policy/volume path is adopted.
-5. **Optional.** Broker-only egress; ACP transport evaluation; upstream the
+4. **Hardening.** *(Landed differently: the state store is in memory and the
+   conversation is the stack's records, so there is nothing to scrub; the
+   attested policy supplies the bind flags; daemon-shutdown reaping is the
+   shared anchor argv.)* MCP socket access control remains a follow-up.
+5. **Optional.** *(Broker-only egress landed and is the default.)* ACP transport evaluation; upstream the
    `run --format json` message-metadata emission if the stock surface ever
    needs to be used without the fork.
 
@@ -874,6 +914,6 @@ The host-only `makeOpencodeBroker` composition accepts `publicInternet: true`
 to issue separately revocable public-egress capabilities alongside inference.
 It uses the shared hosted-agent listeners and destination filtering; the guest
 still receives no real provider credential.
-This option does not yet configure the hosted backend's public session path.
-That integration requires the shared generated resolver file to reach the slice;
-the hosted factory's existing public path remains pending replacement.
+The hosted backend's public session path uses it: `makePublicNetworkEnvironment`
+supplies the proxy environment and the generated resolver file reaches the slice
+as the declared `resolver:public` mount row (`src/opencode-native-controller.js`).

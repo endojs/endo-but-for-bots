@@ -106,8 +106,25 @@ The final identity check detects a prior rebind; it is not atomic compare-and-de
 and does not replace exclusive ownership.
 The store and shared resource registry live in the daemon package so a daemon-local
 supervisor can use them without importing sandbox adapters or native modules.
-Adapter wiring remains pending; running record administration in a shared worker can
-cause collection of a temporary directory to terminate that worker.
+All three adapters are wired to it (`provideSessionOwner` in each backend
+module). Running record administration in a shared worker can cause collection
+of a temporary directory to terminate that worker.
+
+## What this package owns for every adapter
+
+- `hosted-agent-policy.js` — the shared `hosted-agent-v1` slice profile:
+  `HOSTED_SLICE_RESOURCES`, `HOSTED_ANCHOR_ARGV`, `sliceWritableBytes`, and the
+  verifier each adapter parameterises with its fixed mount table.
+- `session-supervisor.js` — the one session lifecycle all three native
+  controllers compose.
+- `provider-broker-service.js` and the broker/grant modules — host-held
+  credentials; a slice sees a placeholder.
+- `transcript-records.js` — the stack's record of a conversation, which each
+  adapter restores its CLI's native store from.
+- `turn-channel.js` — the credit-bounded delivery channel, terminal barrier and
+  deadline helper every client builds its turn on.
+- `mcp-bridge.js`, `mcp-server.js`, `mcp-stdio-bridge.js` — Endo tools over a
+  per-session MCP socket for the CLIs that take tools that way.
 
 ## Session execution powers
 

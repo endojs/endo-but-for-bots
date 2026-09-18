@@ -53,7 +53,7 @@ Fields:
 | `name` | pet name for the resulting `ClaudeClient` |
 | `filesystem` | pet name of an existing `Filesystem` capability |
 | `rootfs` | OCI image (`oci:<ref>` or a bare ref), or `host-bind` / `minimal` |
-| `network` | `none` \| `private` (default) — no host networking; `private` gives outbound internet with no reach to the host |
+| `network` | `none` \| `private` (default) — no host networking; `private` gives outbound internet with no reach to the host. (This is the legacy inbox-form factory's own network model; the hosted backend below runs `broker-only` under the shared attested policy and advertises `off` / `public-internet` instead.) |
 | `model` | optional Claude model id (passed as `--model`) |
 | `credentials` | optional `ClaudeCredentials` pet name |
 | `initialPrompt` | optional first message |
@@ -132,10 +132,16 @@ factory discovers on its own; a Floot session then selects it as the model
 hosted turn events ([`src/claude-hosted-events.js`](./src/claude-hosted-events.js)
 translates the CLI's stream-json wire), forwarding the session model and
 persona on every spawn. `run.interrupt()` kills the in-flight `claude -p`
-and tolerates an idle client. `run.acknowledge()` is a no-op: continuity is
-the CLI's own transcript, which the descriptor declares as
-`continuity: 'transcript'` so Floot mirrors a stopped or failed turn into its
-history rather than dropping it. `admin.terminate()` stops the session through
+and tolerates an idle client; it returns once the process has ended, not
+merely once the reader is closed. `run.acknowledge()` is a no-op: the stack
+owns the transcript (`@endo/hosted-agent/transcript-records.js`), and on a
+revival the controller writes the CLI's own JSONL from those records
+([`src/claude-transcript-writer.js`](./src/claude-transcript-writer.js)) and
+resumes it by id. The descriptor still declares `continuity: 'transcript'`,
+deliberately: within an incarnation the CLI's live conversation keeps a
+delivered prompt and whatever streamed before a stop or a failure, so Floot
+mirrors such a turn into its history rather than dropping it — which is also
+what makes the next restoration faithful. `admin.terminate()` stops the session through
 the daemon owner: the controller ends the CLI, disposes the slice, releases
 the sandbox scope, the 9P mounter, the tool bridge, and the broker grant; the
 workspace and transcript stay for the next revival.

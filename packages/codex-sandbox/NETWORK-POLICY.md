@@ -67,7 +67,9 @@ These settings are appropriate only inside the verified outer sandbox.
 The listener and model containers retain dropped capabilities, including later
 exec operations; public networking needs no privileged setup helper.
 A generated, read-only `/etc/resolv.conf` contains only the isolated DNS listener
-address and bounded resolver timeouts, not the host's resolver configuration.
+address and bounded resolver timeouts, not the host's resolver configuration;
+it is a declared row of the attested mount table (`resolver:public`), and the
+attestation reads the effective mounted file rather than the host path.
 The DNS adapter forwards validated A/AAAA hostname requests through a constrained
 host capability rather than forwarding arbitrary DNS packets.
 
@@ -80,7 +82,9 @@ pinned Codex app-server executes native commands.
 The public-network acceptance command similarly probes the outer container,
 including direct guest listener access and proxy rejection of private destinations.
 Live app-server acceptance covering thread start, resume, and multiple turns with
-native commands remains outstanding.
+native commands has been run on Tokyo (see `README.md` and
+`HOSTED-SUBSCRIPTION.md`); the public-network acceptance command remains the
+check for this document's own claims.
 
 ## Operator configuration
 

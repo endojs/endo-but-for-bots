@@ -137,10 +137,13 @@ never-used session cancels for free.
   `CLAUDE_CONFIG_DIR`) — separate from `/workspace` so the transcript never
   lands in a new-project git worktree or a `publishWorkspace` static site, and
   crucially _outside_ the container's ephemeral tmpfs so it survives a restart.
-  On reincarnation the client reads that config dir's host backing directory
-  before every spawn; when it holds a transcript the turn resumes it by name
+  Within an incarnation the client reads that config dir's host backing
+  directory before every spawn and names the live conversation
   (`claude --resume <id>`, falling back to `--continue` for a transcript it
-  cannot name) rather than forking a fresh, context-free conversation. (Older
+  cannot name). Across incarnations the stack's transcript records decide: the
+  controller writes the CLI's JSONL from them (`src/claude-transcript-writer.js`)
+  and resumes that, so a store that happened to survive does not outrank the
+  record the stack owns. (Older
   sessions minted before the config mount existed carry no
   `CONFIG_MOUNT_POINT`, keep the tmpfs config dir, and therefore still lose
   history across a restart until re-provisioned.)
@@ -194,7 +197,7 @@ one interface guard: both consume `makeBufferedReader` from
 
 ### How floot does it (three layers)
 
-1. **Buffered reply channel** (`floot/src/buffered-channel.js` → `makeBufferedReader`):
+1. **Buffered reply channel** (`@endo/exo-stream/buffered-channel.js` → `makeBufferedReader`; the hosted path uses the credit-bounded `@endo/hosted-agent/turn-channel.js`):
    a `Far` reader (`next`/`return`/`throw`) fed by an imperative `push`/`writer`,
    buffering so a producer can run ahead of a slow consumer. When the **consumer
    stops pulling** (`return`/`throw`), `finalize()` fires an **`onClose`** hook.
@@ -244,6 +247,13 @@ resolved: `makeBufferedReader` now lives in `@endo/exo-stream` and both floot
 and this package import it (see the §"LLM backend layer" open questions).
 
 ## LLM backend layer — one Session interface over container _or_ API
+
+*Superseded, kept as history (2026-09-18).* The seam that landed is
+`@endo/hosted-agent/src/hosted-backend.js` (`HostedBackendFactoryInterface`),
+implemented by `src/claude-backend-factory.js` beside the Codex and OpenCode
+factories, with the normalized event vocabulary of `src/claude-hosted-events.js`
+(`phase | commentary-delta | text-delta | tool-call | tool-result | usage |
+end | abort`). `makeApiSession` / `makeContainerSession` were never written.
 
 The longer-term goal is a backend-agnostic **Session**: the same capability
 surface whether a session is powered by the **container** (this package — the
@@ -498,7 +508,9 @@ dependencies, and its directories, and then removes everything through
 destroy. It is wiring evidence on the development host, not native
 acceptance.
 
-Still pending: live Linux/rootless Podman acceptance. Points to watch there:
+Live Linux/rootless Podman acceptance has run on Tokyo (see
+`../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md` and the restoration acceptances in
+the endo-host repository). Points that were watched there:
 the per-session 9P socket path `<mcpRoot>/<sandboxSessionId>/9p/endo-9p-…sock`
 must stay under the Unix socket path limit, which a deep
 `ENDO_CLAUDE_MCP_DIR` would breach; the broker's model allowlist is the CLI
@@ -767,6 +779,14 @@ cap-arguments. The infra caps (`sandbox-factory` / `fs-mounter`) remain
 host-named by construction (they are the host's own).
 
 ### 9. Credential exposure through the sandbox environment
+
+*Scope (2026-09-18): this section describes the legacy inbox-form factory path
+(`factory.js`, `src/claude-client-module.js`), which materialises a credential
+into the slice environment. The hosted backend Floot actually routes sessions
+to does not: `src/claude-native-controller.js` injects a placeholder and the
+broker holds the credential (see § Phase 3 above, "The real credential never
+enters the slice"), and its egress is `broker-only` under the shared attested
+policy rather than the `none`/`private` profiles below.*
 
 Where the secret goes, and what can read it.
 
