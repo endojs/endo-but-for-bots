@@ -27,7 +27,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 import { makeExecuteTool, toAgentTool } from '../tool-dispatch.js';
 import { tools } from '../tools/index.js';
-import { makeMockPowers } from '../tools/mock-powers.js';
+import { makeMockPowers } from '@endo/agentry/test/mock-powers';
 
 /**
  * Minimal pi-ai Model placeholder. The scripted streamFn ignores the model;

@@ -58,7 +58,7 @@ packages/fae/
 ├── setup-fs-tools.js           # Create filesystem tools (FAE_CWD)
 ├── setup-with-tools.js         # Provision fae with pre-installed tools
 ├── src/
-│   ├── extract-tool-calls.js   # XML <tool_call> parser for models
+│   ├── provider-cache.js       # Rotating agentry chat provider
 │   │                             that embed tool calls in content
 │   ├── fae-tool-interface.js   # FaeTool M.interface() guard
 │   ├── tool-makers.js          # Built-in tool factory functions
@@ -362,8 +362,10 @@ const transcript = [{ role: 'system', content: guestSystemPrompt }];
 
 ## Provider System
 
-Fae reuses `@endo/lal`'s provider system via
-`import { createProvider } from '@endo/lal/providers/index.js'`.
+Fae uses `createChatProvider` from `@endo/agentry/chat`. The adapter translates
+Fae's common chat messages and tool schemas to pi-ai messages and models, so
+Fae shares the agentry provider and credential seam without owning a second
+agent loop.
 
 ### Provider Selection
 

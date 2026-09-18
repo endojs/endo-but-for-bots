@@ -189,13 +189,13 @@ Channel ──InboundMessage──▶ Bus ──▶ AgentLoop ──OutboundMess
 
 ## Provider System
 
-**Fae** reuses `@endo/lal`'s provider system with 3 implementations:
+**Fae** uses `@endo/agentry/chat`, backed by pi-ai's provider registry:
 
-| Provider | SDK |
-|----------|-----|
-| Ollama | `ollama` npm package |
-| llama.cpp | `openai` npm package (OpenAI-compatible) |
-| Anthropic | `@anthropic-ai/sdk` |
+| Provider family | pi-ai API |
+|-----------------|-----------|
+| Ollama / llama.cpp | OpenAI-compatible completions |
+| Anthropic | Anthropic messages |
+| Gemini | Google generative AI |
 
 Selection is based on URL pattern matching in `LAL_HOST`.
 

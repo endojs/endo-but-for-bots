@@ -15,7 +15,7 @@
 //   ENDO_LLM_FAST_AUTH_TOKEN=...    (defaults to ENDO_LLM_AUTH_TOKEN)
 
 import { E } from '@endo/eventual-send';
-import { resolveModel } from '@endo/lal/model-detect.js';
+import { resolveModel } from '@endo/agentry/model-detect';
 
 const jaineFactorySpecifier = new URL('agent.js', import.meta.url).href;
 

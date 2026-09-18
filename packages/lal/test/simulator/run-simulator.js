@@ -19,7 +19,7 @@ import '@endo/init';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { spawnWorkerLoop } from '../../agent.js';
-import { makeMockPowers } from '../../tools/mock-powers.js';
+import { makeMockPowers } from '@endo/agentry/test/mock-powers';
 
 const TIMEOUT_MS = 120_000;
 

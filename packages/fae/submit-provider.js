@@ -7,7 +7,7 @@
 //   -E LAL_AUTH_TOKEN=sk-ant-...
 
 import { E } from '@endo/eventual-send';
-import { resolveModel } from '@endo/lal/model-detect.js';
+import { resolveModel } from '@endo/agentry/model-detect';
 
 /**
  * Find the pending "Create LLM Provider" form in HOST's inbox

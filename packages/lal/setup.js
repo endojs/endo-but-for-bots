@@ -10,7 +10,7 @@
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { chooseModel, fetchAvailableModels } from './model-detect.js';
+import { chooseModel, fetchAvailableModels } from '@endo/agentry/model-detect';
 
 const lalSpecifier = new URL('agent.js', import.meta.url).href;
 

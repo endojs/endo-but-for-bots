@@ -3,7 +3,7 @@
 |             |                                                       |
 | ----------- | ----------------------------------------------------- |
 | **Created** | 2026-05-02                                            |
-| **Updated** | 2026-08-27                                            |
+| **Updated** | 2026-09-16                                            |
 | **Author**  | Kris Kowal (prompted)                                 |
 | **Status**  | Largely realized — genie retired; residual `lal`/`fae` backlog |
 
@@ -32,7 +32,7 @@ knowing the code it names no longer exists on `llm` and every verdict has
 resolved either to "retired with genie" or to one of the three consolidated
 homes tracked here.
 
-### 1. Pi engine → `@endo/agentry` — done for `lal`; `lal`/`fae` cleanup remains
+### 1. Pi engine → `@endo/agentry` — complete
 
 The shared engine shipped as **`@endo/agentry`** (`0.1.0`), on the
 **`@earendil-works/pi-*`** fork (`@earendil-works/pi-agent-core` /
@@ -45,16 +45,11 @@ eval scenarios, and `edit-text` (designs
 [`agentry-agent-builder`](agentry-agent-builder.md),
 [`endo-agent-tools`](endo-agent-tools.md)).
 
-**Remaining:**
-- `packages/fae` still routes its LLM path through
-  `@endo/lal/providers` (`createProvider`) and only borrows agentry's
-  `edit-text`; `packages/jaine` and `packages/floot` also import
-  `@endo/lal/providers`.
-- `packages/lal/providers/` is therefore **not** deleted — it is now a
-  live cross-package export, and `@endo/lal` still ships the
-  `@anthropic-ai/sdk`, `openai`, and `ollama` runtime deps behind it.
-- `packages/fae/src/extract-tool-calls.js` is **not** deleted (still
-  imported by `fae/agent.js`).
+As of 2026-09-16, Fae, Jaine, and Floot use the shared
+`@endo/agentry/chat` adapter over pi-ai. The legacy `packages/lal/providers/`
+directory and its Anthropic/OpenAI/Ollama dependencies are deleted. Model
+catalog detection and textual tool-call recovery also moved to agentry, so
+`packages/fae/src/extract-tool-calls.js` is gone.
 - The survey's "lift genie's `loop/`, `observer/`, `reflector/`,
   `system/`, `registry` into the shared package" plan is **moot** — those
   were genie-only and went away with genie; agentry took a different shape.
@@ -114,15 +109,10 @@ retention by an integration.
 
 ## Residual backlog (the whole of "what remains")
 
-1. **Finish the `lal`/`fae` engine consolidation.**
-   Migrate `fae`, `jaine`, and `floot` off `@endo/lal/providers` onto
-   `@endo/agentry`; then delete `packages/lal/providers/`, drop `@endo/lal`'s
-   `@anthropic-ai/sdk` / `openai` / `ollama` runtime deps, and delete
-   `packages/fae/src/extract-tool-calls.js`.
-2. **Adopt `@endo/reminder`.**
+1. **Adopt `@endo/reminder`.**
    Wire a consumer onto the plugin and publish it; Phase 4 mailbox
    delivery, the CLI verb, and `@pins` retention follow.
-3. **Decide the memory question.**
+2. **Decide the memory question.**
    Determine whether a searchable agent-memory / recall feature is still
    wanted; if so, build it on the mount/`EndoDirectory` + platform-search
    seam rather than reviving genie's FTS5.

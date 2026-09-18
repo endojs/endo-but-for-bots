@@ -10,6 +10,7 @@ import {
   makeConversationTree,
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
+import { extractToolCallsFromContent } from '@endo/agentry/tool-call-content';
 
 import { makeRotatingProvider } from './src/provider-cache.js';
 import { discoverTools, executeTool } from './src/tools.js';
@@ -29,7 +30,6 @@ import {
   makeExecTool,
   makeReadChannelTool,
 } from './src/tool-makers.js';
-import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
 import { runAgenticTurn } from './src/turn-engine.js';
 import {
   assertAgentName,

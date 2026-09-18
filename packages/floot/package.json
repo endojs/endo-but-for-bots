@@ -33,7 +33,7 @@
     "test": "ava"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
+    "@endo/agentry": "workspace:^",
     "@endo/conversation-tree": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
@@ -42,7 +42,6 @@
     "@endo/fae": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/hosted-agent": "workspace:^",
-    "@endo/lal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^"
   },

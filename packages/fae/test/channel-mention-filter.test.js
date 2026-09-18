@@ -14,7 +14,7 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
-import { extractToolCallsFromContent } from '../src/extract-tool-calls.js';
+import { extractToolCallsFromContent } from '@endo/agentry/tool-call-content';
 
 // ---------------------------------------------------------------------------
 // extractToolCallsFromContent

@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createProvider } from '@endo/lal/providers/index.js';
+import { createChatProvider } from '@endo/agentry/chat';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(dirname, '../..');
@@ -44,7 +44,7 @@ console.log(
 );
 
 try {
-  const provider = createProvider({
+  const provider = createChatProvider({
     LAL_HOST: host,
     LAL_MODEL: model,
     LAL_AUTH_TOKEN: authToken,
@@ -81,7 +81,7 @@ if (fastModel) {
   );
 
   try {
-    const fastProvider = createProvider({
+    const fastProvider = createChatProvider({
       LAL_HOST: fastHost,
       LAL_MODEL: fastModel,
       LAL_AUTH_TOKEN: fastAuthToken,
