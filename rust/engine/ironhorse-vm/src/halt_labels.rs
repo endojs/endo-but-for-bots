@@ -29,7 +29,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Date:method",
     "Intl.NumberFormat:compact-locale",
     "Intl.NumberFormat:formatRange",
-    "Iterator.helper",
     "JSON.parse:lone-surrogate",
     "Number.toString:fractional-non-decimal-radix",
     "String.replace:non-string-receiver",
@@ -245,6 +244,8 @@ pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
 pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Date.toJSON:toISOString-key",
     "Iterator.setter:missing-toStringTag",
+    "Iterator:helper-id",
+    "Iterator:helper-kind",
     "Iterator:missing-constructor",
     "Object-static:unexpected-proxy",
     "Reflect:unexpected",
