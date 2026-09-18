@@ -847,13 +847,13 @@ impl Interp {
     fn helper_finish(&mut self, helper: crate::value::SlotIndex) {
         let holder = self.iterators.get(&helper).map(|state| state.result);
         if let Some(holder) = holder {
-            for index in [
-                Self::HELPER_NEXT,
-                Self::HELPER_ARG,
-                Self::HELPER_INNER,
-                Self::HELPER_INNER_NEXT,
-            ] {
-                self.helper_set(holder, index, Slot::undefined());
+            // Empty the holder rather than writing `undefined` over each slot:
+            // a map/filter/take/drop helper only ever populated items 0 and 1,
+            // so overwriting all four GREW its item map on the way to being
+            // spent. `clear_items` drops every item's side reference and
+            // leaves nothing behind.
+            if let Some(data) = self.arrays.get_mut(&holder) {
+                data.clear_items(&mut self.side_refs);
             }
         }
         if let Some(state) = self.iterators.get_mut(&helper) {
@@ -868,9 +868,15 @@ impl Interp {
     fn helper_iter_result(&mut self, value: Slot, done: bool) -> Slot {
         let value_id = self.intern_static_key("value");
         let done_id = self.intern_static_key("done");
-        self.meter.tick_slot_alloc();
+        // Three `fxNewSlot`s, not one: `set_own_unmetered` allocates a slot
+        // per own property, so charging only for the instance undercharged
+        // every `next()` by two slot allocations. Named individually, the
+        // convention the collection constructors in this file already use.
+        self.meter.tick_slot_alloc(); // instance
         let result = self.slots.alloc(Slot::instance(self.object_proto));
+        self.meter.tick_slot_alloc(); // value
         self.set_own_unmetered(result, value_id, value);
+        self.meter.tick_slot_alloc(); // done
         self.set_own_unmetered(result, done_id, Slot::boolean(done));
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
@@ -1098,6 +1104,13 @@ impl Interp {
         }
         self.helper_set(holder, Self::HELPER_NEXT, next_method);
         self.helper_set(holder, Self::HELPER_ARG, captured);
+        // `insert_item` charges nothing — its callers do. Every sibling that
+        // builds an array with items pays for the chunk (`toArray`, the
+        // collection-cursor entries pair, `flat_into`); without this the
+        // holder was the one array in the engine built with a length and
+        // items and charged for neither. Four slots, the fixed layout, so a
+        // later `flatMap` inner write cannot grow it.
+        self.charge_and_check(self.array_chunk_size_metering(4))?;
         self.meter.tick_slot_alloc();
         let helper = self.slots.alloc(Slot::instance(self.iterator_helper_proto));
         self.iterators.insert(
@@ -1307,10 +1320,15 @@ impl Interp {
         }
     }
 
-    /// Read the helper's callback counter and post-increment it. The counter
-    /// saturates rather than wrapping; the dispatch step limit is reached long
-    /// before `u32::MAX` callbacks, so saturation is unreachable in practice
-    /// and is here only so the argument can never silently restart at zero.
+    /// Read the helper's callback counter and post-increment it.
+    ///
+    /// The counter saturates rather than wrapping, so the argument can never
+    /// silently restart at zero. Saturation is not, however, unreachable: the
+    /// counter is the PERSISTED `IteratorRow::index`, and the dispatch step
+    /// limit resets every crank, so a helper that survives enough resumes is
+    /// bounded by nothing. At `u32::MAX` the index sticks there instead of
+    /// continuing, where the spec's is unbounded — a divergence, but a
+    /// contained and monotonic one, and widening it is a row-schema change.
     fn helper_counter(&mut self, helper: crate::value::SlotIndex) -> f64 {
         let Some(state) = self.iterators.get_mut(&helper) else {
             return 0.0;
