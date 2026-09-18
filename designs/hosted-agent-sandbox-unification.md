@@ -57,15 +57,13 @@ Host quota-helper retirement is complete in endo-host (`564700d`): Codex now use
 shared directory storage without the former kernel quota guarantee.
 The offline old XFS image was retained, not reused as active state.
 
-**Still outstanding:** bounded journal replay/retention and large-content storage;
-remaining retained maps, transcript buffers, and UI delivery allocations before
-removing cumulative ceilings; consolidation of effects recording and transport
-admission/cancellation; remaining mechanical wrapper cleanup; runtime probe/anchor
-simplification only after replacement checks prove its invariants; and final
-all-backend rootless-Podman conformance plus obsolete-code/security-document audit.
-The existing cumulative output and journal lifetime caps remain deliberately in
-place until their specific replacement bounds are implemented.
-The UA deployment does not close Phases 4 or 5.
+**Still outstanding** (revised 2026-09-18; bounded journal replay/retention,
+large-content storage and the removal of the cumulative and lifetime ceilings
+landed — see Phase 4 below): consolidation of effects recording and transport
+admission/cancellation; remaining mechanical wrapper cleanup; runtime
+probe/anchor simplification only after replacement checks prove its invariants;
+and final all-backend rootless-Podman conformance plus obsolete-code/security-
+document audit. The UA deployment does not close Phases 4 or 5.
 
 ### Earlier increments
 
@@ -2150,8 +2148,52 @@ do not make runtime unification depend on redesigning every UI/history consumer.
 Remove the anchor/probe machinery only as replacement actual-runtime checks and
 deployment tests establish the promised properties.
 
-Exit: large and long healthy work completes with bounded resident memory and
-storage, and intentionally uncertain effects remain recoverable without replay.
+Exit: large and long healthy work completes with bounded resident memory, and
+intentionally uncertain effects remain recoverable without replay. Storage is
+deliberately not bounded: transcript content is kept until the session is
+removed in Endo and collected, so storage grows with the conversation.
+
+**Journals and ceilings — landed 2026-09-18.** Every lifetime and cumulative
+ceiling named in the status block above is gone, each replaced by a bound on
+the allocation it stood in for:
+
+- Floot's turn journal (`turn-journal.js`): no lifetime ceiling (was 10,000
+  events). Text fields over 8,192 characters are stored as their own values
+  with a preview and a `<field>Ref` in the record (`getTurnContent`); replay
+  reads the newest snapshot (every 64 events) and only the events after it;
+  settled turns beyond a window of 256 move to archive chunks read on request
+  (`getArchivedTurns`), and a turn with an unresolved outcome is never
+  archived. The journal never removes an event, content value or chunk — only
+  a superseded snapshot, which is derived. One storage value is bounded at
+  16 Mi characters, the frame the bounded readers hold; a tool result beyond
+  it fails that call, not the session.
+- Floot's hosted turn (`hosted-turn.js`): the one host-side accumulation of a
+  turn — answer text plus observed call arguments and results — is bounded
+  where it lives, `maxRetainedChars` (16 Mi). This is what the adapters'
+  per-turn byte caps had been standing in for.
+- Codex client: `maxTurnEvents`/`maxTurnBytes` gone; the per-turn identity
+  sets it deduplicates on carry `maxTurnItems` (16,384) by name, and the
+  queue of events arriving before `turn/start` answers keeps its own
+  `maxEarlyEvents`/`maxEarlyBytes`. The 128-call cap, the 30-minute wall
+  clock and the two-minute tool-call timeout that poisoned the session are
+  off by default and remain operator options.
+- OpenCode client: the 8 MiB cumulative turn budget gone (the credit-bounded
+  reader is the resident bound); the bridge's 30-minute wall clock is off by
+  default, effective once the image is rebuilt from this revision.
+- Codex audit journal: no lifetime ceiling (was 16 MiB of entries and a
+  second 16 MiB anchor store that kept every head ever written, a budget of
+  roughly 250 audited tool calls per session). Only the newest head is kept;
+  a payload text field over 64 KiB is stored by reference, named by its hash,
+  with a 4 KiB preview, and the chain hash covers the reference. The whole
+  chain is still verified at every recovery — linear, transient, over small
+  entries; that is what an audit chain costs to be one.
+
+Still named, not changed: Floot's `FLOOT_MAX_TOOL_ROUNDS` (48) for the Fae
+loop, a safety ceiling on a model that never answers, configurable; the
+network-policy audit's 4,096-entry lifetime cap, which refuses further policy
+changes rather than the session and is the same pattern as the audit journal's
+former total. Effects-recording and transport admission/cancellation
+consolidation across the three adapters is the remaining Phase 4 item.
 
 ### Phase 5: final conformance and documentation
 
