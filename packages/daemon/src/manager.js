@@ -43,10 +43,7 @@ import {
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
-import {
-  makeDirectoryMaker,
-  makeReadOnlyDirectoryView,
-} from './directory.js';
+import { makeDirectoryMaker, makeReadOnlyDirectoryView } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
 import { makeDeferredTasks } from './deferred-tasks.js';

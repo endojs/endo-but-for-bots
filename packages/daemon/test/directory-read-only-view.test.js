@@ -48,7 +48,9 @@ test('the read-only view exposes exactly the ReadableNameHub surface', async t =
   const methodNames = await E(/** @type {any} */ (view)).__getMethodNames__();
   // Drop the exo meta-methods (`__getInterfaceGuard__`, `__getMethodNames__`)
   // so only the declared interface surface is compared.
-  const declared = [...methodNames].filter(name => !name.startsWith('__')).sort();
+  const declared = [...methodNames]
+    .filter(name => !name.startsWith('__'))
+    .sort();
   t.deepEqual(declared, Object.keys(readableNameHubMethodGuards).sort());
   // None of the directory's mutators leak onto the view.
   for (const mutator of [

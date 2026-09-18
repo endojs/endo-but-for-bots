@@ -29,10 +29,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, makeHelp } from './help-text.js';
 
-import {
-  DirectoryInterface,
-  ReadableNameHubInterface,
-} from './interfaces.js';
+import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
 
 /** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
 
@@ -65,7 +62,8 @@ const readOnlyHelp = harden({
   help: 'help(method?) -> string\nDescribe this cap, or one of its methods.',
   has: 'has(...path) -> Promise<boolean>\nWhether a name or path resolves in the backing hub.',
   list: 'list(...path) -> Promise<string[]>\nThe names at a path in the backing hub.',
-  lookup: 'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value.',
+  lookup:
+    'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value.',
   maybeLookup:
     'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\nResolve a name or path, or undefined if absent.',
 });
