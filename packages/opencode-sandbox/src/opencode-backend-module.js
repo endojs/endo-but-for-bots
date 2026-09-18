@@ -45,7 +45,7 @@ import { E } from '@endo/eventual-send';
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
-} from './current-specifier.js';
+} from '@endo/hosted-agent/current-specifier.js';
 import {
   readBrokerService,
   readNativeSandbox,

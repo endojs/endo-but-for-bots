@@ -19,18 +19,20 @@ import {
 } from '@endo/hosted-agent/hosted-setup.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 
-import { assertCodexStateRoot } from './codex-state-provider.js';
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
-} from './current-specifier.js';
+} from '@endo/hosted-agent/current-specifier.js';
+import { assertCodexStateRoot } from './codex-state-provider.js';
 
 export { readPinnedSliceImage } from './codex-image-reference.js';
 
 const LABEL = 'Codex';
 
-/** Pet-name directory for everything this adapter mints; the host root stays
- * clean, and the backend's session state is named from here. */
+/**
+ * Pet-name directory for everything this adapter mints; the host root stays
+ * clean, and the backend's session state is named from here.
+ */
 export const SANDBOX_DIR = 'codex-sandbox';
 
 /** The common scoped native Podman service; Codex has no volume registry. */

@@ -67,7 +67,7 @@ import { Fail, q } from '@endo/errors';
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
-} from './src/current-specifier.js';
+} from '@endo/hosted-agent/current-specifier.js';
 import { provideManagedCredentials } from './src/managed-credentials.js';
 import {
   assertRuntimePlacement,

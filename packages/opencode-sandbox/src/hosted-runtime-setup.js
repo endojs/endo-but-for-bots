@@ -16,7 +16,7 @@ import path from 'node:path';
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
-} from './current-specifier.js';
+} from '@endo/hosted-agent/current-specifier.js';
 import { readOpencodeBrokerConfig } from './opencode-broker-service-agent.js';
 
 /** @import { EndoHost } from '@endo/daemon' */

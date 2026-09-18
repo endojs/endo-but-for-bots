@@ -2953,7 +2953,20 @@ than a judgement.
    tidy-up over a settled shape.
 
    Shared rootfs parsing landed in `c8ff7b57e` and is deployed on Tokyo.
-   Remaining wrapper cleanup is not claimed complete.
+
+   **Done, 2026-09-18.** The three `current-specifier.js` re-export wrappers
+   are deleted and their thirteen importers name
+   `@endo/hosted-agent/current-specifier.js`; the one test of it (the OpenCode
+   copy, which covered `assertCurrentSpecifier` too) moved to hosted-agent.
+   Two kinds of wrapper stay on purpose. `managed-credentials-module.js` in
+   claude- and opencode-sandbox is not duplicated logic but the *specifier*
+   stored in every retained credential formula on Tokyo (`makeUnconfined`
+   keeps it verbatim and re-imports it on revival), so deleting it would break
+   revival of what is already minted; a fresh host could mint against the
+   hosted-agent path, and the wrapper is eight lines. `parse-rootfs.js` in
+   claude- and opencode-sandbox carries the adapter's default image over the
+   shared parser, which is the shape `c8ff7b57e` chose. The hosted policies
+   export their mount table and the verifier built over it and nothing else.
 
 ### What this plan does not do
 

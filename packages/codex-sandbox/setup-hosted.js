@@ -28,13 +28,13 @@ import {
 } from '@endo/hosted-agent/session-plan.js';
 import { join } from 'node:path';
 
-import { deriveCodexOwnerId } from './setup-host.js';
-import { normalizeCodexModelDescriptor } from './src/codex-models.js';
-import { readCodexBrokerConfig } from './src/codex-broker-service-agent.js';
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
-} from './src/current-specifier.js';
+} from '@endo/hosted-agent/current-specifier.js';
+import { deriveCodexOwnerId } from './setup-host.js';
+import { normalizeCodexModelDescriptor } from './src/codex-models.js';
+import { readCodexBrokerConfig } from './src/codex-broker-service-agent.js';
 import {
   SANDBOX_DIR,
   backendSpecifier,

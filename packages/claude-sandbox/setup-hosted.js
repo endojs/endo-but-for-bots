@@ -83,14 +83,14 @@ import {
   readNativeProfile,
 } from '@endo/hosted-agent/session-plan.js';
 
+import {
+  assertCurrentSpecifier,
+  toCurrentSpecifier,
+} from '@endo/hosted-agent/current-specifier.js';
 import { CLAUDE_CLI_MODELS } from './src/claude-backend-factory.js';
 import { ANTHROPIC_BETA_PATTERN } from './src/claude-broker.js';
 import { readClaudeBrokerConfig } from './src/claude-broker-service-agent.js';
 import { assertCredentialKind } from './src/claude-credential-kinds.js';
-import {
-  assertCurrentSpecifier,
-  toCurrentSpecifier,
-} from './src/current-specifier.js';
 import {
   SANDBOX_DIR,
   assertRuntimePlacement,
