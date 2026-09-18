@@ -16,6 +16,7 @@ import {
   entries,
   freeze,
   isArray,
+  isPrimitive,
   keys,
   mapGet,
   weakmapGet,
@@ -23,6 +24,7 @@ import {
   assign,
 } from './commons.js';
 import { compartmentEvaluate } from './compartment-evaluate.js';
+import { normalizeImportAttributes } from './module-attributes.js';
 
 const { quote: q } = assert;
 
@@ -33,12 +35,14 @@ export const makeVirtualModuleInstance = (
   moduleAliases,
   moduleSpecifier,
   resolvedImports,
+  attributes,
 ) => {
   const { exportsProxy, exportsTarget, activate } = getDeferredExports(
     compartment,
     weakmapGet(compartmentPrivateFields, compartment),
     moduleAliases,
     moduleSpecifier,
+    attributes,
   );
 
   const notifiers = create(null);
@@ -126,6 +130,7 @@ export const makeModuleInstance = (
     moduleSpecifier,
     moduleSource,
     importMeta: moduleRecordMeta,
+    attributes,
   } = moduleRecord;
   const {
     reexports: exportAlls = [],
@@ -148,6 +153,7 @@ export const makeModuleInstance = (
     compartmentFields,
     moduleAliases,
     moduleSpecifier,
+    attributes,
   );
 
   // {_exportName_: getter} module exports namespace
@@ -175,12 +181,25 @@ export const makeModuleInstance = (
     importMetaHook(moduleSpecifier, importMeta);
   }
 
-  /** @type {(fullSpecifier: string) => Promise<ModuleExportsNamespace>} */
+  /**
+   * @type {(importSpecifier: string, options?: object) =>
+   *   Promise<ModuleExportsNamespace>}
+   */
   let dynamicImport;
   if (needsImport) {
-    /** @param {string} importSpecifier */
-    dynamicImport = async importSpecifier =>
-      compartmentImport(resolveHook(importSpecifier, moduleSpecifier));
+    // `import(specifier, { with: { ... } })`: the `with` clause carried by the
+    // dynamic-import options bag is normalized and threaded to the loader's memo
+    // and hook, bypassing `resolveHook` (attributes do not participate in
+    // resolution).  See `designs/ses-import-attributes.md` § Resolution.
+    dynamicImport = async (importSpecifier, options) => {
+      const importAttributes = normalizeImportAttributes(
+        isPrimitive(options) ? undefined : options.with,
+      );
+      return compartmentImport(
+        resolveHook(importSpecifier, moduleSpecifier),
+        importAttributes,
+      );
+    };
   }
 
   // {_localName_: [{get, set, notify}]} used to merge all the export updaters.

@@ -160,9 +160,34 @@ export type ModuleMap = Record<string, string | ModuleDescriptor>;
 export type ModuleMapHook = (
   moduleSpecifier: string,
 ) => ModuleDescriptor | undefined;
-export type ImportHook = (moduleSpecifier: string) => Promise<ModuleDescriptor>;
+
+/**
+ * Normalized TC39 import attributes: a frozen, null-prototype object of string
+ * keys to string values (the `with { ... }` clause of a static or dynamic
+ * import).  See `designs/ses-import-attributes.md`.
+ */
+export type Attributes = Record<string, string>;
+
+/**
+ * A tuple priming an attribute-bearing module in the compartment memo:
+ * `[specifier, attributes, source]`.
+ */
+export type ModuleWithAttributes = [
+  specifier: string,
+  attributes: Attributes,
+  source: ModuleDescriptor,
+];
+
+// `attributes` is optional on the type so pre-attributes hook implementations
+// type-check unchanged; the loader always passes a value (`EMPTY_ATTRIBUTES`
+// when there is no `with` clause) and uses arity to detect legacy hooks.
+export type ImportHook = (
+  moduleSpecifier: string,
+  attributes?: Attributes,
+) => Promise<ModuleDescriptor>;
 export type ImportNowHook = (
   moduleSpecifier: string,
+  attributes?: Attributes,
 ) => ModuleDescriptor | undefined;
 export type ImportMetaHook = (
   moduleSpecifier: string,
@@ -179,6 +204,14 @@ export interface CompartmentOptions {
   resolveHook?: ResolveHook;
   globals?: Map<string, any>;
   modules?: Map<string, ModuleDescriptor>;
+  /**
+   * Primes attribute-bearing modules in the compartment memo.  Each
+   * `[specifier, attributes, source]` triple seats its source under the
+   * extended memo key so a matching `import ... with { ... }` resolves from the
+   * primed entry before `importHook` is consulted.  See
+   * `designs/ses-import-attributes.md` § Compartment construction.
+   */
+  modulesWithAttributes?: Array<ModuleWithAttributes>;
   __shimTransforms__?: Array<Transform>;
   __noNamespaceBox__?: boolean;
   /** @deprecated */

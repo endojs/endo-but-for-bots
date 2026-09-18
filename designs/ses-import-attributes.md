@@ -3,9 +3,25 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-09-16 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Draft |
+| **Status** | In Progress (Phase 1 landed) |
+
+> **Implementation status (2026-09-16).** Phase 1 — the SES runtime and
+> normalization core — has landed: `normalizeImportAttributes` /
+> `EMPTY_ATTRIBUTES` (in `packages/ses/src/module-attributes.js`, re-exported
+> from `ses`), the attribute-extended module memo key with the legacy-collapse
+> rule, arity-based `importHook` / `importNowHook` back-compatibility with the
+> documented `TypeError`, the `modulesWithAttributes` compartment option, and the
+> dynamic-import (`import(spec, { with })`) path, all covered by
+> `packages/ses/test/import-attributes.test.js`. Deferred to follow-up PRs: the
+> `@endo/module-source` parser capture of static `with` clauses and the linking
+> rework that lets two same-specifier static imports with differing attributes
+> resolve to distinct instances (§ Memo key extension worked example); and the
+> `@endo/compartment-mapper` read/write/synthetic-hook plumbing
+> (§ Compartment-mapper implications). Pre-attributes bundles and archives already
+> load and hash byte-identically under Phase 1 (verified against the
+> compartment-mapper archive-consistency suite).
 
 ## Problem statement
 
