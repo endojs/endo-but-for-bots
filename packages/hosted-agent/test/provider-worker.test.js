@@ -155,8 +155,10 @@ for (const diagnosticsEnabled of [false, true]) {
       const lines = diagnostics
         .split('\n')
         .filter(line => line.startsWith('Provider HTTP diagnostic: '));
-      t.is(lines.length, diagnosticsEnabled ? 4 : 0);
-      t.true(lines.join('\n').length < 4096);
+      // One line per failed request — the rejected one and all five denied —
+      // not a lifetime budget of four.
+      t.is(lines.length, diagnosticsEnabled ? 6 : 0);
+      t.true(lines.every(line => line.length <= 800));
       t.false(lines.join('\n').includes('canary'));
       if (diagnosticsEnabled) {
         t.deepEqual(

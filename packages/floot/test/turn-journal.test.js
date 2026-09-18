@@ -634,22 +634,22 @@ test('settled turns beyond the retained window are archived; unresolved ones nev
       }),
     );
   }
-  const status = await journal.status();
-  t.is(status.retainedTurns + status.archivedTurns, 301);
+  const { retainedTurns, archivedTurns } = await journal.status();
+  t.is(retainedTurns + archivedTurns, 301);
   // The window is enforced at snapshot points, so up to a snapshot's worth of
   // turns (64 events, two per turn here) may sit above it between them.
   t.true(
-    status.retainedTurns <= 256 + 1 + 32,
+    Number(retainedTurns) <= 256 + 1 + 32,
     'the window, the unresolved turn, and at most one snapshot interval',
   );
-  t.true(status.archivedTurns > 0);
+  t.true(Number(archivedTurns) > 0);
   const live = await journal.list();
   t.truthy(
     live.find(record => record.turnId === unknown),
     'unresolved stays in front',
   );
   const archived = await journal.listArchived();
-  t.is(archived.length, status.archivedTurns);
+  t.is(archived.length, archivedTurns);
   t.true(archived.every(record => record.state === 'completed'));
   t.is(archived[0].output, '0', 'oldest settled turn archived first');
   t.true(

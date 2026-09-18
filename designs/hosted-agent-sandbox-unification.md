@@ -2178,10 +2178,17 @@ the allocation it stood in for:
   entries; that is what an audit chain costs to be one.
 
 Still named, not changed: Floot's `FLOOT_MAX_TOOL_ROUNDS` (48) for the Fae
-loop, a safety ceiling on a model that never answers, configurable; the
-network-policy audit's 4,096-entry lifetime cap, which refuses further policy
-changes rather than the session and is the same pattern as the audit journal's
-former total.
+loop, a safety ceiling on a model that never answers, configurable.
+
+Removed later the same day: the network-policy audit's 4,096-entry lifetime
+cap (with the capacity reserve that existed only to serve it) — a session
+that had made its 4,096th policy change could no longer revoke its network,
+the opposite of what the audit protects; one record per human action, no
+ceiling, linear replay. And the provider listener's diagnostic budget — four
+`Provider HTTP diagnostic` lines per listener lifetime in the worker, 4,096
+bytes of stderr per listener lifetime in the runtime — which silenced the
+fifth failed request for as long as the listener lived; both are now bounded
+per line and per chunk, not in total.
 
 **Effects recording and transport admission/cancellation — landed
 2026-09-18.** One effects path: every Endo tool call, from whichever loop
@@ -2249,10 +2256,11 @@ together; what it found and what changed:
   endo-host evidence file stays on the 2026-09-17 acceptance of the same
   image digest. Claude's live recall is the one conformance run still owed,
   and it is a run, not a change.
-- *Still open, named:* the network-policy audit's 4,096-entry lifetime cap;
-  MCP socket access control on the OpenCode side; the offline pre-deploy
-  variant of the pin-bump conformance; the `keep-id` uid posture; the
-  ownership-marker no-recovery contract across daemon restart; `codex exec`.
+- *Still open, named:* MCP socket access control on the OpenCode side; the
+  offline pre-deploy variant of the pin-bump conformance; the `keep-id` uid
+  posture; the ownership-marker no-recovery contract across daemon restart;
+  `codex exec`. (The network-policy audit's lifetime cap, listed here
+  earlier, is removed — see "Protection and limit justification".)
 
 ## Validation
 

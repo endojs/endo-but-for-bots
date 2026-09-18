@@ -81,16 +81,16 @@ export const startProviderListenerWorker = async ({
       makeNetworkListeners || Fail`Provider worker does not support networking`;
       networkConfiguration = configuration.network;
     }
-    let diagnosticCount = 0;
     listener = await makeProviderHttpListener({
       endpoint: configuration.endpoint,
       ...configuration.limits,
       onDiagnostic: diagnostic => {
-        if (configuration.limits.diagnostics !== true || diagnosticCount >= 4)
-          return;
-        diagnosticCount += 1;
-        // Project only fixed, locally generated stages and header-check bits.
-        // Four bounded lines fit within the runtime's 4096-byte stderr budget.
+        if (configuration.limits.diagnostics !== true) return;
+        // Project only fixed, locally generated stages and header-check bits:
+        // one bounded line per failed request, for the listener's whole life.
+        // The fifth failure is the one an operator is looking at, and every
+        // one cost the slice a metered request. The runtime bounds what it
+        // copies of any one chunk, not how many.
         const { stage, checks } = diagnostic;
         const line = JSON.stringify({
           stage,
