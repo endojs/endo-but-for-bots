@@ -127,10 +127,21 @@ class Repository(unittest.TestCase):
         """The oracle lane generates `dist-ironhorse/boot.js` and
         `prelude/ironhorse.js`, and `ses_boot_intrinsics.rs` /
         `ses_prelude_reach.rs` read them at runtime. Editing what those
-        artifacts are built from has to re-run the pins that watch them."""
+        artifacts are built from has to re-run the pins that watch them.
+
+        `@endo/ironhorse-prelude` is the one that matters most now: the
+        repairs both artifacts share live THERE, and
+        `ironhorse-pre-shim.js` is a one-line re-export of it. An edit
+        confined to that package is the case this rule exists for, and it
+        is exactly the case an earlier revision of this test missed --
+        every path below it named still resolved, so the suite stayed green
+        while the lane went unselected for the file it guards."""
         for path in [
+            "packages/ironhorse-prelude/prelude.js",
+            "packages/ironhorse-prelude/package.json",
             "packages/test262-runner/src/ironhorse-prelude.js",
             "packages/test262-runner/src/ironhorse-pre-shim.js",
+            "packages/test262-runner/src/install-pre-lockdown-harden.js",
             "packages/test262-runner/scripts/generate-preludes.js",
             "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
         ]:

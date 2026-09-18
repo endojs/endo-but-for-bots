@@ -1116,8 +1116,18 @@ fn a_compartment_cannot_lock_down_the_shared_realm() {
 /// This is why "only attenuation is missing" is the wrong summary of the gap
 /// between the native `lockdown()` and the shim, and why an earlier revision
 /// of the design note saying so was retracted: attenuation (steps 3 and 4) is
-/// what a CONFINED guest additionally needs, but override enablement is what
-/// arbitrary guest source needs in order to run at all.
+/// what a CONFINED guest additionally needs.
+///
+/// **What this probe does NOT show is that guest source needs enablement to
+/// run.** An earlier revision of this comment said so, and it overstates the
+/// measurement. The override mistake is a `[[Set]]` problem: a class body and
+/// an object literal both define their methods through `[[DefineOwnProperty]]`
+/// and never consult the prototype chain, and `defineStillWorks=mine` above is
+/// that same fact from inside the probe. Only the ES5 assignment idiom
+/// (`Foo.prototype.toString = ...`) is affected, and SES's own `minEnablements`
+/// is six properties whose comments name the transpiler and test libraries
+/// they exist for. So this is a compatibility preference to probe for before
+/// migrating an embedder, not a blocker on the native operation.
 #[test]
 fn a_native_lockdown_does_not_enable_property_override() {
     assert_eq!(

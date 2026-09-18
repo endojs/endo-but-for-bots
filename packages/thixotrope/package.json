@@ -54,6 +54,7 @@
     "@endo/harden": "workspace:^",
     "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
+    "@endo/ironhorse-prelude": "workspace:^",
     "@endo/ocapn": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.4.0"
