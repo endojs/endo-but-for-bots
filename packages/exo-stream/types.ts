@@ -345,6 +345,14 @@ export interface BufferedReaderKit<TRead extends Passable = Passable> {
   close: () => void;
   /** True once a terminal event was pushed or the consumer closed early */
   isClosed: () => boolean;
+  /**
+   * True once a consumer has called `stream()`. Until then nothing watches for
+   * the consumer going away, so a producer that hands readers to remote
+   * parties can use this to give up on one that was never opened.
+   */
+  isStarted: () => boolean;
+  /** Events pushed and not yet taken by the consumer. */
+  buffered: () => number;
   /** Replace the onClose hook (e.g. wired after construction) */
   setOnClose: (fn: () => void) => void;
 }

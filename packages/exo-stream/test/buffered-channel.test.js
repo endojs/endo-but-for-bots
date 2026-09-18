@@ -244,3 +244,43 @@ test('stream() may be called at most once', async t => {
     message: /at most once/,
   });
 });
+
+// A channel used to live as long as one turn, so keeping every event it had
+// carried cost little. A subscription lives for as long as someone watches.
+test('delivered events are not retained', async t => {
+  const { push, reader, buffered } = makeBufferedReader();
+  const iterator = iterateReader(reader, { buffer: 0 });
+  for (let i = 0; i < 1000; i += 1) {
+    push({ type: 'delta', text: `${i}` });
+  }
+  t.is(buffered(), 1000);
+  for (let i = 0; i < 1000; i += 1) {
+    const { value } = await iterator.next();
+    t.is(/** @type {any} */ (value).text, `${i}`, 'order survives the drops');
+  }
+  t.is(buffered(), 0);
+  // And the channel still works after its buffer has been cut back.
+  push({ type: 'delta', text: 'after' });
+  t.is(/** @type {any} */ ((await iterator.next()).value).text, 'after');
+  push({ type: 'end' });
+  t.deepEqual((await iterator.next()).value, { type: 'end' });
+  t.true((await iterator.next()).done);
+});
+
+test('isStarted reports whether a consumer ever opened the stream', async t => {
+  const { push, reader, isStarted, close, isClosed } = makeBufferedReader();
+  push({ type: 'delta', text: 'x' });
+  t.false(isStarted(), 'a reader handed out and never opened');
+  // A producer can give up on it: nothing else would ever notice it is gone.
+  close();
+  t.true(isClosed());
+
+  const other = makeBufferedReader();
+  const iterator = iterateReader(other.reader, { buffer: 0 });
+  other.push({ type: 'delta', text: 'y' });
+  await iterator.next();
+  t.true(other.isStarted());
+  t.false(isStarted());
+  t.truthy(reader);
+  await iterator.return();
+});

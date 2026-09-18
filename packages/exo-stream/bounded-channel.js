@@ -161,6 +161,8 @@ export const makeBoundedReader = options => {
     reader,
     close,
     isClosed: () => finished,
+    isStarted: () => streaming,
+    buffered: () => queue.length + (terminal ? 1 : 0),
     setOnClose: hook => {
       onClose = hook;
     },
