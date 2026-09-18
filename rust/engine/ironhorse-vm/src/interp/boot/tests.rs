@@ -155,6 +155,7 @@ const FRESH_ORDER: &[&str] = &[
     "array_iterator_proto",
     "iterator_proto",
     "iterator_wrapper_proto",
+    "iterator_helper_proto",
     "map_iterator_proto",
     "set_iterator_proto",
     "regexp_string_iterator_proto",
