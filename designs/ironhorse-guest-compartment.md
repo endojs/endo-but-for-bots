@@ -728,8 +728,8 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
   stand-in's anonymity and `length` 1, the `secure mode` refusal on
   construction, and that the global constructor still works.
 - Oracle divergences from `fx_Compartment` recorded, measured, one row each.
-  **Done**, in § Oracle divergences, measured above; they still owe a copy
-  into the native-lockdown note's section.
+  **Done**, in § Oracle divergences, measured above, and copied into the
+  native-lockdown note's own section as its rows 7-9.
   Three rows, not the four this note guessed: two of the three `noXs` cases
   need no row (`Symbol.toStringTag-lockdown.js` simply passes, and
   `evaluate-transforms.js` is excluded because XS does not implement
@@ -778,7 +778,8 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
       carries the decision and the reason phase 1 did not.
 - [ ] Persist a live guest compartment (§ 7), lifting the persist-gate
       refusal.
-- [ ] Copy § Oracle divergences, measured into the native-lockdown note.
+- [x] Copy § Oracle divergences, measured into the native-lockdown note. Done:
+      rows 7-9 of its own § Oracle divergences, measured.
 - [x] Update `packages/test262-runner/README.md`'s skip inventory. Done, and
       it needed more than a skip line: `Compartment` left
       `DEFAULT_ENDOR_SKIP_FEATURES`, both cases now run, and neither became

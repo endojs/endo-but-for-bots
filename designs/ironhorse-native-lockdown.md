@@ -5,7 +5,7 @@
 | **Created** | 2026-09-16 |
 | **Updated** | 2026-09-18 |
 | **Author** | kumavis (prompted) |
-| **Status** | Implemented (`lockdown`); `Compartment` not started |
+| **Status** | Implemented (`lockdown`); `Compartment` phase 1 implemented separately — see [ironhorse-guest-compartment](ironhorse-guest-compartment.md) |
 | **Source** | The gap [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) sized and Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) sequenced |
 
 ## Status
@@ -841,6 +841,40 @@ sets that flag unconditionally (`xsLockdown.c:61`), so no lockdown-installed
 stand-in in XS can reach the `"strict mode"` arm. The other consumer of
 `fxThrowTypeError` — `Function.prototype.caller`/`.arguments` — is the one
 IronHorse is missing.
+
+**From the guest `Compartment` (2026-09-18).**
+
+The steps this note put out of scope for want of a guest `Compartment` now
+have one (`designs/ironhorse-guest-compartment.md`), and step 2 gained its
+sixth stand-in with it: `locked_down_prototypes` carries
+`(compartment_proto, 1)`, which is `fx_lockdown`'s fifth call. Three
+divergences come with it, measured the same way as the rows above.
+
+| # | What diverges | XS | IronHorse |
+|---|---|---|---|
+| 7 | `new Compartment({ modules: { foo: {} } })` | accepts, and so fails `constructor/modules-types.js`, which expects a `TypeError` | rejects: `assert_module_map` requires each own enumerable entry of `modules` to carry a recognized descriptor key |
+| 8 | the render of a thrown non-`Error` at the host boundary | `Test262Error: <message>`, the constructor's `name` | `Object: <message>`, the `Object.prototype.toString` tag |
+| 9 | compartment-construction metering | not measured | allocation-driven (`tick_slot_alloc` per slot), not a calibrated frame constant |
+
+Row 7 is the corpus outranking the oracle, by decision: ironhorse is right and
+XS is wrong, and the differential calls it `over-acceptance` only because its
+reference is XS. It is the one phase-1 case where the two disagree on
+behaviour rather than on rendering.
+
+Row 8 is neither engine's `Compartment` and predates both; binding one is
+merely what made it observable, because the case that exposes it could not run
+before. `Interp::render_uncaught` labels a thrown non-`Error` with its
+`Object.prototype.toString` tag, because it is a host boundary that must not
+run guest code — and for an ordinary guest constructor both hops it would
+need, `constructor` on the prototype and `name` on the function, are virtual
+properties materialized on demand, which a `&self` render cannot do.
+`packages/hardened262/scripts/agents/ironhorse.js` works around the same gap in
+the harness source.
+
+Row 9 is a gap in the ledger rather than in behaviour: `ironhorse-meter` has no
+`fx_Compartment` measurement, and inventing a constant would assert a
+calibration nobody performed. A computron comparison over compartment
+construction is not meaningful until someone measures XS's.
 
 ## Validation on 2026-09-17
 
