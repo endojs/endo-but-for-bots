@@ -1862,7 +1862,11 @@ fn run_ironhorse_module(
     let bytecode = machine
         .relink_crank(bytecode, &names)
         .map_err(|e| Verdict::Fail(format!("module:relink:{e:?}")))?;
-    let mut outcome = machine.run(&bytecode).host_coerced();
+    // Same as the script path: the module body is the subject, so its escaping
+    // throw is rendered the way the oracle shim renders its own.
+    let mut outcome = machine
+        .run_rendering_throws_in_guest(&bytecode)
+        .host_coerced();
     // Setup ran on this machine, so the cumulative totals carry its cost; the
     // oracle resets `meterIndex` after its own setup (`xs_shim.c`), and
     // `dual_run_scripts_checkpoint` normalizes the script path the same way.

@@ -239,6 +239,68 @@ impl Interp {
         "<prototype cycle>".to_string()
     }
 
+    /// ECMAScript `ToString` of an escaping thrown value, run IN the guest.
+    ///
+    /// This is the symmetric twin of the oracle shim's
+    /// `endor_error_from_exception` (`xs-oracle/csrc/xs_shim.c:126`), which
+    /// runs `fxToString` on `mxException` inside a `mxTry`/`mxCatch` and falls
+    /// back to the literal `(exception stringification threw)` when the
+    /// stringification itself throws. XS reports what a guest `toString`
+    /// returns, so a `Test262Error` whose prototype `toString` yields
+    /// `"Test262Error: " + this.message` (`harness/sta.js:18`) is reported by
+    /// that name. Nothing readable without running guest code can produce that
+    /// string, which is why [`Self::render_uncaught`]'s guest-free
+    /// approximation cannot match it and must not try.
+    ///
+    /// **The cost is not charged.** The shim reads `out->computrons`,
+    /// `meter_raw`, `heap_count` and `chunks_size` from the machine BEFORE it
+    /// stringifies (`xs_shim.c:508-512`), so XS's reported meter excludes the
+    /// diagnostic render. Snapshotting the meter and the dispatch count across
+    /// it is therefore what makes the two engines comparable, not a
+    /// convenience: charging it here would make every throwing case's
+    /// computrons disagree with an oracle that does not charge it.
+    ///
+    /// Callable only where a live `code` buffer exists, because `ToPrimitive`
+    /// threads it into `call_primitive_method` to resume the dispatch loop.
+    /// That is the throw's own exit in `run_inner`, which still holds both.
+    fn render_thrown_with_guest(&mut self, code: &[u8], value: Slot) -> String {
+        let meter = self.meter.state();
+        let dispatched = self.n_dispatched;
+        let rendered = self.to_string_units(code, value).ok();
+        self.meter.restore(meter);
+        self.n_dispatched = dispatched;
+        match rendered {
+            Some(units) => SymbolName::from_units(&units).to_string(),
+            // The shim's own sentinel, verbatim: an `Object.create(null)` with
+            // no `toString` reaches it in both engines.
+            None => "(exception stringification threw)".to_string(),
+        }
+    }
+
+    /// [`Self::render_thrown_with_guest`] for the one throw that escapes a
+    /// run, leaving every other `Step` to the guest-free boundary.
+    pub(super) fn finish_step_rendering_throws(
+        &mut self,
+        code: &[u8],
+        step: Step,
+        enabled: bool,
+    ) -> Halt {
+        // RELABEL, never construct. `throw_construction_sites.rs` locks
+        // `Halt::Throw` to the two places that may create one, and this is not
+        // a third: `finish_step` still builds the halt, off the same unwound
+        // jump chain, and only its diagnostic text is replaced afterwards.
+        if let (true, Step::Threw { value, .. }) = (enabled, &step) {
+            let value = *value;
+            let text = self.render_thrown_with_guest(code, value);
+            let mut halt = self.finish_step(step);
+            if let Halt::Throw { rendered, .. } = &mut halt {
+                *rendered = text;
+            }
+            return halt;
+        }
+        self.finish_step(step)
+    }
+
     /// Once a throw reaches the host, rendering must not resume the guest or
     /// change its decided outcome. In particular it cannot allocate guest
     /// objects, enqueue jobs, call a meter host, or swallow a second halt.
