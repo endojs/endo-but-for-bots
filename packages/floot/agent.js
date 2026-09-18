@@ -52,6 +52,7 @@ import {
 } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
+import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
 import { projectTranscript } from './src/transcript-projection.js';
@@ -154,6 +155,7 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
     .optional(M.any(), M.string(), M.string())
     .returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
+  watchSessions: M.callWhen().returns(M.remotable()),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listBackends: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().optional(M.string()).returns(M.arrayOf(M.record())),
@@ -180,6 +182,7 @@ const FlootSessionInterface = M.interface('FlootSession', {
   resume: M.callWhen().returns(M.record()),
   startTurn: M.call(M.any()).returns(M.remotable()),
   getCurrentTurn: M.callWhen().returns(M.or(M.null(), M.record())),
+  watch: M.callWhen().returns(M.remotable()),
   getHistory: M.callWhen().returns(M.any()),
   getTranscript: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
@@ -908,6 +911,11 @@ const provisionPresetObjects = async (
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
  *   the factory built (see `makeFlootToolRegistry`).
+ * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
+ *   Told when this session's turn records change, whoever started the turn —
+ *   the UI, the mailbox, a queued submission. It is how a view learns that the
+ *   transcript moved without asking again on a timer. `turn-started` carries
+ *   the turn's input and, for a mail turn, who sent it.
  * @param {string} [options.hostedContinuity] - The hosted backend's declared
  *   continuity. A `'transcript'` backend keeps its own record of every
  *   delivered prompt and streamed reply (a CLI resuming its transcript), so an
@@ -923,6 +931,8 @@ const provisionPresetObjects = async (
  *     onStart?: (history: Array<Record<string, any>>) => void,
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
+ *   getSettledHistory: () => Promise<Array<Record<string, any>>>,
+ *   getActivity: () => Promise<{ active: boolean, lastTurnState: string, needsRecovery: boolean }>,
  *   getTranscript: () => Promise<Array<Record<string, any>>>,
  *   getTurns: () => Promise<Array<Record<string, any>>>,
  *   getArchivedTurns: () => Promise<Array<Record<string, any>>>,
@@ -951,8 +961,22 @@ export const makeStreamingAgent = async (
     hostedContinuity,
     journalPowers = powers,
     journalMigration,
+    onChange,
   } = {},
 ) => {
+  /**
+   * @param {'turn-started' | 'turn-settled' | 'turn-resolved'} kind
+   * @param {{ input: string, from?: string }} [detail]
+   */
+  const notifyChange = (kind, detail) => {
+    if (!onChange) return;
+    try {
+      onChange(kind, detail);
+    } catch (error) {
+      // An observer must never be able to fail a turn.
+      console.error('[floot-agent] change observer failed:', error);
+    }
+  };
   const retainsDeliveredTurns = hostedContinuity === 'transcript';
   let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
   const provideHostedClient = /** @type {any} */ (providerConfig)
@@ -1789,6 +1813,15 @@ export const makeStreamingAgent = async (
     activeJournalUsage = undefined;
     activeJournalOutcomeUnknown = false;
     journalToolSequence = 0n;
+    notifyChange(
+      'turn-started',
+      harden({
+        input: text,
+        ...(typeof meta?.mail?.from === 'string'
+          ? { from: meta.mail.from }
+          : {}),
+      }),
+    );
     let output = '';
     const observedWriter = {
       ...writer,
@@ -1842,6 +1875,7 @@ export const makeStreamingAgent = async (
     } finally {
       activeJournalTurn = undefined;
       activeJournalSignal = undefined;
+      notifyChange('turn-settled');
     }
   };
 
@@ -2371,7 +2405,7 @@ export const makeStreamingAgent = async (
   const getTranscript = async () =>
     projectTranscript(await tree.getPath(await getOrCreateLeaf()));
 
-  const getHistory = async (excludeTurnId = undefined) => {
+  const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const leafId = await getOrCreateLeaf();
     const turns = await turnJournal.list();
     if (!turns.length) return projectHistory(await tree.getPath(leafId));
@@ -2399,6 +2433,17 @@ export const makeStreamingAgent = async (
     for (const turn of turns) {
       // eslint-disable-next-line no-continue
       if (turn.turnId === excludeTurnId) continue;
+      // A settled view leaves out the turn that is running: by its journal
+      // state, and by identity too, because the journal records `finish`
+      // before the turn has finished unwinding (a hosted acknowledge, the
+      // reply channel closing), and until it has, its viewers are still
+      // rendering it from the turn's own stream.
+      if (
+        settledOnly &&
+        (turn.state === 'pending' || turn.turnId === activeJournalTurn)
+      )
+        // eslint-disable-next-line no-continue
+        continue;
       const meta = {
         turnId: turn.turnId,
         turnState: turn.state,
@@ -2496,6 +2541,28 @@ export const makeStreamingAgent = async (
     return harden(out);
   };
 
+  /**
+   * The conversation up to the last turn that ended. A turn still running is
+   * left out whole — its input, its partial tool evidence and the "Turn
+   * pending." line `getHistory` writes for it — because a view renders a
+   * running turn from the turn's own stream, and would show it twice.
+   */
+  const getSettledHistory = () => getHistory(undefined, true);
+  /**
+   * What a status indicator needs, without the records themselves.
+   */
+  const getActivity = async () => {
+    /** @type {any[]} */
+    const turns = await turnJournal.list();
+    const last = turns.at(-1);
+    return harden({
+      active: Boolean(activeJournalTurn),
+      lastTurnState: `${last?.state || ''}`,
+      needsRecovery: turns.some(
+        turn => turn.state === 'outcome-unknown' && !turn.resolution,
+      ),
+    });
+  };
   const getTurns = () => turnJournal.list();
   const getArchivedTurns = () => turnJournal.listArchived();
   const getTurnContent = ref => turnJournal.readContent(ref);
@@ -2513,6 +2580,7 @@ export const makeStreamingAgent = async (
       journalRecovery = new Promise(resolve => {
         signalJournalRecovery = resolve;
       });
+      notifyChange('turn-resolved');
     });
 
   const getUsage = async () => harden({ ...(await loadUsage()) });
@@ -2528,6 +2596,8 @@ export const makeStreamingAgent = async (
   return harden({
     converse,
     getHistory,
+    getSettledHistory,
+    getActivity,
     getTranscript,
     getTurns,
     getArchivedTurns,
@@ -2938,7 +3008,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
    * @returns {<T>(thunk: () => Promise<T>) => Promise<T>}
    */
   const serializePublishing = id => thunk => {
-    const next = (publishChains.get(id) || Promise.resolve()).then(thunk, thunk);
+    const next = (publishChains.get(id) || Promise.resolve()).then(
+      thunk,
+      thunk,
+    );
     publishChains.set(
       id,
       next.catch(() => {}),
@@ -3412,6 +3485,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // next complete snapshot; it can never erase the sole recovery record.
   let registryWrite = Promise.resolve();
   const saveRegistry = () => {
+    // Every lifecycle change comes through here, so this is where the session
+    // list's viewers hear of it. Told at once rather than after the write:
+    // the list they are shown is the registry in memory, the same one
+    // `listSessions` reads.
+    // eslint-disable-next-line no-use-before-define
+    touchSessionList();
     const result = registryWrite.then(async () => {
       const sequence = registrySequence;
       // Reserve the name before the remote write: a rejected acknowledgement
@@ -3506,6 +3585,157 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return result;
   };
 
+  // ── What views are told ────────────────────────────────────────────────────
+  // A view subscribes (`session.watch()`, `factory.watchSessions()`) instead of
+  // asking again on a timer; see src/session-watch.js. The maps below are the
+  // parts of a session's state that are cheap to read synchronously, which is
+  // what lets a snapshot be taken in the same step that registers its viewer.
+  /** @type {Map<string, ReturnType<typeof makeSessionTurnSlot>>} */
+  const turnSlots = new Map();
+  /** @type {Map<string, ReturnType<typeof makeSessionWatch>>} */
+  const sessionWatches = new Map();
+  // Sessions whose agent is running a turn of any origin — UI, mail, queue —
+  // each with that turn's own record, so a late "settled" clears only its own.
+  /** @type {Map<string, { input: string, from?: string }>} */
+  const workingSessions = new Map();
+  /** @type {Map<string, { lastTurnState: string, needsRecovery: boolean }>} */
+  const lastTurns = new Map();
+  // Reads of a session's last turn can finish out of order; only the latest
+  // one asked for is kept.
+  /** @type {Map<string, number>} */
+  const lastTurnReads = new Map();
+  // Sessions whose agent could not be built. The reason is in the log; here
+  // it only colours the circle.
+  /** @type {Set<string>} */
+  const revivalFailures = new Set();
+  // The record a viewer is shown for a turn in flight: display text and the
+  // turn, never the history promise the slot also carries. Keyed by the slot's
+  // own entry so the same turn is always the same record (the watch compares
+  // by identity).
+  /** @type {WeakMap<object, object>} */
+  const turnViews = new WeakMap();
+  const turnViewOf = id => {
+    const current = turnSlots.get(id)?.getCurrent();
+    if (!current) return null;
+    let view = turnViews.get(current);
+    if (!view) {
+      view = harden({ input: current.input, turn: current.turn });
+      turnViews.set(current, view);
+    }
+    return view;
+  };
+  /**
+   * What a session's status circle shows.
+   */
+  /**
+   * @param {{ id: string, lifecycle?: string, executionState?: string }} entry
+   * @returns {'passive' | 'working' | 'error'}
+   */
+  const activityOf = entry => {
+    const { id } = entry;
+    const lifecycle = entry.lifecycle || 'ready';
+    // Being made or being removed is work in progress, not a fault.
+    if (lifecycle === 'creating' || lifecycle === 'deleting') return 'working';
+    if (lifecycle !== 'ready') return 'error';
+    if (turnSlots.get(id)?.getCurrent() || workingSessions.has(id))
+      return 'working';
+    // A stopped session is at rest by the operator's own hand. Its last turn
+    // is not read at start (a stopped session is not revived), so judging it
+    // by that turn would show one thing before a restart and another after.
+    if (entry.executionState && entry.executionState !== 'running')
+      return 'passive';
+    if (revivalFailures.has(id)) return 'error';
+    const last = lastTurns.get(id);
+    if (last && (last.needsRecovery || last.lastTurnState === 'failed'))
+      return 'error';
+    return 'passive';
+  };
+  // The model an unpinned provider session resolves to right now. Read once
+  // per listing rather than per session.
+  const configuredProviderModel = async () => {
+    try {
+      return `${(await getProviderConfig()).model || ''}`;
+    } catch {
+      return '';
+    }
+  };
+  /**
+   * @param {any} entry
+   * @param {string} providerModel see `configuredProviderModel`
+   */
+  const projectSessionEntry = (entry, providerModel) => {
+    const {
+      id,
+      title,
+      createdAt,
+      presetId,
+      model,
+      backendId,
+      modelId,
+      reasoningEffort,
+      lifecycle,
+      parentSessionId,
+      subagentName,
+    } = entry;
+    return harden({
+      id,
+      title,
+      createdAt,
+      presetId: presetId || DEFAULT_PRESET_ID,
+      model: backendId ? hostedModelId(backendId, modelId || '') : model || '',
+      backendId: backendId || 'provider',
+      modelId: modelId || model || '',
+      // What the session runs, pinned or not: an unpinned provider session
+      // resolves to the configured model at each turn, so this is as of now.
+      effectiveModelId: modelId || model || (backendId ? '' : providerModel),
+      reasoningEffort: reasoningEffort || '',
+      lifecycle: lifecycle || 'ready',
+      // Empty for a session the user opened; set for one an agent
+      // spawned, so a client can group or hide the delegated tree.
+      parentSessionId: parentSessionId || '',
+      subagentName: subagentName || '',
+      activity: activityOf(entry),
+    });
+  };
+  const projectSessions = async () => {
+    await loadRegistry();
+    const providerModel = await configuredProviderModel();
+    return (registry || []).map(entry =>
+      projectSessionEntry(entry, providerModel),
+    );
+  };
+  const sessionListWatch = makeSessionListWatch(projectSessions);
+  const touchSessionList = () => sessionListWatch.touch();
+  /**
+   * @param {string} id
+   * @param {'transcript' | 'network' | 'usage' | 'journal'} [kind]
+   */
+  const touchSession = (id, kind) => {
+    sessionWatches.get(id)?.touch(kind);
+    touchSessionList();
+  };
+  /**
+   * @param {string} id
+   * @param {{ getActivity: () => Promise<{ lastTurnState: string, needsRecovery: boolean }> }} agent
+   */
+  const refreshLastTurn = async (id, agent) => {
+    const read = (lastTurnReads.get(id) || 0) + 1;
+    lastTurnReads.set(id, read);
+    try {
+      const { lastTurnState, needsRecovery } = await agent.getActivity();
+      // Not a later read's business, and not a deleted session's.
+      if (
+        lastTurnReads.get(id) !== read ||
+        !(registry || []).some(session => session.id === id)
+      )
+        return;
+      lastTurns.set(id, { lastTurnState, needsRecovery });
+      touchSessionList();
+    } catch {
+      // The circle keeps what it last showed.
+    }
+  };
+
   // Per-session in-process streaming agent, built lazily over the session
   // guest's powers. provideGuest is idempotent, so this both creates a fresh
   // session guest and revives an existing one after a restart.
@@ -3529,23 +3759,34 @@ export const make = (hostPowers, _context, { env } = {}) => {
     const index = (registry || []).findIndex(session => session.id === id);
     if (index < 0 || !registry) throw Error('Unknown Floot session');
     registry[index] = harden({ ...registry[index], executionState });
+    touchSession(id);
     await saveRegistry();
   };
-  const executionState = async id => {
-    const entry = await assertSessionReady(id);
-    return harden({
-      state: stopFences.has(id)
-        ? 'stopping'
-        : entry.executionState || 'running',
-      supported: Boolean(entry.backendId),
-    });
+  /**
+   * One projection for the call and for the subscription, so they cannot
+   * disagree.
+   *
+   * @param {string} id
+   * @param {{ executionState?: string, backendId?: string } | undefined} entry
+   */
+  const projectExecution = (id, entry) => {
+    // A resume fences the session while it publishes permission to run, so
+    // the fence alone would read as "stopping" on the way from stopped to
+    // running. Until the resume lets go it is still stopped.
+    let state = entry?.executionState || 'running';
+    if (resumeTokens.has(id)) state = 'stopped';
+    else if (stopFences.has(id)) state = 'stopping';
+    return harden({ state, supported: Boolean(entry?.backendId) });
   };
+  const executionState = async id =>
+    projectExecution(id, await assertSessionReady(id));
   const emergencyStop = id => {
     const existing = stopFlights.get(id);
     if (existing) return existing;
     // Fence synchronously, before persistence, inbox shutdown, or native calls.
     stopFences.add(id);
     resumeTokens.delete(id);
+    touchSession(id);
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
       if (!entry.backendId) {
@@ -3593,7 +3834,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
       await setExecutionState(id, 'stopped');
       stopFences.delete(id);
       return executionState(id);
-    })().finally(() => stopFlights.delete(id));
+    })().finally(() => {
+      stopFlights.delete(id);
+      touchSession(id);
+    });
     stopFlights.set(id, stopping);
     return stopping;
   };
@@ -3618,6 +3862,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     resumeTokens.delete(id);
     agents.delete(id);
     stopFences.delete(id);
+    touchSession(id, 'transcript');
     await getAgent(id);
     return executionState(id);
   };
@@ -3630,6 +3875,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         makeSessionNetworkPolicy({
           host: getHost(),
           id,
+          onChange: () => touchSession(id, 'network'),
           supported: async () => {
             const entry = (await loadRegistry()).find(item => item.id === id);
             if (!entry) throw Error('Unknown Floot session');
@@ -3688,6 +3934,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         throw Error(
           'Session cleanup is in progress; retry reading records after it settles',
         );
+      /** @type {{ input: string, from?: string } | undefined} */
+      let runningTurn;
       agentP = (async () => {
         const host = getHost();
         const network = networkController(id);
@@ -3953,6 +4201,37 @@ export const make = (hostPowers, _context, { env } = {}) => {
             backendId: entry?.backendId || 'provider',
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
+            onChange: (kind, detail) => {
+              const watch = sessionWatches.get(id);
+              if (kind === 'turn-started') {
+                // This turn's own record: the settle below clears only the
+                // turn it belongs to, never one a later incarnation started.
+                runningTurn = harden({ input: '', ...detail });
+                if (agents.get(id) === agentP) {
+                  workingSessions.set(id, runningTurn);
+                }
+                watch?.touch('journal');
+                touchSessionList();
+                return;
+              }
+              const settled = runningTurn;
+              if (kind === 'turn-settled') runningTurn = undefined;
+              // The session's own viewers hear at once. The list waits until
+              // the new last turn has been read, so a failed turn's circle
+              // goes working → error without showing passive in between.
+              watch?.touch('transcript');
+              watch?.touch('usage');
+              watch?.touch('journal');
+              void agentP
+                .then(built => refreshLastTurn(id, built))
+                .finally(() => {
+                  if (settled && workingSessions.get(id) === settled) {
+                    workingSessions.delete(id);
+                    sessionWatches.get(id)?.touch();
+                  }
+                  touchSessionList();
+                });
+            },
             ...(extraTools.size > 0 ? { extraTools } : {}),
             ...(hostedContinuity ? { hostedContinuity } : {}),
             ...(sessionDepth < maxSubagentDepth
@@ -3966,9 +4245,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Each session is addressable by mail: start following its inbox.
         if (suspended || stopFences.has(id)) await agent.shutdown(true);
         else agent.startInbox();
+        revivalFailures.delete(id);
+        void refreshLastTurn(id, agent);
         return agent;
       })().catch(async error => {
         agents.delete(id);
+        workingSessions.delete(id);
+        if (!observeOnly) {
+          revivalFailures.add(id);
+          touchSessionList();
+        }
         // Close the mount adapter before terminating, or a push arriving in
         // the window before the retry re-arms would have it create a
         // successor this rollback does not know about — a live backend
@@ -4016,16 +4302,49 @@ export const make = (hostPowers, _context, { env } = {}) => {
     }
     return entry;
   };
-  const getFacet = id => {
-    let facet = facets.get(id);
-    if (!facet) {
-      const turns = makeSessionTurnSlot(
+  const turnSlotFor = id => {
+    let slot = turnSlots.get(id);
+    if (!slot) {
+      slot = makeSessionTurnSlot(
         async (input, writer, signal, setHistory) => {
           await assertSessionReady(id);
           const agent = await getAgent(id);
           await agent.converse(input, writer, undefined, signal, setHistory);
         },
+        () => touchSession(id),
       );
+      turnSlots.set(id, slot);
+    }
+    return slot;
+  };
+  const sessionWatchFor = id => {
+    let watch = sessionWatches.get(id);
+    if (!watch) {
+      watch = makeSessionWatch({
+        loadTranscript: async () => {
+          await assertSessionReady(id);
+          const agent = await getAgent(id, { observeOnly: true });
+          return agent.getSettledHistory();
+        },
+        readTurn: () => turnViewOf(id),
+        readRunning: () => workingSessions.get(id) || null,
+        readPending: () => harden({ entries: [], hold: null }),
+        readExecution: () => {
+          const entry = (registry || []).find(session => session.id === id);
+          return projectExecution(id, entry);
+        },
+        loadNetwork: () => networkController(id).get(),
+        loadUsage: async () =>
+          (await getAgent(id, { observeOnly: true })).getUsage(),
+      });
+      sessionWatches.set(id, watch);
+    }
+    return watch;
+  };
+  const getFacet = id => {
+    let facet = facets.get(id);
+    if (!facet) {
+      const turns = turnSlotFor(id);
       facet = makeExo('FlootSession', FlootSessionInterface, {
         getExecutionState: () => executionState(id),
         emergencyStop: () => emergencyStop(id),
@@ -4042,6 +4361,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
               : entry?.model || '',
             backendId: entry?.backendId || 'provider',
             modelId: entry?.modelId || entry?.model || '',
+            effectiveModelId:
+              entry?.modelId ||
+              entry?.model ||
+              (entry?.backendId ? '' : await configuredProviderModel()),
             reasoningEffort: entry?.reasoningEffort || '',
             lifecycle: entry?.lifecycle || 'ready',
           });
@@ -4069,6 +4392,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const current = turns.getCurrent();
           if (!current) return null;
           return current;
+        },
+        /**
+         * Subscribe to this session: a snapshot of its settled transcript, the
+         * turn in flight, queued submissions, execution state and network
+         * policy, then an event whenever one of them changes — whoever changed
+         * it. Closing the stream detaches this viewer only.
+         */
+        async watch() {
+          await assertSessionReady(id);
+          return sessionWatchFor(id).watch();
         },
         async getHistory() {
           await assertSessionReady(id);
@@ -4197,6 +4530,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')
             return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
+          if (methodName === 'watch')
+            return 'watch() — A disposable stream of this session’s state; subscribe rather than polling getHistory(). First { type: "snapshot", transcript, transcriptError?, turn, running, pending, execution, network, usage, journalVersion }, where transcript is { version, base: 0, keep: 0, append: messages } or null when it could not be read (transcriptError says why; it is retried). Then one event per change: "transcript" { version, base, keep, append } — keep the first `keep` messages you hold and append the rest; `base` is the version it follows, and an event whose base is not the version you hold means you missed one: reopen. Settled turns only: a running turn is rendered from turn.watch(). "transcript-error" { message }; "turn" { turn: { input, turn, pendingId? } | null } for the UI turn in flight; "running" { running: { input, from? } | null } for whatever the agent is running, including mail turns, which have no FlootTurn; "pending" { pending: { entries, hold } }; "execution"; "network"; "usage"; "journal" { version } (turn records changed: re-read getTurns() if you show them); and "end" when the session is deleted. A turn already in flight when you subscribe is in the snapshot, not in a later "turn" event. Open the stream promptly: a reader not opened within two minutes is closed, and a stream that finishes without "end" (or an event whose base you do not hold) means subscribe again. Closing the stream detaches this viewer only.';
           if (methodName === 'getTurns')
             return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
           if (methodName === 'getArchivedTurns')
@@ -4207,7 +4542,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -4329,6 +4664,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
     }
     agents.delete(id);
     facets.delete(id);
+    // Whoever is still watching is told the session is gone.
+    sessionWatches.get(id)?.end();
+    sessionWatches.delete(id);
+    turnSlots.delete(id);
+    workingSessions.delete(id);
+    lastTurns.delete(id);
+    lastTurnReads.delete(id);
+    revivalFailures.delete(id);
   };
 
   const finishSessionDeletion = async id => {
@@ -4796,43 +5139,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, parentSessionId: string, subagentName: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, parentSessionId: string, subagentName: string, effectiveModelId: string, activity: 'passive' | 'working' | 'error' }>>}
      */
     async listSessions() {
-      await loadRegistry();
-      return harden(
-        (registry || []).map(
-          ({
-            id,
-            title,
-            createdAt,
-            presetId,
-            model,
-            backendId,
-            modelId,
-            reasoningEffort,
-            lifecycle,
-            parentSessionId,
-            subagentName,
-          }) => ({
-            id,
-            title,
-            createdAt,
-            presetId: presetId || DEFAULT_PRESET_ID,
-            model: backendId
-              ? hostedModelId(backendId, modelId || '')
-              : model || '',
-            backendId: backendId || 'provider',
-            modelId: modelId || model || '',
-            reasoningEffort: reasoningEffort || '',
-            lifecycle: lifecycle || 'ready',
-            // Empty for a session the user opened; set for one an agent
-            // spawned, so a client can group or hide the delegated tree.
-            parentSessionId: parentSessionId || '',
-            subagentName: subagentName || '',
-          }),
-        ),
-      );
+      return harden(await projectSessions());
+    },
+
+    /**
+     * Subscribe to the session list: a snapshot, then `session` for each one
+     * added or changed (its title, its lifecycle, what its status circle
+     * shows) and `removed` for each one deleted.
+     */
+    async watchSessions() {
+      return sessionListWatch.watch();
     },
 
     /**
@@ -5050,6 +5369,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
     async refreshCredentials() {
       providersByModel.clear();
       providerConfigP = undefined;
+      // An unpinned session's `effectiveModelId` is read from that config.
+      touchSessionList();
       console.error(
         '[floot-factory] Dropped the cached provider config; the next turn re-reads it.',
       );
@@ -5105,7 +5426,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn } | null, getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -5113,12 +5434,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors.',
         listSessions:
-          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, reasoningEffort, lifecycle}] for all sessions.',
+          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, lifecycle, activity}] for all sessions. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:
           'listModels(backendId?) — Return backend-scoped models with compound selection ids and supported reasoning efforts; no argument returns the flattened compatibility catalog.',
         getSession: 'getSession(id) — Return the session facet for an id.',
+        watchSessions:
+          'watchSessions() — A disposable stream of the session list: { type: "snapshot", sessions }, then { type: "session", session } for each session added or changed (including its `activity`: passive | working | error) and { type: "removed", id }. Subscribe rather than calling listSessions() on a timer.',
         renameSession: 'renameSession(id, title) — Rename a session.',
         deleteSession:
           'deleteSession(id) — Delete a session, its backing guest, and every subagent session beneath it.',

@@ -49,6 +49,17 @@ that make it a hands-free voice assistant.
   Mail remains serialized through the session's execution queue.
   Turns survive browser disconnects, but daemon restarts recover committed history
   rather than live turn handles.
+- **Subscriptions** (`src/session-watch.js`) — a view is told when state changes
+  instead of asking again on a timer. `session.watch()` is a disposable stream:
+  a snapshot (settled transcript, the UI turn in flight, what the agent is
+  running whoever started it, queued submissions, execution state, network
+  policy, usage), then one event per change. The transcript travels as
+  `{ version, base, keep, append }`: keep the first `keep` messages, append the
+  rest. It holds settled turns only; a running turn is rendered from its own
+  `watch()`. `factory.watchSessions()` does the same for the session list, where
+  each session carries an `activity` of `passive`, `working` or `error`. A
+  read that fails or never answers is retried while someone is watching, and
+  closing a stream detaches that viewer only. `help('watch')` has the wire format.
 - **Voice caplets** (`voice/`) — two independent, swappable daemon objects,
   provisioned under the `floot/` inventory directory (`FLOOT_DIR`):
   - `floot/stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)

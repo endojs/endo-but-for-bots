@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
@@ -482,4 +483,74 @@ test('factory refuses network changes during admitted UI and mail work', async t
   await until(() => world.dismissed.includes(1n));
   await E(session).setNetworkPolicy('public-internet');
   t.is((await E(session).getNetworkPolicy()).policy, 'public-internet');
+});
+
+/**
+ * Read a session view until an event of `type` arrives.
+ *
+ * @param {AsyncIterator<any>} view
+ * @param {string} type
+ */
+const nextOfType = async (view, type) => {
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { value, done } = await view.next();
+    if (done) throw Error(`the view ended before a "${type}" event`);
+    if (value.type === type) return value;
+  }
+};
+
+test('a view hears a network request the model raised, without asking', async t => {
+  const world = await makeWorld(t);
+  const view = iterateReader(await E(world.session).watch());
+  const snapshot = (await view.next()).value;
+  t.is(snapshot.type, 'snapshot');
+  t.is(snapshot.network.policy, 'off');
+  t.false('request' in snapshot.network);
+  world.setMode('request');
+  const turn = await E(world.session).startTurn('look it up');
+  const event = await nextOfType(view, 'network');
+  t.is(event.network.request.policy, 'public-internet');
+  t.is(event.network.request.reason, 'Fetch public documentation');
+  await E(turn).whenFinished();
+  await view.return();
+});
+
+test('a view hears an emergency stop and the resume that follows', async t => {
+  const world = await makeWorld(t);
+  const view = iterateReader(await E(world.session).watch());
+  t.deepEqual((await view.next()).value.execution, {
+    state: 'running',
+    supported: true,
+  });
+  const stopped = E(world.session).emergencyStop();
+  t.is((await nextOfType(view, 'execution')).execution.state, 'stopping');
+  await stopped;
+  t.is((await nextOfType(view, 'execution')).execution.state, 'stopped');
+  await E(world.session).resume();
+  t.is((await nextOfType(view, 'execution')).execution.state, 'running');
+  await view.return();
+});
+
+test('a mail turn reaches a view: running, then the transcript it leaves', async t => {
+  const world = await makeWorld(t);
+  const list = iterateReader(await E(world.factory).watchSessions());
+  t.is((await list.next()).value.sessions[0].activity, 'passive');
+  const view = iterateReader(await E(world.session).watch());
+  const snapshot = (await view.next()).value;
+  t.is(snapshot.running, null);
+  world.mail();
+  // No FlootTurn exists for a mail turn; `running` is how a view knows of it.
+  const started = await nextOfType(view, 'running');
+  t.is(started.running.input, 'Mail-only work');
+  t.is(typeof started.running.from, 'string');
+  t.is((await nextOfType(list, 'session')).session.activity, 'working');
+  const transcript = await nextOfType(view, 'transcript');
+  t.true(
+    transcript.append.some(message => message.content === 'Mail-only work'),
+  );
+  t.is((await nextOfType(view, 'running')).running, null);
+  t.is((await nextOfType(list, 'session')).session.activity, 'passive');
+  await view.return();
+  await list.return();
 });

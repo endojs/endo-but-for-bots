@@ -14,7 +14,10 @@ const assertNote = note =>
  * to the model: the model receives only request/status tools. An immutable
  * transition intent fences revival before terminating an old generation; an
  * uncertain publication poisons this incarnation instead of reverting policy.
- * @param {{host:any,id:string,supported:()=>Promise<string[]>,prepare:()=>Promise<void>,change:()=>Promise<void>}} options
+ * `onChange` runs after every record is durable — a request the model raised,
+ * an approval, a denial, a change — so a view can show it without asking again
+ * on a timer. It is an observer: what it throws is logged and dropped.
+ * @param {{host:any,id:string,supported:()=>Promise<string[]>,prepare:()=>Promise<void>,change:()=>Promise<void>,onChange?:()=>void}} options
  */
 export const makeSessionNetworkPolicy = ({
   host,
@@ -22,6 +25,7 @@ export const makeSessionNetworkPolicy = ({
   supported,
   prepare,
   change,
+  onChange,
 }) => {
   /^[A-Za-z0-9_-]{1,128}$/.test(id) || Fail`Invalid session identity`;
   const prefix = `floot-network-${id.length}-${id}-`;
@@ -98,6 +102,13 @@ export const makeSessionNetworkPolicy = ({
     }
     state = record;
     sequence = next;
+    if (onChange) {
+      try {
+        onChange();
+      } catch (error) {
+        console.error('[floot-network] change observer failed:', error);
+      }
+    }
   };
   const supportedPolicies = async () => {
     const values = await supported();
