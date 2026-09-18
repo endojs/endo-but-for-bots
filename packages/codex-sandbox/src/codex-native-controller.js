@@ -4,6 +4,7 @@ import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import {
+  HOSTED_ANCHOR_ARGV,
   HOSTED_SLICE_RESOURCES,
   sliceWritableBytes,
 } from '@endo/hosted-agent/hosted-agent-policy.js';
@@ -238,7 +239,7 @@ export const makeCodexNativeController = ({
             },
             mounts,
             bindRoots: [dirname(home.directory)],
-            attestationArgv: ['/bin/sleep', 'infinity'],
+            attestationArgv: HOSTED_ANCHOR_ARGV,
           },
         }),
       );

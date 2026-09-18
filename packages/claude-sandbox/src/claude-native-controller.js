@@ -38,6 +38,7 @@ import {
   makeWorkspaceProjection,
 } from '@endo/hosted-agent/workspace-projection.js';
 import {
+  HOSTED_ANCHOR_ARGV,
   HOSTED_SLICE_RESOURCES,
   sliceWritableBytes,
 } from '@endo/hosted-agent/hosted-agent-policy.js';
@@ -298,7 +299,7 @@ export const makeClaudeNativeController = ({
             path.dirname(state.directory),
             path.dirname(approved.mcpDir),
           ],
-          attestationArgv: ['/bin/sleep', 'infinity'],
+          attestationArgv: HOSTED_ANCHOR_ARGV,
         },
         env: {
           ...makePublicNetworkEnvironment(publicNetwork),
