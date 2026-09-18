@@ -45,7 +45,7 @@ export const helpTextEntries = harden([
       writeText:
         'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
       readOnly:
-        'readOnly() -> Promise<ReadableNameHub>\nMint a read-only ReadableNameHub view of this directory.\nThe view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.\nAttenuation is shallow: a looked-up nested directory is returned live and writable, not a further read-only view.\nRepeated calls return the same view rather than spawning a new worker each time.',
+        'readOnly() -> Promise<ReadableNameHub>\nMint a read-only ReadableNameHub view of this directory.\nThe view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.\nAttenuation is shallow: a looked-up nested directory is returned live and writable, not a further read-only view.\nRepeated calls return the same view.',
     },
   ],
   [

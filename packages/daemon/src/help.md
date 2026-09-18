@@ -132,7 +132,7 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 Mint a read-only ReadableNameHub view of this directory.
 The view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.
 Attenuation is shallow: a looked-up nested directory is returned live and writable, not a further read-only view.
-Repeated calls return the same view rather than spawning a new worker each time.
+Repeated calls return the same view.
 
 # Mail Operations - Send and receive messages between agents.
 

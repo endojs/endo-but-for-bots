@@ -43,7 +43,10 @@ import {
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
-import { makeDirectoryMaker } from './directory.js';
+import {
+  makeDirectoryMaker,
+  makeReadOnlyDirectoryView,
+} from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
@@ -115,7 +118,6 @@ import {
   ResponderInterface,
   WorkerInterface,
   DirectoryInterface,
-  ReadableNameHubInterface,
   BlobInterface,
   ReadableTreeInterface,
   EndoInterface,
@@ -2760,16 +2762,11 @@ const makeDaemonCore = async (
     // would report the full `EndoDirectory` surface (with present-but-throwing
     // mutators) under a value typed `Promise<ReadableNameHub>`, which
     // misclassifies the view for a receiver feature-detecting a read-only hub.
-    const mailReadableView = makeExo(
-      'ReadableNameHub',
-      ReadableNameHubInterface,
-      /** @type {any} */ ({
-        help: makeHelp(directoryHelp),
-        has,
-        list,
-        lookup,
-        maybeLookup,
-      }),
+    // Minted through the shared `makeReadOnlyDirectoryView` factory so all three
+    // read-only views (this, the message hub's, and `EndoDirectory.readOnly()`)
+    // carry an identical guard and a `ReadableNameHub`-specific `help`.
+    const mailReadableView = makeReadOnlyDirectoryView(
+      harden({ has, list, lookup, maybeLookup }),
     );
 
     mailHub = /** @type {NameHub} */ (
@@ -3161,17 +3158,10 @@ const makeDaemonCore = async (
     // A genuinely narrow `ReadableNameHub` view (see the mailbox hub above for
     // the rationale): exactly the five readable methods, so feature detection
     // over `__getMethodNames__` sees the declared `ReadableNameHub` contract
-    // and not the full `MessageHub`/`EndoDirectory` surface.
-    const messageReadableView = makeExo(
-      'ReadableNameHub',
-      ReadableNameHubInterface,
-      /** @type {any} */ ({
-        help: makeHelp(directoryHelp),
-        has,
-        list,
-        lookup,
-        maybeLookup,
-      }),
+    // and not the full `MessageHub`/`EndoDirectory` surface. Minted through the
+    // shared `makeReadOnlyDirectoryView` factory for one guard and one `help`.
+    const messageReadableView = makeReadOnlyDirectoryView(
+      harden({ has, list, lookup, maybeLookup }),
     );
 
     messageHub = /** @type {NameHub} */ (
@@ -4242,7 +4232,7 @@ const makeDaemonCore = async (
       // Behold, unavoidable forward-reference:
       // eslint-disable-next-line no-use-before-define
       makePetStoreInspector(petStoreId),
-    directory: ({ petStore: petStoreId }, context, id) => {
+    directory: ({ petStore: petStoreId }, context) => {
       // Behold, forward-reference:
       // eslint-disable-next-line no-use-before-define
       return makeIdentifiedDirectory({
@@ -4250,7 +4240,6 @@ const makeDaemonCore = async (
         context,
         agentNodeNumber: localNodeNumber,
         isLocalKey,
-        directoryId: id,
       });
     },
     peer: (
@@ -6850,7 +6839,6 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
-    formulateEval,
     pinTransient,
     unpinTransient,
   });

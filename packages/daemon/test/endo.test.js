@@ -7874,20 +7874,22 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
   );
   t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
 
-  // The read-only view exposes no mutators at all.
+  // The read-only view exposes no mutators at all. The expectation pins "no
+  // such method" by name, so a passing assertion cannot be a coincidental
+  // unrelated rejection (a dead worker, a formulation failure).
   await t.throwsAsync(
     E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
-    undefined,
+    { message: /storeIdentifier/ },
     'storeIdentifier is not available on a read-only view',
   );
   await t.throwsAsync(
     E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
-    undefined,
+    { message: /remove/ },
     'remove is not available on a read-only view',
   );
   await t.throwsAsync(
     E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
-    undefined,
+    { message: /makeDirectory/ },
     'makeDirectory is not available on a read-only view',
   );
 

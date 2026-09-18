@@ -986,11 +986,16 @@ export interface ReadableNameHub {
    * resolves to a nested capability-bearing value — a sub-`EndoDirectory`, an
    * agent handle, a worker — is returned as the live, fully-authorized object,
    * NOT a further read-only view. A holder of the read-only hub can therefore
-   * reach and mutate nested directories one level down. Callers that need a
-   * recursively read-only surface must re-attenuate the result themselves (or
-   * arrange that the backing directory contains no nested writable
-   * capabilities). Contrast `EndoMount.readOnly()`, whose {@link ReadableTreeView}
-   * narrowing is recursive through nested lookups.
+   * reach and mutate every writable capability in the transitively reachable
+   * name graph, not merely one literal level down. In particular, if the
+   * backing directory names itself, an ancestor, or the grantor's own agent,
+   * `lookup` of that name hands back the fully writable hub and the narrowing
+   * is void — so this attenuation is only meaningful over a directory whose
+   * reachable graph holds no writable path back to the grantor. Callers that
+   * need a recursively read-only surface must re-attenuate the result
+   * themselves (or arrange that the backing directory contains no nested
+   * writable capabilities). Contrast `EndoMount.readOnly()`, whose
+   * {@link ReadableTreeView} narrowing is recursive through nested lookups.
    */
   lookup(petNamePath: string | readonly string[]): Promise<unknown>;
   /** See {@link ReadableNameHub.lookup}: attenuation is shallow, not recursive. */
@@ -1010,6 +1015,15 @@ export interface EndoDirectory extends NameHub {
    * not recursively narrow values returned by `lookup`/`maybeLookup`; see
    * {@link ReadableNameHub.lookup}. A view of a directory that contains nested
    * writable directories still hands those nested directories out live.
+   *
+   * `async` (returns a `Promise<ReadableNameHub>`), unlike the synchronous,
+   * recursively-narrowing `EndoMount.readOnly()` / `EndoMountFile.readOnly()`:
+   * a directory is a live `NameHub` that can name heterogeneous capabilities
+   * (workers, agents, sub-directories), so a recursive structural narrowing of
+   * the kind a content-addressed mount tree admits is not generally possible,
+   * and the mint forwards through eventual-send. A caller feature-detecting
+   * `readOnly` across the `EndoMount*` / `EndoDirectory` family must not assume
+   * a uniform sync/recursive contract; `await` erases the sync/async tell.
    *
    * Optional at the type level even though the runtime `DirectoryInterface`
    * guard (`interfaces.js`) requires it unconditionally: a standalone

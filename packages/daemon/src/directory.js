@@ -29,99 +29,74 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, makeHelp } from './help-text.js';
 
-import { DirectoryInterface } from './interfaces.js';
+import {
+  DirectoryInterface,
+  ReadableNameHubInterface,
+} from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, Formula, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, EvalDeferredTaskParams, EvalFormula, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
 
-// The read-only view is a worker-hosted exo, minted by evaluating this source
-// with the backing directory bound as `hub`. It forwards only the readable hub
-// methods to the backing directory. The exo carries the `ReadableNameHub`
-// interface guard (help / has / list / lookup / maybeLookup), so malformed /
-// extra / wrong-typed arguments from a less-trusted holder are rejected at THIS
-// boundary — before they reach the backing directory — rather than only
-// downstream. `harden`/`Far` gives passability but no argument guard, which is
-// why this is a guarded `makeExo` and not a bare `Far`. Expressing the view as
-// an evaluation formula (rather than a local in-daemon exo) gives it a
-// first-class formula identity, which a later slice of #1125 recognizes (see
-// `isReadOnlyDirectoryFormula`) so network discovery can reach the backing
-// directory without broadening the guest-facing attenuation. `readOnly()`
-// memoizes the view per directory and pins its formula for the daemon session
-// (see the `readOnly` method below), so a holder that calls it repeatedly does
-// not spawn a worker per call, and a collection sweep cannot reclaim the view
-// out from under a holder. The identity is stable within a running daemon; it
-// is not (yet) durable across restart, because the formula is re-minted with a
-// fresh number on the first call after each start.
+// A read-only view of a name hub: a local in-daemon exo that forwards only the
+// readable hub methods (help / has / list / lookup / maybeLookup) to the
+// backing hub. The exo carries the canonical `ReadableNameHubInterface`
+// guard, so malformed / extra / wrong-typed arguments from a less-trusted
+// holder are rejected at THIS boundary — before they reach the backing hub —
+// rather than only downstream. `harden`/`Far` gives passability but no argument
+// guard, which is why this is a guarded `makeExo` and not a bare `Far`.
 //
-// The interface is reconstructed inline from `M` because the worker compartment
-// that evaluates this source is endowed with `E`, `makeExo`, and `M` (see
-// `worker.js`), but not with `@endo/platform`'s `readableNameHubMethodGuards`
-// record or `@endo/daemon`'s `ReadableNameHubInterface`. The reconstructed guard
-// mirrors `ReadableNameHubInterface` (`interfaces.js`) method-for-method; a unit
-// test (`directory-read-only-formula.test.js`) evaluates this source and asserts
-// its method names still match the canonical record, so the two cannot silently
-// drift. `readOnlyHelp` is a null-prototype record so a caller-supplied method
-// name (`help('constructor')`, `help('toString')`) cannot reach an inherited
+// This is a plain local exo rather than a worker-hosted evaluation formula: it
+// carries no formula identity and pins no worker, so a less-trusted holder
+// cannot loop `readOnly()` into unbounded worker spawn or an unreclaimable pin.
+// It mirrors the sibling `ReadableNameHub` views the manager mints for the
+// mailbox and message hubs (`mailReadableView` / `messageReadableView`). A later
+// slice of the #1125 stack that needs a first-class formula identity for network
+// discovery introduces that identity in the slice that consumes it, rather than
+// shipping a forgeable recognizer ahead of any call site.
+//
+// `readOnlyHelp` is a null-prototype record so a caller-supplied method name
+// (`help('constructor')`, `help('toString')`) cannot reach an inherited
 // `Object.prototype` value and defeat the `?? readOnlyHelp['']` default. `help`
 // is a synchronous self-description of the read-only surface (the guard requires
 // a string return, and a remote forward would resolve to a promise); the four
 // read methods forward to the backing hub and keep their promise/any returns.
-export const readOnlyDirectorySource = `
-const NamePathShape = M.arrayOf(M.string());
-const NameOrPathShape = M.or(M.string(), NamePathShape);
-const ReadableNameHubInterface = M.interface('ReadableNameHub', {
-  help: M.call().optional(M.string()).returns(M.string()),
-  has: M.call().rest(NamePathShape).returns(M.promise()),
-  list: M.call().rest(NamePathShape).returns(M.promise()),
-  lookup: M.call(NameOrPathShape).returns(M.promise()),
-  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
-});
-const readOnlyHelp = {
+const readOnlyHelp = harden({
   __proto__: null,
-  '': 'ReadableNameHub - A read-only view of a name hub.\\n\\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\\nbacking directory; every mutator is withheld. Attenuation is shallow: looked-up\\nnested directories are returned live and writable.',
-  help: 'help(method?) -> string\\nDescribe this cap, or one of its methods.',
-  has: 'has(...path) -> Promise<boolean>\\nWhether a name or path resolves in the backing hub.',
-  list: 'list(...path) -> Promise<string[]>\\nThe names at a path in the backing hub.',
-  lookup: 'lookup(nameOrPath) -> Promise<unknown>\\nResolve a name or path to its value.',
+  '': 'ReadableNameHub - A read-only view of a name hub.\n\nExposes only the readable surface (has, list, lookup, maybeLookup) of the\nbacking directory; every mutator is withheld. Attenuation is shallow: looked-up\nnested directories are returned live and writable.',
+  help: 'help(method?) -> string\nDescribe this cap, or one of its methods.',
+  has: 'has(...path) -> Promise<boolean>\nWhether a name or path resolves in the backing hub.',
+  list: 'list(...path) -> Promise<string[]>\nThe names at a path in the backing hub.',
+  lookup: 'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value.',
   maybeLookup:
-    'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\\nResolve a name or path, or undefined if absent.',
-};
-const readOnly = hub =>
-  makeExo('ReadableNameHub', ReadableNameHubInterface, {
-    help: method => readOnlyHelp[method ?? ''] ?? readOnlyHelp[''],
-    has: (...path) => E(hub).has(...path),
-    list: (...path) => E(hub).list(...path),
-    lookup: path => E(hub).lookup(path),
-    maybeLookup: path => E(hub).maybeLookup(path),
-  });
-readOnly(hub)
-`;
+    'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\nResolve a name or path, or undefined if absent.',
+});
 
 /**
- * Recognize the evaluation recipe that `EndoDirectory.readOnly()` formulates,
- * so a later slice of the #1125 stack (daemon-internal network discovery) can
- * tell a read-only-directory view apart from an arbitrary eval formula.
+ * Mint a read-only `ReadableNameHub` view over a backing name hub. The view is
+ * a local exo carrying the canonical `ReadableNameHubInterface` guard; it
+ * forwards the five readable methods to `hub` and exposes no mutators. `help`
+ * looks up its description through a null-prototype record so a caller-supplied
+ * method name cannot walk `Object.prototype`.
  *
- * SECURITY PRECONDITION — this checks only the recipe SHAPE, and the recipe is
- * public and forgeable: `readOnlyDirectorySource` is an exported string, so any
- * holder of `evaluate` can formulate an `eval` whose `source` matches and whose
- * single `hub` endowment is bound to any identifier it can name. A positive
- * result therefore proves only "this formula is shaped like a read-only view",
- * NOT "the value bound to `hub` was ever a directory this holder was entitled to
- * de-attenuate". A consumer that uses this predicate to recover the backing
- * directory (de-attenuate) MUST additionally verify, at that call site, that
- * `formula.values[0]` resolves to a `directory`-typed formula (`getTypeForId`)
- * and that its provenance is trusted. That validation belongs with the (not-yet-
- * landed) consumer, which is why this predicate ships ahead of any call site.
- *
- * @param {Formula} formula
- * @returns {formula is EvalFormula}
+ * @param {Pick<NameHub, 'has' | 'list' | 'lookup' | 'maybeLookup'>} hub
+ * @returns {ReadableNameHub}
  */
-export const isReadOnlyDirectoryFormula = formula =>
-  formula.type === 'eval' &&
-  formula.source === readOnlyDirectorySource &&
-  formula.names.length === 1 &&
-  formula.names[0] === 'hub' &&
-  formula.values.length === 1;
+export const makeReadOnlyDirectoryView = hub =>
+  /** @type {ReadableNameHub} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'ReadableNameHub',
+        ReadableNameHubInterface,
+        /** @type {any} */ ({
+          help: (/** @type {string | undefined} */ method) =>
+            readOnlyHelp[method ?? ''] ?? readOnlyHelp[''],
+          has: (...path) => E(hub).has(...path),
+          list: (...path) => E(hub).list(...path),
+          lookup: path => E(hub).lookup(path),
+          maybeLookup: path => E(hub).maybeLookup(path),
+        }),
+      )
+    )
+  );
 
 /**
  * @param {object} args
@@ -134,7 +109,6 @@ export const isReadOnlyDirectoryFormula = formula =>
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
- * @param {DaemonCore['formulateEval']} args.formulateEval
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -146,7 +120,6 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
-  formulateEval,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -703,14 +676,12 @@ export const makeDirectoryMaker = ({
    * @param {Context} args.context
    * @param {NodeNumber} args.agentNodeNumber
    * @param {(node: string) => boolean} args.isLocalKey
-   * @param {FormulaIdentifier} args.directoryId
    */
   const makeIdentifiedDirectory = async ({
     petStoreId,
     context,
     agentNodeNumber,
     isLocalKey,
-    directoryId,
   }) => {
     // TODO thread context
 
@@ -744,13 +715,12 @@ export const makeDirectoryMaker = ({
     } = directory;
 
     // The read-only view is memoized per directory: the first `readOnly()` call
-    // formulates the eval view and pins its formula; every later call returns
-    // the same promise. Without this, each call would mint a fresh worker and a
-    // fresh formula, so a less-trusted holder could loop `readOnly()` into
-    // unbounded worker spawn. A rejected formulation is not cached, so a
-    // transient failure can be retried.
-    /** @type {Promise<import('./types.js').ReadableNameHub> | undefined} */
-    let readOnlyViewP;
+    // mints the local exo; every later call returns the same object. The view is
+    // a plain in-daemon exo (no worker, no formula, no pin), so this memo is a
+    // convenience — returning a stable identity across calls — not a defense
+    // against resource amplification.
+    /** @type {ReadableNameHub | undefined} */
+    let readOnlyView;
 
     return makeExo(
       'EndoDirectory',
@@ -793,41 +763,12 @@ export const makeDirectoryMaker = ({
         // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
         // a recursively read-only surface must re-attenuate results themselves.
         readOnly: async () => {
-          if (readOnlyViewP === undefined) {
-            readOnlyViewP = (async () => {
-              /** @type {DeferredTasks<EvalDeferredTaskParams>} */
-              const tasks = makeDeferredTasks();
-              // Pass `pinTransient` as the `pin` argument so the eval formula
-              // is protected from collection from the moment it is created
-              // (inside the formula-graph lock) and stays pinned for the daemon
-              // session. Because the view is memoized per directory, exactly one
-              // formula (and worker) is pinned regardless of how often the
-              // method is called. The view is deliberately not unpinned: it is a
-              // capability handed to a (possibly less-trusted) holder that may
-              // retain it indefinitely, and there is no directory-scoped
-              // retention edge to tie its lifetime to. This keeps the backing
-              // directory reachable for as long as the view is pinned; that is
-              // an accepted trade for a stable, non-collectable view.
-              const { value } = await formulateEval(
-                directoryId,
-                readOnlyDirectorySource,
-                ['hub'],
-                [directoryId],
-                tasks,
-                undefined,
-                pinTransient,
-                'read-only-directory',
-              );
-              return /** @type {Promise<import('./types.js').ReadableNameHub>} */ (
-                value
-              );
-            })().catch(error => {
-              // Do not cache a failed formulation; allow a later retry.
-              readOnlyViewP = undefined;
-              throw error;
-            });
+          if (readOnlyView === undefined) {
+            readOnlyView = makeReadOnlyDirectoryView(
+              harden({ has, list, lookup, maybeLookup: directory.maybeLookup }),
+            );
           }
-          return readOnlyViewP;
+          return readOnlyView;
         },
       }),
     );
