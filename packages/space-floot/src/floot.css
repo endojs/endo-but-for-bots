@@ -110,18 +110,30 @@
 .floot-session-item.active .floot-session-name {
   color: var(--fl-text);
 }
+/* Always a circle, in one of three states. The box is pinned (no padding, no
+   border, fixed both ways) so nothing the host page styles can reshape it, and
+   the state modifiers are namespaced: a bare `.error` here collided with
+   chat's global `.error` rule and drew an ellipse. */
 .floot-status-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  box-sizing: border-box;
+  display: block;
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
   background: var(--fl-text-faint);
 }
-.floot-status-dot.streaming {
+.floot-status-dot-passive {
+  background: var(--fl-text-faint);
+}
+.floot-status-dot-working {
   background: var(--fl-accent);
   animation: floot-dot-pulse 1.2s ease-in-out infinite;
 }
-.floot-status-dot.error {
+.floot-status-dot-error {
   background: var(--fl-red);
 }
 @keyframes floot-dot-pulse {
@@ -455,9 +467,6 @@
   gap: 0.4rem;
   flex-shrink: 0;
 }
-.floot-status-bar.error {
-  color: var(--fl-red);
-}
 .floot-tokens {
   margin-left: auto;
   opacity: 0.6;
@@ -596,7 +605,7 @@
   color: var(--fl-green);
   animation: floot-mic-pulse 1.5s ease infinite;
 }
-.floot-mic.error {
+.floot-mic.floot-mic-error {
   border-color: var(--fl-red);
   color: var(--fl-red);
 }
