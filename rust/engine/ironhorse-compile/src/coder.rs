@@ -2295,6 +2295,30 @@ impl Coder<'_, '_> {
         // The body's defines, for the same reason as `code_for` above.
         self.code_define_nodes(&node.children[2]);
 
+        // Annex B.3.5: `for ( var BindingIdentifier Initializer in Expression )`
+        // assigns the initializer to the variable ONCE, before the head
+        // expression is evaluated, and the loop then assigns each key to the
+        // same variable. The parser admits this shape only for sloppy `var` +
+        // a single identifier.
+        //
+        // Without this the `Binding` node reached the loop's own `code_assign`,
+        // whose `Binding` arm is the DESTRUCTURING-DEFAULT rule — use the
+        // supplied value unless it is `undefined` — so the initializer was
+        // emitted inside the loop and never ran, a for-in key never being
+        // `undefined`. The loop below therefore targets the inner node, not
+        // the `Binding` wrapper.
+        let loop_target = match &node.children[0] {
+            Item::Node(binding) if binding.token == Token::Binding => {
+                self.set_pending_name(&binding.children[0], &binding.children[1]);
+                self.code_reference(&binding.children[0], 0);
+                self.code(&binding.children[1]);
+                self.code_assign(&binding.children[0], 0);
+                self.add_byte(-1, XS_CODE_POP);
+                &binding.children[0]
+            }
+            other => other,
+        };
+
         if self.program_flag {
             self.add_byte(1, XS_CODE_UNDEFINED);
             self.add_byte(-1, XS_CODE_SET_RESULT);
@@ -2332,14 +2356,14 @@ impl Coder<'_, '_> {
         self.add_branch(-1, XS_CODE_BRANCH_IF_1, normal_target);
 
         self.scope_code_reset(scope);
-        self.code_reference(&node.children[0], 0);
+        self.code_reference(loop_target, 0);
         self.add_byte(1, XS_CODE_TRUE);
         self.add_index(-1, XS_CODE_PULL_LOCAL_1, done);
         self.add_index(1, XS_CODE_GET_LOCAL_1, result);
         self.add_symbol(0, XS_CODE_GET_PROPERTY, "value");
         self.add_byte(1, XS_CODE_FALSE);
         self.add_index(-1, XS_CODE_PULL_LOCAL_1, done);
-        self.code_assign(&node.children[0], 0);
+        self.code_assign(loop_target, 0);
         self.add_byte(-1, XS_CODE_POP);
 
         self.targets[continue_target].environment_level = self.environment_level;
