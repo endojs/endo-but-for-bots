@@ -45,7 +45,6 @@ import {
 } from '@endo/hosted-agent';
 
 import { createStreamingProvider } from './providers/index.js';
-import { claudeTurnPartialOf, runClaudeTurn } from './src/claude-turn.js';
 import {
   UNSETTLED_TOOL_RESULT,
   hostedTurnPartialOf,
@@ -55,7 +54,6 @@ import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
-import { makeHostedContinuityOptions } from './src/hosted-continuity.js';
 import { projectTranscript } from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
@@ -865,7 +863,6 @@ const provisionPresetObjects = async (
 
 /**
  * @typedef {object} ClaudeClientConfig
- * @property {any} claudeClient - A ClaudeClient capability
  *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
  *   events. Turns bypass the provider tool loop — the CLI runs its own tools
  *   in the sandbox and keeps its own conversation continuity.
@@ -957,14 +954,13 @@ export const makeStreamingAgent = async (
   } = {},
 ) => {
   const retainsDeliveredTurns = hostedContinuity === 'transcript';
-  const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
   const provideHostedClient = /** @type {any} */ (providerConfig)
     .provideHostedClient;
   const provideProvider = /** @type {any} */ (providerConfig).provideProvider;
   /** @type {any} */
   const staticProvider =
-    claudeClient || hostedClient || provideHostedClient || provideProvider
+    hostedClient || provideHostedClient || provideProvider
       ? null
       : /** @type {any} */ (providerConfig).provider ||
         createStreamingProvider({
@@ -1458,31 +1454,6 @@ export const makeStreamingAgent = async (
       cachedLeaf = node.id;
     };
 
-    if (claudeClient) {
-      // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
-      // its own agentic loop in the sandbox (tools, continuity via the
-      // workspace), so the provider tool loop below is bypassed; the persisted
-      // history keeps only the user turn and the final assistant text.
-      writer.setPhase('thinking');
-      const {
-        finalContent: replyText,
-        usage: turnUsage,
-        toolCalls,
-        outcomeUnknown,
-      } = await runClaudeTurn({
-        client: claudeClient,
-        text: await hostedRecoveryText(text, turnId),
-        writer,
-        signal,
-        recordToolEvent: event => turnJournal.append(turnId, event),
-      });
-      activeJournalUsage = turnUsage;
-      activeJournalOutcomeUnknown = outcomeUnknown === true;
-      if (signal?.aborted) return;
-      await commitExternalTurn(replyText, turnUsage, undefined, toolCalls);
-      return;
-    }
-
     if (hostedClient) {
       writer.setPhase('thinking');
       let hosted;
@@ -1497,10 +1468,7 @@ export const makeStreamingAgent = async (
           // The stack owns the transcript: hand the backend this
           // conversation as records it can rebuild its CLI's native store
           // from, keeping tool calls as tool calls with their results.
-          // `makeHostedContinuityOptions` is the older text form, retained
-          // until every adapter reads the records.
           transcript: await getTranscript(),
-          ...makeHostedContinuityOptions(await getHistory(turnId)),
           recordToolEvent: event => turnJournal.append(turnId, event),
         });
       } catch (error) {
@@ -1799,9 +1767,7 @@ export const makeStreamingAgent = async (
     }
     const turnId = await turnJournal.begin({
       input: text,
-      backendId:
-        backendId ||
-        (hostedClient ? 'hosted' : claudeClient ? 'claude' : 'provider'),
+      backendId: backendId || (hostedClient ? 'hosted' : 'provider'),
       modelId: modelId || '',
       ...(reasoningEffort ? { reasoningEffort } : {}),
     });
@@ -1847,7 +1813,6 @@ export const makeStreamingAgent = async (
           type: 'finish',
           state:
             hostedTurnPartialOf(error)?.outcomeUnknown ||
-            claudeTurnPartialOf(error)?.outcomeUnknown ||
             `${error?.message || ''}`.includes(
               'Hosted turn cancellation failed:',
             )
@@ -1857,10 +1822,7 @@ export const makeStreamingAgent = async (
                 : 'failed',
           output,
           error: error instanceof Error ? error.message : String(error),
-          usage:
-            hostedTurnPartialOf(error)?.usage ||
-            claudeTurnPartialOf(error)?.usage ||
-            activeJournalUsage,
+          usage: hostedTurnPartialOf(error)?.usage || activeJournalUsage,
         });
       }
       throw error;
