@@ -1263,6 +1263,99 @@ mod tests {
         assert_eq!(interp.iterators_snapshot()[0].result, holder.0);
     }
 
+    /// A lazy Iterator helper row (kinds 10-14) needs both an underlying
+    /// iterator and a HOLDER ARRAY; its for-in and string payloads are always
+    /// empty. Each of those is refused, because the encoder writes `kind`
+    /// unconditionally — nothing upstream would have caught a row this shape
+    /// on the way out.
+    #[test]
+    fn lazy_iterator_helper_rows_require_an_iterator_and_a_holder_array() {
+        for case in 0..5 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let iterable = interp.new_object().0;
+            let holder = interp.new_array().0;
+            let mut row = IteratorRow {
+                owner,
+                iterable,
+                result: holder,
+                kind: 10,
+                index: 3,
+                done: false,
+                enum_keys: vec![],
+                str_bytes: vec![],
+            };
+            match case {
+                0 => row.iterable = crate::value::SlotIndex::NULL.0,
+                1 => row.result = crate::value::SlotIndex::NULL.0,
+                2 => row.enum_keys = vec![(0, 0)],
+                3 => row.str_bytes = vec![0, b'a'],
+                // A live slot that is not an array: the holder's items are
+                // where the captured `next` and callback live.
+                _ => row.result = interp.new_object().0,
+            }
+            assert_eq!(
+                interp.restore_iterators(vec![row]).unwrap_err().row,
+                "Iterators",
+                "case {case}"
+            );
+            assert!(interp.iterators_snapshot().is_empty(), "case {case}");
+        }
+    }
+
+    /// The well-formed shape of the same row restores, and round-trips with
+    /// its counter and its holder.
+    #[test]
+    fn a_lazy_iterator_helper_row_round_trips_its_counter_and_holder() {
+        for kind in 10..=14u8 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let iterable = interp.new_object().0;
+            let holder = interp.new_array().0;
+            interp
+                .restore_iterators(vec![IteratorRow {
+                    owner,
+                    iterable,
+                    result: holder,
+                    kind,
+                    index: 7,
+                    done: false,
+                    enum_keys: vec![],
+                    str_bytes: vec![],
+                }])
+                .unwrap();
+            let row = &interp.iterators_snapshot()[0];
+            assert_eq!((row.kind, row.index, row.result), (kind, 7, holder));
+        }
+    }
+
+    /// Kind 15 is the next unused cursor kind. The decoder must refuse it
+    /// rather than restore a row whose `next()` would index a table it does
+    /// not understand.
+    #[test]
+    fn a_cursor_kind_above_the_lazy_helpers_is_still_refused() {
+        let mut interp = Interp::new();
+        let owner = interp.new_object().0;
+        let iterable = interp.new_object().0;
+        let holder = interp.new_array().0;
+        assert_eq!(
+            interp
+                .restore_iterators(vec![IteratorRow {
+                    owner,
+                    iterable,
+                    result: holder,
+                    kind: 15,
+                    index: 0,
+                    done: false,
+                    enum_keys: vec![],
+                    str_bytes: vec![],
+                }])
+                .unwrap_err()
+                .row,
+            "Iterators"
+        );
+    }
+
     #[test]
     fn bulk_restore_preserves_lazy_content_keys_duplicates_and_high_water_marks() {
         struct NoChunkReads;
