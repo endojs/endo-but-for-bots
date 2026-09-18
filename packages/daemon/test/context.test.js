@@ -107,42 +107,17 @@ test('onCancel hooks run during cancellation', async t => {
   t.true(hookRan);
 });
 
-test('onCancel after cancel fires the hook on a microtask', async t => {
+test('onCancel after cancel is a no-op', async t => {
   const { createContext } = setupContextMaker();
   const ctx = createContext(id('a:node'));
 
   await ctx.cancel(new Error('done'));
 
-  // A hook registered after the context is already canceled cannot ride the
-  // (already-drained) disposal pass, so it fires on its own microtask instead
-  // of being dropped. This is the fix for the liveness-gate race: a gate whose
-  // `context.onCancel(() => { canceled = true; })` runs only after an `await`
-  // in an async constructor could otherwise latch open forever if cancellation
-  // fired during that await window.
   let lateHookRan = false;
   ctx.onCancel(() => {
     lateHookRan = true;
   });
-  t.false(lateHookRan, 'hook does not run synchronously during registration');
-  await null;
-  t.true(lateHookRan, 'hook registered after cancel runs on a microtask');
-});
-
-test('a throwing late-registered onCancel hook does not surface', async t => {
-  const { createContext } = setupContextMaker();
-  const ctx = createContext(id('a:node'));
-
-  await ctx.cancel(new Error('done'));
-
-  // A late hook has no `disposed` channel left to report through, so its
-  // failure is swallowed rather than escaping as an unhandled rejection.
-  t.notThrows(() => {
-    ctx.onCancel(() => {
-      throw new Error('late hook failure');
-    });
-  });
-  await null;
-  t.pass('late hook failure did not propagate');
+  t.false(lateHookRan, 'hook registered after cancel should not run');
 });
 
 test('thatDiesIfThisDies after cancel cancels the dependent', async t => {

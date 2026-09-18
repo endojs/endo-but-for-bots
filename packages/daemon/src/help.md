@@ -132,7 +132,7 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 Mint a read-only ReadableNameHub view of this directory.
 The view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.
 Attenuation is shallow: only this directory's own mutators are withheld. A looked-up value is returned live, so a nested directory (or any name bound back to a writable capability, including one naming this directory itself or an ancestor) comes back fully writable; the narrowing reaches only one hop, not the transitively reachable name graph. A holder needing a recursively read-only surface must re-attenuate results itself.
-The view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. It is also severed when the backing directory is collected, so it grants no authority the daemon believes it revoked.
+The view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. After the backing directory is revoked the view forwards no further reads; but a capability already returned by an earlier lookup is unaffected (and, per the shallow-attenuation caveat above, may itself remain fully writable).
 
 # ReadableNameHub - A read-only view of a name hub.
 

@@ -2768,15 +2768,22 @@ const makeDaemonCore = async (
     // The shallow-attenuation caveat on `ReadableNameHub.lookup` (see
     // types.d.ts) bites HARDER here than on a plain directory. A mailbox's
     // reachable graph is, by construction, exactly where arbitrary
-    // sender-supplied capabilities land: a message's `@slots`, `@value`, and
-    // package-message names resolve through `provide` to the full-strength live
-    // object the sender named, not a further-attenuated handle. So a holder of
-    // this "read-only" view can still reach a fully writable capability via
-    // `lookup(['<message>', '@slots'])` (etc.). Withholding the mailbox's own
+    // sender-supplied capabilities land: a message's authority-bearing names —
+    // `@resolver`, `@promise`, `@value`, `@from`, `@to`, and package-message
+    // edge names, each registered with an `id` (see `registerName` below) — all
+    // resolve through `provide` to the full-strength live object the sender
+    // named, not a further-attenuated handle. (`@slots` is registered as data,
+    // an array of strings, so it is NOT the escape vector.) So a holder of this
+    // "read-only" view can still reach a fully writable capability via
+    // `lookup(['<message>', '@resolver'])` (etc.). Withholding the mailbox's own
     // mutators does NOT confine what a looked-up message payload hands back;
     // grant this view only where that one-hop escape is acceptable.
+    // Key the gate off `context.cancelled` (rejected synchronously in `cancel`),
+    // not an `onCancel` hook: a hook-driven flag flips only behind every later-
+    // registered peer hook in the serial drain, so a slow or never-settling peer
+    // would keep this view forwarding to an already-revoked mailbox.
     let mailboxCancelled = false;
-    context.onCancel(() => {
+    void context.cancelled.catch(() => {
       mailboxCancelled = true;
     });
     const mailReadableView = makeReadOnlyDirectoryView(
@@ -3182,13 +3189,20 @@ const makeDaemonCore = async (
     // The liveness gate severs the view when this hub's context is canceled.
     //
     // Same shallow-attenuation caveat as the mailbox hub above: this message's
-    // names (`@slots`, `@value`, package-message names) resolve through
-    // `provide` to the full-strength live capabilities the sender transmitted,
-    // so `lookup`/`maybeLookup` on this "read-only" view can hand back a fully
-    // writable capability. The read-only surface withholds this hub's own
-    // mutators only; it does not attenuate what a looked-up payload returns.
+    // authority-bearing names (`@resolver`, `@promise`, `@value`, `@from`,
+    // `@to`, and package-message edge names — each registered with an `id`)
+    // resolve through `provide` to the full-strength live capabilities the
+    // sender transmitted, so `lookup`/`maybeLookup` on this "read-only" view can
+    // hand back a fully writable capability. (`@slots` is registered as data, an
+    // array of strings, not a capability.) The read-only surface withholds this
+    // hub's own mutators only; it does not attenuate what a looked-up payload
+    // returns.
+    // Key the gate off `context.cancelled` (rejected synchronously in `cancel`),
+    // not an `onCancel` hook: a hook-driven flag flips only behind every later-
+    // registered peer hook in the serial drain, so a slow or never-settling peer
+    // would keep this view forwarding to an already-revoked message.
     let messageCancelled = false;
-    context.onCancel(() => {
+    void context.cancelled.catch(() => {
       messageCancelled = true;
     });
     const messageReadableView = makeReadOnlyDirectoryView(

@@ -742,9 +742,15 @@ export const makeDirectoryMaker = ({
     // so formula collection's sever path cannot reach it. Trip a flag when this
     // directory's context is canceled so the view stops forwarding reads once
     // the backing directory is collected — a capability handed to a less-trusted
-    // holder must not outlive revocation of the capability it attenuates.
+    // holder must not outlive revocation of the capability it attenuates. Key the
+    // gate off `context.cancelled` (rejected synchronously inside `cancel`) rather
+    // than an `onCancel` hook: the hook drain is serial over `hooks.reverse()`, so
+    // a hook-driven flag would flip only behind every later-registered peer hook —
+    // a peer that awaits a slow teardown, or never settles, would keep this view
+    // forwarding to an already-revoked directory. `.catch` on `cancelled` trips the
+    // flag one microtask after rejection regardless of drain order.
     let cancelled = false;
-    context.onCancel(() => {
+    void context.cancelled.catch(() => {
       cancelled = true;
     });
     const assertReadOnlyViewLive = () => {
