@@ -326,24 +326,45 @@ fn a_resumed_helper_chain_continues_at_every_stage() {
     );
 }
 
+/// The `done` latch itself has to travel, which needs a helper that is
+/// finished while its underlying iterator is NOT.
+///
+/// An adversarial review proved the obvious fixture vacuous: an exhausted
+/// `[1].values().map(f)` answers `undefined:true` on a resumed machine even
+/// with the latch dropped, because the helper just re-steps its already-spent
+/// array cursor, gets done, and re-latches — same value, same computrons. The
+/// review forced `done: false` on every restored kind-10..14 row and all
+/// seventeen tests here stayed green.
+///
+/// Here the source is ENDLESS and the helper is closed by `return()`, so a
+/// dropped latch cannot hide: the resumed helper would step that source and
+/// yield from it instead of reporting done.
 #[test]
-fn an_exhausted_helper_stays_exhausted_across_a_resume() {
+fn a_helper_closed_over_a_live_source_stays_closed_across_a_resume() {
     assert_twin(
-        "ih-iter-twin-lazy-exhausted",
-        "var spent = 0; var t = 0; \
-         spent = [1].values().map(function (v) { return v; }); \
-         spent.next(); spent.next(); t = 7; t",
-        &["var spent; var t; var r = 0; r = spent.next(); \
-             t = r.value + ':' + r.done; t"],
-        &["undefined:true"],
+        "ih-iter-twin-lazy-closed-live-source",
+        "var endless = 0; var closed = 0; var t = 0; \
+         endless = { n: 0, next: function () { this.n = this.n + 1; \
+             return { value: this.n, done: false }; } }; \
+         closed = Iterator.prototype.map.call(endless, function (v) { return v; }); \
+         t = closed.next().value; closed.return(); t",
+        &[
+            "var closed; var t; var r = 0; r = closed.next(); \
+             t = r.value + ':' + r.done; t",
+            // The source really is still live: a lost latch would have yielded
+            // from it rather than reporting done.
+            "var endless; var t; t = endless.next().value; t",
+        ],
+        &["undefined:true", "2"],
     );
 }
 
 /// A collection cycle must not reclaim a live helper's captured callback or
 /// its underlying iterator. The row's GC visitor traces only `iterable` and
-/// `result` (`gc_tables.rs`), which is why the holder is an INSTANCE — the
-/// ordinary object walk reaches its items from there. A chain of bare slots,
-/// the shape XS uses for internal fields, would have marked only the first.
+/// `result` (`gc_tables.rs`), which is why the holder is an ARRAY — visiting
+/// `result` marks that array and the ordinary object walk reaches its items
+/// from there. A chain of bare slots, the shape XS uses for internal fields,
+/// would have marked only the first.
 #[test]
 fn a_live_helper_survives_a_collection_with_its_callback_intact() {
     let setup = "var mult = 0; var flat = 0; var t = 0; \

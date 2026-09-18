@@ -5600,6 +5600,19 @@ impl Interp {
                         if self
                             .iterators
                             .get(&i)
+                            // The COLLECTION-CURSOR kinds, not merely a row whose
+                            // `iterable` happens to be a collection of the right
+                            // family. A lazy Iterator helper can be built over a
+                            // Map or Set directly — `Iterator.prototype.map.call(m,
+                            // f)` — so without this its row satisfied the
+                            // collection half of the brand, and
+                            // `collection_iterator_next` handed the helper's
+                            // PRIVATE holder array back to the guest: the captured
+                            // `next` and the callback, readable and writable. The
+                            // sibling brands already gate this way (`kind <= 4`
+                            // above, `kind == 8` on the `Iterator.from` wrapper,
+                            // `kind == 9` on the RegExp String Iterator).
+                            .filter(|state| (5..=7).contains(&state.kind))
                             .and_then(|state| self.collections.get(&state.iterable))
                             .is_some_and(|collection| collection.kind == expected) =>
                     {
