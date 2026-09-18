@@ -1,5 +1,11 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { E } from '@endo/eventual-send';
+import { M } from '@endo/patterns';
+import { makeExo } from '@endo/exo';
+import { Far } from '@endo/pass-style';
+import { readableNameHubMethodGuards } from '@endo/platform/fs/lite';
+
 import {
   isReadOnlyDirectoryFormula,
   readOnlyDirectorySource,
@@ -55,4 +61,31 @@ test('isReadOnlyDirectoryFormula rejects near-miss eval formulas', t => {
   );
   // Endowment name present but no bound value.
   t.false(isReadOnlyDirectoryFormula({ ...readOnlyFormula(), values: [] }));
+});
+
+// The read-only view's interface guard is hand-reconstructed as a string inside
+// `readOnlyDirectorySource`, because the worker compartment that evaluates it
+// cannot import `@endo/platform`'s canonical `readableNameHubMethodGuards`. This
+// test pins the two together: it evaluates the source exactly as the worker does
+// (a Compartment endowed with `E`, `makeExo`, `M`, and `hub`) and asserts the
+// minted exo's method names still equal the canonical record, so a future edit
+// to either declaration that drifts the attenuation boundary is caught here.
+test('readOnlyDirectorySource mirrors the canonical ReadableNameHub surface', async t => {
+  const hub = Far('StubHub', {
+    help: () => 'stub',
+    has: async () => false,
+    list: async () => [],
+    lookup: async () => undefined,
+    maybeLookup: async () => undefined,
+  });
+  const compartment = new Compartment(harden({ E, makeExo, M, hub }));
+  const view = compartment.evaluate(readOnlyDirectorySource);
+  // eslint-disable-next-line no-underscore-dangle
+  const methodNames = await E(/** @type {any} */ (view)).__getMethodNames__();
+  // Drop the exo meta-methods (`__getInterfaceGuard__`, `__getMethodNames__`)
+  // so only the declared interface surface is compared.
+  const declared = [...methodNames]
+    .filter(name => !name.startsWith('__'))
+    .sort();
+  t.deepEqual(declared, Object.keys(readableNameHubMethodGuards).sort());
 });

@@ -7914,3 +7914,42 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
   await E(directory).storeIdentifier(['three'], threeId);
   t.true(await E(readOnlyDirectory).has('three'));
 });
+
+test('EndoDirectory.readOnly() attenuation is shallow: nested directories are handed out live and writable', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-shallow');
+  // A nested directory under the backing directory.
+  const nested = await E(directory).makeDirectory('nested');
+  await E(host).storeValue(1, 'seed-src');
+  const seedId = await E(host).identify('seed-src');
+  await E(nested).storeIdentifier(['seed'], seedId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Looking the nested directory up THROUGH the read-only view returns the
+  // live, fully-writable nested directory — NOT a further read-only view. This
+  // is the security-relevant half of the documented contract: attenuation is
+  // shallow, so a holder of the read-only view can mutate one level down.
+  const nestedViaView = await E(readOnlyDirectory).lookup('nested');
+  await E(host).storeValue(2, 'added-src');
+  const addedId = await E(host).identify('added-src');
+  // The write through the looked-up nested directory succeeds — proving it is
+  // the live capability, not a read-only attenuation.
+  await t.notThrowsAsync(
+    E(/** @type {any} */ (nestedViaView)).storeIdentifier(['added'], addedId),
+    'a nested directory reached through the read-only view is writable',
+  );
+  // And the write is observable back through the view's nested lookup.
+  t.true(await E(/** @type {any} */ (nestedViaView)).has('added'));
+  t.true(await E(nested).has('added'));
+});
+
+test('EndoDirectory.readOnly() is memoized: repeated calls return the same view', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-memo');
+  const first = await E(directory).readOnly();
+  const second = await E(directory).readOnly();
+  // Memoized per directory: the same capability is returned each call, rather
+  // than minting a fresh worker + formula per invocation.
+  t.is(first, second);
+});

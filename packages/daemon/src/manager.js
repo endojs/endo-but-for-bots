@@ -115,6 +115,7 @@ import {
   ResponderInterface,
   WorkerInterface,
   DirectoryInterface,
+  ReadableNameHubInterface,
   BlobInterface,
   ReadableTreeInterface,
   EndoInterface,
@@ -2753,6 +2754,24 @@ const makeDaemonCore = async (
       throw new Error('Text I/O is not supported on mailbox directories');
     };
 
+    // A genuinely narrow `ReadableNameHub` view: exactly the five readable
+    // methods, so `__getMethodNames__`-based feature detection sees the
+    // `ReadableNameHub` contract and nothing more. Returning `mailHub` itself
+    // would report the full `EndoDirectory` surface (with present-but-throwing
+    // mutators) under a value typed `Promise<ReadableNameHub>`, which
+    // misclassifies the view for a receiver feature-detecting a read-only hub.
+    const mailReadableView = makeExo(
+      'ReadableNameHub',
+      ReadableNameHubInterface,
+      /** @type {any} */ ({
+        help: makeHelp(directoryHelp),
+        has,
+        list,
+        lookup,
+        maybeLookup,
+      }),
+    );
+
     mailHub = /** @type {NameHub} */ (
       /** @type {unknown} */ (
         makeExo(
@@ -2783,13 +2802,12 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
-            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
-            // `ReadableNameHub` view via an evaluation formula), this hub
-            // is *already* fully read-only: every mutator above is
-            // `disallowedMutation`/`notSupported`, so there is no writable
-            // surface left to attenuate. `readOnly()` therefore returns the
-            // same already-attenuated hub rather than a distinct narrower exo.
-            readOnly: async () => mailHub,
+            // This hub is *already* fully read-only (every mutator above is
+            // `disallowedMutation`/`notSupported`), but returning it directly
+            // would still expose those methods to `__getMethodNames__`. Return
+            // the narrow `ReadableNameHub` view so the read-only surface is
+            // exactly the declared `Promise<ReadableNameHub>`.
+            readOnly: async () => mailReadableView,
           }),
         )
       )
@@ -3140,6 +3158,22 @@ const makeDaemonCore = async (
       throw new Error('Text I/O is not supported on message directories');
     };
 
+    // A genuinely narrow `ReadableNameHub` view (see the mailbox hub above for
+    // the rationale): exactly the five readable methods, so feature detection
+    // over `__getMethodNames__` sees the declared `ReadableNameHub` contract
+    // and not the full `MessageHub`/`EndoDirectory` surface.
+    const messageReadableView = makeExo(
+      'ReadableNameHub',
+      ReadableNameHubInterface,
+      /** @type {any} */ ({
+        help: makeHelp(directoryHelp),
+        has,
+        list,
+        lookup,
+        maybeLookup,
+      }),
+    );
+
     messageHub = /** @type {NameHub} */ (
       /** @type {unknown} */ (
         makeExo(
@@ -3170,13 +3204,11 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
-            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
-            // `ReadableNameHub` view via an evaluation formula), this hub
-            // is *already* fully read-only: every mutator above is
-            // `disallowedMutation`/`notSupported`, so there is no writable
-            // surface left to attenuate. `readOnly()` therefore returns the
-            // same already-attenuated hub rather than a distinct narrower exo.
-            readOnly: async () => messageHub,
+            // This hub is *already* fully read-only, but returning it directly
+            // would still expose its present-but-throwing mutators to
+            // `__getMethodNames__`. Return the narrow `ReadableNameHub` view so
+            // the surface is exactly the declared `Promise<ReadableNameHub>`.
+            readOnly: async () => messageReadableView,
           }),
         )
       )

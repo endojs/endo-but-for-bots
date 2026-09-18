@@ -982,19 +982,21 @@ export interface ReadableNameHub {
    * Resolve a pet-name path to the value named at it.
    *
    * Attenuation is SHALLOW: only this hub's own mutators (`storeIdentifier`,
-   * `remove`, `makeDirectory`, `writeText`, …) are withheld. A path that
+   * `remove`, `makeDirectory`, `writeText`, ...) are withheld. A path that
    * resolves to a nested capability-bearing value — a sub-`EndoDirectory`, an
    * agent handle, a worker — is returned as the live, fully-authorized object,
    * NOT a further read-only view. A holder of the read-only hub can therefore
    * reach and mutate nested directories one level down. Callers that need a
    * recursively read-only surface must re-attenuate the result themselves (or
    * arrange that the backing directory contains no nested writable
-   * capabilities). Contrast `EndoMount.readOnly()`, whose `SubMount` narrowing
-   * is recursive through nested lookups.
+   * capabilities). Contrast `EndoMount.readOnly()`, whose {@link ReadableTreeView}
+   * narrowing is recursive through nested lookups.
    */
   lookup(petNamePath: string | readonly string[]): Promise<unknown>;
   /** See {@link ReadableNameHub.lookup}: attenuation is shallow, not recursive. */
-  maybeLookup(petNamePath: string | readonly string[]): unknown;
+  maybeLookup(
+    petNamePath: string | readonly string[],
+  ): Promise<unknown | undefined>;
 }
 
 export interface EndoDirectory extends NameHub {
@@ -1008,6 +1010,16 @@ export interface EndoDirectory extends NameHub {
    * not recursively narrow values returned by `lookup`/`maybeLookup`; see
    * {@link ReadableNameHub.lookup}. A view of a directory that contains nested
    * writable directories still hands those nested directories out live.
+   *
+   * Optional at the type level even though the runtime `DirectoryInterface`
+   * guard (`interfaces.js`) requires it unconditionally: a standalone
+   * `EndoDirectory` (and the `mailHub`/`messageHub` directories) always
+   * implements it, but `EndoAgent extends EndoDirectory` while the agent
+   * exos (`EndoGuest`/`EndoHost`) do not yet carry `readOnly` in their
+   * guards, so `E(host).readOnly()` rejects at runtime today. The `?` keeps
+   * that gap type-honest for agents. Whether to implement `readOnly` on
+   * agents (or move it off the base interface) is decided by the slice of
+   * #1125 that first consumes it.
    */
   readOnly?(): Promise<ReadableNameHub>;
 }
