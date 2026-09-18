@@ -259,7 +259,10 @@ export const makePublishTool = ({
     // handed out rather than minting a second one for the same files.
     let known = await load();
     if (known) {
-      const standing = await E(assetServer).describe(known.id);
+      // `check`, not `describe`: a route is only replaced — and with it a URL
+      // already handed out — on what the target says now, not on a failure
+      // some earlier request found and nothing has retried.
+      const standing = await E(assetServer).check(known.id);
       if (standing && standing.status !== 'unavailable') {
         if (known.pending || known.url !== standing.url) {
           await save(harden({ id: known.id, url: standing.url })).catch(
@@ -268,11 +271,18 @@ export const makePublishTool = ({
         }
         return published(standing.url);
       }
-      if (standing) {
-        // The route stands and its target does not answer — the workspace it
-        // was taken from is gone or was replaced. A URL that can only say
-        // "unavailable" is not a publication; replace it.
-        await E(assetServer).release(known.id);
+      if (standing || !known.pending) {
+        // Either the route stands and its target does not answer (the
+        // workspace it was taken from is gone or was replaced), or the server
+        // does not list it — which a release that half-failed also looks
+        // like, with the record still in the store. Release it before its id
+        // is forgotten: repeatable, and it reaches the store either way. If
+        // that fails, keep the id and publish nothing new.
+        try {
+          await E(assetServer).release(known.id);
+        } catch (error) {
+          return `Publishing failed: the previous publication could not be released: ${/** @type {Error} */ (error).message}`;
+        }
         known = undefined;
       }
     }
@@ -283,7 +293,14 @@ export const makePublishTool = ({
     } catch (error) {
       return `Publishing failed: the publication could not be recorded: ${/** @type {Error} */ (error).message}`;
     }
-    const { url } = await E(assetServer).serve(workspace, { label, id });
+    let url;
+    try {
+      ({ url } = await E(assetServer).serve(workspace, { label, id }));
+    } catch (error) {
+      // Nothing stands under the id; the pending record says so and the next
+      // publish serves under it again.
+      return `Publishing failed: ${/** @type {Error} */ (error).message}`;
+    }
     // The route is recorded by id either way; this only completes the record.
     await save(harden({ id, url })).catch(() => {});
     return published(url);

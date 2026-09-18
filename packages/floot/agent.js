@@ -2910,6 +2910,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (publisher) {
       await publisher.revoke();
       publishers.delete(id);
+      // eslint-disable-next-line no-use-before-define
+      publishChains.delete(id);
       return;
     }
     // No tool instance in this incarnation: release from the record.

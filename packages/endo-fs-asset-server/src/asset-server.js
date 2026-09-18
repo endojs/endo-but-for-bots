@@ -183,10 +183,11 @@ const toBase64Url = bytes => {
  * @property {AssetRecord} record
  * @property {'ready' | 'restoring' | 'unavailable' | 'unreadable'} status
  * @property {string} [error]
- * @property {() => Promise<object>} filesystem  the walkable Filesystem.
+ * @property {(options?: { force?: boolean }) => Promise<object>} filesystem
+ *   the walkable Filesystem; `force` ignores a remembered failure.
  * @property {() => Promise<object>} facet  the retained read-only facet.
- * @property {() => void} invalidate  forget a resolved Filesystem that has
- *   stopped answering, so the next request recalls it.
+ * @property {() => Promise<boolean>} alive  whether the target answers now;
+ *   forgets a resolved Filesystem that does not, so the next request recalls.
  */
 
 /**
@@ -252,6 +253,26 @@ const walkable = (facet, kind) =>
   kind === 'filesystem'
     ? readOnlyFilesystem(facet)
     : mountAsFilesystem(facet, { posture: 'readOnly' });
+
+/**
+ * Ask the retained facet something only the target can answer. The walkable
+ * Filesystem over a Mount is a local wrapper whose `root()` never leaves this
+ * worker, so "does root() answer" proves nothing about a mount that has been
+ * cancelled; `has` goes to the mount, and a Filesystem's `root()` to the
+ * Filesystem.
+ *
+ * @param {object} facet
+ * @param {AssetKind} kind
+ * @param {string} index
+ */
+const probeTarget = async (facet, kind, index) => {
+  await null;
+  if (kind === 'filesystem') {
+    await E(readOnlyFilesystem(facet)).root();
+  } else {
+    await E(facet).has(index);
+  }
+};
 
 /** @returns {AssetStore} */
 const makeMemoryStore = () => {
@@ -487,16 +508,31 @@ export const makeAssetServerKit = async ({
       status: knownFacet === undefined ? 'restoring' : 'ready',
       facet: async () => {
         await entry.filesystem();
-        return /** @type {object} */ (facet);
+        if (facet === undefined) {
+          throw makeError(X`the served target is being recalled; try again`);
+        }
+        return facet;
       },
-      invalidate: () => {
-        facet = undefined;
-        filesystem = undefined;
-        entry.status = 'restoring';
+      alive: async () => {
+        const probed = facet;
+        if (probed === undefined) return false;
+        try {
+          await probeTarget(probed, record.kind, record.index);
+          return true;
+        } catch {
+          // Only what was probed is forgotten: a request that held a dead
+          // facet must not undo a recall another request already made.
+          if (facet === probed) {
+            facet = undefined;
+            filesystem = undefined;
+            entry.status = 'restoring';
+          }
+          return false;
+        }
       },
-      filesystem: () => {
+      filesystem: ({ force = false } = {}) => {
         if (filesystem !== undefined) return Promise.resolve(filesystem);
-        if (failed !== undefined && now() < failed.until) {
+        if (!force && failed !== undefined && now() < failed.until) {
           return Promise.reject(failed.cause);
         }
         flight ??= (async () => {
@@ -507,7 +543,7 @@ export const makeAssetServerKit = async ({
               const candidate = walkable(recalled, record.kind);
               // Prove it answers before calling it ready: a facet whose
               // backing is gone resolves and then fails every walk.
-              await E(candidate).root();
+              await probeTarget(recalled, record.kind, record.index);
               return { recalled, candidate };
             })();
             resolved.catch(() => {});
@@ -562,7 +598,7 @@ export const makeAssetServerKit = async ({
       error: why,
       facet: gone,
       filesystem: gone,
-      invalidate: () => {},
+      alive: async () => false,
     };
   };
 
@@ -650,7 +686,7 @@ export const makeAssetServerKit = async ({
     }
     // A published worktree has its repository beside its files. A link to a
     // site is not a grant of its history, and the link is now permanent.
-    if (pathSegments.includes('.git')) {
+    if (pathSegments.some(seg => seg.toLowerCase() === '.git')) {
       return plainResponse(404, 'Not found\n');
     }
 
@@ -693,12 +729,9 @@ export const makeAssetServerKit = async ({
       // A missing path and a Filesystem that has stopped answering both fail
       // the walk. Tell them apart, or a target whose worker restarted would
       // 404 for the rest of this incarnation while listed as ready: if the
-      // root itself does not answer, forget it, so the next request recalls
-      // it, and say "try again" rather than "no such page".
-      try {
-        await E(filesystem).root();
-      } catch {
-        entry.invalidate();
+      // target itself does not answer, forget it, so the next request
+      // recalls it, and say "try again" rather than "no such page".
+      if (!(await entry.alive())) {
         return unavailableResponse();
       }
       return plainResponse(404, 'Not found\n');
@@ -756,6 +789,8 @@ export const makeAssetServerKit = async ({
    */
   const drop = async id => {
     if (!/^[0-9a-f]{32}$/.test(id)) return false;
+    // eslint-disable-next-line no-use-before-define
+    await serving.get(id)?.catch(() => {});
     const entry = entries.get(id);
     if (entry) {
       mounts.delete(entry.record.token);
@@ -804,7 +839,7 @@ export const makeAssetServerKit = async ({
    *   `serve` with an id that already stands returns that route instead of
    *   making another, so the caller simply serves again.
    */
-  const serve = async (target, serveOpts = {}) => {
+  const serveOnce = async (target, serveOpts = {}) => {
     await null;
     if (stopped) {
       throw makeError(X`asset-server has been stopped`);
@@ -877,6 +912,7 @@ export const makeAssetServerKit = async ({
     try {
       // Refuse a facet this server cannot walk here, rather than minting a
       // URL whose every request fails.
+      await probeTarget(facet, kind, index);
       await E(walkable(facet, kind)).root();
       await store.record(record);
     } catch (cause) {
@@ -892,6 +928,35 @@ export const makeAssetServerKit = async ({
     const revoke = makeRevoker(id, record.token);
 
     return harden({ id, path, url, revoke });
+  };
+
+  /**
+   * Serves under a caller-chosen id, in flight. Nothing else reserves an id
+   * between the check that it is free and the route standing, so two serves
+   * of one id would both retain under one name and leave a second, unlisted,
+   * unrevocable token; and a release would race the serve it was meant for.
+   *
+   * @type {Map<string, Promise<unknown>>}
+   */
+  const serving = new Map();
+
+  /** @type {typeof serveOnce} */
+  const serve = async (target, serveOpts = {}) => {
+    const id = serveOpts?.id;
+    if (typeof id !== 'string') return serveOnce(target, serveOpts);
+    const earlier = serving.get(id);
+    if (earlier) {
+      // Whatever it came to, the route either stands now or does not.
+      await earlier.catch(() => {});
+      return serve(target, serveOpts);
+    }
+    const flight = serveOnce(target, serveOpts);
+    serving.set(id, flight);
+    try {
+      return await flight;
+    } finally {
+      if (serving.get(id) === flight) serving.delete(id);
+    }
   };
 
   const getAddress = () => harden({ host, port: boundPort, origin });
@@ -947,10 +1012,24 @@ export const makeAssetServerKit = async ({
     return harden(rest);
   };
 
+  // `describe` reports what the last request found, which can be a failure
+  // from minutes ago that nothing has retried. Someone about to act on
+  // "unavailable" — Floot replaces such a route, and with it a URL already
+  // handed out — asks the target now.
+  const check = async id => {
+    const entry = entries.get(id);
+    if (!entry || entry.status === 'unreadable') return undefined;
+    if (!(await entry.alive())) {
+      await entry.filesystem({ force: true }).catch(() => {});
+    }
+    return describe(id);
+  };
+
   const publisher = makeExo('AssetPublisher', AssetPublisherInterface, {
     serve,
     release,
     describe,
+    check,
     getAddress,
     help: () =>
       `Publisher for the static asset server at ${origin}. serve(target) takes a read-only facet of a Filesystem, Mount or Git capability, retains it, and returns { id, path, url, revoke }; the route lasts until revoke.revoke() or release(id), across restarts.`,
@@ -984,6 +1063,7 @@ export const makeAssetServerKit = async ({
     serve,
     release,
     describe,
+    check,
     getAddress,
     stop,
     help: () =>

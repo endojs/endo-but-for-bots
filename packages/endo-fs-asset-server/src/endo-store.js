@@ -49,11 +49,15 @@ export const makeEndoAssetStore = powers => {
 
   /** @param {string} name */
   const removeIfPresent = async name => {
-    if (await E(powers).has(name)) {
+    if (!(await E(powers).has(name))) return false;
+    try {
       await E(powers).remove(name);
-      return true;
+    } catch (cause) {
+      // `remove` of a missing name throws, and two releases of one id race
+      // between the check and the act. Gone is what was wanted.
+      if (await E(powers).has(name)) throw cause;
     }
-    return false;
+    return true;
   };
 
   /**
@@ -81,8 +85,15 @@ export const makeEndoAssetStore = powers => {
         });
       } catch (cause) {
         await removeIfPresent(name).catch(() => {});
+        // The daemon's wording can name host paths the Mount interface hides;
+        // it is the operator's to read, in the server's log, not the
+        // publisher's.
+        console.error(
+          `asset-server: could not retain a ${kind}:`,
+          /** @type {Error} */ (cause)?.message || String(cause),
+        );
         throw makeError(
-          X`the asset server can only serve a capability it can retain, and it could not retain this ${q(kind)}: ${q(/** @type {Error} */ (cause)?.message || String(cause))}. Pass the daemon-minted capability itself, not a view derived from it; the server takes its own read-only facet.`,
+          X`the asset server can only serve a capability it can retain, and it could not retain this ${q(kind)}. Pass the daemon-minted capability itself, not a view derived from it; the server takes its own read-only facet.`,
         );
       }
     },

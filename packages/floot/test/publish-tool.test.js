@@ -10,6 +10,7 @@ const makeAssetServer = () => {
   const revoked = [];
   const standing = new Map();
   const unavailable = new Set();
+  const failRelease = { count: 0 };
   let counter = 0;
   const server = Far('AssetPublisher', {
     async serve(target, options = {}) {
@@ -53,7 +54,14 @@ const makeAssetServer = () => {
           })
         : undefined;
     },
+    async check(id) {
+      return server.describe(id);
+    },
     async release(id) {
+      if (failRelease.count > 0) {
+        failRelease.count -= 1;
+        throw Error('store is unreachable');
+      }
       if (!standing.has(id)) return false;
       revoked.push(standing.get(id));
       standing.delete(id);
@@ -62,7 +70,7 @@ const makeAssetServer = () => {
   });
   // What a restart of an in-memory server, or an administrator, does.
   const forget = () => standing.clear();
-  return { server, served, revoked, forget, unavailable, standing };
+  return { server, served, revoked, forget, unavailable, standing, failRelease };
 };
 
 const INDEX = 'index.html';
@@ -458,4 +466,46 @@ test('an empty git worktree is refused for the same reason', async t => {
   });
   t.regex(String(await E(tool).execute({})), /no readable index\.html/);
   t.deepEqual(asset.served, []);
+});
+
+test('an id the server no longer lists is released before it is forgotten', async t => {
+  // A release that half-failed leaves the record in the store while the
+  // server has dropped the route from memory: `check` says nothing stands,
+  // and after a restart it would stand again with nobody holding its id.
+  const asset = makeAssetServer();
+  let next = 0;
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeFilesystemCap(),
+    makeId: () => `${(next += 1)}`.repeat(32),
+  });
+  t.regex(await E(tool).execute({}), /token-1/);
+  asset.forget();
+  asset.failRelease.count = 1;
+  t.regex(await E(tool).execute({}), /could not be released/);
+  t.is(asset.served.length, 1, 'nothing new while the old id is unaccounted for');
+  t.regex(await E(tool).execute({}), /token-2/);
+});
+
+test('a serve the server refuses is reported, and the pending id is kept', async t => {
+  /** @type {any} */
+  let recorded;
+  const refusing = Far('AssetPublisher', {
+    check: async () => undefined,
+    release: async () => false,
+    serve: async () => {
+      throw Error('the asset server can only serve a capability it can retain');
+    },
+  });
+  const tool = makePublishTool({
+    getAssetServer: async () => refusing,
+    getWorkspace: async () => makeFilesystemCap(),
+    loadPublication: async () => recorded,
+    savePublication: async publication => {
+      recorded = publication;
+    },
+    makeId: () => 'c'.repeat(32),
+  });
+  t.regex(await E(tool).execute({}), /Publishing failed: the asset server can only serve/);
+  t.deepEqual(recorded, { id: 'c'.repeat(32), pending: true });
 });

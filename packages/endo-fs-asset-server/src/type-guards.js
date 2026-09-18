@@ -49,6 +49,8 @@ export const AssetPublisherInterface = M.interface('AssetPublisher', {
   serve: serveGuard,
   release: M.call(M.string()).returns(M.promise()),
   describe: M.call(M.string()).returns(M.or(M.record(), M.undefined())),
+  // `describe` after asking the target now; for deciding, not for display.
+  check: M.call(M.string()).returns(M.promise()),
   getAddress: M.call().returns(M.record()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
@@ -92,6 +94,7 @@ export const AssetServerInterface = M.interface(
     serve: serveGuard,
     release: M.call(M.string()).returns(M.promise()),
     describe: M.call(M.string()).returns(M.or(M.record(), M.undefined())),
+    check: M.call(M.string()).returns(M.promise()),
     getAddress: M.call().returns(M.record()),
     stop: M.call().returns(M.promise()),
     help: M.call().optional(M.string()).returns(M.string()),

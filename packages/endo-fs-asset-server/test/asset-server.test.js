@@ -604,3 +604,45 @@ test.serial('the repository beside a published worktree is not served', async t 
   t.is((await httpGet(`${url}.git/config`)).status, 404);
   t.is((await httpGet(`${url}sub/.git/config`)).status, 404);
 });
+
+test.serial('two serves of one id are one route, and a release waits for the serve it is for', async t => {
+  const { admin, publisher } = await startKit(t);
+  const id = 'ef'.repeat(16);
+  const fs = await makeSiteFs();
+  const [one, two] = await Promise.all([
+    E(publisher).serve(fs, { id }),
+    E(publisher).serve(fs, { id }),
+  ]);
+  t.is(one.url, two.url);
+  t.is((await E(admin).list()).length, 1);
+
+  const other = '12'.repeat(16);
+  const serving = E(publisher).serve(fs, { id: other });
+  const releasing = E(publisher).release(other);
+  const served = await serving;
+  t.true(await releasing, 'the release saw the route the serve made');
+  t.is((await httpGet(served.url)).status, 404);
+  t.is((await E(admin).list()).length, 1);
+});
+
+test.serial('check() asks the target now, where describe() reports the last failure', async t => {
+  const shared = makeSharedStore();
+  const first = await makeAssetServerKit({
+    backend,
+    getRandomValues,
+    store: shared.store,
+  });
+  const served = await E(first.publisher).serve(await makeSiteFs());
+  await E(first.admin).stop();
+
+  shared.breakTarget(served.id);
+  const clock = 1000;
+  const second = await startKit(t, { store: shared.store, now: () => clock });
+  const { origin } = await E(second.admin).getAddress();
+  t.is((await httpGet(`${origin}${served.path}`)).status, 503);
+  shared.mendTarget(served.id);
+  // Still inside the backoff, and nothing has asked again.
+  t.like(await E(second.publisher).describe(served.id), { status: 'unavailable' });
+  t.like(await E(second.publisher).check(served.id), { status: 'ready' });
+  t.is(await E(second.publisher).check('0'.repeat(32)), undefined);
+});

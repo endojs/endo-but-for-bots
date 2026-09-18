@@ -279,3 +279,32 @@ test.serial('default powers are an in-memory server; insisting on durable refuse
     { message: /needs a host agent/ },
   );
 });
+
+test.serial('a route whose mount is cancelled is not a 404 listed as ready', async t => {
+  // The walkable Filesystem over a Mount is a local wrapper; only a call that
+  // reaches the mount can tell that it has gone.
+  const { host, config } = await prepareHost(t);
+  const siteDir = path.join(config.base, 'site');
+  fs.mkdirSync(siteDir, { recursive: true });
+  fs.writeFileSync(path.join(siteDir, 'index.html'), '<p>site</p>\n');
+  const mount = await E(host).provideMount(siteDir, 'site');
+  const { admin, publisher } = await provideAssetServer(host);
+  const served = await E(publisher).serve(mount);
+  t.is((await get(admin, served.path)).status, 200);
+
+  // The parent goes, and the read-only sub-mount dies with it.
+  await E(host).cancel('site');
+  const after = await get(admin, served.path);
+  const [listed] = await E(admin).list();
+  t.log(`after cancel: ${after.status}, listed ${listed.status}`);
+  t.not(after.status, 404, 'a dead target is "try again", not "no such page"');
+  if (after.status !== 200) {
+    t.is(after.status, 503);
+    t.not(listed.status, 'ready');
+  }
+  // Whatever it was, the route recovers once the mount is provided again.
+  await E(host).lookup(['site']);
+  const checked = await E(publisher).check(served.id);
+  t.like(checked, { status: 'ready' });
+  t.is((await get(admin, served.path)).status, 200);
+});
