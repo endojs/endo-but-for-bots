@@ -26,11 +26,6 @@ export const makeHelp = (helpText, fallbacks = []) => {
    * @returns {string}
    */
   const help = (methodName = '') => {
-    // Own-property lookup, never `in`: `in` walks the prototype chain, so on an
-    // ordinary-prototype help record `help('constructor')` / `help('toString')`
-    // would resolve to an inherited `Object.prototype` value and, through the
-    // `help(method?) -> string` return guard every capability shares, trip
-    // "Remotables must be explicitly declared" instead of documenting a method.
     if (Object.hasOwn(helpText, methodName)) {
       return helpText[methodName];
     }
