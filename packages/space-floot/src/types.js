@@ -26,6 +26,8 @@ export {};
  */
 
 /**
+ * `backendLabel` and `modelLabel` say what the session runs on, in words the
+ * host resolved from the factory's catalogs (ids are not for reading).
  * `status` is what the session's status circle shows: `passive` (nothing
  * running), `working` (a turn in flight) or `error`. `idle` and `streaming`
  * are the older names for the first two and still read the same way.
@@ -36,6 +38,9 @@ export {};
  *   createdAt: number,
  *   presetId: string,
  *   model?: string,
+ *   backendLabel?: string,
+ *   modelLabel?: string,
+ *   reasoningEffort?: string,
  *   status?: 'passive' | 'working' | 'error' | 'idle' | 'streaming',
  *   messageCount?: number,
  *   loaded?: boolean,

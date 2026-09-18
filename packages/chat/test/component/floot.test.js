@@ -140,6 +140,108 @@ test.serial(
   },
 );
 
+test.serial('each session row says what backend and model it runs', async t => {
+  t.timeout(5000);
+  const parent = testDocument.createElement('div');
+  testDocument.body.appendChild(parent);
+  const sessions = [
+    // Hosted: the catalog id is `backend:modelId`, which is also `model`.
+    {
+      id: 'hosted',
+      title: 'Hosted',
+      createdAt: 5,
+      model: 'codex:sol',
+      backendId: 'codex',
+      modelId: 'sol',
+      reasoningEffort: 'high',
+    },
+    // A pinned provider session: `model` and `modelId` are the same id.
+    {
+      id: 'pinned',
+      title: 'Pinned',
+      createdAt: 4,
+      model: 'vendor/model:free',
+      backendId: 'provider',
+      modelId: 'vendor/model:free',
+    },
+    // Unpinned, and the factory says what it resolves to.
+    {
+      id: 'resolved',
+      title: 'Resolved',
+      createdAt: 3,
+      model: '',
+      backendId: 'provider',
+      modelId: '',
+      effectiveModelId: 'qwen3',
+    },
+    // Unpinned, from a factory that does not say. The catalog's `default`
+    // flag is not what runs, so the row must not borrow its title.
+    { id: 'unpinned', title: 'Unpinned', createdAt: 2, model: '' },
+    // The backend and the model have both left the catalog.
+    {
+      id: 'gone',
+      title: 'Gone',
+      createdAt: 1,
+      model: 'retired:old-model',
+      backendId: 'retired',
+      modelId: 'old-model',
+    },
+  ];
+  const facet = id =>
+    Far('LabelSession', {
+      getInfo: () => harden(sessions.find(session => session.id === id)),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+  const factory = Far('LabelFactory', {
+    listSessions: () => harden(sessions),
+    listPresets: () => harden([]),
+    listBackends: () =>
+      harden([
+        { id: 'provider', title: 'Fae' },
+        { id: 'codex', title: 'Codex' },
+      ]),
+    listModels: () =>
+      harden([
+        {
+          id: 'openrouter/free',
+          title: 'Auto free',
+          backendId: 'provider',
+          default: true,
+        },
+        {
+          id: 'vendor/model:free',
+          title: 'Free model',
+          backendId: 'provider',
+        },
+        { id: 'codex:sol', modelId: 'sol', title: 'Sol', backendId: 'codex' },
+      ]),
+    getSession: id => facet(id),
+  });
+  const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+  t.teardown(() => {
+    dispose();
+    parent.remove();
+  });
+  await waitFor(
+    () => parent.querySelectorAll('.floot-session-runtime').length === 5,
+  );
+  const labels = Object.fromEntries(
+    [...parent.querySelectorAll('.floot-session-item')].map(item => [
+      item.querySelector('.floot-session-name')?.textContent,
+      item.querySelector('.floot-session-runtime')?.textContent,
+    ]),
+  );
+  t.deepEqual(labels, {
+    Hosted: 'Codex · Sol high',
+    Pinned: 'Fae · Free model',
+    Resolved: 'Fae · qwen3 (default)',
+    Unpinned: 'Fae · default model',
+    Gone: 'retired · old-model',
+  });
+});
+
 test.serial(
   'Settings keeps emergency stop available during a pending resume',
   async t => {

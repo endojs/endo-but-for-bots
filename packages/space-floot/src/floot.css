@@ -155,6 +155,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* What the session runs on. One line: a long model id is cut, and the full
+   text is the element's title. */
+.floot-session-runtime {
+  font-size: 0.72rem;
+  color: var(--fl-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .floot-session-sub {
   font-size: 0.72rem;
   color: var(--fl-text-faint);

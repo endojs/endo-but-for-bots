@@ -2,7 +2,10 @@
 import fs from 'node:fs';
 import test from 'ava';
 
-import { sessionStatusOf } from '../src/SessionSidebar.js';
+import {
+  sessionRuntimeLabel,
+  sessionStatusOf,
+} from '../src/SessionSidebar.js';
 
 test('every session resolves to one of the three circle states', t => {
   t.is(sessionStatusOf({}), 'passive', 'no status is passive, not blank');
@@ -22,6 +25,23 @@ test('a session that is not ready is an error whatever its turn is doing', t => 
   t.is(sessionStatusOf({ status: 'working', lifecycle: 'error' }), 'error');
   t.is(sessionStatusOf({ lifecycle: 'deleting' }), 'error');
   t.is(sessionStatusOf({ status: 'working', lifecycle: 'ready' }), 'working');
+});
+
+test('a row says what the session runs on', t => {
+  t.is(
+    sessionRuntimeLabel({ backendLabel: 'Codex', modelLabel: 'GPT-5' }),
+    'Codex · GPT-5',
+  );
+  t.is(
+    sessionRuntimeLabel({
+      backendLabel: 'Codex',
+      modelLabel: 'GPT-5',
+      reasoningEffort: 'high',
+    }),
+    'Codex · GPT-5 high',
+  );
+  t.is(sessionRuntimeLabel({ backendLabel: 'Fae' }), 'Fae');
+  t.is(sessionRuntimeLabel({}), '', 'an older host draws no runtime line');
 });
 
 // The space renders inside chat's page, and its stylesheet is bundled into the

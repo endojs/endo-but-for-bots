@@ -44,6 +44,22 @@ export const sessionStatusOf = session => {
 harden(sessionStatusOf);
 
 /**
+ * What a session runs on, for its row: "Backend · Model", with the reasoning
+ * effort when the session pins one. Empty when the host reported neither, so
+ * an older host draws the row as before.
+ *
+ * @param {Pick<FlootSessionMeta, 'backendLabel' | 'modelLabel' | 'reasoningEffort'>} session
+ * @returns {string}
+ */
+export const sessionRuntimeLabel = session => {
+  const model = [session.modelLabel, session.reasoningEffort]
+    .filter(Boolean)
+    .join(' ');
+  return [session.backendLabel, model].filter(Boolean).join(' · ');
+};
+harden(sessionRuntimeLabel);
+
+/**
  * @param {{
  *   state: FlootState,
  *   controller: FlootController,
@@ -93,6 +109,7 @@ export const SessionSidebar = ({
         const unavailable = session.lifecycle && session.lifecycle !== 'ready';
         const status = sessionStatusOf(session);
         const editing = editingId === session.id;
+        const runtime = sessionRuntimeLabel(session);
         return h(
           'div',
           {
@@ -142,6 +159,13 @@ export const SessionSidebar = ({
                   },
                   session.title,
                 ),
+            runtime
+              ? h(
+                  'div',
+                  { class: 'floot-session-runtime', title: runtime },
+                  runtime,
+                )
+              : null,
             h(
               'div',
               { class: 'floot-session-sub' },

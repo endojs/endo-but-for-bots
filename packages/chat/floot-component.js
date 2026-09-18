@@ -560,8 +560,9 @@ export const flootComponent = (
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
-   *   model: string, messages: HistoryMessage[], facet: any, loaded: boolean,
-   *   lifecycle?: string }}
+   *   model: string, backendId?: string, modelId?: string,
+   *   effectiveModelId?: string, reasoningEffort?: string, messages: HistoryMessage[], facet: any,
+   *   loaded: boolean, lifecycle?: string }}
    *   FlootSession
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
@@ -573,6 +574,8 @@ export const flootComponent = (
   let presets = [];
   /** @type {FlootModel[]} */
   let models = [];
+  /** @type {Array<{ id: string, title?: string }>} */
+  let backends = [];
   /** @type {FlootSession[]} */
   let sessions = [];
   /** @type {string | null} */
@@ -753,6 +756,10 @@ export const flootComponent = (
       createdAt: info.createdAt || Date.now(),
       presetId: info.presetId || DEFAULT_PRESET_ID,
       model: info.model || '',
+      backendId: info.backendId || 'provider',
+      modelId: info.modelId || '',
+      effectiveModelId: info.effectiveModelId || '',
+      reasoningEffort: info.reasoningEffort || '',
       messages: [],
       facet,
       loaded: true,
@@ -803,6 +810,42 @@ export const flootComponent = (
           ),
         };
 
+  // What a session runs on, in words. The factory reports ids; the titles come
+  // from the catalogs already loaded for the new-session picker. A session
+  // whose backend or model has since left the catalog still says which it was,
+  // by id, rather than going blank.
+  const backendLabelOf = (/** @type {FlootSession} */ s) => {
+    const id = s.backendId || 'provider';
+    const known = backends.find(b => b.id === id);
+    if (known?.title) return known.title;
+    return id === 'provider' ? 'Fae' : id;
+  };
+  const modelLabelOf = (/** @type {FlootSession} */ s) => {
+    const backendId = s.backendId || 'provider';
+    const known =
+      models.find(m => m.id === s.model) ||
+      models.find(
+        m =>
+          (m.backendId || 'provider') === backendId && m.modelId === s.modelId,
+      );
+    if (known?.title) return known.title;
+    if (s.modelId || s.model) return s.modelId || s.model;
+    // An unpinned session runs whatever the factory is configured with. The
+    // catalog's `default` flag is a picker pre-selection, not a statement of
+    // what runs (a configured model outside the catalog leaves the flag on a
+    // model the session never uses), so it is not borrowed here. A factory
+    // that knows reports it as `effectiveModelId`.
+    if (s.effectiveModelId) {
+      const effective = models.find(
+        m =>
+          (m.backendId || 'provider') === backendId &&
+          (m.id === s.effectiveModelId || m.modelId === s.effectiveModelId),
+      );
+      return `${effective?.title || s.effectiveModelId} (default)`;
+    }
+    return 'default model';
+  };
+
   const getState = () => {
     const session = getActiveSession();
     const liveTurn = session ? liveTurnFor(session.id) : null;
@@ -829,6 +872,9 @@ export const flootComponent = (
         createdAt: s.createdAt,
         presetId: s.presetId,
         model: s.model,
+        backendLabel: backendLabelOf(s),
+        modelLabel: modelLabelOf(s),
+        reasoningEffort: s.reasoningEffort || '',
         status: liveTurnFor(s.id)
           ? /** @type {const} */ ('streaming')
           : sessionStatus.get(s.id) || 'idle',
@@ -2419,6 +2465,10 @@ export const flootComponent = (
           .catch(() => []),
       ]);
       presets = presetList;
+      backends = backendList.map((/** @type {any} */ b) => ({
+        id: b.id,
+        title: b.title,
+      }));
       models = modelList.map(m => ({
         ...m,
         backendTitle: backendList.find(b => b.id === m.backendId)?.title,
@@ -2437,6 +2487,10 @@ export const flootComponent = (
           createdAt: m.createdAt || 0,
           presetId: m.presetId || DEFAULT_PRESET_ID,
           model: m.model || '',
+          backendId: m.backendId || 'provider',
+          modelId: m.modelId || '',
+          effectiveModelId: m.effectiveModelId || '',
+          reasoningEffort: m.reasoningEffort || '',
           messages: [],
           facet: null,
           loaded: false,
