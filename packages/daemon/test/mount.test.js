@@ -277,7 +277,11 @@ test('EndoMountFile.range attenuates to a read-only byte-interval view', async t
   // A range of a range intersects (never regaining authority).
   const el = await E(hello).range(1n, 3n);
   t.is(await E(el).text(), 'el');
-  t.is(await E(await E(hello).range(3n, 100n)).text(), 'lo', 'child clamps to parent');
+  t.is(
+    await E(await E(hello).range(3n, 100n)).text(),
+    'lo',
+    'child clamps to parent',
+  );
 
   // EOF clamp and start === end.
   t.is(await E(await E(file).range(6n, 100n)).text(), 'world\n');
@@ -317,16 +321,28 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
   await E(mount).writeText(['lf.txt'], 'a\nb\nc\n');
   const lf = /** @type {EndoMountFile} */ (await E(mount).lookup('lf.txt'));
   t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
-  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n', 'endLine clamps');
+  t.is(
+    await E(await E(lf).textRange(0, 100)).text(),
+    'a\nb\nc\n',
+    'endLine clamps',
+  );
   t.is(await E(await E(lf).textRange(1, 1)).text(), '', 'empty interval');
 
   await E(mount).writeText(['term.txt'], 'a\nb\n');
   const term = /** @type {EndoMountFile} */ (await E(mount).lookup('term.txt'));
-  t.is(await E(await E(term).textRange(2, 3)).text(), '', 'terminal empty line');
+  t.is(
+    await E(await E(term).textRange(2, 3)).text(),
+    '',
+    'terminal empty line',
+  );
 
   await E(mount).writeText(['crlf.txt'], 'x\r\ny\r\n');
   const crlf = /** @type {EndoMountFile} */ (await E(mount).lookup('crlf.txt'));
-  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r', 'CR before LF preserved');
+  t.is(
+    await E(await E(crlf).textRange(0, 1)).text(),
+    'x\r',
+    'CR before LF preserved',
+  );
 
   // Composition: a byte range's textRange, and a line range's fetch.
   await E(mount).writeText(['doc.txt'], 'one\ntwo\nthree\n');

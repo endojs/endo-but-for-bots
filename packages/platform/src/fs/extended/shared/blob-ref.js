@@ -105,7 +105,8 @@ const makeBlobRefRange = (captured, help, infoOverride, start, end) => {
       const off = toSafeNumber(offset, 'offset');
       const len = toSafeNumber(length, 'length');
       const sliceEnd = Math.min(off + len, view.length);
-      const slice = off >= view.length ? EMPTY_BYTES : view.slice(off, sliceEnd);
+      const slice =
+        off >= view.length ? EMPTY_BYTES : view.slice(off, sliceEnd);
       return makeBytesReaderFromBytes(slice);
     },
     // Range *attenuation*: `range` returns a new `BlobRef` over the composed

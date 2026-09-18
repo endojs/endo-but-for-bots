@@ -1924,7 +1924,9 @@ const makeDaemonCore = async (
       /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
       streamBase64(synPromise) {
         if (isFull) {
-          const pump = makeReaderPump(mapReader(makeFileReader(), encodeBase64));
+          const pump = makeReaderPump(
+            mapReader(makeFileReader(), encodeBase64),
+          );
           return pump(/** @type {any} */ (synPromise));
         }
         // Attenuated view: stream the selected bytes as one base64 chunk.
@@ -2007,13 +2009,21 @@ const makeDaemonCore = async (
        * @param {number} endLine
        */
       async textRange(startLine, endLine) {
-        const { startLine: s, endLine: e } = assertLineRange(startLine, endLine);
+        const { startLine: s, endLine: e } = assertLineRange(
+          startLine,
+          endLine,
+        );
         if (e <= s) {
           return makeReadableBlob(sha256, { start, end: start });
         }
         const bytes = await readSelected();
         const slice = lineRangeToByteSlice(bytes, s, e);
-        const composed = composeByteInterval(start, end, slice.start, slice.end);
+        const composed = composeByteInterval(
+          start,
+          end,
+          slice.start,
+          slice.end,
+        );
         return makeReadableBlob(sha256, composed);
       },
       help: makeHelp(blobHelp),

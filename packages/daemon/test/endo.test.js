@@ -779,7 +779,8 @@ test('stored blob range attenuation: range / textRange return derived readable b
     return new TextDecoder().decode(out);
   };
 
-  const b64 = bytes => crypto.createHash('sha256').update(bytes).digest('base64');
+  const b64 = bytes =>
+    crypto.createHash('sha256').update(bytes).digest('base64');
 
   // range(start, end) → a derived EndoReadable over [start, end).
   const hello = await E(blob).range(0n, 5n);
@@ -838,7 +839,10 @@ test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text compo
 
   const store = async text => {
     const readerRef = bytesReaderFromIterator([new TextEncoder().encode(text)]);
-    return E(host).storeBlob(readerRef, `tr-${Math.random().toString(36).slice(2)}`);
+    return E(host).storeBlob(
+      readerRef,
+      `tr-${Math.random().toString(36).slice(2)}`,
+    );
   };
 
   // LF-delimited lines, 0-based end-exclusive; agrees with lines.slice.join.

@@ -161,7 +161,9 @@ export const makeLocalBlob = (
     // to match the extended `BlobRef`. Computed over the currently selected
     // content — for an attenuated view, the selected bytes' own SHA-256.
     async getInfo() {
-      const bytes = isFull ? await fs.promises.readFile(filePath) : await readSelected();
+      const bytes = isFull
+        ? await fs.promises.readFile(filePath)
+        : await readSelected();
       const hash = encodeBase64(createHash('sha256').update(bytes).digest());
       return harden({
         algorithm: 'sha256',

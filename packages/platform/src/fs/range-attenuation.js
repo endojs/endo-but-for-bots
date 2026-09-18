@@ -39,9 +39,7 @@ export const assertByteRange = (start, end) => {
   const startNum = toSafeNumber(start, 'start');
   const endNum = toSafeNumber(end, 'end');
   if (endNum < startNum) {
-    throw makeError(
-      X`EINVAL: range end ${q(end)} is before start ${q(start)}`,
-    );
+    throw makeError(X`EINVAL: range end ${q(end)} is before start ${q(start)}`);
   }
   return harden({ start: startNum, end: endNum });
 };

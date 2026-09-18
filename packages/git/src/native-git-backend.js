@@ -2395,7 +2395,9 @@ export const makeNativeGitBackend = ({
         const bytes = await readSelected();
         const sliceEnd = Math.min(off + len, bytes.length);
         const slice =
-          off >= bytes.length ? new Uint8Array(0) : bytes.subarray(off, sliceEnd);
+          off >= bytes.length
+            ? new Uint8Array(0)
+            : bytes.subarray(off, sliceEnd);
         return bytesReaderFromIterator(
           (slice.length > 0 ? [slice] : [])[Symbol.iterator](),
         );
@@ -2419,13 +2421,21 @@ export const makeNativeGitBackend = ({
        * @param {number} endLine
        */
       async textRange(startLine, endLine) {
-        const { startLine: s, endLine: e } = assertLineRange(startLine, endLine);
+        const { startLine: s, endLine: e } = assertLineRange(
+          startLine,
+          endLine,
+        );
         if (e <= s) {
           return makeGitBlob(blobOid, { start, end: start });
         }
         const bytes = await readSelected();
         const slice = lineRangeToByteSlice(bytes, s, e);
-        const composed = composeByteInterval(start, end, slice.start, slice.end);
+        const composed = composeByteInterval(
+          start,
+          end,
+          slice.start,
+          slice.end,
+        );
         return makeGitBlob(blobOid, composed);
       },
 

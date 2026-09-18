@@ -397,7 +397,9 @@ test('NativeGitBackend GitBlob range / textRange attenuate to derived blobs', as
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'data.txt'), 'hello world\n');
   await fs.promises.writeFile(path.join(repoRoot, 'lines.txt'), 'a\nb\nc\n');
-  await execFileAsync('git', ['add', 'data.txt', 'lines.txt'], { cwd: repoRoot });
+  await execFileAsync('git', ['add', 'data.txt', 'lines.txt'], {
+    cwd: repoRoot,
+  });
   await execFileAsync(
     'git',
     ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'add data'],
@@ -412,7 +414,10 @@ test('NativeGitBackend GitBlob range / textRange attenuate to derived blobs', as
   // clamping at EOF; start === end selects an empty blob.
   t.is(await E(await E(blob).range(0n, 5n)).text(), 'hello');
   t.is((await E(await E(blob).range(0n, 5n)).getInfo()).size, 5n);
-  t.is(await E(await E(await E(blob).range(0n, 5n)).range(1n, 3n)).text(), 'el');
+  t.is(
+    await E(await E(await E(blob).range(0n, 5n)).range(1n, 3n)).text(),
+    'el',
+  );
   t.is(await E(await E(blob).range(6n, 100n)).text(), 'world\n');
   t.is(await E(await E(blob).range(3n, 3n)).text(), '');
   await t.throwsAsync(() => E(blob).range(5n, 2n), { message: /EINVAL/ });

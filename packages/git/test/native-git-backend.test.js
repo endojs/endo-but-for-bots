@@ -182,7 +182,9 @@ const commitBlob = async (t, name, content) => {
 };
 
 test('GitBlob.range attenuates to a derived blob over a byte interval', async t => {
-  const blob = /** @type {any} */ (await commitBlob(t, 'data.txt', 'hello world\n'));
+  const blob = /** @type {any} */ (
+    await commitBlob(t, 'data.txt', 'hello world\n')
+  );
   const b64 = s => createHash('sha256').update(s).digest('base64');
 
   const hello = await E(blob).range(0n, 5n);
@@ -216,11 +218,15 @@ test('GitBlob.textRange attenuates to a line interval (LF, terminal-LF, CRLF)', 
   const term = /** @type {any} */ (await commitBlob(t, 'term.txt', 'a\nb\n'));
   t.is(await E(await E(term).textRange(2, 3)).text(), '');
 
-  const crlf = /** @type {any} */ (await commitBlob(t, 'crlf.txt', 'x\r\ny\r\n'));
+  const crlf = /** @type {any} */ (
+    await commitBlob(t, 'crlf.txt', 'x\r\ny\r\n')
+  );
   t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
 
   // Composition: byte range then text range, and text range then byte fetch.
-  const doc = /** @type {any} */ (await commitBlob(t, 'doc.txt', 'one\ntwo\nthree\n'));
+  const doc = /** @type {any} */ (
+    await commitBlob(t, 'doc.txt', 'one\ntwo\nthree\n')
+  );
   const firstEight = await E(doc).range(0n, 8n); // 'one\ntwo\n'
   t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
   const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'

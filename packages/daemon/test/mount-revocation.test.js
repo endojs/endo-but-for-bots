@@ -330,7 +330,9 @@ test('revocation: a range of a mount file view revokes with it', async t => {
     message: /Mount has been revoked/,
   });
   // A range taken *after* revocation likewise cannot read.
-  const postRange = await E(file).range(0n, 3n).catch(() => undefined);
+  const postRange = await E(file)
+    .range(0n, 3n)
+    .catch(() => undefined);
   if (postRange !== undefined) {
     await t.throwsAsync(() => E(postRange).text(), {
       message: /Mount has been revoked/,
