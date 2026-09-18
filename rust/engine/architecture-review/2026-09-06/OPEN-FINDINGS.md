@@ -161,6 +161,22 @@ Five checked-in matrices require all 17,534 generated compilations to succeed;
 This supplies reproducible evidence without relying on the earlier unpublished
 generated-source sweep, but does not discharge the 21 remaining sites or close F063.
 
+The two `Number::toString` fuzz trophies reported on PR #1302 were re-measured
+against the pinned oracle and Node.
+`2.513641910770336e18` no longer diverges at all: XS, ironhorse and Node all
+render `2513641910770336000`, and `number_to_ecma_string` has emitted the
+shortest round-tripping decimal since before that report — the 17-digit spelling
+attributed to ironhorse is what XS's own bytecode DUMP prints for the literal,
+not what either engine returns from `String()`.
+`51298814505517056 + 8` is real and is the ORACLE's defect: XS renders
+`51298814505517060`, which parses back one ulp low to `51298814505517056`, while
+ironhorse and Node render `51298814505517064`, which round-trips.
+No port change can settle it, and the by-double comparison that suppresses the
+`finding_*_large_integer_dtoa` family cannot suppress this one, because the two
+spellings are genuinely different doubles.
+Pinned by `ironhorse-vm/tests/oracle_dtoa_round_trip_divergence.rs`; it wants a
+known-divergence entry in the differential targets rather than a fix.
+
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a
 crank, and `collect_every` defaults to 0 — and what the right behaviour there is
