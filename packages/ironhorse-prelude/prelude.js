@@ -108,9 +108,10 @@
 // XS escapes all of this by having a NATIVE `lockdown` -- `fx_lockdown`,
 // `c/moddable/xs/sources/xsLockdown.c` -- which rewires those constructors with
 // direct slot writes, beneath `[[DefineOwnProperty]]`, so a frozen
-// `Function.prototype` never obstructs it. Ironhorse ported XS's `harden` and
-// not its `lockdown`; a native `lockdown` is future work, and until it lands
-// the shim route is the SES profile and this prologue is its preparation.
+// `Function.prototype` never obstructs it. Ironhorse ported XS's `harden`
+// first and its `lockdown` since -- `fx_lockdown` steps 1, 2 and 5 -- but not
+// a guest `Compartment`, which the shim supplies alongside `lockdown`. So the
+// shim route is still the SES profile and this prologue is its preparation.
 //
 // The cast is the assertion, as in the `Iterator` block below: `harden` is a
 // HardenedJS convention rather than a global TypeScript knows about.

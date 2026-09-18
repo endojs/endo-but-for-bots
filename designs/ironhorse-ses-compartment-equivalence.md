@@ -259,8 +259,10 @@ probe cannot reach — and freeze — the intrinsic graph it is measuring.
 XS needs none of this because its `lockdown` is native: `fx_lockdown`
 (§ `fx_lockdown`, in order) rewires those constructors with direct slot writes,
 below `[[DefineOwnProperty]]`, so a frozen `Function.prototype` never obstructs
-it. IronHorse ported XS's `harden` and not XS's `lockdown`; a native `lockdown`
-remains future work, and until it lands the shim route is the SES profile.
+it. IronHorse ported XS's `harden` first and its `lockdown` since — steps 1, 2 and
+5, with the ledger in `ironhorse-native-lockdown.md`. What the native route
+still lacks is a guest `Compartment`, which the shim supplies alongside
+`lockdown`, so the shim route remains the SES profile for this corpus.
 
 ### What the `ses-xs-parity` axis actually runs
 
@@ -278,8 +280,13 @@ So the XS lane is a hybrid: **native `harden`, shim `lockdown`**.
 The node lane is the same shape minus the native half — no `globalThis.harden`
 at all.
 Only the Ironhorse lane asks for a native `lockdown`, via `endot-ih -l`
-(`xst262.c:1269`'s analogue), and Ironhorse does not have one, so every case
-pre-skips.
+(`xst262.c:1269`'s analogue).
+Ironhorse now has one, so `-l` no longer pre-skips the whole mode — but the
+guest surface these cases need is still six names short, so all eight report
+per-case named skips instead (§ The engine lane's zero in
+`packages/test262-runner/README.md`).
+The claim above therefore still holds, for a different reason: the native
+`lockdown` runs, and no case in this axis is covered under it.
 Three hosts, three different configurations, none of them either of the two
 coherent ones.
 
@@ -292,24 +299,41 @@ On XS the second step finds `fx_harden` and nothing is installed, so
 `repairIntrinsics` runs.
 On node nothing is found, the slot is installed, and every `lockdown()`-calling
 case fails (below).
-Ironhorse's own native `harden` puts it in XS's position, which is why the
-Ironhorse prelude leaves it alone — deliberately matching XS rather than
-picking a third configuration.
+Ironhorse's own native `harden` put it in XS's position, and an earlier
+revision of this section made that the reason the Ironhorse prelude left it
+alone — deliberately matching XS rather than picking a third configuration.
+§ The same timing rule, one layer up retracts that.
+The native `harden` traverses, so leaving it in place froze the very intrinsics
+`lockdown()` still had to tame.
+The prelude now DELETES it and lets the shim install its own, which makes the
+Ironhorse lane the pure-shim configuration rather than XS's hybrid.
 
-That makes the Ironhorse lane comparable to XS today, which is what the axis is
-for.
-It does not answer which configuration the axis *should* pin, and the two
-coherent answers want different work: a pure-shim lane needs the selector to
+That made the Ironhorse lane comparable to XS, which is what the axis is for;
+deleting the native `harden` trades that comparability for a coherent
+configuration, and the § above says why the trade is worth making.
+It did not answer which configuration the axis *should* pin, and the two
+coherent answers wanted different work: a pure-shim lane needs the selector to
 find the shim's harden rather than a host one, and a native lane needs
 `fx_lockdown`'s five steps implemented before it can be run at all.
+Both have since moved.
+The shim lane took the first answer — the prelude deletes the host `harden`, so
+the selector finds the shim's — and the native side took part of the second:
+steps 1, 2 and 5 are implemented ([ironhorse-native-lockdown](ironhorse-native-lockdown.md)),
+and a guest `Compartment` is not, which is what still keeps the `-l` lane's
+coverage at zero.
 
 ### How far the shim profile reaches the parity corpus
 
 `packages/test262-runner` runs the `ses-xs-parity` subset against three hosts.
 XS and node evaluate a generated SES prelude; the Ironhorse host drives
-`endot-ih -l`, which expects an ENGINE-side `lockdown()` and therefore
-pre-skips every SES-mode case (`xst.rs`, `SesMode::unimplemented_skip` — note
-that `SesMode::prelude()` is never applied on the live path at all).
+`endot-ih -l`, which asks for an ENGINE-side `lockdown()`.
+That native `lockdown` has since landed, so `-l` no longer pre-skips the mode:
+`SesMode::Lockdown` returns `None` from `xst.rs`'s `unimplemented_skip`, and
+the call is spliced into the setup Script by `assemble` rather than by the
+`SesMode::prelude()` an earlier revision of this sentence pointed at, which is
+gone — it had no caller on the run path, which is how `-l` once ran a whole
+corpus unlocked.
+The two `Compartment` modes still pre-skip.
 
 There is now a third prelude, `src/ironhorse-prelude.js`, and measuring it
 gives the real number for the shim route: **all 8 cases pass**

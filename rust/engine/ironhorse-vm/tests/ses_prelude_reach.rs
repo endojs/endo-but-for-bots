@@ -115,8 +115,10 @@ use std::path::Path;
 ///
 /// XS needs none of this: it has a native `lockdown` (`fx_lockdown`,
 /// `c/moddable/xs/sources/xsLockdown.c`) that rewires those constructors with
-/// direct slot writes, below `[[DefineOwnProperty]]`. A native `lockdown` for
-/// Ironhorse is future work; until then this shim route is the SES profile.
+/// direct slot writes, below `[[DefineOwnProperty]]`. Ironhorse has since
+/// ported that `lockdown` (steps 1, 2 and 5) but not a guest `Compartment`,
+/// which the shim supplies alongside `lockdown`, so this shim route is still
+/// the SES profile.
 /// See `designs/ironhorse-ses-compartment-equivalence.md`.
 const REACH: &[(&str, bool)] = &[
     ("byte-readers.js", true),
