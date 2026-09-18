@@ -74,6 +74,15 @@ impl Interp {
         }
         let v = if self.id_map.contains_key(&name) {
             self.resolve_frame_get(name)
+        } else if let Some(&cell) = self.environment.global_lexicals.get(&name) {
+            // A compartment's `globalLexicals` sit BETWEEN the frame and the
+            // global object, so they shadow a global of the same name and are
+            // shadowed in turn by anything the evaluated source declares
+            // (which lands in `id_map`). Not a property of the global object
+            // and not reached through its [[Get]]: the binding is a standalone
+            // cell, which is what keeps it off `globalThis`.
+            let cell = self.slots.get(cell);
+            Some(Slot::of(cell.kind, cell.value))
         } else if self.environment.global_props.contains_key(&name) {
             // A global object binding is an Object Environment
             // Record binding. Read it through the object's full
@@ -290,6 +299,32 @@ impl Interp {
             // unmetered: XS's own chain walk is already folded into
             // this arm's measured cost, and both forms stay
             // bit-exact against the pin.
+            if let Some(&cell) = self.environment.global_lexicals.get(&name) {
+                // The write-side twin of the lexical arm in
+                // `dispatch_get_variable`: assignment reaches the cell, never
+                // the global object, so it neither creates nor overwrites a
+                // global of the same name.
+                if self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0 {
+                    // A non-writable source descriptor makes the lexical a
+                    // `const` binding. Sloppy mode ignores the write, as it
+                    // does for any non-writable target; strict mode throws,
+                    // which is what `constructor/globalLexicals-properties.js`
+                    // catches around its `shared = null`.
+                    if self.strict {
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set {}: const", self.property_debug_name(name)),
+                        );
+                        return Err(self.raise_js(error));
+                    }
+                } else {
+                    let slot = self.slots.get_mut(cell);
+                    slot.kind = value.kind;
+                    slot.value = value.value;
+                }
+                self.push(value);
+                return Ok(());
+            }
             let own_global = self.environment.global_props.contains_key(&name);
             let resolvable = own_global || self.mop_has(code, self.object_proto, name)?;
             if !resolvable && self.strict {

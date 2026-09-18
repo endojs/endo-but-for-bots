@@ -33,25 +33,34 @@ Per-instance state and the environment lease live in the `guest_compartments`
 side table, which is also the brand every prototype member checks.
 `ironhorse-vm/tests/guest_compartment.rs` is the suite.
 
+`globalLexicals` are bound: `CompartmentEnvironment::global_lexicals` holds one
+standalone cell per name, consulted by `dispatch_get_variable` and
+`dispatch_set_variable` BETWEEN the frame and the global object, so a lexical
+shadows a global, is invisible on `globalThis`, and is `const` when its source
+descriptor was not writable.
+
+`Compartment.prototype` is `fx_lockdown` step 2's sixth stand-in
+(`locked_down_prototypes`), which is its fifth call in XS.
+
 **Not built, and deliberately so.**
 
-- **`globalLexicals` binding.** The option is validated and its values are read
-  once with their per-name writability, then dropped: there is no scope between
-  a compartment's global and its evaluated source to bind them into, and adding
-  one is a new scope kind in `interp/environment.rs`.
-  Honouring the option in part would read as working.
-  This is what `constructor/globalLexicals-properties.js` and
-  `prototype/evaluate/environments.js` still need.
-- **The step-3 template and its step-4 attenuation** (§ 4, § 5 below), and with
-  them the sixth `lockdown()` stand-in (§ 6).
+- **The step-3 template and its step-4 attenuation** (§ 4, § 5 below).
+  § 4 records the decision — a template, freezing `Object.prototype` as data —
+  and why phase 1 did not build it: with no `Math.random` and a `Date.now()`
+  that already returns `0.0`, a template would hold exactly what
+  `self.intrinsics` holds, so the clause meant to pin it is not yet
+  expressible.
+- **Module loading**, all of it. Phase 2.
+- **Persisting a live compartment** (§ 7). A machine holding one is refused at
+  the persist gate by presence.
 
 **Measured.** The hardened262 corpus gate
 (`ironhorse-262/tests/native_lockdown_corpora.rs`) moves from
 54 passed / 36 known failed / 76 excluded files to
-**67 passed / 77 known failed / 7 excluded files and 32 excluded scenarios** —
-54 more scenarios judged, 13 more passing.
+**69 passed / 75 known failed / 7 excluded files and 32 excluded scenarios** —
+54 more scenarios judged, 15 more passing.
 The blanket `test/Compartment/` + `test/modules/` path exclusion is gone.
-Eleven files now pass in at least one scenario:
+Thirteen files now pass in at least one scenario:
 
 | file | scenarios |
 |---|---|
@@ -63,6 +72,8 @@ Eleven files now pass in at least one scenario:
 | `prototype/Symbol.toStringTag.js` | strict, sloppy |
 | `prototype/Symbol.toStringTag-lockdown.js` | lockdownStrict |
 | `prototype/globalThis/defaults.js` | strict |
+| `constructor/globalLexicals-properties.js` | strict, lockdownStrict |
+| `prototype/evaluate/environments.js` | strict, lockdownStrict |
 | `import-now-hook/module-source-descriptor-sees-globals.js` | all four |
 | `import-now-hook/namespace-descriptor.js` | all four |
 | `import-now-hook/returns-undefined.js` | all four |
@@ -332,10 +343,10 @@ piece of phase 1.
 IronHorse has no template object: `install_intrinsic_bindings`
 (`interp/link.rs:240`) reads `self.intrinsics` live, every time.
 
-**Decided: introduce a template**, now that D2 says what goes in it.
-A boot-allocated object filled at lockdown time, which
+**Decided: introduce a template**, and D2 says what goes in it — a
+boot-allocated object filled at lockdown time, which
 `install_intrinsic_bindings` prefers over `self.intrinsics` when `locked_down`
-is set.
+is set, freezing `Object.prototype`'s data properties AS DATA.
 Closest to XS, snapshot-visible, and it gives step 4 somewhere to put an
 attenuated `Math`.
 
@@ -343,6 +354,33 @@ The alternative — attenuating at environment-creation time, with no template �
 is smaller, but every future attenuation becomes a branch in the binding loop
 and there is no single object to harden or to hand to `endot-ih` for
 comparison.
+
+**Deferred, not abandoned: phase 1 did not build it, because today it would
+change nothing.**
+The decision above stands and is what a later change should implement; what
+does not stand is building it now. Three measurements say so:
+
+- **Step 4 has nothing to put in it.** `Math.random` does not exist and
+  `Date.now()` already returns `0.0` (§ 5). A template filled at lockdown
+  would hold exactly the entries `self.intrinsics` already holds.
+- **Nothing mutates `self.intrinsics` after linking**, so "read the template"
+  and "read the live map" cannot diverge. The one runtime insert,
+  `install_test262_host`'s `$262`, panics if called after `link_intrinsics` and
+  is harness-only.
+- **A compartment made before lockdown and one made after already agree**,
+  because both hold REFERENCES into the one shared graph rather than copies, so
+  freezing that graph reaches both. That is XS's architecture too.
+
+So the acceptance clause this note wrote for it — "a compartment made after
+`lockdown()` reads the attenuated template, and one made before does not share
+it" — is not merely unmet, it is not yet expressible: with nothing attenuated
+there is no observable difference for a test to pin. Building the seam now
+would move the boot fingerprint a third time, add an `Interp` field to four
+registries, and buy a branch nothing takes.
+
+The seam earns its place when ironhorse grows a real `Math.random` or a real
+clock. Recording the shape now is the useful half, and this section is that
+record.
 
 Either way, the acceptance property is the same and is pinned as a test rather
 than asserted in prose: a compartment created *after* `lockdown()` reads the
@@ -670,14 +708,18 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
   two-column table exists.
 - A compartment made after `lockdown()` reads the attenuated template, and one
   made before does not share it — pinned as a test.
-  **Not done**; there is no template yet.
+  **Withdrawn, not merely unmet.** § 4 says why: with nothing attenuated there
+  is no observable difference to pin, and a test asserting one would be
+  asserting an implementation detail.
   What is pinned today is weaker and true: a compartment made after
   `lockdown()` reaches the same frozen graph (`native_lockdown.rs`).
-- `Compartment.prototype` is step 2's sixth stand-in, observed by
-  `Symbol.toStringTag-lockdown.js`.
-  **Not done.** The case passes for a different reason — the property is
-  frozen by step 5's general walk, not by a stand-in wired in step 2 — so
-  it does not yet discriminate.
+- `Compartment.prototype` is step 2's sixth stand-in.
+  **Done**, and pinned directly rather than through
+  `Symbol.toStringTag-lockdown.js`, which passes for an unrelated reason (step
+  5's general freeze walk).
+  `lockdown_poisons_the_compartment_constructor` asserts the rewire, the
+  stand-in's anonymity and `length` 1, the `secure mode` refusal on
+  construction, and that the global constructor still works.
 - Oracle divergences from `fx_Compartment` recorded, measured, one row each.
   **Done**, in § Oracle divergences, measured above; they still owe a copy
   into the native-lockdown note's section.
@@ -721,13 +763,12 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
 - [x] Choose the instance-ownership shape (§ 2). Side table holding the lease.
 - [x] Decide whether phase 2's intrinsics are minted in phase 1's boot change.
       They are not; the fingerprint will move again.
-- [ ] Bind `globalLexicals` — the scope kind `interp/environment.rs` does
-      not have. Two corpus files wait on it
-      (`constructor/globalLexicals-properties.js`,
-      `prototype/evaluate/environments.js`).
-- [ ] Build the step-3 template and its step-4 attenuation seam, then wire
-      `Compartment.prototype` as step 2's sixth stand-in and pin the
-      before/after-lockdown test.
+- [x] Bind `globalLexicals`. Done: `CompartmentEnvironment::global_lexicals`,
+      consulted between the frame and the global object. Both corpus files pass.
+- [x] Wire `Compartment.prototype` as step 2's sixth stand-in. Done.
+- [ ] Build the step-3 template and its step-4 attenuation seam — when there
+      is something to put in it (a real `Math.random` or a real clock). § 4
+      carries the decision and the reason phase 1 did not.
 - [ ] Persist a live guest compartment (§ 7), lifting the persist-gate
       refusal.
 - [ ] Copy § Oracle divergences, measured into the native-lockdown note.

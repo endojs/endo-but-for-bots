@@ -95,12 +95,6 @@ impl Interp {
                 let _ = self.mop_get(code, inst, name_id, this)?;
             }
         }
-        // Phase 1 has no lexical scope to bind these into. Validated above and
-        // dropped here rather than silently honoured-in-part: a compartment
-        // that accepted `globalLexicals` and then resolved none of them would
-        // read as working.
-        let _ = lexicals;
-
         let previous = self.current_environment_id();
         // A machine with a guest compartment IS a machine whose compartments
         // share one realm, whatever built it. `Machine` sets this at
@@ -132,6 +126,10 @@ impl Interp {
                         "new Compartment: global definition rejected".into(),
                     ));
                 }
+            }
+            for (id, value, writable) in lexicals {
+                vm.meter.tick_slot_alloc(); // the lexical cell
+                vm.define_global_lexical(id, value, writable);
             }
             Ok(())
         })(self);

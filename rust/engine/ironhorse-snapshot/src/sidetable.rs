@@ -996,6 +996,7 @@ mod tests {
             [
                 "global_obj",
                 "global_props",
+                "global_lexicals",
                 "binding_names",
                 "modules",
                 "compiler_required",
