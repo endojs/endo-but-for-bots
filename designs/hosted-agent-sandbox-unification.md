@@ -2214,6 +2214,46 @@ Never copy historical credential-bearing records into new journals.
 Exit: source ownership is unambiguous, all advertised adapters pass conformance,
 and the deleted-code list is reviewed alongside the new code.
 
+**Status, 2026-09-18.** The audit ran against the code and the documents
+together; what it found and what changed:
+
+- *Deleted, with nothing replacing it because the replacement had already
+  landed:* `floot/src/claude-turn.js` and its two test files (the direct
+  Claude path the factory refuses since Claude moved to the hosted backend);
+  `floot/src/hosted-continuity.js` and its test (the text-form
+  `continuityContext` no adapter reads); the three `current-specifier.js`
+  re-export wrappers; `hosted-agent/test/cli-cleanup-conformance.js` (no
+  consumer since the adapters moved to the daemon owner); Codex's separate
+  4 MiB audit-payload check and `maxToolCalls`; every lifetime and cumulative
+  ceiling named under Phase 4.
+- *Kept deliberately, and why:* the `managed-credentials-module.js` wrappers
+  (the specifier retained credential formulas name); the `parse-rootfs.js`
+  wrappers (the adapter's default image); Codex's audit chain beside Floot's
+  journal (provider-side evidence, not a second executor); the
+  `continuity: 'transcript'` descriptor value on Claude and OpenCode (it names
+  Floot's mirroring of a delivered-but-failed turn, which restoration from
+  records depends on).
+- *Documents reconciled to the code* (commit "one set of guarantees"): the
+  Codex contract, security model, network policy and subscription docs; the
+  Codex merge-blockers file marked as the historical PR gate; the Claude
+  README and design (legacy inbox-form sections scoped as such, the unbuilt
+  session layer marked superseded); the OpenCode design (a current-status
+  block above the original design, and a security summary that matches the
+  shipped posture); Floot's backend design; the hosted-agent README now names
+  what the package owns for every adapter.
+- *Conformance:* the shared restoration suite runs for all three adapters at
+  unit level on every test run. Live: the recall round trip across a daemon
+  restart passed on Tokyo today for OpenCode and Codex on release
+  `2dc7c4f4d`; Claude could not be seeded because its subscription is out of
+  quota (the listener reports that as a bare 502), and its entry in the
+  endo-host evidence file stays on the 2026-09-17 acceptance of the same
+  image digest. Claude's live recall is the one conformance run still owed,
+  and it is a run, not a change.
+- *Still open, named:* the network-policy audit's 4,096-entry lifetime cap;
+  MCP socket access control on the OpenCode side; the offline pre-deploy
+  variant of the pin-bump conformance; the `keep-id` uid posture; the
+  ownership-marker no-recovery contract across daemon restart; `codex exec`.
+
 ## Validation
 
 Tests must establish behavior at boundaries rather than mirror option generation.
