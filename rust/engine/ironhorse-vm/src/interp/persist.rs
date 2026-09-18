@@ -3683,7 +3683,9 @@ impl Interp {
     /// instance with no restored collection (its `next()` indexes the
     /// table unconditionally) or a cursor past the live-entry list, a
     /// string cursor past its text or splitting a UTF-16 unit, or a
-    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, or
+    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, a
+    /// lazy Iterator helper missing its underlying iterator or its holder
+    /// array, or
     /// a for-in cursor past its key list or holding a key id outside the
     /// restored name table.
     pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
@@ -3713,13 +3715,35 @@ impl Interp {
         }
 
         for r in &rows {
-            if r.kind > 9 {
+            if r.kind > 14 {
                 return Err(RestoreError {
                     row: ROW,
                     reason: "malformed iterator state",
                 });
             }
             match r.kind {
+                // The five lazy Iterator helpers. `iterable` is the underlying
+                // iterator and `result` the holder array carrying the captured
+                // `next`, the mapper/predicate or remaining count, and
+                // flatMap's live inner iterator; `index` is the callback
+                // counter and `done` the exhaustion latch, both unconstrained.
+                // The re-entrancy latch rides `generation`, which the row does
+                // not carry: a snapshot is only taken at a quiescent point,
+                // where no helper is mid-step, so restore's zero is always the
+                // live value.
+                10..=14 => {
+                    if r.iterable == crate::value::SlotIndex::NULL.0
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || !r.enum_keys.is_empty()
+                        || !r.str_bytes.is_empty()
+                        || !self.arrays.contains_key(&crate::value::SlotIndex(r.result))
+                    {
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
+                    }
+                }
                 5..=7 => {
                     let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable)) else {
                         return Err(RestoreError {

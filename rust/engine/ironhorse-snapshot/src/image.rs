@@ -4045,6 +4045,24 @@ fn iterator_from_wrapper_malformed(
         || !str_bytes_empty
 }
 
+/// The self-contained shape gate for a lazy Iterator helper cursor (kinds
+/// 10-14: map, filter, take, drop, flatMap). Each wraps a live underlying
+/// iterator and retains a holder array in `result` carrying the captured
+/// `next`, the mapper/predicate or remaining count, and flatMap's live inner
+/// iterator. `index` is the callback counter and `done` the exhaustion latch,
+/// so both are unconstrained; the for-in and string payloads are always empty.
+///
+/// Shared by both gates for the same reason as
+/// [`iterator_from_wrapper_malformed`].
+fn lazy_helper_malformed(
+    iterable: u32,
+    result: u32,
+    enum_keys_empty: bool,
+    str_bytes_empty: bool,
+) -> bool {
+    iterable == u32::MAX || result == u32::MAX || !enum_keys_empty || !str_bytes_empty
+}
+
 /// The self-contained shape gate for a RegExp String Iterator cursor (kind 9):
 /// it wraps a live iterable, retains a result slot, keeps its mode bits in
 /// `index`, carries no for-in keys, and holds whole UTF-16 code units.
@@ -4077,10 +4095,11 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=9 (array values/keys/entries,
+        // The engine's cursor kinds are 0..=14 (array values/keys/entries,
         // for-in, string, collection keys/values/entries, Iterator.from
-        // generic wrappers, and RegExp String Iterator).
-        if kind > 9 {
+        // generic wrappers, RegExp String Iterator, and the five lazy Iterator
+        // helpers map/filter/take/drop/flatMap).
+        if kind > 14 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -4107,6 +4126,13 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
         if kind == 4 && (index as usize > str_bytes.len() || index % 2 != 0) {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: string cursor outside its text",
+            ));
+        }
+        if (10..=14).contains(&kind)
+            && lazy_helper_malformed(iterable, result, enum_keys.is_empty(), str_bytes.is_empty())
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed lazy Iterator helper",
             ));
         }
         if kind == 3 && index as usize > enum_keys.len() {
