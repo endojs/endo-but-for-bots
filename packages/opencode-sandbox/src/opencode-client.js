@@ -39,7 +39,6 @@ import { E } from '@endo/eventual-send';
 import { Buffer } from 'node:buffer';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { makeExo } from '@endo/exo';
-import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -49,6 +48,7 @@ import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 
 import { assertBridgeEvent, parseJsonLines } from './opencode-protocol.js';
+import { importedTurnsFor } from './opencode-transcript.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -201,51 +201,6 @@ const defaultMakeStdinWriter = async proc =>
 
 /** How long the structured import may take before the prompt carries it. */
 const IMPORT_TIMEOUT_MS = 30_000;
-
-/**
- * Transcript records as the turns opencode's import route takes.
- *
- * A tool call and its result become one imported turn, because that is what
- * they are: the route records a tool message carrying both, and splitting them
- * would produce a call the store shows as never having returned.
- *
- * @param {readonly any[]} records
- */
-const importedTurnsFor = records => {
-  const { pairs } = pairToolCalls(records);
-  const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
-  const turns = [];
-  for (const record of records) {
-    if (record.kind === 'message') {
-      turns.push({ kind: record.role, text: record.content });
-    } else if (record.kind === 'compaction') {
-      turns.push({ kind: 'compaction', text: record.summary });
-    } else if (record.kind === 'tool-call') {
-      const result = resultFor.get(record);
-      let input = {};
-      try {
-        const parsed = JSON.parse(record.args);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          input = parsed;
-        } else {
-          input = { value: parsed };
-        }
-      } catch {
-        input = { value: record.args };
-      }
-      turns.push({
-        kind: 'tool',
-        callID: record.id,
-        name: record.name,
-        input,
-        output: result ? result.content : 'Tool call did not complete.',
-        ...(result?.failed ? { failed: true } : {}),
-      });
-    }
-    // A `tool-result` was folded into its call above.
-  }
-  return turns;
-};
 
 /**
  * Build an `OpencodeClient` exo.

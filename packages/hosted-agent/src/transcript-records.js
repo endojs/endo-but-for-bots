@@ -365,3 +365,52 @@ export const responsesApiItems = records => {
   return harden(items);
 };
 harden(responsesApiItems);
+
+/**
+ * Read Responses API items back as records: the inverse of
+ * `responsesApiItems`, and what lets the round-trip conformance judge that
+ * translation rather than trust it.
+ *
+ * Reads what the app-server itself reports, not only what this module emits,
+ * so a thread the CLI extended after restoration is readable too. A message's
+ * text parts are joined; an item kind the stack does not record (reasoning,
+ * web-search calls, custom tool calls) is skipped, because there is no record
+ * it could faithfully become.
+ *
+ * @param {readonly any[]} items
+ * @returns {readonly TranscriptRecord[]}
+ */
+export const readResponsesApiItems = items => {
+  Array.isArray(items) || Fail`Responses API items must be an array`;
+  const records = [];
+  for (const item of items) {
+    if (item?.type === 'message') {
+      const role = item.role === 'user' ? 'user' : 'assistant';
+      const text = (Array.isArray(item.content) ? item.content : [])
+        .filter(
+          part => part?.type === 'input_text' || part?.type === 'output_text',
+        )
+        .map(part => String(part.text))
+        .join('');
+      records.push({ kind: 'message', role, content: text });
+    } else if (item?.type === 'function_call') {
+      records.push({
+        kind: 'tool-call',
+        id: String(item.call_id),
+        name: String(item.name),
+        args: String(item.arguments ?? ''),
+      });
+    } else if (item?.type === 'function_call_output') {
+      records.push({
+        kind: 'tool-result',
+        id: String(item.call_id),
+        content:
+          typeof item.output === 'string'
+            ? item.output
+            : JSON.stringify(item.output ?? ''),
+      });
+    }
+  }
+  return harden(records.map(assertTranscriptRecord));
+};
+harden(readResponsesApiItems);

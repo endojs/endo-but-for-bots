@@ -1834,22 +1834,53 @@ only thing that could have. This is the case the list below calls "restore on
 a wiped store", and running it is what separated a working restoration from a
 CLI that happened to still have its own copy.
 
-Tests that must exist before each adapter is called done:
+Tests that must exist before each adapter is called done — **all five exist
+as of 2026-09-18**, and where each lives:
 
 - **Round trip.** Journal → neutral stream → native transcript → the CLI
   reports the same turns, in order, with the same tool calls and results.
-  Shared, in the conformance suite beside `cli-cleanup-conformance.js`.
+  Shared: `hosted-agent/test/transcript-conformance.js`, driven by
+  `claude-transcript-conformance.test.js`,
+  `codex-transcript-conformance.test.js` and
+  `opencode-transcript-conformance.test.js`. Each adapter supplies its
+  translation and a read-back of the native form (`readClaudeTranscript`,
+  `readResponsesApiItems`, `readImportedTurns`), so the round trip is judged
+  rather than trusted. The "CLI reports" half is the live check below.
 - **Tool-call fidelity.** A restored tool call arrives as a tool call with its
-  result, never as flattened text. This is the property most likely to
-  regress silently.
+  result, never as flattened text. In the shared suite; the read-backs are
+  what make it checkable. Known limit: Codex's `function_call_output` has no
+  failure flag, so a `failed` result restores as an output there.
 - **Compaction round trip.** A compacted session restores with its boundary,
   and its active context is the post-compaction span rather than the whole
-  history.
+  history. In the shared suite; OpenCode's read-back models the CLI's own
+  context assembly (latest compaction onward), Claude's and Codex's carry the
+  summary as the opening message because those CLIs have no boundary row.
 - **Restore on a wiped store.** A session whose native store is gone restores
-  from the journal and reports the prior turns — the case that today has no
-  handling at all on OpenCode's resume path.
+  from the journal and reports the prior turns. Per adapter, at the client:
+  `claude-client.test.js` ("the first turn of the incarnation restores"),
+  `codex-client.test.js` ("a new thread is restored through inject_items, not
+  through its prompt"; "an app-server without inject_items refuses the turn
+  rather than degrading it"), `opencode-client.test.js` ("a new incarnation
+  restores the stack's record before its first turn"; "restoration goes
+  through the structured import, or not at all"). Live: the recall round trip
+  across a daemon restart, `ops/verify-restoration.mjs` in endo-host.
 - **Image pin bump.** Bumping any CLI image runs the round-trip conformance, so
   a private format changing under us fails loudly instead of resuming empty.
+  In endo-host: `modules/restoration-conformance.nix` refuses to evaluate a
+  configuration whose enabled `*Sandbox.image` digest has no entry in
+  `ops/restoration-conformance.json`, and warns on every switch while the
+  entry is a `candidate`; `ops/verify-restoration.mjs` is the live round
+  trip (seed a word, restart the daemon, recall it) and
+  `ops/record-restoration-conformance.mjs` promotes the entry with the
+  evidence. It cannot gate *before* the switch — a broker refuses a re-pin in
+  place, so the image has to be live to be tested — which is why the
+  candidate state warns rather than the bump being blocked outright. An
+  offline pre-deploy variant (drive each CLI in Podman with a written store
+  and read it back through the CLI, no inference) would close that gap and is
+  not scheduled.
+- `cli-cleanup-conformance.js`, which the first bullet named as the suite's
+  neighbour, has had no consumer since the adapters moved to the daemon owner
+  (db53b1040, b4767d5aa); it is dead and goes in the Phase 5 audit.
 
 ## Protection and limit justification
 
