@@ -242,3 +242,129 @@ fn collection_content_indexes_survive_lazy_restore_and_chunk_compaction() {
         assert_eq!(outcome.2, expected);
     }
 }
+
+/// The five lazy Iterator helpers (kinds 10-14) are the first cursors whose
+/// `result` names an internal HOLDER rather than a reused `{value, done}`
+/// iteration result, and the first to carry a guest callback across a
+/// snapshot. Three layers cap the cursor kind — the `ITER` decoder, the
+/// bounds gate, and the VM's `restore_iterators` — so a snapshot written with
+/// a kind none of them knew would have come back refused as corrupt.
+#[test]
+fn resumed_map_and_filter_helpers_keep_their_callback_and_counter() {
+    assert_twin(
+        "ih-iter-twin-lazy-map-filter",
+        "var mapped = 0; var picked = 0; var seen = 0; var t = 0; \
+         seen = []; \
+         mapped = [1, 2, 3, 4].values().map(function (v, i) { seen.push(i); return v * 2; }); \
+         mapped.next(); \
+         picked = [1, 2, 3, 4, 5, 6].values().filter(function (v) { return v % 2 === 0; }); \
+         picked.next(); t = 7; t",
+        &[
+            "var mapped; var t; var r = 0; r = mapped.next(); \
+             t = r.value + ':' + r.done; t",
+            "var mapped; var t; t = mapped.toArray().join(','); t",
+            // The counter rides the row's `index`. Crank 1 spent counter 0, so
+            // the three callbacks after the resume must receive 1, 2 and 3 —
+            // a counter restarted at zero would read "0,0,1,2".
+            "var seen; var t; t = seen.join(','); t",
+            "var picked; var t; t = picked.toArray().join(','); t",
+        ],
+        &["4:false", "6,8", "0,1,2,3", "4,6"],
+    );
+}
+
+#[test]
+fn a_resumed_take_and_drop_keep_their_remaining_count() {
+    // The count lives in the holder, not in the row's `index`: a resumed
+    // `take` must still stop at its ORIGINAL limit, and a resumed `drop` must
+    // not discard a second prefix.
+    assert_twin(
+        "ih-iter-twin-lazy-take-drop",
+        "var kept = 0; var rest = 0; var t = 0; \
+         kept = [1, 2, 3, 4, 5].values().take(3); kept.next(); \
+         rest = [1, 2, 3, 4, 5].values().drop(2); rest.next(); t = 7; t",
+        &[
+            "var kept; var t; t = kept.toArray().join(','); t",
+            "var rest; var t; t = rest.toArray().join(','); t",
+        ],
+        &["2,3", "4,5"],
+    );
+}
+
+#[test]
+fn a_flat_map_resumed_inside_an_inner_iterator_resumes_inside_it() {
+    // One `next()` opens the inner iterator for `1` and yields its first
+    // element, so the snapshot is taken with a LIVE, half-drained inner
+    // iterator in the holder. Losing it would restart that inner run and
+    // repeat `11`.
+    assert_twin(
+        "ih-iter-twin-lazy-flat-map",
+        "var flat = 0; var t = 0; \
+         flat = [1, 2].values().flatMap(function (v) { return [v * 10, v * 10 + 1]; }); \
+         t = flat.next().value; t",
+        &["var flat; var t; t = flat.toArray().join(','); t"],
+        &["11,20,21"],
+    );
+}
+
+#[test]
+fn a_resumed_helper_chain_continues_at_every_stage() {
+    assert_twin(
+        "ih-iter-twin-lazy-chain",
+        "var chain = 0; var t = 0; \
+         chain = [1, 2, 3, 4, 5, 6].values() \
+             .map(function (v) { return v * 2; }) \
+             .filter(function (v) { return v > 2; }) \
+             .drop(1).take(2); \
+         t = chain.next().value; t",
+        &[
+            "var chain; var t; t = chain.toArray().join(','); t",
+            "var chain; var t; var r = 0; r = chain.next(); \
+             t = r.value + ':' + r.done; t",
+        ],
+        &["8", "undefined:true"],
+    );
+}
+
+#[test]
+fn an_exhausted_helper_stays_exhausted_across_a_resume() {
+    assert_twin(
+        "ih-iter-twin-lazy-exhausted",
+        "var spent = 0; var t = 0; \
+         spent = [1].values().map(function (v) { return v; }); \
+         spent.next(); spent.next(); t = 7; t",
+        &["var spent; var t; var r = 0; r = spent.next(); \
+             t = r.value + ':' + r.done; t"],
+        &["undefined:true"],
+    );
+}
+
+/// A collection cycle must not reclaim a live helper's captured callback or
+/// its underlying iterator. The row's GC visitor traces only `iterable` and
+/// `result` (`gc_tables.rs`), which is why the holder is an INSTANCE — the
+/// ordinary object walk reaches its items from there. A chain of bare slots,
+/// the shape XS uses for internal fields, would have marked only the first.
+#[test]
+fn a_live_helper_survives_a_collection_with_its_callback_intact() {
+    let setup = "var mult = 0; var flat = 0; var t = 0; \
+                 mult = 3; \
+                 flat = [1, 2].values().flatMap(function (v) { \
+                     return [v * mult, v * mult + 1]; }); \
+                 t = flat.next().value; t";
+    let observations = ["var flat; var t; t = flat.toArray().join(','); t"];
+    // The captured closure reads a free variable, so a collected upvalue
+    // would surface as a wrong number rather than a crash.
+    assert_twin("ih-iter-twin-lazy-gc", setup, &observations, &["4,6,7"]);
+
+    let (code, names) = compile(setup);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&code).completed);
+    machine.collect_garbage().unwrap();
+    let outcome = crank(&mut machine, observations[0]);
+    assert!(outcome.0, "after a collection: {:?}", outcome.1);
+    assert_eq!(
+        outcome.2, "4,6,7",
+        "the helper's captured callback, its upvalue and its inner iterator all survive a collection",
+    );
+}

@@ -23,8 +23,10 @@ pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
 /// `Iterators` row, the `ITER` atom) — [`Interp::iterators_snapshot`]'s
 /// emission and [`RestoreSession::restore_iterators`]'s input. Kinds: 0-2 array
 /// values/keys/entries, 3 for-in enumerator, 4 string, 5-7 collection
-/// keys/values/entries, 8 for an `Iterator.from` generic wrapper, and 9 for a
-/// RegExp String Iterator. Two boundary
+/// keys/values/entries, 8 for an `Iterator.from` generic wrapper, 9 for a
+/// RegExp String Iterator, and 10-14 for the five lazy Iterator helpers
+/// (map, filter, take, drop, flatMap), whose `result` names an internal holder
+/// array rather than a reused iteration result. Two boundary
 /// normalizations make the row pure data: a collection cursor's `index` is the
 /// LIVE-ENTRY ORDINAL (the
 /// `COLL` row compacts tombstones, so the ordinal IS the physical index
