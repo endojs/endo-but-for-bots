@@ -334,10 +334,13 @@ Rules the bridge must implement:
 - **Interruption.** `interrupt()` asks the bridge to `POST /session/:id/abort`
   and enforces a terminal barrier; the client also kills the bridge process on
   teardown. An abort must not be replayed.
-- **Bounds.** A turn gets a wall-clock and step/token budget; the observed
-  compaction-continue cycle can loop under a pathologically small context
-  (live-captured), so the bridge stops emitting and reports abort when the
-  budget is hit.
+- **Bounds.** A turn has no wall clock by default — a long turn is the
+  user's to interrupt — and an operator who wants an explicit budget sets
+  `ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS`, on which the bridge stops emitting
+  and reports abort. The observed compaction-continue cycle can loop under a
+  pathologically small context (live-captured); that is what the operator
+  budget is for. An image built before this revision still applies a
+  30-minute default until it is rebuilt.
 
 Session handoff: the bridge records the opencode `sessionID`; on reincarnation
 it lists sessions (`GET /session`) and resumes the recorded ID. A missing

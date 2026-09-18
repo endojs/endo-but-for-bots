@@ -55,12 +55,14 @@ const redactSecrets = (text, secrets) => {
   return out.replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]');
 };
 
-// 30 minutes: a real review turn can run ~12 minutes of model time plus
-// compaction and dozens of tool calls. The client passes an explicit value
-// from ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS when the operator wants one.
+// Off unless the operator sets one: a long turn is the user's to interrupt,
+// and the 30-minute default this used to carry ended real review turns —
+// dozens of tool calls around long model time — rather than anything the
+// host had to bound. The client passes ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS
+// through when an operator wants an explicit budget.
 const TURN_TIMEOUT_MS = positiveEnvNumber(
   process.env.OPENCODE_BRIDGE_TURN_TIMEOUT_MS,
-  1_800_000,
+  0,
 );
 
 // ---- pure helpers ----------------------------------------------------------
@@ -598,12 +600,14 @@ const main = async () => {
     pendingError = undefined;
     interrupted = false;
     clearTurnTimers();
-    turnTimer = setTimeout(() => {
-      finishTurn(deriveTerminal({ pendingError, timedOut: true }));
-      void api(`/session/${encodeURIComponent(activeSessionId)}/abort`, {
-        method: 'POST',
-      }).catch(() => {});
-    }, TURN_TIMEOUT_MS);
+    if (TURN_TIMEOUT_MS > 0) {
+      turnTimer = setTimeout(() => {
+        finishTurn(deriveTerminal({ pendingError, timedOut: true }));
+        void api(`/session/${encodeURIComponent(activeSessionId)}/abort`, {
+          method: 'POST',
+        }).catch(() => {});
+      }, TURN_TIMEOUT_MS);
+    }
     void api(`/session/${encodeURIComponent(activeSessionId)}/prompt_async`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
