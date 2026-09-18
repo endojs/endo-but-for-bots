@@ -19,6 +19,7 @@
   "main": "./prelude.js",
   "exports": {
     ".": "./prelude.js",
+    "./codec-polyfill.js": "./codec-polyfill.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -35,7 +36,8 @@
     "typescript": "catalog:dev"
   },
   "files": [
-    "prelude.js"
+    "prelude.js",
+    "codec-polyfill.js"
   ],
   "publishConfig": {
     "access": "public"
