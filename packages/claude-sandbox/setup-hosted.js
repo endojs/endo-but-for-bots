@@ -71,6 +71,7 @@ import path from 'node:path';
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import {
+  assertRetainedBrokerImages,
   mintWithPowersPath,
   providePrivateDirectory,
 } from '@endo/hosted-agent/hosted-setup.js';
@@ -258,6 +259,16 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     if (requestedKind !== undefined && requestedKind !== credsKind) {
       throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} reads a ${q(credsKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
     }
+    // Likewise its pins: a changed image is refused here, not silently
+    // discarded (a live broker cannot be re-pinned in place).
+    await assertRetainedBrokerImages({
+      label: 'Claude',
+      serviceName: `${SANDBOX_DIR}/broker-service`,
+      retained: broker.config,
+      rootfs,
+      listenerImageRef,
+      exec,
+    });
   } else {
     if (requestedKind === undefined) {
       throw seedApiKey
@@ -309,7 +320,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
 
   if (existingBroker) {
     console.log(
-      'Retaining Claude broker service with its persisted configuration.',
+      'Retaining Claude broker service with its persisted configuration; its slice and listener images match the current pins.',
     );
   } else {
     const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);

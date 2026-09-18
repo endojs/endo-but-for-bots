@@ -592,10 +592,11 @@ test.serial(
     // Nothing names a kind and no seed is offered: the retained broker's
     // persisted kind is the credential's, and the current broker and root
     // settings are not reapplied.
+    // The pinned slice image equals the retained broker's, so nothing reaches
+    // Podman; an absent listener image is what a retained broker allows.
     await withEnv(t, {
       ENDO_FLOOT_AUTH_TOKEN: undefined,
       ENDO_CLAUDE_BROKER_LISTENER_IMAGE: undefined,
-      ENDO_CLAUDE_SANDBOX_IMAGE: 'oci:localhost/claude:latest',
     });
     const fake = makeFakeHost();
     fake.seedCredential('test-creds', 'oauthToken');
@@ -653,6 +654,61 @@ test.serial(
       message: /Invalid Claude broker configuration/,
     });
     t.deepEqual(corrupt.mints, []);
+  },
+);
+
+test.serial(
+  'a retained broker whose pins no longer match the configuration is refused before any mint',
+  async t => {
+    await baseEnv(t);
+    const other = `sha256:${'e'.repeat(64)}`;
+    // The operator bumped the slice image; the retained broker still pins the
+    // old digest. Retaining it silently would leave every slice on the old
+    // image while the unit environment claims the new one.
+    await withEnv(t, {
+      ENDO_CLAUDE_SANDBOX_IMAGE: `oci:localhost/claude@${other}`,
+    });
+    const bumped = makeFakeHost();
+    bumped.seedCredential('test-creds', 'apiKey');
+    bumped.seedBroker(retainedBrokerConfig());
+    await t.throwsAsync(main(bumped.host, { exec: refuseInspect }), {
+      message: new RegExp(
+        `pins Claude sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "claude-sandbox/broker-service" when no session depends on it, then rerun setup`,
+      ),
+    });
+    t.deepEqual(bumped.mints, [], 'refused before the credential mint');
+    // A tag is resolved (read-only) to compare; matching the retained digest
+    // retains the broker exactly as a pinned reference would.
+    await withEnv(t, { ENDO_CLAUDE_SANDBOX_IMAGE: 'oci:localhost/claude:latest' });
+    const resolved = makeFakeHost();
+    resolved.seedCredential('test-creds', 'apiKey');
+    resolved.seedBroker(retainedBrokerConfig());
+    const inspected = [];
+    await main(resolved.host, {
+      exec: async (file, args) => {
+        inspected.push([file, ...args]);
+        return { stdout: `${digest}\n` };
+      },
+    });
+    t.is(inspected.length, 1);
+    t.deepEqual(
+      resolved.mints.map(mint => [mint.options.resultName].flat().join('/')),
+      ['claude-sandbox/session-storage', 'claude-sandbox/backend-next'],
+      'the broker is retained, not re-minted',
+    );
+    // The listener image is compared the same way when the environment names
+    // one.
+    await withEnv(t, {
+      ENDO_CLAUDE_SANDBOX_IMAGE: image,
+      ENDO_CLAUDE_BROKER_LISTENER_IMAGE: `localhost/listener@${other}`,
+    });
+    const listener = makeFakeHost();
+    listener.seedCredential('test-creds', 'apiKey');
+    listener.seedBroker(retainedBrokerConfig());
+    await t.throwsAsync(main(listener.host, { exec: refuseInspect }), {
+      message: /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
+    });
+    t.deepEqual(listener.mints, []);
   },
 );
 

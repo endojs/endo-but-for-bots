@@ -295,3 +295,47 @@ export const resolvePinnedImageRef = async (
   return harden({ imageRef, imageDigest });
 };
 harden(resolvePinnedImageRef);
+
+/**
+ * A retained broker keeps the slice and listener images it was minted with:
+ * sessions record the broker's pins, and the controller attests a slice
+ * against them. Setup therefore cannot re-pin a live broker in place, and
+ * silently retaining it discards the operator's change — the unit environment
+ * carries the new digest while every slice keeps launching the old image, and
+ * nothing short of inspecting a running container says so. Refuse instead,
+ * naming both digests and the retirement recipe, before any mint.
+ *
+ * Only the images are compared here. The rest of the persisted profile is
+ * still retained as-is; a broker bearing live grants is deliberately not
+ * rebuilt for a diagnostics toggle.
+ *
+ * @param {object} args
+ * @param {string} args.label Adapter label for messages, e.g. `Claude`.
+ * @param {string} args.serviceName Pet-name path of the broker, for the recipe.
+ * @param {{ imageDigest: string, listenerImageRef: string }} args.retained
+ *   The broker's persisted configuration.
+ * @param {string} args.rootfs The configured slice image (`oci:<image>`).
+ * @param {string} args.listenerImageRef The configured listener image, or ''
+ *   when the environment names none (a retained broker needs none).
+ * @param {(file: string, args: string[]) => Promise<{ stdout: string }>} [args.exec]
+ */
+export const assertRetainedBrokerImages = async ({
+  label,
+  serviceName,
+  retained,
+  rootfs,
+  listenerImageRef,
+  exec = undefined,
+}) => {
+  await null;
+  // Resolving an unpinned tag asks Podman, which is read-only; a pinned
+  // reference needs no Podman at all.
+  const { imageDigest } = await resolvePinnedImageRef(rootfs, exec, label);
+  imageDigest === retained.imageDigest ||
+    Fail`The retained ${q(serviceName)} pins ${b(label)} sandbox image ${q(retained.imageDigest)} but the configuration now names ${q(imageDigest)}; a live broker cannot be re-pinned in place: remove ${q(serviceName)} when no session depends on it, then rerun setup to mint it with the current pins`;
+  if (listenerImageRef !== '') {
+    listenerImageRef === retained.listenerImageRef ||
+      Fail`The retained ${q(serviceName)} runs listener image ${q(retained.listenerImageRef)} but the configuration now names ${q(listenerImageRef)}; a live broker cannot be re-pinned in place: remove ${q(serviceName)} when no session depends on it, then rerun setup to mint it with the current pins`;
+  }
+};
+harden(assertRetainedBrokerImages);

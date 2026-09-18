@@ -2414,12 +2414,28 @@ retained branch and so does not.
 
 The operational unblock is to remove `opencode-sandbox/broker-service` and let
 setup mint it again, which is what was done here. The fix is for setup to
-compare the configured pin against the persisted one and re-mint on a
-mismatch — retention exists so that a broker holding credentials and live
-grants is not rebuilt for nothing, not so that a changed pin is silently
-discarded. Until that lands, **bumping any hosted CLI image requires removing
-the adapter's broker service**, and that belongs next to the re-pin recipe in
-`hosts/common.nix` rather than in someone's memory.
+compare the configured pin against the persisted one — retention exists so that
+a broker holding credentials and live grants is not rebuilt for nothing, not so
+that a changed pin is silently discarded.
+
+**Fixed, 2026-09-18 — by refusing, not re-minting.** Both setups now pass the
+retained broker's persisted profile through
+`assertRetainedBrokerImages` in `@endo/hosted-agent/hosted-setup.js`, which
+resolves the configured slice image (a tag through Podman, read-only; a digest
+without it) and refuses before any mint when it or the listener image differs
+from what the broker was minted with, naming both digests and the retirement
+recipe. Re-minting in place was rejected: the old broker owns its directory
+marker and any live grants, and a session records the broker's pins, so a
+replacement under the same name would either fail at construction or leave
+sessions attesting against a broker that no longer exists. Refusal is also what
+Codex's setup already did for its whole retained configuration; the two
+adapters now agree on the images, which are what an operator bumps. Only the
+images are compared — a retained profile's models, flags and beta list are
+still kept as persisted, which is a narrower contract than Codex's and is left
+so deliberately. **Bumping any hosted CLI image still requires retiring the
+adapter's broker service**, but a forgotten retirement now fails the daemon's
+setup loudly instead of running the old image; the recipe sits beside the pins
+in `hosts/common.nix`.
 
 ### 2. The Codex lease — acquisition leaks it, and recovery is already spent, 2026-09-17
 

@@ -58,6 +58,7 @@ import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import {
+  assertRetainedBrokerImages,
   mintWithPowersPath,
   providePrivateDirectory,
 } from '@endo/hosted-agent/hosted-setup.js';
@@ -205,7 +206,17 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const existingBroker = await E(hostAgent).has(SANDBOX_DIR, 'broker-service');
   let brokerOwnerId = '';
   if (existingBroker) {
-    await readBrokerService(hostAgent);
+    // A retained broker keeps its pins; a changed image is refused here, not
+    // silently discarded (a live broker cannot be re-pinned in place).
+    const broker = await readBrokerService(hostAgent);
+    await assertRetainedBrokerImages({
+      label: 'OpenCode',
+      serviceName: `${SANDBOX_DIR}/broker-service`,
+      retained: broker.config,
+      rootfs,
+      listenerImageRef,
+      exec,
+    });
   } else {
     if (listenerImageRef === '') {
       throw Fail`ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required: the backend records the broker service into every session plan`;
@@ -245,7 +256,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
 
   if (existingBroker) {
     console.log(
-      'Retaining OpenCode broker service with its persisted configuration.',
+      'Retaining OpenCode broker service with its persisted configuration; its slice and listener images match the current pins.',
     );
   } else {
     const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
