@@ -156,6 +156,12 @@ fn a_pattern_declaration_without_an_initializer_is_a_catchable_syntax_error() {
     // The shape test262 exercises only from inside a string, in a file the 262
     // harness excludes: `Function("for (const [z]; ; ) ;")` must throw a
     // SyntaxError the guest can catch, not fault the engine.
+    //
+    // Of the two corpus strings below only that one exercises THIS rule.
+    // `var {''};` was already rejected before it, as `missing identifier` — a
+    // string-literal property name is not a valid shorthand `BindingProperty`,
+    // so the pattern never survives to the initializer check. It is kept as a
+    // corpus case, not counted as evidence for this fix.
     for invalid in [
         "var [a];",
         "let {x};",

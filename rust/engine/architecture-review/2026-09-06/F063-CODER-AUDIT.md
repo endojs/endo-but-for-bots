@@ -416,6 +416,48 @@ count at 21.
 The claim that this pass "made the producer total" was also false when first
 written, and review rather than either new gate is what established that.
 
+## `[In]` is a grammar parameter, not an ambient mode
+
+The declaration fix above was the third answer to one question — is this call a
+`ForBinding`? — and the two wrong ones were both reads of `flags::FOR`. That
+flag is the parser's model of the `[In]` grammar parameter, and modelling a
+positional parameter as ambient state had produced two more defects beside the
+panic, in opposite directions. Both are fixed here, because they are the same
+root cause and splitting them would leave the audit's conclusion half-stated.
+
+**Over-rejection.** Every production the grammar writes `[+In]` resets the
+parameter. Several did not clear the flag, so valid source was refused:
+`for ((a in b);;)`, `for (f(a in b);;)`, `` for (`${a in b}`;;) ``,
+`for (x[a in b];;)`, and every arrow body — `for (x => (a in b);;)`.
+A function-EXPRESSION body already cleared it, so the two spellings of one
+program disagreed, exactly as they did for the panic.
+The parenthesized, argument-list, computed-member and template-substitution
+productions now save/clear/restore the flag, which is the idiom the class,
+object-literal, array-literal, conditional-consequent and dynamic-import arms
+already used; `arrow_expression` clears it as `function_expression` does.
+
+**Under-rejection.** `[~In]` covers the WHOLE `VariableDeclarationList`,
+initializers included, but the flag was cleared on the first `=` and again on
+each comma, so `for (var x = "a" in {};;)` and
+`for (var x = 1, y = "a" in {};;)` — spec early errors — compiled. Both clears
+are gone; the `in` now ends the head and `for_statement`'s existing `Binding`
+and `Statements` arms reject it.
+
+`tests/for_head_in_scope.rs` holds both directions: 23 sources that must compile
+in all five modes and 6 that must be refused in all five. The accept roster is
+load-bearing in a way worth naming — its arrows need an IDENTIFIER parameter
+(`x => …`) as well as a parenthesized one, because `( Expression[+In] )` alone
+satisfies the parenthesized spellings and would leave the arrow-body reset
+untested. Removing the arrow clear fails it; reinstating either declaration-list
+clear fails the refuse roster.
+
+Not changed, and pinned so a later pass has to come here and say so:
+`for (var x = 0 in {})`, the Annex B `VariableStatement`-in-`for-in` form, is
+still refused. That is a separate pre-existing divergence.
+
+Compiling all 53,575 corpus sources in three modes still moves none of the
+160,725 outcomes, with these changes included.
+
 ## Remaining twenty-one explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.

@@ -4790,13 +4790,14 @@ catchable SyntaxError through the real adapter.
 The AST-shape inventory stays at 21. `code_node_inner`'s fifth site is one catch-all
 over every unhandled node kind, so making one kind unreachable does not discharge it,
 and `544d225d` had already set that precedent for the same site.
-The audit is still open, and two pre-existing defects of the SAME ambient-flag root
-cause were found beside it and are NOT fixed here: `for (()=>{ return "a" in {}; };;)`
-is valid and refused, because `flags::FOR` leaks into the arrow body and suppresses
-`in`; and `for (var x = "a" in {};;)` is a spec early error and accepted, because
-`binding` clears that flag before the initializer. Both want `arrow_expression` to
-clear the flag as `function_expression` does, which is a change to a shared parser
-invariant and belongs in its own pass with its own corpus differential.
+The audit is still open. Two pre-existing defects of the SAME ambient-flag root cause
+were found beside it and ARE fixed here, since leaving them would have left the
+finding's conclusion half-stated: `flags::FOR` models the `[In]` grammar parameter,
+and it failed in both directions — valid `in` refused wherever a `[+In]` production
+should have reset it (parentheses, arguments, computed members, template
+substitutions, arrow bodies), and `in` permitted inside a head declaration list that
+`[~In]` covers whole. `tests/for_head_in_scope.rs` pins both directions; the Annex B
+`for (var x = 0 in {})` divergence is unchanged and pinned as such.
 The new deterministic matrices check 17,534 successful compilations and the
 logical-assignment runtime matrix checks 180 result/evaluation-count cases.
 Two independent mutations fail the new tests: dropping finalizer alias origins
