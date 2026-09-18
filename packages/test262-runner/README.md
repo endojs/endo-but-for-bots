@@ -161,9 +161,11 @@ intrinsics survive to be tamed; late, so the shim keeps its own — and wraps
 `makeHardener` rather than the package default, because the default export is
 the *selector*, and giving it to `globalThis.harden` would leave it finding
 itself.
-Nothing about this is Ironhorse-specific; node fails the same case for the same
-reason and would take the same repair, which is a separate change with its own
-baseline to move.
+Nothing about this is Ironhorse-specific — it is the *corpus*'s repair rather
+than the engine's, which is why it sits in the harness and not in
+`@endo/ironhorse-prelude`.
+It is wired into the Ironhorse prelude only; whether another host wants it is
+not a question this change answers.
 
 **Coverage.** `rust/engine/ironhorse-vm/tests/ses_prelude_reach.rs` runs all
 eight cases through the generated prelude and pins each outcome, so the number
