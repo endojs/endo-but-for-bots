@@ -36,7 +36,6 @@
  */
 
 import { E } from '@endo/eventual-send';
-import { Buffer } from 'node:buffer';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -59,9 +58,6 @@ import { importedTurnsFor } from './opencode-transcript.js';
  */
 /** Host-side bound on interrupt(); the bridge grace timer is untrusted. */
 const INTERRUPT_DEADLINE_MS = 15_000;
-// Total normalized-event bytes one turn may buffer before the bridge is
-// considered hostile and torn down.
-const MAX_TURN_EVENT_BYTES = 8 * 1024 * 1024;
 
 export const DEFAULT_BRIDGE_ARGV = harden([
   'node',
@@ -257,7 +253,6 @@ export const makeOpencodeClient = ({
 
   /** @type {Turn | null} */
   let active = null;
-  let activeBytes = 0;
   /** @type {Turn[]} */
   const pendingTurns = [];
   let dispatching = false;
@@ -434,18 +429,12 @@ export const makeOpencodeClient = ({
       // reader to carry it; dropping it keeps one terminal per send.
       return;
     }
-    // Bound the producer side: a hostile bridge must not be able to grow the
-    // buffered reader without limit and exhaust the shared daemon worker.
-    activeBytes += Buffer.byteLength(JSON.stringify(event));
-    if (activeBytes > MAX_TURN_EVENT_BYTES) {
-      // Deliver the terminal before tearing the bridge down, or the reader
-      // would hang with no outcome.
-      turn.push({ type: 'abort', reason: 'turn event budget exceeded' });
-      active = null;
-      turn.settle();
-      bridgeEnded('turn event budget exceeded');
-      return;
-    }
+    // A turn is not bounded in bytes here. What a hostile bridge could grow
+    // is the reader's queue, and that is bounded by credit where it is
+    // delivered (`makeBoundedReader` below: overflow fails delivery and
+    // requests cancellation); what the host keeps of a turn is bounded where
+    // it is kept (Floot's hosted turn). A cumulative cap on top of those
+    // ended long healthy turns for nothing.
     turn.push(event);
     if (event.type === 'end' || event.type === 'abort') {
       active = null;
@@ -581,7 +570,6 @@ export const makeOpencodeClient = ({
             turn.settle();
           } else {
             active = turn;
-            activeBytes = 0;
             try {
               // Composed here, not at `send`: the bridge starts lazily on
               // the first turn, so whether this incarnation has a

@@ -49,8 +49,11 @@ want queuing must make that policy visible above the capability boundary.
   unrecognized server requests.
 - Late events are routed by both thread ID and turn ID, preventing an
   interrupted turn from completing its successor.
-- EOF, malformed/oversized JSONL, failed turns, and exceeded output bounds end
-  in `abort`, never a partial successful assistant message.
+- EOF, malformed/oversized JSONL, failed turns, and a turn that retains more
+  item identities than its bound end in `abort`, never a partial successful
+  assistant message. A turn is not bounded in events or bytes: delivery is
+  bounded by credit at the reader, and what the host keeps of a turn is
+  bounded where it is kept.
 - Cancellation issues `turn/interrupt`; it is never replayed.
 - Before every prompt, the prior app-server turn ID is durably recorded.
   The new turn ID is then written as soon as it is known.

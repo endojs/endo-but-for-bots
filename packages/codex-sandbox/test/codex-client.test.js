@@ -2241,36 +2241,57 @@ test('a rejected post-success audit quarantines a side-effectful Endo tool', asy
   t.true(fixture.isClosed());
 });
 
-test('turn output bounds interrupt an excessive stream', async t => {
+test('a turn is not bounded in events: a long stream on one item is delivered whole', async t => {
   const fixture = makeFixture({
     threadId: 'thread-saved',
-    clientOptions: { maxTurnEvents: 1 },
+    clientOptions: { maxTurnItems: 2 },
   });
   const reader = await fixture.client.send('first');
+  for (let i = 0; i < 500; i += 1) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId: '1',
+        delta: `${i} `,
+      },
+    });
+  }
   fixture.push({
-    method: 'item/agentMessage/delta',
+    method: 'turn/completed',
     params: {
       threadId: fixture.activeThreadId(),
-      turnId: 'turn-1',
-      itemId: '1',
-      delta: 'one',
-    },
-  });
-  fixture.push({
-    method: 'item/agentMessage/delta',
-    params: {
-      threadId: fixture.activeThreadId(),
-      turnId: 'turn-1',
-      itemId: '1',
-      delta: 'two',
+      turn: { id: 'turn-1', status: 'completed' },
     },
   });
   const events = await drain(reader);
-  t.deepEqual(events.at(-1), {
-    type: 'abort',
-    reason: 'Codex turn exceeded configured output bounds',
+  t.is(events.filter(event => event.type === 'text-delta').length, 500);
+  t.is(events.at(-1).type, 'end');
+  t.falsy(fixture.sent.find(message => message.method === 'turn/interrupt'));
+});
+
+test('the identities a turn retains for deduplication are bounded, by name', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { maxTurnItems: 2 },
   });
-  t.truthy(fixture.sent.find(message => message.method === 'turn/interrupt'));
+  const reader = await fixture.client.send('first');
+  for (const itemId of ['1', '2', '3']) {
+    fixture.push({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: fixture.activeThreadId(),
+        turnId: 'turn-1',
+        itemId,
+        delta: 'x',
+      },
+    });
+  }
+  const events = await drain(reader);
+  t.is(events.filter(event => event.type === 'text-delta').length, 2);
+  t.like(events.at(-1), { type: 'abort' });
+  t.regex(events.at(-1).reason, /retained more than 2 item identities/);
 });
 
 test('terminate closes the transport', async t => {

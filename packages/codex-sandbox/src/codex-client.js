@@ -136,8 +136,6 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @property {(turnId: string) => void} resolveStarted
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
  * @property {ReturnType<typeof setTimeout>} [wallTimer]
- * @property {number} events
- * @property {number} bytes
  * @property {number} toolCalls
  * @property {Set<string>} serverRequestIds
  * @property {Set<string>} toolCallIds
@@ -172,8 +170,14 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @param {{ baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string }} [options.savedRecovery]
  * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} [options.saveThreadState]
  * @param {number} [options.requestTimeoutMs]
- * @param {number} [options.maxTurnEvents]
- * @param {number} [options.maxTurnBytes]
+ * @param {number} [options.maxTurnItems] Distinct item, call and request
+ *   identities one turn may retain for deduplication; the one per-turn
+ *   allocation that grows with the stream. A turn is not bounded in events
+ *   or bytes: what it delivers is bounded by credit at the reader, and what
+ *   the host keeps of it is bounded where it is kept (Floot's hosted turn).
+ * @param {number} [options.maxEarlyEvents] Events queued for a turn the
+ *   app-server has announced before `turn/start` has answered with its id.
+ * @param {number} [options.maxEarlyBytes]
  * @param {number} [options.maxToolResultChars]
  * @param {number} [options.maxPromptBytes]
  * @param {number} [options.maxRequestBytes]
@@ -200,8 +204,9 @@ export const makeCodexClient = ({
   savedToolSetId,
   savedRecovery,
   requestTimeoutMs = 30_000,
-  maxTurnEvents = 10_000,
-  maxTurnBytes = 16 * 1024 * 1024,
+  maxTurnItems = 16_384,
+  maxEarlyEvents = 1024,
+  maxEarlyBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
   maxRequestBytes = 2 * 1024 * 1024,
@@ -695,13 +700,29 @@ export const makeCodexClient = ({
   const pushTurn = event => {
     const turn = active;
     if (!turn) return;
-    turn.events += 1;
-    turn.bytes += byteLength(event);
-    if (turn.events > maxTurnEvents || turn.bytes > maxTurnBytes) {
-      void interruptActive('Codex turn exceeded configured output bounds');
-      return;
-    }
     turn.push(harden(event));
+  };
+
+  /**
+   * Retain an identity the turn deduplicates on. The sets and the phase map
+   * are the per-turn allocations that grow with the stream, so they carry
+   * the bound; a turn that keeps naming new items past it is failed with a
+   * reason that says which allocation, not "output bounds".
+   *
+   * @param {Set<string> | Map<string, unknown>} retained
+   * @param {string} key
+   * @param {unknown} [value]
+   */
+  const retainIdentity = (retained, key, value = undefined) => {
+    if (!retained.has(key) && retained.size >= maxTurnItems) {
+      failSession(
+        Error(`Codex turn retained more than ${maxTurnItems} item identities`),
+      );
+      return false;
+    }
+    if (retained instanceof Map) retained.set(key, value);
+    else retained.add(key);
+    return true;
   };
 
   const sameTurn = params => {
@@ -937,7 +958,7 @@ export const makeCodexClient = ({
     if (active.serverRequestIds.has(requestKey)) {
       throw Error(`Codex server request id was replayed: ${id}`);
     }
-    active.serverRequestIds.add(requestKey);
+    if (!retainIdentity(active.serverRequestIds, requestKey)) return;
     if (method === 'item/tool/call') {
       const result = await runDynamicTool(params);
       await sendMessage({ id, result });
@@ -998,10 +1019,14 @@ export const makeCodexClient = ({
       active.earlyEvents += 1;
       active.earlyBytes += byteLength(message);
       if (
-        active.earlyEvents > maxTurnEvents ||
-        active.earlyBytes > maxTurnBytes
+        active.earlyEvents > maxEarlyEvents ||
+        active.earlyBytes > maxEarlyBytes
       ) {
-        failSession(Error('Codex early turn events exceeded output bounds'));
+        failSession(
+          Error(
+            `Codex queued more than ${maxEarlyEvents} events or ${maxEarlyBytes} bytes for a turn before turn/start answered`,
+          ),
+        );
         return;
       }
       const queued = active.earlyByTurn.get(`${eventTurnId}`) || [];
@@ -1022,7 +1047,7 @@ export const makeCodexClient = ({
       case 'item/agentMessage/delta':
         if (active) {
           const itemId = `${params.itemId || ''}`;
-          active.textItems.add(itemId);
+          if (!retainIdentity(active.textItems, itemId)) break;
           pushTurn({
             type:
               active.messagePhases.get(itemId) === 'commentary'
@@ -1034,10 +1059,14 @@ export const makeCodexClient = ({
         break;
       case 'item/started': {
         if (params.item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(
-            `${params.item.id || ''}`,
-            params.item.phase ?? null,
-          );
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${params.item.id || ''}`,
+              params.item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(params.item);
         if (tool) {
@@ -1065,7 +1094,14 @@ export const makeCodexClient = ({
       case 'item/completed': {
         const { item } = params;
         if (item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(`${item.id || ''}`, item.phase ?? null);
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${item.id || ''}`,
+              item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(item);
         if (tool) {
@@ -1684,8 +1720,6 @@ export const makeCodexClient = ({
         resolveTerminal,
         started,
         resolveStarted,
-        events: 0,
-        bytes: 0,
         toolCalls: 0,
         serverRequestIds: new Set(),
         toolCallIds: new Set(),
