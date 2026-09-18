@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { makeBundle } from '@endo/compartment-mapper/bundle.js';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { readCodecPolyfill } from '@endo/ironhorse-prelude/codec-polyfill.js';
 
 const readPowers = makeReadPowers({ fs, url, crypto, path });
 const root = new URL('../', import.meta.url);
@@ -25,9 +26,11 @@ const prologue = await makeBundle(
   readPowers,
   import.meta.resolve('@endo/ironhorse-prelude'),
 );
-const polyfills = fs
-  .readFileSync(new URL('../../rust/endo/xsnap/src/polyfills.js', root), 'utf8')
-  .split('// -- assert polyfill --')[0];
+// Ironhorse has no host text codecs. Shared with `@endo/test262-runner`'s
+// prelude for the same reason the prologue above is: two independent slices of
+// one magic comment is the duplication this package exists to remove. See that
+// module for why everything below the marker is excluded.
+const polyfills = readCodecPolyfill();
 fs.writeFileSync(
   new URL('boot.js', dist),
   `
