@@ -5636,8 +5636,16 @@ impl Coder<'_, '_> {
     /// the tag call, followed by each substitution expression.
     fn code_tagged_template(&mut self, node: &Node, items: &[Item], tail: bool) {
         let cache_target = self.create_target();
-        // Number of `TemplateMiddle` items = (items.length / 2) + 1.
-        let string_count = (items.len() as i32 / 2) + 1;
+        // The cooked/raw arrays are sized by the number of `TemplateMiddle`
+        // items, which the loop below then fills one index at a time. Under
+        // the parser's alternation that is `(items.len() / 2) + 1`, but
+        // deriving it that way makes the size rest on a shape this function
+        // cannot see; counting the items it is about to write keeps the two
+        // in step by construction (F063).
+        let string_count = items
+            .iter()
+            .filter(|item| node_of(item).token == Token::TemplateMiddle)
+            .count() as i32;
         let raws = self.use_temporary();
         let strings = self.use_temporary();
         // XS_DONT_DELETE_FLAG (2) | XS_DONT_SET_FLAG (8): each cooked/raw

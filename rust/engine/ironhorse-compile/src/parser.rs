@@ -1904,10 +1904,21 @@ impl<'a> Parser<'a> {
         count += 1;
         loop {
             self.get_next_token()?;
-            if self.cur.token != Token::RightBrace {
-                self.comma_expression()?;
-                count += 1;
+            // `TemplateSubstitutionTail` requires an `Expression`, so `${}` is
+            // a spec early error. `fxTemplateExpression` instead SKIPS the
+            // expression when the substitution is empty and pushes the next
+            // `TemplateMiddle` straight after the previous one, which both
+            // accepts invalid source and breaks the alternation
+            // `code_tagged_template` derives its string count from. Rejecting
+            // it is a deliberate divergence from the pinned oracle's parser,
+            // in the direction of the spec, and the alternation becomes an
+            // invariant the parser holds rather than one it happens to
+            // produce (F063).
+            if self.cur.token == Token::RightBrace {
+                return Err(self.error("missing expression"));
             }
+            self.comma_expression()?;
+            count += 1;
             if self.cur.token != Token::RightBrace {
                 return Err(self.error("missing }"));
             }

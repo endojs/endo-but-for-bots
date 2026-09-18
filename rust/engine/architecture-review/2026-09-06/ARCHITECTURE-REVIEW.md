@@ -4729,6 +4729,49 @@ The new cover-grammar suite requires 300 invalid cases to report Syntax and 270 
 controls to compile; 16 eval/Function cases use the production compiler adapter and
 require catchable SyntaxErrors rather than invariant or unsupported halts.
 The 21-site AST audit remains in progress; the repairs are not a claim of totality.
+Continuing it into the template family found a third defect, of a different kind:
+not a panic, but a premise.
+`code_tagged_template` sized its cooked and raw arrays as `(items.len() / 2) + 1`,
+which counts `TemplateMiddle` nodes only while the items alternate, and
+`template_expression` did not hold that alternation.
+Ported verbatim from `fxTemplateExpression`, it SKIPS the substitution expression
+when the token after `${` is `}`, so `` `a${}b` `` — a spec early error, since
+`TemplateSubstitutionTail` requires an `Expression` — parsed to two adjacent
+`TemplateMiddle` nodes and compiled.
+`` tag`a${}b${}c` `` then computed a string count of two and wrote three indices,
+which was wrong and survived only because writing index 2 extends a JavaScript array.
+The parser now rejects the empty substitution, a deliberate divergence from the
+pinned oracle's parser in the direction of the spec, as with `for (let x, y in {})`;
+the coder counts the items it is about to write rather than deriving the count.
+No panic meant the test262 sweep could not have found this: not one of the corpus's
+53,912 files contains an empty substitution at the pinned revision, so no committed
+expectation line moves.
+It is evidence for what the sweep's own section already says — an empirical floor
+over a corpus is not a proof — and the explicit AST sites are unchanged by it, because
+the wrong premise was the arithmetic beside one of them rather than the assertion itself.
+Running the rest of the AST pass as a generated matrix rather than a hand roster then
+found a fourth defect that IS a panic, and a nine-byte one: `var [a];` aborts the
+compiler at `code_node_inner` (coder.rs:1588) with `unsupported node kind ArrayBinding`.
+`VariableDeclaration`/`LexicalBinding` require an initializer after a `BindingPattern`,
+so it is a spec early error, unchecked upstream and unchecked here; it reproduces for
+`var`/`let`/`const`, both pattern kinds, every nesting and every goal, and a guest
+raises it with `eval("var [a];")`.
+The parser now rejects it, conditionally: `ForBinding` takes no initializer, so
+`variable_statement` reports the bare pattern back to `for_statement` and reads
+`flags::FOR` at entry, the first attempt having read it after the binding and
+rejected 638 valid corpus files, because a default nested in the pattern clears it.
+The two corpus occurrences of this shape sit inside string literals in `staging/`,
+which the sweep compiles as text and the harness excludes, so neither gate could have
+reached it; a before/after compile of all 53,575 sources in three modes changes none
+of the 160,725 outcomes, for this fix or the template one.
+`ast_shape_matrix.rs` — 67 fragments in 75 positions across five modes, 25,125
+compilations, none of which may panic — is checked in as the net that found it and as
+the corpus sweep's counterpart on the invalid side of the grammar.
+`destructuring_declaration_totality.rs` holds 215 rejections and 180 control
+compilations, and 24 eval/Function cases check the catchable SyntaxError through the
+real adapter.
+This discharges `code_node_inner`'s declaration arm by making its producer total, so
+the inventory falls from 21 AST-shape sites to 20; the audit is still open.
 The new deterministic matrices check 17,534 successful compilations and the
 logical-assignment runtime matrix checks 180 result/evaluation-count cases.
 Two independent mutations fail the new tests: dropping finalizer alias origins

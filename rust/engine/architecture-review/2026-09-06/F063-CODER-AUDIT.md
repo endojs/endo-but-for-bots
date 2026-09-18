@@ -236,7 +236,141 @@ checks 16 eval/Function/strictness cases through the production compiler adapter
 This closes the two demonstrated panic paths, not the entire node-kind/default-arm audit.
 The 21-site AST inventory below remains pending a complete producer/consumer argument.
 
-## Remaining twenty-one explicit sites
+## Template AST follow-up: a wrong premise rather than a panic
+
+Continuing the AST pass into the template family found a defect the two before it
+were not: `code_tagged_template` never panicked on it, and never would have.
+
+`code_tagged_template` sizes the cooked and raw arrays it then fills one index at a
+time as `(items.len() / 2) + 1`.
+That equals the number of `TemplateMiddle` nodes exactly when the items alternate
+`TemplateMiddle`, expression, `TemplateMiddle`, ..., which is a claim about the
+producer, made in the consumer, and checked in neither.
+
+The producer did not hold it.
+`template_expression` ports `fxTemplateExpression` verbatim, including its
+`if (parser->states[0].token != XS_TOKEN_RIGHT_BRACE)` guard, so when the token
+after `${` is `}` the call to `comma_expression` is SKIPPED and the next
+`TemplateMiddle` is pushed directly after the previous one.
+`TemplateSubstitutionTail` requires an [`Expression`][template-grammar], so every
+such source is a spec early error, and both engines compiled it.
+
+[template-grammar]: https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-template-literals
+
+The consequence was silent.
+`` `a${}b` `` evaluated to `"ab"`; `` tag`a${}b${}c` `` produced three
+`TemplateMiddle` items, computed a string count of two, set `strings.length = 2`
+and then wrote indices 0, 1 and 2.
+The arithmetic was wrong and a JavaScript array rescued it, because writing index 2
+extends the array back to a length of three.
+A tag therefore saw a plausible template object assembled from a premise that had
+already failed.
+
+Both halves are closed.
+The parser rejects an empty substitution as Syntax in all five goal/strictness modes,
+a deliberate divergence from the pinned oracle's parser in the direction of the spec —
+the same direction, and for the same reason, as the `for (let x, y in {})` rejection.
+The coder counts the `TemplateMiddle` items it is about to write instead of deriving
+that count from the alternation, so the size and the fill stay in step by construction
+rather than by the parser's cooperation.
+That second change is behaviour-identical under the now-enforced invariant and is not
+independently testable from source; it is there so the consumer stops resting on a
+shape it cannot see.
+
+`tests/template_substitution_totality.rs` requires 26 invalid sources to report Syntax
+in each of the five modes (130 rejections) and 25 valid controls to compile in each
+(125 compilations).
+The invalid roster covers empty substitutions alone, between cooked text, repeated,
+mixed with well-formed neighbours in both orders, holding only whitespace or comments,
+nested inside an outer template, and reached through a member tag, a computed key, a
+parameter default, a field initializer and a static block.
+The controls include the forms that sit closest to the rejected shape — object
+literals, function and class bodies, and comma expressions, whose own `}` tokens
+precede the substitution's.
+Reverting the parser guard fails the invalid roster and leaves the controls green.
+The runtime's `an_empty_template_substitution_is_a_catchable_syntax_error_with_the_real_compiler`
+checks 16 eval/Function/strictness cases through the production compiler adapter.
+
+This one could not have come from the corpus sweep.
+No file among test262's 53,912 at the pinned revision contains an empty substitution,
+by an explicit scan for `${` followed only by whitespace or comments, so the sweep
+was never going to reach it and no committed expectation line moves.
+It is a worked example of the limit `corpus_compiler_totality.rs` states about itself:
+the sweep asks whether the compiler ANSWERS, and here it answered, wrongly.
+
+The 21-site inventory below is unchanged.
+`code_template`'s own explicit site is `panic!("template without items list")`, which
+this pass did not discharge; what it repaired was the arithmetic beside it.
+
+## Declaration AST follow-up: a reachable `code_node_inner` panic
+
+The template pass above found a wrong premise; running the same audit as a
+generated matrix rather than a hand roster found a panic, and a nine-byte one.
+
+`var [a];` aborts the compiler at `code_node_inner`'s unsupported-node assertion
+(coder.rs:1588) with `coder: unsupported node kind ArrayBinding`.
+`VariableDeclaration : BindingPattern Initializer` and `LexicalBinding :
+BindingPattern Initializer` both REQUIRE the initializer, so this is a spec early
+error, and `fxVariableStatement` does not check it; `variable_statement` ported
+that omission.
+`binding` wraps a binding that HAS an initializer in a `Binding` node, so a bare
+`ArrayBinding`/`ObjectBinding` reaches the coder, where no node description
+supplies a code method.
+It reproduces for `var`, `let` and `const`, for both pattern kinds, empty and
+elided and nested and rest patterns, in a binding list beside initialized
+neighbours, in a three-part `for` head, under `export`, and inside every body
+that opens a scope — and a guest reaches it with `eval("var [a];")`.
+The `const`-requires-an-initializer rule for a plain `BindingIdentifier` was
+already enforced, which is why only the pattern form survived.
+
+The rejection is the parser's, as with the other three, and is a deliberate
+divergence from the pinned oracle's parser in the direction of the spec.
+It is conditional in a way the others were not: `ForBinding` takes NO
+initializer, so `for (var [a] of xs)` is legal and `for (var [a]; …)` is not.
+`variable_statement` therefore reports a bare pattern back to `for_statement`
+rather than deciding alone, and reads `flags::FOR` at ENTRY — the first attempt
+read it after the binding and rejected 638 valid Temporal corpus files, because
+`binding` clears that flag on any `=` it consumes, including a default nested
+inside the pattern, as in `for (const [value, message = String(value)] of tests)`.
+
+Neither existing gate could have caught this.
+The test262 sweep compiles each file's own source, and the corpus's only two
+occurrences of the shape sit inside string literals:
+`staging/sm/lexical-environment/for-loop.js` asserts
+`Function("for (const [z]; ; ) ;")` throws, and
+`staging/sm/regress/regress-699682.js` — whose comment reads "Don't assert trying
+to parse any of these" — lists `"var {''};"` among sources to parse at runtime.
+Both files compile cleanly as text, so the sweep is honestly green over them, and
+the 262 harness, which would execute them, excludes `staging/`.
+An explicit before/after run of the compiler over all 53,575 corpus sources in
+three modes confirms it: zero of the 160,725 outcomes change, for this fix or the
+template one, so no committed expectation line moves.
+
+Evidence.
+`tests/destructuring_declaration_totality.rs` requires 43 invalid sources to
+report Syntax in each of five modes (215 rejections) and 36 controls to compile in
+each (180 compilations); the controls are load-bearing, since the rule must NOT
+fire on a `ForBinding`, on assignment destructuring, or on a function parameter.
+Reverting either half of the fix fails the invalid roster and leaves the controls
+green.
+The runtime's `a_pattern_declaration_without_an_initializer_is_a_catchable_syntax_error`
+checks 24 eval/Function/strictness cases through the production compiler adapter,
+including the two corpus strings above.
+
+`tests/ast_shape_matrix.rs` is the net that found it, and is checked in as the
+corpus sweep's counterpart on the other side of the grammar: 67 fragments spliced
+into 75 positions across five modes, 25,125 compilations, none of which may panic.
+The positions are chosen from the remaining-sites table below rather than from
+intuition.
+Like the corpus sweep it asks only whether the compiler ANSWERS, not whether the
+answer is right, and like the corpus sweep it is a floor rather than a proof — a
+product of two hand-written lists is exactly as good as those lists.
+
+The inventory below is reduced by one, from 21 to 20: `code_node_inner`'s five
+sites become four, since this pass discharged the declaration arm by making its
+producer total rather than by arguing the grammar keeps it unreached.
+
+## Remaining twenty explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.
 These need the fuller parser/scoper/coder producer-and-consumer argument, especially child
@@ -244,7 +378,7 @@ traversal and AST construction; this pass does not claim to have discharged them
 
 | Family | Count | Consumers |
 |---|---|---|
-| AST shapes | 21 | `node_of` (1), `code` (1), `code_node_inner` (5), `symbol_of` (1), `code_class` reserved children/Host/member kinds (5), `code_field` kind (1), `code_params_binding` (2), `code_object_binding_assign` (1), `code_object` (1), `code_assign` (2), `code_template` (1) |
+| AST shapes | 20 | `node_of` (1), `code` (1), `code_node_inner` (4), `symbol_of` (1), `code_class` reserved children/Host/member kinds (5), `code_field` kind (1), `code_params_binding` (2), `code_object_binding_assign` (1), `code_object` (1), `code_assign` (2), `code_template` (1) |
 
 The related scoper producer arguments are recorded in [F063-SCOPER-AUDIT.md](F063-SCOPER-AUDIT.md).
 They do not on their own prove that every coder consumer follows the same child traversal.
@@ -272,6 +406,10 @@ Run the compiler tests from the repository root and the VM tests with the engine
 
 ```sh
 cargo test --locked -p ironhorse-compile --test coder_totality_matrix
+cargo test --locked --release -p ironhorse-compile --test ast_shape_matrix
+cargo test --locked -p ironhorse-compile --test template_substitution_totality
+cargo test --locked -p ironhorse-compile --test destructuring_declaration_totality
+cargo test --locked -p ironhorse-runtime --test runtime_compile_meter
 cargo test --locked -p ironhorse-compile --lib coder::target_invariants
 cargo test --locked -p ironhorse-compile --lib coder::declaration_invariants
 cargo test --locked -p ironhorse-compile --lib coder::scope_receipt_invariants

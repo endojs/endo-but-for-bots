@@ -105,6 +105,40 @@ Both now report Syntax in the parser; nested invalid parameter targets are rejec
 The regression suite checks 300 invalid and 270 valid compilations, and 16 runtime cases
 verify catchable SyntaxErrors through the real compiler adapter.
 These repairs do not yet discharge the remaining 21-site inventory.
+Carrying that pass into the template family found a third defect that is not a panic.
+`code_tagged_template` sized its cooked and raw arrays as `(items.len() / 2) + 1`,
+which counts `TemplateMiddle` nodes only while the items alternate, and
+`template_expression` — ported verbatim from `fxTemplateExpression` — skips the
+substitution expression when the token after `${` is `}`.
+`` `a${}b` `` is a spec early error and compiled; `` tag`a${}b${}c` `` computed a
+string count of two and wrote three indices, which a JavaScript array silently
+extended back into agreement.
+The parser now rejects the empty substitution in all five modes, a deliberate
+divergence from the pinned oracle in the direction of the spec, and the coder counts
+the items it writes instead of deriving the count.
+`template_substitution_totality.rs` holds 130 rejections and 125 control compilations,
+and 16 eval/Function cases check the catchable SyntaxError through the real adapter.
+The corpus sweep could not have found it: no test262 file at the pinned revision
+contains an empty substitution, so no expectation line moves.
+The explicit AST sites are unchanged by that one, since the wrong premise was the
+arithmetic beside a site rather than the assertion itself.
+Running the remainder of the AST pass as a generated matrix then found a fourth defect
+that is a panic: `var [a];` aborts the compiler at `code_node_inner` (coder.rs:1588).
+A `BindingPattern` in a `VariableDeclaration` or `LexicalBinding` requires an
+initializer, so this is a spec early error, unchecked upstream and here, reachable by a
+guest through `eval` for `var`/`let`/`const` and every pattern shape.
+The parser now rejects it, conditionally, since `ForBinding` takes no initializer;
+reading `flags::FOR` after the binding rather than at entry rejected 638 valid corpus
+files on the first attempt, because a default nested in the pattern clears that flag.
+The corpus's only two occurrences are inside string literals in `staging/`, which the
+sweep compiles as text and the harness excludes, so neither gate could have found it;
+a before/after compile of all 53,575 sources in three modes changes none of the
+160,725 outcomes, for either fix, so no expectation line moves.
+`ast_shape_matrix.rs` checks in the net that found it — 25,125 generated compilations,
+none of which may panic — and `destructuring_declaration_totality.rs` holds 215
+rejections and 180 control compilations, with 24 eval/Function cases through the real
+adapter.
+The inventory falls from 21 AST-shape sites to 20, and F063 stays open.
 Five checked-in matrices require all 17,534 generated compilations to succeed;
 180 runtime cases separately pin the changed logical-assignment behavior.
 This supplies reproducible evidence without relying on the earlier unpublished
