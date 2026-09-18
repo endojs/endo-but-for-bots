@@ -359,3 +359,134 @@ fn a_throw_inside_a_compartment_restores_the_calling_environment() {
         "inside,outer,undefined"
     );
 }
+
+/// `prototype/evaluate/environments.js`: lexicals are assignable, persist
+/// across `evaluate` calls, and are invisible on `globalThis`, while globals
+/// are visible there.
+#[test]
+fn global_lexicals_are_a_scope_between_the_global_and_the_source() {
+    assert_eq!(
+        result(
+            r#"
+            var c = new Compartment({
+              globals: { foo: 0 },
+              globalLexicals: { bar: 0 },
+            });
+            var first = c.evaluate('bar = foo++');
+            var second = c.evaluate('bar = foo++');
+            [
+              first, second,
+              c.globalThis.foo,
+              String(c.globalThis.bar),
+              c.evaluate('bar'),
+              Object.getOwnPropertyNames(c.globalThis).indexOf('bar'),
+            ].join(',')
+            "#
+        ),
+        "0,1,2,undefined,1,-1"
+    );
+}
+
+/// `constructor/globalLexicals-properties.js`: own enumerable string keys
+/// only, copied once per compartment, per-compartment and not aliased back to
+/// the source, with writability taken from the source descriptor.
+#[test]
+fn global_lexicals_are_copied_per_compartment_with_their_writability() {
+    assert_eq!(
+        result(
+            r#"
+            var getterCount = 0, setterCount = 0, neverCount = 0;
+            var globalLexicals = Object.create(
+              { get x() { neverCount++; } },
+              {
+                y: { get: function () { neverCount++; } },
+                foo: { enumerable: true, writable: true, value: 0 },
+                bar: {
+                  enumerable: true,
+                  get: function () { getterCount++; return globalLexicals.foo; },
+                  set: function (it) { setterCount++; globalLexicals.foo = it; },
+                },
+                shared: {
+                  enumerable: true,
+                  value: { foo: 0, get bar() { return this.foo; },
+                           set bar(it) { this.foo = it; } },
+                },
+              });
+            var body = `
+              foo++;
+              bar++;
+              shared.foo++;
+              shared.bar++;
+              try { shared = null; } catch (e) { /* const */ }
+            `;
+            var c1 = new Compartment({ globalLexicals });
+            c1.evaluate(body);
+            var c2 = new Compartment({ globalLexicals });
+            c2.evaluate(body);
+            [
+              getterCount, setterCount, neverCount,
+              globalLexicals.foo, globalLexicals.bar,
+              globalLexicals.shared.foo, globalLexicals.shared.bar,
+              c1.evaluate('foo'), c1.evaluate('bar'),
+              String(c1.globalThis.foo), String(c1.globalThis.bar),
+              c2.evaluate('foo'), c2.evaluate('bar'),
+            ].join(',')
+            "#
+        ),
+        "2,0,0,0,0,4,4,1,1,undefined,undefined,1,1"
+    );
+}
+
+/// A lexical shadows a global of the same name, and the write reaches the
+/// lexical rather than creating or overwriting the global.
+#[test]
+fn a_lexical_shadows_a_global_of_the_same_name() {
+    assert_eq!(
+        result(
+            r#"
+            var c = new Compartment({
+              globals: { x: 'global' },
+              globalLexicals: { x: 'lexical' },
+            });
+            var before = c.evaluate('x');
+            c.evaluate('x = "written"');
+            [before, c.evaluate('x'), c.globalThis.x].join(',')
+            "#
+        ),
+        "lexical,written,global"
+    );
+}
+
+/// `fx_lockdown` step 2's fifth call: `Compartment.prototype.constructor`
+/// becomes the inert stand-in, like the function family's and `Date`'s.
+///
+/// The stand-in is anonymous and takes its `length` from the constructor it
+/// replaces, which is 1 for `Compartment`. Reaching it is `secure mode`, not a
+/// second compartment.
+#[test]
+fn lockdown_poisons_the_compartment_constructor() {
+    let source = format!(
+        r#"{CATCH}
+        var before = Compartment.prototype.constructor === Compartment;
+        lockdown();
+        var inert = Compartment.prototype.constructor;
+        [
+          before,
+          inert === Compartment,
+          inert.name,
+          inert.length,
+          attempt(function () {{ return new inert(); }}),
+          // The real constructor is still reachable by NAME, as XS leaves it:
+          // step 2 rewires the prototype's `constructor`, it does not unbind
+          // the global.
+          String(new Compartment().evaluate('1+1')),
+        ].join('|')
+        "#
+    );
+    assert_eq!(
+        result(&source),
+        "true|false||1|TypeError: secure mode|2",
+        "lockdown() must replace Compartment.prototype.constructor with the \
+         inert stand-in, leaving the global constructor working"
+    );
+}

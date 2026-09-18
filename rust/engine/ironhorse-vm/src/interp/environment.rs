@@ -23,6 +23,36 @@ impl Interp {
         idx
     }
 
+    /// Bind one of a compartment's `globalLexicals`.
+    ///
+    /// A standalone cell, deliberately NOT linked into the global object's
+    /// property list and deliberately absent from `binding_names`: a lexical
+    /// is a scope between the global and the evaluated source, so
+    /// `getOwnPropertyNames(compartment.globalThis)` must not see it and
+    /// `compartment.globalThis.name` must read `undefined`.
+    /// `CompartmentEnvironment::global_lexicals` carries the rest of the
+    /// contract; `dispatch_get_variable` and `dispatch_set_variable` are the
+    /// two sites that consult it.
+    ///
+    /// Not metered here: the caller (`construct_compartment`) charges the
+    /// allocation, as it does for the endowments beside it.
+    pub(super) fn define_global_lexical(
+        &mut self,
+        id: u16,
+        value: Slot,
+        writable: bool,
+    ) -> crate::value::SlotIndex {
+        let mut cell = Slot::property(id, value.value);
+        cell.kind = value.kind;
+        cell.next = crate::value::SlotIndex::NULL;
+        if !writable {
+            cell.flag |= XS_DONT_SET_FLAG;
+        }
+        let idx = self.slots.alloc(cell);
+        self.environment.global_lexicals.insert(id, idx);
+        idx
+    }
+
     /// Materialize a new own global property at run time (a hoisted
     /// `var`, or a sloppy assignment creating a global), metering the
     /// allocation exactly where `fxNewSlot`/`fxNewChunk` run:

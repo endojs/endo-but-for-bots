@@ -8,7 +8,6 @@ test/Compartment/VirtualModuleSource/bindings/environment.js
 test/Compartment/VirtualModuleSource/bindings/test.js
 test/Compartment/VirtualModuleSource/needsImport/test.js
 test/Compartment/VirtualModuleSource/needsImportMeta/test.js
-test/Compartment/constructor/globalLexicals-properties.js
 test/Compartment/constructor/modules-properties.js
 test/Compartment/constructor/modules-types.js
 test/Compartment/descriptors/namespace/object.js
@@ -21,7 +20,6 @@ test/Compartment/import-now-hook/record-and-specifier-descriptor.js
 test/Compartment/import-now-hook/redirect-record.js
 test/Compartment/import-now-hook/source-specifier-descriptor.js
 test/Compartment/import-now-optional-resolve-hook.js
-test/Compartment/prototype/evaluate/environments.js
 test/Compartment/prototype/import/importHook-separate-errors.js
 test/Compartment/prototype/import/importHook-separate-namespaces.js
 test/Compartment/prototype/import/importHook-shared-errors.js

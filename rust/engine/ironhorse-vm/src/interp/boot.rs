@@ -2180,8 +2180,10 @@ impl Interp {
     /// `prototype.constructor` rewiring are step 2's, at lockdown time --
     /// registering either at boot would make boot install lockdown's effect.
     ///
-    /// `Compartment.prototype` is absent: ironhorse has no guest `Compartment`,
-    /// which is this work's scope boundary. A `SlotIndex::NULL` prototype is
+    /// `Compartment.prototype` is here since the guest `Compartment` landed
+    /// (`designs/ironhorse-guest-compartment.md`), which is `fx_lockdown`
+    /// step 2's fifth call and the sixth pair in
+    /// [`Self::locked_down_prototypes`]. A `SlotIndex::NULL` prototype is
     /// skipped so a partial boot mints nothing dangling.
     fn create_locked_down_constructors(&mut self) {
         for (prototype, arity) in self.locked_down_prototypes() {

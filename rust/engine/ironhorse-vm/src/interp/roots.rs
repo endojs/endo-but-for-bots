@@ -25,6 +25,7 @@ macro_rules! gc_root {
             for realm in $vm.$field.values().filter(|env| env.unhandled_rejection.is_some() || env.owner.as_ref().is_none_or(|owner| owner.strong_count() != 0)) {
                 $roots.push(realm.global_obj);
                 $roots.extend(realm.global_props.values().copied());
+                $roots.extend(realm.global_lexicals.values().copied());
                 $roots.extend(realm.unhandled_rejection);
             }
         }
@@ -34,6 +35,7 @@ macro_rules! gc_root {
             $roots.push($vm.$field.global_obj);
             $roots.extend($vm.$field.unhandled_rejection);
             $roots.extend($vm.$field.global_props.values().copied());
+            $roots.extend($vm.$field.global_lexicals.values().copied());
         }
     };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, none) => {
