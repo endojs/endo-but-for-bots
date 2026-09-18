@@ -672,7 +672,7 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
 | case | what differs | judgement |
 |---|---|---|
 | `constructor/modules-types.js` | The gate reports `over-acceptance: ironhorse completed a source the oracle rejected`. Read the direction carefully: the ORACLE fails the case (`Expected a TypeError to be thrown but no exception was thrown`) and ironhorse passes it. `assert_module_map` rejects a `modules` entry that describes no module; `fx_Compartment` accepts one. | Corpus over oracle, by decision. This is the case the equivalence measurement predicted, and the only phase-1 one. Ironhorse is right and XS is wrong; the gate calls it a divergence because the gate's reference is XS. |
-| `prototype/Symbol.toStringTag.js` | Both engines fail it under lockdown — `verifyProperty` wants `configurable: true` and step 5 has frozen the property — but the abort renders as `Test262Error: descriptor should be configurable` on the oracle and `Object: descriptor should be configurable` on ironhorse. | Agreement on the RESULT, divergence in how a thrown `Test262Error` renders its name. Not this work's, and not new to it; the case simply never ran here before. The file passes in the non-lockdown `strict`/`sloppy` scenarios. |
+| `prototype/Symbol.toStringTag.js` | Both engines fail it under lockdown — `verifyProperty` wants `configurable: true` and step 5 has frozen the property — but the abort renders as `Test262Error: …` on the oracle and `Object: …` on ironhorse. | Agreement on the RESULT, divergence in how a thrown non-`Error` renders its class. Not this work's, though this work is what made it visible: the case could not run before. `Interp::render_uncaught` labels such a value with its `Object.prototype.toString` tag rather than its constructor's `name`, because it is a host boundary that must not run guest code — and for an ordinary guest constructor BOTH hops it would need, `constructor` on the prototype and `name` on the function, are VIRTUAL properties materialized on demand, which a `&self` render cannot do. An attempt to read them as data properties was made and reverted: it needs the render boundary taught to read virtual properties, which is its own change. `packages/hardened262/scripts/agents/ironhorse.js` works around the same gap by rewriting the harness's `Test262Error.prototype.toString`. The file passes in the non-lockdown `strict`/`sloppy` scenarios, where the property is still configurable. |
 | construction metering | Allocation-driven (`tick_slot_alloc` per slot allocated) rather than a calibrated frame constant. `ironhorse-meter` has no `fx_Compartment` measurement, and inventing a constant would assert a calibration nobody performed. | Deliberate, and stated at `construct_compartment`. A computron comparison over compartment construction is not meaningful until someone measures XS's. |
 
 ## Done looks like
@@ -690,13 +690,20 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
   no oracle side at all.
   The `module`-flagged pair is still excluded at `:110`, as predicted.
 - `ses-xs-parity` reach moves.
-  **Done, and smaller than predicted: 6/8 to 7/8, not 0/8 to 2/8.**
-  Those were two different measurements — the Rust-side
-  `ses_xs_parity_suite_has_zero_divergence` ratchet was already at 6, and the
-  `packages/test262-runner` lane is the one that reads 0/8.
-  One case moved (`Symbol.toStringTag.js`); the eighth is the
+  **Two measurements, and they moved differently.**
+  The Rust-side `ses_xs_parity_suite_has_zero_divergence` ratchet goes
+  **6/8 to 7/8** covered with zero divergence; the eighth is the
   `oracle-shim-unsafe:lockdown` skip and is not this work's.
-  `packages/test262-runner/README.md`'s skip inventory still owes an update.
+  The `packages/test262-runner` lane — the one that reads 0/8 — goes
+  **0/8 covered with 8 named skips to 0/8 covered with 7 skips and 1
+  failure**: `Compartment` left `DEFAULT_ENDOR_SKIP_FEATURES`, so both cases
+  that declare it now RUN, and **neither became covered**, because that lane
+  runs `-l` and `lockdown()` has frozen `Compartment.prototype` before the case
+  asks whether it is configurable, so both fail on both engines. One of the two
+  fails identically and is an honest shared skip; the other diverges only in
+  how the thrown `Test262Error` renders (§ Oracle divergences, measured).
+  So this note's "0/8 to 2/8" prediction was wrong twice over, and the lane's
+  README now carries the measurement instead.
 - Snapshot round-trip through eager, lazy and checkpoint resume with a
   compartment live, and the golden identities regenerated under **both** math
   providers.
@@ -772,8 +779,19 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
 - [ ] Persist a live guest compartment (§ 7), lifting the persist-gate
       refusal.
 - [ ] Copy § Oracle divergences, measured into the native-lockdown note.
-- [ ] Update `packages/test262-runner/README.md`'s skip inventory: two cases
-      skip on `feature:Compartment`, and one of them no longer should.
+- [x] Update `packages/test262-runner/README.md`'s skip inventory. Done, and
+      it needed more than a skip line: `Compartment` left
+      `DEFAULT_ENDOR_SKIP_FEATURES`, both cases now run, and neither became
+      covered.
+- [ ] Teach `Interp::render_uncaught` to label a thrown non-`Error` with its
+      constructor's `name`. Both hops are virtual properties, so it needs a
+      read-only path to those, not just another data-property walk. Would turn
+      the lane's one failure into an honest shared skip and let
+      `packages/hardened262/scripts/agents/ironhorse.js` drop its
+      `Test262Error.prototype.toString` rewrite.
+- [ ] Measure the corpus under `-c`/`-lc`. `new Compartment()` exists now, so
+      `SesMode::unimplemented_skip` no longer folds those modes for want of a
+      constructor — it folds them for want of a measurement.
 - [ ] Re-verify `ironhorse-262/tests/stage4_ses_boot.rs`. Its census bar is
       rewritten to REQUIRE `Compartment=function`, as its previous revision
       asked whoever landed a guest `Compartment` to do, but the bar skips
