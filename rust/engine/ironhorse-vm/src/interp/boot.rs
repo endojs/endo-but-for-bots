@@ -570,6 +570,20 @@ impl Interp {
                 .push((self.iterator_wrapper_proto, "next", wrapper_next));
             self.proto_methods
                 .push((self.iterator_wrapper_proto, "return", wrapper_return));
+            // `%IteratorHelperPrototype%` is shared by every instance the five
+            // lazy helpers return. It inherits the helper surface from
+            // `%Iterator.prototype%` (so `iter.map(f).filter(g)` chains) while
+            // keeping a distinct identity and its own `next`/`return`. Like the
+            // sibling built-in iterator prototypes above, its own
+            // `Symbol.toStringTag` is unread on the covered surface and omitted.
+            self.iterator_helper_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+            let helper_next = self.alloc_named_method(NativeMethod::IteratorHelperNext, "next", 0);
+            let helper_return =
+                self.alloc_named_method(NativeMethod::IteratorHelperReturn, "return", 0);
+            self.proto_methods
+                .push((self.iterator_helper_proto, "next", helper_next));
+            self.proto_methods
+                .push((self.iterator_helper_proto, "return", helper_return));
             for (op, (name, arity)) in [
                 ("map", 1u32),
                 ("filter", 1),

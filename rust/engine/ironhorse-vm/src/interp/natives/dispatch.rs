@@ -5628,9 +5628,17 @@ impl Interp {
             NativeMethod::IteratorHelper(op @ 5..=10) => {
                 self.iterator_terminal_helper(code, op, this, base, argc)?
             }
-            NativeMethod::IteratorHelper(_) => {
-                return Err(Step::Host(Halt::NotImplemented("Iterator.helper")));
+            NativeMethod::IteratorHelper(op @ 0..=4) => {
+                self.iterator_lazy_helper(code, op, this, base)?
             }
+            NativeMethod::IteratorHelper(_) => {
+                // `create_intrinsics` installs exactly eleven helpers, so an id
+                // outside 0..=10 can only come from a corrupted method
+                // identity, not from guest code.
+                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+            }
+            NativeMethod::IteratorHelperNext => self.iterator_helper_next(code, this)?,
+            NativeMethod::IteratorHelperReturn => self.iterator_helper_return(code, this)?,
             NativeMethod::Math(id) => self.call_math(id, base, argc, code)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
