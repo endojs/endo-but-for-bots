@@ -931,6 +931,20 @@ it; the two it does not reach are exactly the two that need the guest
 "reaches none of the SES-parity surface end-to-end", which were true when the set
 was the Compartment pair and have been stale since the six were added.)
 
+(Updated 2026-09-18: **`total=8 covered=7 divergent=0`**, one named skip
+remaining. Ironhorse now binds a guest `Compartment`
+(`designs/ironhorse-guest-compartment.md`), so
+`ironhorse-missing-global:Compartment` is gone and `Symbol.toStringTag.js` is
+covered end-to-end. The remaining skip is `1 oracle-shim-unsafe:lockdown` —
+the lockdown-tagged file, pre-partitioned and never dual-run for a reason about
+`lockdown()` rather than about `Compartment`, so the eighth case did not move
+and is not the guest `Compartment`'s to take. The sentence above that says "the
+two it does not reach are exactly the two that need the guest
+`Compartment`/`lockdown` globals" was half right: `Compartment` landing moved
+ONE of the two. The `compartment:intrinsic-surface` fold in the ledger below is
+correspondingly retired — Ironhorse's `Compartment` is no longer only a Rust
+host type.)
+
 **Consolidated fold ledger for s10 (each verified STILL an honest named skip at
 this closure point).**
 
