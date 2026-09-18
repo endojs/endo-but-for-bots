@@ -46,6 +46,17 @@ fn item_token(item: &Item) -> Option<Token> {
     }
 }
 
+/// What a `for` head's declaration list turned out to be, for the two
+/// questions `for_statement` cannot answer from the node stack alone.
+#[derive(Clone, Copy)]
+pub(crate) struct HeadBindings {
+    /// Some binding was a destructuring pattern with NO initializer.
+    pub(crate) bare_pattern: bool,
+    /// The list is exactly `var <BindingIdentifier> = <expr>`, the one shape
+    /// Annex B B.3.5 permits an initializer on in a `for-in` head.
+    pub(crate) annex_b_var_initializer: bool,
+}
+
 impl Parser<'_> {
     // ================= entry points =================
 
@@ -729,15 +740,16 @@ impl Parser<'_> {
         token: Token,
         binding_flags: u32,
         for_binding: bool,
-    ) -> PResult<bool> {
+    ) -> PResult<HeadBindings> {
         let line = self.cur.line;
         let mut comma_flag = false;
         let mut count = 0usize;
         let mut bare_pattern = false;
+        let mut identifier_target = false;
         self.match_token(token)?;
         while has_flag(self.cur.token, BEGIN_BINDING) {
             comma_flag = false;
-            self.binding(token, 1 | binding_flags)?;
+            identifier_target = self.binding(token, 1 | binding_flags)?;
             // `VariableDeclaration : BindingPattern Initializer` and
             // `LexicalBinding : BindingPattern Initializer` both REQUIRE the
             // initializer, so `var [a];` and `let {x};` are spec early errors.
@@ -782,7 +794,17 @@ impl Parser<'_> {
             self.push_node_list(count)?;
             self.push_node_struct(1, Token::Statements, line)?;
         }
-        Ok(bare_pattern)
+        Ok(HeadBindings {
+            bare_pattern,
+            // Annex B B.3.5 admits an initializer on a `for-in` head binding
+            // only for `var` + a single `BindingIdentifier`, in sloppy code.
+            // `count == 1` rules out a list and `identifier_target` rules out a
+            // pattern; `for_statement` checks the token, goal and strictness.
+            annex_b_var_initializer: token == Token::Var
+                && count == 1
+                && identifier_target
+                && self.top_token() == Some(Token::Binding),
+        })
     }
 
     // ================= for =================
@@ -794,7 +816,10 @@ impl Parser<'_> {
         // See `variable_statement`: a destructuring head binding with no
         // initializer is legal for `for-in`/`for-of` and an early error for the
         // three-part `for`, which is not known until the head is parsed.
-        let mut bare_pattern = false;
+        let mut head = HeadBindings {
+            bare_pattern: false,
+            annex_b_var_initializer: false,
+        };
         self.push_null();
         self.match_token(Token::For)?;
         if self.cur.token == Token::Await {
@@ -818,12 +843,12 @@ impl Parser<'_> {
         if self.cur.token == Token::Semicolon {
             self.push_null();
         } else if self.cur.token == Token::Const {
-            bare_pattern = self.variable_statement(Token::Const, 0, true)?;
+            head = self.variable_statement(Token::Const, 0, true)?;
         } else if self.cur.token == Token::Let {
-            bare_pattern = self.variable_statement(Token::Let, 0, true)?;
+            head = self.variable_statement(Token::Let, 0, true)?;
         } else if self.is_keyword("let")? && has_flag(self.ahead_token(), BEGIN_BINDING) {
             self.cur.token = Token::Let;
-            bare_pattern = self.variable_statement(Token::Let, 0, true)?;
+            head = self.variable_statement(Token::Let, 0, true)?;
         } else if self.cur.token == Token::Identifier
             && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("using")
             && !self.cur.escaped
@@ -846,7 +871,7 @@ impl Parser<'_> {
                 expression_flag = true;
             } else {
                 self.cur.token = Token::Using;
-                bare_pattern = self.variable_statement(Token::Using, 0, true)?;
+                head = self.variable_statement(Token::Using, 0, true)?;
             }
         } else if self.cur.token == Token::Await {
             let maybe_await_using = !self.ahead_crlf()
@@ -869,14 +894,14 @@ impl Parser<'_> {
             if is_await_using {
                 self.get_next_token()?;
                 self.cur.token = Token::Using;
-                bare_pattern = self.variable_statement(Token::Using, flags::AWAITING, true)?;
+                head = self.variable_statement(Token::Using, flags::AWAITING, true)?;
                 self.flags |= flags::AWAITING;
             } else {
                 self.comma_expression()?;
                 expression_flag = true;
             }
         } else if self.cur.token == Token::Var {
-            bare_pattern = self.variable_statement(Token::Var, 0, true)?;
+            head = self.variable_statement(Token::Var, 0, true)?;
         } else {
             self.comma_expression()?;
             expression_flag = true;
@@ -890,9 +915,23 @@ impl Parser<'_> {
                 if !self.check_reference(Token::Assign)? {
                     return Err(self.error("no reference"));
                 }
-            } else if self.top_token() == Some(Token::Binding) {
-                // A `for (const x = 1 in …)` head — an initializer on the
-                // loop binding is an early error.
+            } else if self.top_token() == Some(Token::Binding)
+                && !(self.cur.token == Token::In
+                    && head.annex_b_var_initializer
+                    && self.flags & flags::STRICT == 0)
+            {
+                // An initializer on the loop binding is an early error —
+                // `for (const x = 1 in …)`, `for (let x = 1 of …)`,
+                // `for (var [a] = [] in …)`.
+                //
+                // With ONE exception, which this arm used to refuse too:
+                // Annex B.3.5 keeps `for ( var BindingIdentifier Initializer
+                // in Expression )` legal in sloppy code, and the corpus relies
+                // on it (`language/statements/for-in/head-var-...`). It is
+                // `var` only, `in` only (never `of`), one binding only, an
+                // identifier target only, and non-strict only — `head` carries
+                // the first four, `flags::STRICT` the last. Module code is
+                // strict, so the flag covers that too.
                 return Err(self.error("invalid binding initializer"));
             } else if self.cur.token == Token::In && self.top_token() == Some(Token::Using) {
                 return Err(self.error("invalid using in"));
@@ -946,7 +985,7 @@ impl Parser<'_> {
             if expression_flag {
                 self.push_node_struct(1, Token::Statement, line)?;
             }
-            if bare_pattern {
+            if head.bare_pattern {
                 // `for (var [a];;)`. `ForBinding` never takes an initializer,
                 // so the pattern was let through above; a three-part `for`
                 // head is an ordinary `VariableStatement`/`LexicalDeclaration`,
@@ -979,12 +1018,17 @@ impl Parser<'_> {
     /// initializer. One [`STATEMENT_COST`] recursion point: a nested
     /// destructuring pattern (`[[[a]]]`, `{a: {b: {c}}}`) recurses here per
     /// level.
-    pub(crate) fn binding(&mut self, token: Token, flags_arg: u32) -> PResult<()> {
+    /// Returns whether the binding TARGET was a plain `BindingIdentifier`
+    /// rather than a destructuring pattern. Annex B B.3.5 admits an
+    /// initializer in a `for-in` head only for the identifier form, so
+    /// `for_statement` needs to tell them apart.
+    pub(crate) fn binding(&mut self, token: Token, flags_arg: u32) -> PResult<bool> {
         self.nested(STATEMENT_COST, |p| p.binding_inner(token, flags_arg))
     }
 
-    fn binding_inner(&mut self, token: Token, flags_arg: u32) -> PResult<()> {
+    fn binding_inner(&mut self, token: Token, flags_arg: u32) -> PResult<bool> {
         let line = self.cur.line;
+        let identifier_target = self.cur.token == Token::Identifier;
         if self.cur.token == Token::Identifier {
             let sym = self.cur.symbol.clone().unwrap_or_default();
             self.check_strict_symbol(&sym)?;
@@ -1020,7 +1064,7 @@ impl Parser<'_> {
             self.assignment_expression()?;
             self.push_node_struct(2, Token::Binding, line)?;
         }
-        Ok(())
+        Ok(identifier_target)
     }
 
     /// `fxArrayBinding` — `[ a, , ...rest ]` destructuring target.

@@ -152,6 +152,9 @@ fixed with it: `in` refused wherever a `[+In]` production should have reset the 
 (parentheses, arguments, computed members, template substitutions, arrow bodies), and
 `in` permitted inside a head declaration list that `[~In]` covers whole.
 `for_head_in_scope.rs` pins both directions.
+The Annex B `for-in` head initializer, pinned as refused by that pass, is now admitted
+in parser and coder together; it is recorded as an `over-acceptance` against the pinned
+oracle, which rejects a source test262 asserts and Node accepts.
 F063 stays open.
 Five checked-in matrices require all 17,534 generated compilations to succeed;
 180 runtime cases separately pin the changed logical-assignment behavior.

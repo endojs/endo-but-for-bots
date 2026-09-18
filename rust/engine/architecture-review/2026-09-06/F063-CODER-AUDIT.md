@@ -458,6 +458,86 @@ still refused. That is a separate pre-existing divergence.
 Compiling all 53,575 corpus sources in three modes still moves none of the
 160,725 outcomes, with these changes included.
 
+## Annex B.3.5: the one initializer a `for-in` head may keep
+
+`for ( var BindingIdentifier Initializer in Expression )` was refused outright.
+That was a conformance divergence rather than a fault, so the `[In]` pass above
+pinned it and moved on; this closes it.
+
+The grammar is narrow and each clause is load-bearing: `var` only, `in` only
+(never `of`), one binding, a `BindingIdentifier` target, sloppy code only.
+`variable_statement` returns those four in `HeadBindings` and `flags::STRICT`
+settles the fifth, module code being always strict.
+
+The parser half alone would have been worse than the refusal. It accepted the
+shape and the coder dropped the initializer, so `for (var x = 'init' in {}) ; x`
+evaluated to `undefined` and a side-effecting initializer never ran at all.
+`code_for_in_of` had been handing the whole `Binding` node to its own
+`code_assign`, whose `Binding` arm is the DESTRUCTURING-DEFAULT rule — take the
+supplied value unless it is `undefined`, otherwise evaluate the initializer — and
+a for-in key is never `undefined`, so the initializer was emitted inside the loop
+as dead code. It is now emitted once, before the head expression, and the loop
+targets the inner node. Accepting a shape the back end cannot execute is the
+same defect class as the rest of this finding, pointed at ourselves.
+
+`ironhorse-vm/tests/annex_b_for_in_initializer.rs` holds the four blocks of
+test262's `nonstrict-initializer.js` reduced to the values they assert, plus
+ordering and arity separately: the initializer runs exactly once, before the head
+expression, and its value is visible to that expression. Every expectation was
+checked against Node.
+
+### It is recorded as an over-acceptance, and that label understates it
+
+The pinned oracle REJECTS this source — `SyntaxError: missing ;` — so the harness
+files the disagreement as
+`over-acceptance: ironhorse completed a source the oracle rejected`, which is the
+category it also uses for genuine safety problems. Here it is the opposite:
+`annexB/language/statements/for-in/nonstrict-initializer.js` is a POSITIVE test
+asserting exactly the semantics implemented above, Node accepts it, and XS is
+the engine that is wrong.
+
+The committed shard moves from `fail:"error-message-differs:…"` to
+`fail:"over-acceptance:…"` — one recorded failure before and after, regenerated
+by the harness rather than hand-edited. The four sibling files the change also
+touches (`strict-initializer.js`, `var-arguments-{fn-,}strict-init.js`,
+`var-eval-strict-init.js`) are `flags: [onlyStrict]`, so the harness runs them
+only in strict mode, where behaviour is unchanged and they stay `pass`.
+
+This is the direction the whole-tree expectations have no vocabulary for. The
+error-model sweep has a `KNOWN_DIVERGENCES` list for exactly this; the whole-tree
+shards do not, and a future pass that wants the distinction should add one rather
+than read this line as a defect.
+
+It is not a stale pin. `c/moddable` is at `23b4d6b0` (2026-07-07, "version bump
+8.3.1"); upstream `public` had moved to `b6e06ba7` (2026-09-04) when this was
+checked, and `fxVariableStatement` is byte-identical between the two. The gap is
+live upstream behaviour.
+
+And upstream wrote this feature and disabled it. `fxVariableStatement` carries the
+Annex B initializer commented out in place:
+
+```c
+//  if (parser->states[0].token == XS_TOKEN_ASSIGN) {
+//      parser->flags &= ~mxForFlag;
+//      fxGetNextToken(parser);
+//      fxAssignmentExpression(parser);
+//      fxPushNodeStruct(parser, 2, XS_TOKEN_ASSIGN, aLine);
+//      fxPushNodeStruct(parser, 1, XS_TOKEN_STATEMENT, aLine);
+//  }
+```
+
+which is the mirror of the `for (let x, y in {})` precedent on this branch,
+where the oracle's own CHECK is commented out and it under-rejects. Here the
+oracle's own SUPPORT is commented out and it over-rejects. Two divergences from
+one habit, in opposite directions, and the reason a parity corpus cannot be the
+definition of correct on its own.
+
+Note the shape upstream intended differs from the one taken here: it pushes an
+`ASSIGN`/`STATEMENT` pair at the declaration level, where this emits the
+assignment in `code_for_in_of` ahead of the head expression. Both put the
+initializer before the enumeration; if the pin is ever bumped past a commit that
+re-enables that block, the two want reconciling rather than stacking.
+
 ## Remaining twenty-one explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.
