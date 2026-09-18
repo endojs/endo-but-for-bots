@@ -8,37 +8,51 @@ import { makePublishTool } from '../src/publish-tool.js';
 const makeAssetServer = () => {
   const served = [];
   const revoked = [];
+  const standing = new Map();
   let counter = 0;
-  const server = Far('AssetServer', {
-    async serve(filesystem) {
-      // The real server refuses a cap that cannot answer root(); mirror that,
-      // so a projection regression fails here rather than 404ing in
+  const server = Far('AssetPublisher', {
+    async serve(target, options = {}) {
+      // The real server classifies what it is handed — Filesystem, Mount or
+      // Git workspace — takes its own read-only facet, and refuses the rest;
+      // mirror the refusal, so a regression fails here rather than in
       // production.
       // eslint-disable-next-line no-underscore-dangle
-      const names = await E(filesystem).__getMethodNames__();
-      if (!names.includes('root')) {
-        throw Error('serve requires a Filesystem cap with a root() method');
+      const names = await E(target).__getMethodNames__();
+      if (
+        !names.includes('root') &&
+        !names.includes('worktree') &&
+        !names.includes('lookup')
+      ) {
+        throw Error('serve requires a Filesystem, Mount or Git capability');
       }
       counter += 1;
+      const id = `${counter}`.padStart(32, '0');
       const url = `http://host/token-${counter}/`;
-      served.push({ filesystem, url });
+      served.push({ target, url, label: options.label });
+      standing.set(id, url);
       const revoke = Far('AssetMount', {
         async revoke() {
+          standing.delete(id);
           revoked.push(url);
         },
       });
-      return harden({ path: `/token-${counter}/`, url, revoke });
+      return harden({ id, path: `/token-${counter}/`, url, revoke });
+    },
+    async describe(id) {
+      return standing.has(id) ? harden({ id, url: standing.get(id) }) : undefined;
+    },
+    async release(id) {
+      if (!standing.has(id)) return false;
+      revoked.push(standing.get(id));
+      standing.delete(id);
+      return true;
     },
   });
-  return { server, served, revoked };
+  // What a restart of an in-memory server, or an administrator, does.
+  const forget = () => standing.clear();
+  return { server, served, revoked, forget };
 };
 
-/**
- * The publisher refuses a workspace whose root has no readable index, because
- * the asset server resolves a directory request to one and a mount without it
- * 404s on every request. So every fake below carries an `index.html`; the
- * `withIndex: false` form is what the refusal is tested against.
- */
 const INDEX = 'index.html';
 
 /** A Mount child shaped like a MountFile: `text` is what marks it a file. */
@@ -129,32 +143,32 @@ test('publishWorkspace serves the workspace and returns its capability URL', asy
   const result = await E(tool).execute({});
   t.regex(result, /http:\/\/host\/token-1\//);
   t.is(asset.served.length, 1);
-  // A Filesystem is already servable, so it is handed over untouched.
-  t.is(asset.served[0].filesystem, workspace);
+  // The workspace cap itself is handed over: the server takes its own
+  // read-only facet of it and retains that.
+  t.is(asset.served[0].target, workspace);
 });
 
-test('a git workspace is served through its read-only worktree', async t => {
-  // The regression this pins: a session's `git-workspace` preset object is an
-  // `@endo/exo-git` cap with no `root()`, so serving it directly minted a URL
-  // that 404'd on every request.
+test('a git workspace is handed to the server as the durable cap it is', async t => {
+  // The server retains what it serves, and it can only retain a cap the
+  // daemon minted: the session's `git-workspace` object, not a view of it
+  // built in this worker, which would not outlive the worker. The projection
+  // here is only the check that the root resolves.
   const asset = makeAssetServer();
   const { git } = makeGitCap();
   const tool = makePublishTool({
     getAssetServer: async () => asset.server,
     getWorkspace: async () => git,
+    label: 'floot session s1',
   });
 
   const result = await E(tool).execute({});
   t.regex(result, /http:\/\/host\/token-1\//);
   t.is(asset.served.length, 1);
-  t.not(asset.served[0].filesystem, git);
-  // eslint-disable-next-line no-underscore-dangle
-  const names = await E(asset.served[0].filesystem).__getMethodNames__();
-  t.true(names.includes('root'), 'the served cap answers root()');
-  t.true(names.includes('statfs'));
+  t.is(asset.served[0].target, git);
+  t.is(asset.served[0].label, 'floot session s1');
 });
 
-test('a Mount workspace is served through its read-only face', async t => {
+test('a Mount workspace is handed over as it is, too', async t => {
   const asset = makeAssetServer();
   const mount = makeMountCap();
   const tool = makePublishTool({
@@ -164,10 +178,7 @@ test('a Mount workspace is served through its read-only face', async t => {
 
   await E(tool).execute({});
   t.is(asset.served.length, 1);
-  t.not(asset.served[0].filesystem, mount);
-  // eslint-disable-next-line no-underscore-dangle
-  const names = await E(asset.served[0].filesystem).__getMethodNames__();
-  t.true(names.includes('root'));
+  t.is(asset.served[0].target, mount);
 });
 
 test('an unservable workspace is reported, not served', async t => {
@@ -201,7 +212,10 @@ test('a failed projection leaves the previous publication serving', async t => {
   t.deepEqual(asset.revoked, [], 'the working mount was not revoked');
 });
 
-test('re-publishing revokes the previous mount before serving again', async t => {
+test('publishing again reports the standing URL and mints nothing', async t => {
+  // The served tree is the live workspace, so a second publish has nothing
+  // to refresh; a second URL for the same files would be one more route to
+  // leak.
   const asset = makeAssetServer();
   const workspace = makeFilesystemCap();
   const tool = makePublishTool({
@@ -209,14 +223,69 @@ test('re-publishing revokes the previous mount before serving again', async t =>
     getWorkspace: async () => workspace,
   });
 
-  await E(tool).execute({});
-  await E(tool).execute({});
-  // The first URL was revoked when the second publish happened.
+  const first = await E(tool).execute({});
+  const second = await E(tool).execute({});
+  t.is(first, second);
+  t.is(asset.served.length, 1);
+  t.deepEqual(asset.revoked, []);
+});
+
+test('the publication is the session’s: a rebuilt tool finds it, and only deletion releases it', async t => {
+  const asset = makeAssetServer();
+  /** @type {any} */
+  let recorded;
+  const make = () =>
+    makePublishTool({
+      getAssetServer: async () => asset.server,
+      getWorkspace: async () => makeFilesystemCap(),
+      loadPublication: async () => recorded,
+      savePublication: async publication => {
+        recorded = publication;
+      },
+    });
+
+  t.regex(await E(make()).execute({}), /token-1/);
+  t.deepEqual(recorded, { id: '1'.padStart(32, '0'), url: 'http://host/token-1/' });
+  // A new instance — a revived agent, a restarted daemon — serves nothing.
+  const rebuilt = make();
+  t.regex(await E(rebuilt).execute({}), /token-1/);
+  t.is(asset.served.length, 1);
+  t.deepEqual(asset.revoked, []);
+
+  await rebuilt.revoke();
   t.deepEqual(asset.revoked, ['http://host/token-1/']);
+  t.is(recorded, undefined);
+  await rebuilt.revoke();
+  t.is(asset.revoked.length, 1, 'idempotent');
+});
+
+test('a publication the server no longer has is served again', async t => {
+  const asset = makeAssetServer();
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeFilesystemCap(),
+  });
+  t.regex(await E(tool).execute({}), /token-1/);
+  asset.forget();
+  t.regex(await E(tool).execute({}), /token-2/);
   t.is(asset.served.length, 2);
 });
 
-test('revoke() releases the served mount on session teardown', async t => {
+test('a publication that cannot be recorded is released, not left serving', async t => {
+  const asset = makeAssetServer();
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeFilesystemCap(),
+    loadPublication: async () => undefined,
+    savePublication: async () => {
+      throw Error('registry is read-only');
+    },
+  });
+  t.regex(await E(tool).execute({}), /could not be recorded/);
+  t.deepEqual(asset.revoked, ['http://host/token-1/']);
+});
+
+test('revoke() releases the served route on session teardown', async t => {
   const asset = makeAssetServer();
   const tool = makePublishTool({
     getAssetServer: async () => asset.server,
@@ -255,23 +324,21 @@ test('the asset server is resolved per publish, so a late binding is found', asy
   t.regex(await E(tool).execute({}), /http:\/\/host\/token-1\//);
 });
 
-test('concurrent publishes serialize, so neither served mount leaks', async t => {
+test('concurrent publishes serialize into one route', async t => {
   const asset = makeAssetServer();
   const tool = makePublishTool({
     getAssetServer: async () => asset.server,
     getWorkspace: async () => makeFilesystemCap(),
   });
   // Both start before either resolves. Unserialized, each would find no
-  // current mount, serve its own, and only the last would be retained — the
-  // first never revoked.
+  // publication, serve its own, and only the last would be recorded — the
+  // first never released.
   const first = E(tool).execute({});
   const second = E(tool).execute({});
-  await first;
-  await second;
-  t.is(asset.served.length, 2);
-  t.deepEqual(asset.revoked, ['http://host/token-1/']);
+  t.is(await first, await second);
+  t.is(asset.served.length, 1);
   await tool.revoke();
-  t.deepEqual(asset.revoked, ['http://host/token-1/', 'http://host/token-2/']);
+  t.deepEqual(asset.revoked, ['http://host/token-1/']);
 });
 
 test('a workspace with no readable index is refused, not published', async t => {

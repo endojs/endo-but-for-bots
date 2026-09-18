@@ -16,41 +16,73 @@ import { M } from '@endo/patterns';
 /**
  * Revoker handle for a single `serve(...)` mount. The unguessable
  * `path` is itself the capability — anyone who can reach the server
- * and knows the path can read the served Filesystem until the mount
+ * and knows the path can read the served tree until the mount
  * is revoked.
  */
 export const AssetMountInterface = M.interface('AssetMount', {
-  // Stop serving the Filesystem at this mount. Idempotent.
-  revoke: M.call().returns(M.undefined()),
-  // The capability path segment under which the Filesystem is served,
+  // Stop serving at this mount and release what the server retained for it.
+  // Idempotent. Async: a durable store forgets the item too.
+  revoke: M.call().returns(M.promise()),
+  // The capability path segment under which the tree is served,
   // e.g. `/_h7Qd.../`.
   getPath: M.call().returns(M.string()),
-  // The full URL (origin + path) the Filesystem is served at.
+  // The full URL (origin + path) the tree is served at.
   getUrl: M.call().returns(M.string()),
   isRevoked: M.call().returns(M.boolean()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
+// `serve(target, opts)`: `target` is a Filesystem, Mount or Git capability.
+// `M.remotable` does not check an interface name; the server classifies the
+// capability by the methods it answers and refuses anything else before it
+// retains it or mints a URL.
+const serveGuard = M.call(M.eref(M.remotable()))
+  .optional(M.record())
+  .returns(M.promise());
+
 /**
- * The static asset server. `serve(filesystem, opts)` verifies the cap answers
- * `root()`, mints a fresh capability path, registers the Filesystem under it,
- * and resolves to a record `{ path, url, revoke }`; the mount persists until
- * `revoke.revoke()` (or the server stops). `getAddress()` reports the
- * bound host/port and public origin.
+ * The serve-only facet: what is handed to something that has a tree to
+ * publish. It cannot list what others published, and `release` and
+ * `describe` answer only for an `id` that `serve` returned.
+ */
+export const AssetPublisherInterface = M.interface('AssetPublisher', {
+  serve: serveGuard,
+  release: M.call(M.string()).returns(M.promise()),
+  describe: M.call(M.string()).returns(M.or(M.record(), M.undefined())),
+  getAddress: M.call().returns(M.record()),
+  help: M.call().optional(M.string()).returns(M.string()),
+});
+
+/**
+ * The operator's facet. It reads — `list()`, and `getTarget(id)` for the
+ * read-only facet a route serves — and it removes. It has no way to change
+ * what a route serves.
+ */
+export const AssetServerAdminInterface = M.interface('AssetServerAdmin', {
+  list: M.call().returns(M.array()),
+  getTarget: M.call(M.string()).returns(M.promise()),
+  revoke: M.call(M.string()).returns(M.promise()),
+  publisher: M.call().returns(M.remotable('AssetPublisher')),
+  getAddress: M.call().returns(M.record()),
+  stop: M.call().returns(M.promise()),
+  help: M.call().optional(M.string()).returns(M.string()),
+});
+
+/**
+ * The whole server as one facet, for embedders and tests that hold all of it:
+ * `serve(target, opts)` resolves to `{ id, path, url, revoke }`, and the mount
+ * lasts until `revoke.revoke()`. `getAddress()` reports the bound host/port
+ * and public origin.
  *
- * `sloppy: true` so future convenience methods (e.g. listing mounts)
- * can land without an interface bump.
+ * `sloppy: true` so future convenience methods can land without an
+ * interface bump.
  */
 export const AssetServerInterface = M.interface(
   'AssetServer',
   {
-    // Async: the cap is probed for `root()` before a URL is minted, so an
-    // unservable capability is refused at serve time instead of 404ing on
-    // every request. `M.remotable` does not check an interface name, and this
-    // server walks a Filesystem's `root()`, so the probe is the only check.
-    serve: M.call(M.eref(M.remotable('Filesystem')))
-      .optional(M.record())
-      .returns(M.promise()),
+    serve: serveGuard,
+    release: M.call(M.string()).returns(M.promise()),
+    describe: M.call(M.string()).returns(M.or(M.record(), M.undefined())),
     getAddress: M.call().returns(M.record()),
     stop: M.call().returns(M.promise()),
     help: M.call().optional(M.string()).returns(M.string()),

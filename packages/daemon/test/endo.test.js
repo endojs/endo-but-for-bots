@@ -7555,6 +7555,42 @@ test('provideSubMount read-only attenuation confines writes', async t => {
   t.deepEqual(actual, ['main.js']);
 });
 
+test('provideSubMount takes the parent as a capability and refuses a derived view', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-cap');
+  await createMountFixture(mountPath, {
+    'index.html': '<p>hello</p>\n',
+  });
+
+  // A holder that was handed the mount, not its name: another agent.
+  const parent = await E(host).provideMount(mountPath, 'submount-cap-parent');
+  await E(host).provideHost('submount-cap-holder');
+  const holder = await E(host).lookup(['submount-cap-holder']);
+  t.false(await E(holder).has('submount-cap-parent'));
+
+  const child = await E(holder).provideSubMount(parent, [], 'retained', {
+    readOnly: true,
+  });
+  t.deepEqual(await E(child).list(), ['index.html']);
+  await t.throwsAsync(E(child).writeText(['added.html'], 'nope'), {
+    message: /read-only/,
+  });
+  // It is named where the holder asked, so the holder retains it.
+  t.true(await E(holder).has('retained'));
+  const again = await E(holder).lookup(['retained']);
+  t.is(await E(await E(again).lookup('index.html')).text(), '<p>hello</p>\n');
+
+  // A view derived from the mount has no formula and cannot be a parent:
+  // what is retained must be something the daemon can revive.
+  const view = await E(parent).readOnly();
+  await t.throwsAsync(
+    E(holder).provideSubMount(view, [], 'from-view', { readOnly: true }),
+    { message: /daemon-minted mount cap/ },
+  );
+  t.false(await E(holder).has('from-view'));
+});
+
 test('provideSubMount isolates the child from parent siblings', async t => {
   const { host, config } = await prepareHost(t);
 

@@ -2899,15 +2899,33 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return undefined;
   };
 
-  // Per-session bounded workspace publishers. Held so the served mount can be
-  // revoked when the session is rebuilt or deleted.
+  // Per-session bounded workspace publishers. A publication is the session's
+  // and is recorded in its registry entry; it is released when the session is
+  // deleted, by the session's tool instance if this incarnation built one and
+  // from the record if it did not (a stopped session has no agent).
   /** @type {Map<string, { revoke: () => Promise<void> }>} */
   const publishers = new Map();
   const stopPublisher = async id => {
     const publisher = publishers.get(id);
-    if (publisher) {
-      publishers.delete(id);
-      await publisher.revoke().catch(() => {});
+    publishers.delete(id);
+    try {
+      if (publisher) {
+        await publisher.revoke();
+        return;
+      }
+      // eslint-disable-next-line no-use-before-define
+      const entry = (await loadRegistry()).find(session => session.id === id);
+      if (!entry?.publication) return;
+      const assetServer = await getAssetServer();
+      if (!assetServer) throw Error('no asset server is bound');
+      await E(assetServer).release(entry.publication.id);
+    } catch (error) {
+      // The route outlives a session that could not release it; say which,
+      // so the asset server's administrator can drop it.
+      console.error(
+        `[floot-factory] published route for deleted session ${id} was not released (its label is "floot session ${id}"):`,
+        error instanceof Error ? error.message : String(error),
+      );
     }
   };
   /**
@@ -2925,9 +2943,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
    * @returns {Promise<Map<string, any>>}
    */
   const buildExtraTools = async (id, sessionGuest, preset) => {
-    // A fresh agent replaces the tool instance, so drop the prior publisher
-    // (and its served mount) first.
-    await stopPublisher(id);
+    // A fresh agent replaces the tool instance and nothing else: the
+    // publication belongs to the session, is recorded with it, and is served
+    // by the asset server whether or not any tool instance exists. It ends
+    // when the session is deleted (`stopPublisher`).
     const workspaceObject = preset.objects.find(
       object => object.kind === 'git-workspace',
     );
@@ -2940,6 +2959,22 @@ export const make = (hostPowers, _context, { env } = {}) => {
         }
         return undefined;
       },
+      loadPublication: async () => {
+        const entry = (await loadRegistry()).find(session => session.id === id);
+        return entry?.publication;
+      },
+      savePublication: async publication => {
+        const reg = await loadRegistry();
+        /** @type {number} */
+        const index = reg.findIndex(session => session.id === id);
+        if (index < 0) throw Error('Unknown Floot session');
+        const { publication: _previous, ...rest } = reg[index];
+        reg[index] = harden(
+          publication ? { ...rest, publication } : { ...rest },
+        );
+        await saveRegistry();
+      },
+      label: `floot session ${id}`,
     });
     publishers.set(id, { revoke: publishTool.revoke });
     return new Map([['publishWorkspace', publishTool]]);
@@ -3262,7 +3297,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string, executionState?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url: string } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;

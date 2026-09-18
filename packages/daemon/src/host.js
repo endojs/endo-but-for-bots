@@ -1179,12 +1179,31 @@ export const makeHostMaker = ({
       options = {},
     ) => {
       const { readOnly = false } = options;
-      const parentNamePath = namePathFrom(mountName);
-      const mountId = await E(directory).identify(...parentNamePath);
-      if (mountId === undefined) {
-        throw makeError(
-          X`provideSubMount: unknown parent mount ${q(mountName)}`,
-        );
+      /** @type {string | undefined} */
+      let mountId;
+      if (typeof mountName === 'string' || Array.isArray(mountName)) {
+        const parentNamePath = namePathFrom(mountName);
+        mountId = await E(directory).identify(...parentNamePath);
+        if (mountId === undefined) {
+          throw makeError(
+            X`provideSubMount: unknown parent mount ${q(mountName)}`,
+          );
+        }
+      } else {
+        // The parent as a capability rather than a name, as `provideGit` and
+        // `provideShell` take theirs: a holder of a mount it was handed, and
+        // never had a name for, can still derive a narrower durable mount
+        // from it. CapTP round-trips preserve exo identity, so only a mount
+        // this daemon minted resolves; a view derived from one (`readOnly()`,
+        // `subView()`) has no formula and is refused. What is derived can
+        // only narrow: `formulateSubMount` clamps the path beneath the
+        // parent's root and never lifts a read-only parent.
+        mountId = getIdForRef(await mountName);
+        if (mountId === undefined) {
+          throw makeError(
+            X`provideSubMount: parent must be a pet name or a daemon-minted mount cap`,
+          );
+        }
       }
       const { namePath } = petNamePathFrom(newName);
 

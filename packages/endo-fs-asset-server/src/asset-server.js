@@ -41,9 +41,16 @@ import { makeExo } from '@endo/exo';
 import { makeError, X, q } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeHttpServer } from '@endo/platform/http/server';
+import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
+import { readOnly as readOnlyFilesystem } from '@endo/platform/fs/extended/readonly.js';
 
 import { contentTypeForName } from './mime.js';
-import { AssetServerInterface, AssetMountInterface } from './type-guards.js';
+import {
+  AssetServerInterface,
+  AssetServerAdminInterface,
+  AssetPublisherInterface,
+  AssetMountInterface,
+} from './type-guards.js';
 
 /** @import { HttpRequest, HttpResponse } from '@endo/platform/http/server' */
 
@@ -117,13 +124,172 @@ const toBase64Url = bytes => {
 };
 
 /**
- * @typedef {object} AssetMount
- * @property {object} filesystem  endo-fs Filesystem cap (or eref).
- * @property {string[]} basePath  sub-path within the Filesystem that
- *   the mount is rooted at.
- * @property {string} index  directory index file name.
- * @property {boolean} revoked
+ * What a served capability is, which decides how a read-only facet is taken
+ * of it and how that facet is walked.
+ *
+ * @typedef {'filesystem' | 'mount' | 'git'} AssetKind
  */
+
+/**
+ * The pure-data record of one served item: everything but the capability.
+ * This is what a store persists; `token` is the capability path and is kept
+ * so an administrator can be shown a URL again.
+ *
+ * @typedef {object} AssetRecord
+ * @property {1} version
+ * @property {string} id  unguessable handle for revoking; never in a URL.
+ * @property {string} token  the capability path segment.
+ * @property {AssetKind} kind
+ * @property {string[]} subPath  sub-path the mount is rooted at.
+ * @property {string} index  directory index file name.
+ * @property {string} label  free text for the administrator.
+ * @property {number} createdAt  epoch milliseconds.
+ */
+
+/**
+ * Where served items live. The server is the retention root for what it
+ * serves: `retain` takes a READ-ONLY facet of the capability it is handed and
+ * keeps that facet, and nothing else of the capability, until `release`. A
+ * durable store (see `asset-server-module.js`) keeps it across restarts; the
+ * default keeps it in memory, for tests and embedders with no store.
+ *
+ * @typedef {object} AssetStore
+ * @property {(id: string, target: object, kind: AssetKind) => Promise<object>} retain
+ *   Take a read-only facet of `target`, retain it under `id`, return it.
+ * @property {(record: AssetRecord) => Promise<void>} record
+ * @property {() => Promise<AssetRecord[]>} load  every record, any order.
+ * @property {(id: string, kind: AssetKind) => Promise<object>} recall
+ *   the retained read-only facet.
+ * @property {(id: string) => Promise<void>} release  forget facet and record.
+ */
+
+/**
+ * @typedef {object} AssetEntry
+ * @property {AssetRecord} record
+ * @property {'ready' | 'restoring' | 'unavailable'} status
+ * @property {string} [error]
+ * @property {() => Promise<object>} filesystem  the walkable Filesystem.
+ * @property {() => Promise<object>} facet  the retained read-only facet.
+ */
+
+/**
+ * Tell a Filesystem from a Mount from a Git workspace by the methods it
+ * answers, the way `@endo/space-file-explorer` does. A capability that is none
+ * of them is refused here, before anything is retained or a URL minted.
+ *
+ * @param {object} target
+ * @returns {Promise<AssetKind>}
+ */
+export const classifyAssetTarget = async target => {
+  let names;
+  try {
+    // eslint-disable-next-line no-underscore-dangle
+    names = new Set(await E(target).__getMethodNames__());
+  } catch (cause) {
+    throw makeError(
+      X`serve requires a Filesystem, Mount or Git capability; the given capability could not be introspected: ${q(/** @type {Error} */ (cause).message)}`,
+    );
+  }
+  if (names.has('root') && names.has('statfs')) return 'filesystem';
+  if (names.has('worktree') && names.has('status') && names.has('commit')) {
+    return 'git';
+  }
+  if (
+    names.has('lookup') &&
+    names.has('readOnly') &&
+    (names.has('makeDirectory') || names.has('writeText') || names.has('list'))
+  ) {
+    return 'mount';
+  }
+  throw makeError(
+    X`serve requires a Filesystem, Mount or Git capability; got one with methods ${q([...names].sort())}`,
+  );
+};
+harden(classifyAssetTarget);
+
+/**
+ * A read-only facet of `target`, not retained anywhere: what a store with no
+ * durable attenuator keeps. A Git workspace is reduced to the read-only view
+ * of its worktree, so what is served is the files as they are now, not the
+ * last commit.
+ *
+ * @param {object} target
+ * @param {AssetKind} kind
+ * @returns {Promise<object>}
+ */
+export const takeReadOnlyFacet = async (target, kind) => {
+  await null;
+  if (kind === 'filesystem') return readOnlyFilesystem(target);
+  if (kind === 'git') return E(E(target).readOnly()).worktree();
+  return E(target).readOnly();
+};
+harden(takeReadOnlyFacet);
+
+/**
+ * The Filesystem the request path walks, over a retained read-only facet.
+ *
+ * @param {object} facet
+ * @param {AssetKind} kind
+ */
+const walkable = (facet, kind) =>
+  kind === 'filesystem'
+    ? readOnlyFilesystem(facet)
+    : mountAsFilesystem(facet, { posture: 'readOnly' });
+
+/** @returns {AssetStore} */
+const makeMemoryStore = () => {
+  /** @type {Map<string, object>} */
+  const facets = new Map();
+  /** @type {Map<string, AssetRecord>} */
+  const records = new Map();
+  return harden({
+    retain: async (id, target, kind) => {
+      const facet = await takeReadOnlyFacet(target, kind);
+      facets.set(id, facet);
+      return facet;
+    },
+    record: async record => {
+      records.set(record.id, record);
+    },
+    load: async () => [...records.values()],
+    recall: async id => {
+      const facet = facets.get(id);
+      if (facet === undefined) throw makeError(X`no retained facet for ${q(id)}`);
+      return facet;
+    },
+    release: async id => {
+      facets.delete(id);
+      records.delete(id);
+    },
+  });
+};
+
+const toHex = bytes =>
+  Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+
+/**
+ * @param {unknown} record
+ * @returns {record is AssetRecord}
+ */
+const isAssetRecord = record => {
+  const r = /** @type {any} */ (record);
+  return (
+    r !== null &&
+    typeof r === 'object' &&
+    r.version === 1 &&
+    typeof r.id === 'string' &&
+    /^[0-9a-f]{32}$/.test(r.id) &&
+    typeof r.token === 'string' &&
+    /^[A-Za-z0-9_-]{16,}$/.test(r.token) &&
+    ['filesystem', 'mount', 'git'].includes(r.kind) &&
+    Array.isArray(r.subPath) &&
+    r.subPath.every(seg => typeof seg === 'string') &&
+    typeof r.index === 'string' &&
+    r.index !== '' &&
+    typeof r.label === 'string' &&
+    typeof r.createdAt === 'number'
+  );
+};
 
 /**
  * An async iterable over a file's bytes, suitable as an
@@ -169,7 +335,24 @@ const readFileBody = async function* readFileBody(fileNode, size) {
 };
 
 /**
- * Build a static asset server over an injected platform HTTP backend.
+ * Build a static asset server over an injected platform HTTP backend, as a kit
+ * of facets over one route table:
+ *
+ * - `admin` — for whoever operates the server: list what is served, reach an
+ *   item's retained read-only facet, drop a route, stop the server, and hand
+ *   out `publisher()`. It cannot change what a route serves; the only
+ *   mutation is removal.
+ * - `publisher` — for whoever has something to serve: `serve(target)` and the
+ *   release of an item by the `id` `serve` returned. It cannot list, and
+ *   cannot reach anything it was not handed an `id` for.
+ * - `server` — the two together with `stop()`, for embedders and tests that
+ *   hold the whole server anyway.
+ *
+ * The server is the retention root for what it serves. On receipt `serve`
+ * takes a read-only facet of the capability and that facet is all it keeps;
+ * with a durable `store` the facet and the route survive a restart, and the
+ * routes are restored here, before the listener opens, with no help from
+ * whoever published them.
  *
  * @param {object} opts
  * @param {import('@endo/platform/http/server').HttpBackend} opts.backend
@@ -188,15 +371,20 @@ const readFileBody = async function* readFileBody(fileNode, size) {
  *   a proxy. Defaults to `http://{host}:{port}`.
  * @param {number} [opts.tokenBytes]  entropy per capability path;
  *   defaults to 24 bytes (192 bits).
- * @returns {Promise<object>} an `AssetServer` exo.
+ * @param {AssetStore} [opts.store]  where served items are retained;
+ *   defaults to memory, which survives nothing.
+ * @param {() => number} [opts.now]
+ * @returns {Promise<{ admin: object, publisher: object, server: object }>}
  */
-export const makeAssetServer = async ({
+export const makeAssetServerKit = async ({
   backend,
   getRandomValues,
   port = 0,
   host = '127.0.0.1',
   publicBase = undefined,
   tokenBytes = 24,
+  store = makeMemoryStore(),
+  now = Date.now,
 }) => {
   if (typeof backend !== 'function') {
     throw makeError(X`makeAssetServer requires a platform http backend`);
@@ -205,11 +393,66 @@ export const makeAssetServer = async ({
     throw makeError(X`makeAssetServer requires a getRandomValues power`);
   }
 
-  /** @type {Map<string, AssetMount>} */
+  /** Routes by capability path token. @type {Map<string, AssetEntry>} */
   const mounts = new Map();
+  /** The same entries by id. @type {Map<string, AssetEntry>} */
+  const entries = new Map();
 
   const mintToken = () =>
     toBase64Url(getRandomValues(new Uint8Array(tokenBytes)));
+  const mintId = () => toHex(getRandomValues(new Uint8Array(16)));
+
+  /**
+   * An entry whose Filesystem is resolved from the store on demand, one
+   * attempt at a time. A failed attempt is not cached: the next request tries
+   * again, so a target that was briefly unreachable comes back by itself.
+   *
+   * @param {AssetRecord} record
+   * @param {object} [knownFacet]
+   * @returns {AssetEntry}
+   */
+  const makeEntry = (record, knownFacet = undefined) => {
+    /** @type {object | undefined} */
+    let facet = knownFacet;
+    /** @type {object | undefined} */
+    let filesystem =
+      knownFacet === undefined ? undefined : walkable(knownFacet, record.kind);
+    /** @type {Promise<object> | undefined} */
+    let flight;
+    /** @type {AssetEntry} */
+    const entry = {
+      record,
+      status: knownFacet === undefined ? 'restoring' : 'ready',
+      facet: async () => {
+        await entry.filesystem();
+        return /** @type {object} */ (facet);
+      },
+      filesystem: () => {
+        if (filesystem !== undefined) return Promise.resolve(filesystem);
+        flight ??= (async () => {
+          try {
+            facet = await store.recall(record.id, record.kind);
+            const candidate = walkable(facet, record.kind);
+            // Prove it answers before calling it ready: a facet whose
+            // backing is gone resolves and then fails every walk.
+            await E(candidate).root();
+            filesystem = candidate;
+            entry.status = 'ready';
+            entry.error = undefined;
+            return candidate;
+          } catch (cause) {
+            entry.status = 'unavailable';
+            entry.error = String(/** @type {Error} */ (cause)?.message || cause);
+            throw cause;
+          } finally {
+            flight = undefined;
+          }
+        })();
+        return flight;
+      },
+    };
+    return entry;
+  };
 
   /**
    * The platform HTTP request handler: resolve `/{token}/path` to a
@@ -249,9 +492,26 @@ export const makeAssetServer = async ({
     }
 
     const token = rawSegments[0];
-    const mount = token ? mounts.get(token) : undefined;
-    if (!mount || mount.revoked) {
+    const entry = token ? mounts.get(token) : undefined;
+    if (!entry) {
       return plainResponse(404, 'Not found\n');
+    }
+    const mount = entry.record;
+    let filesystem;
+    try {
+      filesystem = await entry.filesystem();
+    } catch {
+      // The route exists and its target does not answer: not a 404, which
+      // would tell a visitor the link is wrong, and retried on the next
+      // request.
+      return {
+        status: 503,
+        headers: [
+          ['Content-Type', 'text/plain; charset=utf-8'],
+          ['Retry-After', '5'],
+        ],
+        body: textEncoder.encode('Temporarily unavailable\n'),
+      };
     }
 
     /** @type {string[]} */
@@ -271,10 +531,10 @@ export const makeAssetServer = async ({
     let size;
     let fileName = pathSegments[pathSegments.length - 1] || mount.index;
     try {
-      const segments = [...mount.basePath, ...pathSegments];
+      const segments = [...mount.subPath, ...pathSegments];
       // Pipeline the walk: never await between segments so the whole
       // root -> lookup -> lookup chain dispatches in one CapTP batch.
-      let node = /** @type {any} */ (E(mount.filesystem).root());
+      let node = /** @type {any} */ (E(filesystem).root());
       for (const seg of segments) {
         node = E(node).lookup(seg);
       }
@@ -340,98 +600,199 @@ export const makeAssetServer = async ({
 
   let stopped = false;
 
+  const urlFor = token => `${origin}/${token}/`;
+
+  // Restore what the store retained, before anyone can publish or ask. The
+  // facets resolve in the background: a target that cannot be revived must
+  // not hold the listener, or the other routes, hostage.
+  for (const record of await store.load()) {
+    if (isAssetRecord(record) && !mounts.has(record.token)) {
+      const entry = makeEntry(record);
+      mounts.set(record.token, entry);
+      entries.set(record.id, entry);
+      entry.filesystem().catch(() => {});
+    }
+  }
+
   /**
-   * Mount a Filesystem under a fresh capability path. Async because the cap is
-   * verified to answer `root()` before a URL is minted for it.
+   * Drop a route and what it retained. The route goes first, so a release
+   * that fails in the store still stops the serving.
    *
-   * @param {object} filesystem  endo-fs Filesystem cap (or eref).
+   * @param {string} id
+   */
+  const drop = async id => {
+    const entry = entries.get(id);
+    if (!entry) return false;
+    mounts.delete(entry.record.token);
+    entries.delete(id);
+    await store.release(id);
+    return true;
+  };
+
+  /**
+   * Serve a Filesystem, Mount or Git capability under a fresh capability
+   * path. The server takes a read-only facet of it on receipt and retains
+   * that; nothing is served, and no URL is minted, for a capability it could
+   * not retain or cannot walk.
+   *
+   * @param {object} target
    * @param {object} [serveOpts]
    * @param {string | string[]} [serveOpts.subPath]  sub-path within
-   *   the Filesystem to serve as the mount root.
+   *   the target to serve as the mount root.
    * @param {string} [serveOpts.index]  directory index file name;
    *   defaults to `index.html`.
+   * @param {string} [serveOpts.label]  free text shown to the administrator.
    */
-  const serve = async (filesystem, serveOpts = {}) => {
+  const serve = async (target, serveOpts = {}) => {
     await null;
     if (stopped) {
       throw makeError(X`asset-server has been stopped`);
     }
-    if (filesystem === undefined || filesystem === null) {
-      throw makeError(X`serve requires a Filesystem cap`);
+    if (target === undefined || target === null) {
+      throw makeError(X`serve requires a Filesystem, Mount or Git capability`);
     }
-    const basePath = normalizeSegments(
+    const subPath = normalizeSegments(
       /** @type {string | string[]} */ (serveOpts.subPath ?? []),
     );
     const index = serveOpts.index ?? 'index.html';
     if (typeof index !== 'string' || index === '') {
       throw makeError(X`serve index must be a non-empty string`);
     }
-    // Refuse a cap this server cannot walk, here, rather than minting a URL
-    // whose every request 404s at `root()`. A Mount and an `@endo/exo-git`
-    // workspace are both plausible things to hand a "serve this directory"
-    // method and neither answers `root()`; the caller projects them (see
-    // `@endo/platform/fs/extended/from-mount.js`) before serving. The probe
-    // costs one round trip per mount, not per request, and is the same
-    // `__getMethodNames__` introspection the request path already uses to
-    // tell a File from a Directory.
-    let rootNames;
+    const label = serveOpts.label ?? '';
+    if (typeof label !== 'string' || label.length > 256) {
+      throw makeError(X`serve label must be a string of at most 256 characters`);
+    }
+    const kind = await classifyAssetTarget(target);
+
+    const id = mintId();
+    const facet = await store.retain(id, target, kind);
+    /** @type {AssetRecord} */
+    const record = harden({
+      version: 1,
+      id,
+      token: mintToken(),
+      kind,
+      subPath,
+      index,
+      label,
+      createdAt: now(),
+    });
     try {
-      // eslint-disable-next-line no-underscore-dangle
-      rootNames = await E(filesystem).__getMethodNames__();
+      // Refuse a facet this server cannot walk here, rather than minting a
+      // URL whose every request fails.
+      await E(walkable(facet, kind)).root();
+      await store.record(record);
     } catch (cause) {
-      throw makeError(
-        X`serve requires a Filesystem cap; the given capability could not be introspected: ${q(/** @type {Error} */ (cause).message)}`,
-      );
+      await store.release(id).catch(() => {});
+      throw cause;
     }
-    if (!rootNames.includes('root')) {
-      throw makeError(
-        X`serve requires a Filesystem cap with a root() method; got one with ${q(rootNames)}`,
-      );
-    }
+    const entry = makeEntry(record, facet);
+    mounts.set(record.token, entry);
+    entries.set(id, entry);
 
-    const token = mintToken();
-    /** @type {AssetMount} */
-    const mount = { filesystem, basePath, index, revoked: false };
-    mounts.set(token, mount);
-
-    const path = `/${token}/`;
-    const url = `${origin}${path}`;
-
+    const path = `/${record.token}/`;
+    const url = urlFor(record.token);
+    let revoked = false;
     const revoke = makeExo('AssetMount', AssetMountInterface, {
-      revoke: () => {
-        mount.revoked = true;
-        mounts.delete(token);
+      revoke: async () => {
+        revoked = true;
+        await drop(id);
       },
       getPath: () => path,
       getUrl: () => url,
-      isRevoked: () => mount.revoked,
+      isRevoked: () => revoked || !entries.has(id),
       help: () =>
-        `Revoker for the Filesystem served at ${url}. Call revoke() to stop serving it.`,
+        `Revoker for the capability served at ${url}. Call revoke() to stop serving it.`,
     });
 
-    return harden({ path, url, revoke });
+    return harden({ id, path, url, revoke });
   };
 
   const getAddress = () => harden({ host, port: boundPort, origin });
 
+  /** @param {AssetEntry} entry */
+  const describeEntry = entry =>
+    harden({
+      id: entry.record.id,
+      path: `/${entry.record.token}/`,
+      url: urlFor(entry.record.token),
+      kind: entry.record.kind,
+      subPath: entry.record.subPath,
+      index: entry.record.index,
+      label: entry.record.label,
+      createdAt: entry.record.createdAt,
+      status: entry.status,
+      ...(entry.error === undefined ? {} : { error: entry.error }),
+    });
+
+  // Stopping closes the listener. It releases nothing: what the server
+  // retains is served again by the next incarnation, and only a revocation
+  // ends a route.
   const stop = async () => {
     if (stopped) {
       return;
     }
     stopped = true;
-    for (const mount of mounts.values()) {
-      mount.revoked = true;
-    }
     mounts.clear();
+    entries.clear();
     await E(httpServer).stop();
   };
 
-  return makeExo('AssetServer', AssetServerInterface, {
+  const release = async id => {
+    if (typeof id !== 'string') throw makeError(X`release requires an id`);
+    return drop(id);
+  };
+
+  const describe = id => {
+    const entry = entries.get(id);
+    return entry ? describeEntry(entry) : undefined;
+  };
+
+  const publisher = makeExo('AssetPublisher', AssetPublisherInterface, {
     serve,
+    release,
+    describe,
+    getAddress,
+    help: () =>
+      `Publisher for the static asset server at ${origin}. serve(target) takes a read-only facet of a Filesystem, Mount or Git capability, retains it, and returns { id, path, url, revoke }; the route lasts until revoke.revoke() or release(id), across restarts.`,
+  });
+
+  const admin = makeExo('AssetServerAdmin', AssetServerAdminInterface, {
+    list: () => harden([...entries.values()].map(describeEntry)),
+    // The retained read-only facet, for inspecting what a route serves.
+    getTarget: async id => {
+      const entry = entries.get(id);
+      if (!entry) throw makeError(X`no served item ${q(id)}`);
+      return entry.facet();
+    },
+    revoke: release,
+    publisher: () => publisher,
     getAddress,
     stop,
     help: () =>
-      `Static asset server at ${origin}. Call serve(filesystem) to mount a Filesystem under a fresh capability path; it returns { path, url, revoke }. The mount serves persistently until revoke.revoke().`,
+      `Administrator of the static asset server at ${origin}. list() the served items, getTarget(id) for an item's read-only facet, revoke(id) to drop a route, publisher() for the serve-only facet, stop() to close the listener.`,
   });
+
+  const server = makeExo('AssetServer', AssetServerInterface, {
+    serve,
+    release,
+    describe,
+    getAddress,
+    stop,
+    help: () =>
+      `Static asset server at ${origin}. Call serve(target) to mount a Filesystem, Mount or Git capability under a fresh capability path; it returns { id, path, url, revoke }. The mount serves until revoke.revoke().`,
+  });
+
+  return harden({ admin, publisher, server });
 };
+harden(makeAssetServerKit);
+
+/**
+ * The whole server as one facet, retaining in memory unless given a store:
+ * the shape this package had before it had an administrator.
+ *
+ * @param {Parameters<typeof makeAssetServerKit>[0]} opts
+ */
+export const makeAssetServer = async opts =>
+  (await makeAssetServerKit(opts)).server;
 harden(makeAssetServer);

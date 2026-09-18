@@ -7,9 +7,15 @@
 // serve arbitrary filesystems).
 //
 // `serve()` returns an unguessable capability URL (192 bits of entropy in the
-// path). We retain the revoker so the factory can revoke the mount when the
-// session is deleted, and so re-publishing after edits first drops the old
-// mount rather than leaking listeners.
+// path) and the `id` of the served item. The asset server is the retention
+// root for what it serves: it takes its own read-only facet of the workspace
+// on receipt, keeps that, and restores the route itself after a restart. So
+// the workspace capability is handed over as it is — the daemon-minted cap,
+// which the server can retain; a view built here could not outlive this
+// worker — and the publication belongs to the session, not to this tool
+// instance: the factory records `{ id, url }` with the session, a rebuilt
+// tool finds it there and the URL it reports is the one already handed out,
+// and only deleting the session releases it.
 //
 // The tool is installed for every session that has a project workspace, whether
 // or not an asset server is bound yet, and resolves the server per publish. A
@@ -106,6 +112,10 @@ const hasReadableIndex = async filesystem => {
   }
 };
 
+// The wording is part of the tool set's identity, which a hosted backend pins
+// to its thread (Codex rotates the thread when it changes), so it is left as
+// it was: calling again is still harmless, and the reply says what is true
+// now — the URL is stable and serves the live files.
 /** @type {import('@endo/fae/src/tool-makers.js').ToolSchema} */
 const publishSchema = harden({
   type: 'function',
@@ -122,23 +132,52 @@ const publishSchema = harden({
 });
 
 /**
+ * @typedef {{ id: string, url: string }} Publication
+ */
+
+/**
  * @param {object} options
  * @param {() => Promise<any>} options.getAssetServer - resolves the shared
- *   AssetServer cap (serve()), or a falsy value while none is bound. Resolved
- *   on every publish: the hosted setup binds the server late in the boot, and
- *   a re-bound server must replace a dead presence.
+ *   asset server's serve-only facet (`serve`, `describe`, `release`), or a
+ *   falsy value while none is bound. Resolved on every publish: the hosted
+ *   setup binds the server late in the boot, and a re-bound server must
+ *   replace a dead presence.
  * @param {() => Promise<any>} options.getWorkspace - resolves this session's
  *   workspace cap (an EndoGit workspace, Mount, or Filesystem), or a falsy
- *   value if the session has none. Whichever of the three it is, it is
- *   projected onto a Filesystem by `toServableFilesystem` before it is served.
+ *   value if the session has none. It is handed to the server as it is; the
+ *   projection here is only to check that the root would resolve.
+ * @param {() => Promise<Publication | undefined>} [options.loadPublication]
+ *   the session's recorded publication, if any. With `savePublication`, this
+ *   is what makes a publication outlive the tool instance and the daemon;
+ *   without them it lasts as long as this instance.
+ * @param {(publication: Publication | undefined) => Promise<void>} [options.savePublication]
+ * @param {string} [options.label] shown to the asset server's administrator.
  * @returns {import('@endo/fae/src/tool-makers.js').FaeTool & { revoke: () => Promise<void> }}
  */
-export const makePublishTool = ({ getAssetServer, getWorkspace }) => {
-  /** @type {{ url: string, revoker: any } | undefined} */
-  let current;
+export const makePublishTool = ({
+  getAssetServer,
+  getWorkspace,
+  loadPublication = undefined,
+  savePublication = undefined,
+  label = '',
+}) => {
+  /** @type {Publication | undefined} */
+  let remembered;
+  const load = async () =>
+    loadPublication ? loadPublication() : Promise.resolve(remembered);
+  /** @param {Publication | undefined} publication */
+  const save = async publication => {
+    if (savePublication) {
+      await savePublication(publication);
+    } else {
+      remembered = publication;
+    }
+  };
+
   // Publishes and revocations run one at a time: a hosted CLI can issue two
   // tool calls in parallel, and two concurrent publishes would each serve a
-  // mount while only the last was retained — the other's listener leaked.
+  // mount while only the last was recorded — the other would never be
+  // released.
   /** @type {Promise<unknown>} */
   let chain = Promise.resolve();
   /**
@@ -152,16 +191,11 @@ export const makePublishTool = ({ getAssetServer, getWorkspace }) => {
     return next;
   };
 
-  const dropCurrent = async () => {
-    await null;
-    if (current) {
-      const { revoker } = current;
-      current = undefined;
-      await E(revoker)
-        .revoke()
-        .catch(() => {});
-    }
-  };
+  const published = url =>
+    `Published your workspace at ${url}\n` +
+    'This is an unguessable capability URL; it opens in a new browser ' +
+    'tab. It serves the files as they are now, so edits show on reload, ' +
+    'and it stays the same across restarts until this session is deleted.';
 
   const publish = async () => {
     const workspace = await getWorkspace();
@@ -200,16 +234,40 @@ export const makePublishTool = ({ getAssetServer, getWorkspace }) => {
         'publish again.'
       );
     }
-    // Refresh: drop any prior mount so a re-publish serves current files and
-    // never accumulates listeners.
-    await dropCurrent();
-    const { url, revoke } = await E(assetServer).serve(filesystem);
-    current = { url, revoker: revoke };
-    return (
-      `Published your workspace at ${url}\n` +
-      'This is an unguessable capability URL; it opens in a new browser ' +
-      'tab. Re-run publishWorkspace after edits to refresh it.'
-    );
+    // The served tree is the live workspace, not a snapshot, so a publication
+    // that still stands needs nothing done to it: report the URL already
+    // handed out rather than minting a second one for the same files.
+    const known = await load();
+    if (known) {
+      const standing = await E(assetServer).describe(known.id);
+      if (standing) return published(standing.url);
+    }
+    const { id, url } = await E(assetServer).serve(workspace, { label });
+    try {
+      await save(harden({ id, url }));
+    } catch (error) {
+      // An unrecorded route would never be released; do not leave one.
+      await E(assetServer)
+        .release(id)
+        .catch(() => {});
+      return `Publishing failed: the publication could not be recorded: ${/** @type {Error} */ (error).message}`;
+    }
+    return published(url);
+  };
+
+  // Release the session's publication. Called when the session is deleted,
+  // never when a tool instance is replaced.
+  const revoke = async () => {
+    const known = await load();
+    if (!known) return;
+    const assetServer = await getAssetServer();
+    if (!assetServer) {
+      throw Error(
+        'The asset server is not bound, so this session’s published URL could not be released',
+      );
+    }
+    await E(assetServer).release(known.id);
+    await save(undefined);
   };
 
   return harden({
@@ -218,9 +276,9 @@ export const makePublishTool = ({ getAssetServer, getWorkspace }) => {
     help: () =>
       'publishWorkspace() — serve this session’s project workspace as a ' +
       'static site and return a shareable capability URL.',
-    // Not part of the tool wire; the factory calls it on session deletion (and
-    // on rebuild) to release the served mount.
-    revoke: () => serialize(dropCurrent),
+    // Not part of the tool wire; the factory calls it on session deletion to
+    // release the served route.
+    revoke: () => serialize(revoke),
   });
 };
 harden(makePublishTool);

@@ -1741,7 +1741,8 @@ export interface EndoHost extends EndoAgent {
    * read-write parent may still be narrowed to a read-only child.
    */
   provideSubMount(
-    mountName: string | string[],
+    /** The parent by pet name, or the daemon-minted mount capability itself. */
+    mountName: string | string[] | EndoMount,
     subpath: string[],
     newName: string | string[],
     opts?: { readOnly?: boolean },

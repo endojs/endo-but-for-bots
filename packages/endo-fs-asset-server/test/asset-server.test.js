@@ -13,7 +13,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
-import { makeAssetServer } from '../src/asset-server.js';
+import { makeAssetServer, makeAssetServerKit } from '../src/asset-server.js';
 import { contentTypeForName, normalizeSegments } from '../src/index.js';
 
 const backend = makeNodeHttpBackend();
@@ -79,6 +79,12 @@ const startServer = async t => {
   const server = await makeAssetServer({ backend, getRandomValues });
   t.teardown(() => E(server).stop());
   return server;
+};
+
+const startKit = async (t, options = {}) => {
+  const kit = await makeAssetServerKit({ backend, getRandomValues, ...options });
+  t.teardown(() => E(kit.admin).stop());
+  return kit;
 };
 
 test('contentTypeForName maps extensions', t => {
@@ -244,50 +250,183 @@ test.serial('rejects path traversal in the request', async t => {
   t.true(res.status === 400 || res.status === 404);
 });
 
-test.serial(
-  'a cap that cannot answer root() is refused, not mounted',
-  async t => {
-    // Regression: `serve()` accepted any non-null cap and returned a URL, so
-    // handing it a Mount or an `@endo/exo-git` workspace — neither of which has
-    // `root()` — produced a link that 404'd on every request, indistinguishably
-    // from a revoked or mistyped one. The mismatch belongs at serve time.
-    const server = await startServer(t);
+test.serial('a capability the server cannot take a read-only facet of is refused, not mounted', async t => {
+  // Regression: `serve()` once accepted any non-null cap and returned a URL
+  // whose every request 404'd. The server now classifies what it is handed —
+  // Filesystem, Mount or Git — takes its own read-only facet, and refuses the
+  // rest before anything is retained or a URL minted.
+  const { admin, publisher } = await startKit(t);
 
-    const sloppy = (label, methods) =>
-      makeExo(
-        label,
-        M.interface(label, {}, { defaultGuards: 'passable' }),
-        methods,
-      );
-
-    // A daemon Mount: `lookup` but no `root`.
-    await t.throwsAsync(
-      () =>
-        E(server).serve(
-          sloppy('EndoMount', {
-            kind: () => 'directory',
-            lookup: () => undefined,
-            list: () => harden([]),
-          }),
-        ),
-      { message: /root\(\) method/ },
+  const sloppy = (label, methods) =>
+    makeExo(
+      label,
+      M.interface(label, {}, { defaultGuards: 'passable' }),
+      methods,
     );
 
-    // An `@endo/exo-git` workspace: `worktree` but no `root`.
-    await t.throwsAsync(
-      () =>
-        E(server).serve(
-          sloppy('Git', {
-            worktree: () => undefined,
-            status: () => harden({}),
-            commit: () => '',
-          }),
-        ),
-      { message: /root\(\) method/ },
-    );
+  // Neither a Filesystem, a Mount nor a Git workspace.
+  await t.throwsAsync(
+    () => E(publisher).serve(sloppy('Thing', { lookup: () => undefined })),
+    { message: /Filesystem, Mount or Git capability/ },
+  );
+  // A Git workspace whose read-only facet cannot be taken.
+  await t.throwsAsync(() =>
+    E(publisher).serve(
+      sloppy('Git', {
+        worktree: () => undefined,
+        status: () => harden({}),
+        commit: () => '',
+      }),
+    ),
+  );
+  // A Filesystem whose root() does not answer.
+  await t.throwsAsync(() =>
+    E(publisher).serve(
+      sloppy('Filesystem', {
+        root: () => {
+          throw Error('no root');
+        },
+        statfs: () => harden({}),
+      }),
+    ),
+  );
 
-    // Nothing was registered, so no token leaked into the mount table.
-    const { url } = await E(server).serve(await makeSiteFs());
-    t.is((await httpGet(url)).status, 200);
-  },
-);
+  // Nothing was registered or retained for any of them.
+  t.deepEqual(await E(admin).list(), []);
+  const { url } = await E(publisher).serve(await makeSiteFs());
+  t.is((await httpGet(url)).status, 200);
+});
+
+/** A store shared by successive servers, the way a durable one is. */
+const makeSharedStore = () => {
+  const facets = new Map();
+  const records = new Map();
+  const broken = new Set();
+  return {
+    facets,
+    records,
+    breakTarget: id => broken.add(id),
+    mendTarget: id => broken.delete(id),
+    store: harden({
+      retain: async (id, target) => {
+        facets.set(id, target);
+        return target;
+      },
+      record: async record => {
+        records.set(record.id, record);
+      },
+      load: async () => [...records.values()],
+      recall: async id => {
+        if (broken.has(id) || !facets.has(id)) throw Error('target is gone');
+        return facets.get(id);
+      },
+      release: async id => {
+        facets.delete(id);
+        records.delete(id);
+      },
+    }),
+  };
+};
+
+test.serial('routes are restored from the store by the next server, with nobody serving again', async t => {
+  const shared = makeSharedStore();
+  const first = await makeAssetServerKit({
+    backend,
+    getRandomValues,
+    store: shared.store,
+  });
+  const kept = await E(first.publisher).serve(await makeSiteFs(), {
+    label: 'kept',
+  });
+  const dropped = await E(first.publisher).serve(await makeSiteFs());
+  await E(dropped.revoke).revoke();
+  t.true(await E(dropped.revoke).isRevoked());
+  // Stopping releases nothing.
+  await E(first.admin).stop();
+  t.is(shared.records.size, 1);
+
+  const second = await startKit(t, { store: shared.store });
+  const { origin } = await E(second.admin).getAddress();
+  t.is((await httpGet(`${origin}${kept.path}`)).text, '<h1>home</h1>');
+  t.is((await httpGet(`${origin}${dropped.path}`)).status, 404);
+  const [listed] = await E(second.admin).list();
+  t.like(listed, { id: kept.id, path: kept.path, label: 'kept', status: 'ready' });
+  t.is((await E(second.admin).list()).length, 1);
+});
+
+test.serial('a route whose target cannot be revived is kept, answers 503, and recovers', async t => {
+  const shared = makeSharedStore();
+  const first = await makeAssetServerKit({
+    backend,
+    getRandomValues,
+    store: shared.store,
+  });
+  const served = await E(first.publisher).serve(await makeSiteFs());
+  await E(first.admin).stop();
+
+  shared.breakTarget(served.id);
+  const second = await startKit(t, { store: shared.store });
+  const { origin } = await E(second.admin).getAddress();
+  const unavailable = await httpGet(`${origin}${served.path}`);
+  t.is(unavailable.status, 503);
+  t.is(unavailable.headers['retry-after'], '5');
+  t.like((await E(second.admin).list())[0], {
+    id: served.id,
+    status: 'unavailable',
+    error: 'target is gone',
+  });
+  // Only a revocation ends a route: the record is still there.
+  t.is(shared.records.size, 1);
+
+  shared.mendTarget(served.id);
+  t.is((await httpGet(`${origin}${served.path}`)).status, 200);
+  t.like((await E(second.admin).list())[0], { status: 'ready' });
+});
+
+test.serial('the administrator lists and removes; the publisher serves and releases its own', async t => {
+  const { admin, publisher } = await startKit(t);
+  // eslint-disable-next-line no-underscore-dangle
+  const adminMethods = await E(admin).__getMethodNames__();
+  // eslint-disable-next-line no-underscore-dangle
+  const publisherMethods = await E(publisher).__getMethodNames__();
+  t.false(adminMethods.includes('serve'), 'an administrator cannot repoint');
+  for (const name of ['list', 'getTarget', 'revoke', 'stop', 'publisher']) {
+    t.false(publisherMethods.includes(name), name);
+  }
+  t.is(await E(admin).publisher(), publisher);
+
+  const one = await E(publisher).serve(await makeSiteFs(), { label: 'one' });
+  const two = await E(publisher).serve(await makeSiteFs(), { label: 'two' });
+  t.deepEqual(
+    (await E(admin).list()).map(item => item.label).sort(),
+    ['one', 'two'],
+  );
+
+  // The administrator reaches the retained facet, and it does not write.
+  const facet = await E(admin).getTarget(one.id);
+  const root = await E(facet).root();
+  await t.throwsAsync(E(root).create('defaced.html', {}));
+  await t.throwsAsync(E(admin).getTarget('f'.repeat(32)), {
+    message: /no served item/,
+  });
+
+  t.true(await E(admin).revoke(one.id));
+  t.false(await E(admin).revoke(one.id), 'idempotent');
+  t.is((await httpGet(one.url)).status, 404);
+  t.is(await E(publisher).describe(one.id), undefined);
+  t.like(await E(publisher).describe(two.id), { url: two.url, label: 'two' });
+  t.true(await E(publisher).release(two.id));
+  t.is((await httpGet(two.url)).status, 404);
+  t.deepEqual(await E(admin).list(), []);
+});
+
+test.serial('serve validates its options before it retains anything', async t => {
+  const shared = makeSharedStore();
+  const { publisher } = await startKit(t, { store: shared.store });
+  const fs = await makeSiteFs();
+  await t.throwsAsync(E(publisher).serve(fs, { index: '' }));
+  await t.throwsAsync(E(publisher).serve(fs, { subPath: '../up' }));
+  await t.throwsAsync(E(publisher).serve(fs, { label: 'x'.repeat(257) }));
+  t.is(shared.facets.size, 0);
+  t.is(shared.records.size, 0);
+});

@@ -415,7 +415,8 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Mint a sub-mount rooted at a subdirectory of an existing mount
   provideSubMount: M.call(
-    NameOrPathShape,
+    // The parent by pet name, or the daemon-minted mount capability itself.
+    M.or(NameOrPathShape, M.remotable()),
     M.arrayOf(M.string()),
     NameOrPathShape,
   )
