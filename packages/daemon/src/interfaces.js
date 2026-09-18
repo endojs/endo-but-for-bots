@@ -82,10 +82,12 @@ export const ResponderInterface = M.interface('EndoResponder', {
 // clients) can consume them without depending on the daemon. They are imported
 // above; the daemon adds only the registry/locator surface below.
 
-// The documentation-contract interface for the narrow read surface. It is not
-// used to build an exo directly (each surface assembles its own guard from the
-// records); it names the contract that `__getMethodNames__`-based feature
-// detection keys on (namehub-interface-unification.md Decision 3).
+// The interface for the narrow read surface. It both names the contract that
+// `__getMethodNames__`-based feature detection keys on
+// (namehub-interface-unification.md Decision 3) AND is used directly to build
+// the read-only views (`makeReadOnlyDirectoryView` in directory.js, and the
+// mailbox/message hub views in manager.js). Editing it therefore changes the
+// argument guard those exos enforce — it is not documentation-only.
 export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
   ...readableNameHubMethodGuards,
 });
@@ -231,6 +233,11 @@ export const HandleInterface = M.interface(
 export const DirectoryInterface = M.interface('EndoDirectory', {
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  // Result awaited before the return is checked (`callWhen`) and pinned to a
+  // `ReadableNameHub` remotable, matching the sibling `EndoMount`/`EndoMountFile`
+  // `readOnly()` guards (which return `M.remotable('ReadableTree')` /
+  // `M.remotable('ReadableBlob')`) and the declared `Promise<ReadableNameHub>`.
+  readOnly: M.callWhen().returns(M.remotable('ReadableNameHub')),
 });
 
 export const GuestInterface = M.interface('EndoGuest', {

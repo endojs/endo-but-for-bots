@@ -7851,3 +7851,196 @@ test.serial(
     t.true((await pendingMessage).done);
   },
 );
+
+test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir');
+  await E(host).storeValue(1, 'one-src');
+  await E(host).storeValue(2, 'two-src');
+  const oneId = await E(host).identify('one-src');
+  const twoId = await E(host).identify('two-src');
+  await E(directory).storeIdentifier(['one'], oneId);
+  await E(directory).storeIdentifier(['two'], twoId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Reads round-trip against the backing directory.
+  t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDirectory).has('one'));
+  t.false(await E(readOnlyDirectory).has('absent'));
+  t.is(
+    await E(readOnlyDirectory).lookup('one'),
+    await E(directory).lookup('one'),
+  );
+  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
+
+  // The read-only view exposes no mutators at all. The expectation pins "no
+  // such method" by name, so a passing assertion cannot be a coincidental
+  // unrelated rejection (a dead worker, a formulation failure).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
+    { message: /storeIdentifier/ },
+    'storeIdentifier is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
+    { message: /remove/ },
+    'remove is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on a read-only view',
+  );
+
+  // Malformed arguments are rejected at THIS boundary by the ReadableNameHub
+  // interface guard (makeExo), not only downstream at the backing directory.
+  // `lookup` requires a string or string[]; a number must be refused by the
+  // guard before it forwards. This is the behavioral proof the interface
+  // guard is live on the guest-facing view.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).lookup(42),
+    { message: /ReadableNameHub/ },
+    'a wrong-typed argument is rejected at the read-only exo boundary',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).has(42),
+    { message: /ReadableNameHub/ },
+    'has rejects a non-string path segment at the exo boundary',
+  );
+
+  // A live write to the backing directory is observable through the view,
+  // confirming it is a live attenuation rather than a snapshot.
+  await E(host).storeValue(3, 'three-src');
+  const threeId = await E(host).identify('three-src');
+  await E(directory).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDirectory).has('three'));
+});
+
+test('EndoDirectory.readOnly() attenuation is shallow: nested directories are handed out live and writable', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-shallow');
+  // A nested directory under the backing directory.
+  const nested = await E(directory).makeDirectory('nested');
+  await E(host).storeValue(1, 'seed-src');
+  const seedId = await E(host).identify('seed-src');
+  await E(nested).storeIdentifier(['seed'], seedId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Looking the nested directory up THROUGH the read-only view returns the
+  // live, fully-writable nested directory — NOT a further read-only view. This
+  // is the security-relevant half of the documented contract: attenuation is
+  // shallow, so a holder of the read-only view can mutate one level down.
+  const nestedViaView = await E(readOnlyDirectory).lookup('nested');
+  await E(host).storeValue(2, 'added-src');
+  const addedId = await E(host).identify('added-src');
+  // The write through the looked-up nested directory succeeds — proving it is
+  // the live capability, not a read-only attenuation.
+  await t.notThrowsAsync(
+    E(/** @type {any} */ (nestedViaView)).storeIdentifier(['added'], addedId),
+    'a nested directory reached through the read-only view is writable',
+  );
+  // And the write is observable back through the view's nested lookup.
+  t.true(await E(/** @type {any} */ (nestedViaView)).has('added'));
+  t.true(await E(nested).has('added'));
+});
+
+test('EndoDirectory.readOnly() is memoized: repeated calls return the same view', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-memo');
+  const first = await E(directory).readOnly();
+  const second = await E(directory).readOnly();
+  // Memoized per directory: the same capability is returned each call, rather
+  // than minting a fresh worker + formula per invocation.
+  t.is(first, second);
+});
+
+test('mailHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The mailbox hub (`@mail`) is one of the two guest-reachable `readOnly()`
+  // call sites in manager.js; its view is minted eagerly at hub construction
+  // from scope-captured has/list/lookup/maybeLookup, so this pins that closure
+  // capture and the guard round-trip through `makeExo` — not just the shared
+  // factory the unit test exercises in isolation.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  await hostMessages.next();
+
+  const mailHub = await E(host).lookup(['@mail']);
+  const readOnlyMail = await E(mailHub).readOnly();
+
+  // Reads round-trip against the backing mailbox hub.
+  const names = [...(await E(readOnlyMail).list())];
+  t.true(Array.isArray(names));
+
+  // No mutator survives on the view (they are present-but-throwing on the hub,
+  // absent entirely on the read-only view).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).remove('1'),
+    { message: /remove/ },
+    'remove is not available on the mailbox read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on the mailbox read-only view',
+  );
+  // The interface guard is live on this call site too: a wrong-typed argument
+  // is rejected at the view boundary.
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMail)).lookup(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('messageHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The per-message hub (`@mail/<number>`) is the second guest-reachable
+  // `readOnly()` call site in manager.js. Same eager-mint shape as the mailbox
+  // hub, exercised here through a real daemon.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await hostMessages.next();
+  await E(host).reply(hostMessage.number, ['hi'], [], []);
+  const { value: replyMessage } = await hostMessages.next();
+
+  const messageHub = await E(host).lookup([
+    '@mail',
+    String(replyMessage.number),
+  ]);
+  const readOnlyMessage = await E(messageHub).readOnly();
+
+  const names = [...(await E(readOnlyMessage).list())];
+  t.true(names.includes('@from'));
+
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMessage)).remove('@from'),
+    { message: /remove/ },
+    'remove is not available on the message read-only view',
+  );
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMessage)).has(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('EndoHost/EndoGuest do not carry readOnly() at runtime today', async t => {
+  // `EndoAgent extends EndoDirectory` at the type level and `EndoDirectory.readOnly`
+  // is declared optional, but the agent guards (GuestInterface/HostInterface) do
+  // NOT spread `readOnly`, so `E(host).readOnly()` / `E(guest).readOnly()` reject.
+  // This pins that documented gap: a future accidental widening of the agent
+  // interfaces to include `readOnly` would redden here rather than silently ship.
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await t.throwsAsync(
+    E(/** @type {any} */ (host)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the host agent interface',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (guest)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the guest agent interface',
+  );
+});
