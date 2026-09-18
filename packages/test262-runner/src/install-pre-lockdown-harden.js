@@ -49,9 +49,10 @@
  * `@endo/thixotrope`'s boot calls `lockdown()` on the line after the shim, with
  * nothing having hardened.
  *
- * Nothing Ironhorse-specific here. The node host fails the same case for the
- * same reason and would take the same repair; wiring it there is a separate
- * change, with its own baseline to move.
+ * Nothing Ironhorse-specific here -- this is the CORPUS's repair, which is why
+ * it lives in the test harness rather than in `@endo/ironhorse-prelude`. It is
+ * wired into `ironhorse-prelude.js` only; whether any other host wants it is
+ * not a question this change answers.
  */
 
 import { makeHardener } from '@endo/harden/make-hardener.js';
