@@ -1289,6 +1289,7 @@ macro_rules! snapshot_payloads {
                             && lazy_helper_malformed(
                                 r.iterable,
                                 r.result,
+                                r.done,
                                 r.enum_keys.is_empty(),
                                 r.str_bytes.is_empty(),
                             )
