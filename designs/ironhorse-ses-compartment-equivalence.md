@@ -923,6 +923,27 @@ the parity corpus in
 keep deleting the lazy `Iterator` helpers.
 Owner's call, not an engineering finding.
 
+**Answered 2026-09-18: keep the shim, for now.**
+The SES shim stays the guest-facing SES profile, because it supplies the
+behaviour a guest actually expects today and the native route's remaining piece
+(G1) is not built.
+This does not retire the native `lockdown()`, which keeps its own two
+consumers: `endot-ih -l`, where any divergence from XS would be a regression
+rather than a feature, and a host locking down a `Machine` whose code it wrote.
+What the answer defers is putting the native operation in the WORKER position,
+where third-party source runs on top of it.
+Re-open when G1 lands: per D2 below, the template is then the only thing
+separating the two profiles for `packages/thixotrope`.
+
+**One consequence for the rest of this list.** Under the shim profile, I1 (the
+lazy `Iterator` helpers) is the chosen route's main engine-side debt -- it is
+why both boot scripts delete that surface by hand -- and G1 loses the
+thixotrope migration from its justification, keeping the 75 hardened262 files
+and the 2 parity-corpus cases. G1's own open question is only tilted, not
+settled: nothing guest-facing now depends on the NATIVE `Compartment` being
+SES-shaped, since the shim installs one, but the corpus that motivates G1 still
+is SES-shaped.
+
 **D2. Whether the native `lockdown()` may diverge from `fx_lockdown` to add
 override enablement.**
 Only live if D1 answers "native", and it has to be settled *before* the step-3
@@ -934,11 +955,35 @@ analogue, and the same probe spliced under `endot-ih -l` classifies
 `shared-positive-test-failure`, so XS behaves identically
 (`native_lockdown.rs::a_native_lockdown_does_not_enable_property_override`).
 Adding it is therefore a deliberate fourth entry in § Oracle divergences, not a
-port gap — and it is load-bearing, because without it arbitrary guest source
-breaks on assignment where the shim's guests do not.
+port gap.
 A compartment template that freezes those properties as data and one that
-installs accessors are different artifacts, which is why this cannot wait until
-step 3 is built.
+installs accessors are different artifacts, which is why it cannot be settled
+after step 3 is built.
+
+**Deferred 2026-09-18, and the reason it is safe to defer is a correction.**
+An earlier revision of this entry called enablement "load-bearing, because
+without it arbitrary guest source breaks on assignment where the shim's guests
+do not". That overstates it. The override mistake is a `[[Set]]` problem: a
+class body and an object literal both define their methods through
+`[[DefineOwnProperty]]` and never consult the prototype chain, so
+class-syntax-first source -- which is what `packages/thixotrope`'s
+orthogonal-persistence model produces -- is structurally immune, and
+`Object.defineProperty` keeps working regardless. Only the ES5 assignment idiom
+is affected, SES's own `minEnablements` is six properties whose comments name
+the transpiler and test libraries they exist for, and a search of `packages/`
+and `rust/endo/xsnap/src/` finds no guest-path site using that idiom at all.
+
+So enablement is a compatibility probe to run before migrating an embedder, not
+a prerequisite for one. Its residual risk is a guest's bundled DEPENDENCY graph
+rather than its authored source. The correction is recorded in full in
+`ironhorse-native-lockdown.md` § Known Gaps and in the probe's own doc comment,
+both of which carried the overstatement.
+
+**It re-sizes the native route.** With enablement demoted, the native profile's
+remaining cost for `packages/thixotrope` is the compartment template alone,
+which folds into G1 -- so the native option reopens when G1 lands rather than
+trailing a second unscoped item behind it. That is why D1's answer is "for
+now".
 
 ### Design work — needs its own note before code
 
@@ -1036,8 +1081,8 @@ Pinned by
 ### Blocked on the above rather than on lockdown
 
 **B1. Moving `packages/thixotrope`'s IronHorse worker off the SES shim.**
-Blocked on D1, then on G1 and D2 together — not on lockdown, and not on
-attenuation alone.
+Deferred by D1 on 2026-09-18, and gated on G1 alone when it reopens — not on
+lockdown, and no longer on D2 beside it.
 The isolation half already works: measured end to end in
 `native_lockdown.rs::a_host_made_compartment_confines_guest_source_only_with_global_names`,
 a host-made compartment on a locked-down `Machine` confines guest source, and
@@ -1045,8 +1090,13 @@ a host-made compartment on a locked-down `Machine` confines guest source, and
 The confinement is a conjunction — `global_names` closes the direct `eval` and
 `Function` bindings that lockdown cannot, lockdown closes the prototype route
 that `global_names` cannot — and both halves are in the tree.
-A worker that swapped the shim today would confine correctly and break ordinary
-guest code.
+What it lacks is the compartment template: a host-made compartment shares the
+start compartment's `Date` where an `fx_lockdown` compartment global would
+answer `NaN`.
+An earlier revision closed this entry with "a worker that swapped the shim
+today would confine correctly and break ordinary guest code", on the override
+mistake. Per D2 that is too strong — class-syntax source does not trip it, and
+nothing on a guest path in this tree uses the idiom that does.
 
 ### In flight elsewhere, and stale against `llm`
 
@@ -1084,14 +1134,21 @@ Flagged, not touched.
 
 ## Known Gaps and TODOs
 
-- [ ] Answer question 1 above — which realm profile — before anything else.
+- [x] Answer question 1 above — which realm profile — before anything else.
       It is the only question whose answer can make the rest unnecessary.
-      Still open after #1295; carried as D1 in § The work #1295 deferred,
-      triaged, where both sides now have a measured price rather than one.
-- [ ] Decide whether the native `lockdown()` may diverge from `fx_lockdown` to
-      add SES's property-override enablement (D2 in the same section). Live
-      only if question 1 answers "native", and it has to be settled before the
-      step-3 design rather than after.
+      Answered 2026-09-18: keep the SES shim as the guest-facing profile for
+      now; the native `lockdown()` keeps its own consumers (`endot-ih -l` and a
+      host locking down its own `Machine`) and is deferred out of the worker
+      position only. Re-open when G1 lands. See D1 in § The work #1295
+      deferred, triaged for the scope of the answer and what it changes below.
+- [x] Decide whether the native `lockdown()` may diverge from `fx_lockdown` to
+      add SES's property-override enablement (D2 in the same section).
+      Deferred 2026-09-18, on a correction rather than a trade: enablement is a
+      compatibility preference for the ES5 assignment idiom, not something
+      arbitrary guest source needs in order to run, because class bodies and
+      object literals define rather than assign. It becomes a probe to run
+      before migrating an embedder. Re-open if that probe trips on a guest's
+      dependency graph.
 - [x] No CI lane runs `ses_boot_intrinsics.rs`'s two profile tests.
       `test-thixotrope-ironhorse` has the bundle but builds through the root
       workspace, which excludes `rust/engine`, so running an engine-workspace
