@@ -2295,7 +2295,8 @@ fn harden_freezes_target_transitively_and_returns_it() {
     // `harden({a:1, b:{c:2}})`: the target and every instance reachable from
     // it are prevented-extensions + every own data property stamped
     // non-writable/non-configurable, and each reached instance marked
-    // `XS_DONT_MARSHALL_FLAG` (the visited set). harden returns its argument.
+    // `XS_DONT_MARSHALL_FLAG` (the visited set), which the OUTERMOST walk's
+    // completion makes permanent. harden returns its argument.
     let (mut interp, outer, inner, id_a, _id_b, id_c) = build_harden_graph();
     let arg = Slot::of(Kind::Reference, Payload::Reference(outer));
     let r = interp.do_harden(&[], arg).expect("harden ok");
@@ -2322,6 +2323,41 @@ fn harden_freezes_target_transitively_and_returns_it() {
         .do_harden(&[], Slot::number(3.0))
         .expect("harden prim ok");
     assert_eq!(prim.kind, Kind::Number);
+}
+
+/// Marks left behind by a walk that never returned are not evidence.
+///
+/// Every ordinary exit from `do_harden` accounts for its marks -- completion
+/// makes them permanent, failure revokes them. One exit does not: a Rust panic
+/// through the walk (heap exhaustion in a host allocation, say) unwinds past
+/// both, and a supervisor that catches it and KEEPS the interpreter would hold
+/// marks for a freeze that never happened. `Halt::HeapExhausted` is not that
+/// case -- it is an ordinary `Err` and takes the revoke path.
+///
+/// This reproduces the state such an unwind leaves -- an instance marked, and
+/// recorded as provisionally marked, with no walk running -- and pins that the
+/// next walk drops it rather than short-circuiting on it. Delete the sweep at
+/// the top of `do_harden` and `inner` comes back extensible.
+#[test]
+fn harden_drops_marks_left_by_a_walk_that_never_returned() {
+    let (mut interp, _outer, inner, _id_a, _id_b, _id_c) = build_harden_graph();
+    interp.slots.get_mut(inner).flag |= XS_DONT_MARSHALL_FLAG;
+    interp
+        .realm
+        .intrinsics()
+        .harden_marks
+        .borrow_mut()
+        .push(inner);
+    let arg = Slot::of(Kind::Reference, Payload::Reference(inner));
+    let _ = interp.do_harden(&[], arg).expect("harden ok");
+    assert!(
+        interp.slots.get(inner).flag & XS_DONT_PATCH_FLAG != 0,
+        "the stale mark must not short-circuit the freeze"
+    );
+    assert!(
+        interp.realm.intrinsics().harden_marks.borrow().is_empty(),
+        "a completed walk leaves no provisional marks"
+    );
 }
 
 #[test]

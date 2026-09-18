@@ -2363,8 +2363,10 @@ impl Interp {
         self.run_operation(shared, true, true)
     }
 
-    /// Evaluate a compartment script without pumping the machine's job queue.
-    pub(crate) fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
+    /// Evaluate a script without pumping the machine's job queue.
+    /// Hosts evaluating several scripts in one job must finish with `run`,
+    /// `run_shared`, or `run_promise_jobs` to perform the microtask checkpoint.
+    pub fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
         self.run_operation(code, true, false)
     }
 

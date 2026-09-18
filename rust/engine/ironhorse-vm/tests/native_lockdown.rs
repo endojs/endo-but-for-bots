@@ -132,6 +132,45 @@ fn a_reentrant_lockdown_is_refused_during_the_harden_walk() {
 }
 
 #[test]
+fn a_first_lockdown_waits_for_the_outer_harden_walk() {
+    for allow in [false, true] {
+        assert_eq!(
+            result(&format!(
+                r#"{CATCH}
+                var allow = {allow};
+                var first = true;
+                var nested;
+                Object.prototype.extra = new Proxy({{}}, {{
+                  preventExtensions(target) {{
+                    if (first) {{
+                      first = false;
+                      // Returning from this nested walk must not clear the
+                      // still-active outer walk's guard.
+                      harden({{}});
+                      nested = attempt(function() {{ return lockdown(); }});
+                    }}
+                    return allow && Reflect.preventExtensions(target);
+                  }}
+                }});
+                var outer = attempt(function() {{ return harden(Object.prototype); }});
+                var unchanged = Function.prototype.constructor === Function;
+                allow = true;
+                var later = attempt(function() {{ return lockdown(); }});
+                [nested, outer, unchanged, later,
+                 Object.isFrozen(Function.prototype),
+                 attempt(function() {{ return lockdown(); }})].join(' | ');
+                "#
+            )),
+            format!(
+                "TypeError: lockdown cannot start during harden | {} | true | returned undefined | true | TypeError: lockdown already called",
+                if allow { "returned [object Object]" } else { "TypeError: extensible object" }
+            ),
+            "the outer harden allows freezing: {allow}"
+        );
+    }
+}
+
+#[test]
 fn lockdown_closes_the_evaluator_reach_through_every_function_family_prototype() {
     // The measured hole this whole operation exists to close.
     // `CompartmentOptions::global_names` decides which names are BOUND and
@@ -1402,5 +1441,223 @@ fn a_refused_harden_makes_lockdown_fail_hard_and_uncatchably() {
     assert_eq!(
         halted, "Refused(\"lockdown:intrinsic-graph\")",
         "the guest's own try/catch must not see this"
+    );
+}
+
+/// A nested walk's marks cannot outlive the unfinished walk they rested on.
+///
+/// `harden()` marks the graph it walks so the walk terminates and so a later
+/// call short-circuits. A Proxy trap reached from the freeze runs arbitrary
+/// guest code, `harden()` included, and that is where one walk's marks become
+/// another walk's evidence:
+///
+/// * the outer walk queues `leaf`, marking it, and has not frozen it yet;
+/// * its trap starts a nested `harden(nestedRoot)`, which sees the mark on
+///   `leaf` and skips it — believing the outer walk owns that subgraph;
+/// * the nested walk completes and marks `nestedRoot`: a promise that
+///   everything reachable from it is frozen;
+/// * the outer walk then fails. Undoing only its OWN marks, as XS's
+///   `fx_harden` does, leaves `leaf` unfrozen and unmarked while `nestedRoot`
+///   keeps a mark that makes every later `harden()` return immediately.
+///
+/// The measured hole, before the fix — `harden(nestedRoot)` returns, and
+/// `leaf.mutable = 2` takes:
+///
+/// ```text
+/// TypeError: extensible object | true | false | 2
+/// ```
+///
+/// A mark is now provisional until the OUTERMOST walk completes, so a walk
+/// that fails revokes the marks of every walk that completed inside it as
+/// well. See `revoke_harden_marks` in `interp/property/integrity.rs`, and
+/// § Oracle divergences in `designs/ironhorse-native-lockdown.md`.
+#[test]
+fn a_nested_harden_cannot_inherit_an_unfinished_walks_marks() {
+    assert_eq!(
+        result(&format!(
+            r#"{CATCH}
+            var leaf = Object.create(null);
+            leaf.mutable = 1;
+            var nestedRoot = Object.create(null);
+            nestedRoot.leaf = leaf;
+            var first = true;
+            var refusing = new Proxy(Object.create(null), {{
+              preventExtensions(target) {{
+                if (first) {{
+                  first = false;
+                  // Reaches `leaf`, which the outer walk has queued.
+                  harden(nestedRoot);
+                }}
+                return false;
+              }}
+            }});
+            var outerRoot = Object.create(null);
+            // The trap first, so the outer walk refuses BEFORE it reaches
+            // `leaf`: what is at stake is the freeze it never performs.
+            outerRoot.trap = refusing;
+            outerRoot.leaf = leaf;
+            var outer = attempt(function () {{ return harden(outerRoot); }});
+            var again = harden(nestedRoot) === nestedRoot;
+            leaf.mutable = 2;
+            [outer, again, Object.isFrozen(leaf), leaf.mutable].join(' | ');
+            "#
+        )),
+        "TypeError: extensible object | true | true | 1"
+    );
+}
+
+/// The same hole, reached through `lockdown()` — which is what makes it more
+/// than a `harden()` curiosity.
+///
+/// Step 5 hardens each intrinsic root, and a root that is already marked is
+/// skipped. A nested walk that marked `Object.prototype` while skipping a
+/// descendant the failed outer walk had queued leaves `lockdown()` nothing to
+/// do for that root: it returns success over an intrinsic whose reachable
+/// graph is not frozen. The guest object here is attached to `Object.prototype`
+/// before the walks, so it is reachable from an intrinsic while being no root
+/// of its own — the only shape that survives step 5's root enumeration, which
+/// lists every boot instance separately.
+///
+/// The measured hole, before the fix — `lockdown()` returns, and the object
+/// hanging off the frozen `Object.prototype` still takes a write:
+///
+/// ```text
+/// TypeError: extensible object | true | false | 2
+/// ```
+#[test]
+fn lockdown_refreezes_an_intrinsic_a_failed_nested_walk_marked() {
+    assert_eq!(
+        result(&format!(
+            r#"{CATCH}
+            Object.prototype.smuggled = {{}};
+            var smuggled = Object.prototype.smuggled;
+            smuggled.mutable = 1;
+            var first = true;
+            var refusing = new Proxy(Object.create(null), {{
+              preventExtensions(target) {{
+                if (first) {{
+                  first = false;
+                  harden(Object.prototype);
+                }}
+                return false;
+              }}
+            }});
+            var outerRoot = Object.create(null);
+            outerRoot.trap = refusing;
+            outerRoot.smuggled = smuggled;
+            var outer = attempt(function () {{ return harden(outerRoot); }});
+            lockdown();
+            smuggled.mutable = 2;
+            [outer, Object.isFrozen(Object.prototype),
+             Object.isFrozen(smuggled), smuggled.mutable].join(' | ');
+            "#
+        )),
+        "TypeError: extensible object | true | true | 1"
+    );
+}
+
+/// A trap that hardens the walk's own root must terminate.
+///
+/// The freeze runs guest code, so the graph being walked can call `harden()`
+/// on itself from inside its own freeze. What makes that terminate is that the
+/// nested call finds the root already marked and returns — XS's answer
+/// (`fx_hardenQueue` checks the mark, `fx_hardenFreezeAndTraverse` sets it)
+/// and this port's.
+///
+/// It is also why the fix above REVOKES marks on failure rather than
+/// withholding them until a walk completes. Withholding was implemented and
+/// measured against this case: each nested call starts a fresh walk, which
+/// re-enters the same trap, and the run halts with
+/// `ReentryLimit { depth: 2062, limit: 2048 }` where XS returns. A soundness
+/// fix that turns a terminating program into a halt is a trade, not a fix.
+#[test]
+fn a_trap_that_hardens_the_walks_own_root_terminates() {
+    assert_eq!(
+        result(
+            r#"
+            var root = Object.create(null);
+            var entries = 0;
+            root.trap = new Proxy(Object.create(null), {
+              preventExtensions(target) {
+                entries++;
+                harden(root);
+                return Reflect.preventExtensions(target);
+              }
+            });
+            var same = harden(root) === root;
+            [same, entries, Object.isFrozen(root)].join(' | ');
+            "#
+        ),
+        "true | 1 | true"
+    );
+}
+
+/// A walk that fails INSIDE another walk revokes what completed under it.
+///
+/// This is the case the two above cannot reach, and the reason revocation is
+/// scoped to the failing walk rather than to the outermost one. Three walks:
+///
+/// * `O` is outermost and succeeds;
+/// * `A` runs from a trap inside `O`, queues `leaf`, and fails — with the
+///   guest catching the failure, so `O` carries on;
+/// * `B` runs from a trap inside `A`, skips `leaf` on `A`'s mark, completes,
+///   and marks its own root.
+///
+/// `O` succeeding is what makes every surviving mark permanent, so `B`'s mark
+/// has to be gone by then. Revoking only `A`'s own worklist — XS's scope —
+/// leaves it, and `harden(bRoot)` afterwards returns without freezing `leaf`:
+///
+/// ```text
+/// caught=TypeError: extensible object | outer=returned true | false | 2
+/// ```
+///
+/// Nothing sweeps that away later either: the stale-mark sweep at the start of
+/// an outermost walk only sees marks an outermost walk left behind, and this
+/// one completed.
+#[test]
+fn a_walk_that_fails_inside_another_walk_revokes_what_completed_under_it() {
+    assert_eq!(
+        result(&format!(
+            r#"{CATCH}
+            var leaf = Object.create(null);
+            leaf.mutable = 1;
+            var bRoot = Object.create(null);
+            bRoot.leaf = leaf;
+            var caught;
+            var innerFirst = true;
+            var refusing = new Proxy(Object.create(null), {{
+              preventExtensions(target) {{
+                if (innerFirst) {{
+                  innerFirst = false;
+                  harden(bRoot);
+                }}
+                return false;
+              }}
+            }});
+            var aRoot = Object.create(null);
+            aRoot.trap = refusing;
+            aRoot.leaf = leaf;
+            var outerFirst = true;
+            var outerRoot = Object.create(null);
+            outerRoot.trap = new Proxy(Object.create(null), {{
+              preventExtensions(target) {{
+                if (outerFirst) {{
+                  outerFirst = false;
+                  caught = attempt(function () {{ return harden(aRoot); }});
+                }}
+                // The outermost walk SUCCEEDS, which is what would make every
+                // surviving mark permanent.
+                return Reflect.preventExtensions(target);
+              }}
+            }});
+            var outer = attempt(function () {{
+              return harden(outerRoot) === outerRoot;
+            }});
+            harden(bRoot);
+            leaf.mutable = 2;
+            [caught, outer, Object.isFrozen(leaf), leaf.mutable].join(' | ');
+            "#
+        )),
+        "TypeError: extensible object | returned true | true | 1"
     );
 }
