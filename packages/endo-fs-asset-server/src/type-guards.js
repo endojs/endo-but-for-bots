@@ -55,16 +55,25 @@ export const AssetPublisherInterface = M.interface('AssetPublisher', {
 
 /**
  * The operator's facet. It reads — `list()`, and `getTarget(id)` for the
- * read-only facet a route serves — and it removes. It has no way to change
- * what a route serves.
+ * read-only facet a route serves — and it removes. It has no way to serve,
+ * or to change what a route serves.
  */
 export const AssetServerAdminInterface = M.interface('AssetServerAdmin', {
   list: M.call().returns(M.array()),
   getTarget: M.call(M.string()).returns(M.promise()),
   revoke: M.call(M.string()).returns(M.promise()),
-  publisher: M.call().returns(M.remotable('AssetPublisher')),
   getAddress: M.call().returns(M.record()),
   stop: M.call().returns(M.promise()),
+  help: M.call().optional(M.string()).returns(M.string()),
+});
+
+/**
+ * The value of the daemon formula: the two facets, each to be given a name of
+ * its own, and nothing else.
+ */
+export const AssetServerRootInterface = M.interface('AssetServerRoot', {
+  admin: M.call().returns(M.remotable('AssetServerAdmin')),
+  publisher: M.call().returns(M.remotable('AssetPublisher')),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 

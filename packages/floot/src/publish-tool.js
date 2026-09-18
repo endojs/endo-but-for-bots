@@ -47,9 +47,11 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
  * Git is projected through its worktree rather than `filesystemAt(ref)`, so an
  * agent publishes the files it just wrote instead of the last commit — an
  * unborn repository is the normal case here. Both projections go through the
- * cap's own read-only facet: publishing is a read, and the served mount must
- * never carry write authority into the asset server.
- *
+ * cap's own read-only facet. This projection is only how the tool checks that
+ * the root would resolve: what is handed to the asset server is the workspace
+ * capability itself, of which the server takes and keeps its own read-only
+ * facet (a view built here has no formula, so the server could not retain
+ * it across a restart).
  * @param {any} workspace
  * @returns {Promise<any>}
  */
@@ -132,8 +134,18 @@ const publishSchema = harden({
 });
 
 /**
- * @typedef {{ id: string, url: string }} Publication
+ * A session's publication. `pending` is set, and the record saved, BEFORE the
+ * server is asked to serve under `id`: a crash in between then leaves a record
+ * that names the route rather than a route nobody has the id of, and the next
+ * publish serves under the same id, which the server treats as the same route.
+ *
+ * @typedef {{ id: string, url?: string, pending?: boolean }} Publication
  */
+
+const mintId = () =>
+  Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), byte =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
 
 /**
  * @param {object} options
@@ -152,6 +164,11 @@ const publishSchema = harden({
  *   without them it lasts as long as this instance.
  * @param {(publication: Publication | undefined) => Promise<void>} [options.savePublication]
  * @param {string} [options.label] shown to the asset server's administrator.
+ * @param {<T>(thunk: () => Promise<T>) => Promise<T>} [options.serialize]
+ *   runs publishes and revocations one at a time. The factory passes one per
+ *   SESSION, because a rebuilt agent has a new tool instance while a call on
+ *   the old one may still be settling; the default is per instance.
+ * @param {() => string} [options.makeId]
  * @returns {import('@endo/fae/src/tool-makers.js').FaeTool & { revoke: () => Promise<void> }}
  */
 export const makePublishTool = ({
@@ -160,6 +177,8 @@ export const makePublishTool = ({
   loadPublication = undefined,
   savePublication = undefined,
   label = '',
+  serialize: sharedSerialize = undefined,
+  makeId = mintId,
 }) => {
   /** @type {Publication | undefined} */
   let remembered;
@@ -185,11 +204,12 @@ export const makePublishTool = ({
    * @param {() => Promise<T>} thunk
    * @returns {Promise<T>}
    */
-  const serialize = thunk => {
+  const ownSerialize = thunk => {
     const next = chain.then(thunk, thunk);
     chain = next.catch(() => {});
     return next;
   };
+  const serialize = sharedSerialize || ownSerialize;
 
   const published = url =>
     `Published your workspace at ${url}\n` +
@@ -237,21 +257,35 @@ export const makePublishTool = ({
     // The served tree is the live workspace, not a snapshot, so a publication
     // that still stands needs nothing done to it: report the URL already
     // handed out rather than minting a second one for the same files.
-    const known = await load();
+    let known = await load();
     if (known) {
       const standing = await E(assetServer).describe(known.id);
-      if (standing) return published(standing.url);
+      if (standing && standing.status !== 'unavailable') {
+        if (known.pending || known.url !== standing.url) {
+          await save(harden({ id: known.id, url: standing.url })).catch(
+            () => {},
+          );
+        }
+        return published(standing.url);
+      }
+      if (standing) {
+        // The route stands and its target does not answer — the workspace it
+        // was taken from is gone or was replaced. A URL that can only say
+        // "unavailable" is not a publication; replace it.
+        await E(assetServer).release(known.id);
+        known = undefined;
+      }
     }
-    const { id, url } = await E(assetServer).serve(workspace, { label });
+    // Record the id first, serve under it second.
+    const id = known?.pending ? known.id : makeId();
     try {
-      await save(harden({ id, url }));
+      await save(harden({ id, pending: true }));
     } catch (error) {
-      // An unrecorded route would never be released; do not leave one.
-      await E(assetServer)
-        .release(id)
-        .catch(() => {});
       return `Publishing failed: the publication could not be recorded: ${/** @type {Error} */ (error).message}`;
     }
+    const { url } = await E(assetServer).serve(workspace, { label, id });
+    // The route is recorded by id either way; this only completes the record.
+    await save(harden({ id, url })).catch(() => {});
     return published(url);
   };
 

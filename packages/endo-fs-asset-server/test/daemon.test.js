@@ -80,20 +80,21 @@ const prepareHost = async t => {
   return { host: await connect(t, config), config };
 };
 
-/** The server with a host agent of its own, and its serve-only facet. */
+/** The server with a host agent of its own, and a name for each facet. */
 const provideAssetServer = async host => {
   // The handle and the agent are two names; the agent is the powers.
   await E(host).provideHost('asset-host-handle', { agentName: 'asset-host' });
   await E(host).makeUnconfined('@main', assetServerModuleHref, {
     powersName: 'asset-host',
-    resultName: 'asset-admin',
-    env: { ENDO_FS_ASSET_SERVER_PORT: '0' },
+    resultName: 'asset-root',
+    env: { ENDO_FS_ASSET_SERVER_PORT: '0', ENDO_FS_ASSET_SERVER_DURABLE: '1' },
   });
+  await E(host).evaluate('@main', 'E(root).admin()', ['root'], ['asset-root'], 'asset-admin');
   await E(host).evaluate(
     '@main',
-    'E(admin).publisher()',
-    ['admin'],
-    ['asset-admin'],
+    'E(root).publisher()',
+    ['root'],
+    ['asset-root'],
     'asset-publisher',
   );
   return {
@@ -129,7 +130,7 @@ test.serial('a served mount comes back after a restart by itself, read-only', as
   // The publisher can neither list nor reach the administrator.
   // eslint-disable-next-line no-underscore-dangle
   const publisherMethods = await E(publisher).__getMethodNames__();
-  for (const forbidden of ['list', 'getTarget', 'revoke', 'stop', 'publisher']) {
+  for (const forbidden of ['list', 'getTarget', 'revoke', 'stop', 'admin']) {
     t.false(publisherMethods.includes(forbidden), forbidden);
   }
 
@@ -152,7 +153,9 @@ test.serial('a served mount comes back after a restart by itself, read-only', as
   // The administrator has no way to repoint a route.
   // eslint-disable-next-line no-underscore-dangle
   const adminMethods = await E(admin).__getMethodNames__();
-  t.false(adminMethods.includes('serve'));
+  for (const forbidden of ['serve', 'publisher', 'release']) {
+    t.false(adminMethods.includes(forbidden), forbidden);
+  }
 
   await restart(config);
   const host2 = await connect(t, config);
@@ -219,4 +222,60 @@ test.serial('a Filesystem and a Git workspace are retained too; a derived view i
   t.true(await E(publisher2).release(gitServed.id));
   t.is((await get(admin2, gitServed.path)).status, 404);
   t.is((await get(admin2, fsServed.path)).status, 200);
+});
+
+test.serial('a mount keeps its deny list when it is served, and a crash leaves nothing retained', async t => {
+  const { host, config } = await prepareHost(t);
+  const siteDir = path.join(config.base, 'site');
+  fs.mkdirSync(path.join(siteDir, 'secrets'), { recursive: true });
+  fs.writeFileSync(path.join(siteDir, 'index.html'), '<p>site</p>\n');
+  fs.writeFileSync(path.join(siteDir, 'secrets', 'key.pem'), 'PRIVATE\n');
+  const mount = await E(host).provideMount(siteDir, 'site', {
+    deniedSegments: ['secrets'],
+  });
+  const { admin, publisher } = await provideAssetServer(host);
+  const served = await E(publisher).serve(mount);
+  t.is((await get(admin, served.path)).status, 200);
+  // The server derives its own read-only mount; that must not shed the
+  // parent's restrictions.
+  t.is((await get(admin, served.path, 'secrets/key.pem')).status, 404);
+
+  // What a crash between retaining a target and recording its route leaves:
+  // a target name with no record. The next incarnation discards it.
+  const agent = await E(host).lookup(['asset-host']);
+  const orphan = `asset-target-${'e'.repeat(32)}`;
+  await E(agent).provideSubMount(mount, [], orphan, { readOnly: true });
+  t.true((await siteNames(host)).includes(orphan));
+  await restart(config);
+  const host2 = await connect(t, config);
+  const admin2 = await E(host2).lookup(['asset-admin']);
+  t.is((await get(admin2, served.path)).status, 200);
+  t.false((await siteNames(host2)).includes(orphan));
+  t.is((await siteNames(host2)).length, 2);
+});
+
+test.serial('default powers are an in-memory server; insisting on durable refuses them', async t => {
+  // What the pre-durable deployments have pinned: the module made with no
+  // powersName. It must still come up (a setup migrating away from it has to
+  // be able to look it up and stop it), and must not pretend to be durable.
+  const { host } = await prepareHost(t);
+  await E(host).makeUnconfined('@main', assetServerModuleHref, {
+    resultName: 'legacy',
+    env: { ENDO_FS_ASSET_SERVER_PORT: '0' },
+  });
+  const legacy = await E(host).lookup(['legacy']);
+  const admin = await E(legacy).admin();
+  t.deepEqual(await E(admin).list(), []);
+  await E(admin).stop();
+
+  await t.throwsAsync(
+    E(host).makeUnconfined('@main', assetServerModuleHref, {
+      resultName: 'insisted',
+      env: {
+        ENDO_FS_ASSET_SERVER_PORT: '0',
+        ENDO_FS_ASSET_SERVER_DURABLE: '1',
+      },
+    }),
+    { message: /needs a host agent/ },
+  );
 });

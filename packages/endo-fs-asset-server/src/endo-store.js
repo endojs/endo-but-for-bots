@@ -51,7 +51,9 @@ export const makeEndoAssetStore = powers => {
   const removeIfPresent = async name => {
     if (await E(powers).has(name)) {
       await E(powers).remove(name);
+      return true;
     }
+    return false;
   };
 
   /**
@@ -90,26 +92,47 @@ export const makeEndoAssetStore = powers => {
     },
     load: async () => {
       const names = /** @type {string[]} */ (await E(powers).list());
-      /** @type {AssetRecord[]} */
+      const idOf = (name, prefix) =>
+        typeof name === 'string' &&
+        name.startsWith(prefix) &&
+        ID_PATTERN.test(name.slice(prefix.length))
+          ? name.slice(prefix.length)
+          : undefined;
+      /** @type {Array<AssetRecord | { id: string, unreadable: string }>} */
       const records = [];
+      const recorded = new Set();
       for (const name of names) {
-        if (
-          typeof name === 'string' &&
-          name.startsWith(RECORD_PREFIX) &&
-          ID_PATTERN.test(name.slice(RECORD_PREFIX.length))
-        ) {
+        const id = idOf(name, RECORD_PREFIX);
+        if (id !== undefined) {
+          recorded.add(id);
           try {
             // eslint-disable-next-line no-await-in-loop
             const record = await E(powers).lookup(name);
             // A record that does not name itself is not trusted to name a
             // route either.
-            if (record?.id === name.slice(RECORD_PREFIX.length)) {
-              records.push(record);
-            }
-          } catch (_cause) {
-            // An unreadable record restores nothing; it stays in the store
-            // for the operator to look at.
+            records.push(
+              record?.id === id
+                ? record
+                : { id, unreadable: 'the record does not name itself' },
+            );
+          } catch (cause) {
+            // Listed, not hidden: it still retains whatever it names.
+            records.push({
+              id,
+              unreadable: String(/** @type {Error} */ (cause)?.message || cause),
+            });
           }
+        }
+      }
+      // A target with no record is what a crash between `retain` and `record`
+      // (or a release that removed the record and then failed) leaves behind:
+      // retained forever, served never, and invisible to the administrator.
+      // Nothing is being served yet, so nothing in flight can own one.
+      for (const name of names) {
+        const id = idOf(name, TARGET_PREFIX);
+        if (id !== undefined && !recorded.has(id)) {
+          // eslint-disable-next-line no-await-in-loop
+          await removeIfPresent(name).catch(() => {});
         }
       }
       return records;
@@ -120,9 +143,11 @@ export const makeEndoAssetStore = powers => {
     },
     release: async id => {
       assertId(id);
-      // The record first: a half-released item must not come back as a route.
-      await removeIfPresent(`${RECORD_PREFIX}${id}`);
-      await removeIfPresent(`${TARGET_PREFIX}${id}`);
+      // The record first: a half-released item must not come back as a
+      // route. If the target's removal then fails, the next `load` sweeps it.
+      const hadRecord = await removeIfPresent(`${RECORD_PREFIX}${id}`);
+      const hadTarget = await removeIfPresent(`${TARGET_PREFIX}${id}`);
+      return hadRecord || hadTarget;
     },
   });
 };

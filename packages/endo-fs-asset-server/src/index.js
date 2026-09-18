@@ -12,6 +12,7 @@ export { makeTreeRequestHandler } from './serve-tree.js';
 export { contentTypeForName } from './mime.js';
 export {
   AssetServerInterface,
+  AssetServerRootInterface,
   AssetServerAdminInterface,
   AssetPublisherInterface,
   AssetMountInterface,

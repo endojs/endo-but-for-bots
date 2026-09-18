@@ -7591,6 +7591,27 @@ test('provideSubMount takes the parent as a capability and refuses a derived vie
   t.false(await E(holder).has('from-view'));
 });
 
+test('provideSubMount carries the parent deny list into the child', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-deny');
+  await createMountFixture(mountPath, {
+    'index.html': '<p>hello</p>\n',
+    'secrets/key.pem': 'PRIVATE\n',
+  });
+  const parent = await E(host).provideMount(mountPath, 'submount-deny-parent', {
+    deniedSegments: ['secrets'],
+  });
+  await t.throwsAsync(E(parent).lookup(['secrets', 'key.pem']));
+
+  const child = await E(host).provideSubMount(parent, [], 'submount-deny-child', {
+    readOnly: true,
+  });
+  t.is(await E(await E(child).lookup('index.html')).text(), '<p>hello</p>\n');
+  await t.throwsAsync(E(child).lookup(['secrets', 'key.pem']));
+  t.false((await E(child).list()).includes('secrets'));
+});
+
 test('provideSubMount isolates the child from parent siblings', async t => {
   const { host, config } = await prepareHost(t);
 

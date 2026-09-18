@@ -49,30 +49,44 @@ daemon-side attenuator: it is retained as given and only ever reached
 through the read-only attenuator, so pass one that is already read-only
 when the difference matters.
 
-Made without powers the server still runs, retains in memory, loses every
-route on restart, and says so once at startup. Powers that are not a host
-agent (a handle in place of its agent, a guest) are refused.
+With powers that cannot retain — the daemon's default least-authority
+powers, a guest, a handle in place of its agent — the server still runs,
+retains in memory, loses every route on restart, and says so once at
+startup. `ENDO_FS_ASSET_SERVER_DURABLE=1` turns that into a refusal to
+start.
+
+Routes are in place before the listener opens, so a request never gets a
+404 for a URL that is about to work, and a store that cannot be read fails
+the server with nothing bound. A request path with a `.git` segment is
+refused: a link to a published worktree is not a grant of its history. A
+sub-mount keeps its parent's deny list, so serving a mount does not shed
+the restrictions it was made with.
 
 ## Facets
 
-The formula value is the **`AssetServerAdmin`**:
+The formula value is the **`AssetServerRoot`**: `admin()` and
+`publisher()`, nothing else. Whoever instantiates the server gives each
+facet a name of its own and hands out neither the root nor the
+administrator.
+
+**`AssetServerAdmin`**, for the operator:
 
 | method | |
 | --- | --- |
-| `list()` | every served item: `{ id, path, url, kind, subPath, index, label, createdAt, status, error? }` |
+| `list()` | every served item: `{ id, path, url, kind, subPath, index, label, createdAt, status, error? }`; a record the store could not read is listed as `{ id, status: 'unreadable', error }` |
 | `getTarget(id)` | the retained read-only facet of an item, for looking at what a route serves |
-| `revoke(id)` | drop a route and release what was retained for it |
-| `publisher()` | the serve-only facet, below |
+| `revoke(id)` | drop a route and release what was retained for it; repeatable, and it reaches the store even for an id this incarnation does not know |
 | `getAddress()` / `stop()` | `stop()` closes the listener and releases nothing |
 
-The administrator reads and removes. It has no `serve` and no way to
-change what a route points at.
+The administrator reads and removes. It has no `serve`, no way to reach
+the publisher, and no way to change what a route points at.
 
-`publisher()` is the **`AssetPublisher`**, the facet to hand to anything
-that has a tree to publish: `serve(target, opts)`, `describe(id)`,
-`release(id)`, `getAddress()`. It cannot list, and `describe`/`release`
-answer only for an `id` that `serve` returned (128 random bits, never
-part of a URL).
+**`AssetPublisher`**, the facet to hand to anything that has a tree to
+publish: `serve(target, opts)`, `describe(id)`, `release(id)`,
+`getAddress()`. It cannot list, and `describe`/`release` answer only for
+an `id` that `serve` returned (128 random bits, never part of a URL).
+`describe` reports a route's status but not why it is unavailable: that
+wording is the daemon's and can name host paths.
 
 ## Shape
 
@@ -84,6 +98,11 @@ const { id, path, url, revoke } = await E(publisher).serve(target, {
   index: 'index.html',
   // optional: free text the administrator sees in list()
   label: 'docs site',
+  // optional: 32 lowercase hex characters of your own randomness. Record
+  // the id BEFORE serving and a crash in between can never leave a route
+  // you have no id for: serving again under an id that stands returns that
+  // route instead of making another.
+  id,
 });
 
 // GET ${url}style.css       -> 200, the file's bytes
@@ -108,24 +127,26 @@ through `makeUnconfined`'s per-formula `env`:
 | `ENDO_FS_ASSET_SERVER_PORT` | Port to listen on. `0`/unset asks the OS to assign one. |
 | `ENDO_FS_ASSET_SERVER_HOST` | Interface to bind. Defaults to `127.0.0.1` (loopback). |
 | `ENDO_FS_ASSET_SERVER_PUBLIC_BASE` | Origin to advertise in returned URLs when behind a proxy. |
+| `ENDO_FS_ASSET_SERVER_DURABLE` | `1` refuses to start unless the powers can retain what is served. Unset, powers that cannot (the daemon's default least-authority powers, a guest) give an in-memory server that says so at startup. |
 
 ```js
 // 1. A host agent that belongs to the server: its pet store is where the
 //    server retains what it serves. The agent, not its handle, is the powers.
 await E(host).provideHost('assets-host-handle', { agentName: 'assets-host' });
 
-// 2. The server. Its value is the administrator.
+// 2. The server. Its value is the root: admin() and publisher().
 await E(host).makeUnconfined('@main', assetServerModuleUrl, {
   powersName: 'assets-host',
-  resultName: 'assets-admin',
-  env: { ENDO_FS_ASSET_SERVER_PORT: '8080' },
+  resultName: 'assets-root',
+  env: { ENDO_FS_ASSET_SERVER_PORT: '8080', ENDO_FS_ASSET_SERVER_DURABLE: '1' },
 });
 
-// 3. The serve-only facet as a formula of its own, so it is durable and can
-//    be handed out by name.
-await E(host).evaluate('@main', 'E(admin).publisher()', ['admin'], ['assets-admin'], 'assets');
+// 3. Each facet as a formula of its own, so it is durable and can be handed
+//    out by name.
+await E(host).evaluate('@main', 'E(root).admin()', ['root'], ['assets-root'], 'assets-admin');
+await E(host).evaluate('@main', 'E(root).publisher()', ['root'], ['assets-root'], 'assets');
 
-// 4. Pin all three so they revive at boot and the routes come back before
+// 4. Pin them so they revive at boot and the routes come back before
 //    anyone asks.
 // 5. From anywhere holding `assets`: E(assets).serve(mountOrGitOrFilesystem)
 ```
@@ -135,7 +156,7 @@ await E(host).evaluate('@main', 'E(admin).publisher()', ['admin'], ['assets-admi
 `makeAssetServer` takes a platform HTTP `backend` and randomness as
 injected powers, so it can be unit-tested with fakes and reused outside a
 daemon. It is the whole server as one facet, retaining in memory;
-`makeAssetServerKit` returns `{ admin, publisher, server }` and takes a
+`makeAssetServerKit` returns `{ root, admin, publisher, server }` and takes a
 `store` (`retain`, `record`, `load`, `recall`, `release`) for an embedder
 with somewhere durable to keep things — `makeEndoAssetStore(powers)` is the
 one the daemon module uses:

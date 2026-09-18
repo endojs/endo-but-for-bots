@@ -9,6 +9,7 @@ const makeAssetServer = () => {
   const served = [];
   const revoked = [];
   const standing = new Map();
+  const unavailable = new Set();
   let counter = 0;
   const server = Far('AssetPublisher', {
     async serve(target, options = {}) {
@@ -25,10 +26,15 @@ const makeAssetServer = () => {
       ) {
         throw Error('serve requires a Filesystem, Mount or Git capability');
       }
+      // A caller-chosen id that already stands is the same route.
+      if (options.id !== undefined && standing.has(options.id)) {
+        const again = standing.get(options.id);
+        return harden({ id: options.id, path: '/again/', url: again, revoke: undefined });
+      }
       counter += 1;
-      const id = `${counter}`.padStart(32, '0');
+      const id = options.id ?? `${counter}`.padStart(32, '0');
       const url = `http://host/token-${counter}/`;
-      served.push({ target, url, label: options.label });
+      served.push({ target, url, label: options.label, id });
       standing.set(id, url);
       const revoke = Far('AssetMount', {
         async revoke() {
@@ -39,7 +45,13 @@ const makeAssetServer = () => {
       return harden({ id, path: `/token-${counter}/`, url, revoke });
     },
     async describe(id) {
-      return standing.has(id) ? harden({ id, url: standing.get(id) }) : undefined;
+      return standing.has(id)
+        ? harden({
+            id,
+            url: standing.get(id),
+            status: unavailable.has(id) ? 'unavailable' : 'ready',
+          })
+        : undefined;
     },
     async release(id) {
       if (!standing.has(id)) return false;
@@ -50,7 +62,7 @@ const makeAssetServer = () => {
   });
   // What a restart of an in-memory server, or an administrator, does.
   const forget = () => standing.clear();
-  return { server, served, revoked, forget };
+  return { server, served, revoked, forget, unavailable, standing };
 };
 
 const INDEX = 'index.html';
@@ -242,10 +254,11 @@ test('the publication is the session’s: a rebuilt tool finds it, and only dele
       savePublication: async publication => {
         recorded = publication;
       },
+      makeId: () => 'a'.repeat(32),
     });
 
   t.regex(await E(make()).execute({}), /token-1/);
-  t.deepEqual(recorded, { id: '1'.padStart(32, '0'), url: 'http://host/token-1/' });
+  t.deepEqual(recorded, { id: 'a'.repeat(32), url: 'http://host/token-1/' });
   // A new instance — a revived agent, a restarted daemon — serves nothing.
   const rebuilt = make();
   t.regex(await E(rebuilt).execute({}), /token-1/);
@@ -271,7 +284,45 @@ test('a publication the server no longer has is served again', async t => {
   t.is(asset.served.length, 2);
 });
 
-test('a publication that cannot be recorded is released, not left serving', async t => {
+test('the id is recorded before anything is served, so a crash in between loses nothing', async t => {
+  const asset = makeAssetServer();
+  /** @type {any[]} */
+  const saves = [];
+  /** @type {any} */
+  let recorded;
+  const make = options =>
+    makePublishTool({
+      getAssetServer: async () => asset.server,
+      getWorkspace: async () => makeFilesystemCap(),
+      loadPublication: async () => recorded,
+      savePublication: async publication => {
+        saves.push({ publication, servedSoFar: asset.served.length });
+        recorded = publication;
+      },
+      makeId: () => 'b'.repeat(32),
+      ...options,
+    });
+
+  await E(make()).execute({});
+  t.deepEqual(saves[0], {
+    publication: { id: 'b'.repeat(32), pending: true },
+    servedSoFar: 0,
+  });
+
+  // The crash: the server has the route, the record still says pending.
+  recorded = { id: 'b'.repeat(32), pending: true };
+  t.regex(await E(make()).execute({}), /token-1/);
+  t.is(asset.served.length, 1, 'found by its id, not served again');
+  t.deepEqual(recorded, { id: 'b'.repeat(32), url: 'http://host/token-1/' });
+
+  // The other crash: recorded pending, never served. Same id, served now.
+  asset.forget();
+  recorded = { id: 'b'.repeat(32), pending: true };
+  t.regex(await E(make()).execute({}), /token-2/);
+  t.is(asset.served.at(-1).id, 'b'.repeat(32));
+});
+
+test('a publication that cannot be recorded serves nothing', async t => {
   const asset = makeAssetServer();
   const tool = makePublishTool({
     getAssetServer: async () => asset.server,
@@ -282,7 +333,50 @@ test('a publication that cannot be recorded is released, not left serving', asyn
     },
   });
   t.regex(await E(tool).execute({}), /could not be recorded/);
+  t.is(asset.served.length, 0);
+});
+
+test('a standing route whose target no longer answers is replaced', async t => {
+  const asset = makeAssetServer();
+  let next = 0;
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeFilesystemCap(),
+    makeId: () => `${(next += 1)}`.repeat(32),
+  });
+  t.regex(await E(tool).execute({}), /token-1/);
+  asset.unavailable.add('1'.repeat(32));
+  t.regex(await E(tool).execute({}), /token-2/);
   t.deepEqual(asset.revoked, ['http://host/token-1/']);
+});
+
+test('publishes of one session share a chain across tool instances', async t => {
+  const asset = makeAssetServer();
+  /** @type {any} */
+  let recorded;
+  let chain = Promise.resolve();
+  const serialize = thunk => {
+    const run = chain.then(thunk, thunk);
+    chain = run.catch(() => {});
+    return run;
+  };
+  const make = () =>
+    makePublishTool({
+      getAssetServer: async () => asset.server,
+      getWorkspace: async () => makeFilesystemCap(),
+      loadPublication: async () => recorded,
+      savePublication: async publication => {
+        recorded = publication;
+      },
+      serialize,
+    });
+  // An old instance and a rebuilt one, both publishing at once.
+  const [first, second] = await Promise.all([
+    E(make()).execute({}),
+    E(make()).execute({}),
+  ]);
+  t.is(first, second);
+  t.is(asset.served.length, 1);
 });
 
 test('revoke() releases the served route on session teardown', async t => {

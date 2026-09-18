@@ -47,6 +47,7 @@ import { readOnly as readOnlyFilesystem } from '@endo/platform/fs/extended/reado
 import { contentTypeForName } from './mime.js';
 import {
   AssetServerInterface,
+  AssetServerRootInterface,
   AssetServerAdminInterface,
   AssetPublisherInterface,
   AssetMountInterface,
@@ -68,6 +69,16 @@ const plainResponse = (status, text) => ({
   status,
   headers: [['Content-Type', 'text/plain; charset=utf-8']],
   body: textEncoder.encode(text),
+});
+
+/** @returns {HttpResponse} */
+const unavailableResponse = () => ({
+  status: 503,
+  headers: [
+    ['Content-Type', 'text/plain; charset=utf-8'],
+    ['Retry-After', '5'],
+  ],
+  body: textEncoder.encode('Temporarily unavailable\n'),
 });
 
 /**
@@ -157,19 +168,25 @@ const toBase64Url = bytes => {
  * @property {(id: string, target: object, kind: AssetKind) => Promise<object>} retain
  *   Take a read-only facet of `target`, retain it under `id`, return it.
  * @property {(record: AssetRecord) => Promise<void>} record
- * @property {() => Promise<AssetRecord[]>} load  every record, any order.
+ * @property {() => Promise<Array<AssetRecord | { id: string, unreadable: string }>>} load
+ *   every record, any order; a record that could not be read or is not one
+ *   comes back as `{ id, unreadable }`, so it is listed rather than hidden.
+ *   Also the moment a store discards what a crash left half-retained.
  * @property {(id: string, kind: AssetKind) => Promise<object>} recall
  *   the retained read-only facet.
- * @property {(id: string) => Promise<void>} release  forget facet and record.
+ * @property {(id: string) => Promise<boolean>} release  forget facet and
+ *   record; whether there was anything to forget. Safe to repeat.
  */
 
 /**
  * @typedef {object} AssetEntry
  * @property {AssetRecord} record
- * @property {'ready' | 'restoring' | 'unavailable'} status
+ * @property {'ready' | 'restoring' | 'unavailable' | 'unreadable'} status
  * @property {string} [error]
  * @property {() => Promise<object>} filesystem  the walkable Filesystem.
  * @property {() => Promise<object>} facet  the retained read-only facet.
+ * @property {() => void} invalidate  forget a resolved Filesystem that has
+ *   stopped answering, so the next request recalls it.
  */
 
 /**
@@ -258,11 +275,16 @@ const makeMemoryStore = () => {
       return facet;
     },
     release: async id => {
-      facets.delete(id);
-      records.delete(id);
+      const had = facets.delete(id);
+      return records.delete(id) || had;
     },
   });
 };
+
+/** How long a restored route may take to answer before a request gives up. */
+const RESOLVE_TIMEOUT_MS = 15_000;
+/** How long a failed resolution is remembered, matching `Retry-After`. */
+const RESOLVE_BACKOFF_MS = 5000;
 
 const toHex = bytes =>
   Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
@@ -283,7 +305,18 @@ const isAssetRecord = record => {
     /^[A-Za-z0-9_-]{16,}$/.test(r.token) &&
     ['filesystem', 'mount', 'git'].includes(r.kind) &&
     Array.isArray(r.subPath) &&
-    r.subPath.every(seg => typeof seg === 'string') &&
+    Number(r.subPath.length) <= 64 &&
+    // Held to what `serve` would have stored: no traversal, no empty or
+    // split segments.
+    r.subPath.every(
+      seg =>
+        typeof seg === 'string' &&
+        seg !== '' &&
+        seg !== '.' &&
+        seg !== '..' &&
+        !seg.includes('/') &&
+        !seg.includes('\0'),
+    ) &&
     typeof r.index === 'string' &&
     r.index !== '' &&
     typeof r.label === 'string' &&
@@ -339,14 +372,16 @@ const readFileBody = async function* readFileBody(fileNode, size) {
  * of facets over one route table:
  *
  * - `admin` — for whoever operates the server: list what is served, reach an
- *   item's retained read-only facet, drop a route, stop the server, and hand
- *   out `publisher()`. It cannot change what a route serves; the only
- *   mutation is removal.
+ *   item's retained read-only facet, drop a route, stop the server. It cannot
+ *   serve, and cannot change what a route serves; its only mutation is
+ *   removal.
  * - `publisher` — for whoever has something to serve: `serve(target)` and the
  *   release of an item by the `id` `serve` returned. It cannot list, and
  *   cannot reach anything it was not handed an `id` for.
- * - `server` — the two together with `stop()`, for embedders and tests that
- *   hold the whole server anyway.
+ * - `root` — `admin()` and `publisher()`, nothing else: the value of the
+ *   daemon formula, from which each facet is given a name of its own.
+ * - `server` — serving and `stop()` in one facet, for embedders and tests
+ *   that hold the whole server anyway.
  *
  * The server is the retention root for what it serves. On receipt `serve`
  * takes a read-only facet of the capability and that facet is all it keeps;
@@ -374,7 +409,7 @@ const readFileBody = async function* readFileBody(fileNode, size) {
  * @param {AssetStore} [opts.store]  where served items are retained;
  *   defaults to memory, which survives nothing.
  * @param {() => number} [opts.now]
- * @returns {Promise<{ admin: object, publisher: object, server: object }>}
+ * @returns {Promise<{ root: object, admin: object, publisher: object, server: object }>}
  */
 export const makeAssetServerKit = async ({
   backend,
@@ -403,9 +438,34 @@ export const makeAssetServerKit = async ({
   const mintId = () => toHex(getRandomValues(new Uint8Array(16)));
 
   /**
+   * A promise that rejects after `ms`, and a way to disarm it. A realm with
+   * no timers waits without a bound, as it did before there was one.
+   *
+   * @param {number} ms
+   */
+  const deadline = ms => {
+    const { setTimeout: set, clearTimeout: clear } = globalThis;
+    if (typeof set !== 'function') {
+      return { expired: new Promise(() => {}), disarm: () => {} };
+    }
+    /** @type {any} */
+    let timer;
+    const expired = new Promise((_, reject) => {
+      timer = set(
+        () => reject(makeError(X`the served target did not answer in time`)),
+        ms,
+      );
+    });
+    expired.catch(() => {});
+    return { expired, disarm: () => clear(timer) };
+  };
+
+  /**
    * An entry whose Filesystem is resolved from the store on demand, one
-   * attempt at a time. A failed attempt is not cached: the next request tries
-   * again, so a target that was briefly unreachable comes back by itself.
+   * attempt at a time and each attempt bounded. A failure is remembered only
+   * for as long as the `Retry-After` it is answered with, so a target that
+   * was briefly unreachable comes back by itself and one that is gone does
+   * not cost a store lookup per request.
    *
    * @param {AssetRecord} record
    * @param {object} [knownFacet]
@@ -419,6 +479,8 @@ export const makeAssetServerKit = async ({
       knownFacet === undefined ? undefined : walkable(knownFacet, record.kind);
     /** @type {Promise<object> | undefined} */
     let flight;
+    /** @type {{ until: number, cause: unknown } | undefined} */
+    let failed;
     /** @type {AssetEntry} */
     const entry = {
       record,
@@ -427,24 +489,45 @@ export const makeAssetServerKit = async ({
         await entry.filesystem();
         return /** @type {object} */ (facet);
       },
+      invalidate: () => {
+        facet = undefined;
+        filesystem = undefined;
+        entry.status = 'restoring';
+      },
       filesystem: () => {
         if (filesystem !== undefined) return Promise.resolve(filesystem);
+        if (failed !== undefined && now() < failed.until) {
+          return Promise.reject(failed.cause);
+        }
         flight ??= (async () => {
+          const { expired, disarm } = deadline(RESOLVE_TIMEOUT_MS);
           try {
-            facet = await store.recall(record.id, record.kind);
-            const candidate = walkable(facet, record.kind);
-            // Prove it answers before calling it ready: a facet whose
-            // backing is gone resolves and then fails every walk.
-            await E(candidate).root();
+            const resolved = (async () => {
+              const recalled = await store.recall(record.id, record.kind);
+              const candidate = walkable(recalled, record.kind);
+              // Prove it answers before calling it ready: a facet whose
+              // backing is gone resolves and then fails every walk.
+              await E(candidate).root();
+              return { recalled, candidate };
+            })();
+            resolved.catch(() => {});
+            const { recalled, candidate } = await Promise.race([
+              resolved,
+              expired,
+            ]);
+            facet = recalled;
             filesystem = candidate;
+            failed = undefined;
             entry.status = 'ready';
             entry.error = undefined;
             return candidate;
           } catch (cause) {
+            failed = { until: now() + RESOLVE_BACKOFF_MS, cause };
             entry.status = 'unavailable';
             entry.error = String(/** @type {Error} */ (cause)?.message || cause);
             throw cause;
           } finally {
+            disarm();
             flight = undefined;
           }
         })();
@@ -453,6 +536,57 @@ export const makeAssetServerKit = async ({
     };
     return entry;
   };
+
+  /**
+   * A record the store holds and could not read. It has no token, so it is
+   * no route; it is listed so the administrator can see and remove it.
+   *
+   * @param {string} id
+   * @param {string} why
+   * @returns {AssetEntry}
+   */
+  const makeUnreadableEntry = (id, why) => {
+    const gone = () => Promise.reject(makeError(X`unreadable record ${q(id)}`));
+    return {
+      record: harden({
+        version: 1,
+        id,
+        token: '',
+        kind: 'filesystem',
+        subPath: [],
+        index: 'index.html',
+        label: '',
+        createdAt: 0,
+      }),
+      status: 'unreadable',
+      error: why,
+      facet: gone,
+      filesystem: gone,
+      invalidate: () => {},
+    };
+  };
+
+  // Restore what the store retained BEFORE the listener opens: a request
+  // that arrives first would be told 404 for a URL that is about to work,
+  // and a proxy may remember that. The facets resolve in the background — a
+  // target that cannot be revived must not hold the listener, or the other
+  // routes, hostage — and a store that cannot be read fails the server here,
+  // with nothing bound.
+  for (const loaded of await store.load()) {
+    if (isAssetRecord(loaded)) {
+      if (!mounts.has(loaded.token) && !entries.has(loaded.id)) {
+        const entry = makeEntry(loaded);
+        mounts.set(loaded.token, entry);
+        entries.set(loaded.id, entry);
+        entry.filesystem().catch(() => {});
+      }
+    } else {
+      const { id, unreadable } = /** @type {any} */ (loaded);
+      if (typeof id === 'string' && !entries.has(id)) {
+        entries.set(id, makeUnreadableEntry(id, String(unreadable)));
+      }
+    }
+  }
 
   /**
    * The platform HTTP request handler: resolve `/{token}/path` to a
@@ -502,16 +636,8 @@ export const makeAssetServerKit = async ({
       filesystem = await entry.filesystem();
     } catch {
       // The route exists and its target does not answer: not a 404, which
-      // would tell a visitor the link is wrong, and retried on the next
-      // request.
-      return {
-        status: 503,
-        headers: [
-          ['Content-Type', 'text/plain; charset=utf-8'],
-          ['Retry-After', '5'],
-        ],
-        body: textEncoder.encode('Temporarily unavailable\n'),
-      };
+      // would tell a visitor the link is wrong.
+      return unavailableResponse();
     }
 
     /** @type {string[]} */
@@ -521,6 +647,11 @@ export const makeAssetServerKit = async ({
     } catch {
       // Traversal / NUL bytes in the request path.
       return plainResponse(400, 'Bad request\n');
+    }
+    // A published worktree has its repository beside its files. A link to a
+    // site is not a grant of its history, and the link is now permanent.
+    if (pathSegments.includes('.git')) {
+      return plainResponse(404, 'Not found\n');
     }
 
     // Resolve the request to a File cap. Any resolution failure
@@ -559,6 +690,17 @@ export const makeAssetServerKit = async ({
       size = /** @type {bigint} */ (attrs.size);
       fileNode = node;
     } catch {
+      // A missing path and a Filesystem that has stopped answering both fail
+      // the walk. Tell them apart, or a target whose worker restarted would
+      // 404 for the rest of this incarnation while listed as ready: if the
+      // root itself does not answer, forget it, so the next request recalls
+      // it, and say "try again" rather than "no such page".
+      try {
+        await E(filesystem).root();
+      } catch {
+        entry.invalidate();
+        return unavailableResponse();
+      }
       return plainResponse(404, 'Not found\n');
     }
 
@@ -602,31 +744,45 @@ export const makeAssetServerKit = async ({
 
   const urlFor = token => `${origin}/${token}/`;
 
-  // Restore what the store retained, before anyone can publish or ask. The
-  // facets resolve in the background: a target that cannot be revived must
-  // not hold the listener, or the other routes, hostage.
-  for (const record of await store.load()) {
-    if (isAssetRecord(record) && !mounts.has(record.token)) {
-      const entry = makeEntry(record);
-      mounts.set(record.token, entry);
-      entries.set(record.id, entry);
-      entry.filesystem().catch(() => {});
-    }
-  }
-
   /**
    * Drop a route and what it retained. The route goes first, so a release
-   * that fails in the store still stops the serving.
+   * that fails in the store still stops the serving; and the store is asked
+   * whether or not this incarnation knows the id, so a release that failed
+   * once can be repeated until it holds, and one made after `stop()` is not
+   * mistaken for done. A revocation that only happened in memory would bring
+   * the URL back at the next restart.
    *
    * @param {string} id
    */
   const drop = async id => {
+    if (!/^[0-9a-f]{32}$/.test(id)) return false;
     const entry = entries.get(id);
-    if (!entry) return false;
-    mounts.delete(entry.record.token);
-    entries.delete(id);
-    await store.release(id);
-    return true;
+    if (entry) {
+      mounts.delete(entry.record.token);
+      entries.delete(id);
+    }
+    const released = await store.release(id);
+    return entry !== undefined || released;
+  };
+
+  /**
+   * @param {string} id
+   * @param {string} token
+   */
+  const makeRevoker = (id, token) => {
+    let revoked = false;
+    const url = urlFor(token);
+    return makeExo('AssetMount', AssetMountInterface, {
+      revoke: async () => {
+        await drop(id);
+        revoked = true;
+      },
+      getPath: () => `/${token}/`,
+      getUrl: () => url,
+      isRevoked: () => revoked || !entries.has(id),
+      help: () =>
+        `Revoker for the capability served at ${url}. Call revoke() to stop serving it.`,
+    });
   };
 
   /**
@@ -642,6 +798,11 @@ export const makeAssetServerKit = async ({
    * @param {string} [serveOpts.index]  directory index file name;
    *   defaults to `index.html`.
    * @param {string} [serveOpts.label]  free text shown to the administrator.
+   * @param {string} [serveOpts.id]  the id to serve under, 32 lowercase hex
+   *   characters of the caller's own randomness. A caller that records the id
+   *   BEFORE it serves can never lose track of a route to a crash in between:
+   *   `serve` with an id that already stands returns that route instead of
+   *   making another, so the caller simply serves again.
    */
   const serve = async (target, serveOpts = {}) => {
     await null;
@@ -654,17 +815,53 @@ export const makeAssetServerKit = async ({
     const subPath = normalizeSegments(
       /** @type {string | string[]} */ (serveOpts.subPath ?? []),
     );
+    // What is retained per route is bounded here, since it is kept for as
+    // long as the route stands.
+    if (subPath.length > 64 || subPath.some(seg => seg.length > 255)) {
+      throw makeError(X`serve subPath is too deep or has too long a segment`);
+    }
     const index = serveOpts.index ?? 'index.html';
-    if (typeof index !== 'string' || index === '') {
-      throw makeError(X`serve index must be a non-empty string`);
+    if (
+      typeof index !== 'string' ||
+      index === '' ||
+      index.length > 255 ||
+      index.includes('/') ||
+      index.includes('\0')
+    ) {
+      throw makeError(X`serve index must be a file name`);
     }
     const label = serveOpts.label ?? '';
     if (typeof label !== 'string' || label.length > 256) {
       throw makeError(X`serve label must be a string of at most 256 characters`);
     }
+    const requestedId = serveOpts.id;
+    if (
+      requestedId !== undefined &&
+      (typeof requestedId !== 'string' || !/^[0-9a-f]{32}$/.test(requestedId))
+    ) {
+      throw makeError(X`serve id must be 32 lowercase hex characters`);
+    }
+    if (requestedId !== undefined) {
+      const standing = entries.get(requestedId);
+      if (standing) {
+        if (standing.status === 'unreadable') {
+          throw makeError(X`serve id ${q(requestedId)} names an unreadable record`);
+        }
+        return harden({
+          id: requestedId,
+          path: `/${standing.record.token}/`,
+          url: urlFor(standing.record.token),
+          revoke: makeRevoker(requestedId, standing.record.token),
+        });
+      }
+    }
     const kind = await classifyAssetTarget(target);
 
-    const id = mintId();
+    const id = requestedId ?? mintId();
+    if (entries.has(id)) {
+      // Two serves raced on one id; the first stands.
+      throw makeError(X`serve id ${q(id)} is already being served`);
+    }
     const facet = await store.retain(id, target, kind);
     /** @type {AssetRecord} */
     const record = harden({
@@ -692,18 +889,7 @@ export const makeAssetServerKit = async ({
 
     const path = `/${record.token}/`;
     const url = urlFor(record.token);
-    let revoked = false;
-    const revoke = makeExo('AssetMount', AssetMountInterface, {
-      revoke: async () => {
-        revoked = true;
-        await drop(id);
-      },
-      getPath: () => path,
-      getUrl: () => url,
-      isRevoked: () => revoked || !entries.has(id),
-      help: () =>
-        `Revoker for the capability served at ${url}. Call revoke() to stop serving it.`,
-    });
+    const revoke = makeRevoker(id, record.token);
 
     return harden({ id, path, url, revoke });
   };
@@ -712,6 +898,15 @@ export const makeAssetServerKit = async ({
 
   /** @param {AssetEntry} entry */
   const describeEntry = entry =>
+    entry.status === 'unreadable'
+      ? harden({
+          id: entry.record.id,
+          status: entry.status,
+          error: entry.error,
+        })
+      : describeRoute(entry);
+  /** @param {AssetEntry} entry */
+  const describeRoute = entry =>
     harden({
       id: entry.record.id,
       path: `/${entry.record.token}/`,
@@ -727,14 +922,13 @@ export const makeAssetServerKit = async ({
 
   // Stopping closes the listener. It releases nothing: what the server
   // retains is served again by the next incarnation, and only a revocation
-  // ends a route.
+  // ends a route. The tables stay, so the administrator of a stopped server
+  // still sees, and can still revoke, what the next one would serve.
   const stop = async () => {
     if (stopped) {
       return;
     }
     stopped = true;
-    mounts.clear();
-    entries.clear();
     await E(httpServer).stop();
   };
 
@@ -743,9 +937,14 @@ export const makeAssetServerKit = async ({
     return drop(id);
   };
 
+  // For whoever holds an id. The reason a target is unavailable is the
+  // daemon's own wording and can name host paths the Mount interface hides,
+  // so it is the administrator's to read, not the publisher's.
   const describe = id => {
     const entry = entries.get(id);
-    return entry ? describeEntry(entry) : undefined;
+    if (!entry || entry.status === 'unreadable') return undefined;
+    const { error: _error, ...rest } = describeRoute(entry);
+    return harden(rest);
   };
 
   const publisher = makeExo('AssetPublisher', AssetPublisherInterface, {
@@ -766,11 +965,19 @@ export const makeAssetServerKit = async ({
       return entry.facet();
     },
     revoke: release,
-    publisher: () => publisher,
     getAddress,
     stop,
     help: () =>
-      `Administrator of the static asset server at ${origin}. list() the served items, getTarget(id) for an item's read-only facet, revoke(id) to drop a route, publisher() for the serve-only facet, stop() to close the listener.`,
+      `Administrator of the static asset server at ${origin}. list() the served items, getTarget(id) for an item's read-only facet, revoke(id) to drop a route, stop() to close the listener. It cannot serve.`,
+  });
+
+  // What a formula's value is: the one object from which the two facets are
+  // taken, held by whoever instantiated the server and handed to no one.
+  const root = makeExo('AssetServerRoot', AssetServerRootInterface, {
+    admin: () => admin,
+    publisher: () => publisher,
+    help: () =>
+      `Static asset server at ${origin}. admin() is the operator's facet (list, getTarget, revoke, stop); publisher() is the serve-only facet to hand out. Give each its own name and hand out neither this object nor admin().`,
   });
 
   const server = makeExo('AssetServer', AssetServerInterface, {
@@ -783,7 +990,7 @@ export const makeAssetServerKit = async ({
       `Static asset server at ${origin}. Call serve(target) to mount a Filesystem, Mount or Git capability under a fresh capability path; it returns { id, path, url, revoke }. The mount serves until revoke.revoke().`,
   });
 
-  return harden({ admin, publisher, server });
+  return harden({ root, admin, publisher, server });
 };
 harden(makeAssetServerKit);
 

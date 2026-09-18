@@ -4727,12 +4727,30 @@ const makeDaemonCore = async (
           }),
         });
 
+        // The deny list narrows like read-only does: a parent that denies
+        // more than the default must not be escaped by re-mounting a subtree.
+        // Left out, the child fell back to the default list, so a mount made
+        // with `deniedSegments: [..., 'secrets']` could be derived into one
+        // that serves `secrets/` — by anyone who could get a host agent to
+        // derive it, which a server that retains what it is handed does. An
+        // overridden list is carried as it is, including an empty one (the
+        // parent already granted that).
+        const parentDenied =
+          parentFormula !== undefined &&
+          (parentFormula.type === 'mount' ||
+            parentFormula.type === 'scratch-mount')
+            ? parentFormula.deniedSegments
+            : undefined;
+
         /** @type {import('./types.js').MountFormula} */
         const formula = harden({
           type: 'mount',
           path: fullPath,
           readOnly: effectiveReadOnly,
           parent: parentMountId,
+          ...(parentDenied !== undefined
+            ? { deniedSegments: [...parentDenied] }
+            : {}),
         });
 
         return formulate(formulaNumber, formula);
