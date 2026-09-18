@@ -1,5 +1,19 @@
 # Merge blockers and external dependencies
 
+**Historical record (2026-09-18).** This file was the PR gate for the Codex
+subscription backend as it stood between 2026-09-07 and 2026-09-10. It is kept
+as evidence of what was decided and why, not as a description of the current
+code: the live documents are [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md)
+and [DEPLOYMENT-ACCEPTANCE.md](./DEPLOYMENT-ACCEPTANCE.md), and the contract is
+[SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md). Statements below that a mode
+"remains disabled", that `@endo/claude-sandbox` injects a credential into its
+slice, that XFS quotas are live evidence, or that name
+`makeAttestedCodexResourceProvisioner` or `codex-auth-seeder`, describe code that
+has since shipped, been replaced, or been deleted (the hosted Claude backend
+runs against the broker with a placeholder in the slice; the volume/quota
+subsystem is retired, see [DURABLE-VOLUMES.md](./DURABLE-VOLUMES.md); the
+attestation is composed in `src/codex-native-controller.js`).
+
 Codex status update, 2026-09-10: an explicit experimental subscription composition
 now has live Floot acceptance with host-held renewable Secrets credentials.
 See [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) for its bounded lifecycle

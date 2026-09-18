@@ -83,9 +83,9 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   })();
   const turnP = agent.converse('build it', writer);
   await sent.waitFor(1);
-  t.is(
-    sendOptions[0].continuityContext,
-    '',
+  t.deepEqual(
+    sendOptions[0].transcript,
+    [],
     'current input is not replayed as history',
   );
   turns[0].push({ type: 'text-delta', text: 'Built.' });
@@ -126,13 +126,14 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   const secondTurn = agent.converse('again', secondReply.writer);
   await sent.waitFor(2);
   t.deepEqual(
-    JSON.parse(sendOptions[1].continuityContext),
+    sendOptions[1].transcript,
     [
-      { role: 'user', content: 'build it' },
-      { role: 'assistant', content: 'Built.' },
-      { role: 'tool', name: 'shell', args: '{}', result: 'ok' },
+      { kind: 'message', role: 'user', content: 'build it' },
+      { kind: 'message', role: 'assistant', content: 'Built.' },
+      { kind: 'tool-call', id: 'tool-1', name: 'shell', args: '{}' },
+      { kind: 'tool-result', id: 'tool-1', content: 'ok' },
     ],
-    'the next turn gets complete prior dialogue, not its own prompt',
+    'the next turn gets the complete prior dialogue as records, not its own prompt',
   );
   turns[1].push({
     type: 'tool-call',

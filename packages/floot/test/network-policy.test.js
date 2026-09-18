@@ -142,9 +142,9 @@ test('loss of configured enforcement fails closed rather than ignoring policy', 
   await t.throwsAsync(controller.forTurn(), { message: /unavailable/ });
 });
 
-test('capacity always reserves durable public revocation', async t => {
+test('the audit has no ceiling: a long-lived session can still change policy', async t => {
   const f = fixture();
-  for (let index = 1; index <= 4092; index += 1) {
+  for (let index = 1; index <= 4200; index += 1) {
     f.values.set(
       `floot-network-4-test-${`${index}`.padStart(20, '0')}`,
       harden({ version: 1, revision: `${index}`, policy: 'off' }),
@@ -152,28 +152,16 @@ test('capacity always reserves durable public revocation', async t => {
   }
   const controller = f.create();
   await controller.set('public-internet');
-  await t.throwsAsync(controller.request('off', 'Consume reserved space'), {
-    message: /reserves capacity/,
-  });
   t.is(await controller.forTurn(), 'public-internet');
-  await controller.set('off');
-  t.is(f.values.size, 4096);
+  const request = await controller.request('off', 'Done downloading');
+  await controller.resolve(request.id, true, 'Approved');
+  t.is(await controller.forTurn(), 'off');
+  t.is(f.values.size, 4205);
   t.is(await f.create().forTurn(), 'off');
   t.is(f.stops(), 2);
 });
 
-test('invalid transition retries and exhausted grants do not freeze an agent', async t => {
-  const f = fixture();
-  for (let index = 1; index <= 4093; index += 1) {
-    f.values.set(
-      `floot-network-4-test-${`${index}`.padStart(20, '0')}`,
-      harden({ version: 1, revision: `${index}`, policy: 'off' }),
-    );
-  }
-  await t.throwsAsync(f.create().set('public-internet'), {
-    message: /capacity/,
-  });
-  t.is(f.preparations(), 0);
+test('an invalid transition retry does not freeze an agent', async t => {
   const pending = fixture();
   pending.stopFailure(true);
   const controller = pending.create();

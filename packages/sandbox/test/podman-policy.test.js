@@ -495,8 +495,11 @@ for (const policy of [false, true]) {
       }
     }
     const creates = createCalls(calls);
-    for (const creation of creates)
+    for (const creation of creates) {
       t.true(creation.args.includes('--http-proxy=false'));
+      // Anchor and operation alike: attached streams are not also logged.
+      t.true(creation.args.includes('--log-driver=none'));
+    }
     const operation = creates.at(-1);
     if (!operation) throw Error('Expected operation create');
     t.true(operation.args.includes('HTTP_PROXY=http://127.0.0.1:1234'));

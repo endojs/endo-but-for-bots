@@ -153,8 +153,8 @@ The slice receives a session-scoped `CODEX_HOME` that is durable across slice
 replacement and destroyed at logical-session teardown, with no `auth.json`.
 The pinned runtime verifier now probes that absence directly and reports
 `codexHomeAuthFile: 'absent'` in `CodexRuntimeEvidenceV1`; the session
-scoping, durability, and teardown are established by the durable `stateVolume`
-bound at `/codex-home`.
+scoping, durability, and teardown are established by the session's state
+directory, held by the session storage owner and bound at `/codex-home`.
 App-server and guest commands can both read and modify it.
 It is native conversation state, not the authoritative host effects record.
 App-server requests for `account/chatgptAuthTokens/refresh`, account login,
@@ -176,10 +176,12 @@ Claude Code inference protocol, with hooks, plugins, user MCP configuration,
 and shared Claude home state disabled unless separately endowed.
 
 No `CLAUDE_CODE_OAUTH_TOKEN`, API key, reusable credential file, or shared
-Claude configuration may enter the slice.
-If the pinned Claude Code release cannot target the broker using an officially
-supported proxy/gateway configuration without receiving the real subscription
-token, Claude-subscription mode must remain unavailable.
+Claude configuration may enter the slice. The hosted Claude backend
+(`@endo/claude-sandbox`, `claude-native-controller.js` with `claude-broker.js`)
+meets this: the slice holds a placeholder, the broker holds the credential and
+presents the subscription Bearer upstream. Only the legacy inbox-form factory
+path of that package still materialises a credential into a slice, and Floot
+does not route sessions to it.
 
 Before enabling either provider, deployment tests must cover refresh, expiry,
 revocation, account switching, model allowlists, quota exhaustion, broker crash,

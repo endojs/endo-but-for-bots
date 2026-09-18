@@ -45,7 +45,6 @@ import {
 } from '@endo/hosted-agent';
 
 import { createStreamingProvider } from './providers/index.js';
-import { claudeTurnPartialOf, runClaudeTurn } from './src/claude-turn.js';
 import {
   UNSETTLED_TOOL_RESULT,
   hostedTurnPartialOf,
@@ -55,7 +54,6 @@ import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
-import { makeHostedContinuityOptions } from './src/hosted-continuity.js';
 import { projectTranscript } from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
@@ -865,7 +863,6 @@ const provisionPresetObjects = async (
 
 /**
  * @typedef {object} ClaudeClientConfig
- * @property {any} claudeClient - A ClaudeClient capability
  *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
  *   events. Turns bypass the provider tool loop — the CLI runs its own tools
  *   in the sandbox and keeps its own conversation continuity.
@@ -957,14 +954,13 @@ export const makeStreamingAgent = async (
   } = {},
 ) => {
   const retainsDeliveredTurns = hostedContinuity === 'transcript';
-  const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
   const provideHostedClient = /** @type {any} */ (providerConfig)
     .provideHostedClient;
   const provideProvider = /** @type {any} */ (providerConfig).provideProvider;
   /** @type {any} */
   const staticProvider =
-    claudeClient || hostedClient || provideHostedClient || provideProvider
+    hostedClient || provideHostedClient || provideProvider
       ? null
       : /** @type {any} */ (providerConfig).provider ||
         createStreamingProvider({
@@ -1051,6 +1047,45 @@ export const makeStreamingAgent = async (
       executingTools.delete(pending);
     }
   };
+  /**
+   * The one place an Endo tool is dispatched on the host, whichever loop asks
+   * — the provider loop below, or a hosted CLI through `journalSnapshot`.
+   * Intent is journaled before the tool has authority, and the outcome — the
+   * result, or the error text the model will see — before it is returned.
+   * The journal's `tool-intent`/`tool-result` pair is the shared effects
+   * record every adapter's Endo tool calls land in; Codex's audit chain
+   * records the provider's side of the same calls with its thread and turn
+   * ids, and is evidence about the transport, not a second executor.
+   *
+   * @param {{ turnId: string, name: string, args: unknown, run: () => unknown }} call
+   * @returns {Promise<{ result: unknown } | { error: unknown }>}
+   */
+  const journaledToolCall = async ({ turnId, name, args, run }) => {
+    journalToolSequence += 1n;
+    const callId = `floot-tool-${journalToolSequence}`;
+    await turnJournal.append(turnId, {
+      type: 'tool-intent',
+      callId,
+      name: `${name}`,
+      args: JSON.stringify(args),
+    });
+    /** @type {{ result: unknown } | { error: unknown }} */
+    let outcome;
+    try {
+      outcome = { result: await executeTracked(run) };
+    } catch (error) {
+      outcome = { error };
+    }
+    await turnJournal.append(turnId, {
+      type: 'tool-result',
+      callId,
+      result:
+        'error' in outcome
+          ? `Error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
+          : `${outcome.result}`,
+    });
+    return outcome;
+  };
   // Hosted runtimes invoke this snapshot directly. Record intent before giving
   // Endo tools authority, and settlement before returning a result to the model.
   const journalSnapshot = snapshot =>
@@ -1064,32 +1099,14 @@ export const makeStreamingAgent = async (
         if (!turnId || activeJournalSignal?.aborted) {
           throw Error('Endo tool call outside an active Floot turn');
         }
-        journalToolSequence += 1n;
-        const callId = `floot-tool-${journalToolSequence}`;
-        await turnJournal.append(turnId, {
-          type: 'tool-intent',
-          callId,
-          name: `${name}`,
-          args: JSON.stringify(args),
+        const outcome = await journaledToolCall({
+          turnId,
+          name,
+          args,
+          run: () => snapshot.execute(name, args),
         });
-        let result;
-        try {
-          result = await executeTracked(() => snapshot.execute(name, args));
-        } catch (error) {
-          const text = `Error: ${error instanceof Error ? error.message : String(error)}`;
-          await turnJournal.append(turnId, {
-            type: 'tool-result',
-            callId,
-            result: text,
-          });
-          throw error;
-        }
-        await turnJournal.append(turnId, {
-          type: 'tool-result',
-          callId,
-          result: `${result}`,
-        });
-        return result;
+        if ('error' in outcome) throw outcome.error;
+        return outcome.result;
       },
     });
 
@@ -1458,31 +1475,6 @@ export const makeStreamingAgent = async (
       cachedLeaf = node.id;
     };
 
-    if (claudeClient) {
-      // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
-      // its own agentic loop in the sandbox (tools, continuity via the
-      // workspace), so the provider tool loop below is bypassed; the persisted
-      // history keeps only the user turn and the final assistant text.
-      writer.setPhase('thinking');
-      const {
-        finalContent: replyText,
-        usage: turnUsage,
-        toolCalls,
-        outcomeUnknown,
-      } = await runClaudeTurn({
-        client: claudeClient,
-        text: await hostedRecoveryText(text, turnId),
-        writer,
-        signal,
-        recordToolEvent: event => turnJournal.append(turnId, event),
-      });
-      activeJournalUsage = turnUsage;
-      activeJournalOutcomeUnknown = outcomeUnknown === true;
-      if (signal?.aborted) return;
-      await commitExternalTurn(replyText, turnUsage, undefined, toolCalls);
-      return;
-    }
-
     if (hostedClient) {
       writer.setPhase('thinking');
       let hosted;
@@ -1497,10 +1489,7 @@ export const makeStreamingAgent = async (
           // The stack owns the transcript: hand the backend this
           // conversation as records it can rebuild its CLI's native store
           // from, keeping tool calls as tool calls with their results.
-          // `makeHostedContinuityOptions` is the older text form, retained
-          // until every adapter reads the records.
           transcript: await getTranscript(),
-          ...makeHostedContinuityOptions(await getHistory(turnId)),
           recordToolEvent: event => turnJournal.append(turnId, event),
         });
       } catch (error) {
@@ -1657,8 +1646,6 @@ export const makeStreamingAgent = async (
           id: call.id || `floot-synth-${round}-${index}`,
         }));
         const runOne = async call => {
-          journalToolSequence += 1n;
-          const journalCallId = `floot-tool-${journalToolSequence}`;
           const name = call.function?.name;
           let args = {};
           let parseError;
@@ -1675,31 +1662,25 @@ export const makeStreamingAgent = async (
             name: `${name}`,
             args: JSON.stringify(args),
           });
-          await turnJournal.append(turnId, {
-            type: 'tool-intent',
-            callId: journalCallId,
-            name: `${name}`,
-            args: JSON.stringify(args),
+          // Unparseable arguments are an outcome the model is told about,
+          // journaled like any other failed call rather than skipped.
+          const outcome = await journaledToolCall({
+            turnId,
+            name,
+            args,
+            run:
+              parseError !== undefined
+                ? () => {
+                    throw Error(
+                      `could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`,
+                    );
+                  }
+                : () => tools.execute(name, args),
           });
-          let resultText;
-          if (parseError !== undefined) {
-            resultText = `Error: could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`;
-          } else {
-            try {
-              resultText = await executeTracked(() =>
-                tools.execute(name, args),
-              );
-            } catch (error) {
-              resultText = `Error: ${
-                error instanceof Error ? error.message : String(error)
-              }`;
-            }
-          }
-          await turnJournal.append(turnId, {
-            type: 'tool-result',
-            callId: journalCallId,
-            result: `${resultText}`,
-          });
+          const resultText =
+            'error' in outcome
+              ? `Error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
+              : outcome.result;
           writer.toolResult({
             id: call.id,
             name: `${name}`,
@@ -1799,9 +1780,7 @@ export const makeStreamingAgent = async (
     }
     const turnId = await turnJournal.begin({
       input: text,
-      backendId:
-        backendId ||
-        (hostedClient ? 'hosted' : claudeClient ? 'claude' : 'provider'),
+      backendId: backendId || (hostedClient ? 'hosted' : 'provider'),
       modelId: modelId || '',
       ...(reasoningEffort ? { reasoningEffort } : {}),
     });
@@ -1847,7 +1826,6 @@ export const makeStreamingAgent = async (
           type: 'finish',
           state:
             hostedTurnPartialOf(error)?.outcomeUnknown ||
-            claudeTurnPartialOf(error)?.outcomeUnknown ||
             `${error?.message || ''}`.includes(
               'Hosted turn cancellation failed:',
             )
@@ -1857,10 +1835,7 @@ export const makeStreamingAgent = async (
                 : 'failed',
           output,
           error: error instanceof Error ? error.message : String(error),
-          usage:
-            hostedTurnPartialOf(error)?.usage ||
-            claudeTurnPartialOf(error)?.usage ||
-            activeJournalUsage,
+          usage: hostedTurnPartialOf(error)?.usage || activeJournalUsage,
         });
       }
       throw error;

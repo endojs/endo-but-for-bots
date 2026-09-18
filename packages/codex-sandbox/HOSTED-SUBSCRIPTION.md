@@ -70,10 +70,15 @@ directories, CLI home, and records; an external workspace is preserved.
 
 Floot stack records are authoritative across controller incarnations.
 Codex reconciles an inherited thread's write-ahead marker before superseding it
-and injecting supplied history as text, never redispatching historical tool calls.
+and restoring the conversation into the new thread as Responses API items through
+`thread/inject_items`, built from the stack's transcript records
+(`@endo/hosted-agent/transcript-records.js`): a tool call arrives as a
+`function_call` with its output, never as text about one, and nothing is
+redispatched.
 Successive turns within an incarnation retain their app-server and thread.
 Tool-catalog changes also require rotation.
-Unavailable or oversized required continuity fails visibly instead of dropping history.
+A thread that cannot take the records fails the turn visibly instead of
+answering without them; there is no size at which the stack declines to restore.
 
 ## Evidence and limits
 

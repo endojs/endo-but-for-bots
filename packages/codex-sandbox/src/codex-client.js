@@ -4,7 +4,10 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { responsesApiItems } from '@endo/hosted-agent/transcript-records.js';
-import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
+import {
+  awaitBarrier,
+  makeHostedTurnChannel,
+} from '@endo/hosted-agent/turn-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
@@ -636,23 +639,15 @@ export const makeCodexClient = ({
       const timeoutFailure = Error(
         'Codex turn was not announced before the interrupt deadline',
       );
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
-      });
       try {
-        turnId = await Promise.race([
-          turn.started,
-          turn.terminal.then(() => undefined),
-          deadline,
-        ]);
+        turnId = await awaitBarrier(
+          Promise.race([turn.started, turn.terminal.then(() => undefined)]),
+          { deadlineMs: requestTimeoutMs, makeFailure: () => timeoutFailure },
+        );
       } catch {
         if (active !== turn) return undefined;
         failSession(timeoutFailure);
         return timeoutFailure;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     }
     if (turnId === undefined || active !== turn) return undefined;
@@ -679,19 +674,15 @@ export const makeCodexClient = ({
       const timeoutFailure = Error(
         'Codex turn did not confirm interruption before the deadline',
       );
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
-      });
       try {
-        await Promise.race([turn.terminal, deadline]);
+        await awaitBarrier(turn.terminal, {
+          deadlineMs: requestTimeoutMs,
+          makeFailure: () => timeoutFailure,
+        });
       } catch (error) {
         const failure = error instanceof Error ? error : timeoutFailure;
         failSession(failure);
         return failure;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     }
     return undefined;
@@ -1702,29 +1693,25 @@ export const makeCodexClient = ({
         turnReserved = false;
         throw Error('Codex session terminated');
       }
-      const channel = makeBoundedReader({
-        maxItems: 1024,
-        maxWeight: 16 * 1024 * 1024,
-        weigh: event => 64 + JSON.stringify(event).length * 2,
+      /** @type {any} */
+      let turn;
+      const channel = makeHostedTurnChannel({
+        onConsumerClosed: () => {
+          if (active === turn) void interruptActive('Codex turn interrupted');
+        },
       });
-      let resolveTerminal = () => {};
-      const terminal = /** @type {Promise<void>} */ (
-        new Promise(resolve => {
-          resolveTerminal = () => resolve(undefined);
-        })
-      );
       let resolveStarted = (/** @type {string} */ _turnId) => {};
       const started = /** @type {Promise<string>} */ (
         new Promise(resolve => {
           resolveStarted = resolve;
         })
       );
-      const turn = {
+      turn = {
         threadId: currentThreadId,
         push: channel.push,
         interrupted: false,
-        terminal,
-        resolveTerminal,
+        terminal: channel.terminal,
+        resolveTerminal: channel.settle,
         started,
         resolveStarted,
         serverRequestIds: new Set(),
@@ -1745,9 +1732,6 @@ export const makeCodexClient = ({
           }
         }, turnWallTimeoutMs);
       }
-      channel.setOnClose(() => {
-        if (active === turn) void interruptActive('Codex turn interrupted');
-      });
       try {
         await audit('turn-requested', {
           threadId: currentThreadId,
@@ -1940,7 +1924,7 @@ export const makeCodexClient = ({
     },
     help(method = '') {
       const methods = harden({
-        send: 'send(prompt, options?) -> streamed provider-neutral events. continuityContext is complete historical conversation text, restored only into an empty/new native thread; continuityContextUnavailable refuses required restoration without disrupting an existing conversation.',
+        send: 'send(prompt, options?) -> streamed provider-neutral events. options.transcript is the stack’s transcript records; a new thread is restored from them through thread/inject_items before the prompt runs, and a thread that cannot take them fails the turn rather than answering without them.',
         models: 'models() -> app-server model catalog',
         interrupt: 'interrupt() -> interrupt the active turn',
         acknowledge:

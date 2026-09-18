@@ -551,6 +551,13 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     '--restart=no',
     '--no-healthcheck',
     '--http-proxy=false',
+    // The caller reads an operation's streams from the attached `start`.
+    // Left to its default, Podman also copies them to its log driver, which
+    // on a systemd host is the journal: tool results and file contents, kept
+    // under whichever unit launched the driver. Nothing here reads
+    // `podman logs`, so the copy had no reader. Stated in this shared prefix
+    // so the anchor and every operation, under any profile, get it alike.
+    '--log-driver=none',
   ];
 
   if (extras.policyArgv !== undefined) {

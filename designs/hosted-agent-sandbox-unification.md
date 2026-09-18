@@ -2111,31 +2111,20 @@ path as its replacement becomes usable.
 Exit: all three use the common grants and supervisor; no guest-visible upstream
 credentials or generic unfiltered hosted-network fallback remains.
 
-**Status, 2026-09-17: mid-phase. The mount sub-track is complete; the exit is
-not met, and is gated on the track that did not move.** Both clauses fail for
-the same reason:
-
-- **No supervisor exists.** `hosted-agent/src/session-registry.js` re-exports
-  a generic resource registry; what stands in for a shared supervisor is two
-  independent 500–600 line lifecycle implementations, which is what the
-  *Shared architecture* table above forbids in as many words.
-- **Codex is not on the common grants.** `provider-broker-service.js` has no
-  Codex consumer — Codex builds its own through `broker-launch.js` — so it
-  has no scope, no plan record, no recovery by session id, and nothing to
-  revoke. The Codex lease failure recorded in the plan below is a direct
-  consequence: its release is reachable from one call site, and there is no
-  owner above it to release it instead.
-
-**The alignment plan below is what closes this exit**, and its steps map onto
-these two clauses: step 2 builds the supervisor from the two adapters that
-already have one lifecycle shape each, step 3 removes the storage difference
-that would otherwise force an escape hatch into the supervisor's adapter
-spec, and step 4 puts Codex on both. Step 1 comes first because it proves an
-adapter behaviour — restoration from stack-owned records — that must hold
-across the reshape and is cheapest to establish before it.
-
-The phase does not exit on step 5; that step is tidy-up over the settled
-shape and is deliberately last.
+**Status, 2026-09-18: exit met.** The status recorded here on 2026-09-17
+said the exit failed on two clauses — no supervisor existed, and Codex was
+not on the common grants — and that the alignment plan below would close
+them. It did, the same day, and this block lagged the plan's own record of
+it (steps 2–4 under *Order*): `hosted-agent/src/session-supervisor.js` is the
+one lifecycle all three adapters compose; Codex takes its grants from
+`provider-broker-service.js` through shared broker scopes, so it has a
+scope, a plan record, recovery by session id and something to revoke;
+`broker-launch.js` and the volume/lease subsystem are deleted
+(`b9bd65509`). Live on Tokyo since the shared-Codex cutover of 2026-09-17
+(endo-host `ops/codex-shared-cutover-20260917.md`) and re-verified through
+the restoration and daemon-stop acceptances of 2026-09-18. Step 5 of the
+plan is tidy-up over the settled shape and never gated this exit; it landed
+on 2026-09-18 too.
 
 ### Phase 4: transport and journal simplification
 
@@ -2189,11 +2178,81 @@ the allocation it stood in for:
   entries; that is what an audit chain costs to be one.
 
 Still named, not changed: Floot's `FLOOT_MAX_TOOL_ROUNDS` (48) for the Fae
-loop, a safety ceiling on a model that never answers, configurable; the
-network-policy audit's 4,096-entry lifetime cap, which refuses further policy
-changes rather than the session and is the same pattern as the audit journal's
-former total. Effects-recording and transport admission/cancellation
-consolidation across the three adapters is the remaining Phase 4 item.
+loop, a safety ceiling on a model that never answers, configurable.
+
+Removed later the same day: the network-policy audit's 4,096-entry lifetime
+cap (with the capacity reserve that existed only to serve it) — a session
+that had made its 4,096th policy change could no longer revoke its network,
+the opposite of what the audit protects; one record per human action, no
+ceiling, linear replay. And the provider listener's diagnostic budget — four
+`Provider HTTP diagnostic` lines per listener lifetime in the worker, 4,096
+bytes of stderr per listener lifetime in the runtime — which silenced the
+fifth failed request for as long as the listener lived; both are now bounded
+per line and per chunk, not in total.
+
+**Container stdio is no longer copied to the journal — landed 2026-09-18, not
+yet deployed.** Neither launch named a log driver, so rootless Podman used its
+default, which on a systemd host is journald, and conmon wrote a second copy of
+every attached byte there under the daemon's unit. For the provider listener
+(`podman run -i`, `provider-listener-runtime.js`) that is the CapTP inference
+pipe: whole request bodies, with system prompts, tool schemas and user
+messages, as `endo-provider-<uuid>` lines. For slices (`podman create`, the
+shared prefix in `drivers/podman.js`) it is each operation's stdout and stderr:
+the CLIs' event streams, tool results and file contents included, as
+`endo-sandbox-…` lines. Conversation content was therefore held in a store
+with its own retention, outside the session's storage, that deleting a
+session did not reach. Both launches now pass `--log-driver=none`. The flag is
+in the create prefix every slice container shares, so the policy anchor, policy
+operations, native-profile operations and generic operations get it alike;
+it is not an attested control, and `sliceConfigFingerprint` does not read it.
+
+Nothing read that copy: no code calls `podman logs`, and attachment is conmon's
+socket, not the log, so the inference pipe, each operation's three streams and
+the startup gate are unchanged. The channels meant for diagnostics are also
+unchanged: the listener's stderr is still a pipe to the runtime, drained for
+the child's lifetime and offered to `host.onStderr`, and the broker worker's
+`console.error` lines still land in the worker's `worker.log`.
+
+**Failures are logged unconditionally — same day.** Removing the journal copy
+took away the only production sink the listener's `Provider HTTP diagnostic`
+lines had, because `host.onStderr` was supplied only by tests. It also made
+plain that the rest of the failure record sat behind the operator's
+`diagnostics` boolean, which is recorded when a broker is minted: OpenCode's
+broker had none, so a 429 from an account out of quota and an outage were the
+same bare 502, and finding out which first took retiring the broker. The
+broker now always installs the transport's failure hook (`<label> upstream
+failure {stage, status, refusal}`: host-only, written only on failure, the
+refusal a bounded credential-screened excerpt of a body that was refused) and
+always reads the listener's stderr pipe for its failure lines (`<label>
+listener failure {stage, checks}`: a stage and boolean header checks, parsed
+and re-projected, never forwarded raw). Both go to the broker worker's
+`worker.log`. `diagnostics` now gates only the admission trail (`broker event
+admitted|completed|revoked <n>`), which is a line per request and is volume
+rather than evidence.
+
+What this does not do: it removes nothing already written. Existing journal
+entries stay until the operator vacuums or they age out. Podman's container
+lifecycle events (names, labels, image; no stdio) still follow
+`events_logger`, and the daemon's own stdout and stderr still go to its unit.
+
+**Effects recording and transport admission/cancellation — landed
+2026-09-18.** One effects path: every Endo tool call, from whichever loop
+dispatches it, goes through `journaledToolCall` in Floot's agent — intent
+before the tool has authority, outcome before it is returned — and the
+hosted CLIs reach it through `journalSnapshot`. The direct Claude path
+(`claude-turn.js`), which had its own copy of the observed-tool recording,
+is deleted; so is the text-form continuity. Codex's audit chain records the
+provider's side of the same calls with its thread and turn ids and is
+evidence about the transport, not a second executor; it is deliberately
+kept. One delivery and cancellation path:
+`@endo/hosted-agent/turn-channel.js` is the credit-bounded reader with the
+one set of bounds, the terminal barrier the producer settles once, the
+consumer-closed hook, and `awaitBarrier` for a deadline that is never
+`unref`'d. All three clients build their turn on it; Claude's `interrupt`,
+which used to return as soon as it had closed the reader, now awaits the
+turn's end like the other two. Admission policy stays per transport by
+design — Claude and OpenCode queue a second `send`, the app-server refuses
+one — and Floot admits one UI turn per session above all three.
 
 ### Phase 5: final conformance and documentation
 
@@ -2206,6 +2265,89 @@ Never copy historical credential-bearing records into new journals.
 
 Exit: source ownership is unambiguous, all advertised adapters pass conformance,
 and the deleted-code list is reviewed alongside the new code.
+
+**Status, 2026-09-18.** The audit ran against the code and the documents
+together; what it found and what changed:
+
+- *Deleted, with nothing replacing it because the replacement had already
+  landed:* `floot/src/claude-turn.js` and its two test files (the direct
+  Claude path the factory refuses since Claude moved to the hosted backend);
+  `floot/src/hosted-continuity.js` and its test (the text-form
+  `continuityContext` no adapter reads); the three `current-specifier.js`
+  re-export wrappers; `hosted-agent/test/cli-cleanup-conformance.js` (no
+  consumer since the adapters moved to the daemon owner); Codex's separate
+  4 MiB audit-payload check and `maxToolCalls`; every lifetime and cumulative
+  ceiling named under Phase 4.
+- *Kept deliberately, and why:* the `managed-credentials-module.js` wrappers
+  (the specifier retained credential formulas name); the `parse-rootfs.js`
+  wrappers (the adapter's default image); Codex's audit chain beside Floot's
+  journal (provider-side evidence, not a second executor); the
+  `continuity: 'transcript'` descriptor value on Claude and OpenCode (it names
+  Floot's mirroring of a delivered-but-failed turn, which restoration from
+  records depends on).
+- *Documents reconciled to the code* (commit "one set of guarantees"): the
+  Codex contract, security model, network policy and subscription docs; the
+  Codex merge-blockers file marked as the historical PR gate; the Claude
+  README and design (legacy inbox-form sections scoped as such, the unbuilt
+  session layer marked superseded); the OpenCode design (a current-status
+  block above the original design, and a security summary that matches the
+  shipped posture); Floot's backend design; the hosted-agent README now names
+  what the package owns for every adapter.
+- *Conformance:* the shared restoration suite runs for all three adapters at
+  unit level on every test run. Live: the recall round trip across a daemon
+  restart passed on Tokyo today for OpenCode and Codex on release
+  `2dc7c4f4d`; Claude could not be seeded because its subscription is out of
+  quota (the listener reports that as a bare 502), and its entry in the
+  endo-host evidence file stays on the 2026-09-17 acceptance of the same
+  image digest. Claude's live recall is the one conformance run still owed,
+  and it is a run, not a change.
+- *Still open, named:* MCP socket access control on the OpenCode side; the
+  offline pre-deploy variant of the pin-bump conformance; the `keep-id` uid
+  posture; the ownership-marker no-recovery contract across daemon restart;
+  `codex exec`. (The network-policy audit's lifetime cap, listed here
+  earlier, is removed — see "Protection and limit justification".)
+
+  What each would take, so the choice is a decision and not a backlog:
+
+  - **MCP socket access control.** Both Claude and OpenCode reach the
+    session's Endo tools over the shared NDJSON socket under `/endo-mcp`,
+    and the bind is the whole access control: any process in the slice's
+    mount namespace can issue a tool call, and the socket cannot say which
+    one did. Option 2 above — the MCP endpoint on the listener sidecar's
+    loopback, behind a bearer token the bridge mints per session — is the
+    recorded recommendation and also retires the `endo-mcp` mount row and
+    the stdio shim. It touches the listener image, both bridges and the
+    mount table; a week of work with its own conformance run. Until then
+    the residual is what "one process per slice, one slice per session"
+    already bounds: a compromised CLI process can call its own session's
+    tools, which it can do through the CLI anyway.
+  - **Offline pre-deploy conformance.** Drive each pinned CLI in Podman with
+    a store the adapter wrote and read it back through the CLI, no
+    inference, before the switch. OpenCode can: `opencode serve` with
+    `OPENCODE_DB=:memory:`, the import route, then the session's messages
+    over its HTTP API. Codex can: `app-server`, `thread/inject_items`, then
+    the thread read. Claude cannot cleanly — the CLI has no command that
+    prints a resumed transcript without a model turn — so its offline
+    variant would read the CLI's own store from the outside, which proves
+    the file, not the CLI's reading of it. A day for OpenCode and Codex; the
+    gate stays a live, post-switch run for Claude.
+  - **`keep-id` posture.** Recovering Codex's stronger pre-convergence
+    posture (slice at a subordinate uid that owns nothing) needs every
+    shared root to be usable by both the daemon and an unmapped uid:
+    `keep-id:uid=<unmapped>,gid=<daemon>` over `0770` roots, or the
+    loopback MCP endpoint above, which removes the one shared root that is
+    a socket. Choose it with the MCP item; alone it is a policy-table change
+    plus the three adapters' storage owners.
+  - **Ownership marker across restart.** Tested and deliberate: the runtime's
+    exclusive marker survives `endo restart` and refuses revival, so a
+    stale incarnation never adopts a live one's state. Changing it means
+    defining what proves the old holder dead; nothing here needs that.
+  - **`codex exec`.** The supervisor migration it was deferred behind has
+    landed, so it is now revisitable on its own: one process per turn would
+    retire the app-server transport, thread revival and the single-writer
+    constraint, at the cost of per-turn startup, which Claude already pays.
+    Worth a spike against the pinned CLI (`exec resume` with the injected
+    thread) before deciding.
 
 ## Validation
 
@@ -2953,7 +3095,20 @@ than a judgement.
    tidy-up over a settled shape.
 
    Shared rootfs parsing landed in `c8ff7b57e` and is deployed on Tokyo.
-   Remaining wrapper cleanup is not claimed complete.
+
+   **Done, 2026-09-18.** The three `current-specifier.js` re-export wrappers
+   are deleted and their thirteen importers name
+   `@endo/hosted-agent/current-specifier.js`; the one test of it (the OpenCode
+   copy, which covered `assertCurrentSpecifier` too) moved to hosted-agent.
+   Two kinds of wrapper stay on purpose. `managed-credentials-module.js` in
+   claude- and opencode-sandbox is not duplicated logic but the *specifier*
+   stored in every retained credential formula on Tokyo (`makeUnconfined`
+   keeps it verbatim and re-imports it on revival), so deleting it would break
+   revival of what is already minted; a fresh host could mint against the
+   hosted-agent path, and the wrapper is eight lines. `parse-rootfs.js` in
+   claude- and opencode-sandbox carries the adapter's default image over the
+   shared parser, which is the shape `c8ff7b57e` chose. The hosted policies
+   export their mount table and the verifier built over it and nothing else.
 
 ### What this plan does not do
 

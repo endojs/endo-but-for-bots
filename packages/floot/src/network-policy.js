@@ -37,10 +37,15 @@ export const makeSessionNetworkPolicy = ({
     Array.isArray(allNames) ||
       Fail`Network policy storage returned invalid names`;
     /** @type {string[]} */
+    // One record per policy action, for the session's whole life: the audit
+    // is the record of every request, approval, denial and change, and it
+    // has no ceiling. A ceiling here refused the next change once the count
+    // was reached, which is a session whose network can no longer be
+    // revoked — the opposite of what an audit protects. Replay is linear in
+    // the count; every entry is a human action.
     const names = allNames
       .filter(name => typeof name === 'string' && name.startsWith(prefix))
       .sort();
-    names.length <= 4096 || Fail`Network policy audit capacity exhausted`;
     for (const name of names) {
       sequence += 1n;
       name === `${prefix}${`${sequence}`.padStart(20, '0')}` ||
@@ -80,18 +85,7 @@ export const makeSessionNetworkPolicy = ({
     return result;
   };
   const write = async value => {
-    sequence < 4096n || Fail`Network policy audit capacity exhausted`;
     const next = sequence + 1n;
-    // Preserve space for completing this transition and a later revocation.
-    const reserve = value.transition
-      ? value.transition.policy === 'public-internet'
-        ? 3n
-        : 1n
-      : value.policy === 'public-internet'
-        ? 2n
-        : 0n;
-    next + reserve <= 4096n ||
-      Fail`Network policy audit reserves capacity for revocation`;
     const record = harden({ ...value, version: 1, revision: `${next}` });
     try {
       await E(host).storeValue(
@@ -139,10 +133,6 @@ export const makeSessionNetworkPolicy = ({
     if (state.transition) {
       state.transition.policy === policy ||
         Fail`Retry the pending network policy change first`;
-    } else {
-      // Reserve space for the commit before admitting an intent.
-      sequence <= (policy === 'public-internet' ? 4092n : 4094n) ||
-        Fail`Network policy audit capacity exhausted`;
     }
     await prepare();
     if (!state.transition) {

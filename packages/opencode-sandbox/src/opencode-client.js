@@ -36,15 +36,18 @@
  */
 
 import { E } from '@endo/eventual-send';
-import { clearTimeout, setTimeout } from 'node:timers';
+import { setTimeout } from 'node:timers';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+import {
+  awaitBarrier,
+  makeHostedTurnChannel,
+} from '@endo/hosted-agent/turn-channel.js';
 
 import { assertBridgeEvent, parseJsonLines } from './opencode-protocol.js';
 import { importedTurnsFor } from './opencode-transcript.js';
@@ -431,7 +434,7 @@ export const makeOpencodeClient = ({
     }
     // A turn is not bounded in bytes here. What a hostile bridge could grow
     // is the reader's queue, and that is bounded by credit where it is
-    // delivered (`makeBoundedReader` below: overflow fails delivery and
+    // delivered (the hosted turn channel: overflow fails delivery and
     // requests cancellation); what the host keeps of a turn is bounded where
     // it is kept (Floot's hosted turn). A cumulative cap on top of those
     // ended long healthy turns for nothing.
@@ -602,43 +605,40 @@ export const makeOpencodeClient = ({
    * @returns {Turn}
    */
   const enqueueTurn = (text, opts = {}) => {
-    const { push, reader, setOnClose } = makeBoundedReader({
-      maxItems: 1024,
-      maxWeight: 16 * 1024 * 1024,
-      weigh: event => 64 + JSON.stringify(event).length * 2,
-    });
-    let settle = () => {};
-    const terminal = new Promise(resolve => {
-      settle = () => resolve(undefined);
-    });
     /** @type {Turn} */
-    const turn = {
+    let turn;
+    const channel = makeHostedTurnChannel({
+      onConsumerClosed: () => {
+        turn.closed = true;
+        if (active === turn) {
+          // Consumer stopped pulling: abort the executing turn.  The pushed
+          // terminal (if it still arrives) lands in a finished reader, which
+          // is a no-op. Keep the separate producer-stop barrier pending until
+          // the bridge actually reports terminal; reader closure is not exit.
+          writeCommand({ op: 'interrupt' }).catch(() => {});
+          return;
+        }
+        const index = pendingTurns.indexOf(turn);
+        if (index >= 0) {
+          pendingTurns.splice(index, 1);
+          channel.push({
+            type: 'abort',
+            reason: 'turn cancelled before it ran',
+          });
+          channel.settle();
+        }
+      },
+    });
+    turn = {
       text,
       transcript: opts.transcript,
       systemPrompt: opts.systemPrompt,
-      reader,
-      push,
+      reader: channel.reader,
+      push: channel.push,
       closed: false,
-      terminal,
-      settle,
+      terminal: channel.terminal,
+      settle: channel.settle,
     };
-    setOnClose(() => {
-      turn.closed = true;
-      if (active === turn) {
-        // Consumer stopped pulling: abort the executing turn.  The pushed
-        // terminal (if it still arrives) lands in a finished reader, which
-        // is a no-op. Keep the separate producer-stop barrier pending until
-        // the bridge actually reports terminal; reader closure is not exit.
-        writeCommand({ op: 'interrupt' }).catch(() => {});
-        return;
-      }
-      const index = pendingTurns.indexOf(turn);
-      if (index >= 0) {
-        pendingTurns.splice(index, 1);
-        push({ type: 'abort', reason: 'turn cancelled before it ran' });
-        settle();
-      }
-    });
     pendingTurns.push(turn);
     void dispatchNext();
     return turn;
@@ -868,24 +868,11 @@ export const makeOpencodeClient = ({
         await writeCommand({ op: 'interrupt' });
         // The bridge's own grace timer is untrusted; bound the host-side wait
         // so a hostile or wedged bridge cannot hang the caller forever.
-        let deadlineTimer;
-        const deadline = new Promise((_, reject) => {
-          deadlineTimer = setTimeout(
-            () =>
-              reject(
-                makeError(
-                  X`OpencodeClient(${q(sessionId)}): interrupt timed out.`,
-                ),
-              ),
-            INTERRUPT_DEADLINE_MS,
-          );
-          deadlineTimer.unref();
+        await awaitBarrier(turn.terminal, {
+          deadlineMs: INTERRUPT_DEADLINE_MS,
+          makeFailure: () =>
+            makeError(X`OpencodeClient(${q(sessionId)}): interrupt timed out.`),
         });
-        try {
-          await Promise.race([turn.terminal, deadline]);
-        } finally {
-          clearTimeout(deadlineTimer);
-        }
       },
 
       /**

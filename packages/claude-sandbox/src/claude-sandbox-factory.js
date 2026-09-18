@@ -49,8 +49,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 
+import { toCurrentSpecifier } from '@endo/hosted-agent/current-specifier.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
-import { toCurrentSpecifier } from './current-specifier.js';
 
 const clientModuleSpecifier = toCurrentSpecifier(
   new URL('./claude-client-module.js', import.meta.url).href,
@@ -580,7 +580,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
+
           console.error(
             '[claude-sandbox-factory] session-request:',
             errorMessage,
@@ -704,7 +704,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
+
           console.error('[claude-sandbox-factory]', errorMessage);
           try {
             await E(powers).reply(
@@ -733,12 +733,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   };
 
   runFactory().catch(error => {
-    // eslint-disable-next-line no-console
     console.error('[claude-sandbox-factory] Factory error:', error);
   });
 
   runSessionRequestLoop().catch(error => {
-    // eslint-disable-next-line no-console
     console.error(
       '[claude-sandbox-factory] session-request loop error:',
       error,

@@ -27,7 +27,12 @@ const client = makeCodexClient({
   toolSetId,
 });
 
-const reader = await E(client).send('Review the current changes');
+// `transcript` is the stack's record of the conversation
+// (`@endo/hosted-agent/transcript-records.js`); a new thread is restored from
+// it through `thread/inject_items` before the prompt runs.
+const reader = await E(client).send('Review the current changes', {
+  transcript,
+});
 ```
 
 App-server is the Codex CLI transport, not an independent billing identity.
@@ -85,5 +90,7 @@ telemetry; they are also retained in the client's bounded `status()` result.
 
 Read [SECURITY-MODEL.md](./SECURITY-MODEL.md),
 [SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md),
-[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md), and
-[MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) before enabling hosted sessions.
+[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md),
+[HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) and
+[DEPLOYMENT-ACCEPTANCE.md](./DEPLOYMENT-ACCEPTANCE.md) before enabling hosted
+sessions; [MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) is the historical PR gate.

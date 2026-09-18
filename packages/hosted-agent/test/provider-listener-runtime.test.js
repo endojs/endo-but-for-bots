@@ -217,6 +217,8 @@ test.serial(
     const started = nativeCalls.find(call => call.args[2] === 'run');
     if (!started) throw Error('Expected listener run');
     t.true(started.args.includes('--http-proxy=false'));
+    // The inference pipe is attached stdio; Podman keeps no second copy.
+    t.true(started.args.includes('--log-driver=none'));
     t.false(started.args.some(arg => arg.startsWith('REGISTRY_AUTH_FILE=')));
     t.true(
       started.args.includes('HOME=/home/node'),
@@ -283,17 +285,16 @@ for (const diagnosticsEnabled of [false, true]) {
       child.stderr.emit('data', prefix);
       child.stderr.emit('data', oversized);
       for (let i = 0; i < 8; i += 1) child.stderr.emit('data', oversized);
+      // Each chunk is copied up to 4096 bytes; there is no lifetime total, so
+      // the ninth oversized chunk is reported like the first.
       t.is(
         diagnostics.reduce((total, chunk) => total + chunk.byteLength, 0),
-        diagnosticsEnabled ? 4096 : 0,
+        diagnosticsEnabled ? initialBytes + 1024 + 9 * 4096 : 0,
       );
       if (diagnosticsEnabled) {
         t.deepEqual(
           diagnostics.slice(initialChunks).map(chunk => chunk.byteLength),
-          [
-            Math.min(1024, 4096 - initialBytes),
-            Math.max(0, 3072 - initialBytes),
-          ].filter(size => size > 0),
+          [1024, ...Array.from({ length: 9 }, () => 4096)],
         );
         t.true(diagnostics.every(chunk => chunk.buffer.byteLength <= 4096));
         prefix.fill(0);

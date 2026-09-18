@@ -40,8 +40,12 @@ Endo records remain outside that domain.
   unknown attestation fields are rejected.
 - The mount table has five fixed entries, all `nosuid,nodev`: a session
   workspace `workspace:<sessionId>` at `/workspace`; a credential-free,
-  session-durable `codex-state:<sessionId>` volume at `/codex-home`; and bounded
-  per-slice tmpfs mounts at `/tmp`, `/run`, and `/scratch`.
+  session-durable `codex-state:<sessionId>` host bind of the session's own
+  state directory at `/codex-home` (a directory the session storage owner
+  holds; there is no Podman volume, quota or lease — see `DURABLE-VOLUMES.md`);
+  and bounded per-slice tmpfs mounts at `/tmp`, `/run`, and `/scratch`. A
+  `public-internet` session adds one declared row, `resolver:public`, the
+  generated read-only `/etc/resolv.conf` (see `NETWORK-POLICY.md`).
 - Beyond those five, the table carries exactly the **runtime attaches** the
   session spec declares (`containerMounts`), each reported as `attach:<key>`
   at a destination under `/mnt/` in its declared `ro` or `rw` mode. An attach
@@ -52,14 +56,19 @@ Endo records remain outside that domain.
   by a userspace server — rather than host data. An attach the table carries
   but the spec did not declare, or the reverse, is an undeclared mount. See
   `designs/runtime-container-fs-mount.md`.
-- The Codex-state volume survives slice replacement for the same logical
-  session so app-server can resume its rollout, but is destroyed at session
-  teardown. It must never contain `auth.json` or reusable credentials.
+- The Codex-state directory survives slice replacement for the same logical
+  session so app-server can resume its rollout, but is removed at session
+  teardown by the session storage owner. It must never contain `auth.json` or
+  reusable credentials. It is native conversation state, a cache: the
+  conversation itself is the stack's transcript records, restored into a new
+  thread through `thread/inject_items` on revival.
 - Initialization must report Linux/Unix and the exact `/codex-home` path before
   any thread or turn request is accepted.
 - No additional bind, volume, socket, device, secret, or capability mount is
-  permitted by this version of the contract. A declared attach is the one
-  bind, and it is proved to be a 9P projection before it is attested.
+  permitted by this version of the contract beyond the declared attaches, the
+  state bind and the resolver row above. A declared attach is proved to be a
+  9P projection before it is attested; the state bind's source must lie under
+  the request's `bindRoots`.
 - Mount path resolution must resist symlink, hardlink, `..`, and
   mount-replacement races.
 
@@ -96,12 +105,18 @@ Endo records remain outside that domain.
 
 ## Resource and protocol limits
 
-- Memory: 4 GiB.
-- Processes: 512 PIDs.
-- CPU: quota equivalent to four cores.
+- Memory: 2 GiB.
+- Processes: 256 PIDs.
+- CPU: quota equivalent to two cores.
 - Open files: 4096.
 - Core dumps: zero bytes.
-- Aggregate writable storage: 16 GiB.
+- Aggregate writable storage: the sum over the mount table, computed and
+  re-checked by the attestation (`sliceWritableBytes`): each tmpfs twice, shm
+  twice, nothing for the workspace projection or the state bind. For Codex's
+  table that is 4 GiB of tmpfs; the workspace and the state directory have no
+  per-session kernel quota (see `DURABLE-VOLUMES.md`).
+  These are the shared `HOSTED_SLICE_RESOURCES` every hosted adapter runs
+  under, not Codex's own.
 - Prompt: 1 MiB; outbound JSON request: 2 MiB; individual JSONL record: 1 MiB.
 - Turn: at most 16,384 distinct item, call and request identities retained
   for deduplication. A turn is not bounded in events, bytes or wall time:
@@ -131,9 +146,14 @@ rlimit table no cgroup sees.
 The driver's `network: "broker-only"` slice policy is the one that does.
 It proves the isolation, identity, namespace, mount-table, and ceiling half of
 this section from effective container and kernel state and reports it as
-`SlicePolicyAttestationV1`; an operator's `makeSlice` composes
-`HostedAgentPolicyV1` from that plus the broker's and the pinned app-server's
-attestations for their own halves.
+`SlicePolicyAttestationV1`. The profile is the shared `hosted-agent-v1`
+(`@endo/hosted-agent/hosted-agent-policy.js`), the same for Claude, Codex and
+OpenCode, parameterised only by each adapter's fixed mount table
+(`CODEX_FIXED_MOUNTS`); the native controller re-asserts the returned slice's
+attestation against it with `hostedPolicyFromSlice` and
+`assertHostedAgentPolicyV1`. The attestation is read of a policy anchor whose
+argv is `HOSTED_ANCHOR_ARGV` — a shell that backgrounds `sleep infinity` and
+traps TERM, so the anchor ends when the daemon's cgroup is stopped.
 See `packages/sandbox/README.md` § "Slice policy and attestation" for what each
 control is proved from and what it deliberately leaves uncovered.
 
@@ -192,8 +212,12 @@ CONNECT to allowed public destinations must work and private destinations,
 rebinding, and redirected private targets must remain denied by the host proxy.
 Undeclared host Unix sockets must remain inaccessible.
 
-Fork, memory, CPU, file-descriptor, disk, output, and never-EOF bombs must hit
-their configured bounds without affecting the host or another session.
+Fork, memory, CPU, file-descriptor, and never-EOF bombs must hit their
+configured bounds without affecting the host or another session; tmpfs bombs
+hit their mount sizes, and there is no per-session disk quota for the
+workspace or state directory to hit. Output has no bound to hit: delivery is
+bounded by credit at the reader and what the host retains of a turn is bounded
+where it is kept.
 SIGTERM-resistant, setsid, double-fork, inherited-pipe, background-terminal,
 startup/dispose race, daemon-crash/orphan, and cleanup-failure cases must all be
 reaped and journaled.

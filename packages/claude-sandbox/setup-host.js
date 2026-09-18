@@ -49,8 +49,8 @@ import { E } from '@endo/eventual-send';
 import { Fail, q } from '@endo/errors';
 import { providePrivateDirectory } from '@endo/hosted-agent/hosted-setup.js';
 
+import { toCurrentSpecifier } from '@endo/hosted-agent/current-specifier.js';
 import { main as provisionSandboxFactory } from './factory.js';
-import { toCurrentSpecifier } from './src/current-specifier.js';
 import {
   SANDBOX_DIR,
   assertRuntimePlacement,

@@ -24,12 +24,11 @@ import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { readClaudeBrokerConfig } from './claude-broker-service-agent.js';
-
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
-} from './current-specifier.js';
+} from '@endo/hosted-agent/current-specifier.js';
+import { readClaudeBrokerConfig } from './claude-broker-service-agent.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 

@@ -41,7 +41,7 @@ import { readFileSync } from 'node:fs';
 import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
-import { toCurrentSpecifier } from './src/current-specifier.js';
+import { toCurrentSpecifier } from '@endo/hosted-agent/current-specifier.js';
 
 const factoryCapletSpecifier = toCurrentSpecifier(
   new URL('src/claude-sandbox-factory.js', import.meta.url).href,

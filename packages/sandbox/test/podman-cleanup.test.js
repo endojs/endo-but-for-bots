@@ -804,6 +804,8 @@ test('generic operations disable automatic restart and inherited healthchecks', 
   const create = f.calls.find(args => args[0] === 'create');
   t.true(create?.includes('--restart=no'));
   t.true(create?.includes('--no-healthcheck'));
+  // Attached streams reach the caller; Podman keeps no journal copy.
+  t.true(create?.includes('--log-driver=none'));
   await f.driver.teardown(f.slice);
   await proc.wait();
 });

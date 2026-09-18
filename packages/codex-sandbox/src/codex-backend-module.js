@@ -17,14 +17,14 @@ import {
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import {
+  assertCurrentSpecifier,
+  toCurrentSpecifier,
+} from '@endo/hosted-agent/current-specifier.js';
 import { makeCodexBackendFactory } from './codex-backend-factory.js';
 import { readCodexBrokerConfig } from './codex-broker-service-agent.js';
 import { readCodexSessionPlan } from './codex-session-plan.js';
 import { assertCodexStateRoot } from './codex-state-provider.js';
-import {
-  assertCurrentSpecifier,
-  toCurrentSpecifier,
-} from './current-specifier.js';
 
 const current = relative =>
   assertCurrentSpecifier(

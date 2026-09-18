@@ -18,8 +18,12 @@ one long-lived app-server process per session.
    and bounded event production.
 3. `codex-protocol.js` frames JSONL and normalizes version-specific tool items.
 4. Floot's `hosted-turn.js` consumes only the normalized event vocabulary.
-5. `backend-factory.js` owns provisioned resources, verifies the exact outer
-   sandbox attestation, and splits run authority from factory-only teardown.
+5. `src/codex-backend-factory.js` (the root `backend-factory.js` is a
+   re-export) is the hosted backend Floot discovers; `src/codex-native-controller.js`
+   composes the shared session supervisor, verifies the exact outer sandbox
+   attestation against the shared `hosted-agent-v1` profile, and restores a
+   new thread from the stack's transcript records through
+   `thread/inject_items`.
 6. `audit-journal.js` provides an append-only, hash-chained writer, an
    independently protected durable head checkpoint that detects entry-store
    rollback or suffix deletion, and a separately held reader over operator-owned

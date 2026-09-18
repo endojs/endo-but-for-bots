@@ -172,9 +172,9 @@ a failed answer much later.
 
 ## What this is not
 
-It is not the provider credential broker that
-[`@endo/codex-sandbox`](../codex-sandbox/MERGE-BLOCKERS.md) still requires.
+It is not the provider credential broker (`src/provider-broker.js`,
+`src/provider-grant-issuer.js`, `src/provider-broker-service.js` in this
+package), which all three hosted adapters take their grants from.
 An oracle reports; a broker enforces.
-Binding a credential to a provider origin, a model allowlist, a quota, and an
-expiry — and refreshing OAuth state outside the sandbox — remains that separate
-component's job.
+Binding a credential to a provider origin and a model allowlist, and
+refreshing OAuth state outside the sandbox, is that component's job.

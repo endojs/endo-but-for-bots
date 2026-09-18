@@ -327,10 +327,19 @@ test('interrupt() throws when idle and closes-and-kills the in-flight turn', asy
   const first = await replies.next();
   t.is(first.value.type, 'system');
 
-  await client.interrupt();
+  // interrupt() is a barrier: it kills the process and returns only once the
+  // turn has ended. The fake's stdout ends when unblocked, as a killed
+  // process's would.
+  let interrupted = false;
+  const interrupting = client.interrupt().then(() => {
+    interrupted = true;
+  });
+  await null;
   t.true(procKilled.get(fake.spawned[0]));
-
-  unblock(); // let the (now-orphaned) producer task drain and exit
+  t.false(interrupted, 'not over while the producer is still running');
+  unblock();
+  await interrupting;
+  t.true(interrupted);
 });
 
 test('interrupt() with a queued turn kills the in-flight turn, not the queued one', async t => {
@@ -357,12 +366,13 @@ test('interrupt() with a queued turn kills the in-flight turn, not the queued on
   t.is(first.value.type, 'system'); // A is producing
   t.is(fake.spawned.length, 1, 'only the in-flight turn has spawned');
 
-  await client.interrupt();
+  const interrupting = client.interrupt();
+  await null;
   // interrupt targeted the in-flight A (killing its process), not the
   // still-queued B — which would previously have been closed instead.
   t.true(procKilled.get(fake.spawned[0]));
-
   unblock();
+  await interrupting;
 });
 
 test('a stream-error abort folds claude stderr into the reason', async t => {

@@ -355,6 +355,13 @@ export const makePodmanProviderListenerRuntimeKit = ({
         '--http-proxy=false',
         '--pull=never',
         '-i',
+        // The inference pipe is this process's attached stdio. Left to its
+        // default, Podman also copies every attached byte to its log driver,
+        // which on a systemd host is the journal: whole request bodies, kept
+        // under the daemon's unit for as long as the journal is. Attachment
+        // does not read the log, so the pipe and `host.onStderr` are as they
+        // were; only the second copy is gone.
+        '--log-driver=none',
         '--name',
         name,
         '--label',
@@ -400,16 +407,16 @@ export const makePodmanProviderListenerRuntimeKit = ({
         live = false;
         pipe?.close();
       });
-      // Drain stderr for the child's entire lifetime. Diagnostics get only a
-      // copied prefix; log volume has no authority to close the inference pipe.
-      let diagnosticBytesRemaining = host.onStderr ? 4096 : 0;
+      // Drain stderr for the child's entire lifetime. Diagnostics get a copied
+      // prefix of each chunk, bounded per chunk and not in total: a listener
+      // reporting its fifth failed request is still heard. Log volume has no
+      // authority to close the inference pipe, and the listener is the
+      // operator's pinned image, whose every failure the slice paid a metered
+      // request for.
+      const diagnosticChunkBytes = host.onStderr ? 4096 : 0;
       subprocess.stderr.on('data', chunk => {
-        if (diagnosticBytesRemaining === 0) return;
-        const preview = Uint8Array.from(
-          chunk.subarray(0, diagnosticBytesRemaining),
-        );
-        diagnosticBytesRemaining -= preview.byteLength;
-        host.onStderr?.(preview);
+        if (diagnosticChunkBytes === 0) return;
+        host.onStderr?.(Uint8Array.from(chunk.subarray(0, diagnosticChunkBytes)));
       });
       pipe = makeProviderPipe({
         input: subprocess.stdout,

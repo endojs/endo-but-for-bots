@@ -34,14 +34,21 @@ The per-session provider broker described in
 channel.
 
 The durable audit journal is outside the workspace and slice.
-Every append advances a head checkpoint through independently protected anchor
-powers, so rolling back or deleting a valid suffix in the mutable entry store is
-detectable on recovery.
+Every append first authorizes the exact entry through a write-ahead head in
+independently protected anchor powers; only the newest head is kept, and it is
+what recovery checks the entry store's tail against, so rolling back or
+deleting a valid suffix in the mutable entry store is detectable on recovery,
+and an entry-store holder cannot synthesize a suffix the anchor never named.
+The whole chain is verified at every recovery.
 The client awaits journal durability before dispatching a prompt, answering an
 approval or Endo tool call, or reporting a terminal result.
-Complete operation payloads are retained within the explicit audit-entry bound;
-an oversized successful dynamic result quarantines the session instead of being
-truncated or returned as an ordinary retryable tool error.
+Complete operation payloads are retained: a payload text field over 64 KiB is
+stored as its own content value named by its hash, with the reference, byte
+count and a 4 KiB preview in the entry, so the chain hash covers the reference
+and the reference covers the content. There is no journal-lifetime ceiling. A
+successful dynamic result the journal cannot store as one value (16 MiB)
+quarantines the session instead of being truncated or returned as an ordinary
+retryable tool error.
 Built-in Codex item notifications are forensic: app-server may emit them only
 after execution starts.
 No code here claims write-ahead audit for built-in shell or file activity.
@@ -55,6 +62,17 @@ Floot acknowledges a successful turn only after the corresponding conversation
 node and usage total are durable.
 Rollback does not undo filesystem, process, remote-capability, or network side
 effects; those remain in the workspace and audit record.
+
+Container stdio is not copied to the host journal.
+The app-server protocol travels over the operation's attached stdin and stdout,
+and the provider listener's inference pipe over its own; both carry prompts,
+tool results, and file contents.
+The slice containers and the listener are launched with `--log-driver=none`, so
+Podman keeps no second copy of those streams under the daemon's systemd unit,
+where retention would follow the journal rather than the session.
+Attachment does not depend on the log driver, and `podman logs` is not used.
+Host-side diagnostics (the broker worker's `worker.log`) are unaffected.
+Entries written before this change remain until the operator removes them.
 
 For private vulnerability reports, follow the repository-level Endo security
 policy.
