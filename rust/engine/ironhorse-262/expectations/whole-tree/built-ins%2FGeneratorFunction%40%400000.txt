@@ -23,8 +23,8 @@ built-ins/GeneratorFunction/invoked-as-function-no-arguments.js sloppy pass
 built-ins/GeneratorFunction/invoked-as-function-no-arguments.js strict pass
 built-ins/GeneratorFunction/invoked-as-function-single-argument.js sloppy pass
 built-ins/GeneratorFunction/invoked-as-function-single-argument.js strict pass
-built-ins/GeneratorFunction/is-a-constructor.js sloppy skip:unsupported-opcode:Iterator.helper
-built-ins/GeneratorFunction/is-a-constructor.js strict skip:unsupported-opcode:Iterator.helper
+built-ins/GeneratorFunction/is-a-constructor.js sloppy pass
+built-ins/GeneratorFunction/is-a-constructor.js strict pass
 built-ins/GeneratorFunction/length.js sloppy pass
 built-ins/GeneratorFunction/length.js strict pass
 built-ins/GeneratorFunction/name.js sloppy pass
@@ -33,3 +33,15 @@ built-ins/GeneratorFunction/proto-from-ctor-realm-prototype.js sloppy skip:share
 built-ins/GeneratorFunction/proto-from-ctor-realm-prototype.js strict skip:shared-positive-test-failure
 built-ins/GeneratorFunction/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/GeneratorFunction/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/GeneratorFunction/prototype/Symbol.toStringTag.js sloppy pass
+built-ins/GeneratorFunction/prototype/Symbol.toStringTag.js strict pass
+built-ins/GeneratorFunction/prototype/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
+built-ins/GeneratorFunction/prototype/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
+built-ins/GeneratorFunction/prototype/extensibility.js sloppy pass
+built-ins/GeneratorFunction/prototype/extensibility.js strict pass
+built-ins/GeneratorFunction/prototype/not-callable.js sloppy pass
+built-ins/GeneratorFunction/prototype/not-callable.js strict pass
+built-ins/GeneratorFunction/prototype/prop-desc.js sloppy pass
+built-ins/GeneratorFunction/prototype/prop-desc.js strict pass
+built-ins/GeneratorFunction/prototype/prototype.js sloppy pass
+built-ins/GeneratorFunction/prototype/prototype.js strict pass

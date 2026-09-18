@@ -1,3 +1,3 @@
 # engine=ironhorse features=default corpus=built-ins/Function/prototype/caller tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/Function/prototype/caller/prop-desc.js sloppy skip:unsupported-opcode:Iterator.helper
-built-ins/Function/prototype/caller/prop-desc.js strict skip:unsupported-opcode:Iterator.helper
+built-ins/Function/prototype/caller/prop-desc.js sloppy fail:"abort-type divergence: oracle threw \"ReferenceError: get WellKnownIntrinsicObjects: undefined variable\" ironhorse threw \"Test262Error: caller should be an own property\""
+built-ins/Function/prototype/caller/prop-desc.js strict fail:"abort-type divergence: oracle threw \"ReferenceError: get WellKnownIntrinsicObjects: undefined variable\" ironhorse threw \"Test262Error: caller should be an own property\""
