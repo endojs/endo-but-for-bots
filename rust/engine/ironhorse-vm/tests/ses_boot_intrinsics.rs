@@ -350,6 +350,23 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
                 outcome.result
             };
 
+            // **`Compartment=undefined` is the next term to go vacuous, and
+            // whoever lands a guest `Compartment` pays for it.** Two terms in
+            // this census have already made the trip: `harden=function` never
+            // discriminated (every configuration here has one), and
+            // `lockdown=function` stopped discriminating when
+            // `create_hardened_globals` began binding one on every realm. Each
+            // was replaced by something that still moves -- the
+            // `hardenTraverses` probe for the first, an identity comparison
+            // against a stashed engine binding for the second.
+            //
+            // `Compartment` only discriminates today because the engine binds
+            // none, so `function` means "the shim installed it". A guest
+            // `Compartment` (`fx_Compartment`, `xsModule.c:2864`) makes that
+            // `function` on both sides of the shim's evaluation, and this term
+            // says nothing again. The repair is the one directly below: stash
+            // `globalThis.__engineCompartment` before the shim and compare by
+            // identity after.
             assert_eq!(
                 crank(SES_CENSUS),
                 "lockdown=function harden=function Compartment=undefined \

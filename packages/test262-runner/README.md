@@ -183,19 +183,56 @@ all; this prelude must leave the realm *un*-locked-down, because one of the
 eight cases asserts a descriptor `lockdown()` changes — `Symbol.toStringTag.js`
 wants `Compartment.prototype[Symbol.toStringTag]` still `configurable: true`,
 and measured after an explicit `lockdown()` it fails with exactly that.
-The other seven are indifferent rather than supporting: two still pass
-post-lockdown, and four are blocked there by an unrelated engine gap
-(`native-call:TypedArray:from-array-like`).
-One case is enough to decide it, and the one is real.
+`Symbol.toStringTag-lockdown.js` fails post-lockdown too, for a different and
+equally real reason: it calls `lockdown()` itself, and SES refuses a second
+one.
+So two of the eight are cases the worker's guests could not run at all.
 
-**The native `lockdown()` has landed, and it does not displace this.** XS's
-`fx_lockdown` (`c/moddable/xs/sources/xsLockdown.c`) rewires those same
+The other six all pass under the options the worker ships.
+Under SES's *defaults* four of them instead halt on
+`native-call:TypedArray:from-array-like`.
+That is one fact rather than two: `bundle-ironhorse-worker.mjs` chose
+`overrideTaming: 'min'` for exactly this reason — its comment names Ironhorse's
+typed-array copy profile refusing the accessor-based iterator overrides that
+`'moderate'` installs on `Array.prototype`.
+An earlier revision of this section reported that default-option column as
+though it were unconditional — "four are blocked post-lockdown by an unrelated
+engine gap" — which understated the shipped configuration by four cases.
+
+| | pre-lockdown | worker's options | SES defaults |
+| --- | --- | --- | --- |
+| `Symbol.toStringTag.js` | pass | **fail** | **fail** |
+| `Symbol.toStringTag-lockdown.js` | pass | fail | fail |
+| `byte-array-brand.js`, `byte-readers.js`, `native-or-emulated-shape.js`, `TextDecoder` intersection | pass | pass | **halt** |
+| `ses-hosts.js`, `TextEncoder` intersection | pass | pass | pass |
+| | **8 / 8** | **6 / 8** | **2 / 8** |
+
+That table is **pinned, not quoted**: `ses_prelude_reach.rs`'s `POST_LOCKDOWN`
+runs all eight cases in a locked-down realm under both option sets, in the same
+`test-ironhorse-oracle` lane as the pre-lockdown pin, and fails with a
+copy-pasteable replacement when any cell moves.
+The worker column is the ratchet for the realm the worker actually ships; the
+defaults column is a second ratchet on the engine gap, and flips to `PASS` when
+that native call lands.
+One case is enough to decide the prelude's own lockdown, and the one is real.
+
+**The native `lockdown()` has landed, and the shim is still the chosen route.**
+XS's `fx_lockdown` (`c/moddable/xs/sources/xsLockdown.c`) rewires those same
 constructors with direct slot writes, underneath `[[DefineOwnProperty]]`, so a
 frozen `Function.prototype` never obstructs it, and Ironhorse now implements its
 steps 1, 2 and 5 natively — `designs/ironhorse-native-lockdown.md` has the
-ledger. What the native route still does not implement is a guest `Compartment`
-(`fx_Compartment`), and the shim supplies that as well as `lockdown`. So the
-shim route above remains the SES profile for this corpus, and
+ledger.
+
+That settled the realm-profile question rather than opening it: the SES shim
+stays the **guest-facing** SES profile, and the native `lockdown()` is deferred
+out of the worker position. It keeps two consumers of its own — `endot-ih -l`,
+where divergence from the XS oracle is a regression, and a host locking down a
+`Machine` whose code it wrote — but neither is the guest surface. The deciding
+gap is `Compartment`: the native route implements no guest one
+(`fx_Compartment`), and the shim supplies it along with `lockdown`.
+
+So this shim route is what the worker ships, which is why the post-lockdown pin
+above measures the worker's realm rather than only this prelude's.
 `test262:ironhorse` — the differential runner, which now starts rather than
 refusing — reports this corpus's two `Compartment` cases as `feature:Compartment`
 skips. § The engine lane's zero, below, has that number and what the rest of it
