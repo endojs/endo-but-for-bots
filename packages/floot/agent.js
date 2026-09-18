@@ -1047,6 +1047,45 @@ export const makeStreamingAgent = async (
       executingTools.delete(pending);
     }
   };
+  /**
+   * The one place an Endo tool is dispatched on the host, whichever loop asks
+   * — the provider loop below, or a hosted CLI through `journalSnapshot`.
+   * Intent is journaled before the tool has authority, and the outcome — the
+   * result, or the error text the model will see — before it is returned.
+   * The journal's `tool-intent`/`tool-result` pair is the shared effects
+   * record every adapter's Endo tool calls land in; Codex's audit chain
+   * records the provider's side of the same calls with its thread and turn
+   * ids, and is evidence about the transport, not a second executor.
+   *
+   * @param {{ turnId: string, name: string, args: unknown, run: () => unknown }} call
+   * @returns {Promise<{ result: unknown } | { error: unknown }>}
+   */
+  const journaledToolCall = async ({ turnId, name, args, run }) => {
+    journalToolSequence += 1n;
+    const callId = `floot-tool-${journalToolSequence}`;
+    await turnJournal.append(turnId, {
+      type: 'tool-intent',
+      callId,
+      name: `${name}`,
+      args: JSON.stringify(args),
+    });
+    /** @type {{ result: unknown } | { error: unknown }} */
+    let outcome;
+    try {
+      outcome = { result: await executeTracked(run) };
+    } catch (error) {
+      outcome = { error };
+    }
+    await turnJournal.append(turnId, {
+      type: 'tool-result',
+      callId,
+      result:
+        'error' in outcome
+          ? `Error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
+          : `${outcome.result}`,
+    });
+    return outcome;
+  };
   // Hosted runtimes invoke this snapshot directly. Record intent before giving
   // Endo tools authority, and settlement before returning a result to the model.
   const journalSnapshot = snapshot =>
@@ -1060,32 +1099,14 @@ export const makeStreamingAgent = async (
         if (!turnId || activeJournalSignal?.aborted) {
           throw Error('Endo tool call outside an active Floot turn');
         }
-        journalToolSequence += 1n;
-        const callId = `floot-tool-${journalToolSequence}`;
-        await turnJournal.append(turnId, {
-          type: 'tool-intent',
-          callId,
-          name: `${name}`,
-          args: JSON.stringify(args),
+        const outcome = await journaledToolCall({
+          turnId,
+          name,
+          args,
+          run: () => snapshot.execute(name, args),
         });
-        let result;
-        try {
-          result = await executeTracked(() => snapshot.execute(name, args));
-        } catch (error) {
-          const text = `Error: ${error instanceof Error ? error.message : String(error)}`;
-          await turnJournal.append(turnId, {
-            type: 'tool-result',
-            callId,
-            result: text,
-          });
-          throw error;
-        }
-        await turnJournal.append(turnId, {
-          type: 'tool-result',
-          callId,
-          result: `${result}`,
-        });
-        return result;
+        if ('error' in outcome) throw outcome.error;
+        return outcome.result;
       },
     });
 
@@ -1625,8 +1646,6 @@ export const makeStreamingAgent = async (
           id: call.id || `floot-synth-${round}-${index}`,
         }));
         const runOne = async call => {
-          journalToolSequence += 1n;
-          const journalCallId = `floot-tool-${journalToolSequence}`;
           const name = call.function?.name;
           let args = {};
           let parseError;
@@ -1643,31 +1662,25 @@ export const makeStreamingAgent = async (
             name: `${name}`,
             args: JSON.stringify(args),
           });
-          await turnJournal.append(turnId, {
-            type: 'tool-intent',
-            callId: journalCallId,
-            name: `${name}`,
-            args: JSON.stringify(args),
+          // Unparseable arguments are an outcome the model is told about,
+          // journaled like any other failed call rather than skipped.
+          const outcome = await journaledToolCall({
+            turnId,
+            name,
+            args,
+            run:
+              parseError !== undefined
+                ? () => {
+                    throw Error(
+                      `could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`,
+                    );
+                  }
+                : () => tools.execute(name, args),
           });
-          let resultText;
-          if (parseError !== undefined) {
-            resultText = `Error: could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`;
-          } else {
-            try {
-              resultText = await executeTracked(() =>
-                tools.execute(name, args),
-              );
-            } catch (error) {
-              resultText = `Error: ${
-                error instanceof Error ? error.message : String(error)
-              }`;
-            }
-          }
-          await turnJournal.append(turnId, {
-            type: 'tool-result',
-            callId: journalCallId,
-            result: `${resultText}`,
-          });
+          const resultText =
+            'error' in outcome
+              ? `Error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
+              : outcome.result;
           writer.toolResult({
             id: call.id,
             name: `${name}`,

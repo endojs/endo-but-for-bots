@@ -46,7 +46,10 @@ import { mapReader } from '@endo/stream';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
+import {
+  awaitBarrier,
+  makeHostedTurnChannel,
+} from '@endo/hosted-agent/turn-channel.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -353,6 +356,10 @@ export const makeClaudeClient = ({
   };
   /** @type {ProcessHandle | null} */
   let inFlight = null;
+  // How long an interrupt waits for the killed process to end before it is
+  // reported as a failed cancellation; a `claude` that ignores SIGKILL for
+  // this long is a wedged runtime, not a slow one.
+  const INTERRUPT_DEADLINE_MS = 15_000;
   // Closes the reply channel of the most recent turn (queued or running).
   // Closing is the producer-side half of a consumer close: it discards
   // undelivered events and fires the channel's onClose, which kills the turn.
@@ -365,6 +372,14 @@ export const makeClaudeClient = ({
   // kills the running `claude` process rather than bailing the queued turn.
   /** @type {(() => void) | null} */
   let inFlightClose = null;
+  // The terminal barrier of the turn `interrupt()` targets: settles when the
+  // turn's process has actually ended, so an interrupt returns only once a
+  // later `send()` cannot race the turn it ended. Reader closure alone is
+  // not exit.
+  /** @type {Promise<void> | null} */
+  let currentTerminal = null;
+  /** @type {Promise<void> | null} */
+  let inFlightTerminal = null;
   // Serialize turns so two `claude -p` processes never race the same
   // workspace conversation: each `send()` queues behind the previous turn.
   /** @type {Promise<void>} */
@@ -606,22 +621,30 @@ export const makeClaudeClient = ({
     /** @type {ProcessHandle | null} */
     let proc = null;
     let closed = false;
-    const { push, reader, close, setOnClose } = makeBoundedReader({
-      maxItems: 1024,
-      maxWeight: 16 * 1024 * 1024,
-      weigh: event => 64 + JSON.stringify(event).length * 2,
+    const channel = makeHostedTurnChannel({
+      onConsumerClosed: () => {
+        closed = true;
+        if (proc) {
+          E(proc)
+            .kill()
+            .catch(() => {});
+        }
+      },
     });
-    setOnClose(() => {
-      closed = true;
-      if (proc) {
-        E(proc)
-          .kill()
-          .catch(() => {});
-      }
-    });
+    const { push, reader, close } = channel;
     currentClose = close;
+    currentTerminal = channel.terminal;
 
     const turn = turnChain.then(async () => {
+      try {
+        await runQueuedTurn();
+      } finally {
+        // Whatever ended the turn — a terminal delivered, a bail before the
+        // spawn, a kill — its process is gone or never was.
+        channel.settle();
+      }
+    });
+    async function runQueuedTurn() {
       if (closed || terminated) {
         // The consumer closed the reader, or the session was terminated,
         // before this queued turn ran. Finalize the reader with a terminal
@@ -654,6 +677,7 @@ export const makeClaudeClient = ({
       }
       inFlight = proc;
       inFlightClose = close;
+      inFlightTerminal = channel.terminal;
       try {
         for await (const event of parseStreamJsonLines(
           makeStdoutIterable(proc),
@@ -732,15 +756,17 @@ export const makeClaudeClient = ({
         if (inFlight === proc) {
           inFlight = null;
           inFlightClose = null;
+          inFlightTerminal = null;
         }
         // Drop the finished turn's closer so a later `interrupt()` reports
         // "nothing in flight" instead of silently no-op'ing against a closed
         // channel.
         if (currentClose === close) {
           currentClose = null;
+          currentTerminal = null;
         }
       }
-    });
+    }
     // Keep the chain alive even if a turn rejects (errors are surfaced as
     // `abort` events, but be defensive).
     turnChain = turn.catch(() => {});
@@ -941,12 +967,23 @@ export const makeClaudeClient = ({
       // Prefer the executing turn (kills its `claude` process); fall back
       // to the most-recent queued turn (which bails before it spawns).
       const target = inFlightClose || currentClose;
+      const terminal = inFlightClose ? inFlightTerminal : currentTerminal;
       if (!target) {
         throw makeError(
           X`ClaudeClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
         );
       }
       target();
+      // Closing the reader kills the process; the turn is over only when the
+      // process has ended, which is what a caller treating this as its
+      // cancellation barrier needs to be true.
+      if (terminal) {
+        await awaitBarrier(terminal, {
+          deadlineMs: INTERRUPT_DEADLINE_MS,
+          makeFailure: () =>
+            makeError(X`ClaudeClient(${q(sessionId)}): interrupt timed out.`),
+        });
+      }
     },
 
     /**

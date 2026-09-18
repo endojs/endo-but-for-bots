@@ -2111,31 +2111,20 @@ path as its replacement becomes usable.
 Exit: all three use the common grants and supervisor; no guest-visible upstream
 credentials or generic unfiltered hosted-network fallback remains.
 
-**Status, 2026-09-17: mid-phase. The mount sub-track is complete; the exit is
-not met, and is gated on the track that did not move.** Both clauses fail for
-the same reason:
-
-- **No supervisor exists.** `hosted-agent/src/session-registry.js` re-exports
-  a generic resource registry; what stands in for a shared supervisor is two
-  independent 500–600 line lifecycle implementations, which is what the
-  *Shared architecture* table above forbids in as many words.
-- **Codex is not on the common grants.** `provider-broker-service.js` has no
-  Codex consumer — Codex builds its own through `broker-launch.js` — so it
-  has no scope, no plan record, no recovery by session id, and nothing to
-  revoke. The Codex lease failure recorded in the plan below is a direct
-  consequence: its release is reachable from one call site, and there is no
-  owner above it to release it instead.
-
-**The alignment plan below is what closes this exit**, and its steps map onto
-these two clauses: step 2 builds the supervisor from the two adapters that
-already have one lifecycle shape each, step 3 removes the storage difference
-that would otherwise force an escape hatch into the supervisor's adapter
-spec, and step 4 puts Codex on both. Step 1 comes first because it proves an
-adapter behaviour — restoration from stack-owned records — that must hold
-across the reshape and is cheapest to establish before it.
-
-The phase does not exit on step 5; that step is tidy-up over the settled
-shape and is deliberately last.
+**Status, 2026-09-18: exit met.** The status recorded here on 2026-09-17
+said the exit failed on two clauses — no supervisor existed, and Codex was
+not on the common grants — and that the alignment plan below would close
+them. It did, the same day, and this block lagged the plan's own record of
+it (steps 2–4 under *Order*): `hosted-agent/src/session-supervisor.js` is the
+one lifecycle all three adapters compose; Codex takes its grants from
+`provider-broker-service.js` through shared broker scopes, so it has a
+scope, a plan record, recovery by session id and something to revoke;
+`broker-launch.js` and the volume/lease subsystem are deleted
+(`b9bd65509`). Live on Tokyo since the shared-Codex cutover of 2026-09-17
+(endo-host `ops/codex-shared-cutover-20260917.md`) and re-verified through
+the restoration and daemon-stop acceptances of 2026-09-18. Step 5 of the
+plan is tidy-up over the settled shape and never gated this exit; it landed
+on 2026-09-18 too.
 
 ### Phase 4: transport and journal simplification
 
@@ -2192,8 +2181,26 @@ Still named, not changed: Floot's `FLOOT_MAX_TOOL_ROUNDS` (48) for the Fae
 loop, a safety ceiling on a model that never answers, configurable; the
 network-policy audit's 4,096-entry lifetime cap, which refuses further policy
 changes rather than the session and is the same pattern as the audit journal's
-former total. Effects-recording and transport admission/cancellation
-consolidation across the three adapters is the remaining Phase 4 item.
+former total.
+
+**Effects recording and transport admission/cancellation — landed
+2026-09-18.** One effects path: every Endo tool call, from whichever loop
+dispatches it, goes through `journaledToolCall` in Floot's agent — intent
+before the tool has authority, outcome before it is returned — and the
+hosted CLIs reach it through `journalSnapshot`. The direct Claude path
+(`claude-turn.js`), which had its own copy of the observed-tool recording,
+is deleted; so is the text-form continuity. Codex's audit chain records the
+provider's side of the same calls with its thread and turn ids and is
+evidence about the transport, not a second executor; it is deliberately
+kept. One delivery and cancellation path:
+`@endo/hosted-agent/turn-channel.js` is the credit-bounded reader with the
+one set of bounds, the terminal barrier the producer settles once, the
+consumer-closed hook, and `awaitBarrier` for a deadline that is never
+`unref`'d. All three clients build their turn on it; Claude's `interrupt`,
+which used to return as soon as it had closed the reader, now awaits the
+turn's end like the other two. Admission policy stays per transport by
+design — Claude and OpenCode queue a second `send`, the app-server refuses
+one — and Floot admits one UI turn per session above all three.
 
 ### Phase 5: final conformance and documentation
 
