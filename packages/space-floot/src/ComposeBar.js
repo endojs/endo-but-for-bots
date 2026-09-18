@@ -50,7 +50,7 @@ export const ComposeBar = ({ state, controller }) => {
             type: 'button',
             class: `floot-mic${voice.micActive ? ' listening' : ''}${
               voice.speaking ? ' recording' : ''
-            }${voice.micError ? ' error' : ''}`,
+            }${voice.micError ? ' floot-mic-error' : ''}`,
             'aria-label': voice.micActive
               ? 'Stop listening'
               : 'Start listening',

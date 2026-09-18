@@ -400,7 +400,10 @@ harden(Bubble);
  * marks both fields optional because a sent message has neither; this is the one
  * place the pairing is established, so nothing downstream has to assert it.
  *
- * @typedef {FlootMessage & { pendingId: number }} FlootPendingMessage
+ * The id is whatever the host addresses the submission by: the daemon's queue
+ * issues strings, and an older host that queued in the page issued numbers.
+ *
+ * @typedef {FlootMessage & { pendingId: number | string }} FlootPendingMessage
  */
 
 /**
@@ -412,7 +415,9 @@ harden(Bubble);
  * @returns {msg is FlootPendingMessage}
  */
 const isPending = msg =>
-  Boolean(msg.pending) && typeof msg.pendingId === 'number';
+  Boolean(msg.pending) &&
+  (typeof msg.pendingId === 'number' ||
+    (typeof msg.pendingId === 'string' && msg.pendingId !== ''));
 
 /**
  * A submission the host has accepted but not yet run, shown after the live turn
@@ -420,14 +425,22 @@ const isPending = msg =>
  * (below the thinking indicator) and the muted styling already say "not sent
  * yet", and a badge on every queued line would just be noise.
  *
- * @param {{ msg: FlootPendingMessage, onSendNow?: (id: number) => void,
- *   onEdit?: (id: number, text: string) => void,
- *   onDelete?: (id: number) => void }} props
+ * `pendingState` refines it. `sending` is a message on its way — accepted by
+ * the page and not yet by the daemon, or claimed by the daemon and starting —
+ * and has no controls: there is nothing left to edit or cancel. `interrupted`
+ * is one the daemon was sending when it restarted, so nobody knows whether it
+ * arrived; it says so, and the user sends it again or deletes it.
+ *
+ * @param {{ msg: FlootPendingMessage, onSendNow?: (id: number | string) => void,
+ *   onEdit?: (id: number | string, text: string) => void,
+ *   onDelete?: (id: number | string) => void }} props
  * @returns {VNode}
  */
 const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
   const text = msg.text || '';
   const id = msg.pendingId;
+  const sending = msg.pendingState === 'sending';
+  const interrupted = msg.pendingState === 'interrupted';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
 
@@ -481,10 +494,30 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
     );
   }
 
+  if (sending) {
+    return h(
+      'div',
+      { class: 'floot-msg-row user pending floot-pending-sending' },
+      h('div', { class: 'floot-msg' }, text),
+      h('div', { class: 'floot-pending-note' }, 'Sending…'),
+    );
+  }
+
   return h(
     'div',
-    { class: 'floot-msg-row user pending' },
+    {
+      class: `floot-msg-row user pending${
+        interrupted ? ' floot-pending-interrupted' : ''
+      }`,
+    },
     h('div', { class: 'floot-msg' }, text),
+    interrupted
+      ? h(
+          'div',
+          { class: 'floot-pending-note', role: 'status' },
+          'May already have been sent: the service restarted while sending it.',
+        )
+      : null,
     h(
       'div',
       { class: 'floot-pending-actions' },
@@ -496,7 +529,7 @@ const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
               class: 'floot-pending-action',
               onClick: () => onSendNow(id),
             },
-            'Send now',
+            interrupted ? 'Send again' : 'Send now',
           )
         : null,
       onEdit
@@ -634,22 +667,27 @@ harden(projectTranscript);
  * @returns {VNode}
  */
 export const MessageList = ({ state, controller, debug = false }) => {
-  const { messages, streamingText, busy, loaded, voice } = state;
+  const { messages, streamingText, loaded, voice } = state;
+  // A turn this page can stop, for the queue's "Send now".
+  const { busy } = state;
+  // Anything under way shows the thinking indicator, including a turn that
+  // arrived by mail, which has no Stop.
+  const thinking = busy || Boolean(state.working);
   const canReplay = Boolean(voice && voice.hasTts);
   const replayingText = voice && voice.replayingText;
   // Older hosts may not offer these; each control simply does not render.
   const onSendNow =
     typeof controller.sendPendingNow === 'function'
-      ? (/** @type {number} */ id) => controller.sendPendingNow?.(id)
+      ? (/** @type {number | string} */ id) => controller.sendPendingNow?.(id)
       : undefined;
   const onEditPending =
     typeof controller.editPending === 'function'
-      ? (/** @type {number} */ id, /** @type {string} */ text) =>
+      ? (/** @type {number | string} */ id, /** @type {string} */ text) =>
           controller.editPending?.(id, text)
       : undefined;
   const onDeletePending =
     typeof controller.cancelPending === 'function'
-      ? (/** @type {number} */ id) => controller.cancelPending?.(id)
+      ? (/** @type {number | string} */ id) => controller.cancelPending?.(id)
       : undefined;
 
   const { rows: projected, pending } = projectTranscript(messages);
@@ -661,18 +699,39 @@ export const MessageList = ({ state, controller, debug = false }) => {
    *
    * @returns {VNode[]}
    */
-  const pendingRows = () =>
-    pending.map((msg, index) =>
+  // A held queue sends nothing until the user says so, so its head offers
+  // "Send now" with no turn to cut short; an interrupted message offers it
+  // wherever it sits, because that is how the user answers "send it again".
+  const held = Boolean(state.pendingHold);
+  const pendingRows = () => [
+    ...(held && pending.length
+      ? [
+          h(
+            'div',
+            {
+              key: 'pending-hold',
+              class: 'floot-pending-hold',
+              role: 'status',
+            },
+            state.pendingHold,
+          ),
+        ]
+      : []),
+    ...pending.map((msg, index) =>
       h(PendingBubble, {
         // Keyed by the placeholder's own id so an edit re-renders in place and
         // deleting one does not reset the edit state of the next.
         key: `pending-${msg.pendingId}`,
         msg,
-        onSendNow: index === 0 && busy ? onSendNow : undefined,
+        onSendNow:
+          (index === 0 && (busy || held)) || msg.pendingState === 'interrupted'
+            ? onSendNow
+            : undefined,
         onEdit: onEditPending,
         onDelete: onDeletePending,
       }),
-    );
+    ),
+  ];
 
   if (!loaded) {
     // A queued message stays visible across a history reload too — it is the
@@ -691,7 +750,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
     );
   }
 
-  const hasContent = messages.length > 0 || streamingText || busy;
+  const hasContent = messages.length > 0 || streamingText || thinking;
   if (!hasContent) {
     return h(
       'div',
@@ -710,7 +769,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
       rawRows.push(
         RawBlock('raw-streaming', { role: 'assistant', text: streamingText }),
       );
-    } else if (busy) {
+    } else if (thinking) {
       rawRows.push(h(ThinkingRow, { key: 'thinking' }));
     }
     return h('div', { class: 'floot-messages' }, rawRows);
@@ -739,7 +798,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
         h('div', { class: 'floot-msg streaming' }, ...linkify(streamingText)),
       ),
     );
-  } else if (busy) {
+  } else if (thinking) {
     rows.push(h(ThinkingRow, { key: 'thinking' }));
   }
   // Queued submissions come after the live turn's output, in the order they

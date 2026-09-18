@@ -16,6 +16,88 @@ const PILL_LABELS = harden({
 
 const DEFAULT_PRESET_ID = 'general';
 
+// What the status circle says, for a reader who cannot see its colour.
+const STATUS_LABELS = harden({
+  passive: 'Passive',
+  working: 'Working',
+  error: 'Error',
+});
+
+/**
+ * The one of three states a session's status circle shows. Every session has
+ * a circle: a session that is doing nothing is `passive`, not blank.
+ *
+ * A session the factory could not make ready is an error whatever else is
+ * known about it (one still being made, or being removed, is working), and an unrecognised status reads as passive rather than
+ * leaking an arbitrary class name into the view.
+ *
+ * @param {Pick<FlootSessionMeta, 'status' | 'lifecycle'>} session
+ * @returns {'passive' | 'working' | 'error'}
+ */
+export const sessionStatusOf = session => {
+  // Being made or being removed is work in progress, not a fault: the daemon
+  // reports it as working, and the circle must not contradict it.
+  if (session.lifecycle === 'creating' || session.lifecycle === 'deleting')
+    return 'working';
+  if (session.lifecycle && session.lifecycle !== 'ready') return 'error';
+  if (session.status === 'working' || session.status === 'streaming')
+    return 'working';
+  if (session.status === 'error') return 'error';
+  return 'passive';
+};
+harden(sessionStatusOf);
+
+/**
+ * What to say about a session that is not ready. In progress is not
+ * "unavailable": that word is for a session an operator has to look at.
+ *
+ * @param {string | undefined} lifecycle
+ */
+export const lifecycleNote = lifecycle => {
+  if (lifecycle === 'creating') return 'Starting…';
+  if (lifecycle === 'deleting') return 'Deleting…';
+  return `Unavailable: ${lifecycle}`;
+};
+harden(lifecycleNote);
+
+/**
+ * What a session runs on, for its row: "Backend · Model", with the reasoning
+ * effort when the session pins one. Empty when the host reported neither, so
+ * an older host draws the row as before.
+ *
+ * @param {Pick<FlootSessionMeta, 'backendLabel' | 'modelLabel' | 'reasoningEffort'>} session
+ * @returns {string}
+ */
+export const sessionRuntimeLabel = session => {
+  const model = [session.modelLabel, session.reasoningEffort]
+    .filter(Boolean)
+    .join(' ');
+  return [session.backendLabel, model].filter(Boolean).join(' · ');
+};
+harden(sessionRuntimeLabel);
+
+/**
+ * The small line under a session's title: how much is in it, where known, and
+ * how many messages are waiting their turn — which for a session left behind
+ * is the only sign that it has something held for the user.
+ *
+ * @param {Pick<FlootSessionMeta, 'messageCount' | 'loaded' | 'pendingCount'>} session
+ * @returns {string}
+ */
+export const sessionSubLabel = session => {
+  const parts = [];
+  if (session.messageCount) {
+    parts.push(
+      `${session.messageCount} message${session.messageCount === 1 ? '' : 's'}`,
+    );
+  } else if (session.loaded) {
+    parts.push('empty');
+  }
+  if (session.pendingCount) parts.push(`${session.pendingCount} queued`);
+  return parts.join(' · ');
+};
+harden(sessionSubLabel);
+
 /**
  * @param {{
  *   state: FlootState,
@@ -55,8 +137,9 @@ export const SessionSidebar = ({
     if (title) controller.renameSession(id, title);
   };
 
+  // Selecting never waits for a turn: the daemon owns the turn and whatever is
+  // queued behind it, so leaving a busy session stops nothing and loses nothing.
   const select = (/** @type {string} */ id) => {
-    if (state.busy) return; // don't switch context mid-turn
     controller.selectSession(id);
     onAfterSelect();
   };
@@ -64,8 +147,9 @@ export const SessionSidebar = ({
   const items = sessions.length
     ? sessions.map(session => {
         const unavailable = session.lifecycle && session.lifecycle !== 'ready';
-        const status = unavailable ? 'error' : session.status || 'idle';
+        const status = sessionStatusOf(session);
         const editing = editingId === session.id;
+        const runtime = sessionRuntimeLabel(session);
         return h(
           'div',
           {
@@ -73,14 +157,21 @@ export const SessionSidebar = ({
             class: `floot-session-item${session.id === activeSessionId ? ' active' : ''}`,
             onClick: () => !editing && select(session.id),
           },
+          // The modifier is namespaced on purpose. The space renders inside
+          // chat's page, whose stylesheet has a global `.error` rule (padding
+          // and a border, for error values in messages); a bare `error` class
+          // here picked that up and stretched the circle into an ellipse.
           h('span', {
-            class: `floot-status-dot${status === 'idle' ? '' : ` ${status}`}`,
+            class: `floot-status-dot floot-status-dot-${status}`,
+            role: 'img',
+            'aria-label': STATUS_LABELS[status],
+            title: STATUS_LABELS[status],
           }),
           h(
             'div',
             { class: 'floot-session-meta' },
             unavailable
-              ? h('div', null, `Unavailable: ${session.lifecycle}`)
+              ? h('div', null, lifecycleNote(session.lifecycle))
               : null,
             editing
               ? h('input', {
@@ -108,15 +199,14 @@ export const SessionSidebar = ({
                   },
                   session.title,
                 ),
-            h(
-              'div',
-              { class: 'floot-session-sub' },
-              session.messageCount
-                ? `${session.messageCount} message${session.messageCount === 1 ? '' : 's'}`
-                : session.loaded
-                  ? 'empty'
-                  : '',
-            ),
+            runtime
+              ? h(
+                  'div',
+                  { class: 'floot-session-runtime', title: runtime },
+                  runtime,
+                )
+              : null,
+            h('div', { class: 'floot-session-sub' }, sessionSubLabel(session)),
             session.presetId && session.presetId !== DEFAULT_PRESET_ID
               ? h(
                   'span',

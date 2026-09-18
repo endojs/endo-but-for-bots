@@ -195,6 +195,10 @@ labeled as potentially describing the same operation, not proof of duplicate eff
 failed, cancelled, pending, or outcome-unknown state.
 `getHistory()` merges the journal and conversation tree chronologically, including
 failed-turn tool evidence and explicit error/status messages.
+`watch()` publishes the same merge without the turn that is still running
+(`getSettledHistory`), as a delta each time a turn settles or is resolved; the
+running turn is what `FlootTurn.watch()` is for, and a view that showed both
+would show it twice.
 An input-only mail node never suppresses the journal's later tool evidence.
 Provider context includes known effects from failed turns; hosted prompts carry
 bounded recovery evidence after incomplete turns, since transcript rollback does

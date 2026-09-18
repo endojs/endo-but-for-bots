@@ -124,14 +124,17 @@ The controller is the model; `FlootApp` is the view.
 controller = {
   // --- reactive state (pure data; re-read after every `change` notification) ---
   getState() => {
-    sessions: Array<{ id, title, createdAt, presetId, model, streaming, error }>,
+    sessions: Array<{ id, title, createdAt, presetId, model, backendLabel,
+      modelLabel, status: 'passive' | 'working' | 'error', pendingCount }>,
     activeSessionId: string | null,
     presets: Array<{ id, title, description }>,
     models: Array<{ id, title, description, default }>,  // selectable for a new session
     messages: Array<FlootMessage>,   // active session transcript (history + live turn)
     streamingText: string,           // in-progress assistant bubble, '' when idle
     phase: string,                   // 'thinking' | 'using tools' | ...
-    busy: boolean,                   // a turn is streaming for the active session
+    busy: boolean,                   // a turn this page can stop is in flight
+    working: boolean,                // anything is under way, incl. a mail turn
+    pendingHold: string,             // why queued messages are not moving, or ''
     status: string,                  // status-bar text
     usage: { inputTokens, outputTokens } | null,
     // voice (all booleans/numbers/strings — no audio objects):
@@ -154,6 +157,26 @@ controller = {
 
 Notes:
 
+- The host does not drive the conversation; it subscribes to it.
+  The daemon owns the transcript, the turn in flight and the queue of messages
+  waiting their turn, and says when any of them changes (`session.watch()`,
+  `factory.watchSessions()` in `@endo/floot`). The host renders what it is told:
+  `send` is `session.enqueue(text)`, and the daemon decides when that becomes a
+  turn. Nothing in the host is a queue, a lock or a timer, so:
+  - selecting another session, or starting a new one, never waits for a turn —
+    the session left behind keeps running, and its queue with it;
+  - a message sent behind a running turn outlives the page that sent it, and a
+    second page sees it;
+  - mail, a turn another page started, a network request the model raised and a
+    session an agent spawned all appear without being asked for.
+  The one thing the host holds is a message for the round trip between the
+  keystroke and the daemon's acknowledgement (`pendingState: 'sending'`), so it
+  never vanishes from the screen.
+- Every session row has a status circle in one of three states — `passive`,
+  `working`, `error` — reported by the daemon (`activity`), and a line saying
+  what backend and model it runs. State classes are namespaced
+  (`floot-status-dot-error`): the space's stylesheet shares a document with
+  chat's, whose bare `.error` rule once turned the circle into an ellipse.
 - `FlootApp` re-renders on `subscribe` notifications via a tiny
   `useReducer(c => c + 1, 0)` + a mount-once effect; it reads `getState()` each
   render.

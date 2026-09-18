@@ -49,6 +49,30 @@ that make it a hands-free voice assistant.
   Mail remains serialized through the session's execution queue.
   Turns survive browser disconnects, but daemon restarts recover committed history
   rather than live turn handles.
+- **Queued submissions** (`src/pending-queue.js`, `src/session-submissions.js`)
+  — `session.enqueue(text)` accepts a message and returns `{ id }`. It becomes a
+  turn at once if nothing is ahead of it; otherwise it waits in a durable
+  per-session queue in the factory host's pet store, whether or not the caller
+  stays connected, and the daemon starts it when its turn comes. A message sent
+  behind a running turn therefore outlives the page that sent it.
+  Dispatch is at most once: an entry is marked `dispatching` before its turn
+  starts and removed when the turn journal has the input, and one found
+  `dispatching` after a restart becomes `interrupted` and is never sent again
+  on its own. A queue that comes back from a restart non-empty, a turn that was
+  refused before it began, and an emergency stop all hold the queue until
+  `sendPending(id)` or a new `enqueue`; `listPending()`, `editPending()` and
+  `cancelPending()` manage what waits. At most 100 messages wait at once.
+- **Subscriptions** (`src/session-watch.js`) — a view is told when state changes
+  instead of asking again on a timer. `session.watch()` is a disposable stream:
+  a snapshot (settled transcript, the UI turn in flight, what the agent is
+  running whoever started it, queued submissions, execution state, network
+  policy, usage), then one event per change. The transcript travels as
+  `{ version, base, keep, append }`: keep the first `keep` messages, append the
+  rest. It holds settled turns only; a running turn is rendered from its own
+  `watch()`. `factory.watchSessions()` does the same for the session list, where
+  each session carries an `activity` of `passive`, `working` or `error`. A
+  read that fails or never answers is retried while someone is watching, and
+  closing a stream detaches that viewer only. `help('watch')` has the wire format.
 - **Voice caplets** (`voice/`) — two independent, swappable daemon objects,
   provisioned under the `floot/` inventory directory (`FLOOT_DIR`):
   - `floot/stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
