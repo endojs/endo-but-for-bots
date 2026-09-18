@@ -358,13 +358,23 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
                  traverses, it is a port of XS's fx_hardenFreezeAndTraverse -- \
                  but no Compartment"
             );
-            // **`lockdown=function` no longer discriminates, so pin identity
-            // too.** Before the engine bound a `lockdown`, that census term
-            // meant "the shim installed one". It is now `function` on both
-            // sides of the shim's evaluation and says nothing about whose it
-            // is; only `Compartment` and `frozenObjectProto` still move.
-            // Stash the engine's and compare by identity, which does move.
-            crank("globalThis.__engineLockdown = globalThis.lockdown; 0");
+            // **Neither `lockdown=function` nor `harden=function`
+            // discriminates, so pin identity too.** Before the engine bound a
+            // `lockdown`, that census term meant "the shim installed one". It
+            // is now `function` on both sides of the shim's evaluation and says
+            // nothing about whose it is, and `harden` never said anything: the
+            // engine binds one too. Only `Compartment` and `frozenObjectProto`
+            // still move in the census itself.
+            //
+            // So stash BOTH engine bindings and compare each against its own
+            // counterpart. An earlier revision stashed only `__engineLockdown`
+            // and then compared `harden` against it, which is `false` however
+            // `harden` was built -- a second vacuous term in a test whose
+            // purpose is to catch exactly that.
+            crank(
+                "globalThis.__engineLockdown = globalThis.lockdown; \
+                 globalThis.__engineHarden = globalThis.harden; 0",
+            );
             assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
             assert_eq!(
                 crank(SES_CENSUS),
@@ -375,11 +385,14 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
             );
             assert_eq!(
                 crank(
-                    "[globalThis.lockdown === globalThis.__engineLockdown, \
-                      globalThis.harden === globalThis.__engineLockdown].join(' ')"
+                    "[typeof globalThis.lockdown, typeof globalThis.harden, \
+                      globalThis.lockdown === globalThis.__engineLockdown, \
+                      globalThis.harden === globalThis.__engineHarden].join(' ')"
                 ),
-                "false false",
-                "the shim REPLACED the engine's lockdown; a typeof census cannot see that"
+                "function function false false",
+                "the shim REPLACED both of the engine's bindings with its own, and \
+                 both are still callable afterwards; a typeof census sees neither \
+                 replacement"
             );
             // Not merely present: usable, with its own globals and its own
             // evaluator. The `__options__` sigil selects the modern
