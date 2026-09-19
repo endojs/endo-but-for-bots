@@ -64,6 +64,8 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} planesDirectoryId
+   * @param {FormulaIdentifier | undefined} guestPinsDirectoryId
+   * @param {FormulaIdentifier | undefined} hostPinsDirectoryId
    * @param {Context} context
    */
   const makeGuest = async (
@@ -78,6 +80,8 @@ export const makeGuestMaker = ({
     mainWorkerId,
     networksDirectoryId,
     planesDirectoryId,
+    guestPinsDirectoryId,
+    hostPinsDirectoryId,
     context,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
@@ -90,6 +94,12 @@ export const makeGuestMaker = ({
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(networksDirectoryId);
     context.thisDiesIfThatDies(planesDirectoryId);
+    if (guestPinsDirectoryId !== undefined) {
+      context.thisDiesIfThatDies(guestPinsDirectoryId);
+    }
+    if (hostPinsDirectoryId !== undefined) {
+      context.thisDiesIfThatDies(hostPinsDirectoryId);
+    }
 
     const baseController = await provideStoreController(petStoreId);
     const mailboxController = await provideStoreController(mailboxStoreId);
@@ -103,6 +113,11 @@ export const makeGuestMaker = ({
     }
     specialNames['@nets'] = networksDirectoryId;
     specialNames['@planes'] = planesDirectoryId;
+    // The guest-visible pin directory is distinct from the host-only pin
+    // directory, which is deliberately absent from special names.
+    if (guestPinsDirectoryId !== undefined) {
+      specialNames['@pins'] = guestPinsDirectoryId;
+    }
     const specialStore = makePetSitter(baseController, specialNames);
 
     const getNetworkAddresses = () =>
@@ -133,6 +148,7 @@ export const makeGuestMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -347,6 +363,7 @@ export const makeGuestMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,

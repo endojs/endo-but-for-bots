@@ -221,6 +221,10 @@ export type GuestFormula = {
   worker: FormulaIdentifier;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
+  /** The guest-visible and guest-mutable pin directory (`@pins`). */
+  guestPins?: FormulaIdentifier;
+  /** The host-only pin directory retained by the guest formula. */
+  hostPins?: FormulaIdentifier;
 };
 
 export type LeastAuthorityFormula = {
@@ -959,6 +963,13 @@ export interface NameHub {
     locator: string,
   ): AsyncGenerator<LocatorNameChange, undefined, undefined>;
   list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Return a snapshot of the values at the directory's immediate pet names.
+   * The names and their values are captured in one directory turn, so a
+   * concurrent mutation cannot shift the association between enumeration and
+   * lookup.
+   */
+  listValues(): Promise<Array<unknown>>;
   listIdentifiers(...petNamePath: string[]): Promise<Array<string>>;
   listLocators(...petNamePath: string[]): Promise<Record<string, string>>;
   followNameChanges(
@@ -1526,9 +1537,13 @@ export interface EndoMountControl {
 
 export interface EndoWorker {}
 
-export type MakeHostOrGuestOptions = {
+export type MakeAgentOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** A caller-selected directory to expose to the new agent as `@pins`. */
+  pins?: EndoDirectory;
+  /** A caller-selected directory to expose as `@nets`. */
+  networks?: EndoDirectory;
 };
 
 export type MakeCapletOptions = {
@@ -1933,11 +1948,11 @@ export interface EndoHost extends EndoAgent {
   provideHostPath(cap: unknown): Promise<string>;
   provideGuest(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoGuest>;
   provideHost(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
@@ -2663,6 +2678,8 @@ type FormulateNumberedGuestParams = {
   workerId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
+  guestPinsDirectoryId: FormulaIdentifier;
+  hostPinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
 
@@ -2814,6 +2831,8 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2827,6 +2846,8 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (
