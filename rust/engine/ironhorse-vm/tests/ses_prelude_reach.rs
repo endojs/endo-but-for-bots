@@ -247,6 +247,15 @@ fn the_lazy_iterator_helpers_survive_lockdown() {
     ))
     .exists()
     {
+        // Same guard the reach pins carry, and for the same reason: a test
+        // that skips itself is a test that passes without measuring, and the
+        // lane that claims to run this one must not get away with that.
+        assert!(
+            std::env::var_os("IRONHORSE_SES_PRELUDE_REQUIRED").is_none(),
+            "IRONHORSE_SES_PRELUDE_REQUIRED is set but the prelude is absent: \
+             the lane claims to have run \
+             `yarn workspace @endo/test262-runner build` and did not"
+        );
         eprintln!("ses-prelude: absent — `yarn workspace @endo/test262-runner build` to run this");
         return;
     }
