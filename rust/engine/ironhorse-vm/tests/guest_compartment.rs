@@ -199,19 +199,45 @@ fn a_compartment_global_shares_every_name_but_its_own_evaluators() {
             r#"
             var c = new Compartment();
             var globals = c.globalThis;
-            var exceptions = ['Compartment','Function','NaN','eval','global','globalThis'];
+            // Name the evaluators STATICALLY. A compartment's global is
+            // populated from the interned symbol table and materializes a name
+            // lazily, so `globals['Function']` reads `undefined` when nothing
+            // in the crank ever named `Function` -- which is how this check
+            // previously "passed" for the evaluators: `undefined` on one side
+            // compares unequal, exactly as a per-compartment copy would.
+            var pairs = [
+              ['Compartment', globals.Compartment, globalThis.Compartment],
+              ['Function', globals.Function, globalThis.Function],
+              ['eval', globals.eval, globalThis.eval],
+            ];
             var wrong = [];
-            var names = Object.getOwnPropertyNames(globals);
-            for (var i = 0; i < names.length; i++) {
-              var name = names[i];
-              var same = globalThis[name] === globals[name];
-              var expected = exceptions.indexOf(name) >= 0 ? false : true;
-              if (same !== expected) { wrong.push(name); }
+            for (var j = 0; j < pairs.length; j++) {
+              var name = pairs[j][0], mine = pairs[j][1], outer = pairs[j][2];
+              // Minted per compartment: distinct, and CALLABLE on both sides.
+              // Inequality alone is not evidence of a copy -- two `undefined`s
+              // would also have satisfied it.
+              if (mine === outer) { wrong.push(name + ':shared'); }
+              if (typeof mine !== 'function') { wrong.push(name + ':mine-not-callable'); }
+              if (typeof outer !== 'function') { wrong.push(name + ':outer-not-callable'); }
             }
-            wrong.length === 0 ? 'ok' : wrong.join(',')
+            if (globals.globalThis !== globals) { wrong.push('globalThis:not-own'); }
+            // `NaN` is checked as a self-inequality, never as an "exception":
+            // listing it as one would pass whether or not it were
+            // per-compartment, because it compares unequal to itself.
+            if (globals.NaN === globals.NaN) { wrong.push('NaN:self-equal'); }
+            // Everything else the compartment's global carries is SHARED.
+            var names = Object.getOwnPropertyNames(globals);
+            var perCompartment = ['Compartment', 'Function', 'eval', 'global', 'globalThis'];
+            for (var i = 0; i < names.length; i++) {
+              var n = names[i];
+              if (n === 'NaN' || perCompartment.indexOf(n) >= 0) { continue; }
+              if (globalThis[n] !== globals[n]) { wrong.push(n + ':not-shared'); }
+            }
+            // Without a floor this reads `ok` on an empty name set.
+            [names.indexOf('Object') >= 0, wrong.length === 0 ? 'ok' : wrong.join(',')].join(' ')
             "#
         ),
-        "ok"
+        "true ok"
     );
 }
 
@@ -332,12 +358,28 @@ fn the_modules_option_and_its_entries_are_type_checked() {
     let r = result(&source);
     let parts: Vec<&str> = r.split('|').collect();
     assert_eq!(parts[0], "[object Compartment]", "empty module map");
+    // The REASON, not just the class: a `TypeError` raised by some unrelated
+    // mistake in the fixture would satisfy a bare `starts_with("TypeError:")`.
     for i in 1..5 {
-        assert!(parts[i].starts_with("TypeError:"), "option: {}", parts[i]);
+        assert_eq!(
+            parts[i], "TypeError: new Compartment: modules is not an object",
+            "option {i}"
+        );
     }
     assert_eq!(parts[5], "returned [object Compartment]", "empty object");
-    for i in 6..12 {
-        assert!(parts[i].starts_with("TypeError:"), "entry: {}", parts[i]);
+    for (i, reason) in (6..12).zip([
+        "module descriptor is not an object",
+        "module descriptor is not an object",
+        "module descriptor is not an object",
+        "unrecognized module descriptor",
+        "unrecognized module descriptor",
+        "unrecognized module descriptor",
+    ]) {
+        assert_eq!(
+            parts[i],
+            format!("TypeError: new Compartment: {reason}"),
+            "entry {i}"
+        );
     }
 }
 
@@ -417,13 +459,17 @@ fn global_lexicals_are_copied_per_compartment_with_their_writability() {
               bar++;
               shared.foo++;
               shared.bar++;
-              try { shared = null; } catch (e) { /* const */ }
+              (function () {
+                try { shared = null; return 'no-throw'; }
+                catch (e) { return e.name + ':' + e.message; }
+              })()
             `;
             var c1 = new Compartment({ globalLexicals });
-            c1.evaluate(body);
+            var r1 = c1.evaluate(body);
             var c2 = new Compartment({ globalLexicals });
-            c2.evaluate(body);
+            var r2 = c2.evaluate(body);
             [
+              r1, r2,
               getterCount, setterCount, neverCount,
               globalLexicals.foo, globalLexicals.bar,
               globalLexicals.shared.foo, globalLexicals.shared.bar,
@@ -433,7 +479,47 @@ fn global_lexicals_are_copied_per_compartment_with_their_writability() {
             ].join(',')
             "#
         ),
-        "2,0,0,0,0,4,4,1,1,undefined,undefined,1,1"
+        // `r1`/`r2` are the point of the `shared = null` probe: a
+        // non-writable descriptor makes the lexical a `const` binding, and
+        // swallowing the throw in a bare `catch` pinned nothing -- every other
+        // term reads the same whether the store throws or silently succeeds.
+        "TypeError:set shared: const,TypeError:set shared: const,\
+2,0,0,0,0,4,4,1,1,undefined,undefined,1,1"
+    );
+}
+
+/// A `const` lexical rejects a store from the compartment's OWN evaluators
+/// too, not just from strict `evaluate` source.
+///
+/// `Compartment.prototype.evaluate` is always strict, so a strictness-gated
+/// const check looked right for as long as `evaluate` was the only way in.
+/// `globalThis.eval` and `globalThis.Function` are the compartment's own
+/// evaluator copies and run SLOPPY source, and a store to an immutable binding
+/// throws however strict the assigning code is (ECMA-262 9.1.1.1.5
+/// `SetMutableBinding` forces `S` to true -- the same reason `const c = 1;
+/// c = 2` throws in sloppy code).
+#[test]
+fn a_const_lexical_rejects_a_sloppy_store() {
+    assert_eq!(
+        result(
+            r#"
+            var gl = {};
+            Object.defineProperty(gl, 'k', { enumerable: true, value: 1 });
+            var c = new Compartment({ globalLexicals: gl });
+            function attempt(f) {
+              try { return 'returned ' + String(f()); }
+              catch (e) { return e.name + ': ' + e.message; }
+            }
+            [
+              attempt(function () { return c.globalThis.Function('k = 9; return k')(); }),
+              attempt(function () { return c.globalThis.eval('k = 9; k'); }),
+              attempt(function () { return c.evaluate('k = 9; k'); }),
+              String(c.evaluate('k')),
+            ].join(' | ')
+            "#
+        ),
+        "TypeError: set k: const | TypeError: set k: const | \
+TypeError: set k: const | 1"
     );
 }
 
@@ -488,5 +574,90 @@ fn lockdown_poisons_the_compartment_constructor() {
         "true|false||1|TypeError: secure mode|2",
         "lockdown() must replace Compartment.prototype.constructor with the \
          inert stand-in, leaving the global constructor working"
+    );
+}
+
+/// A `globalLexicals` cell outlives the `Compartment` INSTANCE that
+/// introduced it, for as long as the compartment's global object is alive.
+///
+/// The cell is deliberately off the global object's property chain -- that is
+/// what keeps the name invisible on `globalThis` -- so, alone among
+/// environment state, nothing reaches it through an ordinary arena edge. Its
+/// only root was the `environments` root walk, which filters on the
+/// environment's owner lease, and that lease belongs to the INSTANCE. A
+/// retained function keeps `global_env`, and hence the environment, alive long
+/// after its instance is swept: two collections later the cell was freed while
+/// `global_lexicals` still named it, and the next crank's allocations recycled
+/// the slot. Read back through the retained function this answered the new
+/// occupant's value rather than the binding's, in a debug build with nothing
+/// tripped -- the slot had been reallocated and was live again.
+#[test]
+fn a_lexical_outlives_the_compartment_instance() {
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            // The instance is never stored: only the function it evaluated
+            // escapes, and that function is what pins the compartment's global.
+            let crank1 = "var f = 0; var churn = 0; churn = []; \
+                 f = new Compartment({ globalLexicals: { secret: 42 } })\
+                 .evaluate('(function () { return secret; })'); 0;";
+            let crank2 = "var f; var churn; var zz = 0; var t = 0; \
+                 for (zz = 0; zz < 64; zz++) { churn[zz % 8] = { a: zz, b: 'x' + zz }; } \
+                 t = f(); t";
+            let (c1, s1) = ironhorse_compile::compile_atoms(crank1).unwrap();
+            let (c2, s2) = ironhorse_compile::compile_atoms(crank2).unwrap();
+            let mut m = Interp::new();
+            m.set_source_compiler(std::rc::Rc::new(TestCompiler));
+            m.link_intrinsics(&parse_symbols(&s1));
+            assert!(m.run(&c1).completed);
+            // The first collection sweeps the instance and prunes its row,
+            // dropping the environment's owner lease; the second is the one
+            // that used to sweep the cell.
+            m.collect_garbage().unwrap();
+            m.collect_garbage().unwrap();
+            let c2 = m.relink_crank(&c2, &parse_symbols(&s2)).expect("relink");
+            let out = m.run(&c2);
+            assert!(out.completed, "{:?}", out.halt);
+            assert_eq!(out.result, "42");
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// A bare-name `delete` inside a compartment resolves against the
+/// compartment's own global, and cannot remove a `globalLexicals` binding.
+///
+/// `EVAL_REFERENCE` pushes a `Kind::EnvReference` sentinel carrying
+/// `SlotIndex(0)` to mean "the global object", and `DELETE_PROPERTY` matched on
+/// the payload without checking the kind -- taking the sentinel for a live
+/// instance. `SlotIndex(0)` is the DEFAULT realm's global only because
+/// `Interp::new` happens to allocate it first, so a `delete` evaluated in a
+/// compartment reached into the parent realm and deleted there. The sentinel
+/// and the delete path both predate the guest constructor; compartments are
+/// what made the defect reachable, since until then only the host could mint a
+/// second environment.
+#[test]
+fn a_bare_delete_in_a_compartment_stays_in_that_compartment() {
+    assert_eq!(
+        result(
+            r#"
+            globalThis.leak = 1;
+            var c = new Compartment({ globalLexicals: { bar: 1 } });
+            c.globalThis.own = 2;
+            var deletedLexical = c.globalThis.eval('delete bar');
+            var deletedOwn = c.globalThis.eval('delete own');
+            c.globalThis.eval('delete leak');
+            [
+              String(globalThis.leak),
+              String(deletedLexical), String(c.evaluate('bar')),
+              String(deletedOwn), String(c.globalThis.own),
+            ].join(',')
+            "#
+        ),
+        // The parent's `leak` survives; `delete` of a lexical answers `false`
+        // (a binding in a scope is not a property, and `delete` must not claim
+        // to have removed one); the compartment's own global property goes.
+        "1,false,1,true,undefined"
     );
 }

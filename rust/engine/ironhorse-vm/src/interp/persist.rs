@@ -568,6 +568,40 @@ impl Interp {
                 "a live guest `Compartment`, whose environment binding no snapshot carries",
             );
         }
+        // Presence of the INSTANCE is not the whole question, because the
+        // instance is not what carries the state. Two things outlive it.
+        //
+        // First, `globalLexicals`. They live on the ENVIRONMENT, which
+        // survives its instance (a retained function keeps `global_env`, and
+        // hence the environment, alive), and `EnvironmentRow` has no column
+        // for them: `shared_machine_snapshot` would write the environment and
+        // drop its lexicals on the floor, and the restored crank would answer
+        // a `ReferenceError` -- or, worse, an unshadowed global -- where the
+        // pre-checkpoint crank answered the bound value. A lexical is also not
+        // arena-chain-resident, so there is nothing for `rebuild_global_props`
+        // to recover it from. Refuse on the state itself, not on its holder.
+        //
+        // Second, `shared_compartments`. `construct_compartment` sets it, and
+        // it is what makes `shared_machine_snapshot` return `Some` at all. On
+        // a machine with no shared-realm primordial profile the emitted image
+        // carries empty `intrinsic_roots`, which restore compares against
+        // `new_shared_realm_machine`'s populated set and refuses as a
+        // "shared primordial profile mismatch". Writing bytes that no restore
+        // can ever accept is worse than refusing to write them: catch the
+        // asymmetry on the write side, where the caller can still act on it.
+        if std::iter::once(&self.environment)
+            .chain(self.inactive_environments.values())
+            .any(|env| !env.global_lexicals.is_empty())
+        {
+            return Some(
+                "a guest `Compartment`'s `globalLexicals`, for which `EnvironmentRow` has no column",
+            );
+        }
+        if self.shared_compartments && self.realm.intrinsics().roots.is_empty() {
+            return Some(
+                "a guest `Compartment` built on a machine with no shared-realm primordial profile, whose image no restore would accept",
+            );
+        }
         // Every reaction kind now names state some atom carries, so this
         // refuses only a kind that does not (architecture finding F127
         // closed the last of them). Async functions carry their frames in

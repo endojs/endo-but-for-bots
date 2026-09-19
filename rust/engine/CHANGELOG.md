@@ -945,6 +945,27 @@ ONE of the two. The `compartment:intrinsic-surface` fold in the ledger below is
 correspondingly retired — Ironhorse's `Compartment` is no longer only a Rust
 host type.)
 
+(Updated 2026-09-19: an adversarial review of the landed phase 1 found seven
+defects, each reproduced against the engine before it was acted on and each now
+carrying a test that fails without the fix. The one that mattered:
+a `globalLexicals` cell is deliberately off the global object's property chain,
+so nothing reached it through an arena edge, and its only root was filtered on
+an owner lease belonging to the `Compartment` INSTANCE — while a retained
+function keeps the ENVIRONMENT alive. Two collections after the instance died
+the cell was swept while still bound, and the next crank's allocations recycled
+the slot: the binding read back as the churn loop's counter, silently, in a
+debug build. Also fixed: a persist gate that keyed on the instance rather than
+on the state that outlives it (a plain machine ACCEPTED a checkpoint that no
+restore would take); a bare-name `delete` in a compartment reaching into the
+parent realm through a `SlotIndex(0)` sentinel taken for an instance; a `const`
+lexical accepting a sloppy store from the compartment's own evaluators; a
+construction charge that did not move between a 6-slot and a 58-slot
+compartment; an environment switch leaked on the unwind path; and
+`shared_compartments` left flipped after a failed construction.
+`designs/ironhorse-guest-compartment.md` § Adversarial review carries the full
+account, including what was NOT a defect and the one gap deliberately left
+open.)
+
 **Consolidated fold ledger for s10 (each verified STILL an honest named skip at
 this closure point).**
 

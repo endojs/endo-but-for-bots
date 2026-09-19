@@ -306,22 +306,31 @@ impl Interp {
                 // global of the same name.
                 if self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0 {
                     // A non-writable source descriptor makes the lexical a
-                    // `const` binding. Sloppy mode ignores the write, as it
-                    // does for any non-writable target; strict mode throws,
-                    // which is what `constructor/globalLexicals-properties.js`
-                    // catches around its `shared = null`.
-                    if self.strict {
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("set {}: const", self.property_debug_name(name)),
-                        );
-                        return Err(self.raise_js(error));
-                    }
-                } else {
-                    let slot = self.slots.get_mut(cell);
-                    slot.kind = value.kind;
-                    slot.value = value.value;
+                    // `const` BINDING, not a non-writable property, and the
+                    // difference is exactly the strictness question: a store
+                    // to an immutable binding throws however strict the
+                    // assigning code is (ECMA-262 9.1.1.1.5 `SetMutableBinding`
+                    // step 2 forces `S` to true), which is why `const c = 1;
+                    // c = 2` throws in sloppy code too. Both of this engine's
+                    // other const paths -- the frame-local one above and the
+                    // `with`-object `EnvironmentSet::Const` -- already throw
+                    // unconditionally; gating this one on `self.strict` made
+                    // the compartment's OWN evaluators (`globalThis.eval`,
+                    // `globalThis.Function`, which run sloppy source) silently
+                    // discard the write. `evaluate` is always strict, so no
+                    // test saw it.
+                    let error = self.internal_error(
+                        "TypeError",
+                        format!("set {}: const", self.property_debug_name(name)),
+                    );
+                    return Err(self.raise_js(error));
                 }
+                let slot = self.slots.get_mut(cell);
+                slot.kind = value.kind;
+                slot.value = value.value;
+                // The store is one built-in step, as it is in the
+                // object-environment and global arms beside this one.
+                self.meter.tick_builtin();
                 self.push(value);
                 return Ok(());
             }
