@@ -1742,6 +1742,21 @@ export interface EndoGuest extends EndoAgent {
    * implementation.
    */
   invite(guestName: string | string[]): Promise<Invitation>;
+  /**
+   * Redeem an invitation locator into THIS guest, binding the relationship to
+   * the calling guest — no replacement guest is minted on the acceptor side.
+   * The guest accepts *as itself*: its `@self` handle is the identity presented
+   * to the inviter, and the inviter's handle is bound reciprocally under
+   * `correspondentName` (a pet name this guest chooses; the inviter chooses its
+   * own independently, so the two may differ). A path nests the binding under a
+   * directory that must already exist. Shares `EndoHost.accept`'s
+   * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface.
+   */
+  accept(
+    invitationLocator: string,
+    correspondentName: string | string[],
+  ): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -3059,6 +3074,21 @@ export interface DaemonCore {
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
+
+  /**
+   * Acceptor-side invitation redemption shared by `EndoHost.accept` and
+   * `EndoGuest.accept`. Binds the relationship into the calling agent (accepts
+   * as itself; mints no replacement guest), sourcing the accepting agent's
+   * handle addresses from its own `@nets`. Peer registration and remote
+   * agent-key routing stay behind this daemon-core capability, so a guest
+   * acceptor is handed no dialing or peer-registration authority.
+   */
+  acceptInvitation: (args: {
+    invitationLocator: string;
+    acceptingHandleId: FormulaIdentifier;
+    acceptingNetworksDirectoryId: FormulaIdentifier;
+    bindCorrespondent: (remoteHandleLocator: string) => Promise<void>;
+  }) => Promise<void>;
 
   formulateUnconfined: (
     hostAgentId: FormulaIdentifier,
