@@ -421,6 +421,13 @@ export const BlobRefInterface = M.interface('BlobRef', {
   ),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
+  // Range *attenuation* (designs/readableblob-range-attenuation.md): `range`
+  // resolves synchronously to a derived `BlobRef` over the selected byte
+  // interval (construction reads no bytes); `textRange` reads to find LF
+  // boundaries, so it resolves asynchronously. Both return the same
+  // `ReadableBlob` interface, enforced here rather than as `M.any()`.
+  range: M.call(M.bigint(), M.bigint()).returns(M.remotable('ReadableBlob')),
+  textRange: M.call(M.number(), M.number()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 harden(BlobRefInterface);

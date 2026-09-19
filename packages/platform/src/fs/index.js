@@ -12,6 +12,7 @@ export {
   PathEntryInterface,
   PathEntryIssuerInterface,
   rangeReadConvenienceMethodGuards,
+  rangeAttenuationMethodGuards,
   recursiveListMethodGuards,
   ReadableBlobInterface,
   ReadableBlobRangeInterface,
@@ -23,6 +24,13 @@ export {
   FileInterface,
   DirectoryInterface,
 } from './interfaces.js';
+
+export {
+  assertByteRange,
+  assertLineRange,
+  composeByteInterval,
+  lineRangeToByteSlice,
+} from './range-attenuation.js';
 
 export { snapshotBlobMethods } from './snapshot-blob.js';
 export { snapshotTreeMethods } from './snapshot-tree.js';

@@ -613,6 +613,21 @@ Read the entire blob as a UTF-8 string.
 
 Read and parse the blob as JSON.
 
+## range(start, end) -> EndoReadable
+
+Attenuate to the half-open byte interval [start, end) of this blob.
+Returns a new EndoReadable with exactly the authority to read the selected
+bytes; ranges compose (a range of a range intersects) and start === end selects
+an empty blob. start and end are bigints. Construction reads no bytes, so it
+resolves synchronously.
+
+## textRange(startLine, endLine) -> Promise<EndoReadable>
+
+Attenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,
+CRLF preserved) of the blob's bytes.
+Returns a new EndoReadable over the corresponding byte slice; it reads bytes to
+find the line boundaries, so it resolves asynchronously.
+
 # Endo Bootstrap - The root interface for the Endo daemon.
 
 This is the entry point for connecting to Endo.
@@ -944,6 +959,21 @@ Recomputed each call, since the live file may change.
 Read the byte range [offset, offset + length) of the live file without
 streaming the whole thing. offset and length are bigints; the range is
 clamped at end-of-content.
+
+## range(start, end) -> ReadableBlobView
+
+Attenuate to the half-open byte interval [start, end) of the live file.
+Returns a read-only ReadableBlob view with exactly the authority to read the
+selected bytes; ranges compose (a range of a range intersects) and the view
+still observes the live file subject to the fixed interval. start and end are
+bigints. Construction reads no bytes, so it resolves synchronously.
+
+## textRange(startLine, endLine) -> Promise<ReadableBlobView>
+
+Attenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,
+CRLF preserved) of the live file's current bytes.
+Returns a read-only ReadableBlob view over the corresponding byte slice; it
+reads bytes to find the line boundaries, so it resolves asynchronously.
 
 ## text() -> Promise<string>
 

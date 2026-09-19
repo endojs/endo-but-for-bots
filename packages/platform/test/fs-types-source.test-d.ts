@@ -105,7 +105,11 @@ expectTypeOf<SourceReadableBlobRange['fetch']>().toEqualTypeOf<
 // match.
 expectTypeOf<PackageReadableBlobRangeRead>().toEqualTypeOf<SourceReadableBlobRangeRead>();
 expectTypeOf<keyof SourceReadableBlobRangeRead>().toEqualTypeOf<
-  keyof SourceReadableBlobRange | 'rangeRead' | 'rangeReadText'
+  | keyof SourceReadableBlobRange
+  | 'rangeRead'
+  | 'rangeReadText'
+  | 'range'
+  | 'textRange'
 >();
 
 // ContentStoreBlob and ContentStore must stay in parity with the source, and

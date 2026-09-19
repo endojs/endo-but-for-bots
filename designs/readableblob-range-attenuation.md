@@ -55,6 +55,25 @@ nonexistent directory convention.
 
 ## Proposed interface
 
+> **Build-review naming revision (2026-09-18, review
+> [#5252703859](https://github.com/endojs/endo-but-for-bots/pull/1301#pullrequestreview-5252703859)).**
+> Two maintainer directives refine the method names in this section; where the
+> text below still writes the older spellings, the revised names govern (they
+> are also recorded as resolved decisions 4 and 5).
+>
+> - **Byte/text × all/range cross product.** Name the read methods by the cross
+>   product of their two dimensions: `bytes` (all bytes) / `byteRange` (a byte
+>   range) / `text` (all text) / `textRange` (a text range). Concretely, the
+>   whole-content byte reader `fetch(offset, length)` becomes `bytes`, and the
+>   byte-range attenuator written `range` in this document becomes `byteRange`
+>   (symmetric with `textRange`). `text` and `textRange` are unchanged.
+> - **Per-algorithm hash methods instead of a `getInfo` bundle.** Replace the
+>   single `getInfo() => { algorithm, hash, size }` with one accessor method per
+>   hashing algorithm (`sha256()`, `sha512()`, …) plus a separate `size()`
+>   method. A blob may provide more than one algorithm and favor one internally,
+>   while the external surface can migrate gradually — a later algorithm is a
+>   new method, not a reshaped bundle or a broken caller.
+
 Make range attenuation part of the one rich `ReadableBlob` interface. The
 current `ReadableBlobRange` and `ReadableBlobRangeRead` distinction goes away:
 every public rich blob has the following methods in addition to `getInfo`,
@@ -192,3 +211,16 @@ mount changes, and revocation.
    blobs, mount views, and Git blobs) adopts the new surface in the one clean
    release. There is no daemon-only-first phase and no temporary interface
    split.
+4. Read methods are named by the {byte, text} × {all, range} cross product:
+   `bytes` / `byteRange` / `text` / `textRange`. The whole-content byte reader
+   `fetch` becomes `bytes`; the byte-range attenuator written `range` above
+   becomes `byteRange`, symmetric with `textRange`. (Build review
+   [#5252703859](https://github.com/endojs/endo-but-for-bots/pull/1301#pullrequestreview-5252703859),
+   inline on `git-declarations.js`.)
+5. Blob content metadata is exposed as one accessor method per hashing
+   algorithm (`sha256()`, `sha512()`, …) plus a separate `size()` method, not a
+   single `getInfo()` bundle. A blob may offer several algorithms and favor one
+   internally; the external surface migrates gradually — an added algorithm is a
+   new method, never a reshaped return value. (Build review
+   [#5252703859](https://github.com/endojs/endo-but-for-bots/pull/1301#pullrequestreview-5252703859),
+   inline on `fs-declarations.js`.)

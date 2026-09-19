@@ -297,6 +297,20 @@ bigint.
 Read a byte window from the blob.
 The range is `[offset, offset + length)`, clamped at end of file.
 
+## range(start, end) -> GitBlob
+
+Attenuate to the half-open byte interval `[start, end)` of this blob.
+Returns a new GitBlob with exactly the authority to read the selected bytes;
+ranges compose (a range of a range intersects) and `start === end` selects an
+empty blob. Construction reads no bytes, so it resolves synchronously.
+
+## textRange(startLine, endLine) -> Promise<GitBlob>
+
+Attenuate to lines `[startLine, endLine)` (0-based, end-exclusive, LF
+boundaries, CRLF preserved) of the blob's bytes.
+Returns a new GitBlob over the corresponding byte slice; it reads bytes to find
+the line boundaries, so it resolves asynchronously.
+
 # GitRemote - A policy-bound remote fetch, pull, and push capability.
 
 A GitRemote carries a fixed remote URL and a normalized policy: which

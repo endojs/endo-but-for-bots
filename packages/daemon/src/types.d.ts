@@ -1234,6 +1234,20 @@ export interface EndoReadable {
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
   fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select the
+   * half-open byte interval `[start, end)` relative to the receiver and return
+   * a new `EndoReadable` with exactly the authority to read it. Ranges compose
+   * and construction reads no bytes, so it resolves synchronously.
+   */
+  range(start: bigint, end: bigint): EndoReadable;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF boundaries,
+   * CRLF preserved) of the receiver's current bytes and return the byte slice
+   * as an `EndoReadable`. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<EndoReadable>;
   help(method?: string): string;
 }
 
@@ -1287,6 +1301,19 @@ export interface ReadableBlobView {
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
   fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a new
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  range(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   help(method?: string): string;
 }
 
@@ -1336,6 +1363,19 @@ export interface EndoMountFile {
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
   fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  range(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   writeText(content: string): Promise<void>;
   append(content: string): Promise<void>;
   writeBytes(readableRef: ERef<PassableBytesReader>): Promise<void>;
