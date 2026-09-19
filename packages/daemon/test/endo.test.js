@@ -254,12 +254,19 @@ const makeConfig = (...root) => {
     // Use a short socket path under the OS temp dir to stay within the ~104
     // char Unix socket path limit; a long CI (or worktree) checkout path can
     // otherwise push `<dirname>/tmp/<config>/endo.sock` over the limit. The
-    // last root segment carries a unique per-test/config id suffix. (This
-    // mirrors `_multiplayer-suite.js`'s makeConfig.)
+    // last root segment carries a unique per-test/config id suffix, and the
+    // base-36 process id keeps two concurrent runs (two worktrees, two CI
+    // containers sharing `/tmp`) from deriving the SAME absolute socket path —
+    // a collision where one run's `purge`/`clean` unlinks the other's live
+    // socket. The slice is trimmed to leave the pid room within the length
+    // budget. (This mirrors `_multiplayer-suite.js`'s makeConfig.)
     sockPath:
       process.platform === 'win32'
-        ? raw`\\?\pipe\endo-${root.join('-')}-test.sock`
-        : path.join(os.tmpdir(), `endo-${root.join('-').slice(-40)}.sock`),
+        ? raw`\\?\pipe\endo-${process.pid.toString(36)}-${root.join('-')}-test.sock`
+        : path.join(
+            os.tmpdir(),
+            `endo-${process.pid.toString(36)}-${root.join('-').slice(-32)}.sock`,
+          ),
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
@@ -4042,6 +4049,19 @@ testNeedsNodeWorker(
     t.is(await E(guestA).identify('@pins', 'guest-to-b'), undefined);
     t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
 
+    // Same-daemon acceptance registers NO peer: the inviter's daemon is this
+    // daemon, so writing a self-peer (or a self-referential remote-agent-key
+    // row) would be spurious. The `acceptInvitation`/`Invitation.accept` guards
+    // that skip those writes are the point of this shape, and an end-to-end
+    // success would otherwise tolerate the extra inert rows silently — so pin
+    // the shared peer store stays empty, and a future removal of either guard
+    // reddens here rather than passing unnoticed.
+    t.deepEqual(
+      await E(host).listKnownPeers(),
+      [],
+      'same-daemon accept writes no known-peer entry',
+    );
+
     // The bound handles are each guest's OWN handle — the acceptor bound the
     // inviter's handle (not the top host's), and vice versa.
     const guestAHandleId = await E(host).identify('guest-a-handle');
@@ -4067,7 +4087,7 @@ testNeedsNodeWorker(
         message =>
           message.type === 'package' && message.strings?.[0] === 'Hello from A',
       ),
-      'B received A’s message',
+      "B received A's message",
     );
     const messagesForA = await E(guestA).listMessages();
     t.true(
@@ -4075,7 +4095,7 @@ testNeedsNodeWorker(
         message =>
           message.type === 'package' && message.strings?.[0] === 'Hello from B',
       ),
-      'A received B’s message',
+      "A received B's message",
     );
 
     // Single-use: a replay of the spent invitation is rejected.
@@ -4119,7 +4139,7 @@ testNeedsNodeWorker(
         message =>
           message.type === 'package' && message.strings?.[0] === 'I to J',
       ),
-      'J received I’s message',
+      "J received I's message",
     );
     const messagesForK = await E(guestK).listMessages();
     t.true(
@@ -4127,7 +4147,7 @@ testNeedsNodeWorker(
         message =>
           message.type === 'package' && message.strings?.[0] === 'J to K',
       ),
-      'K received J’s message',
+      "K received J's message",
     );
   },
 );

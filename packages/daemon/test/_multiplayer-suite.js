@@ -583,7 +583,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
           m => m.type === 'package' && m.strings?.[0] === 'Hello from A',
         );
       });
-      t.pass('acceptor received the inviter’s message');
+      t.pass("acceptor received the inviter's message");
 
       await waitForCondition(async () => {
         const messages = /** @type {any[]} */ (await E(guestA).listMessages());
@@ -591,7 +591,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
           m => m.type === 'package' && m.strings?.[0] === 'Hello from B',
         );
       });
-      t.pass('inviter received the acceptor’s message');
+      t.pass("inviter received the acceptor's message");
 
       // Single-use survives CapTP: the replayed accept is rejected.
       await t.throwsAsync(

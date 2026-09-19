@@ -363,7 +363,8 @@ export const makeGuestMaker = ({
      * `EndoHost.invite`'s implementation (`formulateInvitation`): the resulting
      * invitation's locator `from` names *this guest's* handle, so an acceptor
      * binds this guest rather than the top host. The invitation id is retained
-     * under `guestName` in this guest's own pet store so it survives a restart,
+     * under `correspondentName` in this guest's own pet store so it survives a
+     * restart,
      * and acceptance overwrites that slot with the accepted handle (consume
      * once). Network mediation is supplied internally by the daemon inside the
      * invitation formula, so this call hands the guest no `getPeerInfo`,
@@ -376,21 +377,25 @@ export const makeGuestMaker = ({
      * addresses even with an empty `@nets`. That disclosure is inherent to
      * issuing a redeemable invitation and grants no authority to act on the
      * addresses.
-     * @param {NameOrPath} guestName
+     * @param {NameOrPath} correspondentName
      */
-    const invite = async guestName => {
-      const { namePath, petName: guestPetName } = petNamePathFrom(guestName);
+    const invite = async correspondentName => {
+      const { namePath, petName: correspondentPetName } =
+        petNamePathFrom(correspondentName);
       /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       tasks.push(identifiers =>
         namePath.length === 1
-          ? specialStore.storeIdentifier(guestPetName, identifiers.invitationId)
+          ? specialStore.storeIdentifier(
+              correspondentPetName,
+              identifiers.invitationId,
+            )
           : E(directory).storeIdentifier(namePath, identifiers.invitationId),
       );
       const { value } = await formulateInvitation(
         guestId,
         handleId,
-        guestName,
+        correspondentName,
         tasks,
       );
       return value;
@@ -411,9 +416,14 @@ export const makeGuestMaker = ({
      * stay behind that helper (and the invitation formula's own daemon-mediated
      * accept), so a guest acceptor gains no `getPeerInfo`/`addPeerInfo`, host
      * facet, peer enumeration, or outbound-dialing surface — exactly as a guest
-     * inviter does not. Reachability follows this guest's own `@nets`: an empty
-     * `@nets` (the default) still accepts same-daemon peers but leaves the guest
-     * undialable across daemons (the anonymizing-persona default).
+     * inviter does not. Redeeming a genuine invitation does have a bounded,
+     * additive effect on shared routing: the inviter's daemon is registered as
+     * a peer and its agent key recorded, but only additively (a known peer is
+     * never re-addressed and a mapped agent key never redirected), and the
+     * agent-key write happens only after the invitation is proven, so a forged
+     * locator mutates nothing. Reachability follows this guest's own `@nets`: an
+     * empty `@nets` (the default) still accepts same-daemon peers but leaves the
+     * guest undialable across daemons (the anonymizing-persona default).
      * @param {string} invitationLocator
      * @param {NameOrPath} correspondentName
      */

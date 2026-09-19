@@ -7012,10 +7012,17 @@ const makeDaemonCore = async (
    * bind here is a plain, idempotent, single-writer local write.
    *
    * Network mediation stays behind the internal broker and daemon-core
-   * persistence powers, reachable here only lexically. A guest acceptor
-   * therefore gains no `getPeerInfo`/`addPeerInfo`, host facet, peer
-   * enumeration, or outbound-dialing surface of its own — exactly as a guest
-   * inviter does not (see `makeInvitationNetworkBroker`).
+   * persistence powers, reachable here only lexically. A guest acceptor gains
+   * no `getPeerInfo`/`addPeerInfo`, host facet, peer enumeration, or
+   * outbound-dialing *surface* of its own — exactly as a guest inviter does not
+   * (see `makeInvitationNetworkBroker`). It does cause a bounded, attenuated
+   * *effect* on shared routing state: redeeming a genuine invitation registers
+   * the inviter's daemon as a peer and records its agent key. That effect is
+   * strictly additive — a peer already known is never re-addressed, an
+   * agent-key already mapped is never redirected, and an empty address list is
+   * never registered — and the agent-key write is deferred until after
+   * `E(invitation).accept()` proves the invitation, so a forged or unspent
+   * locator cannot mutate routing at all.
    *
    * @param {object} args
    * @param {string} args.invitationLocator
@@ -7037,10 +7044,21 @@ const makeDaemonCore = async (
   }) => {
     await null;
     const {
+      formulaType,
       number: invitationNumber,
       node: peerKey,
       hints,
     } = parseLocator(invitationLocator);
+    // `parseLocator` only checks the type is a recognized locator type, not
+    // that it is the one this operation redeems. Assert it names an invitation
+    // before any peer/agent-key state is touched, so `accept` cannot be pointed
+    // at an arbitrary formula id. This matters most on the guest facet, which —
+    // unlike a host — has no peer surface of its own to fall back on.
+    if (formulaType !== 'invitation') {
+      throw makeError(
+        X`Invitation locator must have type "invitation", got ${q(formulaType)}`,
+      );
+    }
     const url = new URL(invitationLocator);
     const remoteHandleNumber = url.searchParams.get('from');
     // The inviter handle's node may differ from the daemon node when agent
@@ -7051,6 +7069,12 @@ const makeDaemonCore = async (
       throw makeError('Invitation must have a "from" parameter');
     }
     assertFormulaNumber(remoteHandleNumber);
+    // Validate the inviter's agent-key node at its input edge, before it can
+    // reach a durable routing write; otherwise a malformed `fromNode` would
+    // persist a junk `remote_agent_key` row and only then throw.
+    if (remoteHandleNodeParam !== null) {
+      assertNodeNumber(remoteHandleNodeParam);
+    }
 
     // Same-daemon acceptance needs no peer setup: the inviter's daemon is this
     // daemon. Registering the local node as a peer of itself, or writing a
@@ -7058,18 +7082,29 @@ const makeDaemonCore = async (
     // of the guest-native-invitations design), so skip both for the local
     // node. `addPeerInfo` has no self-node guard of its own, so the skip must
     // live here.
+    //
+    // The peer route to the inviter's daemon must exist BEFORE the invitation
+    // can be provided across daemons (`provide` below dials `peerKey`), so this
+    // one write cannot be deferred until after the invitation validates. To
+    // keep an unverified, caller-supplied locator from repointing an existing
+    // correspondent's dialing addresses (`addPeerInfo` replaces a known peer
+    // whose addresses differ), register a peer only when we do not already know
+    // it, and never with an empty address list: the accept path may ADD a
+    // route, never REDIRECT or blank one. A genuine invitation from an
+    // already-known peer already has a usable route.
     if (peerKey !== localNodeNumber) {
-      const networkBroker = await makeInvitationNetworkBroker();
-      // Register the inviter's agent key so we can route to its daemon.
-      if (remoteHandleNodeParam && remoteHandleNodeParam !== peerKey) {
-        persistencePowers.writeRemoteAgentKey(remoteHandleNodeParam, peerKey);
+      const knownPeers = /** @type {KnownPeersStore} */ (
+        /** @type {unknown} */ (await provideStoreController(knownPeersId))
+      );
+      if (knownPeers.identifyLocal(peerKey) === undefined && hints.length > 0) {
+        const networkBroker = await makeInvitationNetworkBroker();
+        /** @type {PeerInfo} */
+        const peerInfo = {
+          node: peerKey,
+          addresses: hints,
+        };
+        await networkBroker.addPeerInfo(peerInfo);
       }
-      /** @type {PeerInfo} */
-      const peerInfo = {
-        node: peerKey,
-        addresses: hints,
-      };
-      await networkBroker.addPeerInfo(peerInfo);
     }
 
     const invitationId = formatId({
@@ -7099,19 +7134,48 @@ const makeDaemonCore = async (
     }
     const handleLocator = handleUrl.href;
 
-    const invitation = await provide(invitationId, 'invitation');
-    await E(invitation).accept(handleLocator);
-
-    // Bind the inviter's remote handle under the acceptor-chosen pet name for
-    // mail delivery. Use the inviter handle's actual node (which may be an
-    // agent key) when provided, falling back to the inviter's daemon node.
+    // The inviter's remote handle locator is pure to compute. Use the inviter
+    // handle's actual node (which may be an agent key) when provided, falling
+    // back to the inviter's daemon node.
     const remoteHandleNode = remoteHandleNodeParam || peerKey;
     const remoteHandleId = formatId({
       number: /** @type {FormulaNumber} */ (remoteHandleNumber),
       node: /** @type {NodeNumber} */ (remoteHandleNode),
     });
     const remoteHandleLocator = formatLocator(remoteHandleId, 'handle');
+
+    // Bind the inviter's remote handle under the acceptor-chosen pet name for
+    // mail delivery BEFORE consuming the invitation. `bindCorrespondent` is the
+    // only fallible acceptor-side work — a bad name path (e.g. one nested under
+    // a directory that does not exist) throws in `storeLocator` — and
+    // `E(invitation).accept()` is an irreversible single-use consume on the
+    // inviter. Doing the fallible bind first mirrors the inviter side's "do all
+    // the fallible work first, consume LAST" discipline, so a bad name can
+    // never strand a spent invitation with no local binding and no retry. The
+    // bind is a pure-local, idempotent write that does not depend on the
+    // invitation being accepted, so a subsequent `accept` failure leaves only a
+    // benign local pet-name binding that the whole-accept retry re-establishes.
     await bindCorrespondent(remoteHandleLocator);
+
+    const invitation = await provide(invitationId, 'invitation');
+    await E(invitation).accept(handleLocator);
+
+    // Register the inviter's agent key so future sends addressed to that key
+    // route to its daemon. Deferred until AFTER the invitation is proven and
+    // consumed — the invitation id uses `peerKey` (the daemon node), never the
+    // agent key, so nothing above needs it earlier — and made additive-only, so
+    // an accept can only add a new agent-key route, never redirect an existing
+    // correspondent's key to a different daemon. A forged locator therefore
+    // cannot poison this table: `E(invitation).accept()` rejects before we get
+    // here.
+    if (
+      peerKey !== localNodeNumber &&
+      remoteHandleNodeParam &&
+      remoteHandleNodeParam !== peerKey &&
+      persistencePowers.getRemoteAgentKey(remoteHandleNodeParam) === undefined
+    ) {
+      persistencePowers.writeRemoteAgentKey(remoteHandleNodeParam, peerKey);
+    }
   };
 
   /**
@@ -7268,12 +7332,22 @@ const makeDaemonCore = async (
             );
           }
 
-          /** @type {PeerInfo} */
-          const peerInfo = {
-            node: guestDaemonNode,
-            addresses,
-          };
-          await networkBroker.addPeerInfo(peerInfo);
+          // Only register a route when the acceptor advertised addresses. An
+          // acceptor whose own `@nets` is empty (the anonymizing-persona
+          // default) yields an address-less handle locator; registering it
+          // would drive `addPeerInfo` to REPLACE this daemon's existing peer
+          // record for the acceptor's daemon with zero addresses, breaking
+          // every pre-existing relationship with that daemon. Such an acceptor
+          // is undialable across daemons anyway, so skipping the write loses
+          // nothing.
+          if (addresses.length > 0) {
+            /** @type {PeerInfo} */
+            const peerInfo = {
+              node: guestDaemonNode,
+              addresses,
+            };
+            await networkBroker.addPeerInfo(peerInfo);
+          }
         }
 
         // Use storeLocator so the directory properly internalizes the remote

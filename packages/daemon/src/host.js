@@ -2146,31 +2146,35 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath} guestName
+     * @param {NameOrPath} correspondentName
      */
-    const invite = async guestName => {
-      const { namePath, petName: guestPetName } = petNamePathFrom(guestName);
-      // We must immediately retain a formula under guestName so that we
+    const invite = async correspondentName => {
+      const { namePath, petName: correspondentPetName } =
+        petNamePathFrom(correspondentName);
+      // We must immediately retain a formula under correspondentName so that we
       // preserve the invitation across restarts, but we must replace the
-      // guestName with the handle of the guest that accepts the invitation.
-      // We need to return the locator for the invitation regardless of what
-      // we store.
-      // Overwriting the guestName must cancel the pending invitation (consume
-      // once) so that the invitation can no longer modify the petStore entry
-      // for the guestName.
-      // A path nests the invitation (and, once redeemed, the guest)
+      // correspondentName with the handle of the correspondent that accepts the
+      // invitation. We need to return the locator for the invitation regardless
+      // of what we store.
+      // Overwriting the correspondentName must cancel the pending invitation
+      // (consume once) so that the invitation can no longer modify the petStore
+      // entry for the correspondentName.
+      // A path nests the invitation (and, once redeemed, the correspondent)
       // inside a directory; the parent directory must already exist.
       /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       tasks.push(identifiers =>
         namePath.length === 1
-          ? petStore.storeIdentifier(guestPetName, identifiers.invitationId)
+          ? petStore.storeIdentifier(
+              correspondentPetName,
+              identifiers.invitationId,
+            )
           : E(directory).storeIdentifier(namePath, identifiers.invitationId),
       );
       const { value } = await formulateInvitation(
         hostId,
         handleId,
-        guestName,
+        correspondentName,
         tasks,
       );
       return value;
@@ -2178,24 +2182,25 @@ export const makeHostMaker = ({
 
     /**
      * Redeem an invitation locator into THIS host. Acceptance binds the
-     * inviter's handle reciprocally under `guestName` — no synthetic local
-     * guest is minted. Shares one implementation with `EndoGuest.accept` via
-     * the daemon-core `acceptInvitation` helper, which carries the whole
+     * inviter's handle reciprocally under `correspondentName` — no synthetic
+     * local guest is minted. Shares one implementation with `EndoGuest.accept`
+     * via the daemon-core `acceptInvitation` helper, which carries the whole
      * register-peer / record-agent-key / bind sequence so the contract does not
      * fork by facet.
      * @param {string} invitationLocator
-     * @param {NameOrPath} guestName
+     * @param {NameOrPath} correspondentName
      */
-    const accept = async (invitationLocator, guestName) => {
+    const accept = async (invitationLocator, correspondentName) => {
       // A path nests the accepted connection inside a directory; the parent
       // directory must already exist.
-      const { namePath: guestNamePath } = petNamePathFrom(guestName);
+      const { namePath: correspondentNamePath } =
+        petNamePathFrom(correspondentName);
       return acceptInvitation({
         invitationLocator,
         acceptingHandleId: handleId,
         acceptingNetworksDirectoryId: networksDirectoryId,
         bindCorrespondent: remoteHandleLocator =>
-          E(directory).storeLocator(guestNamePath, remoteHandleLocator),
+          E(directory).storeLocator(correspondentNamePath, remoteHandleLocator),
       });
     };
 

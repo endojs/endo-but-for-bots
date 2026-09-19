@@ -1736,12 +1736,12 @@ export interface EndoGuest extends EndoAgent {
    * Mint a single-use invitation whose locator's `from` names this guest's
    * handle, so an acceptor binds this guest (not the top host) under its chosen
    * pet name. Acceptance stores the acceptor's handle in this guest's pet store
-   * under `guestName`. Network mediation runs through an internal daemon broker;
-   * this call confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
-   * enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * under `correspondentName`. Network mediation runs through an internal
+   * daemon broker; this call confers no `getPeerInfo`/`addPeerInfo`, host facet,
+   * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
    * implementation.
    */
-  invite(guestName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string | string[]): Promise<Invitation>;
   /**
    * Redeem an invitation locator into THIS guest, binding the relationship to
    * the calling guest — no replacement guest is minted on the acceptor side.
@@ -1751,7 +1751,10 @@ export interface EndoGuest extends EndoAgent {
    * own independently, so the two may differ). A path nests the binding under a
    * directory that must already exist. Shares `EndoHost.accept`'s
    * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
-   * enumeration, or outbound-dialing surface.
+   * enumeration, or outbound-dialing surface. Redeeming a genuine invitation
+   * registers the inviter's daemon and agent key additively only (never
+   * redirecting an existing route), with the agent-key write deferred until the
+   * invitation is proven.
    */
   accept(
     invitationLocator: string,
@@ -2126,10 +2129,10 @@ export interface EndoHost extends EndoAgent {
     locator: string,
     petNameOrPath: string | string[],
   ): Promise<void>;
-  invite(guestName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string | string[]): Promise<Invitation>;
   accept(
     invitationLocator: string,
-    guestName: string | string[],
+    correspondentName: string | string[],
   ): Promise<void>;
   endow(
     messageNumber: bigint,
