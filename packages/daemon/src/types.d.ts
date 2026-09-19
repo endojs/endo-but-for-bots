@@ -648,9 +648,39 @@ export type ChannelMessage = {
 
 export type InvitationFormula = {
   type: 'invitation';
-  hostAgent: FormulaIdentifier;
-  hostHandle: FormulaIdentifier;
+  /**
+   * The inviting `EndoAgent` — an `EndoHost` (via `EndoHost.invite`) or an
+   * `EndoGuest` (via `EndoGuest.invite`). Network mediation is not drawn from
+   * this agent; the daemon supplies it internally (see `makeInvitation`), so a
+   * guest inviter gains no network authority.
+   *
+   * Optional because a record minted before the
+   * `hostAgent`/`hostHandle` -> `invitingAgent`/`invitingHandle` rename
+   * carries only the deprecated {@link hostAgent}; every read coerces
+   * `invitingAgent ?? hostAgent`, so an on-disk record may satisfy this shape
+   * through the fallback field alone.
+   */
+  invitingAgent?: FormulaIdentifier;
+  /**
+   * The inviting agent's handle, which the locator's `from` names. Optional
+   * for the same legacy reason as {@link invitingAgent}; reads coerce
+   * `invitingHandle ?? hostHandle`.
+   */
+  invitingHandle?: FormulaIdentifier;
   guestName: NameOrPath;
+  /**
+   * @deprecated Legacy field name for {@link invitingAgent}, persisted by
+   * records minted before the `hostAgent`/`hostHandle` ->
+   * `invitingAgent`/`invitingHandle` rename, and the fallback source reads
+   * coerce from. Read-only: newly minted invitations never set it, but reads
+   * coerce it so existing production databases need not be purged.
+   */
+  hostAgent?: FormulaIdentifier;
+  /**
+   * @deprecated Legacy field name for {@link invitingHandle}. See
+   * {@link hostAgent}.
+   */
+  hostHandle?: FormulaIdentifier;
 };
 
 export type InvitationDeferredTaskParams = {
@@ -802,6 +832,12 @@ export interface Invitation {
     hostNameFromGuest?: string,
   ): Promise<{ syncedStoreNumber: FormulaNumber }>;
   locate(): Promise<string>;
+  /**
+   * Revoke this pending, unaccepted invitation through the object itself.
+   * Single-use: a no-op once the invitation has been accepted, and it revokes
+   * exactly this invitation, leaving any sibling invitation redeemable.
+   */
+  cancel(reason?: Error): Promise<void>;
 }
 
 export interface Topic<
@@ -1654,6 +1690,16 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+  /**
+   * Mint a single-use invitation whose locator's `from` names this guest's
+   * handle, so an acceptor binds this guest (not the top host) under its chosen
+   * pet name. Acceptance stores the acceptor's handle in this guest's pet store
+   * under `guestName`. Network mediation runs through an internal daemon broker;
+   * this call confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * implementation.
+   */
+  invite(guestName: string | string[]): Promise<Invitation>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -2966,8 +3012,8 @@ export interface DaemonCore {
   ) => FormulateResult<GitRemote>;
 
   formulateInvitation: (
-    hostAgentId: FormulaIdentifier,
-    hostHandleId: FormulaIdentifier,
+    invitingAgentId: FormulaIdentifier,
+    invitingHandleId: FormulaIdentifier,
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
