@@ -190,6 +190,38 @@ pet-name. To use a different engine, provision a replacement object exposing the
 same interface (`transcribe` / `synthesize`) under the same pet-name — no change
 to the factory or UI is required.
 
+## System prompts
+
+A session's system prompt is composed (`src/system-prompt.js`) from one
+standard base — what is true of every Floot session: a guest of the daemon,
+acting on capabilities, with the petstore and mail tools — plus sections chosen
+by three facts about the session:
+
+- **How it is driven.** `createSession({ spoken: true })` says the replies are
+  read aloud, and adds the voice rules (short, no markdown, never read code
+  aloud). The Floot space passes it. A session made by any other caller of the
+  factory does not get them, and a subagent never does: its reader is its
+  parent.
+- **Where its model runs.** A hosted backend declares a `promptEnvironment` in
+  its descriptor (see BACKEND-DESIGN.md). A model in a sandbox is told the names
+  Endo's tools carry in its tool list, that its own shell and file tools are
+  not Endo's `exec`, that its workspace is a directory it can edit, and what
+  the container-mount tools do. A model behind the provider API is told none
+  of that, and instead how to write files through `exec`.
+- **Its preset**, which decides the objects in its petstore and so the
+  sections that explain them.
+
+The composed text is stored in the session's registry entry at creation,
+together with the context it was composed from (`promptContext`).
+A session keeps the prompt it started with; an edit to a section reaches new
+sessions only.
+The one exception is a preset that bumps its `promptVersion` (below), and the
+recorded context is what lets that migration compose the new text for the same
+backend and the same kind of driver.
+A `systemPrompt` passed to `createSession` still replaces the preset's
+entirely, and a subagent's instructions are still appended beneath its
+parent's preset prompt rather than substituted for it.
+
 ## Subagents
 
 A session may delegate to a subagent session and converse with it over the

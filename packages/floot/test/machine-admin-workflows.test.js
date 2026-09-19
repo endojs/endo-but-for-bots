@@ -196,3 +196,34 @@ test('versioned migration never replaces a custom or a delegated prompt', t => {
   });
   t.is(refreshPresetEntry(delegated), delegated);
 });
+
+test('a versioned migration composes the new prompt for where the session runs and how it is driven', t => {
+  const promptContext = harden({
+    environment: {
+      toolNamePrefix: 'mcp__endo__',
+      toolNames: {},
+      nativeTools: true,
+      workspacePath: '/workspace',
+    },
+    spoken: false,
+    containerMounts: true,
+  });
+  const migrated = refreshPresetEntry(
+    harden({
+      id: 'hosted-admin',
+      presetId: 'machine-admin',
+      systemPrompt: 'an older machine-admin prompt',
+      presetPromptVersion: 1,
+      promptContext,
+    }),
+  );
+  t.is(migrated.presetPromptVersion, 2);
+  t.deepEqual(migrated.promptContext, promptContext);
+  t.true(migrated.systemPrompt.includes('`exec` appears as `mcp__endo__exec`'));
+  t.true(
+    migrated.systemPrompt.includes('NORMAL DEPLOYS MUST GO THROUGH A WORKFLOW'),
+  );
+  // It was not spoken before the migration, and is not after.
+  t.false(migrated.systemPrompt.includes('aloud'));
+  t.not(migrated.systemPrompt, getPreset('machine-admin').systemPrompt);
+});
