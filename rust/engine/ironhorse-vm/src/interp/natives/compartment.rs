@@ -104,20 +104,56 @@ impl Interp {
         // `compartment_evaluator` mint this environment its own `eval`,
         // `Function` and `Compartment` -- which
         // `prototype/globalThis/defaults.js` observes by identity.
+        //
+        // Set BEFORE `create_environment` because that is the call whose
+        // behaviour it selects, and restored if that call fails: the flag is
+        // machine-wide and irreversible in the forward direction, so a
+        // construction that throws must not leave the machine's compartment
+        // profile changed with no compartment to show for it.
+        let shared_before = self.shared_compartments;
         self.shared_compartments = true;
         let lease = std::rc::Rc::new(());
         let modules = std::rc::Rc::new(std::cell::RefCell::new(crate::ModuleGraph::default()));
         // `global_names: None` -- the standard set. A guest compartment has no
         // way to name a narrower list, and `global_names` is not attenuation
         // in any case (see `CompartmentEnvironment::global_names`).
-        let global = self
-            .create_environment(None, std::rc::Rc::downgrade(&lease), modules)
-            .map_err(Step::Host)?;
+        // Allocation-driven metering, as `designs/ironhorse-guest-compartment.md`
+        // requires: `create_environment` allocates a global object plus one
+        // property per bound intrinsic name, and the bound set is whatever the
+        // crank's source text has interned -- guest-controlled, and measured at
+        // 58 slots for a program naming the standard intrinsics against 6 for
+        // one naming none. A constant charge here would let a loop over
+        // `new Compartment()` buy that spread unmetered, so charge what was
+        // actually allocated. `create_environment` only allocates, so the
+        // live-count delta IS the allocation count; charging after the fact
+        // costs one environment's overshoot and keeps the charge honest
+        // without hand-counting a set that will change.
+        let live_before = self.slots.live_count();
+        let global = match self.create_environment(None, std::rc::Rc::downgrade(&lease), modules) {
+            Ok(global) => global,
+            Err(host) => {
+                self.shared_compartments = shared_before;
+                return Err(Step::Host(host));
+            }
+        };
+        for _ in 0..self.slots.live_count().saturating_sub(live_before) {
+            self.meter.tick_slot_alloc();
+        }
         // `create_environment` leaves the NEW environment active. Everything
         // below that touches the compartment's globals must happen here, and
         // the switch back must happen on every path out.
-        let result = (|vm: &mut Self| -> Result<(), Step> {
-            vm.meter.tick_slot_alloc(); // the compartment's global object
+        // `catch_unwind` rather than a bare call: `define_global_id` and
+        // `define_global_lexical` both reach `heap_exhausted()`, which is a
+        // `resume_unwind` and not an `Err`, so a plain restore below `result`
+        // would be skipped exactly when the machine survives the panic (the
+        // arena ceiling is caught and converted to `Halt::HeapExhausted`).
+        // Leaking the switch would leave the rest of the crank -- and the
+        // host's own `detach_realm_compiler` teardown -- running against the
+        // half-built compartment's environment. Restore, then re-raise, which
+        // is the discipline `create_environment` and `create_host_function`
+        // already follow.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let vm = &mut *self;
             vm.inherit_compiler(previous);
             for (id, value) in endowments {
                 vm.meter.tick_slot_alloc(); // the global property
@@ -131,10 +167,13 @@ impl Interp {
                 vm.meter.tick_slot_alloc(); // the lexical cell
                 vm.define_global_lexical(id, value, writable);
             }
-            Ok(())
-        })(self);
+            Ok::<(), Step>(())
+        }));
         self.switch_environment(previous);
-        result?;
+        match result {
+            Ok(result) => result?,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
 
         self.meter.tick_slot_alloc(); // the instance
         let instance = self.slots.alloc(Slot::instance(self.compartment_proto));

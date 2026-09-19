@@ -390,9 +390,12 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
                 outcome.result
             };
 
-            // **`Compartment=undefined` is the next term to go vacuous, and
-            // whoever lands a guest `Compartment` pays for it.** Two terms in
-            // this census have already made the trip: `harden=function` never
+            // **`Compartment` has now made the trip too, and this revision
+            // is the one that paid for it.** The guest constructor landed
+            // (`designs/ironhorse-guest-compartment.md`), so the assertion
+            // below reads `Compartment=function` BEFORE the shim is evaluated
+            // and the term no longer means "the shim installed it". Two others
+            // made the same trip earlier: `harden=function` never
             // discriminated (every configuration here has one), and
             // `lockdown=function` stopped discriminating when
             // `create_hardened_globals` began binding one on every realm. Each
@@ -400,11 +403,11 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
             // `hardenTraverses` probe for the first, an identity comparison
             // against a stashed engine binding for the second.
             //
-            // `Compartment` only discriminates today because the engine binds
-            // none, so `function` means "the shim installed it". A guest
-            // `Compartment` (`fx_Compartment`, `xsModule.c:2864`) makes that
-            // `function` on both sides of the shim's evaluation, and this term
-            // says nothing again. The repair is the one directly below: stash
+            // `Compartment` discriminated only for as long as the engine
+            // bound none. `create_compartment` (`fx_Compartment`,
+            // `xsModule.c:2864`) makes it `function` on both sides of the
+            // shim's evaluation, so the term says nothing on its own. The
+            // repair is the one directly below, and it is in place: stash
             // `globalThis.__engineCompartment` before the shim and compare by
             // identity after.
             assert_eq!(

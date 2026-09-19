@@ -94,6 +94,45 @@ impl Interp {
 
     pub(super) fn dispatch_delete_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
         let obj = self.peek_checked()?;
+        if obj.kind == Kind::EnvReference {
+            // `EVAL_REFERENCE` pushes an `EnvReference` sentinel when the name
+            // resolved to no object environment: NULL for a frame local, and
+            // `SlotIndex(0)` for "the global object". Neither payload is an
+            // instance index. `SlotIndex(0)` is the DEFAULT realm's global only
+            // by construction accident -- `Interp::new` happens to allocate it
+            // first -- so matching on `obj.value` alone took the sentinel for a
+            // live instance and deleted from that realm whatever environment
+            // was actually current. Harmless while only the host could mint a
+            // second environment; a cross-realm mutation as soon as guest code
+            // can run in a compartment. Resolve against the CURRENT environment.
+            self.meter.tick_builtin();
+            let deleted = if self.environment.global_lexicals.contains_key(&id) {
+                // A `globalLexicals` entry is a binding in a scope, not a
+                // property of the global object: `delete` cannot remove it,
+                // and must not answer `true` as though it had.
+                false
+            } else if matches!(obj.value, Payload::Reference(i) if i == crate::value::SlotIndex::NULL)
+            {
+                // A frame-local declarative binding is likewise not deletable.
+                false
+            } else {
+                self.delete_own_property(self.environment.global_obj, id)
+            };
+            if !deleted && self.strict {
+                let error = self.internal_error(
+                    "TypeError",
+                    format!(
+                        "delete {}: no permission (strict mode)",
+                        self.property_debug_name(id)
+                    ),
+                );
+                return Err(self.raise_js(error));
+            }
+            if let Some(s) = self.stack.last_mut() {
+                *s = Slot::boolean(deleted);
+            }
+            return Ok(());
+        }
         match obj.value {
             Payload::Reference(inst) => {
                 // `fxRunDelete` wraps `mxBehaviorDeleteProperty`

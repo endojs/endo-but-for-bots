@@ -1275,3 +1275,102 @@ fn a_container_without_meter_identity_is_refused() {
         Err(SnapshotError::Corrupt("missing METR identity"))
     ));
 }
+
+/// A guest `Compartment`'s state outlives its INSTANCE, so the persist gate
+/// cannot key on the instance table alone.
+///
+/// `guest_compartments` empties as soon as the collector prunes the dead
+/// instance's row, and the gate then had nothing to object to -- but the
+/// compartment's ENVIRONMENT survives (a retained function keeps
+/// `global_env`, and hence the environment, alive), and the environment is
+/// what carries both pieces of unpersistable state:
+///
+/// - `globalLexicals`, for which `EnvironmentRow` has no column. The image
+///   would keep the environment and silently drop its bindings, so the
+///   restored crank answers a `ReferenceError` -- or an unshadowed global --
+///   where the pre-checkpoint crank answered the bound value. A lexical is
+///   not arena-chain-resident either, so `rebuild_global_props` has nothing
+///   to recover it from.
+/// - `shared_compartments`, which `construct_compartment` sets and which is
+///   what makes `shared_machine_snapshot` emit at all. On a machine with no
+///   shared-realm primordial profile the image carries empty
+///   `intrinsic_roots`, and restore refuses it as a
+///   "shared primordial profile mismatch" -- bytes written that no restore
+///   can ever accept, with nothing said at write time.
+///
+/// Both are refused on the write side now, where the caller can still act.
+#[test]
+fn a_dead_compartment_instance_does_not_open_the_persist_gate() {
+    struct TestCompiler;
+    impl ironhorse_vm::SourceCompiler for TestCompiler {
+        fn compile_source(
+            &self,
+            source: &str,
+            strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            match ironhorse_compile::compile_atoms_budgeted_with_limit(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                raw_budget,
+                charge,
+            ) {
+                Ok(c) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode: c.bytecode,
+                    symbols: c.symbols,
+                    parse_meter_raw: c.parse_meter_raw,
+                    parse_computrons: c.parse_computrons,
+                }),
+                Err(ironhorse_compile::CompileError::MeterAbort) => {
+                    Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                }
+                Err(e) => Err(ironhorse_vm::SourceCompileError::Syntax(format!("{e:?}"))),
+            }
+        }
+    }
+
+    // `options` names the compartment's construction; `row` is the gate the
+    // surviving environment must trip once the instance is gone.
+    for (options, row) in [
+        (
+            "{ globalLexicals: { secret: 42 } }",
+            "a guest `Compartment`'s `globalLexicals`, for which `EnvironmentRow` has no column",
+        ),
+        (
+            "{}",
+            "a guest `Compartment` built on a machine with no shared-realm primordial profile, \
+             whose image no restore would accept",
+        ),
+    ] {
+        let (b, n) = compile(&format!(
+            "var f = 0; f = new Compartment({options})\
+             .evaluate('(function () {{ return 1; }})'); 0;"
+        ));
+        let mut m = Interp::new();
+        m.set_source_compiler(std::rc::Rc::new(TestCompiler));
+        m.link_intrinsics(&n);
+        assert!(m.run(&b).completed);
+        // The instance is unreachable. Collecting it empties
+        // `guest_compartments`, which is precisely what used to satisfy the
+        // presence gate while the environment carried on.
+        m.collect_garbage().unwrap();
+        match m.write_snapshot(&sig()) {
+            Err(MachineSnapshotError::PendingStateUnsupported { row: named }) => {
+                assert_eq!(named, row, "refused by the wrong gate for {options}")
+            }
+            other => panic!("must refuse {options}: {other:?}"),
+        }
+        let mut store = MemoryStore::new();
+        match begin_store_session(m, &sig(), &mut store) {
+            Err((_, StoreError::PendingStateUnsupported { row: named })) => {
+                assert_eq!(named, row, "the store verb refuses by the same name")
+            }
+            Err((_, other)) => {
+                panic!("the store verb refused {options} by the wrong gate: {other:?}")
+            }
+            Ok(_) => panic!("the store verb must refuse {options}"),
+        }
+    }
+}

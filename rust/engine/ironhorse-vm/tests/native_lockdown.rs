@@ -1083,10 +1083,13 @@ fn a_compartment_cannot_lock_down_the_shared_realm() {
 /// guest source against the SHARED `globalThis` with a real clock: a
 /// confinement regression, not a migration.
 ///
-/// If this test starts reporting `Compartment=function`, re-read it alongside
-/// `designs/ironhorse-native-lockdown.md` § Known Gaps before assuming the
-/// migration is unblocked — the constructor existing is necessary, not
-/// sufficient.
+/// This test now reports `Compartment=function`: the guest constructor landed
+/// (`designs/ironhorse-guest-compartment.md`). That is necessary and NOT
+/// sufficient, which is the whole point of the paragraph above — steps 3 and 4,
+/// the compartment-global template and its attenuated `Date`/`Math`, are still
+/// missing, so the migration remains blocked for the reason stated, not for
+/// want of a constructor. Read `designs/ironhorse-native-lockdown.md` § Known
+/// Gaps before concluding otherwise.
 /// What SES's `lockdown()` does that the native one does not, measured rather
 /// than argued.
 ///

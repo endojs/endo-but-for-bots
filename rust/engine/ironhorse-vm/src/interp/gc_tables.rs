@@ -403,7 +403,23 @@ interp_state!(define_chunk_walk);
 // partial-page enumeration. Only collection strength differs between the walks.
 macro_rules! gc_slot_row {
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, environment) => {
-        $emit! { if let Some(owner) = $row.unhandled_rejection { $visit(owner); } }
+        $emit! {
+            if let Some(owner) = $row.unhandled_rejection { $visit(owner); }
+            // A `globalLexicals` cell is the one piece of environment state
+            // that rides no arena edge: `define_global_lexical` leaves
+            // `next` NULL and links the cell nowhere, so that the name stays
+            // invisible on `globalThis`. Global *properties* need no edge
+            // here because `create_global_property` links them into the
+            // global object's chain. The root walk in `roots.rs` covers
+            // lexicals only while the environment's owner lease is alive,
+            // and that lease belongs to the `Compartment` INSTANCE, not to
+            // the environment: a retained function keeps `global_env` --
+            // hence this row -- alive long after its instance is swept.
+            // Tracing the cells from the row's own live global object is
+            // what makes their lifetime the compartment's rather than the
+            // instance's.
+            for cell in $row.global_lexicals.values() { $visit(*cell); }
+        }
     };
 
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, none) => {

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-18 |
-| **Updated** | 2026-09-18 |
+| **Updated** | 2026-09-19 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress (phase 1 landed, less `globalLexicals` and the step-3 template) |
 | **Source** | The scope boundary [ironhorse-native-lockdown](ironhorse-native-lockdown.md) drew, and the `Compartment` half of [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) |
@@ -673,7 +673,126 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
 |---|---|---|
 | `constructor/modules-types.js` | The gate reports `over-acceptance: ironhorse completed a source the oracle rejected`. Read the direction carefully: the ORACLE fails the case (`Expected a TypeError to be thrown but no exception was thrown`) and ironhorse passes it. `assert_module_map` rejects a `modules` entry that describes no module; `fx_Compartment` accepts one. | Corpus over oracle, by decision. This is the case the equivalence measurement predicted, and the only phase-1 one. Ironhorse is right and XS is wrong; the gate calls it a divergence because the gate's reference is XS. |
 | `prototype/Symbol.toStringTag.js` | Both engines fail it under lockdown — `verifyProperty` wants `configurable: true` and step 5 has frozen the property — but the abort renders as `Test262Error: …` on the oracle and `Object: …` on ironhorse. | Agreement on the RESULT, divergence in how a thrown non-`Error` renders its class. Not this work's, though this work is what made it visible: the case could not run before. `Interp::render_uncaught` labels such a value with its `Object.prototype.toString` tag rather than its constructor's `name`, because it is a host boundary that must not run guest code — and for an ordinary guest constructor BOTH hops it would need, `constructor` on the prototype and `name` on the function, are VIRTUAL properties materialized on demand, which a `&self` render cannot do. An attempt to read them as data properties was made and reverted: it needs the render boundary taught to read virtual properties, which is its own change. `packages/hardened262/scripts/agents/ironhorse.js` works around the same gap by rewriting the harness's `Test262Error.prototype.toString`. The file passes in the non-lockdown `strict`/`sloppy` scenarios, where the property is still configurable. |
-| construction metering | Allocation-driven (`tick_slot_alloc` per slot allocated) rather than a calibrated frame constant. `ironhorse-meter` has no `fx_Compartment` measurement, and inventing a constant would assert a calibration nobody performed. | Deliberate, and stated at `construct_compartment`. A computron comparison over compartment construction is not meaningful until someone measures XS's. |
+| construction metering | Allocation-driven (`tick_slot_alloc` per slot allocated) rather than a calibrated frame constant. `ironhorse-meter` has no `fx_Compartment` measurement, and inventing a constant would assert a calibration nobody performed. | Deliberate, and stated at `construct_compartment`. A computron comparison over compartment construction is not meaningful until someone measures XS's. The charge is now measured rather than assumed: see § Adversarial review for the interval where it was a constant. |
+
+## Adversarial review, and what it found
+
+Five reviewers were run against the landed phase-1 change, each on one failure
+class: re-entrancy and slot invalidation, confinement, `globalLexicals` scope
+semantics, persistence and GC integration, and the test suite's own honesty.
+Every finding below was reproduced against the engine before it was acted on,
+and every fix carries a test that fails without it (each was re-checked by
+mutating the fix and confirming the test catches it).
+
+Two reviewers converged independently on the first one, which is the one that
+mattered.
+
+### Fixed
+
+- **A `globalLexicals` cell could be swept while still bound.** The cell is
+  deliberately off the global object's property chain -- that is what keeps the
+  name invisible on `globalThis` -- so, alone among environment state, nothing
+  reached it through an ordinary arena edge. Its only root was the
+  `environments` root walk, which filters on the environment's owner lease, and
+  that lease belongs to the `Compartment` INSTANCE. A retained function keeps
+  `global_env`, and hence the environment, alive long after its instance is
+  swept; two collections later the cell was freed while `global_lexicals` still
+  named it, and the next crank's allocations recycled the slot. Reproduced: the
+  binding read back as `64`, the churn loop's counter, rather than `42` -- in a
+  debug build, with no assertion tripped, because the slot had been reallocated
+  and was live again. Silent cross-object data confusion, and a write through
+  the same path would have been an arbitrary-slot overwrite. Fixed by visiting
+  the cells from `gc_slot_row`'s `environment` arm, which ties their lifetime to
+  the compartment's global object rather than to its instance.
+
+- **The persist gate keyed on the instance, not on the state.**
+  `guest_compartments` empties as soon as the collector prunes the dead
+  instance's row, and the gate then had nothing to object to -- while the
+  environment, and both pieces of unpersistable state it carries, lived on.
+  Reproduced on a plain machine: the checkpoint was ACCEPTED and the resume then
+  failed with `Corrupt("restore session did not validate")`. Bytes written that
+  no restore can ever accept, with nothing said at write time, which is worse
+  than the silent binding loss the review predicted. Two causes, now refused
+  separately on the write side: `globalLexicals`, for which `EnvironmentRow` has
+  no column and which is not arena-chain-resident either, so nothing could
+  rebuild it; and `shared_compartments`, which `construct_compartment` sets and
+  which makes `shared_machine_snapshot` emit an image whose empty
+  `intrinsic_roots` restore refuses as a "shared primordial profile mismatch".
+
+- **A bare-name `delete` in a compartment reached into the parent realm.**
+  `EVAL_REFERENCE` pushes a `Kind::EnvReference` sentinel carrying
+  `SlotIndex(0)` to mean "the global object", and `DELETE_PROPERTY` matched on
+  the payload without checking the kind -- taking the sentinel for a live
+  instance. `SlotIndex(0)` is the default realm's global only because
+  `Interp::new` happens to allocate it first. Reproduced: `delete leak`
+  evaluated inside a compartment removed the PARENT's `globalThis.leak`. The
+  sentinel and the delete path both predate this change and are untouched by it;
+  guest compartments are what made the defect reachable, since until now only
+  the host could mint a second environment. Fixed by resolving the sentinel
+  against the current environment, which also stopped `delete` of a lexical
+  answering `true` while the binding survived -- it answers `false` now, because
+  a binding in a scope is not a property.
+
+- **A `const` lexical accepted a sloppy store.** The lexical arm gated its
+  `XS_DONT_SET_FLAG` check on `self.strict`, modelling the cell as a
+  non-writable property. It is a binding: ECMA-262 9.1.1.1.5 forces `S` to true,
+  which is why `const c = 1; c = 2` throws in sloppy code, and both of this
+  engine's other const paths -- the frame-local one and the `with`-object one --
+  already threw unconditionally. `Compartment.prototype.evaluate` is always
+  strict, so no test could see it; the compartment's OWN evaluators
+  (`globalThis.eval`, `globalThis.Function`) run sloppy source and silently
+  discarded the write. That store also skipped the `tick_builtin` both sibling
+  arms charge.
+
+- **Construction charged a constant where the cost is guest-controlled.**
+  § 1 required charging `create_environment`'s allocations "or a guest loop over
+  `new Compartment()` buys unmetered allocation", and the arm charged 2 ticks.
+  Measured: a compartment costs 6 slots when the crank's source text interns no
+  intrinsic names and 58 when it interns the standard set -- the guest picks,
+  via its own source text -- and the charge did not move between those two at
+  all. Now charged from the live-count delta, verified exact at 52 x
+  `SLOT_ALLOCATION_METERING`. Worth stating precisely: a slot is 1/256 of a
+  computron, so this is faithfulness to XS's own accounting and to § 1, not a
+  security boundary -- correct metering would not have stopped the arena
+  exhaustion the reviewers framed it as enabling.
+
+- **The environment switch leaked on the unwind path.** `define_global_id` and
+  `define_global_lexical` reach `heap_exhausted()`, which is a `resume_unwind`
+  and not an `Err`, so the restore below `result` was skipped exactly when the
+  machine survives the panic. Now `catch_unwind` -> restore -> `resume_unwind`,
+  the discipline `create_environment` and `create_host_function` already follow.
+
+- **`shared_compartments` stayed flipped after a failed construction.** The flag
+  is machine-wide and irreversible in the forward direction; it is now rolled
+  back if `create_environment` fails.
+
+- **The `const` probe pinned nothing.** `constructor/globalLexicals-properties`'s
+  twin swallowed its `shared = null` outcome in a bare `catch`, and every other
+  term in the expected string read the same whether the store threw or silently
+  succeeded. The outcome is now part of the assertion.
+
+### Not a defect
+
+- The `var` hoist's `globalThis` name leak. `c.globalThis.eval('var bar = 5')`
+  over a lexical `bar` leaves `bar` on `getOwnPropertyNames(c.globalThis)` with
+  the lexical shadowing it -- which is what SES's own `with`-proxy scope does:
+  the property comes from the `var` declaration, not from the lexical, and the
+  lexical is still not a property of the global. The invariant holds.
+
+### Open, and deliberately not guessed at
+
+- A function declaration in the compartment's own sloppy evaluators is routed
+  to the lexical cell instead of to the global binding it declares.
+  `hoist_vars_to_global` and `can_declare_global_function` do not consult
+  `global_lexicals`, so `c.globalThis.eval('function bar(){}')` over a lexical
+  `bar` materializes a global property that the declaration's initializing store
+  never reaches. Before the const fix it vanished silently; it now throws
+  `TypeError: set bar: const`, which is the right posture for a known gap but
+  not correct semantics. The repair is to distinguish a declaration-instantiation
+  store from an ordinary assignment, which is a compiler/dispatch change that
+  wants the shadowing semantics settled first -- and phase 1's documented
+  surface is `evaluate`, which is strict and where declarations become frame
+  locals that shadow correctly. Recorded rather than guessed at.
 
 ## Done looks like
 
@@ -798,6 +917,10 @@ Each is a row the native-lockdown note's § Oracle divergences should carry.
       asked whoever landed a guest `Compartment` to do, but the bar skips
       without `rust/endo/xsnap/src/ses_boot.js`, which this environment could
       not generate — so that edit is unexecuted.
+- [ ] Teach `hoist_vars_to_global` / `can_declare_global_function` about
+      `global_lexicals`, so a function declaration in the compartment's own
+      sloppy evaluators initializes the global binding it declares instead of
+      being routed to the lexical cell. See § Adversarial review, "Open".
 - [ ] Size phase 2 once referrer threading is scoped separately.
 
 ## Prompt
