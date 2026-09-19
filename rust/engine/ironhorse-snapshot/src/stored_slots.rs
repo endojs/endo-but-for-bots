@@ -6,10 +6,10 @@ use crate::store::SmallState;
 use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow, BoundFunctionRow,
     CombinatorRow, DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow,
-    FunctionStateSnapshot, GeneratorRow, HostFunctionRow, ModuleGraphSnapshot, ModuleRecordRow,
-    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
-    PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow, SavedJumpRow,
-    SharedMachineSnapshot,
+    FromAsyncRow, FunctionStateSnapshot, GeneratorRow, HostFunctionRow, ModuleGraphSnapshot,
+    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
+    PromiseClusterSnapshot, PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow,
+    SavedJumpRow, SharedMachineSnapshot,
 };
 use ironhorse_vm::Slot;
 
@@ -386,7 +386,13 @@ row!(SavedJumpRow {
     ]
 });
 row!(PromiseClusterSnapshot {
-    slots: [async_instances, async_generators, promises, combinators],
+    slots: [
+        async_instances,
+        async_generators,
+        from_async,
+        promises,
+        combinators
+    ],
     metadata: [functions, guards, unhandled_rejection]
 });
 row!(AsyncGeneratorRow {
@@ -408,6 +414,22 @@ row!(PromiseReactionRow {
 row!(CombinatorRow {
     slots: [resolve, reject],
     metadata: [kind, remaining, results]
+});
+// `target` is a slot INDEX rather than a `Slot`, so it is metadata here and
+// is remapped by the image's index machinery, exactly as `CombinatorRow`'s
+// `results` is (architecture finding F127).
+row!(FromAsyncRow {
+    slots: [
+        resolve,
+        reject,
+        mapfn,
+        this_arg,
+        iterator,
+        next_method,
+        array_like,
+        close_error,
+    ],
+    metadata: [target, k, len, flags]
 });
 row!(AsyncRow {
     slots: [frame, resolve, reject],

@@ -21,6 +21,15 @@ const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-67a52af412f03a7b-i
 const FINDING_SOURCE: &str = "(226492416 * 226492416)";
 const SHORTEST_RESULT: &str = "51298814505517060";
 
+// This is a FROZEN COPY of the stage-1 generator as it stood when the trophy
+// was minimized — a wrapping cursor at a fixed depth of 4. It is deliberately
+// NOT kept equivalent to `ironhorse_fuzz::gen_program`, which has since gained
+// a finite cursor and a fuzzer-drawn depth (architecture finding F040). Freezing
+// it is what makes the recorded input still fold to the program this trophy is
+// about; tracking the live generator would silently retarget the regression.
+// What it produces is checked below — the program text in one file, the
+// completion value in the other — so the freeze is verified rather than
+// merely declared.
 struct InputBytes<'a> {
     data: &'a [u8],
     position: usize,

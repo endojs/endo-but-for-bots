@@ -89,6 +89,30 @@ fn generated_cases_reproduce_corpus_coverage() {
         "every generated case must run exactly once"
     );
 
+    // A compiler panic names itself in the failure detail rather than hiding
+    // in the skip column, so `met_bar` below already forbids it. This only
+    // says WHICH failure, because "1 failure(s)" is a bad message for an
+    // engine fault.
+    //
+    // Honesty about reach: this corpus is a positive one — its four
+    // `negative:` cases are all `phase: runtime` — and `compiler-panicked` is
+    // raised only on the parse/resolution negative path, so the counter below
+    // is structurally zero here whatever the compiler does. The gate that can
+    // actually fire over parse-phase negatives is
+    // `committed_expectations_record_no_compiler_fault` in
+    // `tests/expectation_shards.rs`, over the checked-in whole-tree
+    // expectations. This line is a message, not a proof, and is written down
+    // as one because the previous version of this comment claimed the proof.
+    assert_eq!(
+        rep.compiler_panics(),
+        0,
+        "the compiler panicked on {} case(s) ({:?}). A panic is an engine \
+         fault, not a coverage gap: route the fold through the coder's error \
+         channel with a kind, or fix the invariant.",
+        rep.compiler_panics(),
+        rep.compiler_panic_labels()
+    );
+
     // Observable divergences and stale engine-versioned pins remain failures.
     assert!(
         rep.met_bar() && rep.failures.is_empty(),

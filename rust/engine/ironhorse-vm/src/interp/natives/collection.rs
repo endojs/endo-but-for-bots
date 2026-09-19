@@ -797,6 +797,656 @@ impl Interp {
         self.call_any(code, return_method, iterator, &[])
     }
 
+    /// The lazy Iterator helpers' shared holder layout. A helper's
+    /// [`IterState::result`] names an internal Array whose items carry the
+    /// captured iterator record and per-helper state; an Array keeps the
+    /// otherwise arbitrary [`Slot`]s on the ordinary GC and snapshot paths
+    /// (the row's `result` edge marks the holder, and the holder's own items
+    /// are traced and persisted like any other array's) without minting
+    /// name-table ids for internal field names.
+    const HELPER_NEXT: u32 = 0;
+    /// The mapper/predicate (kinds 10, 11, 14) or the remaining count as a
+    /// number (kinds 12, 13).
+    const HELPER_ARG: u32 = 1;
+    /// `flatMap`'s live inner iterator, or `undefined` between inner runs.
+    const HELPER_INNER: u32 = 2;
+    /// `flatMap`'s live inner `next` method, or `undefined`.
+    const HELPER_INNER_NEXT: u32 = 3;
+
+    fn helper_get(&self, holder: crate::value::SlotIndex, index: u32) -> Slot {
+        self.arrays
+            .get(&holder)
+            .and_then(|data| data.items().get(&index).copied())
+            .unwrap_or_else(Slot::undefined)
+    }
+
+    fn helper_set(&mut self, holder: crate::value::SlotIndex, index: u32, value: Slot) {
+        if let Some(data) = self.arrays.get_mut(&holder) {
+            data.insert_item(index, value, &mut self.side_refs);
+        }
+    }
+
+    /// Latch a lazy helper completed and release everything it held. Every
+    /// exit that stops yielding — normal exhaustion, a throw out of the
+    /// underlying iterator, a throwing callback, `take`'s limit, and
+    /// `return()` — goes through here, so a later `next()` reports done
+    /// without touching the underlying iterator again.
+    ///
+    /// A completed generator's closure is unreachable, so EVERY edge it held
+    /// has to go, not just the callback. The captured `next` and the
+    /// underlying iterator are equally dead once `done` latches, because both
+    /// `next()` and `return()` short-circuit on `done` before reading either.
+    /// Releasing only some of them left a spent helper pinning its entire
+    /// source object graph for as long as anything referenced it — a cached
+    /// `.take(n)` view, a helper parked in a Map — and a snapshot wrote that
+    /// garbage out with it.
+    ///
+    /// `iterable` drops to NULL, which is not a new state for this table: a
+    /// live string cursor (kind 4) already carries one. The three restore
+    /// gates admit it for a row that is `done`, and only for such a row.
+    fn helper_finish(&mut self, helper: crate::value::SlotIndex) {
+        let holder = self.iterators.get(&helper).map(|state| state.result);
+        if let Some(holder) = holder {
+            // Empty the holder rather than writing `undefined` over each slot:
+            // a map/filter/take/drop helper only ever populated items 0 and 1,
+            // so overwriting all four GREW its item map on the way to being
+            // spent. `clear_items` drops every item's side reference and
+            // leaves nothing behind.
+            if let Some(data) = self.arrays.get_mut(&holder) {
+                data.clear_items(&mut self.side_refs);
+            }
+        }
+        if let Some(state) = self.iterators.get_mut(&helper) {
+            state.done = true;
+            state.iterable = crate::value::SlotIndex::NULL;
+        }
+    }
+
+    /// `CreateIterResultObject(value, done)`. Generator-backed helpers allocate
+    /// a fresh result on every `next()`, unlike the built-in cursors above,
+    /// which mutate and return one reused object.
+    fn helper_iter_result(&mut self, value: Slot, done: bool) -> Slot {
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
+        // Three `fxNewSlot`s, not one: `set_own_unmetered` allocates a slot
+        // per own property, so charging only for the instance undercharged
+        // every `next()` by two slot allocations. Named individually, the
+        // convention the collection constructors in this file already use.
+        self.meter.tick_slot_alloc(); // instance
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        self.meter.tick_slot_alloc(); // value
+        self.set_own_unmetered(result, value_id, value);
+        self.meter.tick_slot_alloc(); // done
+        self.set_own_unmetered(result, done_id, Slot::boolean(done));
+        Slot::of(Kind::Reference, Payload::Reference(result))
+    }
+
+    /// `IteratorStepValue(record)` over an explicit `(iterator, next)` pair.
+    /// `Ok(Ok(None))` is the exhausted step. A throw out of `next`, a
+    /// non-object step result, or a throwing `done`/`value` getter all
+    /// propagate WITHOUT calling `return`: the spec's IteratorStepValue sets
+    /// [[Done]] before returning the abrupt completion, so its caller's
+    /// IfAbruptCloseIterator finds a closed record and skips the close. This
+    /// function sets no latch itself — the caller latches the helper on the
+    /// way out — so the distinction it implements is only "do not close".
+    fn helper_step_value(
+        &mut self,
+        code: &[u8],
+        iterator: Slot,
+        next_method: Slot,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        if !self.is_callable_value(next_method) {
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
+        }
+        let step =
+            match self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))? {
+                Ok(step) => step,
+                Err(error) => return Ok(Err(error)),
+            };
+        let step_inst = match step.value {
+            Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+            _ => {
+                return Ok(Err(self.internal_error(
+                    "TypeError",
+                    "iterator result: not an object".into(),
+                )))
+            }
+        };
+        let done_id = self.intern_static_key("done");
+        let done = match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+            Ok(done) => done,
+            Err(error) => return Ok(Err(error)),
+        };
+        if self.truthy(&done) {
+            return Ok(Ok(None));
+        }
+        let value_id = self.intern_static_key("value");
+        let value =
+            match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+        Ok(Ok(Some(value)))
+    }
+
+    /// `GetIteratorFlattenable(value, reject-primitives)` followed by
+    /// GetIteratorDirect: returns the `(iterator, next)` pair `flatMap` drives.
+    /// A primitive — string included, since `flatMap` rejects primitives —
+    /// and a non-object `@@iterator` result are both TypeErrors.
+    fn helper_iterator_flattenable(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+    ) -> Result<Result<(Slot, Slot), Slot>, Step> {
+        let Payload::Reference(inst) = value.value else {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        };
+        if value.kind != Kind::Reference {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        }
+        // A halt, not a panic: this runs on a guest-driven `flatMap` step, and
+        // the two other engine invariants this path can raise are registered
+        // halts. The symbol is minted at boot, so neither can fire post-boot,
+        // but a guest-reachable frame should not be the one place that aborts
+        // the process instead of unwinding the crank.
+        let Some(iterator_id) = self.well_known_symbol_property_id("iterator") else {
+            return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-symbol")));
+        };
+        let method =
+            match self.array_from_try(|this| this.mop_get(code, inst, iterator_id, value))? {
+                Ok(method) => method,
+                Err(error) => return Ok(Err(error)),
+            };
+        let iterator = if matches!(method.kind, Kind::Undefined | Kind::Null) {
+            value
+        } else {
+            if !self.is_callable_value(method) {
+                return Ok(Err(
+                    self.internal_error("TypeError", "call: not a function".into())
+                ));
+            }
+            match self.array_from_try(|this| this.call_any(code, method, value, &[]))? {
+                Ok(iterator) => iterator,
+                Err(error) => return Ok(Err(error)),
+            }
+        };
+        let Payload::Reference(iterator_inst) = iterator.value else {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        };
+        if iterator.kind != Kind::Reference {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        }
+        let next_id = self.intern_static_key("next");
+        let next_method = match self
+            .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
+        {
+            Ok(next_method) => next_method,
+            Err(error) => return Ok(Err(error)),
+        };
+        Ok(Ok((iterator, next_method)))
+    }
+
+    /// Create one of the lazy Iterator helpers (`map`, `filter`, `take`,
+    /// `drop`, `flatMap`) behind a native try boundary. Like the eager helpers
+    /// below, these drive the PUBLIC direct-iterator protocol rather than
+    /// ironhorse's iterator side table, so a user iterator, a Proxy, an
+    /// accessor `next`, or an overridden built-in `next` all stay observable.
+    pub(in crate::interp) fn iterator_lazy_helper(
+        &mut self,
+        code: &[u8],
+        op: u8,
+        this: Slot,
+        base: usize,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_lazy_helper_inner(code, op, this, base)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    /// The shared creation steps. The operation ids follow `create_intrinsics`:
+    /// 0 map, 1 filter, 2 take, 3 drop, 4 flatMap; the stored `IterState.kind`
+    /// is the id plus ten.
+    fn iterator_lazy_helper_inner(
+        &mut self,
+        code: &[u8],
+        op: u8,
+        iterator: Slot,
+        base: usize,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let inst = match iterator.value {
+            Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+            _ => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "this: not an object".into())
+                ))
+            }
+        };
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+
+        // ES2025 builds the INCOMPLETE iterator record before validating the
+        // argument, so an argument fault closes the receiver — IteratorClose
+        // observes `return` — while `next` has not been read yet. The original
+        // error always wins over a fault from `return`.
+        let captured = match op {
+            0 | 1 | 4 => {
+                if !self.is_callable_value(arg0) {
+                    let error = self.internal_error(
+                        "TypeError",
+                        match op {
+                            1 => "predicate: not a function",
+                            _ => "mapper: not a function",
+                        }
+                        .into(),
+                    );
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+                arg0
+            }
+            2 | 3 => {
+                let limit = match self.array_from_try(|this| this.to_number_f64(code, arg0))? {
+                    Ok(limit) => limit,
+                    Err(error) => return Ok(Err(self.array_from_close(code, iterator, error)?)),
+                };
+                // NaN is rejected BEFORE ToIntegerOrInfinity, which would
+                // otherwise fold it to +0 and silently accept `take(NaN)`.
+                if limit.is_nan() {
+                    let error = self.internal_error("RangeError", "invalid count".into());
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+                // ToIntegerOrInfinity: truncate toward zero, keeping infinities.
+                // `-0.5` truncates to `-0`, which is NOT negative, so it is the
+                // accepted zero limit rather than a RangeError.
+                let limit = limit.trunc();
+                if limit < 0.0 {
+                    let error = self.internal_error("RangeError", "invalid count".into());
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+                Slot::number(if limit == 0.0 { 0.0 } else { limit })
+            }
+            _ => {
+                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+            }
+        };
+
+        // GetIteratorDirect. A throwing `next` getter propagates WITHOUT a
+        // close: the spec reaches it with a plain `?`, after the argument
+        // checks above have already had their chance to close.
+        let next_id = self.intern_static_key("next");
+        let next_method =
+            match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
+                Ok(next_method) => next_method,
+                Err(error) => return Ok(Err(error)),
+            };
+
+        self.meter.tick_builtin();
+        let holder = self.new_array();
+        if let Some(data) = self.arrays.get_mut(&holder) {
+            data.length = 4;
+        }
+        self.helper_set(holder, Self::HELPER_NEXT, next_method);
+        self.helper_set(holder, Self::HELPER_ARG, captured);
+        // `insert_item` charges nothing — its callers do. Every sibling that
+        // builds an array with items pays for the chunk (`toArray`, the
+        // collection-cursor entries pair, `flat_into`); without this the
+        // holder was the one array in the engine built with a length and
+        // items and charged for neither. Four slots, the fixed layout, so a
+        // later `flatMap` inner write cannot grow it.
+        self.charge_and_check(self.array_chunk_size_metering(4))?;
+        self.meter.tick_slot_alloc();
+        let helper = self.slots.alloc(Slot::instance(self.iterator_helper_proto));
+        self.iterators.insert(
+            helper,
+            IterState {
+                iterable: inst,
+                index: 0,
+                kind: op + 10,
+                // `generation` is the re-entrancy latch for these kinds, not a
+                // collection clear-generation. A snapshot is only taken at a
+                // quiescent point, where no helper is mid-step, so the row
+                // needs no field for it and restore's zero is always right.
+                generation: 0,
+                result: holder,
+                done: false,
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
+            },
+        );
+        Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(helper))))
+    }
+
+    /// Resolve the receiver of a `%IteratorHelperPrototype%` method to its
+    /// live helper state, enforcing the brand and the "already running"
+    /// re-entrancy refusal a generator-backed helper performs.
+    fn helper_receiver(
+        &mut self,
+        this: Slot,
+    ) -> Result<Result<(crate::value::SlotIndex, IterState), Slot>, Step> {
+        let Payload::Reference(helper) = this.value else {
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an iterator".into())
+            ));
+        };
+        if this.kind != Kind::Reference {
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an iterator".into())
+            ));
+        }
+        let Some(state) = self
+            .iterators
+            .get(&helper)
+            .filter(|state| (10..=14).contains(&state.kind))
+            .cloned()
+        else {
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an iterator".into())
+            ));
+        };
+        if state.generation != 0 {
+            // A generator-backed helper refuses a re-entrant request; a mapper
+            // that calls its own helper's `next()` lands here rather than
+            // corrupting the half-advanced state.
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: already running".into())
+            ));
+        }
+        Ok(Ok((helper, state)))
+    }
+
+    /// `%IteratorHelperPrototype%.next()`.
+    pub(in crate::interp) fn iterator_helper_next(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_helper_next_inner(code, this)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterator_helper_next_inner(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let (helper, state) = match self.helper_receiver(this)? {
+            Ok(pair) => pair,
+            Err(error) => return Ok(Err(error)),
+        };
+        if state.done {
+            let result = self.helper_iter_result(Slot::undefined(), true);
+            return Ok(Ok(result));
+        }
+        if let Some(live) = self.iterators.get_mut(&helper) {
+            live.generation = 1;
+        }
+        let stepped = self.iterator_helper_step(code, helper, &state);
+        // Clear the latch on EVERY exit, including a host halt: leaving it set
+        // would turn a recoverable halt into a permanently poisoned helper.
+        if let Some(live) = self.iterators.get_mut(&helper) {
+            live.generation = 0;
+        }
+        match stepped {
+            Ok(Ok(Some(value))) => {
+                let result = self.helper_iter_result(value, false);
+                Ok(Ok(result))
+            }
+            Ok(Ok(None)) => {
+                self.helper_finish(helper);
+                let result = self.helper_iter_result(Slot::undefined(), true);
+                Ok(Ok(result))
+            }
+            Ok(Err(error)) => {
+                self.helper_finish(helper);
+                Ok(Err(error))
+            }
+            Err(halt) => Err(halt),
+        }
+    }
+
+    /// Advance one lazy helper by a single yielded value. `Ok(Ok(None))` is
+    /// exhaustion; the caller latches the helper done for both that and a
+    /// throw.
+    fn iterator_helper_step(
+        &mut self,
+        code: &[u8],
+        helper: crate::value::SlotIndex,
+        state: &IterState,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        let holder = state.result;
+        let underlying = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        let next_method = self.helper_get(holder, Self::HELPER_NEXT);
+
+        match state.kind {
+            // take: the limit is consumed BEFORE the underlying step, and
+            // reaching zero closes the underlying iterator with a NORMAL
+            // completion — a fault from that `return` is the helper's throw.
+            12 => {
+                let remaining = to_number(&self.helper_get(holder, Self::HELPER_ARG));
+                if remaining <= 0.0 {
+                    return match self.iterator_close_normal(code, underlying, Slot::undefined())? {
+                        Ok(_) => Ok(Ok(None)),
+                        Err(error) => Ok(Err(error)),
+                    };
+                }
+                if remaining.is_finite() {
+                    self.helper_set(holder, Self::HELPER_ARG, Slot::number(remaining - 1.0));
+                }
+                self.helper_step_value(code, underlying, next_method)
+            }
+            // drop: discard the prefix, then mirror the underlying iterator.
+            13 => {
+                let mut remaining = to_number(&self.helper_get(holder, Self::HELPER_ARG));
+                // Bounded like the map/filter and flatMap arms. `drop(Infinity)`
+                // over an endless iterator never decrements, so without this the
+                // prefix loop's only exits are exhaustion, a throw, or whatever
+                // the meter reaches first — the one lazy arm relying on that.
+                let mut budget = 1_000_000u64;
+                while remaining > 0.0 {
+                    budget = match budget.checked_sub(1) {
+                        Some(left) => left,
+                        None => return Err(Step::Host(Halt::StepLimit(self.n_dispatched))),
+                    };
+                    if remaining.is_finite() {
+                        remaining -= 1.0;
+                        // Write the decrement back before stepping, so a throw
+                        // out of the underlying iterator cannot leave the
+                        // prefix waiting to be dropped a second time.
+                        self.helper_set(holder, Self::HELPER_ARG, Slot::number(remaining));
+                    }
+                    match self.helper_step_value(code, underlying, next_method)? {
+                        Ok(Some(_)) => {}
+                        Ok(None) => return Ok(Ok(None)),
+                        Err(error) => return Ok(Err(error)),
+                    }
+                }
+                self.helper_step_value(code, underlying, next_method)
+            }
+            // flatMap: drain the live inner iterator first, then take the next
+            // outer value and flatten it.
+            14 => self.iterator_helper_flat_map_step(code, helper, holder, underlying, next_method),
+            // map and filter.
+            kind @ (10 | 11) => {
+                let callback = self.helper_get(holder, Self::HELPER_ARG);
+                for _ in 0..1_000_000u64 {
+                    let value = match self.helper_step_value(code, underlying, next_method)? {
+                        Ok(Some(value)) => value,
+                        Ok(None) => return Ok(Ok(None)),
+                        Err(error) => return Ok(Err(error)),
+                    };
+                    let counter = self.helper_counter(helper);
+                    let args = [value, Slot::number(counter)];
+                    let produced = match self.array_from_try(|this| {
+                        this.call_any(code, callback, Slot::undefined(), &args)
+                    })? {
+                        Ok(produced) => produced,
+                        Err(error) => {
+                            return Ok(Err(self.array_from_close(code, underlying, error)?))
+                        }
+                    };
+                    if kind == 10 {
+                        return Ok(Ok(Some(produced)));
+                    }
+                    if self.truthy(&produced) {
+                        return Ok(Ok(Some(value)));
+                    }
+                }
+                Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+            }
+            _ => Err(Step::Host(Halt::EngineInvariant("Iterator:helper-kind"))),
+        }
+    }
+
+    /// Read the helper's callback counter and post-increment it.
+    ///
+    /// The counter saturates rather than wrapping, so the argument can never
+    /// silently restart at zero. Saturation is not, however, unreachable: the
+    /// counter is the PERSISTED `IteratorRow::index`, and the dispatch step
+    /// limit resets every crank, so a helper that survives enough resumes is
+    /// bounded by nothing. At `u32::MAX` the index sticks there instead of
+    /// continuing, where the spec's is unbounded — a divergence, but a
+    /// contained and monotonic one, and widening it is a row-schema change.
+    fn helper_counter(&mut self, helper: crate::value::SlotIndex) -> f64 {
+        let Some(state) = self.iterators.get_mut(&helper) else {
+            return 0.0;
+        };
+        let counter = state.index;
+        state.index = state.index.saturating_add(1);
+        counter as f64
+    }
+
+    /// One `flatMap` step. The inner iterator lives in the holder across
+    /// `next()` calls, so a partially drained inner survives; an abrupt inner
+    /// step closes the OUTER iterator, matching IfAbruptCloseIterator on the
+    /// outer record in the spec's closure.
+    fn iterator_helper_flat_map_step(
+        &mut self,
+        code: &[u8],
+        helper: crate::value::SlotIndex,
+        holder: crate::value::SlotIndex,
+        underlying: Slot,
+        next_method: Slot,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        for _ in 0..1_000_000u64 {
+            let inner = self.helper_get(holder, Self::HELPER_INNER);
+            if inner.kind == Kind::Reference {
+                let inner_next = self.helper_get(holder, Self::HELPER_INNER_NEXT);
+                match self.helper_step_value(code, inner, inner_next)? {
+                    Ok(Some(value)) => return Ok(Ok(Some(value))),
+                    Ok(None) => {
+                        self.helper_set(holder, Self::HELPER_INNER, Slot::undefined());
+                        self.helper_set(holder, Self::HELPER_INNER_NEXT, Slot::undefined());
+                    }
+                    Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
+                }
+                continue;
+            }
+            let value = match self.helper_step_value(code, underlying, next_method)? {
+                Ok(Some(value)) => value,
+                Ok(None) => return Ok(Ok(None)),
+                Err(error) => return Ok(Err(error)),
+            };
+            let callback = self.helper_get(holder, Self::HELPER_ARG);
+            let counter = self.helper_counter(helper);
+            let args = [value, Slot::number(counter)];
+            let mapped = match self
+                .array_from_try(|this| this.call_any(code, callback, Slot::undefined(), &args))?
+            {
+                Ok(mapped) => mapped,
+                Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
+            };
+            let (inner, inner_next) = match self.helper_iterator_flattenable(code, mapped)? {
+                Ok(pair) => pair,
+                Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
+            };
+            self.helper_set(holder, Self::HELPER_INNER, inner);
+            self.helper_set(holder, Self::HELPER_INNER_NEXT, inner_next);
+        }
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+    }
+
+    /// `%IteratorHelperPrototype%.return()`: the return completion the spec
+    /// delivers to the closure's suspended `Yield`, whose
+    /// IfAbruptCloseIterator closes the underlying iterator. A `flatMap` with
+    /// a live inner iterator closes the inner one first.
+    pub(in crate::interp) fn iterator_helper_return(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_helper_return_inner(code, this)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterator_helper_return_inner(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let (helper, state) = match self.helper_receiver(this)? {
+            Ok(pair) => pair,
+            Err(error) => return Ok(Err(error)),
+        };
+        if state.done {
+            let result = self.helper_iter_result(Slot::undefined(), true);
+            return Ok(Ok(result));
+        }
+        // Read the live inner iterator BEFORE latching: `helper_finish` clears
+        // the holder, and a `flatMap` suspended inside an inner iterator must
+        // still close that inner one.
+        let inner = self.helper_get(state.result, Self::HELPER_INNER);
+        // Latch before closing: a `return` method that reaches back into this
+        // helper must see a completed one, and the closes must not run twice.
+        self.helper_finish(helper);
+        let underlying = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        if inner.kind == Kind::Reference {
+            if let Err(error) = self.iterator_close_normal(code, inner, Slot::undefined())? {
+                // IfAbruptCloseIterator(backupCompletion, iterated): a FAILING
+                // inner close still closes the outer iterator, and the inner's
+                // error stays the winner. Returning here instead leaked the
+                // outer iterator whenever an inner `return` misbehaved — a
+                // generator's `finally` would never run.
+                return Ok(Err(self.array_from_close(code, underlying, error)?));
+            }
+        }
+        match self.iterator_close_normal(code, underlying, Slot::undefined())? {
+            Ok(_) => {
+                let result = self.helper_iter_result(Slot::undefined(), true);
+                Ok(Ok(result))
+            }
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
     /// Invoke one of the eager Iterator helpers (`reduce`, `toArray`,
     /// `forEach`, `some`, `every`, or `find`) behind a native try boundary.
     /// Their shared implementation below drives the public direct-iterator

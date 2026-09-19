@@ -539,17 +539,16 @@ impl Interp {
         if self.intrinsics.contains_key("$262") {
             return Some("a test262 `$262` host object, which no snapshot carries");
         }
-        // A pending reaction whose KIND names an `Array.fromAsync` step
-        // points at `from_async` state the image does not carry. Every
-        // such in-flight accumulation is anchored by exactly one
-        // `FromAsync*` reaction on a live promise — an unanchored entry is
-        // unreachable and compacted away — so refusing by kind here is the
-        // whole gate for that satellite, checked before the doomed-set
-        // early return below because it is independent of function slots.
-        // Async functions carry their frames in ASYN, and async generators
-        // their instances beside them, so the `AsyncAwait` and
-        // `AsyncGenerator*` kinds resume. The side tables are walked in
-        // full in both variants, as below.
+        // Every reaction kind now names state some atom carries, so this
+        // refuses only a kind that does not (architecture finding F127
+        // closed the last of them). Async functions carry their frames in
+        // `ASYN`, async generators their instances beside them, and the
+        // `Array.fromAsync` accumulations follow those — so the
+        // `AsyncAwait`, `AsyncGenerator*` and `FromAsync*` kinds all resume.
+        // The check stays, rather than becoming unreachable code: a new
+        // reaction kind added without a carry must be refused here rather
+        // than resumed against state nothing wrote. The side tables are
+        // walked in full in both variants, as below.
         let async_reaction = self
             .promises
             .values()
@@ -566,6 +565,10 @@ impl Interp {
                         | ReactionKind::AsyncGeneratorAwait(_)
                         | ReactionKind::AsyncGeneratorYield(_)
                         | ReactionKind::AsyncGeneratorReturn(_)
+                        | ReactionKind::FromAsyncNext(_)
+                        | ReactionKind::FromAsyncElem(_)
+                        | ReactionKind::FromAsyncMap(_)
+                        | ReactionKind::FromAsyncClose(_)
                         | ReactionKind::FinallyReturn
                         | ReactionKind::FinallyAwait(_)
                         | ReactionKind::Combine(_, _)
@@ -2435,6 +2438,9 @@ impl Interp {
             .collect();
         let live_comb: std::collections::BTreeSet<u32> =
             self.snapshot_combinator_map().into_keys().collect();
+        let fa_map: std::collections::HashMap<u32, u32> =
+            self.snapshot_from_async_map().into_iter().collect();
+        let live_from_async: std::collections::BTreeSet<u32> = fa_map.keys().copied().collect();
         let guard_map: std::collections::HashMap<usize, u32> = live_guards
             .iter()
             .enumerate()
@@ -2540,10 +2546,14 @@ impl Interp {
                                 ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
                                 ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
                                 ReactionKind::AsyncGeneratorReturn(i) => (6, i.0, 0),
-                                ReactionKind::FromAsyncNext(fa) => (7, fa, 0),
-                                ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
-                                ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
-                                ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
+                                // Remapped onto the compacted arena, exactly as
+                                // `Combine` is: the writer emits live entries
+                                // densely, so a raw index would point at the
+                                // wrong row (architecture finding F127).
+                                ReactionKind::FromAsyncNext(fa) => (7, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncElem(fa) => (8, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncMap(fa) => (9, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncClose(fa) => (10, fa_map[&fa], 0),
                                 ReactionKind::FinallyAwait(rejected) => (11, rejected as u32, 0),
                             };
                             PromiseReactionRow {
@@ -2593,6 +2603,39 @@ impl Interp {
                         reject: c.reject,
                         remaining: c.remaining,
                         results: c.results.0,
+                    }
+                })
+                .collect(),
+            from_async: live_from_async
+                .iter()
+                .map(|&old| {
+                    let f = &self.from_async[old as usize];
+                    let mut flags = 0u8;
+                    if f.target_is_array {
+                        flags |= FromAsyncRow::TARGET_IS_ARRAY;
+                    }
+                    if f.mapping {
+                        flags |= FromAsyncRow::MAPPING;
+                    }
+                    if f.settled {
+                        flags |= FromAsyncRow::SETTLED;
+                    }
+                    if f.sync_wrapped {
+                        flags |= FromAsyncRow::SYNC_WRAPPED;
+                    }
+                    FromAsyncRow {
+                        resolve: f.resolve,
+                        reject: f.reject,
+                        target: f.target.0,
+                        k: f.k,
+                        len: f.len,
+                        mapfn: f.mapfn,
+                        this_arg: f.this_arg,
+                        iterator: f.iterator,
+                        next_method: f.next_method,
+                        array_like: f.array_like,
+                        close_error: f.close_error,
+                        flags,
                     }
                 })
                 .collect(),
@@ -2832,9 +2875,25 @@ impl Interp {
                             comb_pending[r.a as usize] += 1;
                             ReactionKind::CombineDirect(r.a, r.b)
                         }
-                        // The `FromAsync*` kinds name machinery no atom
-                        // carries; the decoder refuses them and so does
-                        // this verb — as it does the crafted shapes above.
+                        // The four `Array.fromAsync` steps, carried in `ASYN`
+                        // since format 24 (architecture finding F127). Each
+                        // indexes the accumulation arena and, like the other
+                        // native reactions, carries no callback slots — a row
+                        // that carries any is crafted.
+                        7..=10
+                            if (r.a as usize) < snap.from_async.len()
+                                && r.b == 0
+                                && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                    .iter()
+                                    .all(|slot| slot.kind == Kind::Undefined) =>
+                        {
+                            match r.kind {
+                                7 => ReactionKind::FromAsyncNext(r.a),
+                                8 => ReactionKind::FromAsyncElem(r.a),
+                                9 => ReactionKind::FromAsyncMap(r.a),
+                                _ => ReactionKind::FromAsyncClose(r.a),
+                            }
+                        }
                         _ => return None,
                     };
                     Some(PromiseReaction {
@@ -3124,6 +3183,31 @@ impl Interp {
                 results: crate::value::SlotIndex(c.results),
             })
             .collect();
+        // The `Array.fromAsync` arena, restored densely in the order the
+        // writer compacted it, so the remapped reaction payloads index it
+        // (architecture finding F127). Rebuilding it EMPTY was sound only
+        // while the persist gate refused every machine holding one.
+        *self.from_async = snap
+            .from_async
+            .iter()
+            .map(|f| FromAsyncData {
+                resolve: f.resolve,
+                reject: f.reject,
+                target: crate::value::SlotIndex(f.target),
+                target_is_array: f.has(FromAsyncRow::TARGET_IS_ARRAY),
+                k: f.k,
+                mapfn: f.mapfn,
+                mapping: f.has(FromAsyncRow::MAPPING),
+                this_arg: f.this_arg,
+                settled: f.has(FromAsyncRow::SETTLED),
+                iterator: f.iterator,
+                next_method: f.next_method,
+                sync_wrapped: f.has(FromAsyncRow::SYNC_WRAPPED),
+                array_like: f.array_like,
+                len: f.len,
+                close_error: f.close_error,
+            })
+            .collect();
         Ok(())
     }
 
@@ -3149,6 +3233,18 @@ impl Interp {
                     ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                         self.combinators.get(ci as usize).is_some_and(|c| {
                             self.is_callable_value(c.resolve) && self.is_callable_value(c.reject)
+                        })
+                    }
+                    // The same shape for the `Array.fromAsync` arena: the
+                    // reaction indexes a row, and that row's result
+                    // capability must be callable or the next step settles
+                    // nothing (architecture finding F127).
+                    ReactionKind::FromAsyncNext(fa)
+                    | ReactionKind::FromAsyncElem(fa)
+                    | ReactionKind::FromAsyncMap(fa)
+                    | ReactionKind::FromAsyncClose(fa) => {
+                        self.from_async.get(fa as usize).is_some_and(|f| {
+                            self.is_callable_value(f.resolve) && self.is_callable_value(f.reject)
                         })
                     }
                     _ => true,
@@ -3195,6 +3291,40 @@ impl Interp {
                 }
             }
         }
+        // The `Array.fromAsync` flags that make a CLAIM ABOUT ANOTHER TABLE,
+        // checked here because that is where every table is in place
+        // (architecture finding F127). A carried flag is a claim, not
+        // evidence, and each of these two decides a branch that assumes its
+        // own table agrees:
+        //
+        // `target_is_array` sends the accumulator through the dense store,
+        // which unwraps `self.arrays` — so a bit set over a non-Array target
+        // is an engine panic on the next crank, reachable from one flipped
+        // byte in a store. It is DERIVED at both mint sites
+        // (`self.arrays.contains_key(&target)`), so the honest value is
+        // recomputable and a disagreement is corruption by definition.
+        //
+        // `sync_wrapped` says the iterator is a sync one wrapped as async,
+        // which decides whether a step's result is awaited or read directly.
+        // Set over a genuinely async iterator, the resumed accumulation reads
+        // a promise as a `{value, done}` step and walks forever until the
+        // meter stops it. That one is not derivable from the row, so the
+        // check is the weaker one it admits: a flag about an iterator is
+        // nonsense without an iterator, which the decoder already refuses —
+        // this is the in-memory twin of that rule, for the store path.
+        //
+        // The third clause is the in-memory twin of a rule the container
+        // decoder already enforces: an iterator with no `next` method has
+        // nothing to step, so the accumulation's result promise would never
+        // settle. The store path does not run that decoder, and a silent
+        // permanent stall is the one outcome worse than a refusal, so the
+        // rule is stated on both sides rather than on the container alone.
+        let from_async_valid = self.from_async.iter().all(|f| {
+            let iterated = f.iterator.kind == Kind::Reference;
+            f.target_is_array == self.arrays.contains_key(&f.target)
+                && (!f.sync_wrapped || iterated)
+                && (!iterated || f.next_method.kind == Kind::Reference)
+        });
         // A request's capability is an ordinary resolving pair whose
         // promise is the request's own result promise; the awaited
         // promise an active request waits on may be unreachable (a
@@ -3221,7 +3351,7 @@ impl Interp {
                     .as_ref()
                     .is_none_or(|f| self.functions.contains_key(&f.cur_func))
         });
-        reactions_valid && generators_valid && self.async_instances.iter().all(|(owner, a)| {
+        reactions_valid && generators_valid && from_async_valid && self.async_instances.iter().all(|(owner, a)| {
             let function = |slot: Slot| match slot.value {
                 Payload::Reference(f) => self.promise_functions.get(&f),
                 _ => None,
@@ -3553,7 +3683,9 @@ impl Interp {
     /// instance with no restored collection (its `next()` indexes the
     /// table unconditionally) or a cursor past the live-entry list, a
     /// string cursor past its text or splitting a UTF-16 unit, or a
-    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, or
+    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, a
+    /// lazy Iterator helper missing its underlying iterator or its holder
+    /// array, or
     /// a for-in cursor past its key list or holding a key id outside the
     /// restored name table.
     pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
@@ -3583,13 +3715,39 @@ impl Interp {
         }
 
         for r in &rows {
-            if r.kind > 9 {
+            if r.kind > 14 {
                 return Err(RestoreError {
                     row: ROW,
                     reason: "malformed iterator state",
                 });
             }
             match r.kind {
+                // The five lazy Iterator helpers. `iterable` is the underlying
+                // iterator and `result` the holder array carrying the captured
+                // `next`, the mapper/predicate or remaining count, and
+                // flatMap's live inner iterator; `index` is the callback
+                // counter and `done` the exhaustion latch, both unconstrained.
+                // The re-entrancy latch rides `generation`, which the row does
+                // not carry: a snapshot is only taken at a quiescent point,
+                // where no helper is mid-step, so restore's zero is always the
+                // live value.
+                10..=14 => {
+                    // A spent helper has released its underlying iterator, so
+                    // `iterable` is NULL on a DONE row and must not be on one
+                    // that can still yield. The holder array survives either
+                    // way, emptied by `helper_finish`.
+                    if (!r.done && r.iterable == crate::value::SlotIndex::NULL.0)
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || !r.enum_keys.is_empty()
+                        || !r.str_bytes.is_empty()
+                        || !self.arrays.contains_key(&crate::value::SlotIndex(r.result))
+                    {
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
+                    }
+                }
                 5..=7 => {
                     let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable)) else {
                         return Err(RestoreError {

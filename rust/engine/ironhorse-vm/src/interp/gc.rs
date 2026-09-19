@@ -239,8 +239,8 @@ impl Interp {
             .filter(|(i, _)| live_comb.contains(&(*i as u32)))
             .map(|(_, e)| e)
             .collect();
-        let old = std::mem::take(&mut self.from_async);
-        self.from_async = old
+        let old = self.from_async.take();
+        *self.from_async = old
             .into_iter()
             .enumerate()
             .filter(|(i, _)| live_fa.contains(&(*i as u32)))

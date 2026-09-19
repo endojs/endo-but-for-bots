@@ -983,6 +983,13 @@ pub enum NativeMethod {
     /// `set Iterator.prototype[Symbol.toStringTag]`: the symbol-keyed instance
     /// of `SetterThatIgnoresPrototypeProperties`.
     IteratorToStringTagSetter,
+    /// `%IteratorHelperPrototype%.next()`: advance the lazy helper named by
+    /// the receiver's [`IterState`] kind (10 map, 11 filter, 12 take, 13 drop,
+    /// 14 flatMap).
+    IteratorHelperNext,
+    /// `%IteratorHelperPrototype%.return()`: close the underlying iterator and
+    /// latch the helper done, returning `{ value: undefined, done: true }`.
+    IteratorHelperReturn,
     /// One of the Iterator Helper prototype methods, indexed in the order
     /// installed by `create_intrinsics`.
     IteratorHelper(u8),

@@ -264,6 +264,17 @@ pub(super) fn cesu8_to_units(bytes: &[u8]) -> Vec<u16> {
                 | (((bytes[i + 1] & 0x3F) as u32) << 12)
                 | (((bytes[i + 2] & 0x3F) as u32) << 6)
                 | (bytes[i + 3] & 0x3F) as u32;
+            // Only a value in the astral range has a surrogate pair. Two
+            // shapes reach here without one, neither of which the compiler
+            // emits: an OVERLONG sequence (`F0 80 80 80` is zero, and
+            // `cp - 0x10000` would wrap), and a lead byte above `F4` —
+            // including `F8..FF`, which is not a UTF-8 lead at all and whose
+            // low three bits this mask silently accepts — carrying `cp` past
+            // `0x10FFFF`. Both are a malformed tail, which this decoder drops
+            // exactly as it drops a truncated one above.
+            if !(0x10000..=0x10FFFF).contains(&cp) {
+                break;
+            }
             // A genuine astral scalar → its surrogate pair (two code units).
             let v = cp - 0x10000;
             units.push((0xD800 + (v >> 10)) as u16);
@@ -296,4 +307,56 @@ pub(super) fn is_ecma_whitespace(c: u32) -> bool {
 
 pub(super) fn trim_ecma_whitespace(source: &str) -> &str {
     source.trim_matches(|c: char| is_ecma_whitespace(c as u32))
+}
+
+#[cfg(test)]
+mod cesu8_decoder {
+    use super::cesu8_to_units;
+
+    /// The decoder's contract on the 4-byte branch, which is the one shape
+    /// the XS compiler never emits and a crafted bytecode operand can.
+    ///
+    /// Found by the `bytecode_decoder` fuzz target: `F0 80 80 80` decodes to
+    /// zero, and the surrogate-pair arithmetic subtracted `0x10000` from it,
+    /// which panics under this workspace's `overflow-checks = true` release
+    /// profile — an engine abort reachable from bytes, which is precisely
+    /// what the tripwire lane exists to catch.
+    #[test]
+    fn a_malformed_four_byte_sequence_is_dropped_not_wrapped() {
+        // Overlong: the lead promises four bytes for a value of zero.
+        assert_eq!(cesu8_to_units(&[0xF0, 0x80, 0x80, 0x80]), Vec::<u16>::new());
+        // Past the Unicode range: `F7 BF BF BF` is 0x1FFFFF.
+        assert_eq!(cesu8_to_units(&[0xF7, 0xBF, 0xBF, 0xBF]), Vec::<u16>::new());
+        // Not a UTF-8 lead byte at all; the `& 0x07` mask accepts its low
+        // bits, so only the range check refuses it.
+        assert_eq!(cesu8_to_units(&[0xFF, 0xBF, 0xBF, 0xBF]), Vec::<u16>::new());
+        // A malformed tail drops only the tail, exactly as a truncated one
+        // does: what precedes it still decodes.
+        assert_eq!(
+            cesu8_to_units(&[b'a', b'b', 0xF0, 0x80, 0x80, 0x80]),
+            vec![0x61, 0x62]
+        );
+    }
+
+    /// The branch still does its job: a genuine astral scalar becomes its
+    /// surrogate pair, at both ends of the range.
+    #[test]
+    fn a_genuine_astral_scalar_still_becomes_its_surrogate_pair() {
+        // U+10000, the first astral scalar.
+        assert_eq!(
+            cesu8_to_units(&[0xF0, 0x90, 0x80, 0x80]),
+            vec![0xD800, 0xDC00]
+        );
+        // U+10FFFF, the last one.
+        assert_eq!(
+            cesu8_to_units(&[0xF4, 0x8F, 0xBF, 0xBF]),
+            vec![0xDBFF, 0xDFFF]
+        );
+        // U+1F600, and a CESU-8 surrogate half beside it to show the two
+        // encodings coexist in one operand.
+        assert_eq!(
+            cesu8_to_units(&[0xF0, 0x9F, 0x98, 0x80, 0xED, 0xA0, 0x80]),
+            vec![0xD83D, 0xDE00, 0xD800]
+        );
+    }
 }

@@ -8,14 +8,22 @@
 /// front end ([`ironhorse_compile`]) — the same compiler the top-level
 /// program rides — so an eval'd source is held to the identical pipeline.
 ///
-/// Total over the coder's panics (`catch_unwind`): a deferred coder path
-/// becomes an honest [`ironhorse_vm::SourceCompileError::Unsupported`]
-/// (a coverage gap the VM surfaces as `Halt::NotImplemented`), never a harness
-/// crash. A structured parse reject splits on its kind by its kind: an `Unsupported` parse (an unported-but-valid
-/// construct) is a coverage gap. Meter refusal becomes an uncatchable
-/// `MeterAbort`; other rejects become realm-local, catchable `SyntaxError`s.
-/// Charges reach the live VM before each work step, and a shared receipt
-/// survives this compiler's unwind boundary.
+/// Total over the coder's panics (`catch_unwind`), and the two reasons a
+/// compile can fail to produce bytecode are kept apart (architecture finding
+/// F063). A structured parse reject whose kind is `Unsupported` — a valid
+/// construct this compiler has not ported — is a coverage gap, and becomes
+/// [`ironhorse_vm::SourceCompileError::Unsupported`], which the VM surfaces as
+/// an uncatchable, self-naming `Halt::NotImplemented`. A *caught panic* is not
+/// that: it is the compiler breaking its own invariant, and it becomes
+/// [`ironhorse_vm::SourceCompileError::Invariant`], which the VM surfaces as
+/// `Halt::EngineInvariant("eval:compiler-invariant")`. Until this distinction
+/// existed both arrived as `Unsupported`, so a guest-triggerable compiler fault
+/// was indistinguishable from an honest coverage gap — in the harness's
+/// accounting and in the `NotImplemented` label the guest saw.
+///
+/// Meter refusal becomes an uncatchable `MeterAbort`; other rejects become
+/// realm-local, catchable `SyntaxError`s. Charges reach the live VM before each
+/// work step, and a shared receipt survives this compiler's unwind boundary.
 pub struct IronhorseSourceCompiler;
 
 impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
@@ -64,9 +72,12 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
                     _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
                 }
             }
-            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
-                panic_message(payload.as_ref()),
-            )),
+            // A caught panic is an engine fault, not a coverage gap. See the
+            // type's doc comment: sharing `Unsupported` with an unported
+            // construct is precisely what F063 reported.
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Invariant(panic_message(
+                payload.as_ref(),
+            ))),
         }
     }
 
@@ -120,9 +131,12 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
                     _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
                 }
             }
-            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
-                panic_message(payload.as_ref()),
-            )),
+            // A caught panic is an engine fault, not a coverage gap. See the
+            // type's doc comment: sharing `Unsupported` with an unported
+            // construct is precisely what F063 reported.
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Invariant(panic_message(
+                payload.as_ref(),
+            ))),
         }
     }
 }

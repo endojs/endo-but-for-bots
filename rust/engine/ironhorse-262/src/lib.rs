@@ -186,16 +186,17 @@ pub enum IronhorseCompile {
     /// ironhorse-compile returned a structured error whose kind is
     /// [`ironhorse_compile::parser::ParseErrorKind::Unsupported`] — the front
     /// end declined a construct that is *valid JS but not yet ported*, not a
-    /// spec early error. This is an Ironhorse compiler coverage gap (grouped
-    /// with [`Self::Panicked`] as `compiler-unimplemented:<phase>`), never a
-    /// covered early error. The string is the rendered `ParseError`.
+    /// spec early error. This is an Ironhorse compiler coverage gap
+    /// (`compiler-unimplemented:<phase>`), never a covered early error. The
+    /// string is the rendered `ParseError`.
     Unsupported(String),
-    /// ironhorse-compile **panicked** — it reached a deferred/unimplemented
-    /// coder path (e.g. `static block with lexical declarations deferred`) and
-    /// folded rather than emitting bytecode. This is an Ironhorse *compiler
-    /// coverage gap*, not a covered early error and not a verdict; the string is
-    /// the panic message (a gap label). Distinct from [`Self::Rejected`] (a
-    /// clean SyntaxError) so a crash is never miscounted as a correct rejection.
+    /// ironhorse-compile **panicked** — the compiler violated its own
+    /// invariant. This is an engine FAULT, filed as a `Fail` named
+    /// `compiler-panicked:<phase>`; the string is the panic message. It shared
+    /// `compiler-unimplemented:<phase>` with [`Self::Unsupported`] until F063,
+    /// which made an engine fault read as an honest coverage gap. Distinct
+    /// from [`Self::Rejected`] (a clean SyntaxError) so a crash is never
+    /// miscounted as a correct rejection.
     Panicked(String),
 }
 
@@ -382,10 +383,11 @@ fn compile_for(
                     };
                     (Vec::new(), Vec::new(), signal)
                 }
-                // A coder fold / panic: ironhorse-compile reached a deferred
-                // path. Empty bytecode, and the panic payload becomes a compiler
-                // coverage-gap label — distinct from a clean rejection so a crash
-                // is never miscounted as a correct SyntaxError.
+                // ironhorse-compile PANICKED. Empty bytecode, and the panic
+                // payload becomes an engine-fault label — distinct both from a
+                // clean rejection (so a crash is never miscounted as a correct
+                // SyntaxError) and from a structured `Unsupported` (so a fault
+                // is never miscounted as honest missing coverage).
                 Err(payload) => (
                     Vec::new(),
                     Vec::new(),
@@ -624,7 +626,12 @@ fn run_compiled_script(
         match interp.relink_crank(bytecode, &names) {
             Ok(code) => {
                 return if pump_jobs {
-                    interp.run(&code).host_coerced()
+                    // The SUBJECT case: an escaping thrown value is rendered by
+                    // running the guest's `toString`, because the oracle side of
+                    // this comparison is `xs_shim.c`'s `endor_error_from_exception`
+                    // doing exactly that. The engine's ordinary boundary stays
+                    // guest-free and keeps its meter- and heap-ceiling guarantees.
+                    interp.run_rendering_throws_in_guest(&code).host_coerced()
                 } else {
                     // Setup sources end in undefined, so coercion cannot invoke
                     // a guest callback between setup and the subject.

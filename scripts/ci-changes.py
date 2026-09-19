@@ -22,7 +22,8 @@ JOBS = (
     "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
     "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
-    "test-ironhorse-oracle", "oracle-sanitizers", "test-ocapn-python",
+    "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
+    "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
 )
@@ -35,13 +36,20 @@ JS_JOBS = {
 RUST_JOBS = {
     "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
-    "test-ironhorse-oracle", "oracle-sanitizers", "build-wasm",
+    "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
+    "build-wasm",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
     ".github/workflows/ocapn-guile-interop.yml": {"guile-interop"},
     ".github/workflows/depcheck.yml": {"depcheck"},
     ".github/workflows/ironhorse-sanitizers.yml": {"oracle-sanitizers"},
+    # The one entry whose job lives in a DIFFERENT file. The deep-fuzz
+    # workflow and ci.yml's fuzz-ironhorse tripwire share a roster shell
+    # and a corpus cache family, so editing one is a reason to run the
+    # other; every sibling entry above maps a workflow to the job it
+    # defines.
+    ".github/workflows/ironhorse-deep-fuzz.yml": {"fuzz-ironhorse"},
 }
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
@@ -270,6 +278,11 @@ def classify(paths, graphs, all_jobs=False):
         jobs["oracle-sanitizers"] |= bool(crates & {
             "xs-oracle", "ironhorse-compile", "ironhorse-regexp", "ironhorse-262", "ironhorse-fuzz",
         })
+        # The pull-request fuzz tripwire. Same reach as the deep lane it
+        # guards: any engine crate can move a fuzz target's subject.
+        jobs["fuzz-ironhorse"] |= any(
+            n.startswith("rust:rust/engine/") for n in rust_affected
+        )
         jobs["build-wasm"] |= "ocapn_noise_protocol_facilities" in crates
 
     for path in paths:

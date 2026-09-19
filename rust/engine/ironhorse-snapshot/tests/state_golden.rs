@@ -221,17 +221,48 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     assert_eq!(labels.len(), 16);
 }
 
+/// Both async shapes that once refused a snapshot now write one, and what
+/// they write reads back. The `Array.fromAsync` arm is the last of them
+/// (format 24, architecture finding F127's last clause); before it, a machine
+/// holding one refused with `PendingStateUnsupported`.
+///
+/// This lives beside the golden corpus rather than in the carry suite because
+/// it is the assertion that the corpus's own gate — `write_snapshot`, not the
+/// container reader — admits these machines at all.
 #[test]
-fn async_generator_state_writes_and_a_from_async_step_remains_an_explicit_refusal() {
-    let machine = fresh("async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0");
-    assert!(machine
-        .write_snapshot(&Signature::new("w4-determinism-corpus"))
-        .is_ok());
-    let machine = fresh("var p = Array.fromAsync([new Promise(function () {})]); 0");
+fn both_async_generator_and_from_async_state_now_write_and_read_back() {
+    let sig = Signature::new("w4-determinism-corpus");
+    for source in [
+        "async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0",
+        "var p = Array.fromAsync([new Promise(function () {})]); 0",
+    ] {
+        let machine = fresh(source);
+        let bytes = machine
+            .write_snapshot(&sig)
+            .unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        from_snapshot_bytes(&bytes, &sig).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+    }
+    // The control must guard the SAME gate the two arms above used to trip.
+    // A quiescence control does not: it lives on a different branch of
+    // `write_snapshot`, so the whole pending-row gate could be deleted and
+    // this test would stay green while claiming otherwise. The `$262` host is
+    // a quiescent machine that the PENDING-ROW gate still refuses, which is
+    // the branch that has to remain live for the admissions to mean anything.
+    let (code, names) = ironhorse_compile::compile_atoms("var x = 0; x = 41; x").unwrap();
+    let mut machine = Interp::new();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    machine.install_test262_host();
+    machine.link_intrinsics(&parse_symbols(&names));
+    assert!(machine.run(&code).completed);
     assert!(
-        matches!(machine.write_snapshot(&Signature::new("w4-determinism-corpus")),
-        Err(MachineSnapshotError::PendingStateUnsupported { row }) if row == "a promise reaction that would resume a non-persisted async frame")
+        machine.is_quiescent(),
+        "the refusal must not be quiescence's"
     );
+    assert!(matches!(
+        machine.write_snapshot(&sig),
+        Err(MachineSnapshotError::PendingStateUnsupported { row })
+            if row == "a test262 `$262` host object, which no snapshot carries"
+    ));
 }
 
 /// An identity fixture, read back so regeneration rewrites only the digest

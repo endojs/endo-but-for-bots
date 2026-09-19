@@ -22,7 +22,9 @@ effort measures its regression invariant against it.
 > terminates alone (`oracle-nontermination:…`), rather than retaining the
 > hand-authored `engine-hang:…` strings in `baseline.json`; and parse/resolution
 > negatives that were blanket run-skips can now land as `covered`,
-> `compiler-unimplemented:*`, an over-acceptance `Fail`, or an
+> `compiler-unimplemented:*`, a `compiler-panicked:*` **failure** (an engine
+> fault, kept apart from the coverage gap beside it — architecture finding
+> F063), an over-acceptance `Fail`, or an
 > `negative-oracle-unexpected` skip when both parsers accept (the early-error verdict is
 > decided at the parse phase, comparing ironhorse-compile's acceptance against
 > the oracle's own parse signal). The

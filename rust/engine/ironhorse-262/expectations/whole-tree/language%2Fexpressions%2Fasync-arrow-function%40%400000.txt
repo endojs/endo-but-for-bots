@@ -70,6 +70,11 @@ language/expressions/async-arrow-function/escaped-async-line-terminator.js stric
 language/expressions/async-arrow-function/escaped-async.js sloppy pass
 language/expressions/async-arrow-function/escaped-async.js strict pass
 language/expressions/async-arrow-function/eval-var-scope-syntax-err.js sloppy pass
+language/expressions/async-arrow-function/forbidden-ext/b1/async-arrow-function-forbidden-ext-direct-access-prop-arguments.js sloppy pass
+language/expressions/async-arrow-function/forbidden-ext/b1/async-arrow-function-forbidden-ext-direct-access-prop-caller.js sloppy pass
+language/expressions/async-arrow-function/forbidden-ext/b2/async-arrow-function-forbidden-ext-indirect-access-own-prop-caller-get.js sloppy pass
+language/expressions/async-arrow-function/forbidden-ext/b2/async-arrow-function-forbidden-ext-indirect-access-own-prop-caller-value.js sloppy pass
+language/expressions/async-arrow-function/forbidden-ext/b2/async-arrow-function-forbidden-ext-indirect-access-prop-caller.js sloppy pass
 language/expressions/async-arrow-function/name.js sloppy pass
 language/expressions/async-arrow-function/name.js strict pass
 language/expressions/async-arrow-function/object-destructuring-param-strict-body.js sloppy pass
@@ -78,8 +83,8 @@ language/expressions/async-arrow-function/params-trailing-comma-multiple.js slop
 language/expressions/async-arrow-function/params-trailing-comma-multiple.js strict pass
 language/expressions/async-arrow-function/params-trailing-comma-single.js sloppy pass
 language/expressions/async-arrow-function/params-trailing-comma-single.js strict pass
-language/expressions/async-arrow-function/prototype.js sloppy skip:unsupported-opcode:Iterator.helper
-language/expressions/async-arrow-function/prototype.js strict skip:unsupported-opcode:Iterator.helper
+language/expressions/async-arrow-function/prototype.js sloppy pass
+language/expressions/async-arrow-function/prototype.js strict pass
 language/expressions/async-arrow-function/rest-param-strict-body.js sloppy pass
 language/expressions/async-arrow-function/rest-param-strict-body.js strict pass
 language/expressions/async-arrow-function/rest-params-trailing-comma-early-error.js sloppy pass

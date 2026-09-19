@@ -111,6 +111,81 @@ fn compilation_refusal_is_uncatchable_and_adds_no_dynamic_segment() {
 }
 
 #[test]
+fn invalid_cover_grammar_is_a_catchable_syntax_error_with_the_real_compiler() {
+    for invalid in [
+        "(object.x)=>0;",
+        "({x:object[key]})=>0;",
+        "(...items);",
+        "class C{#x; m(){return (this.#x)=>0;}}",
+    ] {
+        for call in ["eval", "Function"] {
+            for directive in ["", "'use strict'; "] {
+                let payload = format!("{directive}{invalid}");
+                let source = format!(
+                    "var caught=false; try{{{call}({payload:?});}}\
+                     catch(e){{caught=e instanceof SyntaxError;}} caught"
+                );
+                let (_, out) = run(&source, Rc::new(IronhorseSourceCompiler), false);
+                assert!(out.completed, "{source}: {:?}", out.halt);
+                assert_eq!(out.result, "true", "{source}");
+            }
+        }
+    }
+}
+
+#[test]
+fn an_empty_template_substitution_is_a_catchable_syntax_error_with_the_real_compiler() {
+    for invalid in ["`${}`;", "`a${}b`;", "tag`a${}b${}c`;", "`${ /*c*/ }`;"] {
+        for call in ["eval", "Function"] {
+            for directive in ["", "'use strict'; "] {
+                let payload = format!("{directive}{invalid}");
+                let source = format!(
+                    "var caught=false; try{{{call}({payload:?});}}\
+                     catch(e){{caught=e instanceof SyntaxError;}} caught"
+                );
+                let (_, out) = run(&source, Rc::new(IronhorseSourceCompiler), false);
+                assert!(out.completed, "{source}: {:?}", out.halt);
+                assert_eq!(out.result, "true", "{source}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_pattern_declaration_without_an_initializer_is_a_catchable_syntax_error() {
+    // The shape test262 exercises only from inside a string, in a file the 262
+    // harness excludes: `Function("for (const [z]; ; ) ;")` must throw a
+    // SyntaxError the guest can catch, not fault the engine.
+    //
+    // Of the two corpus strings below only that one exercises THIS rule.
+    // `var {''};` was already rejected before it, as `missing identifier` — a
+    // string-literal property name is not a valid shorthand `BindingProperty`,
+    // so the pattern never survives to the initializer check. It is kept as a
+    // corpus case, not counted as evidence for this fix.
+    for invalid in [
+        "var [a];",
+        "let {x};",
+        "const [a];",
+        "for (const [z]; ; ) ;",
+        "var {\'\'};",
+        "var [a], b;",
+    ] {
+        for call in ["eval", "Function"] {
+            for directive in ["", "\'use strict\'; "] {
+                let payload = format!("{directive}{invalid}");
+                let source = format!(
+                    "var caught=false; try{{{call}({payload:?});}}\
+                     catch(e){{caught=e instanceof SyntaxError;}} caught"
+                );
+                let (_, out) = run(&source, Rc::new(IronhorseSourceCompiler), false);
+                assert!(out.completed, "{source}: {:?}", out.halt);
+                assert_eq!(out.result, "true", "{source}");
+            }
+        }
+    }
+}
+
+#[test]
 fn compiler_errors_and_unwinds_retain_live_charges() {
     for source in ["'unterminated", "var =", "class C { static { let x=1; } }"] {
         let mut raw = 0;

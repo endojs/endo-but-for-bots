@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "cc"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -53,6 +59,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -61,6 +73,24 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "foldhash",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
+dependencies = [
+ "hashbrown",
 ]
 
 [[package]]
@@ -195,6 +225,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4a2c462a4d927d512f5f882a033ddd62f33a05bb9f230d98f736ac3dc85938f"
 
 [[package]]
+name = "ironhorse-262"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-runtime",
+ "ironhorse-vm",
+ "xs-oracle",
+ "yaml-rust2",
+]
+
+[[package]]
 name = "ironhorse-compile"
 version = "0.0.1"
 dependencies = [
@@ -208,6 +249,8 @@ dependencies = [
 name = "ironhorse-fuzz"
 version = "0.0.1"
 dependencies = [
+ "arbitrary",
+ "ironhorse-262",
  "ironhorse-compile",
  "ironhorse-regexp",
  "ironhorse-snapshot",
@@ -235,6 +278,14 @@ version = "0.0.1"
 dependencies = [
  "ironhorse-meter",
  "ironhorse-unicode",
+]
+
+[[package]]
+name = "ironhorse-runtime"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-vm",
 ]
 
 [[package]]
@@ -463,6 +514,16 @@ name = "xs-oracle"
 version = "0.0.1"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "yaml-rust2"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b36710ce3a279cfce8465dbab826f161675a262950b922cb2c3663852dfe9eb0"
+dependencies = [
+ "arraydeque",
+ "hashlink",
 ]
 
 [[package]]

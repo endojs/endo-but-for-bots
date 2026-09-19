@@ -70,9 +70,61 @@ One finding regressed, F119, when the classification index this review's own
 tradeoff was deliberately removed.
 The still-open and partially-open set is listed on its own, by severity, in
 [OPEN-FINDINGS.md](OPEN-FINDINGS.md).
-Appendix A now carries six locations and five statuses per finding; the
+Appendix A now carries eight locations and seven statuses per finding; the
 `7753a4b9` locations are file-level, because the decomposition moved every
 construct in the VM.
+
+**Resolved again against
+[`2c69bf78d`](https://github.com/endojs/endo-but-for-bots/commit/2c69bf78d), 2026-09-17.**
+A third pass the same day, on one finding: F127, which the second had listed
+among the three it did not attempt.
+It is closed — the claim's remaining clause and the recommendation's
+second one — with the `Array.fromAsync` accumulations travelling in
+`ASYN` at format 24, and `PersistentMachine`'s documentation states what a
+checkpoint refuses where an embedder meets it.
+182 fixed, 6 partially fixed, 1 open, 2 held, and the low-severity set is now
+down to the one clause blocked on the worker protocol.
+What the pass is worth reading for is the defect list, not the feature: the
+carry as first written turned a refusal into a HOST PANIC on any queued
+`Array.fromAsync` job — the persist gate governs queued jobs too, and the
+shared-machine serializer kept a catch-all `unreachable!` that was true only
+while the gate refused those kinds — and the same hole had been open for the
+async generators since format 23.
+Four claims the change made about its own test coverage were false; mutations
+to the compaction remap and to the carried `close_error` slot both survived
+the entire suite before the fixtures that now kill them existed.
+Appendix A now carries nine locations and eight statuses per finding.
+
+**Resolved again against
+[`e1038c189`](https://github.com/endojs/endo-but-for-bots/commit/e1038c189),
+2026-09-17.**
+A second pass the same day, on the six findings the first did not attempt.
+Three moved: F068 from open to partially open (the `JsMachine` extraction,
+which reopens W6 decision 2 by instruction rather than by any of its three
+triggers), and F063 and F119 kept their statuses while losing the clause that
+made them untestable.
+181 fixed, 7 partially fixed, 1 open, 2 held.
+F075, F127 and F149 were not attempted and the Revision history says so rather
+than saying they were hard.
+The pass's most useful output is a measurement it did not set out to produce:
+`ironhorse-compile` returns rather than panics on all 53,575 sources of the
+pinned test262 corpus, and the two that did panic before it were found by a
+reviewer rather than by the roster meant to be the net.
+Two of the pass's own fixes were wrong first and are recorded as such.
+
+**Resolved against
+[`0b25cdba9`](https://github.com/endojs/endo-but-for-bots/commit/0b25cdba9),
+2026-09-17.**
+A resolution pass rather than a sixth revision: it set out to close the
+nineteen findings that were still open, so its statuses record work done in
+response to the review.
+Nine closed — F039, F040, F041, F053, F062, F070, F110, F121 and F158 — and
+F106/F122 went from "the envelope has no instrument" to one clause without
+one, leaving 181 fixed, 8 partially fixed and 2 open.
+F010 and F076 stayed held by design; six were not attempted.
+Three further wrong values were found while fixing F062 and are recorded
+there, two fixed and one not, and one regression the pass introduced and then
+removed is recorded in the Revision history rather than omitted.
 
 The earlier revision's per-finding statuses were **not** overwritten: a finding
 resolved since carries an additional Status line, and Appendix A carries a

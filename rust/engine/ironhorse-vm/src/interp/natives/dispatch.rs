@@ -5600,6 +5600,19 @@ impl Interp {
                         if self
                             .iterators
                             .get(&i)
+                            // The COLLECTION-CURSOR kinds, not merely a row whose
+                            // `iterable` happens to be a collection of the right
+                            // family. A lazy Iterator helper can be built over a
+                            // Map or Set directly — `Iterator.prototype.map.call(m,
+                            // f)` — so without this its row satisfied the
+                            // collection half of the brand, and
+                            // `collection_iterator_next` handed the helper's
+                            // PRIVATE holder array back to the guest: the captured
+                            // `next` and the callback, readable and writable. The
+                            // sibling brands already gate this way (`kind <= 4`
+                            // above, `kind == 8` on the `Iterator.from` wrapper,
+                            // `kind == 9` on the RegExp String Iterator).
+                            .filter(|state| (5..=7).contains(&state.kind))
                             .and_then(|state| self.collections.get(&state.iterable))
                             .is_some_and(|collection| collection.kind == expected) =>
                     {
@@ -5628,9 +5641,17 @@ impl Interp {
             NativeMethod::IteratorHelper(op @ 5..=10) => {
                 self.iterator_terminal_helper(code, op, this, base, argc)?
             }
-            NativeMethod::IteratorHelper(_) => {
-                return Err(Step::Host(Halt::NotImplemented("Iterator.helper")));
+            NativeMethod::IteratorHelper(op @ 0..=4) => {
+                self.iterator_lazy_helper(code, op, this, base)?
             }
+            NativeMethod::IteratorHelper(_) => {
+                // `create_intrinsics` installs exactly eleven helpers, so an id
+                // outside 0..=10 can only come from a corrupted method
+                // identity, not from guest code.
+                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+            }
+            NativeMethod::IteratorHelperNext => self.iterator_helper_next(code, this)?,
+            NativeMethod::IteratorHelperReturn => self.iterator_helper_return(code, this)?,
             NativeMethod::Math(id) => self.call_math(id, base, argc, code)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf

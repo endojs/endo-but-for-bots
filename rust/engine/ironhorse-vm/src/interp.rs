@@ -39,7 +39,7 @@ mod snapshot_rows;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow,
     BoundFunctionRow, CollectionSnapshot, CombinatorRow, DisposableStackRow, DisposalRecordRow,
-    EnvironmentRow, EvaluatorRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
+    EnvironmentRow, EvaluatorRow, FromAsyncRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
     HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow, ModuleGraphSnapshot,
     ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
     PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow, PromiseRow,
@@ -197,9 +197,24 @@ pub enum SourceCompileError {
     /// A genuine early (parse/early) error: the source is not a valid
     /// Script. The bridge throws a catchable realm `SyntaxError`.
     Syntax(String),
-    /// The compiler reached a deferred/unported path (a valid construct it
-    /// does not yet compile, or a coder panic). An honest coverage gap.
+    /// The compiler reached a deferred/unported path: a valid construct it
+    /// does not yet compile. An honest coverage gap.
+    ///
+    /// NOT a caught panic. A panic is [`Self::Invariant`], and the two used
+    /// to be the same arm — so a compiler that violated its own invariant
+    /// reported as missing coverage, which is exactly the distinction a
+    /// consensus engine needs and the one it did not have (architecture
+    /// finding F063).
     Unsupported(String),
+    /// The compiler violated an invariant: it panicked, and an embedder's
+    /// firewall caught the unwind.
+    ///
+    /// This is an ENGINE FAULT, not a coverage gap and not a guest error.
+    /// The bridge stops the machine with an uncatchable
+    /// [`Halt::EngineInvariant`] under a fixed label rather than letting
+    /// arbitrary panic text reach a guest, and no guest `SyntaxError` is
+    /// raised: the source may be perfectly valid.
+    Invariant(String),
     /// Regexp compilation exceeded its storage profile.
     HeapExhausted,
 }
@@ -275,6 +290,14 @@ pub const STACK_SLOT_COUNT: usize = 4096;
 /// this ceiling before the next instruction and returns `Halt::StepLimit`.
 /// Ordinary runs use the arena and allocation-admission limits instead.
 const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
+
+/// Dispatch budget for one opt-in guest render of an escaping thrown value
+/// ([`Interp::run_rendering_throws_in_guest`]). Generous by orders of
+/// magnitude for any `toString` a diagnostic would meet -- test262's is a
+/// string concatenation -- while still bounding a `toString` that does not
+/// terminate. Exceeding it is `Halt::StepLimit`, which the render propagates
+/// rather than turning into text.
+const RENDER_DISPATCH_BUDGET: u64 = 10_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
 /// (`mxGlobal`/`mxException`/`mxProgram`/… — the `*StackIndex` slots in
 /// `xsAll.h`) plus the frame scratch `fxOverflow` guards against; the
@@ -1218,7 +1241,17 @@ struct IterState {
     /// For a collection cursor (kinds 5-7): the owning collection's
     /// clear-generation at creation. A `clear()` bumps the collection's
     /// counter and this cursor dead-ends — XS's purge semantics (see
-    /// `CollectionData::generation`). Zero for every other kind.
+    /// `CollectionData::generation`).
+    ///
+    /// For a lazy Iterator helper (kinds 10-14) the field is reused as the
+    /// "already running" re-entrancy latch, set to 1 only for the duration of
+    /// one `next()` step, so a callback that re-enters its own helper is
+    /// refused rather than corrupting half-advanced state. The snapshot row
+    /// carries no field for it: a snapshot is taken only at a quiescent point,
+    /// where no helper is mid-step, so restore's zero is always the live
+    /// value.
+    ///
+    /// Zero for every other kind, and zero for a helper between steps.
     generation: u32,
     enum_keys: std::rc::Rc<Vec<(u16, u32)>>,
     /// For a string iterator (`kind == 4`) or RegExp String Iterator (`kind ==
@@ -2357,17 +2390,51 @@ impl Interp {
         self.run_shared(std::rc::Rc::from(code))
     }
 
+    /// [`Self::run`], but an escaping thrown value is rendered by running the
+    /// guest's own `toString`, as ECMAScript `String()` would.
+    ///
+    /// **Opt in, and only a differential harness should.** The ordinary
+    /// boundary is deliberately guest-free: `host_rendering_meter.rs` pins that
+    /// a diagnostic render cannot run guest work past an exhausted meter
+    /// ceiling, cannot allocate past the chunk ceiling, and cannot make a run's
+    /// cost depend on rendering work. Those are the guarantees an embedder
+    /// relies on and they are unchanged here; this entry point trades them away
+    /// deliberately, for the one caller that needs the oracle's string.
+    ///
+    /// **What it does NOT put back.** The meter index and the dispatch count
+    /// are snapshotted and restored, and the render is bounded by
+    /// [`RENDER_DISPATCH_BUDGET`]. Everything else a guest `toString` does
+    /// persists: heap slots and chunks it allocated, globals and the thrown
+    /// object it mutated, a promise job it enqueued (the run's only drain has
+    /// already happened by then, so such a job waits for the next crank), and
+    /// the unhandled-rejection latch. An armed meter host is also CONSULTED
+    /// during the render even though the index is rolled back afterwards --
+    /// the consultation cannot be undone. Both current callers bail out on
+    /// `!completed` before touching the machine again, so none of this is live
+    /// today; a second caller must read this list rather than assume the meter
+    /// snapshot covers it.
+    ///
+    /// That caller is the test262 differential. The oracle's side of the
+    /// comparison does not come from XS either: `xs_shim.c`'s
+    /// `endor_error_from_exception` runs `fxToString` on `mxException` after
+    /// `mxCatch`, in the SHIM. Comparing a guest-free approximation against a
+    /// guest-run `ToString` measures the two harnesses, not the two engines, so
+    /// the port's harness has to render the same way to compare at all.
+    pub fn run_rendering_throws_in_guest(&mut self, code: &[u8]) -> RunOutcome {
+        self.run_operation(std::rc::Rc::from(code), true, true, true)
+    }
+
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(shared, true, true)
+        self.run_operation(shared, true, true, false)
     }
 
     /// Evaluate a script without pumping the machine's job queue.
     /// Hosts evaluating several scripts in one job must finish with `run`,
     /// `run_shared`, or `run_promise_jobs` to perform the microtask checkpoint.
     pub fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(code, true, false)
+        self.run_operation(code, true, false, false)
     }
 
     /// Whether this machine has queued promise jobs. This is distinct from
@@ -2390,7 +2457,7 @@ impl Interp {
             .top_level_code
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
-        self.run_operation(code, false, true)
+        self.run_operation(code, false, true, false)
     }
 
     fn run_operation(
@@ -2398,10 +2465,12 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let start_raw = self.meter.raw();
         let start_dispatched = self.n_dispatched;
-        let mut outcome = self.run_shared_outcome(shared, execute_script, pump_jobs);
+        let mut outcome =
+            self.run_shared_outcome(shared, execute_script, pump_jobs, guest_thrown_rendering);
         outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
         outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
         outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
@@ -2413,6 +2482,7 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
@@ -2431,7 +2501,7 @@ impl Interp {
             };
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_inner(shared, execute_script, pump_jobs)
+            self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
@@ -2439,6 +2509,23 @@ impl Interp {
                 // remains non-quiescent and must be rewound by the supervisor.
                 self.native_depth = 0;
                 self.last_crank_completed = false;
+                // A lazy Iterator helper's "already running" latch rides
+                // `IterState::generation`, cleared by the step's own exit path
+                // — which THIS unwind skipped, because `HeapExhausted` is a
+                // `resume_unwind` rather than a returned `Step`. A latch left
+                // set poisons that helper for good (every later `next()` and
+                // `return()` answers "already running"), and because a
+                // following completed crank restores quiescence the machine
+                // could then be snapshotted: the row carries no field for the
+                // latch, so the resumed twin would answer differently from the
+                // machine it came from. No helper is mid-step once the stack
+                // has unwound, so clearing every latch here is exactly the
+                // live value.
+                for state in self.iterators.values_mut() {
+                    if (10..=14).contains(&state.kind) {
+                        state.generation = 0;
+                    }
+                }
                 RunOutcome {
                     meter_raw_this_run: 0,
                     computrons_this_run: 0,
@@ -2502,6 +2589,7 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let code: &[u8] = &shared;
         if self.slots.capacity() > self.slots.ceiling()
@@ -2563,7 +2651,7 @@ impl Interp {
             }
             self.result = script_result;
         }
-        let halt = self.finish_step(step);
+        let halt = self.finish_step_rendering_throws(code, step, guest_thrown_rendering);
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the

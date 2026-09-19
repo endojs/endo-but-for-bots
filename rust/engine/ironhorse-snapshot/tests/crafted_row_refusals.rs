@@ -617,13 +617,43 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         .iter_mut()
         .find(|p| !p.reactions.is_empty())
         .expect("the fixture holds a pending reaction");
-    row.reactions[0].kind = 7; // FromAsyncNext is still refused
-    expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
-    expect_commit_and_external_store_refusal(
-        &read_machine(&bytes, &sig()).unwrap(),
+    // `FromAsyncNext` DECODES since format 24 (architecture finding F127),
+    // so the refusal moved from the kind byte to the anchor: it must name a
+    // carried accumulation, and this fixture carries none. The native-kind
+    // payload shape is required first, exactly as for an async-generator kind.
+    let reaction = &mut row.reactions[0];
+    reaction.kind = 7;
+    reaction.b = 0;
+    reaction.on_fulfilled = ironhorse_vm::Slot::undefined();
+    reaction.on_rejected = ironhorse_vm::Slot::undefined();
+    reaction.resolve = ironhorse_vm::Slot::undefined();
+    reaction.reject = ironhorse_vm::Slot::undefined();
+    expect_container_refusal(
         &image,
-        "promise cluster: reaction kind does not resume",
+        "fromAsync reaction: missing or duplicate accumulation",
     );
+    // An ANCHOR check is an adoption check, not a commit check: the store
+    // admits the payload structurally and refuses it when a machine is built
+    // from it, exactly as the async-generator arm below does.
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
+    assert!(matches!(
+        validate_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found)))
+            if found == "fromAsync reaction: missing or duplicate accumulation"
+    ));
+    // A kind past every carry is still refused on the byte itself.
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| !p.reactions.is_empty())
+        .expect("the fixture holds a pending reaction");
+    row.reactions[0].kind = 13;
+    expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
     // An async-generator kind decodes, but must name a carried instance
     // that is serving a request; this fixture carries none.
     let mut image = read_machine(&bytes, &sig()).expect("reads");

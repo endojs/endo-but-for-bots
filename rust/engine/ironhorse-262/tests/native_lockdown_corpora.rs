@@ -148,6 +148,16 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
                 // that one classification is a failure in hardened262's
                 // existing baseline. Structural/infrastructure skips and
                 // setup failures must never satisfy a known body failure.
+                //
+                // `shared-test262-failure` is the same category and is
+                // accepted for the same reason: `xst.rs` reaches it only when
+                // BOTH engines threw the harness's own `Test262Error` with an
+                // agreeing message, which means ironhorse ran far enough to
+                // assert and lost. It appears here now because the subject run
+                // renders an escaping throw with the guest's `toString`, as
+                // the oracle shim does; before that, a shared failure could
+                // not be told from a disagreement, since every ironhorse
+                // `Test262Error` rendered as `Object: …` and never agreed.
                 let pass = match outcome {
                     Some((_, Outcome::Pass)) => true,
                     Some((_, Outcome::Fail(reason)))
@@ -156,7 +166,8 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
                         false
                     }
                     Some((_, Outcome::Skip(reason)))
-                        if reason == "shared-positive-test-failure" =>
+                        if reason == "shared-positive-test-failure"
+                            || reason == "shared-test262-failure" =>
                     {
                         false
                     }

@@ -126,6 +126,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // and seal asserts at the end of this fixture branch on
     // `ironhorse_vm::MATH_PROVIDER`; BOTH arms were re-measured, each under
     // its own provider.
+    // `%Iterator.prototype%`'s five lazy helpers (map/filter/take/drop/flatMap)
+    // stopped halting and gained a real implementation, which adds
+    // `%IteratorHelperPrototype%` and its `next`/`return` to the boot heap.
+    // That is a boot-heap CONTENT move of the same class as every one above,
+    // not a format change, so each marker restamps the same changed heap.
+    // BOTH provider arms were re-measured, each under its own provider.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     // Historical hashes describe the platform profile. Normalize only SIGN.
     let mut platform_signature = sig.encode();
@@ -137,13 +143,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "0c8da4396dd5e6dfa2191a9f9c85ecb50e87dd5a7ea770fafadf6084fbcca160"
+        "a7c29a32dec8c1f333550ed2c7cf868eea7233d9401328a53225972376d5c345"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "c3b5bda4e4617b95d30f4db48efc3d095a9445c883037e8a2f59976b6e4f84f5"
+        "51fc33d00d8f858e3468bbc4b59aa625138923b3783f2f461951225985cf2896"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -151,7 +157,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "5339663238c5412c565863fb2be14e559670ad06db20100c627a21f10a8befe8"
+        "281cf09033bdb4af16f7d657fa55d0cc9b2f3a28e1aa922d01a3294b6757e6f1"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -159,7 +165,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "dc490a7c84f88dc5ee978ddc9bdc9ad2c49828996c04023934a014cc04dea230"
+        "149ff2988f4b5ba2c6e26c6e599c5faf55f9efb203534ef85c83d86412e369c3"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -167,7 +173,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "ef35fbbb174f397efa8ef4d07d2db4c92c71f5b1fd3dca84b078e58d91afa484"
+        "55beec21d835c05b924feeb41093bf627173820cab8e65ddad86bc937f0787e8"
     );
 
     let blob = session
@@ -400,23 +406,31 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // Re-pinned for format version 23, which lets `ASYN` carry
             // async generator instances (architecture review F127). This
             // fixture holds none, so only the VERS payload changes.
-            "c0e16ad94b444384b294a9ff577e0ec45a6acd274d3a15d41cc355b4d2cb8d86"
+            // Re-pinned for format version 24, which lets `ASYN` carry the
+            // `Array.fromAsync` accumulations behind the generators (the
+            // last clause of F127). Same story: this fixture holds none, so
+            // only the VERS payload moves. Re-measured on top of the guest
+            // `lockdown()` work, which moves the boot heap under both pins.
+            "4162b4784c5a74f5f4c69cffe159cf716eaf7ce299351ef71e8ccfa97c77b9ef"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
-            // Re-pinned for format version 23 alongside the platform pin.
+            // Re-pinned for format version 23 alongside the platform pin,
+            // and again for format version 24 (the `Array.fromAsync` carry).
+            // BOTH arms moved together, as the warning below requires.
             // Reached ONLY under the deterministic provider, so a golden
             // run under the default provider alone never evaluates this arm
             // and cannot tell you it is stale. A re-pin that moves the
             // platform arm above and leaves this one behind therefore looks
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
-            // The digest below is the guest `lockdown()` one, moved with the
-            // platform arm above and measured under this provider rather than
-            // copied from it -- the two arms carry DIFFERENT digests, because
+            // The digest below carries the guest `lockdown()` boot move AND
+            // format version 24, moved with the platform arm above and
+            // measured under this provider rather than copied from it -- the
+            // two arms carry DIFFERENT digests, because
             // `derive_boot_fingerprint` folds `MATH_PROVIDER` in only when
             // `deterministic-math` is on, and the final blob (unlike the
             // markers above) is not signature-normalized.
-            "7a5acb87016de123175d2e7d8ebd8356b6bb3386a823e671d28025e0dbf140e3"
+            "93018f97ba2244ebca32b5fbe96e92c0f0e6275dff74544494f834d217754a4d"
         },
         "canonical final blob hash"
     );
@@ -655,20 +669,28 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // the `VERS` stamp and the schema, so the seal moves with the blob
             // while the small state itself is unchanged (this machine holds no
             // async generator).
-            "b8bdae6ab380f0d3ef09f1f99461efb42a336601077d33662d59e23117f2c6ec"
+            // Re-pinned again for format version 24 / store schema v35 (the
+            // `Array.fromAsync` carry, F127's last clause), for the same
+            // reason: the stamp and the schema are in the manifest, and this
+            // machine holds no accumulation. Re-measured on top of the guest
+            // `lockdown()` work, which moves the boot heap the seal covers.
+            "c2279d3e57f181025fe768171c18c38cd3aa191bb1b84bc75d9427d65cff4d56"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
-            // the platform pin.
+            // the platform pin, and again for format version 24 / store
+            // schema v35. BOTH arms moved together, as the warning below
+            // requires.
             // Reached ONLY under the deterministic provider, so a golden
             // run under the default provider alone never evaluates this arm
             // and cannot tell you it is stale. A re-pin that moves the
             // platform arm above and leaves this one behind therefore looks
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
-            // The digest below is the guest `lockdown()` one, measured under
-            // this provider rather than copied from the platform arm, for the
-            // reason given on the blob's else-arm above.
-            "f7368a2df1611cc087a0d58c33e14e09c098bbe86f3b19e7e8f3a3633742a8a9"
+            // The digest below carries the guest `lockdown()` boot move AND
+            // format version 24, measured under this provider rather than
+            // copied from the platform arm, for the reason given on the blob's
+            // else-arm above.
+            "60552afbaf98a9d35576b2e87b2aaeb23b53201c9067f922a200df5fb18bf8d7"
         },
         "epoch-3 seal chain"
     );

@@ -967,13 +967,64 @@ fn arguments_and_await_in_static_block_are_errors() {
 }
 
 #[test]
-#[should_panic(expected = "invalid initializer")]
 fn cover_initialized_name_as_expression_is_error() {
     // `fxBindingNodeCode`: a shorthand-with-initializer (CoverInitializedName)
     // in an object literal used as a real expression — never refined to a
     // destructuring pattern — is a Syntax Error (raised at code time, like
     // XS's `fxReportParserError`).
-    let _ = crate::coder::compile("({ a = 1 });");
+    //
+    // A STRUCTURED error, not a panic. This test used to be
+    // `#[should_panic(expected = "invalid initializer")]`, which pinned the
+    // wrong thing: a spec early error reported by dying is indistinguishable
+    // from an invariant violation, and the harness filed both as unported
+    // coverage (architecture finding F063).
+    for source in ["({ a = 1 });", "({a: {b = 1}});"] {
+        let err = crate::coder::compile(source).expect_err(source);
+        assert_eq!(
+            err.kind,
+            crate::parser::ParseErrorKind::Syntax,
+            "{source} is a spec early error, not a coverage gap"
+        );
+        assert!(
+            err.message.contains("invalid initializer"),
+            "{source}: {}",
+            err.message
+        );
+    }
+}
+
+/// A construct this compiler has not ported reports as `Unsupported`, which
+/// is a different thing from a spec early error and must stay different.
+#[test]
+fn a_deferred_static_block_fold_reports_unsupported() {
+    let err = crate::coder::compile("class C { static { let x = 1; } }")
+        .expect_err("the fold is not compiled");
+    assert_eq!(
+        err.kind,
+        crate::parser::ParseErrorKind::Unsupported,
+        "a deferred fold is a coverage gap, not an early error"
+    );
+    assert!(
+        err.message
+            .contains("static block with lexical declarations"),
+        "{}",
+        err.message
+    );
+}
+
+/// The neighbours must keep compiling: a fold that swallowed valid input
+/// would trade a panic for a wrong answer.
+#[test]
+fn the_converted_folds_do_not_widen() {
+    for source in [
+        "[a = 1];",
+        "({ a = 1 } = {});",
+        "var { a = 1 } = {};",
+        "class D { f = 1; }",
+        "class E { static { 1; } }",
+    ] {
+        assert!(crate::coder::compile(source).is_ok(), "{source}");
+    }
 }
 
 #[test]

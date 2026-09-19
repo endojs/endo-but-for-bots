@@ -14,6 +14,15 @@ name = "ironhorse_fuzz"
 path = "src/lib.rs"
 
 [dependencies]
+# The generator cursor (design § Fuzzability). `Unstructured` is
+# libFuzzer's own byte source: it is FINITE, so a generator that runs out
+# of bytes stops drawing instead of wrapping, which is what lets
+# libFuzzer's length feedback reach the deeper arms of a grammar. The
+# hand-rolled modulo cursor it replaces made every input infinitely long
+# and defeated that feedback. Already resolved at this exact version in
+# both the repo-root and the cargo-fuzz lockfiles, so the shared-dependency
+# agreement check (`scripts/check-lockfile-agreement.py`) stays green.
+arbitrary = "1.4.2"
 ironhorse-vm = { path = "../ironhorse-vm" }
 xs-oracle = { path = "../xs-oracle" }
 ironhorse-regexp = { path = "../ironhorse-regexp" }
@@ -23,3 +32,15 @@ ironhorse-compile = { path = "../ironhorse-compile" }
 # Fuzzability). The substance stays here in the forbid(unsafe_code) lib so it
 # builds and unit-tests without a libFuzzer toolchain.
 ironhorse-snapshot = { path = "../ironhorse-snapshot", features = ["unchecked-tooling"] }
+# The MULTI-CRANK differential arm drives `dual_run_cranks`, the harness's
+# only window onto cross-crank semantics. `ironhorse-262` does not depend on
+# this crate, so the edge is acyclic; it already links the same oracle.
+ironhorse-262 = { path = "../ironhorse-262" }
+
+# Regenerates the checked-in libFuzzer seed corpus under `fuzz/seeds/`.
+# Derived from the engine's own writers, so the corpus is reproducible and
+# reviewable; `seeds::tests::the_checked_in_seed_corpus_is_current` fails
+# when the tree and the generator disagree.
+[[bin]]
+name = "write-seed-corpus"
+path = "src/bin/write_seed_corpus.rs"

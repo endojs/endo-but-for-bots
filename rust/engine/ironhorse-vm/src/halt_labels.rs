@@ -27,8 +27,8 @@ use crate::opcode::Opcode;
 /// instrument. Sorted by byte order.
 pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Date:method",
+    "Intl.NumberFormat:compact-locale",
     "Intl.NumberFormat:formatRange",
-    "Iterator.helper",
     "JSON.parse:lone-surrogate",
     "Number.toString:fractional-non-decimal-radix",
     "String.replace:non-string-receiver",
@@ -244,6 +244,9 @@ pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
 pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "Date.toJSON:toISOString-key",
     "Iterator.setter:missing-toStringTag",
+    "Iterator:helper-id",
+    "Iterator:helper-kind",
+    "Iterator:helper-symbol",
     "Iterator:missing-constructor",
     "Object-static:unexpected-proxy",
     "Reflect:unexpected",
@@ -278,6 +281,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "dub_at:stack-underflow",
     "end:frame-underflow",
     "eval:compile-charge-receipt",
+    "eval:compiler-invariant",
     "eval:frame-underflow",
     "eval:relink",
     "exponentiation:stack-underflow",

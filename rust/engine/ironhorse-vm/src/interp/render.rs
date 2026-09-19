@@ -239,6 +239,100 @@ impl Interp {
         "<prototype cycle>".to_string()
     }
 
+    /// ECMAScript `ToString` of an escaping thrown value, run IN the guest.
+    ///
+    /// This is the symmetric twin of the oracle shim's
+    /// `endor_error_from_exception` (`xs-oracle/csrc/xs_shim.c:126`), which
+    /// runs `fxToString` on `mxException` inside a `mxTry`/`mxCatch` and falls
+    /// back to the literal `(exception stringification threw)` when the
+    /// stringification itself throws. XS reports what a guest `toString`
+    /// returns, so a `Test262Error` whose prototype `toString` yields
+    /// `"Test262Error: " + this.message` (`harness/sta.js:18`) is reported by
+    /// that name. Nothing readable without running guest code can produce that
+    /// string, which is why [`Self::render_uncaught`]'s guest-free
+    /// approximation cannot match it and must not try.
+    ///
+    /// **The cost is not charged.** The shim reads `out->computrons`,
+    /// `meter_raw`, `heap_count` and `chunks_size` from the machine BEFORE it
+    /// stringifies (`xs_shim.c:507-510`; 512 is the stringify call
+    /// those reads are contrasted with), so XS's reported meter excludes the
+    /// diagnostic render. Snapshotting the meter and the dispatch count across
+    /// it is therefore what makes the two engines comparable, not a
+    /// convenience: charging it here would make every throwing case's
+    /// computrons disagree with an oracle that does not charge it.
+    ///
+    /// Callable only where a live `code` buffer exists, because `ToPrimitive`
+    /// threads it into `call_primitive_method` to resume the dispatch loop.
+    /// That is the throw's own exit in `run_inner`, which still holds both.
+    fn render_thrown_with_guest(&mut self, code: &[u8], value: Slot) -> Result<String, Step> {
+        let meter = self.meter.state();
+        let dispatched = self.n_dispatched;
+        // Bound the window. The default boundary spends ZERO guest
+        // instructions, so opting in must not hand a thrown value unbounded
+        // execution: `throw {toString(){ while(true){} }}` otherwise never
+        // returns, and the in-repo harness suites run with `case_timeout` 0.
+        // A finite `step_limit` bounds dispatches AND, via the bounded-mode
+        // wedge guard (`dispatch.rs:193`), live slots at
+        // `BOUNDED_RUN_SLOT_CEILING` — so an allocating render trips
+        // `Halt::StepLimit` instead of panicking through `heap_exhausted()`
+        // and rewriting the run's verdict to `HeapExhausted`. Either way the
+        // halt propagates below rather than becoming a string.
+        let step_limit = self.step_limit;
+        self.step_limit = dispatched.saturating_add(RENDER_DISPATCH_BUDGET);
+        let rendered = self.to_string_units(code, value);
+        self.step_limit = step_limit;
+        self.meter.restore(meter);
+        self.n_dispatched = dispatched;
+        match rendered {
+            Ok(units) => Ok(SymbolName::from_units(&units).to_string()),
+            // A GUEST throw inside `toString` is the shim's own sentinel case:
+            // `endor_error_from_exception` catches it and reports this literal.
+            // An `Object.create(null)` with no `toString` reaches it in both
+            // engines.
+            Err(Step::Threw { .. }) => Ok("(exception stringification threw)".to_string()),
+            // Anything else is the ENGINE saying it cannot continue --
+            // `NotImplemented`, `Refused`, `StepLimit`, `EngineInvariant`, an
+            // escaped control transfer. Collapsing those into the sentinel
+            // above would make a port coverage gap indistinguishable from a
+            // guest throw and record it as AGREEMENT with the oracle, which is
+            // the laundering this whole change exists to undo, one layer down.
+            // `finish_step` turns it into the honest halt instead, and the 262
+            // harness names it (`declined_verdict`, `xst.rs:891`).
+            Err(fault) => Err(fault),
+        }
+    }
+
+    /// [`Self::render_thrown_with_guest`] for the one throw that escapes a
+    /// run, leaving every other `Step` to the guest-free boundary.
+    pub(super) fn finish_step_rendering_throws(
+        &mut self,
+        code: &[u8],
+        step: Step,
+        enabled: bool,
+    ) -> Halt {
+        // RELABEL, never construct. `throw_construction_sites.rs` locks
+        // `Halt::Throw` to the two places that may create one, and this is not
+        // a third: `finish_step` still builds the halt, off the same unwound
+        // jump chain, and only its diagnostic text is replaced afterwards.
+        if let (true, Step::Threw { value, .. }) = (enabled, &step) {
+            let value = *value;
+            match self.render_thrown_with_guest(code, value) {
+                Ok(text) => {
+                    let mut halt = self.finish_step(step);
+                    if let Halt::Throw { rendered, .. } = &mut halt {
+                        *rendered = text;
+                    }
+                    return halt;
+                }
+                // The render faulted. Report the fault, not the throw: the
+                // guest's own verdict is no longer the whole story, and a
+                // silently sentinel-ised gap is worse than a named halt.
+                Err(fault) => return self.finish_step(fault),
+            }
+        }
+        self.finish_step(step)
+    }
+
     /// Once a throw reaches the host, rendering must not resume the guest or
     /// change its decided outcome. In particular it cannot allocate guest
     /// objects, enqueue jobs, call a meter host, or swallow a second halt.

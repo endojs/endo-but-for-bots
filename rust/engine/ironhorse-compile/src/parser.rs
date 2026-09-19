@@ -686,9 +686,8 @@ impl<'a> Parser<'a> {
 
     /// `fxCheckReference` — is the top-of-stack a valid assignment
     /// target for `token`? Unwraps a single-item `Expressions` cover to
-    /// its reference, as XS does. Destructuring targets (Array/Object
-    /// converted to bindings) are deferred, so an assignment into one
-    /// reports [`ParseErrorKind::Unsupported`].
+    /// its reference, as XS does. Plain assignment also converts Array/Object
+    /// covers into assignment patterns; compound assignment does not.
     fn check_reference(&mut self, token: Token) -> PResult<bool> {
         // Unwrap a parenthesized single reference: (x) = …
         if self.top_token() == Some(Token::Expressions) {
@@ -1174,8 +1173,12 @@ impl<'a> Parser<'a> {
                         }
                     }
                     Token::LeftBracket => {
+                        // `MemberExpression [ Expression[+In] ]`.
+                        let saved = self.flags & flags::FOR;
+                        self.flags &= !flags::FOR;
                         self.get_next_token()?;
                         self.comma_expression()?;
+                        self.flags |= saved;
                         self.push_node_struct(2, Token::MemberAt, line)?;
                         self.match_token(Token::RightBracket)?;
                     }
@@ -1239,9 +1242,13 @@ impl<'a> Parser<'a> {
                                 self.get_next_token()?;
                             }
                             Token::LeftBracket => {
+                                // `OptionalChain [ Expression[+In] ]`.
+                                let saved = self.flags & flags::FOR;
+                                self.flags &= !flags::FOR;
                                 self.push_node_struct(1, Token::Option, line)?;
                                 self.get_next_token()?;
                                 self.comma_expression()?;
+                                self.flags |= saved;
                                 self.push_node_struct(2, Token::MemberAt, line)?;
                                 self.match_token(Token::RightBracket)?;
                             }
@@ -1357,7 +1364,15 @@ impl<'a> Parser<'a> {
                 self.array_expression()?;
                 self.flags |= saved;
             }
-            Token::LeftParenthesis => self.group_expression(0)?,
+            Token::LeftParenthesis => {
+                // `( Expression[+In] )` — a parenthesized expression resets
+                // `[In]`, so `for ((a in b);;)` is legal. Same save/clear/
+                // restore the class/object/array arms above use (F063).
+                let saved = self.flags & flags::FOR;
+                self.flags &= !flags::FOR;
+                self.group_expression(0)?;
+                self.flags |= saved;
+            }
             Token::Template => {
                 self.push_null();
                 let (s, r) = self.cur_template_strings();
@@ -1903,12 +1918,27 @@ impl<'a> Parser<'a> {
         self.push_raw(r, line);
         self.push_node_struct(2, Token::TemplateMiddle, line)?;
         count += 1;
+        // `${ Expression[+In] }` — a substitution resets `[In]`, so
+        // `for (`${a in b}`;;)` is legal (F063).
+        let saved_for = self.flags & flags::FOR;
+        self.flags &= !flags::FOR;
         loop {
             self.get_next_token()?;
-            if self.cur.token != Token::RightBrace {
-                self.comma_expression()?;
-                count += 1;
+            // `TemplateSubstitutionTail` requires an `Expression`, so `${}` is
+            // a spec early error. `fxTemplateExpression` instead SKIPS the
+            // expression when the substitution is empty and pushes the next
+            // `TemplateMiddle` straight after the previous one, which both
+            // accepts invalid source and breaks the alternation
+            // `code_tagged_template` derives its string count from. Rejecting
+            // it is a deliberate divergence from the pinned oracle's parser,
+            // in the direction of the spec, and the alternation becomes an
+            // invariant the parser holds rather than one it happens to
+            // produce (F063).
+            if self.cur.token == Token::RightBrace {
+                return Err(self.error("missing expression"));
             }
+            self.comma_expression()?;
+            count += 1;
             if self.cur.token != Token::RightBrace {
                 return Err(self.error("missing }"));
             }
@@ -1926,6 +1956,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        self.flags |= saved_for;
         self.push_node_list(count)?;
         Ok(())
     }
@@ -1959,6 +1990,10 @@ impl<'a> Parser<'a> {
         let mut count = 0usize;
         let line = self.cur.line;
         let mut spread_flag = false;
+        // `Arguments : ( ArgumentList[+In] )` — an argument list resets `[In]`,
+        // so `for (f(a in b);;)` is legal (F063).
+        let saved_for = self.flags & flags::FOR;
+        self.flags &= !flags::FOR;
         self.match_token(Token::LeftParenthesis)?;
         while self.cur.token == Token::Spread || has_flag(self.cur.token, BEGIN_EXPRESSION) {
             let param_line = self.cur.line;
@@ -1976,6 +2011,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.match_token(Token::RightParenthesis)?;
+        self.flags |= saved_for;
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::Params, line)?;
         if spread_flag {
@@ -2030,8 +2066,12 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Token::LeftBracket => {
+                    // `MemberExpression [ Expression[+In] ]`.
+                    let saved = self.flags & flags::FOR;
+                    self.flags &= !flags::FOR;
                     self.get_next_token()?;
                     self.comma_expression()?;
+                    self.flags |= saved;
                     self.push_node_struct(2, Token::MemberAt, member_line)?;
                     self.match_token(Token::RightBracket)?;
                 }
@@ -2157,6 +2197,12 @@ impl<'a> Parser<'a> {
             self.push_null();
             self.flags |= saved_await_yield;
             return Err(self.error("missing expression"));
+        }
+        // Spread belongs to arguments, array/object literals, or an arrow's
+        // rest parameter. The arrow and async-call interpretations returned
+        // above; an ordinary parenthesized expression has no spread form.
+        if spread_flag {
+            return Err(self.error("invalid spread"));
         }
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::Expressions, line)?;

@@ -2046,6 +2046,12 @@ rather than work items.
   Actions tab with a custom budget — sharing the smoke lane's corpus
   cache family so the two lanes accrete ONE corpus; the 30 s PR
   tripwire stays as it was.
+  Corrected 2026-09-16: the PR tripwire this item and the paragraph below both
+  describe had in fact been removed from `ci.yml`, so for several waves the
+  only lane was the nightly one — and it ran four pure-Rust targets, not the
+  roster.
+  Both lanes now read their roster from `fuzz/Cargo.toml` and start from the
+  checked-in `ironhorse-fuzz/fuzz/seeds/` corpus.
 - [x] ~~The oracle-linked crate test suites (ironhorse-compile,
   -regexp, -262, the fuzz lib's unit tests) run locally/manually, not
   in CI~~ Done (deferred pass, 2026-08-18): the
@@ -2073,9 +2079,13 @@ rather than work items.
 Landed context for the items above: the
 attached-mode benchmark landed with phase 10's instruments, and the
 cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
-decode/round-trip target on every ironhorse-relevant change, corpus
-cached across runs, crash artifacts uploaded on failure; deep fuzzing
-stays a local/scheduled concern). The lane's FIRST run earned trophy
+target on every ironhorse-relevant change, corpus cached across runs,
+crash artifacts uploaded on failure; deep fuzzing stays a local/scheduled
+concern).
+That job was later lost from `ci.yml` and was absent when the architecture
+review measured the lane.
+It is back, and now covers every declared target rather than the decode and
+round-trip ones. The lane's FIRST run earned trophy
 #2: hostile bytecode that enters an async run, pops below the run's
 recorded stack base, then suspends — the frame snapshot's `split_off`
 panicked past the stack end. Both suspend twins (`YIELD`/`AWAIT`) now
@@ -2658,12 +2668,24 @@ INTERIOR of the supported region (covered state round-trips
 correctly); none tests its BOUNDARY (uncovered state fails VISIBLY).
 The Pending classification silently relied on per-native `this`
 guards for its safety story, and nobody had ever checked which rows
-actually had one (W6-9's silent-wrong four). Same genre: the store is
-fuzzed at the decoder but no harness forges a store with recomputed
-hashes (W6-14), the eval-bridge walker never sees a crafted unit
-(W6-18), and the metering walker's mis-size cancels out on every
-tested program (W6-17 — a divergence that only fires when a stray
-`0x86` lands in the over-stepped bytes, which no fixture produces).
+actually had one (W6-9's silent-wrong four). Same genre: no harness
+forges a store with recomputed hashes (W6-14), the eval-bridge walker
+never sees a crafted unit (W6-18), and the metering walker's mis-size
+cancels out on every tested program (W6-17 — a divergence that only
+fires when a stray `0x86` lands in the over-stepped bytes, which no
+fixture produces).
+
+This paragraph used to open by reasoning from "the store is fuzzed at the
+decoder", which was false when it was written and stayed false for a wave.
+No `ironhorse-fuzz` target reached `HeapStore`, `StoreManifest::decode`,
+`SmallState::decode` or `validate_store`, and the phase-1 acceptance bar below
+claimed a malformed-store target that did not exist while phases 2 through 12
+were declared done.
+A meta-cause analysis that reasons from an unmet bar is itself an instance of
+the failure it is analysing.
+The target exists now (`fuzz_targets/store_decoder.rs` over
+`ironhorse_fuzz::store`), so the clause is retired rather than corrected in
+place; what is left in this sentence is the part that is still true.
 
 **The meta-cause** is one sentence: the seam's safety rests on
 hand-maintained enumerations (ledger rows, GC visitation arms, gate
@@ -4196,7 +4218,7 @@ dirty flag suffices to start).
 | `ironhorse-vm` | dirty + residency bitmaps, `PageSource` trait, `attach_backing` / `checkpoint` drains | `forbid`, none |
 | `ironhorse-snapshot` | `store` module: `HeapStore`, manifest gates, paged model, memory + file reference stores, `export_to_container` / `import_from_container` | `forbid`, none |
 | `rust/endo` (daemon) | `ironhorse_store_sqlite`: `HeapStore` over rusqlite, file lifecycle, supervisor verbs | daemon already compiles bundled SQLite |
-| `ironhorse-fuzz` | malformed-store decoder target, fault-schedule metamorphic target, checkpoint round-trip target | dev/CI only |
+| `ironhorse-fuzz` | malformed-store decoder target (`store_decoder`), fault-schedule metamorphic target, checkpoint round-trip target | dev/CI only |
 
 ## Alternatives Considered and Rejected
 
@@ -4260,6 +4282,12 @@ changes an engine observable.
    validation refuses foreign/corrupt/mismatched stores with
    structured errors; malformed-store fuzz target armed (the
    over-allocation trophies generalize to page counts).
+   *Bar met:* the first two on delivery; the fuzz target NOT until
+   `fuzz_targets/store_decoder.rs` landed, long after phases 2-12 were
+   declared done.
+   Recorded here rather than quietly ticked, because an acceptance bar that a
+   later phase's prose then reasons from is worse unmet-and-unmarked than
+   unmet.
 2. **Dirty tracking, checkpoint, SQLite backend, eager store resume.**
    Arena dirty bitmaps; `checkpoint(&mut store)`;
    `ironhorse_store_sqlite` in `rust/endo`; supervisor verbs behind an

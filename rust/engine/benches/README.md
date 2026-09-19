@@ -92,7 +92,60 @@ and `Interp::run`, including completion rendering.
 These are fresh-machine microbenchmarks, not steady-state daemon workloads.
 Allocation churn is not a direct measurement of collection pauses or heap footprint.
 The report always marks the full stage-8 envelope unavailable until its remaining
-daemon, comparable heap-footprint, and code-size measurements exist.
+daemon and comparable heap-footprint measurements exist.
+
+## Code size (F106/F122)
+
+The envelope's other footprint clause — "code size within 2x of `libxs.a`" —
+now has an instrument:
+
+```sh
+python3 rust/engine/benches/code_size.py            # report
+python3 rust/engine/benches/code_size.py --check-code-size   # and fail above 2x
+```
+
+It sums `.text` across the Moddable XS translation units in `libxsoracle.a`
+(excluding this repository's own `xs_shim` object) and across the release
+rlibs of the engine crates, and reports the ratio against the design's bar.
+`xs_compare.py` includes the same measurement in its report.
+
+The engine is currently around **6x** XS by this measure, against a 2x bar.
+That number is reported and not gated: an rlib carries every monomorphized
+instantiation the crate emitted, including ones a linker would discard, so it
+is an upper bound rather than a linked-binary figure, and gating a bar the
+tree is nowhere near would redden every run without saying anything the
+number does not. The point of the instrument is that the clause stopped being
+unfalsifiable; `--check-code-size` is the gate for when the bar is reachable.
+
+## Heap footprint (F106/F122)
+
+The envelope's other footprint clause — "heap within 1.1x" — also has an
+instrument now, and both sides of it:
+
+```sh
+RUST_MIN_STACK=33554432 cargo test --release -p ironhorse-262 \
+  --test xs_footprint_bench -- --ignored --nocapture --test-threads=1
+```
+
+The oracle shim reports XS's own `currentHeapCount` and `currentChunksSize`;
+the engine reports `SlotArena::xs_accounted_byte_size` (XS's 32-byte unit, so
+the ratio reads the bar as written) and `SlotArena::resident_byte_size` (what
+the process actually holds). `xs_compare.py` runs it and folds the result in.
+
+The measured picture is not one number. On property access, calls and string
+work the engine sits at roughly **0.2x** XS, because XS boots a much larger
+intrinsics set. On allocation churn it sits at about **2.5x**, above the 1.1x
+bar — which is where the design's parenthesis, "the slot accounting is
+identical by construction; overhead can come only from arena bookkeeping",
+stops being true: nothing collects within a crank, so churned garbage is
+still resident at the boundary. That is the residue of F010/F076, and this is
+the first measurement that shows its cost.
+
+Reported, not gated, for the same reason as code size.
+
+The one clause of the envelope still without an instrument is the
+four-variant daemon benchmark, whose fourth arm stays blocked until
+`endor worker -e ironhorse` speaks the worker protocol.
 
 ## Daemon arm: explicitly blocked
 

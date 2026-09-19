@@ -946,6 +946,30 @@ pub mod engine {
     /// exceptions before anything runs: runtime-interned ids present
     /// (table extension would collide until the ledger's KEYS row
     /// lands), or bytecode the instruction walker cannot decode.
+    ///
+    /// What a checkpoint REFUSES (architecture finding F127's second
+    /// clause: an embedder meets this here, not only in the side-table
+    /// ledger). Beyond the quiescence gate — a crank that did not reach a
+    /// boundary is rewound rather than stored, which is the crashed-crank
+    /// contract above — the remaining refusals are about what the crank
+    /// LEFT BEHIND.
+    /// Suspended async state is no longer part of that set: `await`,
+    /// async generators and in-flight `Array.fromAsync` accumulations all
+    /// travel (formats 14, 23 and 24 respectively), so a vat parked on a
+    /// host response checkpoints and resumes.
+    /// Three things still refuse, each by name, and each is a property of
+    /// the embedding rather than of the guest program:
+    /// an active or heap-backed HOST MODULE GRAPH, because a host module's
+    /// contents are the embedder's and no atom carries them;
+    /// the test262 `$262` object, because a conformance machine is not a
+    /// persistable one;
+    /// and a stored reference to a NATIVE FUNCTION restore cannot
+    /// reconstruct, which is reachable only by minting one outside the
+    /// boot image and letting the guest keep it.
+    /// A [`MachineError`] naming one of those is a fail-closed refusal
+    /// with the store untouched, not a corrupted checkpoint: the crank's
+    /// effects are discarded and the machine rewinds, exactly as a failed
+    /// flush does.
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::SharedStoreSession>,
@@ -2048,9 +2072,80 @@ pub mod engine {
                     .unwrap(),
                 "42"
             );
+            // The dynamic-function route, which needs the source compiler
+            // `with_bounds` wired above: its completion renders through the
+            // same job drain. Through the compartment's OWN `Function`
+            // binding, which is what a guest has -- NOT through
+            // `(()=>{}).constructor`, which `VmMachine::new` locks down at
+            // construction and `the_prototype_chain_evaluator_is_denied`
+            // below pins as refused.
+            assert_eq!(machine.eval("Function('return 42')()").unwrap(), "42");
+        }
+
+        /// The prototype-chain route to the ORIGINAL `Function` is closed.
+        ///
+        /// `VmMachine::new` performs the whole lockdown operation at
+        /// construction, and its step 2 replaces the five function-family and
+        /// `Date` prototypes' `constructor` with an inert stand-in. Reaching an
+        /// evaluator that way is the cross-compartment leak lockdown exists to
+        /// deny, so an ephemeral `Machine` must refuse it rather than compile.
+        ///
+        /// This asserts the refusal rather than merely avoiding the shape: the
+        /// assertion above once read `(()=>{}).constructor('return 42')()` and
+        /// expected `"42"`, i.e. it pinned the bypass. Nothing caught that when
+        /// lockdown closed it, because `ci.yml`'s `-p endo` step names three
+        /// `--test` targets and never ran the unit tests.
+        ///
+        /// Four distinct poisoned slots, not six: the first three spellings all
+        /// resolve to `Function.prototype.constructor` (measured in-engine —
+        /// `(()=>{}).constructor === (function(){}).constructor` and
+        /// `=== ({}).constructor.constructor` are both `true`), and only the
+        /// generator / async / async-generator rows reach constructors of their
+        /// own. They are kept because they are the spellings a guest actually
+        /// writes, not because each is a separate slot.
+        ///
+        /// `ironhorse-vm`'s `realms.rs` covers the same five evaluator families
+        /// against a bare VM machine; what this adds is the endo `Machine`
+        /// wrapper's ephemeral path, where `with_bounds` builds the machine and
+        /// each `eval` gets a fresh Realm.
+        #[test]
+        fn the_prototype_chain_evaluator_is_denied_on_an_ephemeral_machine() {
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            for family in [
+                "(()=>{}).constructor",
+                "({}).constructor.constructor",
+                "(function(){}).constructor",
+                "Object.getPrototypeOf(function*(){}).constructor",
+                "Object.getPrototypeOf(async function(){}).constructor",
+                "Object.getPrototypeOf(async function*(){}).constructor",
+            ] {
+                let source = format!(
+                    "try {{ {family}('return 1')(); 'REACHED' }} \
+                     catch (e) {{ e.name + ': ' + e.message }}"
+                );
+                assert_eq!(
+                    machine.eval(&source).unwrap(),
+                    "TypeError: secure mode",
+                    "{family} still reaches an evaluator on an ephemeral machine"
+                );
+            }
+            // `Date` is the fifth prototype lockdown poisons and the one that is
+            // not an evaluator. Dropped from the loop above because it takes no
+            // source argument; asserted here so all five are covered.
             assert_eq!(
-                machine.eval("(()=>{}).constructor('return 42')()").unwrap(),
-                "42"
+                machine
+                    .eval(
+                        "try { Date.prototype.constructor(); 'REACHED' } \
+                         catch (e) { e.name + ': ' + e.message }"
+                    )
+                    .unwrap(),
+                "TypeError: secure mode",
+            );
+            // And `Date` itself must keep working through its own binding, so
+            // the poisoning is the constructor edge and not the intrinsic.
+            assert_eq!(
+                machine.eval("typeof new Date().getTime()").unwrap(),
+                "number"
             );
         }
 
