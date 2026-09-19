@@ -15,7 +15,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 
@@ -26,6 +26,7 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -42,6 +43,7 @@ export const makeGuestMaker = ({
   formulateEval,
   formulateReadableBlob,
   formulateMarshalValue,
+  formulateInvitation,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -354,6 +356,44 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
+    /**
+     * Mint a single-use invitation owned by this guest. This shares
+     * `EndoHost.invite`'s implementation (`formulateInvitation`): the resulting
+     * invitation's locator `from` names *this guest's* handle, so an acceptor
+     * binds this guest rather than the top host. The invitation id is retained
+     * under `guestName` in this guest's own pet store so it survives a restart,
+     * and acceptance overwrites that slot with the accepted handle (consume
+     * once). Network mediation is supplied internally by the daemon inside the
+     * invitation formula, so this call hands the guest no `getPeerInfo`,
+     * `addPeerInfo`, host facet, peer enumeration, or outbound-dialing surface:
+     * a guest inviter gains no *dialing or peer-registration* authority. Note
+     * this is narrower than "no network authority" — the invitation URL the
+     * guest can then obtain via `locate()` does embed this daemon's advertised
+     * connection-hint addresses (by design; every invitation, host- or
+     * guest-issued, encodes them), so a guest learns and can forward those
+     * addresses even with an empty `@nets`. That disclosure is inherent to
+     * issuing a redeemable invitation and grants no authority to act on the
+     * addresses.
+     * @param {NameOrPath} guestName
+     */
+    const invite = async guestName => {
+      const { namePath, petName: guestPetName } = petNamePathFrom(guestName);
+      /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        namePath.length === 1
+          ? specialStore.storeIdentifier(guestPetName, identifiers.invitationId)
+          : E(directory).storeIdentifier(namePath, identifiers.invitationId),
+      );
+      const { value } = await formulateInvitation(
+        guestId,
+        handleId,
+        guestName,
+        tasks,
+      );
+      return value;
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -411,6 +451,7 @@ export const makeGuestMaker = ({
       storeValue,
       submit,
       sendValue,
+      invite,
     };
 
     return makeExo(

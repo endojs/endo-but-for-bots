@@ -402,13 +402,14 @@ Store a passable value (number, string, array, record, etc.) with a name.
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
 - provideGuest("my-guest") creates/retrieves a named guest
-Options: { introducedNames: { guestName: hostName } }
+Options: { agentName, introducedNames, pins, networks }
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 
 Create or retrieve another host agent.
 - provideHost() creates an anonymous host
 - provideHost("my-host") creates/retrieves a named host
+Options: { agentName, introducedNames, pins, networks }
 
 ## provideWorker(petNamePath) -> Promise<EndoWorker>
 

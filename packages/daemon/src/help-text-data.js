@@ -128,9 +128,9 @@ export const helpTextEntries = harden([
       storeValue:
         'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
       provideGuest:
-        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { introducedNames: { guestName: hostName } }',
+        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { agentName, introducedNames, pins, networks }',
       provideHost:
-        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host',
+        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host\nOptions: { agentName, introducedNames, pins, networks }',
       provideWorker:
         'provideWorker(petNamePath) -> Promise<EndoWorker>\nCreate or retrieve a worker for running code.\nWorkers are isolated JavaScript environments.',
       evaluate:

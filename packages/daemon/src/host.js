@@ -2253,34 +2253,6 @@ export const makeHostMaker = ({
       // so the leaf pet name suffices for the protocol.
       await E(invitation).accept(handleLocator, guestLeaf);
 
-      // Create a local guest with a regular pet store.
-      // Pin the guest handle via deferred task to prevent premature
-      // collection, then store the durable name after the lock releases.
-      /** @type {import('./types.js').DeferredTasks<import('./types.js').AgentDeferredTaskParams>} */
-      const guestTasks = makeDeferredTasks();
-      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
-      const { id: localGuestId } = await formulateGuest(
-        hostId,
-        handleId,
-        guestTasks,
-        `guest:${guestLeaf}`,
-      );
-
-      // Look up the local guest's handle from its formula so we can
-      // name it.  Incarnating the handle transitively incarnates the
-      // guest.
-      const localGuestFormula =
-        /** @type {import('./types.js').GuestFormula} */ (
-          await getFormulaForId(localGuestId)
-        );
-
-      // Store the durable name and release the transient pin.
-      await E(directory).storeIdentifier(
-        ['@pins', `guest-${guestLeaf}`],
-        localGuestFormula.handle,
-      );
-      await unpinTransient(localGuestFormula.handle);
-
       // Store the remote handle under guestName for mail delivery.
       // Use the handle's actual node (which may be an agent key) if
       // provided, falling back to the daemon node.
