@@ -28,18 +28,8 @@ import {
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import {
-  assertFormulaNumber,
-  parseId,
-  formatId,
-} from './formula-identifier.js';
-import {
-  formatLocator,
-  formatLocatorWithHints,
-  idFromLocator,
-  internalizeLocator,
-  parseLocator,
-} from './locator.js';
+import { parseId } from './formula-identifier.js';
+import { idFromLocator, internalizeLocator } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
@@ -326,6 +316,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
  * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
@@ -340,7 +331,6 @@ harden(normalizeHttpClientPolicy);
  * @param {NodeNumber} args.localNodeNumber
  * @param {(node: string) => boolean} args.isLocalKey
  * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
- * @param {(publicKey: string, daemonNode: string) => void} [args.writeRemoteAgentKey]
  * @param {DaemonCore['pinTransient']} [args.pinTransient]
  * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
  * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
@@ -378,6 +368,7 @@ export const makeHostMaker = ({
   formulateGitCredential,
   formulateGitRemote,
   formulateInvitation,
+  acceptInvitation,
   formulateDirectoryForStore,
   getPeerIdForNodeIdentifier,
   formulateChannel,
@@ -403,10 +394,6 @@ export const makeHostMaker = ({
     throw makeError(X`gitClone not wired into makeHostMaker`);
   },
   getIdForRef = /** @param {unknown} _ref */ _ref => undefined,
-  writeRemoteAgentKey = /** @param {string} _pk @param {string} _dn */ (
-    _pk,
-    _dn,
-  ) => {},
   pinTransient = /** @param {any} _id */ _id => {},
   unpinTransient = /** @param {any} _id */ _id => {},
   getFormulaGraphSnapshot = /** @param {any[]} _ids */ async _ids =>
@@ -2190,81 +2177,26 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Redeem an invitation locator into THIS host. Acceptance binds the
+     * inviter's handle reciprocally under `guestName` — no synthetic local
+     * guest is minted. Shares one implementation with `EndoGuest.accept` via
+     * the daemon-core `acceptInvitation` helper, which carries the whole
+     * register-peer / record-agent-key / bind sequence so the contract does not
+     * fork by facet.
      * @param {string} invitationLocator
      * @param {NameOrPath} guestName
      */
     const accept = async (invitationLocator, guestName) => {
-      // A path nests the accepted guest inside a directory; the parent
+      // A path nests the accepted connection inside a directory; the parent
       // directory must already exist.
-      const { namePath: guestNamePath, petName: guestLeaf } =
-        petNamePathFrom(guestName);
-      const {
-        number: invitationNumber,
-        node: peerKey,
-        hints,
-      } = parseLocator(invitationLocator);
-      const url = new URL(invitationLocator);
-      const remoteHandleNumber = url.searchParams.get('from');
-      // The remote handle's node may differ from the peer key when
-      // agent keys are used as formula nodes.
-      const remoteHandleNodeParam = url.searchParams.get('fromNode');
-
-      if (!remoteHandleNumber) {
-        throw makeError(`Invitation must have a "from" parameter`);
-      }
-      assertFormulaNumber(remoteHandleNumber);
-
-      /** @type {PeerInfo} */
-      const peerInfo = {
-        node: peerKey,
-        addresses: hints,
-      };
-      // eslint-disable-next-line no-use-before-define
-      await addPeerInfo(peerInfo);
-
-      // Register the remote agent key so we can route to its daemon.
-      if (remoteHandleNodeParam && remoteHandleNodeParam !== peerKey) {
-        writeRemoteAgentKey(remoteHandleNodeParam, peerKey);
-      }
-
-      const invitationId = formatId({
-        number: invitationNumber,
-        node: peerKey,
+      const { namePath: guestNamePath } = petNamePathFrom(guestName);
+      return acceptInvitation({
+        invitationLocator,
+        acceptingHandleId: handleId,
+        acceptingNetworksDirectoryId: networksDirectoryId,
+        bindCorrespondent: remoteHandleLocator =>
+          E(directory).storeLocator(guestNamePath, remoteHandleLocator),
       });
-
-      const { number: handleNumber, node: handleNode } = parseId(handleId);
-      // eslint-disable-next-line no-use-before-define
-      const { addresses: hostAddresses } = await getPeerInfo();
-      const handleLocatorWithoutHandleNode = formatLocatorWithHints(
-        formatId({ number: handleNumber, node: localNodeNumber }),
-        'handle',
-        hostAddresses,
-      );
-      const handleUrl = new URL(handleLocatorWithoutHandleNode);
-      // Include the handle's node if it differs from the daemon node
-      // (i.e. it uses an agent key).
-      if (handleNode !== localNodeNumber) {
-        handleUrl.searchParams.set('handleNode', handleNode);
-      }
-      const handleLocator = handleUrl.href;
-
-      const invitation = await provide(invitationId, 'invitation');
-      // The remote invitation ignores this name (`_hostNameFromGuest`),
-      // so the leaf pet name suffices for the protocol.
-      await E(invitation).accept(handleLocator, guestLeaf);
-
-      // Store the remote handle under guestName for mail delivery.
-      // Use the handle's actual node (which may be an agent key) if
-      // provided, falling back to the daemon node.
-      const remoteHandleNode = remoteHandleNodeParam || peerKey;
-      const remoteHandleId = formatId({
-        number: /** @type {import('./types.js').FormulaNumber} */ (
-          remoteHandleNumber
-        ),
-        node: /** @type {import('./types.js').NodeNumber} */ (remoteHandleNode),
-      });
-      const remoteHandleLocator = formatLocator(remoteHandleId, 'handle');
-      await E(directory).storeLocator(guestNamePath, remoteHandleLocator);
     };
 
     /** @type {EndoHost['cancel']} */

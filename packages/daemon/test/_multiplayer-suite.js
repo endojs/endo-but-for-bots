@@ -485,6 +485,123 @@ export const runMultiplayerSuite = ({ test, network }) => {
     );
   });
 
+  // Give a guest its own reachable `@nets` by minting a second network on the
+  // guest's daemon and moving it into the guest's networks directory. A guest's
+  // `@nets` starts empty (the anonymizing-persona default), so an acceptor is
+  // undialable across daemons until its host populates it — the reciprocal
+  // precondition the guest-native-invitations design states for a cross-daemon
+  // guest acceptor.
+  const giveGuestOwnNetwork = async (host, guestAgentName) => {
+    // The network module reads its listen address from a fixed pet name and,
+    // once bound, rewrites that name to the concrete assigned port. The host's
+    // network already did so, so reset the name to the ephemeral-port sentinel
+    // before minting the guest's network, or it would try to bind the host
+    // network's live port (EADDRINUSE).
+    await E(host).storeValue(network.listenAddr, network.listenAddrName);
+    const servicePath = path.join(dirname, network.modulePath);
+    const serviceLocation = url.pathToFileURL(servicePath).href;
+    const guestNetwork = await E(host).makeUnconfined(
+      '@main',
+      serviceLocation,
+      {
+        powersName: '@agent',
+        resultName: 'guest-network',
+      },
+    );
+    await guestNetwork;
+    // Move the guest network under the guest's own `@nets` so its address rides
+    // the guest's handle locator (getAllNetworkAddresses reads the guest's
+    // networks directory).
+    await E(host).move(
+      ['guest-network'],
+      [guestAgentName, '@nets', network.netsKey],
+    );
+  };
+
+  // The guest-native acceptance contract: a GUEST (not the top host) redeems an
+  // invitation into ITSELF across daemons — the symmetric complement of the
+  // guest-inviter test above, and the shape minion.town's onboarding needs.
+  test.serial(
+    'EndoGuest accepts an invitation into itself across daemons',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      const guestA = await E(hostA).provideGuest('guest-a-handle', {
+        agentName: 'guest-a-agent',
+      });
+      const guestB = await E(hostB).provideGuest('guest-b-handle', {
+        agentName: 'guest-b-agent',
+      });
+
+      // Populate the acceptor guest's `@nets` so the inviter's daemon can dial
+      // it back for the inviter->acceptor mail direction.
+      await giveGuestOwnNetwork(hostB, 'guest-b-agent');
+
+      // The inviting guest mints; the accepting guest redeems into itself.
+      const invitation = await E(guestA).invite('to-b');
+      const invitationLocator = await E(invitation).locate();
+      await E(guestB).accept(invitationLocator, 'to-a');
+
+      // Reciprocal binding, each guest under its own chosen pet name.
+      const toBId = await E(guestA).identify('to-b');
+      const toAId = await E(guestB).identify('to-a');
+      t.truthy(
+        toBId,
+        "inviting guest bound the acceptor's handle under 'to-b'",
+      );
+      t.truthy(
+        toAId,
+        "accepting guest bound the inviter's handle under 'to-a'",
+      );
+
+      // Each side bound the OTHER guest's own handle (not a host, not a minted
+      // replacement guest).
+      const guestAHandleId = await E(hostA).identify('guest-a-handle');
+      const guestBHandleId = await E(hostB).identify('guest-b-handle');
+      t.is(
+        parseId(toAId).number,
+        parseId(guestAHandleId).number,
+        "acceptor's 'to-a' is the inviting guest's own handle",
+      );
+      t.is(
+        parseId(toBId).number,
+        parseId(guestBHandleId).number,
+        "inviter's 'to-b' is the accepting guest's own handle",
+      );
+
+      // The accepting guest minted no replacement guest under @pins.
+      t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
+
+      // Bidirectional mail proves both dialing directions established.
+      await E(guestA).send('to-b', ['Hello from A'], [], []);
+      await E(guestB).send('to-a', ['Hello from B'], [], []);
+
+      await waitForCondition(async () => {
+        const messages = /** @type {any[]} */ (await E(guestB).listMessages());
+        return messages.some(
+          m => m.type === 'package' && m.strings?.[0] === 'Hello from A',
+        );
+      });
+      t.pass('acceptor received the inviter’s message');
+
+      await waitForCondition(async () => {
+        const messages = /** @type {any[]} */ (await E(guestA).listMessages());
+        return messages.some(
+          m => m.type === 'package' && m.strings?.[0] === 'Hello from B',
+        );
+      });
+      t.pass('inviter received the acceptor’s message');
+
+      // Single-use survives CapTP: the replayed accept is rejected.
+      await t.throwsAsync(
+        () => E(guestB).accept(invitationLocator, 'to-a-again'),
+        undefined,
+        'replayed invitation is rejected',
+      );
+    },
+  );
+
   // The invitation object's own cancel() revokes exactly that pending
   // invitation, leaving a sibling invitation for the same guest redeemable.
   test.serial(
