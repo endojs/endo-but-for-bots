@@ -49,14 +49,27 @@ fn regression_cases_never_diverge() {
     };
 
     let files = collect_js(&dir);
-    // The tree may legitimately be sparse (source-expressible fuzz trophies are
-    // rare — most findings fold into the stage corpus, and decoder/bytecode
-    // trophies live as Rust regression tests in `ironhorse-fuzz`; see the README),
-    // but the gate itself is always wired: any case present is dual-run.
-    if files.is_empty() {
-        eprintln!("no source-expressible fuzz trophies checked in yet; gate is armed");
-        return;
-    }
+    // The tree is SPARSE, not empty, and the difference is load-bearing.
+    // Source-expressible fuzz trophies are rare — most findings fold into the
+    // stage corpus, and decoder/bytecode trophies live as Rust regression
+    // tests in `ironhorse-fuzz`; see the README. But this gate used to return
+    // early on an empty tree while its own comment claimed it was "always
+    // wired", so deleting or renaming the one checked-in case would have left
+    // it reporting green having dual-run nothing.
+    //
+    // That is the shape of three separate incidents on this branch (a vacuous
+    // carry fixture, a `#[test]` a merge nested out of collection, and a suite
+    // that skipped itself on a missing build artifact), so it is asserted
+    // rather than commented. Emptying the tree deliberately means changing
+    // this line deliberately, which is the same discipline every other pin
+    // here uses.
+    assert!(
+        !files.is_empty(),
+        "no cases under {} — this gate cannot dual-run anything, and a silent \
+         pass is exactly what it exists to prevent. If the tree is meant to be \
+         empty, retire this assertion in the same commit that empties it.",
+        dir.display()
+    );
 
     // Gate meter-exact where a trophy carries the tag; a trophy is not required
     // to, but if it does its historical computron evidence is held.

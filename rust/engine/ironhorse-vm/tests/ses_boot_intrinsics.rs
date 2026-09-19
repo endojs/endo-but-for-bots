@@ -243,8 +243,9 @@ fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
 /// which constructor was used. `Interp::new()` and
 /// `Machine::unfrozen_with_start_global_names` leave the intrinsics mutable and the
 /// shim repairs and then freezes them itself. `Machine::new()` freezes them at
-/// construction, and the shim's `repairIntrinsics` cannot then rewrite a
-/// descriptor it needs to.
+/// construction, and the SES bundle then cannot rewrite a descriptor it needs
+/// to (see `FROZEN_REALM_FORECLOSURE` for exactly where that stops it, which
+/// is NOT `repairIntrinsics`).
 ///
 /// That used to make the two mutually exclusive -- the multi-compartment
 /// `Machine` API came only with the construction-time freeze. Deferring the
@@ -317,17 +318,47 @@ const SES_CENSUS: &str = "['lockdown','harden','Compartment']\
 /// other operation against a sealed slot was the `Iterator.prototype` sweep,
 /// which existed because the five lazy helpers halted uncatchably; they are
 /// implemented, so the sweep is gone and the prologue runs to completion even
-/// here. Foreclosure therefore comes from the SHIM again -- `repairIntrinsics`
-/// rewriting descriptors on intrinsics the native freeze already sealed --
-/// which is where it came from before the prologue was bundled into a strict
-/// module. Same foreclosure, one layer later, and the third value this
-/// constant has held.
+/// here. Foreclosure moves one layer later, into the SES bundle -- the third
+/// value this constant has held.
+///
+/// NOT in `repairIntrinsics`, which two earlier revisions of this comment
+/// claimed. `lockdown()` is never reached. The abort happens while the SES
+/// bundle's MODULE GRAPH is still evaluating, at `@endo/immutable-arraybuffer`'s
+/// module-scope install (`packages/immutable-arraybuffer/src/shim.js`, pulled in
+/// unconditionally by `packages/ses/src/lockdown.js`), on its first
+/// `defineProperties` against the frozen `ArrayBuffer.prototype`. Measured:
+/// evaluating the bundle TRUNCATED before its trailing `lockdown({...})` call
+/// still throws this, and `globalThis.lockdown` is still identically the
+/// engine's binding afterwards -- so `ses/src/lockdown-shim.js`, which assigns
+/// that global at module scope, had not finished either. The census asserted
+/// after the failure says the same thing in the other direction, and the two
+/// used to contradict each other.
+///
+/// Two things follow that the message itself does not say. The realm is
+/// foreclosed CLEANLY rather than half-repaired, but by one statement's margin:
+/// that install aborts just before the loop which would have replaced the
+/// TypedArray constructors on the start global, and those writes WOULD have
+/// succeeded, leaving emulated constructors over un-shimmed prototypes. And
+/// this foreclosure point is contingent on the engine not implementing the
+/// Immutable ArrayBuffer proposal -- once `ArrayBuffer.prototype.sliceToImmutable`
+/// exists natively, that install's `if` guard is false, the bundle proceeds
+/// further, and this constant moves again.
 const FROZEN_REALM_FORECLOSURE: &str = "ERROR: invalid descriptor";
 
 /// `eval_wrapped`'s shape: an engine halt is not catchable, so a `'ok'` here
 /// means the program ran to completion and threw nothing.
+///
+/// The initializer is load-bearing, not decoration. These cranks share one
+/// realm, and a bare `var __e;` does not reset a binding an earlier crank
+/// already created -- so a second `wrapped()` call after a first one threw
+/// would report the FIRST error again, in helpers whose whole job is to pin an
+/// error string. Every caller currently uses it once per realm, so this is a
+/// trap rather than a live bug; an adversarial review sprang it while probing.
 fn wrapped(source: &str) -> String {
-    format!("var __e; try {{ {source} }} catch(e) {{ __e = e; }} __e ? ('ERROR: ' + __e.message) : 'ok'")
+    format!(
+        "var __e = undefined; try {{ {source} }} catch(e) {{ __e = e; }} \
+         __e ? ('ERROR: ' + __e.message) : 'ok'"
+    )
 }
 
 #[test]
@@ -463,22 +494,23 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
                 "Machine::new freezes the intrinsic graph at construction"
             );
-            // The boot forecloses in `repairIntrinsics` again, one layer
-            // LATER than the previous revision of this pin, and the message
-            // moved back with it.
+            // The boot forecloses one layer LATER than the previous revision
+            // of this pin, and the message moved with it.
             //
             // That revision caught the prologue being bundled into a strict
             // module: `delete Iterator.prototype.map` on a frozen intrinsic
             // had returned false silently under the old sloppy-mode splice,
             // and strict mode throws, so the prologue stopped at its own sweep
-            // and the shim never ran.
+            // and the bundle never ran.
             //
             // The sweep is now gone -- it existed only because the five lazy
             // Iterator helpers halted uncatchably, and they are implemented --
-            // so the prologue completes and the shim reaches the descriptor
-            // rewrite that the native freeze refuses. All three revisions are
-            // foreclosure; what moves is which layer gets there first, which
-            // is exactly what this constant is documented to track.
+            // so the prologue completes and the SES bundle gets to run. It
+            // then aborts inside its own module graph, well before
+            // `lockdown()`; `FROZEN_REALM_FORECLOSURE` names the statement and
+            // the measurement. All three revisions are foreclosure; what moves
+            // is which layer gets there first, which is exactly what that
+            // constant is documented to track.
             assert_eq!(
                 crank(&wrapped(&boot)),
                 FROZEN_REALM_FORECLOSURE,

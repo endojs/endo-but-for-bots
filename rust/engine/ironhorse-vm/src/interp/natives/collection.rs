@@ -865,18 +865,32 @@ impl Interp {
     /// `CreateIterResultObject(value, done)`. Generator-backed helpers allocate
     /// a fresh result on every `next()`, unlike the built-in cursors above,
     /// which mutate and return one reused object.
+    /// `CreateIterResultObject`, charged NOTHING — deliberately, and this is
+    /// the third answer this function has given.
+    ///
+    /// The spec creates a fresh object per call, so this allocates three slots
+    /// (the instance and one per own property) and `a === b` is correctly
+    /// `false` across two `next()`s. XS does not: `fx_IteratorHelper_prototype_next`
+    /// (`xsGenerator.c`) reads `instance->next` and MUTATES it in place, so it
+    /// allocates the result once at helper creation and answers `true` — an XS
+    /// deviation this engine does not copy.
+    ///
+    /// The meter, though, must match XS, and XS pays nothing here. Charging
+    /// per slot put the helpers 768 raw per `next()` OVER the oracle, linear
+    /// in iteration length: measured on the done fast path, XS 1327104 vs
+    /// 1327872 here, and removing these three ticks lands on XS exactly.
+    /// Charging once — the original — was 256 over.
+    ///
+    /// `regexp_string_iterator_result` is the settled precedent: same three
+    /// slots, same fresh-where-XS-reuses shape, no charge, and its per-`next()`
+    /// cost has always matched XS. The slots still cost the HEAP, which the
+    /// collector and the chunk ceiling account for; what is not charged is the
+    /// METER, because the oracle does not charge it.
     fn helper_iter_result(&mut self, value: Slot, done: bool) -> Slot {
         let value_id = self.intern_static_key("value");
         let done_id = self.intern_static_key("done");
-        // Three `fxNewSlot`s, not one: `set_own_unmetered` allocates a slot
-        // per own property, so charging only for the instance undercharged
-        // every `next()` by two slot allocations. Named individually, the
-        // convention the collection constructors in this file already use.
-        self.meter.tick_slot_alloc(); // instance
         let result = self.slots.alloc(Slot::instance(self.object_proto));
-        self.meter.tick_slot_alloc(); // value
         self.set_own_unmetered(result, value_id, value);
-        self.meter.tick_slot_alloc(); // done
         self.set_own_unmetered(result, done_id, Slot::boolean(done));
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
