@@ -48,8 +48,18 @@ export const discoverTools = async (host, localTools) => {
 
   /** @type {unknown} */
   let maybeToolNames;
+  // Ask before listing. Most agents have no tools/ directory, and listing a
+  // name that is not there is an error the daemon logs with a stack on every
+  // call — once per model round, for every session. A host that cannot say
+  // is simply asked to list, as before.
+  let mayHaveTools = true;
   try {
-    maybeToolNames = await E(host).list('tools');
+    mayHaveTools = (await E(host).has('tools')) !== false;
+  } catch {
+    mayHaveTools = true;
+  }
+  try {
+    maybeToolNames = mayHaveTools ? await E(host).list('tools') : [];
   } catch {
     // No tools/ directory in this agent's namespace — that's fine
     maybeToolNames = [];

@@ -1467,6 +1467,56 @@ const stripCodeFence = code => {
   return fenced ? fenced[1] : code;
 };
 
+/**
+ * What to tell a model whose code did not parse. The advice has to fit the
+ * cause: told "no markdown fences" about code that had none, a model resends
+ * the same thing with something else changed.
+ *
+ * @param {string} code
+ * @param {string} message - the engine's message; it carries no position.
+ * @returns {string}
+ */
+export const describeParseFailure = (code, message) => {
+  const hints = [];
+  if (
+    /SES_IMPORT_REJECTED|import expression|import statement|import\.meta/i.test(
+      message,
+    )
+  ) {
+    hints.push(
+      'exec has no import, import() or require: there is no module loader and no Node built-ins. Reach files and everything else outside through capabilities: E(powers).lookup(...). This evaluator refuses the characters "import(" anywhere in the source, even inside a string or a comment — so if you are writing a file that contains a dynamic import, build that text as "imp" + "ort(".',
+    );
+  } else if (/SES_HTML_COMMENT_REJECTED|html comment/i.test(message)) {
+    hints.push(
+      'The source contains an HTML comment marker (<!-- or -->), which this evaluator refuses even inside a string. Write it as "<!" + "--" and "--" + ">".',
+    );
+  } else {
+    // A fence that was stripped before evaluating is not the problem; one
+    // that is still there (prose around it, or only half of it) is.
+    if (stripCodeFence(code) === code && code.includes('```')) {
+      hints.push(
+        'Send raw JavaScript in the "code" argument, without markdown fences or any prose around the code.',
+      );
+    }
+    // The fences' own backticks are not template literals.
+    if (code.replace(/```/g, '').includes('`')) {
+      hints.push(
+        'The code uses template literals. If one of them holds text that itself contains a backtick or ${ (a shader, a template, markdown), that inner backtick ends the literal and the rest is parsed as code — a common cause of "Unexpected identifier". Build such text from single-quoted strings joined together, or escape each inner backtick and ${.',
+      );
+    }
+    if (/await is only valid|Unexpected reserved word/.test(message)) {
+      hints.push(
+        'await works at the top level of the code, but not inside a nested function unless that function is async.',
+      );
+    }
+  }
+  if (hints.length === 0) {
+    hints.push('Check the code for syntax errors and send it again.');
+  }
+  return `Could not parse the code (${message}). ${hints.join(' ')}`;
+};
+harden(describeParseFailure);
+
 export const makeExecTool = powers => {
   /** @type {ToolSchema} */
   const toolSchema = harden({
@@ -1485,12 +1535,28 @@ export const makeExecTool = powers => {
         '- harden: freeze objects for safe passing\n' +
         '- console: for logging\n' +
         '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
+        'Nothing else is in scope. A petname is NOT a variable: reach a stored ' +
+        'object with const workspace = await E(powers).lookup("workspace"); at ' +
+        'the top of every call that uses it (each call is a fresh function ' +
+        'body; nothing carries over). A name you never declared does not ' +
+        'throw here, it reads as undefined — so the error Cannot deliver ' +
+        '"someMethod" to target; typeof target is "undefined" means a name in ' +
+        'your code was never declared or looked up.\n\n' +
         'The code runs under SES lockdown, which surprises callers who expect a ' +
         'normal environment:\n' +
         '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
         'let a capability supply one.\n' +
         '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
         'between polls within one call.\n' +
+        '- No import, import() or require: there is no module loader and no ' +
+        'Node built-ins (fs, path, child_process). Files, network and ' +
+        'everything else outside come from capabilities reached through ' +
+        'powers.\n' +
+        '- The code is JavaScript source inside a JSON string. To build a file ' +
+        'that itself contains backticks or ${ (a shader, a template, ' +
+        'markdown), do not put it in a template literal — the inner backtick ' +
+        'ends the literal. Use single-quoted strings joined together, or ' +
+        'escape each inner backtick and ${.\n' +
         '- The result is JSON-serialized for the model. BigInts render as ' +
         'decimal strings, so a stat() or workflow status can be returned as ' +
         'it came. A remote capability is described by its method names.\n\n' +
@@ -1546,9 +1612,7 @@ export const makeExecTool = powers => {
         // nudge to resend clean source, so the model can self-correct on the
         // next round instead of the turn aborting.
         const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Could not parse the code (${message}). Send raw JavaScript in the "code" argument — no markdown fences — and check for syntax errors.`,
-        );
+        throw new Error(describeParseFailure(code, message));
       }
       // The compartment has no timers, so an agent watching something change
       // (a workflow reaching await-approval, a build finishing) could not wait
