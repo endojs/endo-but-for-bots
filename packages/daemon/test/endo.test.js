@@ -526,6 +526,18 @@ test('failure to start', async t => {
     await cleanup();
     const configSubDirectory = `failure-to-start~${'0'.repeat(200)}`;
     const config = makeConfig('tmp', configSubDirectory);
+    // makeConfig now parks sockPath under the OS temp dir to dodge the ~104
+    // char Unix socket limit, but this test's whole point is a start that
+    // fails, which it induces precisely by that over-long socket path. Restore
+    // the long in-state-dir sockPath here so `start` still fails to bind.
+    if (process.platform !== 'win32') {
+      config.sockPath = path.join(
+        dirname,
+        'tmp',
+        configSubDirectory,
+        'endo.sock',
+      );
+    }
     await purge(config);
     await t.throwsAsync(() => start(config));
   } finally {
