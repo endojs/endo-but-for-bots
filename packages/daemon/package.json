@@ -131,6 +131,8 @@
     "files": [
       "test/**/*.test.*"
     ],
+    "serial": true,
+    "concurrency": 1,
     "timeout": "5m"
   },
   "typeCoverage": {
