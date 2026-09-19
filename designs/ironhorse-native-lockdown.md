@@ -559,8 +559,23 @@ entire operation succeeds and is the state carried across persistence.
    than by the disconnected `-l` wire an earlier revision cited: see
    § Oracle divergences, measured. Decision 4 itself produced none; the width
    of the root set (rows 3 and 4 there) did.
-5. **Does the daemon want this at all?** **Still open**, and this work does not
-   answer it. It makes the native profile answerable where it was not.
+5. **Does the daemon want this at all?** **Deferred 2026-09-18** at the owner's
+   direction: the endor daemon is not a current priority. This work does not
+   answer the question and no longer needs to -- it makes the native profile
+   answerable for whoever asks it later.
+
+   Deferred, not open. Nothing should be sequenced on it, and a reader planning
+   work here should treat Phase 4 of
+   [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
+   -- the endor SES bundle bar, which this question gates -- as deferred with
+   it. That document is not amended here; its own Status still reads Proposed
+   and it remains an ordering proposal with nothing implemented.
+
+   Distinct from the profile question answered the same day, which was about
+   `packages/thixotrope`'s IronHorse worker and chose the SES shim. The two are
+   separate decisions about separate embedders, and conflating them is easy
+   because both were once phrased as "the daemon's IronHorse worker" when only
+   thixotrope has one.
 
 ### One decision the implementation forced
 
@@ -602,14 +617,25 @@ Each line is a claim, and each was measured.
       An earlier revision of this line counted the blob and seal once each,
       which is the exact miscount the two-armed fix exists to prevent.)
 - [x] `ses_prelude_reach` stays at its 7/8 pin and `ses_boot_intrinsics`'s
-      three realm profiles still pass — with one change in each, `lockdown`
-      going from `undefined` to `function` in the pre-shim census, which is the
-      engine binding its own and is the only thing that moved.
+      three realm profiles still pass, with `lockdown` going from `undefined` to
+      `function` in the pre-shim census where the engine binds its own.
 
-      **That census term stopped discriminating in the process, and the tests
-      now say so.** `lockdown=function` used to mean "the shim installed one";
-      with the engine binding one on every realm it is `function` on both sides
-      of the shim's evaluation and carries no information. The unfrozen profile
+      **Corrected 2026-09-18: that is two of the three profiles, not all three,
+      and an earlier revision of this item said "one change in each" and "the
+      engine binding one on every realm".** `create_hardened_globals` binds
+      `lockdown` for every `Interp`, but
+      `new_shared_realm_machine_configured` REMOVES it again when
+      `freeze == false` (`interp/realm.rs:703`): an unfrozen machine exists so
+      the SES shim can repair and freeze the graph, the shim installs its own,
+      and until it does the engine's would be a realm-wide mutation reachable
+      from any compartment of a machine that has not locked down yet. So the
+      two plain-`Interp` profiles moved and the unfrozen-`Machine` profile still
+      pins `lockdown=undefined` deliberately.
+
+      **Where the term did move, it stopped discriminating, and the tests now
+      say so.** `lockdown=function` used to mean "the shim installed one"; where
+      the engine binds one it is `function` on both sides of the shim's
+      evaluation and carries no information. The unfrozen profile
       pins object identity across the shim's evaluation instead, and the frozen
       profile CALLS the binding and pins `TypeError: lockdown already called` —
       the engine's message, where the shim's would have been
@@ -1290,11 +1316,34 @@ retracted one.
       only one.** It said "what is genuinely still missing is ATTENUATION, not
       isolation", which understated the distance to the shim.
 
-      Attenuation is the first: a host-made compartment's `Date.now()` answers
-      from the real clock instead of the NaN an `fx_lockdown` compartment global
-      would give, and `Math` is likewise unsecured. That is steps 3 and 4 — a
+      Attenuation is the first: a host-made compartment shares the start
+      compartment's `Date` rather than getting the NaN an `fx_lockdown`
+      compartment global would give, and `Math` is likewise unsecured. That is
+      steps 3 and 4.
+
+      **Corrected 2026-09-18 on two points, both of which change the
+      sequencing.** This paragraph read "a host-made compartment's `Date.now()`
+      answers from the real clock", and closed by calling steps 3 and 4 "a
       narrower gap than a guest `Compartment` constructor, and the one to close
-      if guest source must not read a clock.
+      if guest source must not read a clock". Neither survives measurement.
+
+      IronHorse's clock is already fixed: `Date.now()` returns `0.0`
+      unconditionally (`interp/natives/date.rs:50`), and `Math.random` does not
+      exist at all -- `create_math` (`interp/boot.rs:2512`) installs 34 methods
+      and `random` is not among them. § Step 4 above and
+      `native_lockdown.rs::the_post_lockdown_start_compartment_keeps_its_date_and_lacks_a_compartment`
+      both already said so, and the oracle divergence they record is the same
+      fact from the other side: `Date.now() > 0` is `true` on XS and `false`
+      here. So step 4 is nearly empty as a port, and no guest reads a live
+      clock today.
+
+      What a confined guest is actually missing is a compartment global to
+      attenuate INTO, which is step 3, which is `mxCompartmentGlobal`, which is
+      the guest `Compartment`'s own template. Steps 3 and 4 are therefore not a
+      smaller piece to land ahead of the next item; they are the same piece,
+      and they belong in its design rather than before it.
+      `designs/ironhorse-ses-compartment-equivalence.md` § The work #1295
+      deferred, triaged carries this as G1.
 
       The second is that the worker calls the SHIM's
       `lockdown({errorTaming: 'safe', reporting: 'none', overrideTaming:
@@ -1311,11 +1360,52 @@ retracted one.
       XS's `fx_lockdown` behaves identically — this is fidelity to the oracle,
       not a port defect.
 
-      The distinction matters for sequencing: attenuation is what a CONFINED
-      guest additionally needs, while override enablement is what arbitrary
-      guest source needs in order to run at all. A worker that swapped the shim
-      for the native `lockdown()` today would confine correctly and break
-      ordinary guest code.
+      **Corrected 2026-09-18: override enablement is a compatibility
+      preference here, not a requirement.** This paragraph read "override
+      enablement is what arbitrary guest source needs in order to run at all",
+      and concluded that a worker swapping the shim for the native `lockdown()`
+      "would confine correctly and break ordinary guest code". That overstates
+      it, because the override mistake is a `[[Set]]` problem only.
+
+      A class body and an object literal both define their methods through
+      `[[DefineOwnProperty]]` (`ClassDefinitionEvaluation` ->
+      `MethodDefinitionEvaluation` -> `DefinePropertyOrThrow`), which never
+      consults the prototype chain, and `Object.defineProperty` keeps working
+      after lockdown -- the probe above measures `defineStillWorks=mine`. Only
+      the ES5 ASSIGNMENT idiom is affected: `Foo.prototype.toString = ...`,
+      `Child.prototype.constructor = Child`, `MyError.prototype.name = ...`.
+      Class-syntax-first guest source, which is what `packages/thixotrope`'s
+      orthogonal-persistence model produces, is structurally immune.
+
+      SES's own list says the same thing. `minEnablements`
+      (`packages/ses/src/enablements.js:60`) is six properties on four objects
+      -- `%ObjectPrototype%.toString`, `%FunctionPrototype%.toString`,
+      `%ErrorPrototype%.name` and `%IteratorPrototype%`'s `toString`,
+      `constructor` and `@@toStringTag` -- and each entry's comment names the
+      offender it exists for (`// set by "rollup"`; `// set by "precond",
+      "ava", "node-fetch"`). It is a shim for transpiled and legacy dependency
+      output, not a language-level need.
+
+      Measured in this tree: assignment to `toString`, `name` or `constructor`
+      on any prototype, across `packages/` and `rust/endo/xsnap/src/` and
+      excluding `node_modules`, the test262 corpus and `dist/`, occurs in three
+      places and none is guest-path code -- a comment in `enablements.js`,
+      SES's own `property-override.test.js`, and
+      `packages/hardened262/scripts/agents/ironhorse.js:27`, a harness adapter
+      that rewrites an `Object.defineProperty` call INTO the assignment idiom.
+
+      So the distinction for sequencing is narrower than this item claimed.
+      Attenuation is what a CONFINED guest additionally needs. Override
+      enablement is a compatibility probe to run before migrating a worker --
+      cheap, because the surface is those six properties -- and its residual
+      risk is a guest's bundled DEPENDENCY graph rather than its authored
+      source. The one idiom that still catches otherwise-modern code is
+      `MyError.prototype.name = 'MyError'` after `class MyError extends Error
+      {}`, which has a definable alternative.
+
+      **Consequence:** the native route's remaining cost for this worker is the
+      compartment template alone, which folds into the guest `Compartment`
+      below. It does not trail a second unscoped item behind it.
 - [ ] **Native `lockdown()` and the SES shim are alternatives, not layers, and
       the failure mode is ugly.** SES guards a second lockdown with
       `seemsToBeLockedDown()`, whose sixth term calls
@@ -1335,21 +1425,60 @@ retracted one.
       `native_lockdown.rs::the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown`.
 - [ ] **Widen the shared-corpus gates past hardened262 and stage4-harden.**
       The two gates that exist reuse sources, harnesses and committed baselines
-      rather than restating assertions, which is the shape to keep. The obvious
-      next candidate -- `packages/hardened262`'s 255 `test/Object` integrity
-      cases -- is not a directory to point the gate at: some of those cases
-      require MUTABLE intrinsics and would fail under lockdown for the reason
-      the lockdown exists, so adding them means selecting the behavioural ones
-      case by case and writing down why each excluded one is excluded. The SES
+      rather than restating assertions, which is the shape to keep.
+
+      **Corrected 2026-09-18: the candidate this item named does not exist.**
+      It said the obvious next one was "`packages/hardened262`'s 255
+      `test/Object` integrity cases", which "is not a directory to point the
+      gate at" because some of them require MUTABLE intrinsics. There is no
+      `test/Object` directory in that package, and the 255 figure matches
+      nothing in the tree: `packages/hardened262/test` is 123 files in ten
+      directories -- 68 `Compartment`, 30 `intrinsics`, 12 `harden`, 7
+      `modules`, and one each of `ArrayBuffer`, `TextDecoder`, `TextEncoder`,
+      `freeze`, `ironhorse` and `lockdown`.
+
+      What the gate actually leaves out is smaller and differently shaped:
+      `native_lockdown_corpora.rs:130` excludes `test/Compartment/` and
+      `test/modules/` -- 75 files -- and asserts each is already `false` in the
+      committed IronHorse baseline, which is why it runs 47. So the residue is
+      not a curation problem at all; it is blocked on a guest `Compartment`,
+      the next item below. What this item still wants first is an inventory of
+      what the two existing gates do not cover and why, not a directory to
+      point at.
+      `designs/ironhorse-ses-compartment-equivalence.md` § The work #1295
+      deferred, triaged carries it as R1. The SES
       AVA suites are further still: they depend on SES options, override
       enablement and a guest `Compartment`, so they need a real adapter rather
-      than source stripping. Deliberately not started here -- an unselected
-      directory would either go red for the wrong reason or need an exclusion
-      list nobody could read. The `-l` sweep below already executes those files
-      as part of the whole corpus; what a gate would add is curation.
+      than source stripping. Deliberately not started here. The `-l` sweep
+      below already executes every one of these files as part of the whole
+      corpus; what a gate would add is curation, and the correction above is
+      why that curation cannot be scoped yet.
 - [ ] A guest `Compartment` (`fx_Compartment`, `xsModule.c:2864`) is the next
       piece, and the one that makes the parity corpus's lockdown case runnable
       natively. It needs its own definition.
+
+      What that definition owes, beyond transliterating `fx_Compartment`, is
+      scoped in `designs/ironhorse-ses-compartment-equivalence.md` § The work
+      #1295 deferred, triaged (G1): there is no template object to snapshot
+      because IronHorse builds each compartment's globals from `global_props`
+      at `create_environment` (`interp/realm.rs:879`); two of
+      `CompartmentOptions`' hooks are booleans rather than callables; relative
+      specifiers are inexpressible because `ModuleGraph::resolve` takes no
+      referrer and `Realm` has no parent; and a new intrinsic moves the boot
+      fingerprint again, forcing the golden-fixture regeneration this work
+      measured once already. Steps 3 and 4 fold into it rather than preceding
+      it, per the correction two items above.
+
+      What it unblocks, measured: the 75 `packages/hardened262` files the
+      shared-corpus gate excludes, and 2 of the 8 cases on the
+      `test262:ironhorse` engine lane -- not all 8; the other six need
+      `frozenBytes`, `compareBytes`, `concatBytes`, `passStyleOf` and
+      `environment`, which no engine has natively
+      (`packages/test262-runner/README.md` § The engine lane's zero).
+
+      Blocked on it in turn, and NOT on lockdown: moving
+      `packages/thixotrope`'s IronHorse worker off the SES shim, two items
+      above.
 - [x] Decide where the oracle-divergence record for a deliberate departure from
       `fx_lockdown` lives. It lives in § Oracle divergences, measured, below.
       An earlier revision closed this as moot, reasoning that decision 4 is a

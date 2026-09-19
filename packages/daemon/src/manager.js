@@ -43,7 +43,7 @@ import {
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
-import { makeDirectoryMaker } from './directory.js';
+import { makeDirectoryMaker, makeReadOnlyDirectoryView } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
@@ -2753,6 +2753,48 @@ const makeDaemonCore = async (
       throw new Error('Text I/O is not supported on mailbox directories');
     };
 
+    // A genuinely narrow `ReadableNameHub` view: exactly the five readable
+    // methods, so `__getMethodNames__`-based feature detection sees the
+    // `ReadableNameHub` contract and nothing more. Returning `mailHub` itself
+    // would report the full `EndoDirectory` surface (with present-but-throwing
+    // mutators) under a value typed `Promise<ReadableNameHub>`, which
+    // misclassifies the view for a receiver feature-detecting a read-only hub.
+    // Minted through the shared `makeReadOnlyDirectoryView` factory so all three
+    // read-only views (this, the message hub's, and `EndoDirectory.readOnly()`)
+    // carry an identical guard and a `ReadableNameHub`-specific `help`. The
+    // liveness gate severs the view when this hub's context is canceled, so a
+    // guest's read-only view does not outlive collection of the mailbox.
+    //
+    // The shallow-attenuation caveat on `ReadableNameHub.lookup` (see
+    // types.d.ts) bites HARDER here than on a plain directory. A mailbox's
+    // reachable graph is, by construction, exactly where arbitrary
+    // sender-supplied capabilities land: a message's authority-bearing names —
+    // `@resolver`, `@promise`, `@value`, `@from`, `@to`, and package-message
+    // edge names, each registered with an `id` (see `registerName` below) — all
+    // resolve through `provide` to the full-strength live object the sender
+    // named, not a further-attenuated handle. (`@slots` is registered as data,
+    // an array of strings, so it is NOT the escape vector.) So a holder of this
+    // "read-only" view can still reach a fully writable capability via
+    // `lookup(['<message>', '@resolver'])` (etc.). Withholding the mailbox's own
+    // mutators does NOT confine what a looked-up message payload hands back;
+    // grant this view only where that one-hop escape is acceptable.
+    // Key the gate off `context.cancelled` (rejected synchronously in `cancel`),
+    // not an `onCancel` hook: a hook-driven flag flips only behind every later-
+    // registered peer hook in the serial drain, so a slow or never-settling peer
+    // would keep this view forwarding to an already-revoked mailbox.
+    let mailboxCancelled = false;
+    void context.cancelled.catch(() => {
+      mailboxCancelled = true;
+    });
+    const mailReadableView = makeReadOnlyDirectoryView(
+      harden({ has, list, lookup, maybeLookup }),
+      () => {
+        if (mailboxCancelled) {
+          throw new Error('Mailbox directory has been revoked');
+        }
+      },
+    );
+
     mailHub = /** @type {NameHub} */ (
       /** @type {unknown} */ (
         makeExo(
@@ -2783,6 +2825,12 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // This hub is *already* fully read-only (every mutator above is
+            // `disallowedMutation`/`notSupported`), but returning it directly
+            // would still expose those methods to `__getMethodNames__`. Return
+            // the narrow `ReadableNameHub` view so the read-only surface is
+            // exactly the declared `Promise<ReadableNameHub>`.
+            readOnly: async () => mailReadableView,
           }),
         )
       )
@@ -3133,6 +3181,39 @@ const makeDaemonCore = async (
       throw new Error('Text I/O is not supported on message directories');
     };
 
+    // A genuinely narrow `ReadableNameHub` view (see the mailbox hub above for
+    // the rationale): exactly the five readable methods, so feature detection
+    // over `__getMethodNames__` sees the declared `ReadableNameHub` contract
+    // and not the full `MessageHub`/`EndoDirectory` surface. Minted through the
+    // shared `makeReadOnlyDirectoryView` factory for one guard and one `help`.
+    // The liveness gate severs the view when this hub's context is canceled.
+    //
+    // Same shallow-attenuation caveat as the mailbox hub above: this message's
+    // authority-bearing names (`@resolver`, `@promise`, `@value`, `@from`,
+    // `@to`, and package-message edge names — each registered with an `id`)
+    // resolve through `provide` to the full-strength live capabilities the
+    // sender transmitted, so `lookup`/`maybeLookup` on this "read-only" view can
+    // hand back a fully writable capability. (`@slots` is registered as data, an
+    // array of strings, not a capability.) The read-only surface withholds this
+    // hub's own mutators only; it does not attenuate what a looked-up payload
+    // returns.
+    // Key the gate off `context.cancelled` (rejected synchronously in `cancel`),
+    // not an `onCancel` hook: a hook-driven flag flips only behind every later-
+    // registered peer hook in the serial drain, so a slow or never-settling peer
+    // would keep this view forwarding to an already-revoked message.
+    let messageCancelled = false;
+    void context.cancelled.catch(() => {
+      messageCancelled = true;
+    });
+    const messageReadableView = makeReadOnlyDirectoryView(
+      harden({ has, list, lookup, maybeLookup }),
+      () => {
+        if (messageCancelled) {
+          throw new Error('Message directory has been revoked');
+        }
+      },
+    );
+
     messageHub = /** @type {NameHub} */ (
       /** @type {unknown} */ (
         makeExo(
@@ -3163,6 +3244,11 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // This hub is *already* fully read-only, but returning it directly
+            // would still expose its present-but-throwing mutators to
+            // `__getMethodNames__`. Return the narrow `ReadableNameHub` view so
+            // the surface is exactly the declared `Promise<ReadableNameHub>`.
+            readOnly: async () => messageReadableView,
           }),
         )
       )

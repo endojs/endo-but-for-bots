@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-15 |
-| **Updated** | 2026-09-15 |
+| **Updated** | 2026-09-18 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
 | **Source** | Measured while working Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) |
@@ -35,6 +35,22 @@ doc comment what it actually does (§ Equivalence: `Compartment`).
 Everything else here is a handoff: what the stage-4 SES gap actually is,
 measured rather than assumed, and what a reader who was not present needs in
 order to size it.
+
+**Revised 2026-09-18, after [#1295](https://github.com/endojs/endo-but-for-bots/pull/1295)
+merged.**
+That pull request landed the native `lockdown()` this document's § next step 3
+left open, and named the work it did not do.
+§ The work #1295 deferred, triaged sorts that list by what each item needs
+before code — a decision, a design note, a measurement, or nothing — and
+corrects two claims the same lineage produced: `packages/hardened262` has no
+`test/Object` directory, and IronHorse's start-compartment clock is already
+fixed at the epoch rather than live.
+The second correction inverts a sequencing recommendation: attenuation is not a
+smaller piece to land ahead of a guest `Compartment`, it is the same piece.
+The **Status** field is unchanged at Proposed deliberately.
+What moved is this document's contents, not its acceptance: its first question —
+which realm profile the daemon takes — is still unanswered, and it is still the
+question that decides whether most of the rest is work at all.
 
 ## What is the Problem Being Solved?
 
@@ -184,6 +200,70 @@ it — lock down before admitting a second compartment.
 `Interp`, its refusal on a realm frozen first, and the unfrozen `Machine` that
 takes it and keeps its compartments.
 
+#### The same timing rule, one layer up: `harden` before `lockdown`
+
+The three shapes above are about when the HOST freezes the graph. There is a
+second freeze with the same failure signature, and it comes from the GUEST.
+
+IronHorse's `harden` is a faithful port of XS's `fx_hardenFreezeAndTraverse`
+and walks prototype chains. At boot `Function.prototype.constructor` carries
+the spec's `{writable: true, enumerable: false, configurable: true}`; after a
+single `harden({})` anywhere it is `{writable: false, configurable: false}`.
+A shim `lockdown()` that runs afterwards reaches
+`ses/src/tame-function-constructors.js`, tries to redefine that `constructor`
+to its inert stand-in, and is refused — `invalid descriptor`, the same string
+the construction-time freeze produces, from an unrelated cause.
+
+The rejection is spec-correct: a non-configurable, non-writable data property
+cannot be redefined to a different value, and re-running the same define with
+the identical value is accepted. The freeze is the problem, not the refusal.
+
+This is not a hazard for the shipped IronHorse worker, whose prologue
+(`@endo/ironhorse-prelude`) deletes `harden` and whose boot then locks down with
+nothing having hardened (`bundle-ironhorse-worker.mjs`). It bites any embedder
+that hardens first, and it bit the `ses-xs-parity` corpus, where
+`@endo/pass-style`, `@endo/bytes` and `@endo/immutable-arraybuffer` all
+`harden()` at module scope while the prelude is still evaluating.
+
+Deleting is the right default, and not only because it sidesteps the freeze.
+`packages/ses/src/make-hardener.js:142-147` ADOPTS an existing
+`globalThis.harden`, and `packages/ses/src/lockdown.js:85` calls that at MODULE
+SCOPE, so whatever sits at `globalThis.harden` when the shim is *evaluated* is
+what the guest keeps: `lockdown()` does not replace it, it reinstalls it
+through `tameHarden`. A non-traversing stand-in left in place across the shim's
+evaluation therefore becomes the guest's `harden` for the life of the realm —
+silently, since `typeof harden` is `function` either way. Deleting hands the
+shim its own hardener, which traverses, and traversal is the whole point: a
+hardened object whose prototype is still extensible has methods anyone holding
+that prototype can replace.
+
+`packages/test262-runner/src/install-pre-lockdown-harden.js` resolves the
+corpus's case without paying that price. It installs `@endo/harden`'s
+`makeHardener({ traversePrototypes: false })` at `globalThis.harden` AFTER the
+shim is evaluated — present, so `@endo/harden`'s selector adopts it rather than
+installing its own into `Object[Symbol.for('harden')]`, the slot whose mere
+presence makes `repairIntrinsics` refuse; non-traversing, so the intrinsics
+survive to be tamed; late, so the shim keeps its own — and wraps
+`globalThis.lockdown` to withdraw it again on the way in, because the shim
+collects the start global's own `harden` as an intrinsic and
+`initProperty` (`packages/ses/src/intrinsics.js:39`) rejects two definitions of
+it as `Conflicting definitions of harden`. That took the corpus from 7/8 to
+8/8, and leaves the guest with the shim's traversing hardener in both
+environments.
+
+`rust/engine/ironhorse-vm/tests/ses_boot_intrinsics.rs` pins that last clause
+behaviourally rather than by `typeof`: its census reports `hardenTraverses`,
+measured by hardening an object whose prototype has a NULL prototype, so the
+probe cannot reach — and freeze — the intrinsic graph it is measuring.
+
+XS needs none of this because its `lockdown` is native: `fx_lockdown`
+(§ `fx_lockdown`, in order) rewires those constructors with direct slot writes,
+below `[[DefineOwnProperty]]`, so a frozen `Function.prototype` never obstructs
+it. IronHorse ported XS's `harden` first and its `lockdown` since — steps 1, 2 and
+5, with the ledger in `ironhorse-native-lockdown.md`. What the native route
+still lacks is a guest `Compartment`, which the shim supplies alongside
+`lockdown`, so the shim route remains the SES profile for this corpus.
+
 ### What the `ses-xs-parity` axis actually runs
 
 Worth stating plainly, because the axis's name and its `-l` flag both suggest
@@ -200,8 +280,13 @@ So the XS lane is a hybrid: **native `harden`, shim `lockdown`**.
 The node lane is the same shape minus the native half — no `globalThis.harden`
 at all.
 Only the Ironhorse lane asks for a native `lockdown`, via `endot-ih -l`
-(`xst262.c:1269`'s analogue), and Ironhorse does not have one, so every case
-pre-skips.
+(`xst262.c:1269`'s analogue).
+Ironhorse now has one, so `-l` no longer pre-skips the whole mode — but the
+guest surface these cases need is still six names short, so all eight report
+per-case named skips instead (§ The engine lane's zero in
+`packages/test262-runner/README.md`).
+The claim above therefore still holds, for a different reason: the native
+`lockdown` runs, and no case in this axis is covered under it.
 Three hosts, three different configurations, none of them either of the two
 coherent ones.
 
@@ -214,50 +299,69 @@ On XS the second step finds `fx_harden` and nothing is installed, so
 `repairIntrinsics` runs.
 On node nothing is found, the slot is installed, and every `lockdown()`-calling
 case fails (below).
-Ironhorse's own native `harden` puts it in XS's position, which is why the
-Ironhorse prelude leaves it alone — deliberately matching XS rather than
-picking a third configuration.
+Ironhorse's own native `harden` put it in XS's position, and an earlier
+revision of this section made that the reason the Ironhorse prelude left it
+alone — deliberately matching XS rather than picking a third configuration.
+§ The same timing rule, one layer up retracts that.
+The native `harden` traverses, so leaving it in place froze the very intrinsics
+`lockdown()` still had to tame.
+The prelude now DELETES it and lets the shim install its own, which makes the
+Ironhorse lane the pure-shim configuration rather than XS's hybrid.
 
-That makes the Ironhorse lane comparable to XS today, which is what the axis is
-for.
-It does not answer which configuration the axis *should* pin, and the two
-coherent answers want different work: a pure-shim lane needs the selector to
+That made the Ironhorse lane comparable to XS, which is what the axis is for;
+deleting the native `harden` trades that comparability for a coherent
+configuration, and the § above says why the trade is worth making.
+It did not answer which configuration the axis *should* pin, and the two
+coherent answers wanted different work: a pure-shim lane needs the selector to
 find the shim's harden rather than a host one, and a native lane needs
 `fx_lockdown`'s five steps implemented before it can be run at all.
+Both have since moved.
+The shim lane took the first answer — the prelude deletes the host `harden`, so
+the selector finds the shim's — and the native side took part of the second:
+steps 1, 2 and 5 are implemented ([ironhorse-native-lockdown](ironhorse-native-lockdown.md)),
+and a guest `Compartment` is not, which is what still keeps the `-l` lane's
+coverage at zero.
 
 ### How far the shim profile reaches the parity corpus
 
 `packages/test262-runner` runs the `ses-xs-parity` subset against three hosts.
 XS and node evaluate a generated SES prelude; the Ironhorse host drives
-`endot-ih -l`, which expects an ENGINE-side `lockdown()` and therefore
-pre-skips every SES-mode case (`xst.rs`, `SesMode::unimplemented_skip` — note
-that `SesMode::prelude()` is never applied on the live path at all).
+`endot-ih -l`, which asks for an ENGINE-side `lockdown()`.
+That native `lockdown` has since landed, so `-l` no longer pre-skips the mode:
+`SesMode::Lockdown` returns `None` from `xst.rs`'s `unimplemented_skip`, and
+the call is spliced into the setup Script by `assemble` rather than by the
+`SesMode::prelude()` an earlier revision of this sentence pointed at, which is
+gone — it had no caller on the run path, which is how `-l` once ran a whole
+corpus unlocked.
+The two `Compartment` modes still pre-skip.
 
 There is now a third prelude, `src/ironhorse-prelude.js`, and measuring it
-gives the first real number for the shim route: **7 of the 8 cases pass**
+gives the real number for the shim route: **all 8 cases pass**
 (`ironhorse-vm/tests/ses_prelude_reach.rs`), up from 3 when the prelude first
-ran, against `covered=6` for the engine route, which skips the two that need
-the guest surface.
-The overlap is not the interesting part; the failures are.
+ran and 7 before the harden fix below, against `covered=6` for the engine
+route, which skips the two that need the guest surface.
+The overlap is not the interesting part; the one that took longest is.
 
 | case | node | Ironhorse via the shim prelude |
 |---|---|---|
 | `Compartment/prototype/Symbol.toStringTag.js` | pass | **pass** |
-| `Compartment/prototype/Symbol.toStringTag-lockdown.js` | **fail** | fail |
+| `Compartment/prototype/Symbol.toStringTag-lockdown.js` | **fail** | **pass** |
 | `pass-style-bytes/byte-readers.js` | pass | **pass** |
 | `pass-style-bytes/native-or-emulated-shape.js` | pass | **pass** |
 | `pass-style-bytes/byte-array-brand.js` | pass | **pass** |
 | `view-behavior-matrix/ses-hosts.js` | pass | **pass** |
 | `TextEncoder`/`TextDecoder` intersection | pass | **pass** |
 
-`Symbol.toStringTag-lockdown.js` **fails on node too** — the node host reports
-14/16 today, both failures on that file (one file, sloppy and strict).
-It fails on BOTH hosts, but **for two different reasons**, and an earlier
+`Symbol.toStringTag-lockdown.js` is the last one to fall, and it is the only
+case node still fails — the node host reports 14/16, both failures on that file
+(one file, sloppy and strict).
+It used to fail on BOTH hosts, but **for two different reasons**, and an earlier
 revision of this section asserted node's reason for Ironhorse as well and
 concluded "it is not an Ironhorse gap".
-That was an inference from a shared symptom, never a measurement, and it is
-wrong. Both reasons are `harden` running before `lockdown`, which is why the
-inference looked safe; they part company on what `harden` did.
+That was an inference from a shared symptom, never a measurement, and it was
+wrong twice over: it was an Ironhorse gap, and it was a fixable one.
+Both reasons are `harden` running before `lockdown`, which is why the inference
+looked safe; they part company on what `harden` did.
 
 | | node | Ironhorse |
 | --- | --- | --- |
@@ -267,10 +371,10 @@ inference looked safe; they part company on what `harden` did.
 
 On node the selector finds no host `harden`, installs its own at
 `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses outright
-(`packages/ses/src/lockdown.js:393`).
+(`packages/ses/src/lockdown.js:395`).
 
-On Ironhorse the selector adopts the native `globalThis.harden` exactly as
-`ironhorse-pre-shim.js` intends, and the slot stays empty — so that refusal
+On Ironhorse the selector used to adopt the native `globalThis.harden`, and the
+slot stayed empty — so that refusal
 never fires. What fails instead is
 `tame-function-constructors.js:102`:
 
@@ -471,7 +575,7 @@ The preludes import `./expose-pass-style-bytes-globals.js`, which pulls
 `@endo/pass-style` and so `@endo/harden`; where the host has no native
 `harden` for its selector to adopt, `@endo/harden` installs its own at
 `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses to run at all
-when it finds one (`packages/ses/src/lockdown.js:393`).
+when it finds one (`packages/ses/src/lockdown.js:395`).
 The corpus's one such case, `Symbol.toStringTag-lockdown.js`, is red on node
 for that reason — the host reports 14/16 — and three cases ported from
 `lockdown.test.js` and `harden.test.js` failed identically when tried.
@@ -766,6 +870,17 @@ The shim is the larger one — and it is the one already running on IronHorse.
 
 ## What a next step should establish first
 
+Written 2026-09-15, before the native `lockdown()` existed.
+Question 1 below is two questions wearing one name, and both are now settled.
+"The daemon's Ironhorse worker" was written in the endor sense, while every
+measurement under it comes from `packages/thixotrope`, which is the only
+embedder that HAS an IronHorse worker. Split on 2026-09-18: thixotrope's
+profile is answered (keep the SES shim), and endor's is deferred at the owner's
+direction. Questions 3 and 5 were answered earlier and are struck through.
+For what each remaining piece needs before code — and for two corrections to
+the sequencing this section implies — read § The work #1295 deferred, triaged
+alongside it.
+
 1. **Decide which profile the daemon's Ironhorse worker takes.**
    This is no longer either/or: with the freeze deferred, the shim profile
    keeps the `Machine`/`Compartment` Rust API, so the choice is about which
@@ -820,13 +935,18 @@ The shim is the larger one — and it is the one already running on IronHorse.
    losing the subclass identity, and descriptor attributes on
    `{Async,}GeneratorFunction`.
 
-   `ironhorse-pre-shim.js` no longer amputates the surface, so the shim
-   profile now presents a real `Iterator` global. Note that SES exercises the
-   helpers itself on the way through: `get-anonymous-intrinsics.js` discovers
-   `%IteratorHelperPrototype%` by evaluating `Iterator.from([]).take(0)`, so
-   `lockdown()` runs a lazy helper before any guest code does.
-   `bundle-ironhorse-worker.mjs` still deletes the surface by hand and is
-   deliberately left alone, being a shipping configuration.
+   The amputation is gone from `@endo/ironhorse-prelude`, so the shim profile
+   presents a real `Iterator` global. Because that prologue was extracted into
+   one module, the removal reaches BOTH consumers at once — the `ses-xs-parity`
+   corpus and the `dist-ironhorse/boot.js` the worker ships — rather than
+   fixing the corpus and leaving the shipped environment behind. That is what
+   the module's own header asks for: "each should disappear as the gap
+   closes".
+
+   Note that SES exercises the helpers itself on the way through:
+   `get-anonymous-intrinsics.js` discovers `%IteratorHelperPrototype%` by
+   evaluating `Iterator.from([]).take(0)`, so `lockdown()` runs a lazy helper
+   before any guest code does.
 
    One engine-profile divergence is retained deliberately:
    `%IteratorHelperPrototype%` carries no own `Symbol.toStringTag`, so
@@ -851,6 +971,368 @@ The shim is the larger one — and it is the one already running on IronHorse.
    marked met and its deliverable column now says the native route is a choice
    rather than the plan, since the shim route reaches the same guest surface.
 
+## The work #1295 deferred, triaged
+
+[ironhorse-native-lockdown](ironhorse-native-lockdown.md) merged as
+[#1295](https://github.com/endojs/endo-but-for-bots/pull/1295) on 2026-09-18,
+carrying `fx_lockdown` steps 1, 2 and 5 and leaving a named list of things it
+did not do.
+This section sorts that list by **what each item needs before any code is
+written**, because they are not the same kind of work and two of them cannot be
+started at all as currently written.
+Nothing here re-states the items; the native-lockdown note's § Known Gaps owns
+their detail.
+
+Two corrections came out of writing it, both to claims this document's own
+lineage produced, and they are recorded first because they change what the
+next step is.
+
+### Correction 1 — there is no `test/Object` in `packages/hardened262`
+
+The native-lockdown note's "widen the shared-corpus gates" item names
+"`packages/hardened262`'s 255 `test/Object` integrity cases" as the obvious
+next candidate.
+That directory does not exist.
+`packages/hardened262/test` is **123 files** in ten directories: 68
+`Compartment`, 30 `intrinsics`, 12 `harden`, 7 `modules`, and one each of
+`ArrayBuffer`, `TextDecoder`, `TextEncoder`, `freeze`, `ironhorse` and
+`lockdown`.
+The 255 figure matches nothing in the tree.
+
+What the shared-corpus gate actually leaves out is measurable and smaller:
+`native_lockdown_corpora.rs:130` excludes `test/Compartment/` and
+`test/modules/` — **75 files** — and asserts each is already `false` in the
+committed IronHorse baseline, which is why the gate runs 47.
+So the item's premise ("a directory to point the gate at, minus the cases that
+need mutable intrinsics") describes a corpus that is not there, and its real
+content is that 75 of 123 files are blocked on a guest `Compartment`.
+Corrected in the native-lockdown note by the same pass that wrote this section.
+
+### Correction 2 — IronHorse's start-compartment clock is already fixed
+
+The handoff that closed #1295 said a host-made compartment's `Date.now()`
+"answers from the real clock", and sequenced attenuation as the thing to close
+first.
+The first clause is wrong.
+`Date.now()` returns `0.0` unconditionally
+(`ironhorse-vm/src/interp/natives/date.rs:50`), and `Math.random` does not
+exist at all — `create_math` (`interp/boot.rs:2512`) installs 34 methods and
+`random` is not among them.
+The merged note's own test comment has this right, and records the resulting
+oracle divergence: `Date.now() > 0` is `true` on XS and `false` on IronHorse.
+
+So step 4 is nearly empty **as a port**: its `Math` half has nothing to
+attenuate and its `Date` half reduces to `Date.prototype.constructor`, which
+step 2 already covers.
+The gap a confined guest still has is not a live clock, it is that there is no
+compartment global to attenuate *into* — a host-made compartment shares the
+start compartment's `Date`, where an `fx_lockdown` compartment global would
+answer `NaN`.
+That is step 3, and step 3 is the guest `Compartment`'s template.
+**The consequence for sequencing is the opposite of the handoff's:** attenuation
+is not a smaller piece to land first, it is the same piece, and it should be
+folded into the guest-`Compartment` design rather than scheduled ahead of it.
+
+### Decisions — nothing below them is worth starting first
+
+**D1. Which realm profile the daemon's IronHorse worker takes.**
+This is § What a next step should establish first, question 1, still open, and
+it is still the only question whose answer can make most of the rest
+unnecessary.
+What has changed is that both sides now have a measured price rather than one.
+The native side has steps 1, 2 and 5 and needs step 3, a guest `Compartment`
+and override enablement before a thixotrope-shaped guest could run on it.
+The shim side runs today in `test-thixotrope-ironhorse` and reaches 16/16 on
+the parity corpus in
+[#1294](https://github.com/endojs/endo-but-for-bots/pull/1294), at the cost of
+~576 KB of guest code per boot, an engine floor, and a boot script that must
+keep deleting the lazy `Iterator` helpers.
+Owner's call, not an engineering finding.
+
+**Answered 2026-09-18: keep the shim, for now.**
+The SES shim stays the guest-facing SES profile, because it supplies the
+behaviour a guest actually expects today and the native route's remaining piece
+(G1) is not built.
+This does not retire the native `lockdown()`, which keeps its own two
+consumers: `endot-ih -l`, where any divergence from XS would be a regression
+rather than a feature, and a host locking down a `Machine` whose code it wrote.
+What the answer defers is putting the native operation in the WORKER position,
+where third-party source runs on top of it.
+Re-open when G1 lands: per D2 below, the template is then the only thing
+separating the two profiles for `packages/thixotrope`.
+
+**And the endor half is deferred outright.** This entry's title says "the
+daemon's", which was always ambiguous: endor runs XS, calls neither `fx_harden`
+nor `fx_lockdown`, and has no IronHorse worker, so only thixotrope had a profile
+to choose. Whether endor wants one at all is a separate decision --
+`ironhorse-native-lockdown.md` § Decisions, item 5 -- and on 2026-09-18 the
+owner deferred it: endor is not a current priority. Deferred, not open: nothing
+should be sequenced on it, and Phase 4 of
+[ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md),
+which that question gates, is deferred with it.
+
+**One consequence for the rest of this list.** Under the shim profile, I1 (the
+lazy `Iterator` helpers) is the chosen route's main engine-side debt -- it is
+why both boot scripts delete that surface by hand -- and G1 loses the
+thixotrope migration from its justification, keeping the 75 hardened262 files
+and the 2 parity-corpus cases. G1's own open question is only tilted, not
+settled: nothing guest-facing now depends on the NATIVE `Compartment` being
+SES-shaped, since the shim installs one, but the corpus that motivates G1 still
+is SES-shaped.
+
+**D2. Whether the native `lockdown()` may diverge from `fx_lockdown` to add
+override enablement.**
+Only live if D1 answers "native", and it has to be settled *before* the step-3
+design rather than after.
+SES's `enablePropertyOverrides` converts the frequently-overridden
+`Object.prototype` data properties into accessors so that `o.toString = ...` on
+an instance still works once the prototype is frozen; `fx_lockdown` has no
+analogue, and the same probe spliced under `endot-ih -l` classifies
+`shared-positive-test-failure`, so XS behaves identically
+(`native_lockdown.rs::a_native_lockdown_does_not_enable_property_override`).
+Adding it is therefore a deliberate fourth entry in § Oracle divergences, not a
+port gap.
+A compartment template that freezes those properties as data and one that
+installs accessors are different artifacts, which is why it cannot be settled
+after step 3 is built.
+
+**Deferred 2026-09-18, and the reason it is safe to defer is a correction.**
+An earlier revision of this entry called enablement "load-bearing, because
+without it arbitrary guest source breaks on assignment where the shim's guests
+do not". That overstates it. The override mistake is a `[[Set]]` problem: a
+class body and an object literal both define their methods through
+`[[DefineOwnProperty]]` and never consult the prototype chain, so
+class-syntax-first source -- which is what `packages/thixotrope`'s
+orthogonal-persistence model produces -- is structurally immune, and
+`Object.defineProperty` keeps working regardless. Only the ES5 assignment idiom
+is affected, SES's own `minEnablements` is six properties whose comments name
+the transpiler and test libraries they exist for, and a search of `packages/`
+and `rust/endo/xsnap/src/` finds no guest-path site using that idiom at all.
+
+So enablement is a compatibility probe to run before migrating an embedder, not
+a prerequisite for one. Its residual risk is a guest's bundled DEPENDENCY graph
+rather than its authored source. The correction is recorded in full in
+`ironhorse-native-lockdown.md` § Known Gaps and in the probe's own doc comment,
+both of which carried the overstatement.
+
+**It re-sizes the native route.** With enablement demoted, the native profile's
+remaining cost for `packages/thixotrope` is the compartment template alone,
+which folds into G1 -- so the native option reopens when G1 lands rather than
+trailing a second unscoped item behind it. That is why D1's answer is "for
+now".
+
+### Design work — needs its own note before code
+
+**G1. A guest `Compartment` (`fx_Compartment`, `xsModule.c:2864`), with steps 3
+and 4 folded in.**
+Transliterating `fx_Compartment` is the smallest part of it.
+What a design note has to settle first:
+
+- **There is no template to snapshot.** `fx_lockdown` step 3 fills
+  `mxCompartmentGlobal` from the intrinsics up to `_Compartment`; IronHorse
+  builds each compartment's globals from `global_props` at
+  `create_environment` (`interp/realm.rs:879`). The note has to decide whether
+  to introduce a template object or to attenuate at environment-creation time,
+  and that decision is also the answer to step 4 (Correction 2).
+- **Two of `CompartmentOptions`' hooks are booleans.** `has_resolve_hook` and
+  `has_import_hook` exist so a constructor-shape probe can observe them; they
+  resolve and import nothing (§ Equivalence: `Compartment`).
+- **Relative specifiers are inexpressible.** `ModuleGraph::resolve` takes one
+  argument, `ImportEntry` carries no referrer, and all six resolution sites
+  pass the specifier alone. Threading a referrer through them is a prerequisite
+  for any real `resolveHook`, and `Realm` has no parent, so XS's inherited-hook
+  walk has no counterpart either (§ Module resolution).
+- **It moves the boot fingerprint again.** A new intrinsic changes
+  `boot_fingerprint`, which refuses every existing snapshot and forces another
+  golden-fixture regeneration; #1295 measured that cost as the TSV corpora for
+  both math providers plus nine inline digests in
+  `ironhorse-snapshot/tests/metamorphic_determinism.rs`.
+
+What it unblocks, measured rather than estimated: the **75** hardened262 files
+the shared-corpus gate excludes today (Correction 1), and **2 of the 8** cases
+on the `test262:ironhorse` engine lane — not all 8. The other six need
+`frozenBytes`, `compareBytes`, `concatBytes`, `passStyleOf` and `environment`,
+which a prelude supplies and no engine has natively
+(`packages/test262-runner/README.md` § The engine lane's zero).
+
+**And that list is now the whole of it, which is worth stating plainly.** G1
+had three justifications when this section was written. Two decisions on
+2026-09-18 removed the other two: D1 kept the SES shim for
+`packages/thixotrope`, and the endor question was deferred outright. The SES
+shim installs its own `Compartment`, so no embedder in this tree needs the
+native one. What remains is conformance — corpus coverage and differential
+fidelity against the oracle — which is real work with a real number attached,
+but it is test coverage rather than a product dependency, and it should be
+prioritized as such rather than as a blocker.
+
+That also tilts, without settling, the decision at the head of this item. If the
+only consumer is the corpus, then matching XS buys oracle-adjudicable behaviour
+and matching SES buys those 75 files; nothing guest-facing pulls either way any
+more.
+
+### Research — cannot be scoped until measured
+
+**R1. What a wider shared-corpus gate could actually take.**
+Correction 1 removes the item's premise, so what it needs first is an inventory
+of what the two existing gates do not cover and why, not a directory to point
+at.
+The SES AVA suites remain further out for the reason already recorded: they
+need SES options, override enablement and a guest `Compartment`, so they want a
+real adapter rather than source stripping.
+
+**R2. What the `-l` sweep's 3,691 failures are.**
+§ Validation on 2026-09-18 in the native-lockdown note classifies them — 2,409
+thrown-value rendering differences, 797 where IronHorse throws and the oracle
+completes, 207 error-message differences, 31 hangs at the ten-second bound —
+and diagnoses none.
+Whether the 2,409 are one renderer fault or many decides whether wider
+conformance is a week or a quarter, and no plan should be made without knowing.
+
+**R3. The 395 `built-ins/RegExp/property-escapes/generated` files.**
+A host limit, not a corpus or engine one: 3.5–6 GB of oracle RSS per batch and
+over an hour of CPU, OOM-killed at 4-way parallelism on a 15 GB box.
+No design content; it wants a bigger box and a re-run.
+
+### Implementation — no decision or design owed
+
+**I1. The lazy `Iterator` helpers.**
+`map`, `filter`, `take`, `drop` and `flatMap` answer `typeof` as `"function"`
+and halt the machine with `NotImplemented("Iterator.helper")` when called
+(`interp/natives/dispatch.rs:5631`) — an engine halt, so `try`/`catch` does not
+recover and the crank does not complete.
+This is the one item on the shim side that is engine work, and it is what makes
+the boot script delete the surface by hand.
+Not free in the other direction: un-advertising them would convert **326**
+`skip:unsupported-opcode` rows across **14** files in
+`ironhorse-262/expectations/whole-tree` into ordinary conformance failures, so
+implementing them is the honest fix.
+
+**I2. `%ThrowTypeError%`.**
+Absent. XS builds it and installs it as the get/set of
+`Function.prototype.caller` and `.arguments`; IronHorse has neither property,
+so `Object.getOwnPropertyNames(Function.prototype)` differs from XS's in
+membership and order, and `fx_lockdown:202-203` has no analogue here.
+Predates this work.
+`packages/hardened262/test/intrinsics/ThrowTypeError/intrinsic-metadata.js` is
+its case, and it is one of the 29 `intrinsic-metadata.js` failures the
+hardened262 baseline carries with and without lockdown alike.
+
+### Recorded, no action
+
+**N1. Native `lockdown()` and the SES shim are alternatives, not layers.**
+Unchanged and still correct: SES's `seemsToBeLockedDown()` calls
+`Date.prototype.constructor.now()`, `fx_lockdown` puts the inert stand-in
+there, and the guard throws `TypeError: call: not a function` instead of
+reporting `SES_MULTIPLE_INSTANCES`.
+Measured on both engines, so giving the stand-in a `now` would buy a better
+message at the cost of oracle fidelity.
+Pinned by
+`native_lockdown.rs::the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown`.
+
+### Blocked on the above rather than on lockdown
+
+**B1. Moving `packages/thixotrope`'s IronHorse worker off the SES shim.**
+Deferred by D1 on 2026-09-18, and gated on G1 alone when it reopens — not on
+lockdown, and no longer on D2 beside it.
+The isolation half already works: measured end to end in
+`native_lockdown.rs::a_host_made_compartment_confines_guest_source_only_with_global_names`,
+a host-made compartment on a locked-down `Machine` confines guest source, and
+`({}).constructor.constructor` is a `TypeError` inside it.
+The confinement is a conjunction — `global_names` closes the direct `eval` and
+`Function` bindings that lockdown cannot, lockdown closes the prototype route
+that `global_names` cannot — and both halves are in the tree.
+What it lacks is the compartment template: a host-made compartment shares the
+start compartment's `Date` where an `fx_lockdown` compartment global would
+answer `NaN`.
+An earlier revision closed this entry with "a worker that swapped the shim
+today would confine correctly and break ordinary guest code", on the override
+mistake. Per D2 that is too strong — class-syntax source does not trip it, and
+nothing on a guest path in this tree uses the idiom that does.
+
+### In flight elsewhere, and stale against `llm`
+
+[#1294](https://github.com/endojs/endo-but-for-bots/pull/1294) is open against
+`llm` at `7753a4b9`, which is **before** #1295 merged.
+Its description says "until [a native `lockdown()`] lands, the shim route is
+the SES profile and `test262:ironhorse` continues to refuse to start"; both
+clauses are now stale, and its `ses_boot_intrinsics.rs` census predates the
+engine binding `lockdown`.
+An earlier revision of this paragraph said the engine now binds it "for every
+profile, unconditional", which is wrong and matters for the rebase.
+`create_hardened_globals` (`interp/boot.rs:2144`) binds it for every `Interp`,
+and `new_shared_realm_machine_configured` REMOVES it again when
+`freeze == false` (`interp/realm.rs:703`), because an unfrozen machine exists
+for the SES shim and the shim owns the operation there.
+So of that file's three census sites, the two on a plain `Interp` moved from
+`lockdown=undefined` to `lockdown=function`, and the unfrozen-`Machine` site
+still reads `lockdown=undefined` by design.
+It wants a rebase and a reconciliation before its numbers can be read against
+this document.
+Flagged, not touched.
+
+### Not covered by anything above, and not deferred either
+
+Written 2026-09-18 in answer to "what work is not being covered or explicitly
+deferred here?".
+Everything in this section is open, unowned, and outside both in-flight workers
+(a guest `Compartment`; the #1294 rebase).
+
+**The parity axis is unenforced.** See the re-opened ratchet item in § Known
+Gaps. This is the largest of them, because it is the measurement every other
+claim about the shim route rests on.
+
+**Two of this document's own open gaps were never carried into the triage.**
+Neither is assigned:
+
+- The prelude's `@endo/harden` interaction **on the node host**. #1294 solves
+  the IronHorse half with `install-pre-lockdown-harden.js`, and its own
+  description says wiring the same repair to node "is a separate change with
+  its own baseline to move". Until someone does, node stays at 14/16 for a
+  reason we have already diagnosed and fixed elsewhere. The item's second
+  clause -- porting SES's own lockdown/`Compartment` assertions into the
+  `ses-xs-parity` corpus -- is untouched.
+- The stage-4 bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`,
+  so it cannot see a divergence in how the two engines settle what
+  `@endo/eventual-send`'s shim leaves pending.
+
+**Resolved the day this section was written: the endor daemon.** It appeared
+here as open-and-unowned, which was right for about an hour. The owner then
+deferred it outright -- endor is not a current priority -- so it is no longer
+uncovered, it is declined. Recorded at D1 above and in
+`ironhorse-native-lockdown.md` § Decisions, item 5. Phase 4 of
+[ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
+is deferred with it; that document is not amended, so read its Phase 4 against
+this note.
+
+**A predictable three-way collision on one file.** `ses_boot_intrinsics.rs`'s
+census pins `Compartment=undefined`. When a guest `Compartment` lands, that term
+stops discriminating in exactly the way `lockdown=function` did once the engine
+bound one -- #1295 had to replace that assertion with an identity comparison for
+the same reason. #1294 is also editing that file. Whoever lands second pays for
+it, and nobody has been told.
+
+**Adjacent tracks this document does not cover and should not be read as
+covering.** `designs/ironhorse-known-defects.md` has 111 of 208 findings open or
+partial at `fa3ecfcfd`, 83 of them P1 -- roughly 48 metering calibration and 63
+guest-observable divergences. The architecture review has 61 open findings at its
+last revision, worked by
+[#1302](https://github.com/endojs/endo-but-for-bots/pull/1302). **The unasked
+question between them and this thread is R2**: the `-l` sweep's 3,691 failures
+are classified but undiagnosed, and nobody has checked whether they are a subset
+of that catalog or a distinct population. If they are a subset, R2 is already
+someone's work; if they are not, it is nobody's.
+
+### Closed since this document was last revised, by work landing elsewhere
+
+- **A CI lane runs `ses_boot_intrinsics.rs`.** `.github/workflows/ci.yml`
+  now has a "Test the SES realm profiles and prelude reach" step with
+  `IRONHORSE_SES_SHIM_REQUIRED` and `IRONHORSE_SES_PRELUDE_REQUIRED` set, so
+  the two profile tests assert rather than skip.
+- **The `ses-xs-parity` ratchet is recorded.** `packages/test262-runner`'s
+  README gained § Ratchet, not a gate, with per-lane counts (`node` 14/16,
+  `ironhorse-host` 14/16, `ironhorse` 0/8 covered) and the reason each lane
+  reports what it does.
+
 ## Dependencies
 
 | Design | Relationship |
@@ -863,14 +1345,32 @@ The shim is the larger one — and it is the one already running on IronHorse.
 
 ## Known Gaps and TODOs
 
-- [ ] Answer question 1 above — which realm profile — before anything else.
+- [x] Answer question 1 above — which realm profile — before anything else.
       It is the only question whose answer can make the rest unnecessary.
-- [ ] No CI lane runs `ses_boot_intrinsics.rs`'s two profile tests.
+      Answered 2026-09-18: keep the SES shim as the guest-facing profile for
+      now; the native `lockdown()` keeps its own consumers (`endot-ih -l` and a
+      host locking down its own `Machine`) and is deferred out of the worker
+      position only. Re-open when G1 lands. See D1 in § The work #1295
+      deferred, triaged for the scope of the answer and what it changes below.
+- [x] Decide whether the native `lockdown()` may diverge from `fx_lockdown` to
+      add SES's property-override enablement (D2 in the same section).
+      Deferred 2026-09-18, on a correction rather than a trade: enablement is a
+      compatibility preference for the ES5 assignment idiom, not something
+      arbitrary guest source needs in order to run, because class bodies and
+      object literals define rather than assign. It becomes a probe to run
+      before migrating an embedder. Re-open if that probe trips on a guest's
+      dependency graph.
+- [x] No CI lane runs `ses_boot_intrinsics.rs`'s two profile tests.
       `test-thixotrope-ironhorse` has the bundle but builds through the root
       workspace, which excludes `rust/engine`, so running an engine-workspace
       test there compiles the engine a second time.
       They skip on a bare checkout; `IRONHORSE_SES_SHIM_REQUIRED` makes a lane
       that claims to have built the bundle fail instead.
+      Closed: `.github/workflows/ci.yml` has a "Test the SES realm profiles and
+      prelude reach" step that runs `--test ses_boot_intrinsics --test
+      ses_prelude_reach` with `IRONHORSE_SES_SHIM_REQUIRED` and
+      `IRONHORSE_SES_PRELUDE_REQUIRED` set, in the oracle lane that built both
+      artifacts, so the tests assert rather than skip.
 - [x] Verify `ModuleGraph` against SES and XS module-map semantics.
       Done 2026-09-15: the resolver takes no referrer, so relative specifiers
       are inexpressible and the map is a pre-resolved bundle
@@ -907,7 +1407,12 @@ The shim is the larger one — and it is the one already running on IronHorse.
       that.
 - [ ] Implement the lazy `Iterator` helpers, or decide the engine should not
       advertise them. Today `typeof Iterator.prototype.map` is `"function"` and
-      calling it is an uncatchable halt (§ next step 2).
+      calling it is an uncatchable halt (§ next step 2;
+      `interp/natives/dispatch.rs:5631`). Triaged as I1 — implementation only,
+      no decision or design owed — and the direction is settled by the other
+      side's cost: un-advertising would convert 326 `skip:unsupported-opcode`
+      rows across 14 files in `ironhorse-262/expectations/whole-tree` into
+      ordinary conformance failures, so implementing them is the honest fix.
 - [ ] Resolve the prelude's `@endo/harden` interaction so `lockdown()`-calling
       cases can run on the node host, then port SES's own lockdown/Compartment
       assertions into the `ses-xs-parity` corpus (§ Why SES's own suite is not
@@ -915,10 +1420,20 @@ The shim is the larger one — and it is the one already running on IronHorse.
       measured NOT to work.
 - [ ] Record the `ses-xs-parity` ratchet somewhere a regression is visible.
       The axis is deliberately not a CI gate and does not need to fail a build;
-      what it needs is a captured per-lane count to ratchet against. Today
-      `packages/test262-runner`'s `"test"` is `exit 0` and the only counts
-      recorded anywhere are the prose baselines in that package's README
-      (node 14/16, `ironhorse-host` 6/16), which nothing checks.
+      what it needs is a captured per-lane count to ratchet against.
+      **Closed on 2026-09-18 and re-opened the same day; the closure was
+      wrong.** It cited `packages/test262-runner/README.md`'s new § Ratchet, not
+      a gate and its per-lane table. But this item's complaint was never that
+      the README lacked counts -- it was that "the only counts recorded anywhere
+      are the prose baselines in that package's README, which nothing checks".
+      Better prose is still prose. `"test"` is still `exit 0`, nothing compares
+      a run against a committed number, and **no CI lane runs any `test262:*`
+      lane at all**: `.github/workflows/ci.yml` builds `@endo/test262-runner`
+      only for the prelude artifact the oracle lane consumes, and the `endot-ih`
+      invocation there walks the corpus directory rather than this axis. So
+      every parity figure in circulation is hand-run, including the 16/16 that
+      [#1294](https://github.com/endojs/endo-but-for-bots/pull/1294) exists to
+      deliver -- a number nothing will notice losing.
 - [x] Wire the Ironhorse prelude into `endot-ih` — landed as a `--prelude`
       flag, with `effective_skip_features` dropping `lockdown`/`Compartment`
       when one is supplied. `SesMode::unimplemented_skip` deliberately still
@@ -927,6 +1442,11 @@ The shim is the larger one — and it is the one already running on IronHorse.
       `SesMode::prelude()` stays unreachable on the live path. The lane that
       actually moved is `test262:ironhorse-host`, which skips `endot-ih`'s
       differential entirely.
+      Superseded in part by #1295: `-l` no longer fails closed, setup is
+      compiled and evaluated as its own Script, and `SesMode::prelude()` was
+      deleted rather than kept — it was the template whose only callers were
+      its own unit tests, which is how a disconnected `-l` wire passed for a
+      measurement for as long as it did.
 - [ ] The bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`, so
       it cannot see a divergence in how the two engines settle what
       `@endo/eventual-send`'s shim leaves pending.

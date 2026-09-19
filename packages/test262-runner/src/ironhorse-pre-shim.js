@@ -1,34 +1,18 @@
-// Ironhorse-specific repairs the SES shim needs, evaluated before it.
+// The Ironhorse repairs the SES shim needs, evaluated before it.
 //
-// These mirror `packages/thixotrope/scripts/bundle-ironhorse-worker.mjs`,
-// which is the configuration already shipping on Ironhorse. Each is an engine
-// gap rather than a test-harness convenience, and each should disappear as the
-// gap closes.
-
-// Ironhorse's own `harden` (`create_hardened_globals`) is deliberately LEFT
-// ALONE. `@endo/harden`'s selector takes `Object[Symbol.for('harden')]` first
-// and `globalThis.harden` second, and installs its own only if neither
-// exists -- and an installed `Object[@harden]` makes SES's `repairIntrinsics`
-// refuse ("a prior harden implementation has been used and installed",
-// `packages/ses/src/lockdown.js:393`). So deleting Ironhorse's native harden
-// is what BREAKS lockdown here, not what enables it. XS relies on the same
-// adoption: `xst` installs its native `harden` and the selector takes it.
+// This file used to carry its own copy of them. It no longer does: they live in
+// `@endo/ironhorse-prelude`, which `@endo/thixotrope`'s
+// `scripts/bundle-ironhorse-worker.mjs` also bundles into the
+// `dist-ironhorse/boot.js` the Ironhorse worker ships. Importing the same
+// module is the point — it is what makes the `ses-xs-parity` corpus measure
+// the shipped environment rather than a look-alike.
 //
-// `packages/thixotrope/scripts/bundle-ironhorse-worker.mjs` does delete it,
-// because there `polyfills.js` has already replaced it with a deep-freeze
-// shim; this prelude omits that section of `polyfills.js` entirely.
-
-// The start realm has no host console. SES expects one even when reporting is
-// disabled; diagnostics confer no external I/O capability.
-if (!globalThis.console) {
-  // A deliberate stub, not a `Console`: SES reads only these six, and
-  // supplying the other seventeen would confer diagnostics we do not implement.
-  /** @type {any} */ (globalThis).console = {
-    log() {},
-    info() {},
-    warn() {},
-    error() {},
-    debug() {},
-    trace() {},
-  };
-}
+// Anything Ironhorse-specific belongs THERE, not here. This file exists only to
+// pull it in ahead of `ses/lockdown-shim.js`, and to hold whatever is genuinely
+// specific to running test262 — which is currently nothing.
+//
+// In particular the pre-lockdown `harden` this corpus needs is NOT here: it is
+// `./install-pre-lockdown-harden.js`, which must come AFTER the shim rather
+// than before it. See that file for why the order decides which hardener the
+// guest keeps.
+import '@endo/ironhorse-prelude';

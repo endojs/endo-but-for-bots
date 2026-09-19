@@ -273,9 +273,47 @@ fn thixotrope_ses_boot() -> Option<String> {
     }
 }
 
+/// The realm profile, as a single line.
+///
+/// `hardenTraverses` is the one entry that is not a `typeof`, and it is the
+/// point of the census rather than a flourish. Every configuration here has
+/// SOME `harden` -- the engine binds its own, the shim installs its own, and a
+/// pre-lockdown stand-in is a third -- so `typeof harden` is `function`
+/// throughout and pins nothing. What distinguishes them is whether `harden`
+/// walks prototype chains, which is what makes it a security primitive rather
+/// than an `Object.freeze` alias: a hardened object whose prototype is still
+/// extensible has methods anyone holding that prototype can replace.
+///
+/// The probe hardens `{ __proto__: proto }` where `proto` itself has a NULL
+/// prototype, and asks whether `proto` came out frozen. The null link is
+/// load-bearing: a probe built on `{}` would walk to `Object.prototype` and
+/// freeze the intrinsic graph, which is exactly the pre-lockdown freeze the
+/// prologue exists to avoid -- the census would corrupt the realm it measures
+/// and take `frozenObjectProto` with it.
 const SES_CENSUS: &str = "['lockdown','harden','Compartment']\
     .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ') \
+    + ' hardenTraverses=' + (function(){ \
+        if (typeof globalThis.harden !== 'function') { return 'n/a'; } \
+        var proto = { __proto__: null }; \
+        try { globalThis.harden({ __proto__: proto }); } \
+        catch (e) { return 'threw:' + e.message; } \
+        return String(Object.isFrozen(proto)); \
+      })() \
     + ' frozenObjectProto=' + Object.isFrozen(Object.prototype)";
+
+/// What a realm frozen before the prologue runs reports, verbatim.
+///
+/// Named rather than inlined because it is a PROPERTY OF WHICH REPAIR THE
+/// PROLOGUE ATTEMPTS FIRST AGAINST A SEALED SLOT, not of the shim: reorder
+/// `packages/ironhorse-prelude/prelude.js` and this string changes without
+/// anything being wrong. The assertion below says what must not change -- that
+/// the boot forecloses at all -- and this says where it currently does.
+///
+/// Not the prologue's first statement, which is `delete globalThis.harden`:
+/// that one SUCCEEDS even here, because `Machine::new`'s freeze seals the
+/// intrinsic graph and not the start global's own properties. The first
+/// operation it actually refuses is the `Iterator.prototype` sweep.
+const FROZEN_REALM_FORECLOSURE: &str = "ERROR: delete map: no permission (strict mode)";
 
 /// `eval_wrapped`'s shape: an engine halt is not catchable, so a `'ok'` here
 /// means the program ran to completion and threw nothing.
@@ -312,31 +350,66 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
                 outcome.result
             };
 
+            // **`Compartment=undefined` is the next term to go vacuous, and
+            // whoever lands a guest `Compartment` pays for it.** Two terms in
+            // this census have already made the trip: `harden=function` never
+            // discriminated (every configuration here has one), and
+            // `lockdown=function` stopped discriminating when
+            // `create_hardened_globals` began binding one on every realm. Each
+            // was replaced by something that still moves -- the
+            // `hardenTraverses` probe for the first, an identity comparison
+            // against a stashed engine binding for the second.
+            //
+            // `Compartment` only discriminates today because the engine binds
+            // none, so `function` means "the shim installed it". A guest
+            // `Compartment` (`fx_Compartment`, `xsModule.c:2864`) makes that
+            // `function` on both sides of the shim's evaluation, and this term
+            // says nothing again. The repair is the one directly below: stash
+            // `globalThis.__engineCompartment` before the shim and compare by
+            // identity after.
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=function harden=function Compartment=undefined frozenObjectProto=false",
-                "the engine binds its own harden and lockdown, but no Compartment"
+                "lockdown=function harden=function Compartment=undefined \
+                 hardenTraverses=true frozenObjectProto=false",
+                "the engine binds its own lockdown and its own harden -- which \
+                 traverses, it is a port of XS's fx_hardenFreezeAndTraverse -- \
+                 but no Compartment"
             );
-            // **`lockdown=function` no longer discriminates, so pin identity
-            // too.** Before the engine bound a `lockdown`, that census term
-            // meant "the shim installed one". It is now `function` on both
-            // sides of the shim's evaluation and says nothing about whose it
-            // is; only `Compartment` and `frozenObjectProto` still move.
-            // Stash the engine's and compare by identity, which does move.
-            crank("globalThis.__engineLockdown = globalThis.lockdown; 0");
+            // **Neither `lockdown=function` nor `harden=function`
+            // discriminates, so pin identity too.** Before the engine bound a
+            // `lockdown`, that census term meant "the shim installed one". It
+            // is now `function` on both sides of the shim's evaluation and says
+            // nothing about whose it is, and `harden` never said anything: the
+            // engine binds one too. Only `Compartment` and `frozenObjectProto`
+            // still move in the census itself.
+            //
+            // So stash BOTH engine bindings and compare each against its own
+            // counterpart. An earlier revision stashed only `__engineLockdown`
+            // and then compared `harden` against it, which is `false` however
+            // `harden` was built -- a second vacuous term in a test whose
+            // purpose is to catch exactly that.
+            crank(
+                "globalThis.__engineLockdown = globalThis.lockdown; \
+                 globalThis.__engineHarden = globalThis.harden; 0",
+            );
             assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=function harden=function Compartment=function frozenObjectProto=true",
-                "the shim must install what the engine does not, and freeze"
+                "lockdown=function harden=function Compartment=function \
+                 hardenTraverses=true frozenObjectProto=true",
+                "the shim must install what the engine does not, and freeze -- and \
+                 the harden it leaves behind must still traverse prototypes"
             );
             assert_eq!(
                 crank(
-                    "[globalThis.lockdown === globalThis.__engineLockdown, \
-                      globalThis.harden === globalThis.__engineLockdown].join(' ')"
+                    "[typeof globalThis.lockdown, typeof globalThis.harden, \
+                      globalThis.lockdown === globalThis.__engineLockdown, \
+                      globalThis.harden === globalThis.__engineHarden].join(' ')"
                 ),
-                "false false",
-                "the shim REPLACED the engine's lockdown; a typeof census cannot see that"
+                "function function false false",
+                "the shim REPLACED both of the engine's bindings with its own, and \
+                 both are still callable afterwards; a typeof census sees neither \
+                 replacement"
             );
             // Not merely present: usable, with its own globals and its own
             // evaluator. The `__options__` sigil selects the modern
@@ -381,25 +454,41 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
                 "Machine::new freezes the intrinsic graph at construction"
             );
-            // `repairIntrinsics` rewrites descriptors on the intrinsics the
-            // native freeze has already sealed.
+            // The boot now forecloses one layer EARLIER than it used to, and
+            // the message changed with it.
+            //
+            // It used to reach `repairIntrinsics`, which rewrites descriptors
+            // on intrinsics the native freeze has already sealed, and report
+            // the engine's generic `invalid descriptor`. The repairs ahead of
+            // the shim are now a bundled module (`@endo/ironhorse-prelude`)
+            // rather than raw statements spliced into the boot script, so they
+            // run in STRICT mode. `delete Iterator.prototype.map` on a frozen
+            // intrinsic returned false silently under the old sloppy-mode
+            // splice; strict mode throws, so the prologue stops there and the
+            // shim never runs.
+            //
+            // Both are foreclosure, and the new one is the better report: it
+            // names the first operation the frozen realm actually refused,
+            // rather than the first one the shim happened to try afterwards.
             assert_eq!(
                 crank(&wrapped(&boot)),
-                "ERROR: invalid descriptor",
+                FROZEN_REALM_FORECLOSURE,
                 "the shim is expected to fail on a realm frozen before it runs; \
                  if it now succeeds, the repair path has changed and \
                  designs/ironhorse-ses-compartment-equivalence.md must say so"
             );
-            // `invalid descriptor` is the engine's generic rejected-
-            // `defineProperty` message (`property/object.rs`), so the message
-            // alone would also match an unrelated shim bug that passed a
-            // malformed descriptor. Pin the outcome too: the shim installed
-            // nothing, and `harden` is gone because the bundle deletes
-            // `polyfills.js`'s before the shim runs.
+            // The message alone would also match an unrelated prologue bug, so
+            // pin the outcome too: the shim installed nothing, and the realm is
+            // left with NO `harden` at all. The prologue's `delete` of the
+            // engine's own succeeded -- see `FROZEN_REALM_FORECLOSURE` -- and
+            // the `lockdown()` that would have installed the shim's was never
+            // reached. That is the honest report of a half-applied prologue,
+            // and it is why this realm profile is foreclosed rather than
+            // merely degraded: a guest here would have neither hardener.
             //
-            // `lockdown` here is the ENGINE's, not the shim's: the shim aborted
-            // before installing its own, and `create_hardened_globals` binds
-            // one. A `typeof` census can say no more than that, and an earlier
+            // `lockdown` is still `function`, and it is the ENGINE's, not the
+            // shim's: `create_hardened_globals` binds one on every realm. A
+            // `typeof` census can say no more than that, and an earlier
             // revision of this comment read more into it -- that such a realm
             // "has a native `lockdown()`" and so "the option now exists". It
             // does not. This is a `Machine::new()` realm, which performs the
@@ -413,7 +502,7 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             assert_eq!(
                 crank(SES_CENSUS),
                 "lockdown=function harden=undefined Compartment=undefined \
-                 frozenObjectProto=true"
+                 hardenTraverses=n/a frozenObjectProto=true"
             );
             // `lockdown=function` above is the weak term: the engine binds one
             // on every realm, so it is `function` whether the shim ran or not.
@@ -465,10 +554,11 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
             assert_eq!(
                 crank(&start, SES_CENSUS),
                 "lockdown=undefined harden=function Compartment=undefined \
-                 frozenObjectProto=false",
+                 hardenTraverses=true frozenObjectProto=false",
                 "an UNFROZEN machine does not bind the engine's `lockdown`: \
                  `freeze == false` means the SES shim owns the operation, and \
-                 the shim installs its own when it evaluates"
+                 the shim installs its own when it evaluates. The harden it \
+                 does bind traverses"
             );
             assert_eq!(
                 crank(&start, &wrapped(&boot)),
@@ -478,8 +568,9 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
             assert_eq!(
                 crank(&start, SES_CENSUS),
                 "lockdown=function harden=function Compartment=function \
-                 frozenObjectProto=true",
-                "the guest's own lockdown must install and freeze"
+                 hardenTraverses=true frozenObjectProto=true",
+                "the guest's own lockdown must install and freeze, and leave a \
+                 harden that traverses prototypes"
             );
             // The engine's multi-compartment API still works, and the guest's
             // freeze reached the graph the sibling shares.

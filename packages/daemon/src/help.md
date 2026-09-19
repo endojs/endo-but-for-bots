@@ -127,6 +127,41 @@ For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
 Example: writeText(["my-mount", "output.txt"], "hello")
 
+## readOnly() -> Promise<ReadableNameHub>
+
+Mint a read-only ReadableNameHub view of this directory.
+The view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.
+Attenuation is shallow: only this directory's own mutators are withheld. A looked-up value is returned live, so a nested directory (or any name bound back to a writable capability, including one naming this directory itself or an ancestor) comes back fully writable; the narrowing reaches only one hop, not the transitively reachable name graph. A holder needing a recursively read-only surface must re-attenuate results itself.
+The view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. After the backing directory is revoked the view forwards no further reads; but a capability already returned by an earlier lookup is unaffected (and, per the shallow-attenuation caveat above, may itself remain fully writable).
+
+# ReadableNameHub - A read-only view of a name hub.
+
+Exposes only the readable surface (has, list, lookup, maybeLookup) of the
+backing directory; every mutator is withheld. Attenuation is shallow: a
+looked-up nested directory (or any name bound back to a writable capability) is
+returned live and writable, not a further read-only view.
+
+## help(methodName?) -> string
+
+Describe this cap, or one of its methods.
+
+## has(...path) -> Promise<boolean>
+
+Whether a name or path resolves in the backing hub.
+
+## list(...path) -> Promise<string[]>
+
+The names at a path in the backing hub.
+
+## lookup(nameOrPath) -> Promise<unknown>
+
+Resolve a name or path to its value. The result is live: a nested directory
+comes back fully writable, so this narrowing reaches only one hop.
+
+## maybeLookup(nameOrPath) -> Promise<unknown | undefined>
+
+Resolve a name or path, or undefined if absent.
+
 # Mail Operations - Send and receive messages between agents.
 
 Messages can be requests (asking for a capability) or packages (sending values).
