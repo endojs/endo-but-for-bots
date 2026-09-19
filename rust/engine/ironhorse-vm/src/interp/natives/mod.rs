@@ -3,6 +3,7 @@ mod array;
 mod bigint;
 mod buffer;
 mod collection;
+mod compartment;
 mod date;
 mod dispatch;
 mod intl;

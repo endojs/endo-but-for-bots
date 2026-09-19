@@ -661,6 +661,33 @@ impl Interp {
             }
         }
         self.proto_accessors = accessors;
+        // `Compartment.prototype[Symbol.toStringTag]`, a symbol-keyed DATA
+        // property `{value: 'Compartment', writable: false, enumerable: false,
+        // configurable: true}` -- `prototype/Symbol.toStringTag.js` reads it
+        // with `verifyProperty`, which checks all three attributes and the
+        // value, so an accessor or a writable data property both fail it.
+        //
+        // Installed here rather than in `create_compartment` because the
+        // well-known symbol key ids are minted by this pass; `full` gates it
+        // for the same reason the `ProtoAccessorKey::WellKnownSymbol` branch
+        // above is gated, and `find_property` keeps a guest redefinition from
+        // being overwritten by a relink.
+        if full && !self.compartment_proto.is_null() {
+            if let Some(pid) = self.well_known_symbol_property_id("toStringTag") {
+                let proto = self.compartment_proto;
+                if self.find_property(proto, pid).is_none()
+                    && !self.accessors.contains_key(&(proto, pid))
+                {
+                    let off = self.alloc_str_text("Compartment");
+                    self.set_own_unmetered_with_flag(
+                        proto,
+                        pid,
+                        Slot::of(Kind::String, Payload::String(off)),
+                        XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                    );
+                }
+            }
+        }
         // `%Error.prototype%.stack` {get, set} (`XS_DONT_ENUM_FLAG` only —
         // enumerable: false, configurable: true), installed when the program
         // names `Error` so every other program's metering stays untouched;

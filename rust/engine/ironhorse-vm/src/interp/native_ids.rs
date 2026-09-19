@@ -676,6 +676,21 @@ pub enum NativeMethod {
     /// Allocation-driven metering, like its `harden` sibling — `xsLockdown.c`
     /// calls no `mxMeter`.
     GlobalLockdown,
+    /// `Compartment.prototype.evaluate(source)` (`fx_Compartment_prototype_evaluate`,
+    /// `xsModule.c`): compile `source` as a Script in the receiver's
+    /// environment and run it there, returning the completion value.
+    ///
+    /// The receiver must be branded — present in
+    /// [`Interp::guest_compartments`] — or this is a `TypeError`, the same
+    /// discrimination `CollKind` gives `Map.prototype.get`. The environment is
+    /// switched for the duration and restored on both the normal and the
+    /// throwing path, so a guest exception surfaces in the CALLING
+    /// compartment with its own environment intact.
+    CompartmentEvaluate,
+    /// `get Compartment.prototype.globalThis`: the receiver's own global
+    /// object, as an ordinary reference. Branded like
+    /// [`Self::CompartmentEvaluate`].
+    CompartmentGlobalThisGetter,
     /// `$262.detachArrayBuffer(buffer)`, the test262 host hook.
     Test262DetachArrayBuffer,
     /// `JSON.stringify(value[, replacer[, space]])` serializes through
@@ -1055,6 +1070,18 @@ pub enum Native {
     /// [`Interp::shared_buffers`]); the "shared" distinction only gates
     /// `Atomics.wait`/`notify` and `ArrayBuffer.isView`-style brand checks.
     SharedArrayBuffer,
+    /// `Compartment` — the guest-callable compartment constructor
+    /// (`fx_Compartment`, `xsModule.c:2864`), scoped in
+    /// `designs/ironhorse-guest-compartment.md`.
+    ///
+    /// Constructor-only: a bare `Compartment(...)` call is a `TypeError`, as
+    /// `Map`/`Set`/`Proxy` are. Each instance owns a fresh global object built
+    /// by [`Interp::create_environment`], holding references to the one shared
+    /// intrinsic graph rather than copies, and a fresh `eval`/`Function` bound
+    /// to it ([`Interp::compartment_evaluator`]). The per-instance environment
+    /// handle lives in the [`Interp::guest_compartments`] side table, which is
+    /// also the brand [`Interp::compartment_of`] checks.
+    Compartment,
     /// The non-global abstract `%TypedArray%` constructor, reachable as the
     /// `[[Prototype]]` of every concrete TypedArray constructor. Direct call
     /// and direct construction both throw a `TypeError`.
@@ -1160,6 +1187,7 @@ impl Native {
             Native::Iterator => "Iterator",
             Native::ArrayBuffer => "ArrayBuffer",
             Native::SharedArrayBuffer => "SharedArrayBuffer",
+            Native::Compartment => "Compartment",
             Native::TypedArrayBase => "TypedArray",
             Native::TypedArray(i) => TYPED_ARRAY_TYPES[i as usize].name,
             Native::DataView => "DataView",
@@ -1207,6 +1235,10 @@ impl Native {
             // instance and this value is never the one a guest reads.
             Native::LockedDownConstructor => 1,
             Native::TypedArray(_) => 3,
+            // `fx_Compartment` takes the single options bag. SES's legacy
+            // positional `(globals, modules, options)` form is not XS's
+            // surface and is not modelled.
+            Native::Compartment => 1,
             Native::DataView => 1,
             Native::Date => 7,
             Native::Symbol
@@ -1269,6 +1301,7 @@ impl Native {
             ("Iterator", Native::Iterator),
             ("ArrayBuffer", Native::ArrayBuffer),
             ("SharedArrayBuffer", Native::SharedArrayBuffer),
+            ("Compartment", Native::Compartment),
         ];
         // The concrete TypedArray constructors (`Uint8Array`/…), each a
         // `fx_TypedArray` callback distinguished by its element type index.

@@ -47,6 +47,26 @@ pub struct CompartmentEnvironment {
     pub(super) modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
     pub(super) binding_names: std::collections::BTreeSet<u16>,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    /// The compartment's `globalLexicals` (`fx_Compartment`,
+    /// `xsModule.c:3030`), by interned key id.
+    ///
+    /// A scope BETWEEN this environment's global object and the source
+    /// evaluated in it: a lexical shadows a global of the same name, and is
+    /// invisible on `globalThis` -- `constructor/globalLexicals-properties.js`
+    /// asserts both halves, and `prototype/evaluate/environments.js` asserts
+    /// that a write to a lexical does not create a global.
+    ///
+    /// Each value is a standalone arena slot holding the binding's current
+    /// value, NOT a property linked into the global object's chain, which is
+    /// what keeps it off `getOwnPropertyNames(globalThis)`. `XS_DONT_SET_FLAG`
+    /// on that slot makes the binding `const`, taken from the source
+    /// descriptor's writability at construction: XS reads per-name writability
+    /// off the descriptor, and the corpus's `shared` entry (a `value` with no
+    /// `writable`) is the case that must throw on assignment.
+    ///
+    /// Empty for every environment but a guest compartment's. The host
+    /// `Compartment` API has no `globalLexicals` option.
+    pub(super) global_lexicals: std::collections::HashMap<u16, crate::value::SlotIndex>,
     pub(super) owner: Option<std::rc::Weak<()>>,
     /// Which intrinsic names may be BOUND as globals in this environment --
     /// the live filter, and the authority: `interp/link.rs` consults exactly
@@ -79,6 +99,7 @@ impl CompartmentEnvironment {
         Self {
             global_obj,
             global_props: Default::default(),
+            global_lexicals: Default::default(),
             binding_names: Default::default(),
             modules: Default::default(),
             source_compiler: None,
@@ -106,12 +127,25 @@ impl Interp {
         self.environment.shared_compiler = Some(std::rc::Rc::downgrade(compiler));
     }
 
+    /// Mint this environment's own copy of an intrinsic that must be bound to
+    /// it rather than shared -- `eval`, `Function`, and `Compartment`.
+    ///
+    /// XS mints exactly these three per compartment (`fx_Compartment`,
+    /// `xsModule.c:2923-2956`), and `test/Compartment/prototype/globalThis/defaults.js`
+    /// observes it: every own global of a fresh compartment is the outer
+    /// realm's BY IDENTITY except `Compartment`, `Function`, `eval` and the
+    /// value globals. The copy shares the original's `ctor_prototype`, so
+    /// `%Compartment.prototype%` stays one object and a compartment made by a
+    /// nested compartment carries the same brand.
     pub(super) fn compartment_evaluator(&mut self, original: crate::SlotIndex) -> crate::SlotIndex {
         let Some(mut info) = self.functions.get(&original).cloned() else {
             return original;
         };
         if !self.shared_compartments
-            || !matches!(info.native, Some(Native::Eval | Native::Function))
+            || !matches!(
+                info.native,
+                Some(Native::Eval | Native::Function | Native::Compartment)
+            )
         {
             return original;
         }
@@ -402,13 +436,22 @@ impl Interp {
     /// carries -- 1 for the function family, 7 for `Date` (`xsLockdown.c:95-127`).
     /// Shared by `create_locked_down_constructors` (which mints) and
     /// `do_lockdown` step 2 (which wires), so the two cannot drift.
-    pub(super) fn locked_down_prototypes(&self) -> [(crate::value::SlotIndex, u32); 5] {
+    pub(super) fn locked_down_prototypes(&self) -> [(crate::value::SlotIndex, u32); 6] {
         [
             (self.async_function_proto, 1),
             (self.async_generator_function_proto, 1),
             (self.function_proto, 1),
             (self.generator_function_proto, 1),
             (self.date_proto, 7),
+            // `fx_lockdown` step 2's fifth call. Absent until ironhorse had a
+            // guest `Compartment` to have a prototype
+            // (`designs/ironhorse-guest-compartment.md`); `length` 1, from the
+            // constructor it replaces, as `fx_lockdown_aux` takes it.
+            //
+            // `SlotIndex::NULL` is skipped by both callers, so a machine built
+            // before `create_compartment` runs -- or one where it returned
+            // early -- mints and wires nothing dangling here.
+            (self.compartment_proto, 1),
         ]
     }
 

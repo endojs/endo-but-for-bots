@@ -53,6 +53,12 @@ impl Interp {
                 let kind = match info.native {
                     Some(Native::Eval) => 0,
                     Some(Native::Function) => 1,
+                    // The guest `Compartment` joined the per-compartment
+                    // evaluators when it was bound
+                    // (`designs/ironhorse-guest-compartment.md`). A new kind
+                    // VALUE, not a new column: an older image can never carry
+                    // it, and the reader refuses any value it does not know.
+                    Some(Native::Compartment) => 2,
                     _ => return None,
                 };
                 Some(EvaluatorRow {
@@ -737,6 +743,7 @@ impl Interp {
             let native = match row.kind {
                 0 => Native::Eval,
                 1 => Native::Function,
+                2 => Native::Compartment,
                 _ => return Err(refuse("invalid evaluator recipe")),
             };
             let mut info = boot

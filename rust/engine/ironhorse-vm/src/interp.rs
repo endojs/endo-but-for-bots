@@ -614,6 +614,33 @@ struct ProxyData {
     revoked: bool,
 }
 
+/// One guest `Compartment` instance's internal slots (`fx_Compartment`,
+/// `xsModule.c:2864`), keyed by the instance slot in
+/// [`Interp::guest_compartments`]. Membership is the brand: every
+/// `Compartment.prototype` method checks it rather than duck-typing, so
+/// `Compartment.prototype.evaluate.call({})` is a `TypeError`.
+///
+/// `lease` is what keeps the environment out of [`Interp::reap_environments`]'s
+/// reach. A HOST compartment's lease is the Rust `Compartment` handle's
+/// (`compartment.rs`), whose `Weak` is handed to `create_environment` as
+/// `owner`; a guest compartment has no Rust handle, so the lease is owned HERE
+/// and its lifetime is the instance's. When the collector prunes a dead
+/// instance's row the lease drops with it, `owner.strong_count()` reaches zero,
+/// and the environment becomes collectable on the next pass -- the same
+/// contract, reached from the guest side.
+#[derive(Clone, Debug)]
+struct GuestCompartmentData {
+    /// The compartment's own global object -- what
+    /// `Compartment.prototype.globalThis` answers, and the key
+    /// `inactive_environments` files its environment under.
+    global: crate::value::SlotIndex,
+    /// The environment's owner lease. Never read; held for its `Drop`, which
+    /// is what releases the environment to [`Interp::reap_environments`] when
+    /// the collector prunes this row.
+    #[allow(dead_code)]
+    lease: std::rc::Rc<()>,
+}
+
 /// Transient metering context for a recursive `Reflect.get(target, key, …)`
 /// issued by an active Proxy trap while an Array Iterator performs its
 /// `length` or indexed-value Get. It is installed only when the active trap's
@@ -2861,6 +2888,12 @@ fn native_unsupported_name(native: Native) -> &'static str {
         // scans every string literal in THIS function body and would read one
         // as a new label.
         Native::LockedDownConstructor => unreachable!(),
+        // Modeled too, and for the same reason it gets no label: `Compartment`
+        // has its own arms in `call_native_inner` for both the construct and
+        // the bare-call (a `TypeError`) paths, so the `_` fallthrough that
+        // reaches this registry is unreachable for it. The `unreachable!`
+        // carries no message, as above.
+        Native::Compartment => unreachable!(),
         Native::Host => "native-call:host",
         Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",

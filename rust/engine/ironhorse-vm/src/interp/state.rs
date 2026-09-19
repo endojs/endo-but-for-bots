@@ -1759,6 +1759,41 @@ pub struct Interp {
     /// entries. Maintained by every counted mutation in
     /// [`crate::bulk`]; whole-row drops decrement via `drop_refs`.
     side_refs: SideRefCounts,
+    #[boot_new(std::collections::HashMap::new())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(late, map)]
+    #[gc_chunk(none)]
+    #[gc_slots(map, guest_compartment)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Per-instance guest `Compartment` internal slots, keyed by the instance
+    /// slot like [`Self::proxies`]. Membership is the brand every
+    /// `Compartment.prototype` method checks. See [`GuestCompartmentData`];
+    /// `designs/ironhorse-guest-compartment.md` states the ownership contract.
+    ///
+    /// NOT a snapshot table yet: the environment itself already travels (the
+    /// `Environments` section, with its `host_owned` flag), but the
+    /// instance-to-global association does not, so a machine holding a guest
+    /// compartment is refused at the persist gate rather than silently
+    /// restored without one. See [`Interp::stored_unpersistable_row_inner`].
+    guest_compartments: std::collections::HashMap<crate::value::SlotIndex, GuestCompartmentData>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The realm's `%Compartment.prototype%` (a boot object), so a
+    /// `new Compartment()` instance chains to it and its methods resolve.
+    /// `SlotIndex::NULL` until `create_compartment` runs.
+    compartment_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]

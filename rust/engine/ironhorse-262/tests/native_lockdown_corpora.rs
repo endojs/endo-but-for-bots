@@ -102,6 +102,7 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
         let mut passed = 0;
         let mut failed = 0;
         let mut excluded = 0;
+        let mut excluded_modes = 0;
         for path in source_files(&package.join("test")) {
             let file = path.strip_prefix(&package).unwrap().to_str().unwrap();
             let source = std::fs::read_to_string(&path).unwrap();
@@ -127,8 +128,20 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
             for mode in &modes {
                 inventoried.insert((file.to_string(), *mode));
             }
-            if file.starts_with("test/Compartment/") || file.starts_with("test/modules/") {
-                eprintln!("excluded (guest Compartment/module API): {file}");
+            // The blanket `test/Compartment/` + `test/modules/` exclusion is
+            // gone: ironhorse binds a guest `Compartment`
+            // (`designs/ironhorse-guest-compartment.md`), so those cases run
+            // here and are compared against the baseline like any other.
+            //
+            // Two narrow exclusions replace it, and neither is a path prefix.
+            // The first is this file, which needs SES's `transforms` option --
+            // a shim-only constructor option XS does not implement, so the
+            // differential has no oracle side to compare against and the case
+            // produces no mode outcome at all. The second is below, after the
+            // run, because it is a property of the OUTCOME rather than of the
+            // file: a named missing-global skip.
+            if file == "test/Compartment/evaluate-transforms.js" {
+                eprintln!("excluded (SES-only `transforms` option, no oracle side): {file}");
                 for mode in modes {
                     assert_eq!(expected.get(&(file.to_string(), mode)), Some(&false));
                 }
@@ -160,6 +173,30 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
                     {
                         false
                     }
+                    // An honest coverage gap the runner NAMES: the case
+                    // reaches for a global ironhorse has not landed, and the
+                    // differential stops rather than guessing. Phase 2's
+                    // `test/Compartment/` corpus is 32 files of exactly this,
+                    // all of them `ModuleSource`
+                    // (`designs/ironhorse-guest-compartment.md` § Phasing).
+                    //
+                    // Counted as an exclusion, not as a known failure, and
+                    // still required to be failing in the committed baseline
+                    // -- so landing the global turns this into a real pass or
+                    // a real drift, never into a silent skip.
+                    Some((_, Outcome::Skip(reason)))
+                        if reason.starts_with("ironhorse-missing-global:") =>
+                    {
+                        assert_eq!(
+                            expected.get(&(file.to_string(), mode)),
+                            Some(&false),
+                            "{file} {mode:?}: a named missing-global skip must be \
+                             failing in the committed baseline"
+                        );
+                        eprintln!("excluded (named missing global) {file} {mode:?}: {outcome:?}");
+                        excluded_modes += 1;
+                        continue;
+                    }
                     _ => {
                         drift.push(format!(
                             "{file} {mode:?}: missing body execution: {outcome:?} {:?}",
@@ -188,7 +225,10 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
         }
         let baseline_keys: BTreeSet<_> = expected.into_keys().collect();
         assert_eq!(inventoried, baseline_keys, "scenario inventory changed");
-        eprintln!("native hardened262: {passed} passed, {failed} known failed script scenarios; {excluded} excluded files");
+        eprintln!(
+            "native hardened262: {passed} passed, {failed} known failed script scenarios; \
+             {excluded} excluded files and {excluded_modes} excluded scenarios"
+        );
         assert!(passed > 0, "native lockdown coverage must not be empty");
         assert!(
             drift.is_empty(),
