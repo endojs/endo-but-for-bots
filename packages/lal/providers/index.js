@@ -43,7 +43,6 @@ export const createProvider = env => {
     return makeOpenRouterProvider({
       apiKey: env.LAL_AUTH_TOKEN || '',
       model: env.LAL_MODEL || '',
-      maxTokens: env.LAL_MAX_TOKENS ? Number(env.LAL_MAX_TOKENS) : undefined,
     });
   }
 
