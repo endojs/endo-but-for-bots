@@ -145,6 +145,7 @@ test.serial(
     t.is(created[0][0].model, 'vendor/model:free');
     t.is(created[0][0].backendId, 'provider');
     t.false('reasoningEffort' in created[0][0]);
+    t.is(created[0][0].spoken, true);
     await tick();
     parent
       .querySelector('[aria-label="New session"]')
@@ -159,6 +160,7 @@ test.serial(
       backendId: 'codex',
       modelId: 'sol',
       reasoningEffort: 'high',
+      spoken: true,
     });
   },
 );
@@ -771,6 +773,7 @@ const setup = async (t, count = 2, recover = false, prepare = () => {}) => {
     send,
     remove,
     setCreationFailure: daemon.setCreationFailure,
+    created: daemon.created,
     mountSibling: () => {
       const sibling = testDocument.createElement('div');
       testDocument.body.appendChild(sibling);
@@ -987,10 +990,8 @@ test.serial('a URL in a reply renders as a new-tab link', async t => {
 test.serial(
   'session creation failure does not poison later submissions',
   async t => {
-    const { parent, turns, send, remove, setCreationFailure } = await setup(
-      t,
-      1,
-    );
+    const { parent, turns, send, remove, setCreationFailure, created } =
+      await setup(t, 1);
     remove(0);
     setCreationFailure(true);
     await send('first attempt');
@@ -998,6 +999,11 @@ test.serial(
     setCreationFailure(false);
     await send('retry');
     await waitFor(() => turns.length === 1);
+    // The session the page makes for a first message is one it drives: it
+    // says so, because only a session that says so is composed with the voice
+    // rules, and the positional call cannot say anything.
+    t.is(created.length, 1);
+    t.like(created[0][0], { spoken: true });
     t.is(turns[0].text, 'retry');
   },
 );

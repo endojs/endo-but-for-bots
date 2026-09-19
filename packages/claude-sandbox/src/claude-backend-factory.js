@@ -40,6 +40,7 @@ import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 import path from 'node:path';
 
 import { translateClaudeTurn } from './claude-hosted-events.js';
+import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
 
 /** The backend id Floot pins sessions to (`claude:<model>`). */
 export const CLAUDE_BACKEND_ID = 'claude';
@@ -319,6 +320,16 @@ export const makeClaudeBackendFactory = ({
         continuity: 'transcript',
         toolOwnership: 'endo',
         supportedNetworkPolicies: NETWORK_POLICIES,
+        // What a system prompt must know about this place. Claude Code lists
+        // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its
+        // own shell and file tools; the hosted policy mounts the session
+        // workspace at /workspace, the CLI's working directory.
+        promptEnvironment: {
+          toolNamePrefix: `mcp__${DEFAULT_SERVER_NAME}__`,
+          toolNames: {},
+          nativeTools: true,
+          workspacePath: '/workspace',
+        },
       });
     },
     listModels,

@@ -12,8 +12,19 @@ The canonical provider-neutral guards and descriptor validator are exported by
 `@endo/hosted-agent`; Floot validates every endowed factory's
 descriptor against that contract.
 Descriptors are projected to the exact five capability-free fields `id`,
-`title`, `kind`, `continuity`, and `toolOwnership`; backend-supplied metadata is
-never forwarded to the UI.
+`title`, `kind`, `continuity`, and `toolOwnership`, plus the two optional ones
+`supportedNetworkPolicies` and `promptEnvironment`; any other backend-supplied
+metadata is refused rather than forwarded to the UI.
+`promptEnvironment` is what a system prompt has to know about the place the
+backend's model runs — `{ toolNamePrefix, toolNames, nativeTools,
+workspacePath }`: how the runtime renames Endo's tools, whether the model has a
+shell and file tools of its own, and where a session's git workspace is
+mounted.
+Floot composes a session's prompt for it (see "System prompts" in the README).
+Every string in it lands in a prompt, so the validator holds each to the shape
+of a tool name or an absolute path.
+A backend that declares none is treated as a sandbox Floot knows nothing
+about: the prompt then makes no claim about tool names or paths.
 `continuity` names how the backend carries a conversation between turns, which
 decides what Floot's own tree must retain:
 `explicit` (Floot supplies the whole history on every turn),

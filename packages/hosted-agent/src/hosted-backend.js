@@ -81,6 +81,107 @@ export const CONTINUITY_MODES = harden([
 ]);
 
 /**
+ * What a system prompt has to know about the place a model runs, as plain
+ * data a backend declares about itself. A prompt written for one backend is
+ * wrong on another in exactly these ways: the model sees Endo's tools under
+ * other names, it has (or lacks) a shell and file tools of its own, and the
+ * session's workspace is (or is not) a directory it can simply edit.
+ *
+ * - `toolNamePrefix`: what the backend's runtime puts in front of every Endo
+ *   tool name (`endo_` for an MCP server named `endo` under opencode,
+ *   `mcp__endo__` under Claude Code). Empty when names are passed unchanged.
+ * - `toolNames`: exceptions to the prefix, by Endo tool name (Codex renames
+ *   only `exec`, to keep it apart from its native exec).
+ * - `nativeTools`: the model has its runtime's own shell and file tools,
+ *   acting inside a sandbox that cannot reach Endo capabilities.
+ * - `workspacePath`: where that sandbox mounts a session's git workspace;
+ *   empty when it does not.
+ *
+ * @typedef {object} PromptEnvironment
+ * @property {string} toolNamePrefix
+ * @property {Record<string, string>} toolNames
+ * @property {boolean} nativeTools
+ * @property {string} workspacePath
+ */
+
+const TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const TOOL_NAME_PREFIX = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const PROMPT_ENVIRONMENT_KEYS = harden([
+  'nativeTools',
+  'toolNamePrefix',
+  'toolNames',
+  'workspacePath',
+]);
+
+/**
+ * Validate and copy a backend's declared prompt environment. Every string in
+ * it ends up inside a system prompt, so each is held to the shape of the
+ * thing it names rather than accepted as free text.
+ *
+ * @param {any} environment
+ * @returns {PromptEnvironment}
+ */
+export const assertPromptEnvironment = environment => {
+  (environment &&
+    typeof environment === 'object' &&
+    !Array.isArray(environment) &&
+    Object.keys(environment).sort().join(',') ===
+      PROMPT_ENVIRONMENT_KEYS.join(',')) ||
+    Fail`Prompt environment must be a record of ${q(PROMPT_ENVIRONMENT_KEYS)}`;
+  const { toolNamePrefix, nativeTools, workspacePath } = environment;
+  (typeof toolNamePrefix === 'string' &&
+    (toolNamePrefix === '' || TOOL_NAME_PREFIX.test(toolNamePrefix))) ||
+    Fail`Prompt environment has an invalid tool name prefix`;
+  const declaredNames = environment.toolNames;
+  (declaredNames &&
+    typeof declaredNames === 'object' &&
+    !Array.isArray(declaredNames)) ||
+    Fail`Prompt environment has invalid tool names`;
+  // Read once, then check and keep what was read: an object that answers
+  // differently the second time must not get an unchecked answer through.
+  const nameEntries = Object.entries(declaredNames);
+  (nameEntries.length <= 64 &&
+    nameEntries.every(
+      ([from, to]) =>
+        TOOL_NAME.test(from) && typeof to === 'string' && TOOL_NAME.test(to),
+    )) ||
+    Fail`Prompt environment has invalid tool names`;
+  typeof nativeTools === 'boolean' ||
+    Fail`Prompt environment must say whether the model has native tools`;
+  (typeof workspacePath === 'string' &&
+    (workspacePath === '' ||
+      (/^\/[A-Za-z0-9._-]{1,64}(\/[A-Za-z0-9._-]{1,64}){0,7}$/.test(
+        workspacePath,
+      ) &&
+        !workspacePath
+          .split('/')
+          .some(part => part === '.' || part === '..')))) ||
+    Fail`Prompt environment has an invalid workspace path`;
+  workspacePath === '' ||
+    nativeTools ||
+    Fail`A workspace path means nothing to a model without native tools`;
+  return harden({
+    toolNamePrefix,
+    toolNames: Object.fromEntries(nameEntries),
+    nativeTools,
+    workspacePath,
+  });
+};
+harden(assertPromptEnvironment);
+
+const REQUIRED_DESCRIPTOR_KEYS = harden([
+  'continuity',
+  'id',
+  'kind',
+  'title',
+  'toolOwnership',
+]);
+const OPTIONAL_DESCRIPTOR_KEYS = harden([
+  'promptEnvironment',
+  'supportedNetworkPolicies',
+]);
+
+/**
  * Validate and project the exact capability-free descriptor fields Floot uses
  * for selection and recovery.
  *
@@ -89,10 +190,13 @@ export const CONTINUITY_MODES = harden([
 export const assertHostedBackendDescriptor = descriptor => {
   (descriptor &&
     typeof descriptor === 'object' &&
-    [
-      'continuity,id,kind,title,toolOwnership',
-      'continuity,id,kind,supportedNetworkPolicies,title,toolOwnership',
-    ].includes(Object.keys(descriptor).sort().join(','))) ||
+    !Array.isArray(descriptor) &&
+    REQUIRED_DESCRIPTOR_KEYS.every(key => Object.hasOwn(descriptor, key)) &&
+    Object.keys(descriptor).every(
+      key =>
+        REQUIRED_DESCRIPTOR_KEYS.includes(key) ||
+        OPTIONAL_DESCRIPTOR_KEYS.includes(key),
+    )) ||
     Fail`Hosted backend descriptor must be a record`;
   (typeof descriptor.id === 'string' &&
     /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(descriptor.id)) ||
@@ -126,6 +230,13 @@ export const assertHostedBackendDescriptor = descriptor => {
     ...(descriptor.supportedNetworkPolicies === undefined
       ? {}
       : { supportedNetworkPolicies: [...descriptor.supportedNetworkPolicies] }),
+    ...(descriptor.promptEnvironment === undefined
+      ? {}
+      : {
+          promptEnvironment: assertPromptEnvironment(
+            descriptor.promptEnvironment,
+          ),
+        }),
   });
 };
 harden(assertHostedBackendDescriptor);

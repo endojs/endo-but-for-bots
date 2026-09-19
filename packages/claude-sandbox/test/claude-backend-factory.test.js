@@ -119,6 +119,13 @@ test('describe() and listModels() present Claude Code as a hosted backend', asyn
     continuity: 'transcript',
     toolOwnership: 'endo',
     supportedNetworkPolicies: ['off', 'public-internet'],
+    // Claude Code names an MCP server's tools mcp__<server>__<tool>.
+    promptEnvironment: {
+      toolNamePrefix: 'mcp__endo__',
+      toolNames: {},
+      nativeTools: true,
+      workspacePath: '/workspace',
+    },
   });
   const models = await E(factory).listModels();
   t.deepEqual(models, CLAUDE_CLI_MODELS);

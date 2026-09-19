@@ -107,6 +107,7 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     inputTokens: 9,
     outputTokens: 2,
     turns: 1,
+    incompleteTurns: 0,
   });
   // 'Built.' preceded a tool call, so it was flushed as its own message at
   // tool_call time; a final would re-merge it with any later text.
@@ -168,6 +169,7 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     inputTokens: 9,
     outputTokens: 2,
     turns: 2,
+    incompleteTurns: 0,
   });
 });
 

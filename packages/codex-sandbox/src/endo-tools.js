@@ -2,6 +2,13 @@
 
 import { Fail } from '@endo/errors';
 
+/**
+ * The Endo tools Codex sees under another name. One table: the catalog is
+ * adapted with it, results are translated back with it, and the backend's
+ * descriptor declares it so a system prompt can say the name the model sees.
+ */
+export const CODEX_TOOL_NAMES = harden({ exec: 'endo_exec' });
+
 /** Keep the guest JavaScript tool distinct from Codex's native exec tool.
  * The versioned catalog identity forces old threads to rotate instead of
  * silently changing what a previously named tool means.
@@ -12,10 +19,10 @@ export const adaptEndoTools = catalog => {
     Fail`Endo tool name endo_exec is reserved by the Codex adapter`;
   return harden({
     dynamicTools: catalog.dynamicTools.map(tool =>
-      tool.name === 'exec' ? { ...tool, name: 'endo_exec' } : tool,
+      tool.name === 'exec' ? { ...tool, name: CODEX_TOOL_NAMES.exec } : tool,
     ),
     toolSetId: JSON.stringify(['CodexEndoToolsV1', catalog.toolSetId]),
-    originalName: name => (name === 'endo_exec' ? 'exec' : name),
+    originalName: name => (name === CODEX_TOOL_NAMES.exec ? 'exec' : name),
   });
 };
 harden(adaptEndoTools);

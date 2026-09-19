@@ -48,6 +48,8 @@ const SNAPSHOT_VERSION = 1;
  */
 const MAX_EVENT_SIZE = 131_072;
 const PREVIEW_CHARS = 8192;
+/** How many distinct serving models one turn may record. */
+const MAX_SERVED_BY = 16;
 const MAX_CONTENT_CHARS = 16 * 1024 * 1024;
 const RETAINED_TURNS = 256;
 const SNAPSHOT_EVERY = 64;
@@ -254,6 +256,12 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       ['completed', 'failed', 'cancelled', 'outcome-unknown'].includes(
         event.state,
       ) || Fail`Invalid terminal turn journal state`;
+      if (event.servedBy !== undefined) {
+        const { servedBy } = event;
+        (Array.isArray(servedBy) && servedBy.length <= MAX_SERVED_BY) ||
+          Fail`Invalid turn journal servedBy`;
+        for (const served of servedBy) assertText(served, 256);
+      }
       const state =
         record.tools.some(tool => !tool.settled) ||
         record.activity.some(tool => !tool.settled)
@@ -269,6 +277,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
           'error',
           'errorRef',
           'usage',
+          'servedBy',
           'conversationNodeId',
         ]) {
           if (event[key] !== undefined) record[key] = event[key];

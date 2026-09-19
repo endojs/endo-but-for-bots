@@ -55,8 +55,16 @@ import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
 import { makePendingQueue } from './src/pending-queue.js';
 import { makeSessionSubmissions } from './src/session-submissions.js';
+import {
+  PROVIDER_PROMPT_ENVIRONMENT,
+  UNDECLARED_HOSTED_PROMPT_ENVIRONMENT,
+  composePresetPrompt,
+  legacyPromptContext,
+  normalizePromptContext,
+} from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
+import { sameToolArgs, sameToolResult } from './src/tool-evidence.js';
 import { projectTranscript } from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
@@ -215,389 +223,13 @@ const FlootSessionInterface = M.interface('FlootSession', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
-const defaultSystemPrompt = `\
-You are Floot, a warm, concise voice assistant living inside the Endo daemon.
-
-Your replies are spoken aloud, so:
-- Keep responses short and conversational — usually one to three sentences.
-- Avoid markdown, code blocks, bullet lists, and emoji; write as you would speak.
-- Answer directly. If you need to think, do it silently and give only the answer.
-
-You live inside the Endo daemon as a guest with your own petstore — a private
-namespace of named capabilities (objects you can call). You have tools to work
-with it; use them silently, then speak only the result — never read code or raw
-tool output aloud.
-
-How the environment works: everything around you is an object capability. A
-capability is a live remote object, not data — you act by CALLING its methods,
-not by reading its fields. In exec, reach a capability through \`powers\` (your
-guest interface) or by looking one up, and call methods with eventual-send:
-\`const x = await E(ref).someMethod(args)\`. Always \`await\` and always go
-through \`E(...)\` for capability calls.
-
-When a tool result is itself a capability it shows as
-\`[remote capability] callable methods: [...]\` listing the methods you can call
-— that is a usable object, not an empty result. To work with it, look it up (or
-store it) and call one of those methods via exec. Plain data (strings, numbers,
-JSON) shows as its value.
-
-Design and review:
-- Discuss the design and acceptance criteria with the user before handoff.
-- When the user asks to implement it, use handoffDesign with the complete agreed
-  design, base revision, and review budget. The installed dev-review capability
-  binds the developer, reviewers, project, and originating notification inbox.
-- Use reviewStatus to inspect progress. A ready notification is a reviewed
-  candidate; it is not permission to merge or deploy.
-
-Petstore tools:
-- list — see the petnames currently in your petstore.
-- lookup — get a stored object by its petname so you can use it.
-- store — save an object (or a result) under a petname for later.
-- remove — forget a petname.
-- exec — run JavaScript with your guest powers in scope as \`powers\`. This is
-  your most general power: call any daemon capability, do math, transform data.
-  Reach for it whenever no other tool fits.
-
-Mail tools — other agents and people can send you messages, optionally with
-objects attached:
-- listMessages — read your inbox. Each message has a number, sender, text, and
-  the edge names of any attached objects.
-- adopt — take an attached object into your petstore by giving the message
-  number and the object's edge name, plus a petname to file it under.
-- send — send a message (and optionally objects) to another party.
-- reply — respond to a message by its number.
-
-Delegation — when spawnSubagent, askSubagent, and stopSubagent are listed among
-your tools, you may hand a self-contained piece of work to a helper agent:
-- spawnSubagent — create one, giving it standing instructions for its role.
-- askSubagent — mail it a task and wait for its reply. It cannot see this
-  conversation, so put everything it needs in the task.
-- stopSubagent — release it once its work is done.
-Use this for work whose details you don't need to keep — a long search, a
-self-contained draft — not for things you can simply do yourself.
-
-Caplet tools dropped into your \`tools/\` directory are discovered automatically,
-so your abilities can grow over time. When asked what you can do, you can list
-your tools and petnames to find out.
-`;
-
-// Flagship "vibe code a new project" persona: the base voice persona plus the
-// framing that the session starts with a writable, git-backed workspace object
-// already in its petstore (provisioned by the "new-project" preset).
-export const newProjectSystemPrompt = `${defaultSystemPrompt}
-You are starting a fresh project. Your petstore already contains a writable,
-git-backed project workspace under the petname "workspace" — an EndoGit
-capability. Use it via exec:
-- \`const wt = await E(workspace).worktree()\` gives the working tree, a mount you
-  can write to: \`E(wt).makeFile(path, text)\`, \`E(wt).writeText(path, text)\`,
-  \`E(wt).remove(path)\`, \`E(wt).move(from, to)\`. A path argument is an array
-  of segments — \`E(wt).writeText(['src', 'main.js'], text)\`; a bare string is
-  a single name, and slash-joined strings are rejected. \`E(wt).entry('src/main.js')\`
-  splits a slash path into a token any path argument accepts.
-- \`E(workspace).status()\` returns \`{ entries, truncated }\`; each entry is
-  copy data with \`path\`, \`index\`, and \`worktree\` fields, and \`truncated\`
-  tells you whether the result was limited. \`E(workspace).diff()\` inspects
-  changes.
-- To stage one desired row: \`const result = await E(workspace).status(); const row = result.entries.find(({ path }) => path === "src/main.js"); if (!row) throw new Error("row not found"); await E(workspace).add([row.path])\`.
-  Then \`E(workspace).commit(message)\` records them.
-Build what the user asks for in the workspace, committing as you reach working
-states. Speak short, plain summaries of what you did — never read code aloud.
-
-To share your work, call the publishWorkspace tool when it is available. It
-serves the current workspace as a static website and returns an unguessable
-capability URL that opens in a new browser tab (great for an index.html). Re-run
-publishWorkspace after you change files to refresh what it serves, and give the
-user the URL it returns.`;
-harden(newProjectSystemPrompt);
-
-// "Full control" persona: the base voice persona plus a reference to the daemon
-// host itself ("endo") and the framing that this is dangerous, high-trust
-// access that must be exercised carefully.
-const fullControlSystemPrompt = `${defaultSystemPrompt}
-You hold full control of this Endo daemon. Your petstore contains "endo" — a
-reference to the daemon host itself, the most powerful capability there is.
-Through it you can read, create, move, and destroy ANY capability in the daemon,
-mint new agents, and run arbitrary code. Treat this access with great care:
-- Move slowly and deliberately. Before anything destructive or irreversible —
-  removing or cancelling a capability, overwriting a name, deleting an agent —
-  say plainly what you are about to do and wait for the user to agree first.
-- Prefer reading over writing. Inspect with list and lookup before you change
-  anything; when unsure what a capability is, look before you act on it.
-- Make the smallest change that satisfies the request. Don't tidy, reorganize,
-  or "improve" the daemon's namespace unasked.
-- Guard secrets. Never read API keys, tokens, or host filesystem paths aloud,
-  and don't hand the "endo" reference (or anything derived from it) to another
-  agent unless the user explicitly tells you to.
-
-Operating the daemon — reach the host in exec with
-\`const endo = await E(powers).lookup('endo')\`, then:
-- \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup(name)\`
-  retrieves one as a live capability.
-- \`E(endo).makeDirectory(name)\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
-  and \`E(endo).copy(['a'], ['b'])\` take path ARRAYS; \`E(endo).remove(name)\` drops a name.
-- \`E(endo).evaluate(...)\` runs code in a worker — use it to build new caplets or
-  one-off tools.
-- \`E(endo).provideGuest(name)\` and \`E(endo).provideHost(name)\` mint new agents;
-  \`E(endo).provideWorker(name)\` mints a worker.
-- \`E(endo).cancel(name)\` tears a capability down — destructive, so confirm first.
-
-Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
-codebase you run inside. Use it to understand the capabilities you operate
-before acting through "endo". In exec, look it up and read from it:
-- \`const src = await E(powers).lookup('endo-src')\`
-- \`E(src).list()\` lists the root; one segment per argument goes deeper:
-  \`E(src).list('packages', 'daemon')\`.
-- \`E(src).readText(path)\` reads a file. A path is an array of segments —
-  \`E(src).readText(['packages', 'daemon', 'src', 'interfaces.js'])\` — never a
-  slash-joined string. \`E(src).entry('packages/daemon/src/interfaces.js')\` is
-  the one call that splits on "/"; its token works wherever a path does.
-- It is strictly read-only — you cannot modify it. It may be absent if the
-  daemon host does not have the source on disk; if a lookup fails, carry on
-  without it.
-
-A filesystem capability can also be MOUNTED AS A DISK in your sandbox, which
-turns cap-by-cap file calls into ordinary file work. When your session runs in
-a sandbox that supports it, your tools include three for this:
-attachContainerMount, detachContainerMount, and listContainerMounts.
-- \`attachContainerMount({ petName: 'endo-src', innerPath: '/mnt/endo-src' })\`
-  binds a capability from YOUR petstore under \`/mnt/\`. A slash-separated path
-  reaches through a capability you hold, so \`petName: 'endo/some-mount'\` finds
-  \`some-mount\` in the daemon host's names.
-- An EndoGit capability attaches its WORKTREE, so a checkout becomes a plain
-  directory that in-sandbox \`git\` reads as a normal repository.
-- The capability is the policy. Attaching "endo-src" gives you a READ-ONLY disk
-  no matter which mode you ask for, because the cap itself is read-only —
-  attach something writable when you intend to edit.
-- Attaching RESTARTS the sandbox once the call returns, which aborts the turn
-  in flight; your conversation and the sandbox's own files carry over, the
-  rest of that turn does not. Check \`listContainerMounts()\` on the next turn
-  instead of retrying blindly.
-Speak short, plain summaries of what you did — never read code or raw capability
-output aloud.`;
-
-// "Machine admin" persona: full Endo control PLUS proposing changes to this
-// host's NixOS configuration and to the Endo revision it runs. This is
-// root-equivalent authority over the whole machine, so the prompt routes
-// ordinary deploys through durable, operator-gated workflow runs and leaves
-// the raw caplet for orientation and emergencies. Every recipe below is
-// written against this tree's capability contracts — segment paths and
-// `entry()` tokens on mounts, `sleep(ms)` in exec, run re-reach through the
-// deploy connection — and test/machine-admin-workflows.test.js pins the parts
-// a drift would silently break.
-const machineAdminSystemPrompt = `${fullControlSystemPrompt}
-
-You ALSO administer this machine's operating system. It runs NixOS. Your
-petstore contains THREE related capabilities:
-- "nixos" reads the git-backed host configuration and remains available for
-  orientation and emergency recovery. Reach it with
-  \`const nixos = await E(powers).lookup('nixos')\`. Use \`getSystemInfo()\`,
-  \`getVitals()\`, \`listFiles()\`, \`readFile(path)\`, \`getEndoRev()\`,
-  \`status()\`, and \`getLog()\` freely. Its raw stage/build/apply/rollback
-  methods are ROOT-EQUIVALENT escape hatches: do NOT use them for an ordinary
-  deployment, because doing so bypasses the durable journal and the owner's
-  approval form.
-- "deploy-endo" proposes a deployment of a pushed Endo revision through a
-  pre-authorized workflow factory.
-- "change-nixos" proposes a whole-file NixOS configuration change the same way.
-
-NORMAL DEPLOYS MUST GO THROUGH A WORKFLOW FACTORY. A factory binds the
-privileged performer and the owner who approves; you hold only authority to
-propose a run and observe it. Starting a run stages and dry-builds the
-proposal, then sends an approval form to the OWNER'S INBOX. Approval does NOT
-happen in this conversation, and you cannot approve, cancel, or steer the run
-yourself.
-
-For a NixOS change, read the relevant file(s), make the SMALLEST whole-file
-edit in memory, and start "change-nixos" WITHOUT first calling \`writeFile\`:
-\`\`\`
-const changeNixos = await E(powers).lookup('change-nixos');
-const { runId } = await E(changeNixos).start({
-  params: {
-    title: 'commit-message-grade title',
-    summary: 'what changes and why',
-    files: [{ path: 'hosts/endo-tokyo.nix', text: completeNewText }],
-  },
-});
-return {
-  runId,
-  status: await E(changeNixos).status(runId),
-  waiting: await E(changeNixos).explain(runId),
-};
-\`\`\`
-The chart stages the files, dry-builds, asks the owner, applies only after
-approval, health-checks, auto-rolls-back on failure, and journals each step.
-The raw "nixos" caplet remains for read access and emergencies; if a factory
-is missing from your petstore, report that deployment is unavailable instead
-of silently falling back to raw \`apply()\`.
-
-You can also CHANGE THE ENDO SOURCE THIS MACHINE RUNS. The NixOS config pins
-an exact Endo commit in "endo.rev", so the revision is part of the generation:
-if a new revision leaves the daemon unhealthy, the workflow's apply
-auto-rollback restores the previous revision with it.
-
-The route from an edit to a running machine is: clone from the local Forgejo,
-edit, commit, push a branch, then start a durable deploy workflow. The
-workflow pins and applies only after its build and owner-inbox approval.
-Never edit "endo-src" — it is the running code and is read-only on purpose.
-Work in a scratch clone.
-
-Push and clone happen HERE, through capabilities — not from a terminal.
-Forgejo is a host service, so nothing but the daemon's own Git capabilities
-can reach it.
-
-Set up the work area ONCE — skip this if "endo-work" is already in the host's
-names, because re-running mints a fresh scratch mount and rebinds the names,
-orphaning the earlier work area and its commits:
-\`\`\`
-const endo = await E(powers).lookup('endo');
-const credential = await E(endo).lookup('forgejo-credential');
-// The forge's https origin is the credential's audience; this repository's
-// mirror is floot/endo.git under it.
-const url = \`\${await E(credential).audience()}/floot/endo.git\`;
-if (!url.startsWith('https:')) {
-  // Git remotes here speak https only; report this instead of proceeding.
-  return \`The forge at \${url} is not served over https; nothing here can push to it.\`;
-}
-const identity = { authorName: 'Floot', authorEmail: 'floot@goooooo.ooo' };
-const mount = await E(endo).provideScratchMount('endo-work-mount');
-await E(endo).provideGitClone({
-  destMount: mount,
-  endpoint: { url, credential },
-  identity,
-});
-const git = await E(endo).provideGit(mount, 'endo-work', { identity });
-await E(endo).provideGitRemote(git, 'endo-work-origin', {
-  name: 'origin', url, credential,
-  allowedDirections: ['push'], allowedBranches: ['agent'],
-});
-return await E(git).currentBranch();
-\`\`\`
-Naming the mount, the git, and the remote is what lets later exec calls reach
-them. The git carries the author identity you gave it, and the remote is
-fenced to the \`agent\` branch, so what you commit and push is attributable
-and reviewable.
-
-Then MOUNT THE CHECKOUT AS A DISK and edit it as ordinary files. Prefer this to
-editing through capability calls — it is the difference between one round trip
-per file and simply working in a directory:
-\`\`\`
-attachContainerMount({ petName: 'endo/endo-work', innerPath: '/mnt/endo-work' })
-\`\`\`
-The worktree appears at \`/mnt/endo-work\`, and \`git\` in the sandbox inspects it
-(status, diff, log) as the same repository the "endo-work" capability holds. The
-attach restarts the sandbox and aborts this turn, so expect no result from the
-call: begin the next turn with \`listContainerMounts()\` to confirm the bind, then
-do the work.
-
-Edit at \`/mnt/endo-work\` with your normal file tools, then stage and commit
-THROUGH THE GIT capability — it carries the author identity from the clone,
-which in-sandbox \`git commit\` does not:
-\`\`\`
-const endo = await E(powers).lookup('endo');
-const git = await E(endo).lookup('endo-work');
-const branches = await E(git).branches();
-if (branches.some(b => b.name === 'agent')) await E(git).switchBranch('agent');
-else await E(git).createBranch('agent', { switchAfterCreate: true });
-const { entries } = await E(git).status();
-await E(git).add(entries.map(e => e.path));
-const commit = await E(git).commit('fix(floot): …');
-return commit.oid;
-\`\`\`
-\`E(git).status()\` returns \`{ entries, truncated }\` (NOT an array); stage only
-when it lists something.
-
-For a one-line change, or when no disk is attached, edit through the MOUNT
-capability instead and commit the same way:
-\`\`\`
-const endo = await E(powers).lookup('endo');
-const mount = await E(endo).lookup('endo-work-mount');
-const git = await E(endo).lookup('endo-work');
-const file = 'packages/floot/agent.js';
-const entry = await E(mount).entry(file);   // the one call that splits on "/"
-const before = await E(mount).readText(entry);
-await E(mount).writeText(entry, before.replace(oldText, newText));
-await E(git).add([file]);
-return (await E(git).commit('fix(floot): …')).oid;
-\`\`\`
-Mount paths are arrays of segments — \`E(mount).readText(['packages', 'floot',
-'agent.js'])\` — or an \`entry()\` token; a slash-joined string is rejected.
-
-Push, then PROPOSE the pushed revision through "deploy-endo". Do not call
-\`stageRev\`, \`build\`, or \`apply\` yourself:
-\`\`\`
-const endo = await E(powers).lookup('endo');
-const result = await E(await E(endo).lookup('endo-work-origin')).push({
-  source: 'refs/heads/agent', destination: 'refs/heads/agent',
-});
-const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
-const deployEndo = await E(powers).lookup('deploy-endo');
-const { runId } = await E(deployEndo).start({
-  params: {
-    title: 'commit-message-grade title',
-    summary: 'what changed and why',
-    rev: head.oid,
-    branch: 'agent',
-  },
-});
-return {
-  pushed: result.updatedRefs,
-  rev: head.oid,
-  runId,
-  status: await E(deployEndo).status(runId),
-  waiting: await E(deployEndo).explain(runId),
-};
-\`\`\`
-Tell the user the run id, what state it reached, and explicitly that its
-approval form is in the owner's inbox, not this conversation. You never
-receive the run itself, only its id; keep the id in the conversation. On a
-later turn, re-reach
-it through the same connection: \`E(deployEndo).status(runId)\`,
-\`E(deployEndo).explain(runId)\`, and \`E(deployEndo).journal(runId, { from: 12n })\`
-for the journal entries since a sequence number ("change-nixos" runs work the
-same way through "change-nixos"). Checkpoint with \`status()\` so a turn never
-blocks waiting for approval — \`await sleep(ms)\` between a few polls inside
-one exec is fine; spinning is not. Narrate state CHANGES in short plain
-language, especially for voice — never dump a journal or raw capability
-output.
-
-Rules that are not obvious and will bite you:
-- PUSH BEFORE YOU START THE DEPLOY RUN. The host fetches a pinned revision from
-  Forgejo and only finds commits reachable from a branch head. Proposing a
-  commit you have not pushed makes the workflow's build fail to resolve it.
-- Applying RESTARTS THE DAEMON. The work area and its commits survive.
-  Credential material is process-local, so the start-up setup rotates the
-  Forgejo credential in place and a remote holding it keeps working. A push
-  that fails with "Git credential … has been revoked" means the credential
-  the remote holds is dead: re-run the \`provideGitRemote\` call above once
-  (the setup may have re-minted the credential under the same name), and if
-  the push still fails that way the forge credential is not provisioned on
-  this host — report that. One that fails with "GitRemote … has been revoked"
-  means the remote itself was revoked: re-run \`provideGitRemote\`.
-  \`E(remote).credentialHealth()\` reports \`available\` and \`revoked\` for a
-  remote that still answers. Do not re-clone; only the remote needs redoing.
-  A \`/mnt/\` disk survives too — attach records are replayed onto the rebuilt
-  sandbox — so re-attaching is unnecessary; \`listContainerMounts()\` tells you.
-- The remote pushes ONLY \`agent\` — a push to any other branch is refused by
-  its policy. Stay on \`agent\` so the change is reviewable, and say what you
-  pushed.
-- A revision that only exists on Forgejo is fine to deploy here, but that is NOT
-  an upstream proposal. Starting "deploy-endo" proposes a LOCAL deployment to
-  the owner; it does not open a pull request. You have no route to GitHub —
-  the forge credential is for the local forge only — so proposing upstream ends
-  with you. Report the commit hash, branch, run id, and a one-line summary, and
-  say plainly that the change is pending or running here but is not submitted
-  upstream, so the user can take it from there.
-- exec runs under SES lockdown: no \`Date.now()\`, no \`Math.random()\`, no
-  \`setTimeout\`. \`sleep(ms)\` is provided for waiting between polls within one
-  call; it is the only way to wait.
-- exec results are JSON-serialized. BigInts render as decimal strings, so
-  journal sequence numbers and \`stat()\` sizes arrive as text; pass a sequence
-  back in as a BigInt literal (\`{ from: 12n }\`).
-- \`git.log()\` entries carry \`summary\`, not \`message\`.
-- Capability results have no size bound: one \`diff()\` or a wide \`list()\` can
-  blow the turn. Narrow before you return, and filter at the source rather
-  than reading everything back to sift it here.
-Speak short, plain summaries — never read config text aloud.`;
+// The prompts themselves are composed in src/system-prompt.js from a standard
+// base plus sections chosen by how a session is driven, where its model runs,
+// and its preset. What this file keeps is each preset's prompt as sessions
+// recorded before that composition existed ran it (spoken, on the provider
+// API): the fallback for a registry entry that carries no prompt of its own.
+const legacyPresetPrompt = presetId =>
+  composePresetPrompt({ presetId, context: legacyPromptContext(presetId) });
 
 // Catalog of session presets. Each preset pairs a system prompt with a set of
 // objects to provision (idempotently) into the session guest's petstore the
@@ -609,7 +241,7 @@ const PRESETS = [
     id: 'general',
     title: 'General assistant',
     description: 'A blank session with no project workspace.',
-    systemPrompt: defaultSystemPrompt,
+    systemPrompt: legacyPresetPrompt('general'),
     objects: [],
   },
   {
@@ -617,7 +249,7 @@ const PRESETS = [
     title: 'New project',
     description:
       'Start a project with a writable, git-backed workspace ready to populate.',
-    systemPrompt: newProjectSystemPrompt,
+    systemPrompt: legacyPresetPrompt('new-project'),
     objects: [{ kind: 'git-workspace', petName: 'workspace' }],
   },
   {
@@ -625,7 +257,7 @@ const PRESETS = [
     title: 'Full Endo control',
     description:
       'Full control of the Endo daemon via an "endo" host reference. High access — handle with care.',
-    systemPrompt: fullControlSystemPrompt,
+    systemPrompt: legacyPresetPrompt('full-control'),
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src', required: false },
@@ -646,7 +278,7 @@ const PRESETS = [
     title: 'Machine admin (NixOS)',
     description:
       "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
-    systemPrompt: machineAdminSystemPrompt,
+    systemPrompt: legacyPresetPrompt('machine-admin'),
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src', required: false },
@@ -670,6 +302,9 @@ const PRESETS = [
     ],
   },
 ];
+// How many distinct serving models one turn records; a router rarely uses
+// more than a handful, and the record is for reading.
+const MAX_SERVED_BY = 16;
 const DEFAULT_PRESET_ID = 'general';
 export const getPreset = id =>
   PRESETS.find(p => p.id === id) ||
@@ -702,9 +337,17 @@ export const refreshPresetEntry = entry => {
   ) {
     return entry;
   }
+  // Compose the new text for the place and the driver this session was
+  // created for. An entry that recorded neither predates contexts, and ran
+  // the one prompt every session of its preset ran.
   return harden({
     ...entry,
-    systemPrompt: preset.systemPrompt,
+    systemPrompt: entry.promptContext
+      ? composePresetPrompt({
+          presetId: preset.id,
+          context: entry.promptContext,
+        })
+      : preset.systemPrompt,
     presetPromptVersion: promptVersion,
   });
 };
@@ -953,7 +596,7 @@ const provisionPresetObjects = async (
  *   getTurnContent: (ref: { name: string, chars: number }) => Promise<string>,
  *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
- *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
+ *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number, incompleteTurns: number }>,
  *   startInbox: () => void,
  *   shutdown: (allowBackendQuarantine?: boolean) => Promise<void>,
  * }>}
@@ -1019,7 +662,10 @@ export const makeStreamingAgent = async (
   const currentProvider = async () =>
     provideProvider ? provideProvider() : staticProvider;
 
-  const effectivePrompt = systemPrompt || defaultSystemPrompt;
+  // An agent built with no prompt at all was not opened by the Floot space,
+  // so nothing reads its replies aloud.
+  const effectivePrompt =
+    systemPrompt || composePresetPrompt({ presetId: 'general' });
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
   const turnJournal = makeTurnJournal(journalPowers, {
     migration: journalMigration,
@@ -1031,6 +677,11 @@ export const makeStreamingAgent = async (
   let activeJournalSignal;
   let completedJournalTurn;
   let activeJournalUsage;
+  // The models that served the active turn's rounds, as a provider that
+  // routes (OpenRouter) reports them. Recorded with the turn's finish, so a
+  // failed turn says which upstream it failed on.
+  /** @type {string[]} */
+  let activeJournalServedBy = [];
   let activeJournalOutcomeUnknown = false;
   const assertTurnToolsSettled = async turnId => {
     const turn = await turnJournal.get(turnId);
@@ -1170,6 +821,10 @@ export const makeStreamingAgent = async (
     }
     return undefined;
   };
+  const servedByOfTurn = () =>
+    activeJournalServedBy.length > 0
+      ? { servedBy: harden([...activeJournalServedBy]) }
+      : {};
   const loadUsage = async () => {
     if (usage) return usage;
     const recorded = await findRecordedUsage();
@@ -1433,7 +1088,7 @@ export const makeStreamingAgent = async (
           );
         }
       }
-      writer.usage(nextUsage);
+      writer.usage(await usageToReport(nextUsage));
       // Consumers flush streaming text into a message at each tool_call and
       // flush the trailing segment at end. Re-emitting the concatenated reply
       // here would re-merge those segments into one bubble (the
@@ -1654,15 +1309,45 @@ export const makeStreamingAgent = async (
         );
         let streamed = '';
         const provider = await currentProvider();
-        const { message, usage: roundUsage } = await provider.chatStream(
-          context,
-          tools.providerSchemas,
-          delta => {
-            streamed += delta;
-            writer.delta(delta);
-          },
-          signal,
-        );
+        let answer;
+        try {
+          answer = await provider.chatStream(
+            context,
+            tools.providerSchemas,
+            delta => {
+              streamed += delta;
+              writer.delta(delta);
+            },
+            signal,
+          );
+        } catch (error) {
+          // The turn's failure reaches the journal and the view, but this log
+          // otherwise ends at the round that was asked for and never says
+          // what became of it.
+          console.error(
+            `[floot] round ${round} ${signal?.aborted ? 'stopped' : 'failed'}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          throw error;
+        }
+        const { message, usage: roundUsage, servedBy } = answer;
+        if (servedBy?.model || servedBy?.provider) {
+          // Cut to what the journal accepts: a finish event it refused would
+          // leave the turn pending and the session unable to begin another.
+          const served = [servedBy.model, servedBy.provider]
+            .filter(part => typeof part === 'string' && part !== '')
+            .join(' via ')
+            .slice(0, 256);
+          console.error(`[floot] round ${round} served by ${served}`);
+          if (
+            served !== '' &&
+            !activeJournalServedBy.includes(served) &&
+            activeJournalServedBy.length < MAX_SERVED_BY
+          ) {
+            activeJournalServedBy = [...activeJournalServedBy, served];
+          }
+        }
         if (roundUsage) {
           turnInput += roundUsage.inputTokens || 0;
           turnOutput += roundUsage.outputTokens || 0;
@@ -1794,10 +1479,11 @@ export const makeStreamingAgent = async (
       state: 'completed',
       output: finalContent,
       usage: { inputTokens: turnInput, outputTokens: turnOutput },
+      ...servedByOfTurn(),
       conversationNodeId: committedNode.id,
     });
     completedJournalTurn = turnId;
-    writer.usage(totals);
+    writer.usage(await usageToReport(totals));
     writer.final(finalContent);
     writer.end();
   };
@@ -1825,6 +1511,9 @@ export const makeStreamingAgent = async (
     activeJournalTurn = turnId;
     activeJournalSignal = signal;
     activeJournalUsage = undefined;
+    // Here, not where rounds begin: a turn that fails before its first round
+    // must not be recorded as served by the previous turn's models.
+    activeJournalServedBy = [];
     activeJournalOutcomeUnknown = false;
     journalToolSequence = 0n;
     notifyChange(
@@ -1873,6 +1562,7 @@ export const makeStreamingAgent = async (
           state: activeJournalOutcomeUnknown ? 'outcome-unknown' : 'cancelled',
           output,
           usage: activeJournalUsage,
+          ...servedByOfTurn(),
         });
       }
     } catch (error) {
@@ -1893,6 +1583,7 @@ export const makeStreamingAgent = async (
           output,
           error: error instanceof Error ? error.message : String(error),
           usage: hostedTurnPartialOf(error)?.usage || activeJournalUsage,
+          ...servedByOfTurn(),
         });
       }
       throw error;
@@ -2485,8 +2176,15 @@ export const makeStreamingAgent = async (
         const match = unmatched.findIndex(
           other =>
             other.name === tool.name &&
-            other.args === tool.args &&
-            other.result === tool.result,
+            sameToolArgs(
+              { text: other.args, cut: other.argsRef !== undefined },
+              { text: tool.args, cut: tool.argsRef !== undefined },
+            ) &&
+            (other.result === tool.result ||
+              sameToolResult(
+                { text: other.result, cut: other.resultRef !== undefined },
+                { text: tool.result, cut: tool.resultRef !== undefined },
+              )),
         );
         if (match >= 0) unmatched.splice(match, 1);
         else
@@ -2505,6 +2203,12 @@ export const makeStreamingAgent = async (
         args: tool.args,
         result:
           tool.result ?? 'Tool outcome unknown; do not automatically retry.',
+      }));
+      // Which of those the journal holds only a preview of. Kept beside the
+      // messages rather than on them: a message is what a view is handed.
+      const journalCuts = evidence.map(tool => ({
+        args: tool.argsRef !== undefined,
+        result: tool.resultRef !== undefined,
       }));
       const users = projected.filter(message => message.role === 'user');
       // A partial turn the backend retained was mirrored into the tree in
@@ -2536,14 +2240,22 @@ export const makeStreamingAgent = async (
           UNSETTLED_TOOL_RESULT,
           'Tool outcome unknown; do not automatically retry.',
         ]);
-        const sameResult = (left, right) =>
-          left === right || (placeholders.has(left) && placeholders.has(right));
-        for (const tool of journalTools) {
+        const sameResult = (left, right, cut) =>
+          left === right ||
+          (placeholders.has(left) && placeholders.has(right)) ||
+          sameToolResult({ text: left }, { text: right, cut });
+        for (const [index, tool] of journalTools.entries()) {
+          // The tree mirrors the provider's argument string and the whole
+          // result; the journal re-serializes the one and may hold a preview
+          // of either. The same call, compared as strings, showed up twice.
           const match = unmatchedTools.findIndex(
             other =>
               other.name === tool.name &&
-              other.args === tool.args &&
-              sameResult(other.result, tool.result),
+              sameToolArgs(
+                { text: other.args },
+                { text: tool.args, cut: journalCuts[index].args },
+              ) &&
+              sameResult(other.result, tool.result, journalCuts[index].result),
           );
           if (match >= 0) unmatchedTools.splice(match, 1);
           else messages.splice(Math.max(0, messages.length - 1), 0, tool);
@@ -2609,7 +2321,88 @@ export const makeStreamingAgent = async (
       notifyChange('turn-resolved');
     });
 
-  const getUsage = async () => harden({ ...(await loadUsage()) });
+  /**
+   * What the session has used. The running totals are committed with each
+   * completed turn's conversation node, so they know nothing of a turn that
+   * failed, was stopped, or whose outcome is unknown — yet its tokens were
+   * spent all the same. Those are read from the journal, which records every
+   * turn's usage with its finish, and added here; `turns` stays the count of
+   * completed turns and `incompleteTurns` counts the rest.
+   */
+  /** @type {{ archived: number, inputTokens: number, outputTokens: number, turns: number } | undefined} */
+  let archivedIncomplete;
+  const tally = turns => {
+    const sum = { inputTokens: 0, outputTokens: 0, turns: 0 };
+    for (const turn of turns) {
+      // The synthetic record of a journal imported from before journals is
+      // not a turn anybody ran.
+      if (
+        turn.terminal &&
+        turn.state !== 'completed' &&
+        turn.turnId !== 'legacy-import'
+      ) {
+        sum.turns += 1;
+        sum.inputTokens += Number(turn.usage?.inputTokens) || 0;
+        sum.outputTokens += Number(turn.usage?.outputTokens) || 0;
+      }
+    }
+    return sum;
+  };
+  const getUsage = async () => {
+    const completed = await loadUsage();
+    // Archived turns never change, and reading them costs a lookup per
+    // chunk; read them again only when there are more of them.
+    const { archivedTurns } = await turnJournal.status();
+    if (!archivedIncomplete || archivedIncomplete.archived !== archivedTurns) {
+      archivedIncomplete = {
+        archived: archivedTurns,
+        ...tally(await turnJournal.listArchived()),
+      };
+    }
+    const retained = tally(await turnJournal.list());
+    return harden({
+      ...completed,
+      inputTokens:
+        completed.inputTokens +
+        archivedIncomplete.inputTokens +
+        retained.inputTokens,
+      outputTokens:
+        completed.outputTokens +
+        archivedIncomplete.outputTokens +
+        retained.outputTokens,
+      incompleteTurns: archivedIncomplete.turns + retained.turns,
+    });
+  };
+
+  /**
+   * The usage a finished turn tells its view: what getUsage() answers, so the
+   * figure does not drop at the end of a turn because an earlier one did not
+   * complete. The turn is already journaled as completed when this runs, so
+   * it may neither fail nor wait for long — a journal that cannot be read is
+   * a reason to report the completed totals, not to abort a reply.
+   *
+   * @param {{ inputTokens: number, outputTokens: number, turns: number }} completedTotals
+   */
+  const usageToReport = async completedTotals => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    try {
+      return await Promise.race([
+        getUsage(),
+        new Promise(resolve => {
+          timer = setTimeout(() => resolve(completedTotals), 5000);
+        }),
+      ]);
+    } catch (error) {
+      console.error(
+        '[floot] could not total the session’s usage; reporting completed turns only:',
+        error instanceof Error ? error.message : String(error),
+      );
+      return completedTotals;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   if (provideHostedClient) {
     // Provision from the same capability-gated catalog as the provider loop,
@@ -4689,7 +4482,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           if (methodName === 'watch')
             return 'watch() — A disposable stream of this session’s state; subscribe rather than polling getHistory(). First { type: "snapshot", transcript, transcriptError?, turn, running, pending, execution, network, usage, journalVersion }, where transcript is { version, base: 0, keep: 0, append: messages } or null when it could not be read (transcriptError says why; it is retried). Then one event per change: "transcript" { version, base, keep, append } — keep the first `keep` messages you hold and append the rest; `base` is the version it follows, and an event whose base is not the version you hold means you missed one: reopen. Settled turns only: a running turn is rendered from turn.watch(). "transcript-error" { message }; "turn" { turn: { input, turn, pendingId? } | null } for the UI turn in flight; "running" { running: { input, from? } | null } for whatever the agent is running, including mail turns, which have no FlootTurn; "pending" { pending: { entries, hold } }; "execution"; "network"; "usage"; "journal" { version } (turn records changed: re-read getTurns() if you show them); and "end" when the session is deleted. A turn already in flight when you subscribe is in the snapshot, not in a later "turn" event. Open the stream promptly: a reader not opened within two minutes is closed, and a stream that finishes without "end" (or an event whose base you do not hold) means subscribe again. Closing the stream detaches this viewer only.';
           if (methodName === 'getTurns')
-            return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
+            return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, `servedBy` (the models a routing provider reports having served the turn’s rounds), errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
           if (methodName === 'getArchivedTurns')
             return 'getArchivedTurns() — Settled turn records beyond the retained window, oldest first, read from storage on request.';
           if (methodName === 'getTurnContent')
@@ -4698,7 +4491,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns, incompleteTurns } — tokens include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -4907,9 +4700,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
     ) {
       throw Error('OpenRouter model must include its organization prefix');
     }
+    /** @type {import('@endo/hosted-agent').PromptEnvironment} */
+    let promptEnvironment = PROVIDER_PROMPT_ENVIRONMENT;
     if (backendId) {
       const backend = (await getHostedBackends()).get(backendId);
       if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
+      promptEnvironment =
+        backend.descriptor.promptEnvironment ||
+        UNDECLARED_HOSTED_PROMPT_ENVIRONMENT;
       const models = await E(backend.factory).listModels();
       const chosen = models.find(candidate => candidate.id === modelId);
       if (!chosen) {
@@ -4931,10 +4729,25 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // getAgent (objects are provisioned once, idempotently). A model is pinned
     // only when the caller chose a known one; otherwise the session follows
     // the factory's configured default model.
+    //
+    // The preset's prompt is composed for this session: for the place its
+    // model runs (the backend's declared environment; every hosted session is
+    // handed the container-mount tools, see getAgent) and for how it is
+    // driven. Only a caller that says its replies are spoken gets the voice
+    // rules, and a subagent never does: its reader is its parent.
+    const delegated = parentSessionId !== undefined;
+    const promptContext = normalizePromptContext({
+      environment: promptEnvironment,
+      spoken: !delegated && options.spoken === true,
+      containerMounts: Boolean(backendId),
+    });
     const sessionPrompt = composeSessionSystemPrompt({
-      presetPrompt: preset.systemPrompt,
+      presetPrompt: composePresetPrompt({
+        presetId: preset.id,
+        context: promptContext,
+      }),
       requestedPrompt: options.systemPrompt,
-      delegated: parentSessionId !== undefined,
+      delegated,
     });
     const entry = harden({
       id,
@@ -4942,6 +4755,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
       createdAt: Date.now(),
       presetId: preset.id,
       systemPrompt: sessionPrompt,
+      // What the prompt above was composed from, so a versioned migration can
+      // compose its successor for the same place and driver.
+      promptContext,
       // A versioned preset records which prompt revision this session runs,
       // and a prompt the operator supplied is marked so no later migration
       // replaces it with the preset's (refreshPresetEntry). Entries that
@@ -5303,6 +5119,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
               title: titleOrOptions,
               presetId,
               model,
+              // The positional form is the Floot space's original call, from
+              // before a caller could say how it is driven.
+              spoken: true,
             };
       // The delegation fields are minted by the spawner, never accepted from a
       // caller: a session that claimed another's parentage would join that
@@ -5604,11 +5423,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
-          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, and reasoningEffort. Returns its opaque facet.',
+          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors.',
         listSessions:
