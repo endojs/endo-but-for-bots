@@ -311,9 +311,18 @@ const SES_CENSUS: &str = "['lockdown','harden','Compartment']\
 ///
 /// Not the prologue's first statement, which is `delete globalThis.harden`:
 /// that one SUCCEEDS even here, because `Machine::new`'s freeze seals the
-/// intrinsic graph and not the start global's own properties. The first
-/// operation it actually refuses is the `Iterator.prototype` sweep.
-const FROZEN_REALM_FORECLOSURE: &str = "ERROR: delete map: no permission (strict mode)";
+/// intrinsic graph and not the start global's own properties.
+///
+/// As of the lazy Iterator helpers, the prologue refuses NOTHING. Its only
+/// other operation against a sealed slot was the `Iterator.prototype` sweep,
+/// which existed because the five lazy helpers halted uncatchably; they are
+/// implemented, so the sweep is gone and the prologue runs to completion even
+/// here. Foreclosure therefore comes from the SHIM again -- `repairIntrinsics`
+/// rewriting descriptors on intrinsics the native freeze already sealed --
+/// which is where it came from before the prologue was bundled into a strict
+/// module. Same foreclosure, one layer later, and the third value this
+/// constant has held.
+const FROZEN_REALM_FORECLOSURE: &str = "ERROR: invalid descriptor";
 
 /// `eval_wrapped`'s shape: an engine halt is not catchable, so a `'ok'` here
 /// means the program ran to completion and threw nothing.
@@ -454,22 +463,22 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
                 "Machine::new freezes the intrinsic graph at construction"
             );
-            // The boot now forecloses one layer EARLIER than it used to, and
-            // the message changed with it.
+            // The boot forecloses in `repairIntrinsics` again, one layer
+            // LATER than the previous revision of this pin, and the message
+            // moved back with it.
             //
-            // It used to reach `repairIntrinsics`, which rewrites descriptors
-            // on intrinsics the native freeze has already sealed, and report
-            // the engine's generic `invalid descriptor`. The repairs ahead of
-            // the shim are now a bundled module (`@endo/ironhorse-prelude`)
-            // rather than raw statements spliced into the boot script, so they
-            // run in STRICT mode. `delete Iterator.prototype.map` on a frozen
-            // intrinsic returned false silently under the old sloppy-mode
-            // splice; strict mode throws, so the prologue stops there and the
-            // shim never runs.
+            // That revision caught the prologue being bundled into a strict
+            // module: `delete Iterator.prototype.map` on a frozen intrinsic
+            // had returned false silently under the old sloppy-mode splice,
+            // and strict mode throws, so the prologue stopped at its own sweep
+            // and the shim never ran.
             //
-            // Both are foreclosure, and the new one is the better report: it
-            // names the first operation the frozen realm actually refused,
-            // rather than the first one the shim happened to try afterwards.
+            // The sweep is now gone -- it existed only because the five lazy
+            // Iterator helpers halted uncatchably, and they are implemented --
+            // so the prologue completes and the shim reaches the descriptor
+            // rewrite that the native freeze refuses. All three revisions are
+            // foreclosure; what moves is which layer gets there first, which
+            // is exactly what this constant is documented to track.
             assert_eq!(
                 crank(&wrapped(&boot)),
                 FROZEN_REALM_FORECLOSURE,
@@ -480,9 +489,10 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             // The message alone would also match an unrelated prologue bug, so
             // pin the outcome too: the shim installed nothing, and the realm is
             // left with NO `harden` at all. The prologue's `delete` of the
-            // engine's own succeeded -- see `FROZEN_REALM_FORECLOSURE` -- and
-            // the `lockdown()` that would have installed the shim's was never
-            // reached. That is the honest report of a half-applied prologue,
+            // engine's own succeeded -- see `FROZEN_REALM_FORECLOSURE`, whose
+            // note explains why that one statement works on a frozen realm --
+            // and the `lockdown()` that would have installed the shim's was
+            // never reached. That is the honest report of a half-applied prologue,
             // and it is why this realm profile is foreclosed rather than
             // merely degraded: a guest here would have neither hardener.
             //
