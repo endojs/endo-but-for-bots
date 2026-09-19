@@ -172,9 +172,30 @@ and freezes them itself. Measured: the 576 KB
 
 `Machine::new()` freezes the intrinsics at construction
 (`new_shared_realm_machine_with_permit`, `interp/realm.rs`).
-The shim's `repairIntrinsics` then cannot rewrite a descriptor it needs, and
-the same bundle aborts with `invalid descriptor` — leaving the realm with
-neither the engine's `harden` (the bundle deleted it) nor the shim's.
+The same bundle then aborts with `invalid descriptor` — leaving the realm
+with neither the engine's `harden` (the bundle deleted it) nor the shim's.
+
+Not in `repairIntrinsics`, which an earlier revision of this passage said and
+which is wrong: `lockdown()` is never reached. The abort happens while the
+SES bundle's MODULE GRAPH is still evaluating, at
+`@endo/immutable-arraybuffer`'s module-scope install
+(`packages/immutable-arraybuffer/src/shim.js`, pulled in unconditionally by
+`packages/ses/src/lockdown.js`), on its first `defineProperties` against the
+frozen `ArrayBuffer.prototype`. Measured: evaluating the bundle TRUNCATED
+before its trailing `lockdown({...})` call still throws `invalid descriptor`,
+and `globalThis.lockdown` is still identically the engine's binding
+afterwards — so SES's own `lockdown-shim.js`, which assigns that global at
+module scope, had not finished either.
+
+Two consequences worth keeping. The realm is foreclosed CLEANLY rather than
+half-repaired, but only by one statement's margin: that install aborts just
+before the loop which would have replaced the TypedArray constructors on the
+start global, and those writes would have succeeded, leaving emulated
+constructors over un-shimmed prototypes. And the foreclosure point is
+contingent on the engine NOT implementing the Immutable ArrayBuffer proposal
+— once `ArrayBuffer.prototype.sliceToImmutable` exists natively, that
+install's `if` guard is false, the bundle proceeds further, and the abort
+moves again.
 
 That made the two look mutually exclusive: the multi-compartment `Machine` API
 came only with the construction-time freeze, and the shim came only with a
@@ -929,11 +950,25 @@ alongside it.
    refusing an entry with no construction site left in the source.
 
    The 326 ledgered rows became real outcomes: 288 pass, 28 are named skips
-   (mostly failures the XS oracle shares), and 10 are recorded failures — none
-   of them in the helpers. They are pre-existing gaps the uncatchable halt had
-   been masking, the largest two groups being `class E extends Error {}`
-   losing the subclass identity, and descriptor attributes on
-   `{Async,}GeneratorFunction`.
+   (mostly failures the XS oracle shares), and 10 are recorded failures. The 10
+   are two groups, both pre-existing gaps the uncatchable halt had been
+   masking, and neither is a defect in the helpers:
+
+   - 6 rows, `Iterator/prototype/take/next-method-returns-throwing-*`. They
+     are `take` cases, but the defect is not in `take` — it forwards `return()`
+     correctly. `class E extends Error {}` loses the subclass identity, so the
+     harness's `ReturnCalledError` arrives as a plain `Error`. Verified on the
+     pre-Iterator commit, where it reproduces identically.
+   - 4 rows, `Function/prototype/{arguments,caller}/prop-desc.js`, where the
+     ORACLE throws (`ReferenceError: get WellKnownIntrinsicObjects`) — a
+     harness gap on XS's side, not ours.
+
+   A third group, 6 rows of descriptor attributes on
+   `{Async,}GeneratorFunction`, is NOT among those 10: those rows did not exist
+   in the prior expectations at all, and are cases the walk reached for the
+   first time. An earlier revision of this paragraph counted them inside the 10
+   and called them one of its two largest groups, which cannot be right — 6 and
+   6 do not fit in 10.
 
    The amputation is gone from `@endo/ironhorse-prelude`, so the shim profile
    presents a real `Iterator` global. Because that prologue was extracted into
@@ -1195,17 +1230,20 @@ No design content; it wants a bigger box and a re-run.
 
 ### Implementation — no decision or design owed
 
-**I1. The lazy `Iterator` helpers.**
-`map`, `filter`, `take`, `drop` and `flatMap` answer `typeof` as `"function"`
-and halt the machine with `NotImplemented("Iterator.helper")` when called
-(`interp/natives/dispatch.rs:5631`) — an engine halt, so `try`/`catch` does not
-recover and the crank does not complete.
-This is the one item on the shim side that is engine work, and it is what makes
-the boot script delete the surface by hand.
-Not free in the other direction: un-advertising them would convert **326**
-`skip:unsupported-opcode` rows across **14** files in
-`ironhorse-262/expectations/whole-tree` into ordinary conformance failures, so
-implementing them is the honest fix.
+**I1. The lazy `Iterator` helpers.** ~~Done.~~
+`map`, `filter`, `take`, `drop` and `flatMap` used to answer `typeof` as
+`"function"` and then halt the machine with `NotImplemented("Iterator.helper")`
+when called — an engine halt, so `try`/`catch` did not recover and the crank
+did not complete. That is what made the boot script delete the surface by hand.
+Un-advertising them was not free in the other direction either: it would have
+converted **326** `skip:unsupported-opcode` rows across **14** files in
+`ironhorse-262/expectations/whole-tree` into ordinary conformance failures.
+So they were implemented, which is what closed those 326 rows and let
+`@endo/ironhorse-prelude` stop amputating the surface. See the resolved entry
+in § What decides the profile for the outcome and its measurements; the
+dispatch arms cited by an earlier revision of this item
+(`interp/natives/dispatch.rs`) now call `iterator_lazy_helper` and raise no
+halt.
 
 **I2. `%ThrowTypeError%`.**
 Absent. XS builds it and installs it as the get/set of
@@ -1405,14 +1443,12 @@ someone's work; if they are not, it is nobody's.
       tests; what it would not do is re-run the dual-run measurement. Widening
       a Rust lane's triggers across the JS workspace is the wrong trade for
       that.
-- [ ] Implement the lazy `Iterator` helpers, or decide the engine should not
-      advertise them. Today `typeof Iterator.prototype.map` is `"function"` and
-      calling it is an uncatchable halt (§ next step 2;
-      `interp/natives/dispatch.rs:5631`). Triaged as I1 — implementation only,
-      no decision or design owed — and the direction is settled by the other
-      side's cost: un-advertising would convert 326 `skip:unsupported-opcode`
-      rows across 14 files in `ironhorse-262/expectations/whole-tree` into
-      ordinary conformance failures, so implementing them is the honest fix.
+- [x] Implement the lazy `Iterator` helpers, or decide the engine should not
+      advertise them. Done: implemented, as instances of a new
+      `%IteratorHelperPrototype%` whose state survives collection and resume.
+      The 326 `skip:unsupported-opcode` rows across 14 files became real
+      outcomes rather than conformance failures, and the prologue's amputation
+      of the surface went with them (§ What decides the profile).
 - [ ] Resolve the prelude's `@endo/harden` interaction so `lockdown()`-calling
       cases can run on the node host, then port SES's own lockdown/Compartment
       assertions into the `ses-xs-parity` corpus (§ Why SES's own suite is not
