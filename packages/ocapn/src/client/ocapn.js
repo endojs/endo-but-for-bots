@@ -29,7 +29,6 @@ import { makePassableCodecs } from '../codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
 import { locationToLocationId, toHex } from './util.js';
-import { randomGiftId } from '../cryptography.js';
 import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 import { makeOcapnTable } from '../captp/ocapn-tables.js';
@@ -1293,7 +1292,7 @@ export const makeOcapn = (
       peer: { publicKey: receiverPublicKeyForGifter },
     } = gifterReceiverSession;
     const gifterSideId = gifterExporterSession.self.keyPair.publicKey.id;
-    const giftId = randomGiftId();
+    const giftId = cryptography.randomGiftId();
     const signedHandoffGive = cryptography.makeSignedHandoffGive(
       receiverPublicKeyForGifter,
       exporterLocation,

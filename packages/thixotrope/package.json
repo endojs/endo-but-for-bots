@@ -26,7 +26,8 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./node-powers.js": "./node-powers.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -56,6 +57,7 @@
     "@endo/init": "workspace:^",
     "@endo/ironhorse-prelude": "workspace:^",
     "@endo/ocapn": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.4.0"
   },
