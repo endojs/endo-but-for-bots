@@ -17,46 +17,46 @@ test('OpenRouter selection fails early without credentials', t => {
   );
 });
 
-test.serial(
-  'OpenRouter factories omit default output caps and retain explicit caps',
-  async t => {
-    const originalFetch = globalThis.fetch;
-    t.teardown(() => {
-      globalThis.fetch = originalFetch;
-    });
-    const bodies = [];
-    globalThis.fetch = async (_url, init) => {
-      bodies.push(JSON.parse(init.body));
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: 'stop',
-              message: { role: 'assistant', content: 'Done' },
-            },
-          ],
-        }),
-      );
-    };
-    const env = {
-      LAL_HOST: 'https://openrouter.ai/api/v1',
-      LAL_MODEL: 'openrouter/free',
-      LAL_AUTH_TOKEN: 'test-not-a-key',
-    };
-    await createProvider(env).chat([], []);
-    await createStreamingProvider(env).chat([], []);
-    await createStreamingProvider({
-      ...env,
-      FLOOT_PROVIDER: 'openrouter',
-    }).chat([], []);
-    t.true(bodies.every(body => !('max_tokens' in body)));
-    await createStreamingProvider({ ...env, FLOOT_MAX_TOKENS: '8192' }).chat(
-      [],
-      [],
+test.serial('OpenRouter factories never send an output cap', async t => {
+  const originalFetch = globalThis.fetch;
+  t.teardown(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: 'Done' },
+          },
+        ],
+      }),
     );
-    t.is(bodies[3].max_tokens, 8192);
-  },
-);
+  };
+  const env = {
+    LAL_HOST: 'https://openrouter.ai/api/v1',
+    LAL_MODEL: 'openrouter/free',
+    LAL_AUTH_TOKEN: 'test-not-a-key',
+  };
+  await createProvider(env).chat([], []);
+  await createStreamingProvider(env).chat([], []);
+  await createStreamingProvider({
+    ...env,
+    FLOOT_PROVIDER: 'openrouter',
+  }).chat([], []);
+  // Not from the environment either: a reply is as long as the model makes
+  // it, and a cap only ever turned a long answer into a failed turn.
+  await createStreamingProvider({ ...env, FLOOT_MAX_TOKENS: '8192' }).chat(
+    [],
+    [],
+  );
+  await createProvider({ ...env, LAL_MAX_TOKENS: '8192' }).chat([], []);
+  t.is(bodies.length, 5);
+  t.true(bodies.every(body => !('max_tokens' in body)));
+});
 
 test('configured free router appears once and remains the default', async t => {
   const factory = make(

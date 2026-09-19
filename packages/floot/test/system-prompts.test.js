@@ -61,7 +61,14 @@ test('every prompt is the standard base plus sections', t => {
     const prompt = composePresetPrompt({ presetId, context });
     for (const phrase of shared) t.true(prompt.includes(phrase), phrase);
     // No section leaves a stray value behind.
-    t.false(/\bundefined\b|\[object |\bNaN\b/.test(prompt), presetId);
+    // (The base explains, in so many words, what an undeclared name reads as.)
+    const said = prompt
+      .replace('it reads as undefined', '')
+      .replace('typeof target is "undefined"', '');
+    t.false(/\bundefined\b|\[object |\bNaN\b/.test(said), presetId);
+    t.true(
+      prompt.includes('A petname is a name in your petstore, not a variable'),
+    );
   }
   // A preset only ever adds to the base.
   for (const presetId of PROMPT_PRESET_IDS) {

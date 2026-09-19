@@ -217,6 +217,7 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
             inputTokens: value.inputTokens,
             outputTokens: value.outputTokens,
             turns: value.turns,
+            incompleteTurns: value.incompleteTurns || 0,
           };
           emit({ type: 'usage' });
         } else if (value.type === 'end') {

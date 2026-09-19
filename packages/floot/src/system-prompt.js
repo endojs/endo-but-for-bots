@@ -165,6 +165,16 @@ guest interface) or by looking one up, and call methods with eventual-send:
 \`const x = await E(ref).someMethod(args)\`. Always \`await\` and always go
 through \`E(...)\` for capability calls.
 
+A petname is a name in your petstore, not a variable in exec. Every exec call is
+a fresh function body: nothing declared in an earlier call exists in the next,
+and only \`powers\`, \`E\`, \`harden\`, \`console\` and \`sleep\` are there to begin
+with. So each call looks up what it uses first —
+\`const thing = await E(powers).lookup('thing')\`. A name you never declared does
+not throw; it reads as undefined, and the error you then get is
+\`Cannot deliver "someMethod" to target; typeof target is "undefined"\`. exec has
+no \`import\` or \`require\` and no Node built-ins: whatever is outside comes
+through a capability.
+
 When a tool result is itself a capability it shows as
 \`[remote capability] callable methods: [...]\` listing the methods you can call
 — that is a usable object, not an empty result. To work with it, look it up (or

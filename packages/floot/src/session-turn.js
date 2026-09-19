@@ -157,6 +157,7 @@ const drainReplyReader = async (reader, status, emit) => {
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
         turns: event.turns,
+        incompleteTurns: event.incompleteTurns || 0,
       };
     } else if (event.type === 'end') {
       terminal = event;

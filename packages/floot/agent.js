@@ -64,6 +64,7 @@ import {
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
+import { sameToolArgs, sameToolResult } from './src/tool-evidence.js';
 import { projectTranscript } from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
@@ -301,6 +302,9 @@ const PRESETS = [
     ],
   },
 ];
+// How many distinct serving models one turn records; a router rarely uses
+// more than a handful, and the record is for reading.
+const MAX_SERVED_BY = 16;
 const DEFAULT_PRESET_ID = 'general';
 export const getPreset = id =>
   PRESETS.find(p => p.id === id) ||
@@ -592,7 +596,7 @@ const provisionPresetObjects = async (
  *   getTurnContent: (ref: { name: string, chars: number }) => Promise<string>,
  *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
- *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
+ *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number, incompleteTurns: number }>,
  *   startInbox: () => void,
  *   shutdown: (allowBackendQuarantine?: boolean) => Promise<void>,
  * }>}
@@ -673,6 +677,11 @@ export const makeStreamingAgent = async (
   let activeJournalSignal;
   let completedJournalTurn;
   let activeJournalUsage;
+  // The models that served the active turn's rounds, as a provider that
+  // routes (OpenRouter) reports them. Recorded with the turn's finish, so a
+  // failed turn says which upstream it failed on.
+  /** @type {string[]} */
+  let activeJournalServedBy = [];
   let activeJournalOutcomeUnknown = false;
   const assertTurnToolsSettled = async turnId => {
     const turn = await turnJournal.get(turnId);
@@ -812,6 +821,10 @@ export const makeStreamingAgent = async (
     }
     return undefined;
   };
+  const servedByOfTurn = () =>
+    activeJournalServedBy.length > 0
+      ? { servedBy: harden([...activeJournalServedBy]) }
+      : {};
   const loadUsage = async () => {
     if (usage) return usage;
     const recorded = await findRecordedUsage();
@@ -1075,7 +1088,7 @@ export const makeStreamingAgent = async (
           );
         }
       }
-      writer.usage(nextUsage);
+      writer.usage(await usageToReport(nextUsage));
       // Consumers flush streaming text into a message at each tool_call and
       // flush the trailing segment at end. Re-emitting the concatenated reply
       // here would re-merge those segments into one bubble (the
@@ -1296,15 +1309,45 @@ export const makeStreamingAgent = async (
         );
         let streamed = '';
         const provider = await currentProvider();
-        const { message, usage: roundUsage } = await provider.chatStream(
-          context,
-          tools.providerSchemas,
-          delta => {
-            streamed += delta;
-            writer.delta(delta);
-          },
-          signal,
-        );
+        let answer;
+        try {
+          answer = await provider.chatStream(
+            context,
+            tools.providerSchemas,
+            delta => {
+              streamed += delta;
+              writer.delta(delta);
+            },
+            signal,
+          );
+        } catch (error) {
+          // The turn's failure reaches the journal and the view, but this log
+          // otherwise ends at the round that was asked for and never says
+          // what became of it.
+          console.error(
+            `[floot] round ${round} ${signal?.aborted ? 'stopped' : 'failed'}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          throw error;
+        }
+        const { message, usage: roundUsage, servedBy } = answer;
+        if (servedBy?.model || servedBy?.provider) {
+          // Cut to what the journal accepts: a finish event it refused would
+          // leave the turn pending and the session unable to begin another.
+          const served = [servedBy.model, servedBy.provider]
+            .filter(part => typeof part === 'string' && part !== '')
+            .join(' via ')
+            .slice(0, 256);
+          console.error(`[floot] round ${round} served by ${served}`);
+          if (
+            served !== '' &&
+            !activeJournalServedBy.includes(served) &&
+            activeJournalServedBy.length < MAX_SERVED_BY
+          ) {
+            activeJournalServedBy = [...activeJournalServedBy, served];
+          }
+        }
         if (roundUsage) {
           turnInput += roundUsage.inputTokens || 0;
           turnOutput += roundUsage.outputTokens || 0;
@@ -1436,10 +1479,11 @@ export const makeStreamingAgent = async (
       state: 'completed',
       output: finalContent,
       usage: { inputTokens: turnInput, outputTokens: turnOutput },
+      ...servedByOfTurn(),
       conversationNodeId: committedNode.id,
     });
     completedJournalTurn = turnId;
-    writer.usage(totals);
+    writer.usage(await usageToReport(totals));
     writer.final(finalContent);
     writer.end();
   };
@@ -1467,6 +1511,9 @@ export const makeStreamingAgent = async (
     activeJournalTurn = turnId;
     activeJournalSignal = signal;
     activeJournalUsage = undefined;
+    // Here, not where rounds begin: a turn that fails before its first round
+    // must not be recorded as served by the previous turn's models.
+    activeJournalServedBy = [];
     activeJournalOutcomeUnknown = false;
     journalToolSequence = 0n;
     notifyChange(
@@ -1515,6 +1562,7 @@ export const makeStreamingAgent = async (
           state: activeJournalOutcomeUnknown ? 'outcome-unknown' : 'cancelled',
           output,
           usage: activeJournalUsage,
+          ...servedByOfTurn(),
         });
       }
     } catch (error) {
@@ -1535,6 +1583,7 @@ export const makeStreamingAgent = async (
           output,
           error: error instanceof Error ? error.message : String(error),
           usage: hostedTurnPartialOf(error)?.usage || activeJournalUsage,
+          ...servedByOfTurn(),
         });
       }
       throw error;
@@ -2127,8 +2176,15 @@ export const makeStreamingAgent = async (
         const match = unmatched.findIndex(
           other =>
             other.name === tool.name &&
-            other.args === tool.args &&
-            other.result === tool.result,
+            sameToolArgs(
+              { text: other.args, cut: other.argsRef !== undefined },
+              { text: tool.args, cut: tool.argsRef !== undefined },
+            ) &&
+            (other.result === tool.result ||
+              sameToolResult(
+                { text: other.result, cut: other.resultRef !== undefined },
+                { text: tool.result, cut: tool.resultRef !== undefined },
+              )),
         );
         if (match >= 0) unmatched.splice(match, 1);
         else
@@ -2147,6 +2203,12 @@ export const makeStreamingAgent = async (
         args: tool.args,
         result:
           tool.result ?? 'Tool outcome unknown; do not automatically retry.',
+      }));
+      // Which of those the journal holds only a preview of. Kept beside the
+      // messages rather than on them: a message is what a view is handed.
+      const journalCuts = evidence.map(tool => ({
+        args: tool.argsRef !== undefined,
+        result: tool.resultRef !== undefined,
       }));
       const users = projected.filter(message => message.role === 'user');
       // A partial turn the backend retained was mirrored into the tree in
@@ -2178,14 +2240,22 @@ export const makeStreamingAgent = async (
           UNSETTLED_TOOL_RESULT,
           'Tool outcome unknown; do not automatically retry.',
         ]);
-        const sameResult = (left, right) =>
-          left === right || (placeholders.has(left) && placeholders.has(right));
-        for (const tool of journalTools) {
+        const sameResult = (left, right, cut) =>
+          left === right ||
+          (placeholders.has(left) && placeholders.has(right)) ||
+          sameToolResult({ text: left }, { text: right, cut });
+        for (const [index, tool] of journalTools.entries()) {
+          // The tree mirrors the provider's argument string and the whole
+          // result; the journal re-serializes the one and may hold a preview
+          // of either. The same call, compared as strings, showed up twice.
           const match = unmatchedTools.findIndex(
             other =>
               other.name === tool.name &&
-              other.args === tool.args &&
-              sameResult(other.result, tool.result),
+              sameToolArgs(
+                { text: other.args },
+                { text: tool.args, cut: journalCuts[index].args },
+              ) &&
+              sameResult(other.result, tool.result, journalCuts[index].result),
           );
           if (match >= 0) unmatchedTools.splice(match, 1);
           else messages.splice(Math.max(0, messages.length - 1), 0, tool);
@@ -2251,7 +2321,88 @@ export const makeStreamingAgent = async (
       notifyChange('turn-resolved');
     });
 
-  const getUsage = async () => harden({ ...(await loadUsage()) });
+  /**
+   * What the session has used. The running totals are committed with each
+   * completed turn's conversation node, so they know nothing of a turn that
+   * failed, was stopped, or whose outcome is unknown — yet its tokens were
+   * spent all the same. Those are read from the journal, which records every
+   * turn's usage with its finish, and added here; `turns` stays the count of
+   * completed turns and `incompleteTurns` counts the rest.
+   */
+  /** @type {{ archived: number, inputTokens: number, outputTokens: number, turns: number } | undefined} */
+  let archivedIncomplete;
+  const tally = turns => {
+    const sum = { inputTokens: 0, outputTokens: 0, turns: 0 };
+    for (const turn of turns) {
+      // The synthetic record of a journal imported from before journals is
+      // not a turn anybody ran.
+      if (
+        turn.terminal &&
+        turn.state !== 'completed' &&
+        turn.turnId !== 'legacy-import'
+      ) {
+        sum.turns += 1;
+        sum.inputTokens += Number(turn.usage?.inputTokens) || 0;
+        sum.outputTokens += Number(turn.usage?.outputTokens) || 0;
+      }
+    }
+    return sum;
+  };
+  const getUsage = async () => {
+    const completed = await loadUsage();
+    // Archived turns never change, and reading them costs a lookup per
+    // chunk; read them again only when there are more of them.
+    const { archivedTurns } = await turnJournal.status();
+    if (!archivedIncomplete || archivedIncomplete.archived !== archivedTurns) {
+      archivedIncomplete = {
+        archived: archivedTurns,
+        ...tally(await turnJournal.listArchived()),
+      };
+    }
+    const retained = tally(await turnJournal.list());
+    return harden({
+      ...completed,
+      inputTokens:
+        completed.inputTokens +
+        archivedIncomplete.inputTokens +
+        retained.inputTokens,
+      outputTokens:
+        completed.outputTokens +
+        archivedIncomplete.outputTokens +
+        retained.outputTokens,
+      incompleteTurns: archivedIncomplete.turns + retained.turns,
+    });
+  };
+
+  /**
+   * The usage a finished turn tells its view: what getUsage() answers, so the
+   * figure does not drop at the end of a turn because an earlier one did not
+   * complete. The turn is already journaled as completed when this runs, so
+   * it may neither fail nor wait for long — a journal that cannot be read is
+   * a reason to report the completed totals, not to abort a reply.
+   *
+   * @param {{ inputTokens: number, outputTokens: number, turns: number }} completedTotals
+   */
+  const usageToReport = async completedTotals => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    try {
+      return await Promise.race([
+        getUsage(),
+        new Promise(resolve => {
+          timer = setTimeout(() => resolve(completedTotals), 5000);
+        }),
+      ]);
+    } catch (error) {
+      console.error(
+        '[floot] could not total the session’s usage; reporting completed turns only:',
+        error instanceof Error ? error.message : String(error),
+      );
+      return completedTotals;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   if (provideHostedClient) {
     // Provision from the same capability-gated catalog as the provider loop,
@@ -4331,7 +4482,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           if (methodName === 'watch')
             return 'watch() — A disposable stream of this session’s state; subscribe rather than polling getHistory(). First { type: "snapshot", transcript, transcriptError?, turn, running, pending, execution, network, usage, journalVersion }, where transcript is { version, base: 0, keep: 0, append: messages } or null when it could not be read (transcriptError says why; it is retried). Then one event per change: "transcript" { version, base, keep, append } — keep the first `keep` messages you hold and append the rest; `base` is the version it follows, and an event whose base is not the version you hold means you missed one: reopen. Settled turns only: a running turn is rendered from turn.watch(). "transcript-error" { message }; "turn" { turn: { input, turn, pendingId? } | null } for the UI turn in flight; "running" { running: { input, from? } | null } for whatever the agent is running, including mail turns, which have no FlootTurn; "pending" { pending: { entries, hold } }; "execution"; "network"; "usage"; "journal" { version } (turn records changed: re-read getTurns() if you show them); and "end" when the session is deleted. A turn already in flight when you subscribe is in the snapshot, not in a later "turn" event. Open the stream promptly: a reader not opened within two minutes is closed, and a stream that finishes without "end" (or an event whose base you do not hold) means subscribe again. Closing the stream detaches this viewer only.';
           if (methodName === 'getTurns')
-            return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
+            return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, `servedBy` (the models a routing provider reports having served the turn’s rounds), errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
           if (methodName === 'getArchivedTurns')
             return 'getArchivedTurns() — Settled turn records beyond the retained window, oldest first, read from storage on request.';
           if (methodName === 'getTurnContent')
@@ -4340,7 +4491,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns, incompleteTurns } — tokens include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);

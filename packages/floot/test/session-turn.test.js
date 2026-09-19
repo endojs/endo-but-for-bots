@@ -311,6 +311,6 @@ test('tool calls pair with their results across a snapshot', async t => {
     ],
     done: true,
     error: null,
-    usage: { inputTokens: 11, outputTokens: 3, turns: 1 },
+    usage: { inputTokens: 11, outputTokens: 3, turns: 1, incompleteTurns: 0 },
   });
 });

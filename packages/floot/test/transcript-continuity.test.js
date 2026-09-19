@@ -138,11 +138,13 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
       'Turn cancelled.',
     ),
   );
-  // Nothing completed: usage is not counted.
+  // Nothing completed, and the backend reported no tokens for what it
+  // streamed; the turn is counted as one that did not settle.
   t.deepEqual(await agent.getUsage(), {
     inputTokens: 0,
     outputTokens: 0,
     turns: 0,
+    incompleteTurns: 1,
   });
 });
 
