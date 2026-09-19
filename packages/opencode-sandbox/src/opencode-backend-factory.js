@@ -36,6 +36,7 @@ import {
 import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
 import { DEFAULT_MODEL } from './opencode-agent-config.js';
+import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
 
 /** The backend id Floot pins sessions to (`opencode:<model>`). */
 export const OPENCODE_BACKEND_ID = 'opencode';
@@ -290,6 +291,16 @@ export const makeOpencodeBackendFactory = ({
         continuity: 'transcript',
         toolOwnership: 'endo',
         supportedNetworkPolicies: NETWORK_POLICIES,
+        // What a system prompt must know about this place. opencode lists an
+        // MCP server's tools as `<server>_<tool>`; it has its own shell and
+        // file tools; the hosted policy mounts the session workspace at
+        // /workspace, its working directory.
+        promptEnvironment: {
+          toolNamePrefix: `${DEFAULT_SERVER_NAME}_`,
+          toolNames: {},
+          nativeTools: true,
+          workspacePath: '/workspace',
+        },
       });
     },
     listModels,

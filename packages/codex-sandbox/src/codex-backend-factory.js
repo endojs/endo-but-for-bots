@@ -12,7 +12,7 @@ import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
 import { normalizeCodexModelDescriptor } from './codex-models.js';
 import { assertContainerMounts } from './codex-hosted-policy.js';
-import { withEndoToolInstructions } from './endo-tools.js';
+import { CODEX_TOOL_NAMES, withEndoToolInstructions } from './endo-tools.js';
 
 /**
  * Floot's protocol adapter over daemon-owned native sessions. No slices,
@@ -135,6 +135,16 @@ export const makeCodexBackendFactory = ({
         continuity: 'opaque-reconciled',
         toolOwnership: 'endo',
         supportedNetworkPolicies: policies,
+        // What a system prompt must know about this place. Codex receives
+        // Endo's tools under their own names, except the one the adapter
+        // renames to keep it apart from Codex's native exec; it has its own
+        // shell and file tools, and its cwd is the session workspace.
+        promptEnvironment: {
+          toolNamePrefix: '',
+          toolNames: CODEX_TOOL_NAMES,
+          nativeTools: true,
+          workspacePath: '/workspace',
+        },
       });
     },
     async listModels() {

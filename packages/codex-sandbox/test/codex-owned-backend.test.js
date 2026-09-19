@@ -14,7 +14,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
 import { makeCodexBackendFactory } from '../src/codex-backend-factory.js';
+import { adaptEndoTools } from '../src/endo-tools.js';
 import { makeCodexSessionProvisioner } from '../src/codex-backend-module.js';
 
 const model = harden({
@@ -258,4 +260,32 @@ test('Codex placement is recorded before directories and replacement stops befor
     message: /overlaps protected/,
   });
   t.deepEqual(calls, before, 'rejected before owner mutation');
+});
+
+test('the descriptor says what a system prompt must know about Codex', async t => {
+  const factory = makeCodexBackendFactory({
+    models: [model],
+    provisionSession: async () => Far('Client', {}),
+    stopSession: async () => undefined,
+    removeSession: async () => undefined,
+  });
+  const described = await E(factory).describe();
+  // It passes the contract Floot validates every backend against...
+  const { promptEnvironment } = assertHostedBackendDescriptor(described);
+  t.deepEqual(promptEnvironment, {
+    toolNamePrefix: '',
+    toolNames: { exec: 'endo_exec' },
+    nativeTools: true,
+    workspacePath: '/workspace',
+  });
+  // ...and the rename it declares is the one the adapter performs, so the
+  // prompt names the tool the model will actually find in its list.
+  const adapted = adaptEndoTools({
+    dynamicTools: [{ name: 'exec' }, { name: 'lookup' }],
+    toolSetId: 'x',
+  });
+  t.deepEqual(
+    adapted.dynamicTools.map(tool => tool.name),
+    ['exec', 'lookup'].map(name => promptEnvironment.toolNames[name] || name),
+  );
 });

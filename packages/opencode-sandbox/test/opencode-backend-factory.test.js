@@ -116,6 +116,13 @@ test('describe() and listModels() present OpenCode as a hosted backend', async t
     continuity: 'transcript',
     toolOwnership: 'endo',
     supportedNetworkPolicies: ['off', 'public-internet'],
+    // opencode names an MCP server's tools <server>_<tool>.
+    promptEnvironment: {
+      toolNamePrefix: 'endo_',
+      toolNames: {},
+      nativeTools: true,
+      workspacePath: '/workspace',
+    },
   });
   const models = await E(factory).listModels();
   t.deepEqual(models, OPENCODE_MODELS);
