@@ -28,6 +28,7 @@ import {
 } from './connection.js';
 import { makeWorkerFacet } from './worker.js';
 import { makePowers } from './bus-worker-node-powers.js';
+import { installShutdownSignals } from './shutdown-signals.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 
@@ -36,7 +37,13 @@ const powers = makePowers({ fs, url });
 const { promise: cancelled, reject: cancel } =
   /** @type {PromiseKit<never>} */ (makePromiseKit());
 
-process.once('SIGINT', () => cancel(new Error('SIGINT')));
+// Graceful SIGTERM/SIGINT with a bounded force-exit backstop and orphan-exit
+// under ENDO_EXIT_WHEN_ORPHANED.
+installShutdownSignals({
+  cancel,
+  graceMs: Number(process.env.ENDO_WORKER_SHUTDOWN_GRACE_MS) || 3000,
+  exitWhenOrphaned: process.env.ENDO_EXIT_WHEN_ORPHANED === '1',
+});
 
 const { reader, writer } = powers.connection;
 
