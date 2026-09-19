@@ -64,6 +64,8 @@ import {
 } from './pet-name.js';
 import {
   formatLocator,
+  formatLocatorWithHints,
+  parseLocator,
   idFromLocator,
   internalizeLocator,
   externalizeId,
@@ -4286,6 +4288,7 @@ const makeDaemonCore = async (
             submit: disallowedFn,
             sendValue: disallowedFn,
             invite: disallowedFn,
+            accept: disallowedFn,
             deliver: disallowedSyncFn,
             editMessage: disallowedFn,
             messageHistory: disallowedFn,
@@ -6871,6 +6874,119 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Acceptor-side invitation redemption, shared by `EndoHost.accept` and
+   * `EndoGuest.accept`. Runs on the ACCEPTOR's daemon and binds the
+   * relationship into the CALLING agent — no replacement guest is minted. The
+   * accepting agent accepts *as itself*: its own `@self` handle is the identity
+   * presented to the inviter, and the inviter's handle is bound reciprocally
+   * under a pet name the acceptor chose. The single commit point is the
+   * inviter-side pet-store rebind inside `Invitation.accept`; the acceptor-side
+   * bind here is a plain, idempotent, single-writer local write.
+   *
+   * Network mediation stays behind the internal broker and daemon-core
+   * persistence powers, reachable here only lexically. A guest acceptor
+   * therefore gains no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface of its own — exactly as a guest
+   * inviter does not (see `makeInvitationNetworkBroker`).
+   *
+   * @param {object} args
+   * @param {string} args.invitationLocator
+   * @param {FormulaIdentifier} args.acceptingHandleId - the accepting agent's
+   *   `@self` handle, the identity the inviter binds.
+   * @param {FormulaIdentifier} args.acceptingNetworksDirectoryId - the
+   *   accepting agent's own `@nets`. An empty `@nets` yields an address-less
+   *   handle locator (the anonymizing-persona default), so the acceptor is
+   *   reachable same-daemon but undialable across daemons.
+   * @param {(remoteHandleLocator: string) => Promise<void>} args.bindCorrespondent
+   *   Binds the inviter's remote handle locator under the acceptor-chosen pet
+   *   name in the accepting agent's own directory.
+   */
+  const acceptInvitation = async ({
+    invitationLocator,
+    acceptingHandleId,
+    acceptingNetworksDirectoryId,
+    bindCorrespondent,
+  }) => {
+    await null;
+    const {
+      number: invitationNumber,
+      node: peerKey,
+      hints,
+    } = parseLocator(invitationLocator);
+    const url = new URL(invitationLocator);
+    const remoteHandleNumber = url.searchParams.get('from');
+    // The inviter handle's node may differ from the daemon node when agent
+    // keys are used as formula nodes (always so for a guest inviter).
+    const remoteHandleNodeParam = url.searchParams.get('fromNode');
+
+    if (!remoteHandleNumber) {
+      throw makeError('Invitation must have a "from" parameter');
+    }
+    assertFormulaNumber(remoteHandleNumber);
+
+    // Same-daemon acceptance needs no peer setup: the inviter's daemon is this
+    // daemon. Registering the local node as a peer of itself, or writing a
+    // remote-agent-key row for a local key, would both be spurious (section 4
+    // of the guest-native-invitations design), so skip both for the local
+    // node. `addPeerInfo` has no self-node guard of its own, so the skip must
+    // live here.
+    if (peerKey !== localNodeNumber) {
+      const networkBroker = await makeInvitationNetworkBroker();
+      // Register the inviter's agent key so we can route to its daemon.
+      if (remoteHandleNodeParam && remoteHandleNodeParam !== peerKey) {
+        persistencePowers.writeRemoteAgentKey(remoteHandleNodeParam, peerKey);
+      }
+      /** @type {PeerInfo} */
+      const peerInfo = {
+        node: peerKey,
+        addresses: hints,
+      };
+      await networkBroker.addPeerInfo(peerInfo);
+    }
+
+    const invitationId = formatId({
+      number: invitationNumber,
+      node: peerKey,
+    });
+
+    // Build the accepting agent's OWN handle locator: the URL authority is this
+    // daemon's node (so the inviter registers a dialable daemon peer), the
+    // agent key rides the `handleNode` query parameter, and the connection
+    // hints come from the accepting agent's own `@nets`.
+    const { number: handleNumber, node: handleNode } =
+      parseId(acceptingHandleId);
+    const addresses = await getAllNetworkAddresses(
+      acceptingNetworksDirectoryId,
+    );
+    const handleLocatorWithoutHandleNode = formatLocatorWithHints(
+      formatId({ number: handleNumber, node: localNodeNumber }),
+      'handle',
+      addresses,
+    );
+    const handleUrl = new URL(handleLocatorWithoutHandleNode);
+    // Include the handle's node if it differs from the daemon node (i.e. it
+    // uses an agent key).
+    if (handleNode !== localNodeNumber) {
+      handleUrl.searchParams.set('handleNode', handleNode);
+    }
+    const handleLocator = handleUrl.href;
+
+    const invitation = await provide(invitationId, 'invitation');
+    await E(invitation).accept(handleLocator);
+
+    // Bind the inviter's remote handle under the acceptor-chosen pet name for
+    // mail delivery. Use the inviter handle's actual node (which may be an
+    // agent key) when provided, falling back to the inviter's daemon node.
+    const remoteHandleNode = remoteHandleNodeParam || peerKey;
+    const remoteHandleId = formatId({
+      number: /** @type {FormulaNumber} */ (remoteHandleNumber),
+      node: /** @type {NodeNumber} */ (remoteHandleNode),
+    });
+    const remoteHandleLocator = formatLocator(remoteHandleId, 'handle');
+    await bindCorrespondent(remoteHandleLocator);
+  };
+
+  /**
    * @param {FormulaIdentifier} id
    * @param {FormulaIdentifier} invitingAgentId - the inviting `EndoAgent`; an
    *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
@@ -7007,20 +7123,30 @@ const makeDaemonCore = async (
           );
         }
 
-        // Register the guest's agent key so we can route to its daemon.
-        if (guestHandleNode !== guestDaemonNode) {
-          persistencePowers.writeRemoteAgentKey(
-            guestHandleNode,
-            guestDaemonNode,
-          );
-        }
+        // Same-daemon acceptance: the accepting agent lives on THIS daemon
+        // (its handle locator's authority is our own node), so there is no
+        // remote daemon to register and no remote agent key to route. Writing
+        // a `remote_agent_key` row for a local key would be spurious — a
+        // guest's handle node is always its own agent key, so a same-daemon
+        // accept otherwise satisfies `guestHandleNode !== guestDaemonNode` and
+        // would write one (section 4 of the guest-native-invitations design).
+        // Skip both writes for the local node.
+        if (guestDaemonNode !== localNodeNumber) {
+          // Register the guest's agent key so we can route to its daemon.
+          if (guestHandleNode !== guestDaemonNode) {
+            persistencePowers.writeRemoteAgentKey(
+              guestHandleNode,
+              guestDaemonNode,
+            );
+          }
 
-        /** @type {PeerInfo} */
-        const peerInfo = {
-          node: guestDaemonNode,
-          addresses,
-        };
-        await networkBroker.addPeerInfo(peerInfo);
+          /** @type {PeerInfo} */
+          const peerInfo = {
+            node: guestDaemonNode,
+            addresses,
+          };
+          await networkBroker.addPeerInfo(peerInfo);
+        }
 
         // Use storeLocator so the directory properly internalizes the remote
         // formula identifier for peer resolution.  This rebind is the actual
@@ -7138,6 +7264,7 @@ const makeDaemonCore = async (
     formulateReadableBlob,
     formulateMarshalValue,
     formulateInvitation,
+    acceptInvitation,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,
@@ -7530,6 +7657,7 @@ const makeDaemonCore = async (
     formulateGitCredential,
     formulateGitRemote,
     formulateInvitation,
+    acceptInvitation,
     formulateDirectoryForStore,
     getPeerIdForNodeIdentifier,
     getAllNetworkAddresses,
@@ -7552,7 +7680,6 @@ const makeDaemonCore = async (
     getScratchMountPath,
     getMountHostPath,
     getIdForRef,
-    writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
     traceAggregator,
     secretManager,
     formulateSecretLookup: (hubId, path, bind) =>

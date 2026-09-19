@@ -6,6 +6,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import url from 'url';
+import os from 'os';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -247,10 +248,15 @@ const makeConfig = (...root) => {
     statePath: path.join(dirname, ...root, 'state'),
     ephemeralStatePath: path.join(dirname, ...root, 'run'),
     cachePath: path.join(dirname, ...root, 'cache'),
+    // Use a short socket path under the OS temp dir to stay within the ~104
+    // char Unix socket path limit; a long CI (or worktree) checkout path can
+    // otherwise push `<dirname>/tmp/<config>/endo.sock` over the limit. The
+    // last root segment carries a unique per-test/config id suffix. (This
+    // mirrors `_multiplayer-suite.js`'s makeConfig.)
     sockPath:
       process.platform === 'win32'
         ? raw`\\?\pipe\endo-${root.join('-')}-test.sock`
-        : path.join(dirname, ...root, 'endo.sock'),
+        : path.join(os.tmpdir(), `endo-${root.join('-').slice(-40)}.sock`),
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
@@ -3932,6 +3938,123 @@ test('EndoGuest.invite nests the invitation at a directory path', async t => {
   t.true(await E(guest).has('peers', 'bob'));
   t.false(await E(guest).has('bob'));
 });
+
+testNeedsNodeWorker(
+  'EndoGuest.accept binds into the calling guest (same daemon)',
+  async t => {
+    // Both the inviting and accepting guest live in ONE daemon — the
+    // minion.town shape, where the app's inviter and invitee guests are
+    // siblings under a single daemon. No network is required.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+    // The invitee redeems into ITSELF via the guest facet, not through a host.
+    await E(guestB).accept(invitationLocator, 'to-a');
+
+    // Reciprocal binding, each under its own independently chosen pet name.
+    t.truthy(await E(guestA).identify('to-b'));
+    t.truthy(await E(guestB).identify('to-a'));
+
+    // Accepting as itself mints no replacement guest on either side.
+    t.is(await E(guestA).identify('@pins', 'guest-to-b'), undefined);
+    t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
+
+    // The bound handles are each guest's OWN handle — the acceptor bound the
+    // inviter's handle (not the top host's), and vice versa.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const guestBHandleId = await E(host).identify('guest-b-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('to-a')).number,
+      parseId(guestAHandleId).number,
+      "acceptor's 'to-a' is the inviting guest's own handle",
+    );
+    t.is(
+      parseLocator(await E(guestA).locate('to-b')).number,
+      parseId(guestBHandleId).number,
+      "inviter's 'to-b' is the accepting guest's own handle",
+    );
+
+    // Mail flows both directions over the shared daemon's mailbox substrate.
+    await E(guestA).send('to-b', ['Hello from A'], [], []);
+    await E(guestB).send('to-a', ['Hello from B'], [], []);
+
+    const messagesForB = await E(guestB).listMessages();
+    t.true(
+      messagesForB.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from A',
+      ),
+      'B received A’s message',
+    );
+    const messagesForA = await E(guestA).listMessages();
+    t.true(
+      messagesForA.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from B',
+      ),
+      'A received B’s message',
+    );
+
+    // Single-use: a replay of the spent invitation is rejected.
+    await t.throwsAsync(
+      () => E(guestB).accept(invitationLocator, 'to-a-again'),
+      undefined,
+      'replayed invitation is rejected',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'EndoGuest transitive invite chain I -> J -> K (same daemon)',
+  async t => {
+    // A guest that has accepted an invitation can itself invite and accept
+    // further guests: "a guest may invite more guests, transitively."
+    const { host } = await prepareHost(t);
+    const guestI = await E(host).provideGuest('i-handle', { agentName: 'i' });
+    const guestJ = await E(host).provideGuest('j-handle', { agentName: 'j' });
+    const guestK = await E(host).provideGuest('k-handle', { agentName: 'k' });
+
+    const invIJ = await E(guestI).invite('j');
+    await E(guestJ).accept(await E(invIJ).locate(), 'i');
+
+    // J, an accepted guest, now extends its OWN invitation to K.
+    const invJK = await E(guestJ).invite('k');
+    await E(guestK).accept(await E(invJK).locate(), 'j');
+
+    t.truthy(await E(guestI).identify('j'));
+    t.truthy(await E(guestJ).identify('i'));
+    t.truthy(await E(guestJ).identify('k'));
+    t.truthy(await E(guestK).identify('j'));
+
+    // Mail flows along each hop of the chain.
+    await E(guestI).send('j', ['I to J'], [], []);
+    await E(guestJ).send('k', ['J to K'], [], []);
+
+    const messagesForJ = await E(guestJ).listMessages();
+    t.true(
+      messagesForJ.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'I to J',
+      ),
+      'J received I’s message',
+    );
+    const messagesForK = await E(guestK).listMessages();
+    t.true(
+      messagesForK.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'J to K',
+      ),
+      'K received J’s message',
+    );
+  },
+);
 
 testNeedsNodeWorker(
   'accept keeps distinct result names for paths that a naive join would collide',

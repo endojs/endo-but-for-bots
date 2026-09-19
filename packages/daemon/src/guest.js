@@ -27,6 +27,7 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -44,6 +45,7 @@ export const makeGuestMaker = ({
   formulateReadableBlob,
   formulateMarshalValue,
   formulateInvitation,
+  acceptInvitation,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -394,6 +396,38 @@ export const makeGuestMaker = ({
       return value;
     };
 
+    /**
+     * Redeem an invitation locator into THIS guest. Acceptance binds the
+     * relationship to the calling guest — no replacement guest is minted on the
+     * acceptor side. The guest accepts *as itself*: its own `@self` handle is
+     * the identity presented to the inviter, and the inviter's handle is bound
+     * reciprocally under `correspondentName`, a pet name this guest chooses in
+     * its own directory (a path nests under a directory that must already
+     * exist). The inviter independently chooses its own pet name for this
+     * guest, so the two names may differ.
+     *
+     * This shares one implementation with `EndoHost.accept` via the daemon-core
+     * `acceptInvitation` helper. Peer registration and remote-agent-key routing
+     * stay behind that helper (and the invitation formula's own daemon-mediated
+     * accept), so a guest acceptor gains no `getPeerInfo`/`addPeerInfo`, host
+     * facet, peer enumeration, or outbound-dialing surface — exactly as a guest
+     * inviter does not. Reachability follows this guest's own `@nets`: an empty
+     * `@nets` (the default) still accepts same-daemon peers but leaves the guest
+     * undialable across daemons (the anonymizing-persona default).
+     * @param {string} invitationLocator
+     * @param {NameOrPath} correspondentName
+     */
+    const accept = async (invitationLocator, correspondentName) => {
+      const { namePath } = petNamePathFrom(correspondentName);
+      return acceptInvitation({
+        invitationLocator,
+        acceptingHandleId: handleId,
+        acceptingNetworksDirectoryId: networksDirectoryId,
+        bindCorrespondent: remoteHandleLocator =>
+          E(directory).storeLocator(namePath, remoteHandleLocator),
+      });
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -452,6 +486,7 @@ export const makeGuestMaker = ({
       submit,
       sendValue,
       invite,
+      accept,
     };
 
     return makeExo(

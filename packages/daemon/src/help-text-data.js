@@ -116,6 +116,10 @@ export const helpTextEntries = harden([
         'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
         'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+      invite:
+        'invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation whose locator names this guest\'s own handle, so an\nacceptor becomes a peer of this guest (not of the top host). Bind the acceptor\nunder correspondentName once they accept. Hand the returned invitation\'s\nlocate() string to the invitee out of band.\nExample: invite("new-neighbor")',
+      accept:
+        'accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator into this guest, binding the relationship to the\ncalling guest — no replacement guest is minted. This guest accepts as itself;\nthe inviter\'s handle is bound under correspondentName, a pet name this guest\nchooses (the inviter chooses its own independently, so they may differ).\nExample: accept(invitationLocator, "my-neighbor")',
     },
   ],
   [
@@ -154,9 +158,9 @@ export const helpTextEntries = harden([
       adoptFromLocator:
         'adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")',
       invite:
-        'invite(guestName) -> Promise<Invitation>\nCreate an invitation for a guest to connect.',
+        "invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation and bind the correspondent under correspondentName\nonce they accept. Hand the returned invitation's locate() string to the invitee\nout of band.",
       accept:
-        'accept(invitationId, guestHandleId, guestName) -> Promise<void>\nAccept an invitation, creating a connection.',
+        "accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator, binding the inviter's handle reciprocally under\ncorrespondentName — no synthetic local guest is minted.",
       endow:
         'endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>\nBind capabilities to a guest\'s code definition and evaluate it.\nThis is the host-side counterpart to the guest\'s define() method.\n\n- messageNumber: The definition message number\n- bindings: Record mapping slot names to pet names, e.g. { counter: "my-counter" }\n- workerName: Optional worker to use for evaluation\n- resultName: Optional pet name to store the result\n\nThe host decides which capabilities to provide for each slot.\nThe code proposed by the guest runs with these host-chosen bindings.\n\nExample: endow(0, { counter: "my-counter" })',
       form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name or path of the recipient\n- description: Human-readable description of what the form is for\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])',

@@ -358,6 +358,22 @@ For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
 Example: writeText(["my-mount", "output.txt"], "hello")
 
+## invite(correspondentName) -> Promise<Invitation>
+
+Mint a single-use invitation whose locator names this guest's own handle, so an
+acceptor becomes a peer of this guest (not of the top host). Bind the acceptor
+under correspondentName once they accept. Hand the returned invitation's
+locate() string to the invitee out of band.
+Example: invite("new-neighbor")
+
+## accept(invitationLocator, correspondentName) -> Promise<void>
+
+Redeem an invitation locator into this guest, binding the relationship to the
+calling guest — no replacement guest is minted. This guest accepts as itself;
+the inviter's handle is bound under correspondentName, a pet name this guest
+chooses (the inviter chooses its own independently, so they may differ).
+Example: accept(invitationLocator, "my-neighbor")
+
 # EndoHost - A privileged agent with full Endo capabilities.
 
 A host has all guest capabilities plus:
@@ -493,13 +509,16 @@ Parses the locator to extract peer info, establishes a connection if needed,
 and writes the formula ID into the local pet store.
 Example: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")
 
-## invite(guestName) -> Promise<Invitation>
+## invite(correspondentName) -> Promise<Invitation>
 
-Create an invitation for a guest to connect.
+Mint a single-use invitation and bind the correspondent under correspondentName
+once they accept. Hand the returned invitation's locate() string to the invitee
+out of band.
 
-## accept(invitationId, guestHandleId, guestName) -> Promise<void>
+## accept(invitationLocator, correspondentName) -> Promise<void>
 
-Accept an invitation, creating a connection.
+Redeem an invitation locator, binding the inviter's handle reciprocally under
+correspondentName — no synthetic local guest is minted.
 
 ## endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>
 
