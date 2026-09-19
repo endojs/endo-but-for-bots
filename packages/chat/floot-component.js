@@ -723,23 +723,23 @@ export const flootComponent = (
    */
   const createSession = async (title, presetId, model, reasoningEffort) => {
     const selected = models.find(candidate => candidate.id === model);
-    const requiresRecordForm = Boolean(
-      selected?.backendId || reasoningEffort || (model && model.includes(':')),
-    );
-    const facet = requiresRecordForm
-      ? await E(factory).createSession({
-          title: title || DEFAULT_TITLE,
-          ...(presetId ? { presetId } : {}),
-          ...(model ? { model } : {}),
-          ...(selected?.backendId
-            ? {
-                backendId: selected.backendId,
-                modelId: selected.modelId || model,
-              }
-            : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-        })
-      : await E(factory).createSession(title || DEFAULT_TITLE, presetId, model);
+    // Always the record form: it is the only one that can say this session is
+    // driven from here, where replies are read aloud. The factory composes
+    // the voice rules into the system prompt of a session that says so, and
+    // of no other.
+    const facet = await E(factory).createSession({
+      title: title || DEFAULT_TITLE,
+      spoken: true,
+      ...(presetId ? { presetId } : {}),
+      ...(model ? { model } : {}),
+      ...(selected?.backendId
+        ? {
+            backendId: selected.backendId,
+            modelId: selected.modelId || model,
+          }
+        : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
     const session = {

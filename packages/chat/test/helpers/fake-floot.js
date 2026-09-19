@@ -125,6 +125,8 @@ export const makeFakeDaemon = ({
   const turns = [];
   /** @type {string[]} */
   const deleted = [];
+  /** @type {any[][]} */
+  const creations = [];
   /** @type {object[]} */
   const cancelledTurns = [];
   let nextId = count;
@@ -378,8 +380,9 @@ export const makeFakeDaemon = ({
       parts.get(id)?.watch.end();
       listWatch.touch();
     },
-    createSession: () => {
+    createSession: (...args) => {
       if (failCreation) throw Error('creation unavailable');
+      creations.push(args);
       const id = `s${nextId}`;
       nextId += 1;
       sessions.push({ id, title: `Session ${id}`, createdAt: nextId });
@@ -391,6 +394,8 @@ export const makeFakeDaemon = ({
   return {
     factory,
     turns,
+    /** The arguments of every createSession call that got as far as creating. */
+    created: creations,
     deleted,
     cancelledTurns,
     store,
