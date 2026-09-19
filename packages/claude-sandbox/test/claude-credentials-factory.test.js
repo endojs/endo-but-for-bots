@@ -28,6 +28,13 @@ test('makeCredentialsExo carries the oauthToken kind', async t => {
   t.is(await issued.materialise(), 'sk-ant-oat-token');
 });
 
+test('makeCredentialsExo carries the subscription kind (for @endo/claude apiKeyHelper)', async t => {
+  const creds = makeCredentialsExo('sub-value', 'subscription');
+  t.is(await creds.kind(), 'subscription');
+  const issued = await creds.issue('session-sub');
+  t.is(await issued.materialise(), 'sub-value');
+});
+
 test('makeCredentialsExo rejects an unknown kind', t => {
   t.throws(() => makeCredentialsExo('sk-ant-key', 'bogus'), {
     message: /must be one of/,
