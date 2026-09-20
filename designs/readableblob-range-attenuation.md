@@ -14,7 +14,7 @@ operation. Its name consequently hides both its unit and its capability
 meaning. It returns a one-use bytes reader, so a caller cannot pass the
 selected part of a blob on as the same read capability.
 
-The replacement is an attenuation. `range` and `textRange` return a new,
+The replacement is an attenuation. `byteRange` and `textRange` return a new,
 ephemeral `ReadableBlob` with exactly the authority to read the selected
 portion. The returned value has the same interface, so ranges compose and can
 be handed to code that already accepts a readable blob.
@@ -24,7 +24,7 @@ be handed to code that already accepts a readable blob.
 The current public range method is not confined to the daemon. The shared
 platform guard `rangeReadMethodGuards` in
 [`packages/platform/src/fs/interfaces.js`](../packages/platform/src/fs/interfaces.js)
-declares `getInfo()` and `fetch(offset: bigint, length: bigint)`. It is
+declares `sha256()`, `size()`, and `bytes()`. It is
 combined with the base surface as `ReadableBlobRangeInterface`, and
 `ReadableBlobRangeReadInterface` additionally declares the convenience methods
 `rangeRead` and `rangeReadText`.
@@ -57,11 +57,14 @@ nonexistent directory convention.
 
 Make range attenuation part of the one rich `ReadableBlob` interface. The
 current `ReadableBlobRange` and `ReadableBlobRangeRead` distinction goes away:
-every public rich blob has the following methods in addition to `getInfo`,
-`text`, `json`, `streamBase64`, and `help`.
+every public rich blob has the following methods in addition to `text`, `json`,
+`streamBase64`, and `help`.
 
 ```ts
-range(start: bigint, end: bigint): Promise<ReadableBlob>
+sha256(): Promise<string>
+size(): Promise<bigint>
+bytes(): Promise<PassableBytesReader>
+byteRange(start: bigint, end: bigint): ReadableBlob
 textRange(startLine: number, endLine: number): Promise<ReadableBlob>
 ```
 
@@ -71,7 +74,7 @@ capability. The runtime guards should require the returned `ReadableBlob`, not
 
 ### Byte ranges
 
-`range(start, end)` selects the half-open byte interval `[start, end)`, relative
+`byteRange(start, end)` selects the half-open byte interval `[start, end)`, relative
 to the receiver. Both values must be non-negative `bigint` values representable
 by the backing implementation's safe-offset domain. `start > end`, a negative
 value, or a non-safe value rejects with `EINVAL`; `start === end` returns an
@@ -79,8 +82,8 @@ empty readable blob. The endpoint convention intentionally differs from the
 old `(offset, length)` signature: an end offset makes nested ranges and
 adjacent ranges mechanically clear.
 
-The selection clamps at the receiver's end. Thus `range(100n, 200n)` on a
-12-byte blob is a valid empty attenuation, and `range(6n, 100n)` yields the
+The selection clamps at the receiver's end. Thus `byteRange(100n, 200n)` on a
+12-byte blob is a valid empty attenuation, and `byteRange(6n, 100n)` yields the
 suffix. Constructing a byte range does not read or persist bytes. The returned
 cap retains only its source cap plus the composed interval, so a range of a
 range intersects the two intervals and can never regain authority outside the
@@ -88,7 +91,7 @@ parent interval.
 
 Every ordinary read applies to the attenuated bytes. In particular, `text()`
 and `json()` decode only those bytes, `streamBase64()` streams only those bytes,
-and `getInfo()` reports the selected content's `{ algorithm, hash, size }`.
+`sha256()` reports the selected content's digest, and `size()` reports its length.
 For an immutable source that is a stable content address for the selected
 bytes. For the existing live mount-file face, it preserves the current live
 semantics: each operation observes the source at that operation, subject to
@@ -130,7 +133,7 @@ the in-process `LocalBlob`, return materialized values, and are explicitly a
 follow-up for daemon, Git, and mount blobs in
 [platform-range-and-tree-reads.md](platform-range-and-tree-reads.md).
 
-Recommendation: replace `rangeRead(offset, length)` with `range(start, end)`
+Recommendation: replace `rangeRead(offset, length)` with `byteRange(start, end)`
 and `rangeReadText(startLine, endLine)` with `textRange(startLine, endLine)` in
 the next rich-blob API version. The result-type change is intentional: callers
 read the returned attenuated blob by its normal methods rather than receiving a
@@ -143,7 +146,7 @@ continues to happen with `lookup`, then range selection happens on the blob.
 This is a semantic rename, not a mechanical `fetch` search-and-replace. The
 old method's result is `PassableBytesReader`; the new method's result is a
 same-interface capability. In particular, `fetch` cannot be an alias of
-`range`.
+`byteRange`.
 
 The implementation owner must inventory these range-specific definitions and
 callers before editing. The list is intentionally separated from unrelated
@@ -159,12 +162,12 @@ HTTP, Git-transport, and content-store methods also named `fetch`:
 | Design and API prose | `designs/{fs-interface-consolidation,platform-range-and-tree-reads,agentry-git-eval-scenarios,endo-fs-from-git,fs-interface-reconciliation,registry-capability,snapshot-mapper}.md`, `designs/README.md`, and `packages/platform/src/fs/extended/DESIGN.md` |
 
 1. Add a shared attenuation maker and tests for byte composition, empty and
-   EOF-clamped selections, revocation/liveness, `getInfo` on selected content,
+   EOF-clamped selections, revocation/liveness, `sha256` and `size` on selected content,
    and text-line selections. Adopt it in every rich blob implementation above.
    Keep the source's identity and lifetime private: derived ranges receive no
    formula, name, or persistence entry.
-2. Replace `fetch`, `rangeRead`, and `rangeReadText` with `range` and
-   `textRange` on every producer in one clean break — migration is not a
+2. Replace `fetch`, `rangeRead`, and `rangeReadText` with `bytes`, `byteRange`,
+   and `textRange` on every producer in one clean break. Migration is not a
    concern, so no deprecated aliases, compatibility window, or legacy-adapter
    package. Update internal consumers (`cas.js`, `cached-fs.js`, and daemon
    consumers) to the new cap shape, decoding/streaming through the normal blob
@@ -192,3 +195,16 @@ mount changes, and revocation.
    blobs, mount views, and Git blobs) adopts the new surface in the one clean
    release. There is no daemon-only-first phase and no temporary interface
    split.
+4. Read methods are named by the {byte, text} x {all, range} cross product:
+   `bytes` / `byteRange` / `text` / `textRange`. The whole-content byte reader
+   `fetch` becomes `bytes`; the byte-range attenuator written `range` above
+   becomes `byteRange`, symmetric with `textRange`. (Build review
+   [#5252703859](https://github.com/endojs/endo-but-for-bots/pull/1301#pullrequestreview-5252703859),
+   inline on `git-declarations.js`.)
+5. Blob content metadata is exposed as one accessor method per hashing
+   algorithm (`sha256()`, `sha512()`, and others) plus a separate `size()`
+   method, rather than a bundled metadata accessor. A blob may offer several algorithms and favor one
+   internally; the external surface migrates gradually — an added algorithm is a
+   new method, never a reshaped return value. (Build review
+   [#5252703859](https://github.com/endojs/endo-but-for-bots/pull/1301#pullrequestreview-5252703859),
+   inline on `fs-declarations.js`.)
