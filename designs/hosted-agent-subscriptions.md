@@ -54,6 +54,66 @@ Where the implementation differs from the design below:
   **Anthropic's API does not report a window**, so both Anthropic providers
   report 0.
 
+**Phases 2 and 3, readings and subscribing, are implemented.** Not deployed.
+A deployed broker is a retained formula; it starts reading headers when the
+daemon restarts onto this code, with no retirement.
+
+- `hosted-agent/src/rate-limit-headers.js` — the header projection and
+  `isSubscriptionExhausted`; `provider-transport.js` calls `onReading`
+  synchronously before its served check, and throws the bare classification
+  `Provider subscription exhausted` (`isSubscriptionExhaustion`). The grant
+  still collapses it to `Provider request failed` for the slice; nothing uses
+  it until the pool does (phase 6).
+- `account-source.js` — the broker's read-only account source (`observe`,
+  `watch`, `refresh`), reached as `accountSource()` on the scopes service;
+  `latest-topic.js` — the coalescing stream every watcher here is served by.
+- `account.js` — windows carry `usedPercent` and `windowSeconds`; rate limits
+  carry `limitReached`, `credits` and `resetCredits`, each with the time it
+  was read. `account-oracle.js` — the push path, journalling on material
+  change, `watch()`, one order for builds and pushes.
+- `account-oracle-module.js` and `account-source-module.js` — the retained
+  entrypoints; `hosted-setup.js` `publishAccountOracle`, called by the three
+  adapters' `setup-hosted.js`, binds `<backend id>-account` into Floot.
+- Active reads, run only by `refresh()`: `codex-sandbox/src/codex-account-read.js`
+  (`/wham/usage`) and `hosted-agent/src/openrouter-account-read.js`.
+- Floot: `src/account-watch.js`, `watchAccounts()`, `refreshAccounts()`. Page:
+  `chat/floot-component.js`. View: `space-floot/src/account-label.js`; a chip
+  beside the token count for the account of the session on screen, and a
+  Subscriptions section with a Refresh button in the settings panel.
+
+Where phases 2 and 3 differ from the design below:
+
+- **The stream is the whole list, coalesced**: `{ type: 'accounts', accounts }`
+  now and on every change, not a snapshot followed by per-account events. A
+  reader that is slow or away gets the newest list and cannot miss an event.
+  Readers are bounded at 64 per topic; past that the oldest is closed and
+  subscribes again.
+- **An account is keyed by `backendId`**, with the backend's title. The
+  `providerId`, `subscriptionId` and `label` of the design arrive with the
+  pool (phase 5). `servedLast` is not recorded yet.
+- **The oracle's namespace holds only the broker's account source**, as a
+  formula of its own whose powers are the broker service. It is minted again
+  on every setup run and the oracle's `account-source` name re-pointed, so the
+  oracle keeps its identity and journal across a re-minted broker. Until the
+  next setup run the source formula keeps a retired broker formula from being
+  collected; it is never opened, so it holds no listener and no lock.
+- **Active reads are not purely numeric.** A Codex plan is one of the pinned
+  CLI's enumerated plan types or `unknown`; a reset credit's id must have the
+  shape of an identifier; the backend's description text is dropped. A body
+  is read up to a byte bound and its text never reaches an error.
+- **`limitReached` ages in the view**: a full window blocks until it resets;
+  the provider's word with no full window stands until every window the
+  reading named has reset; with no window at all it is believed for an hour.
+  The pool will need the same rule (phase 5).
+- **A refresh's build still journals whenever it observed anything**; only
+  pushed readings use the material-change test. The test looks at blocked
+  state, reset times, plan, credits (whole units), banked resets and
+  five-point steps of each window, and not at list prices.
+- **Floot's own provider path has no active read yet.** Its key is read inside
+  Floot and no formula holds it as a source. The OpenCode broker has one.
+- **`claude setup-token` and `/api/oauth/usage` remain untested**, so Claude
+  has no active read; its headers are the whole of its status.
+
 ## What is the Problem Being Solved?
 
 A hosted agent session spends a subscription: a ChatGPT plan through Codex, a
