@@ -111,6 +111,38 @@ fn a_completed_machine_still_passes_the_blob_verbs() {
         .expect("a quiescent completed machine snapshots as before");
 }
 
+/// A catchable failure after `new Compartment` has created its environment is
+/// still a failed construction: it must not switch a standalone interpreter to
+/// the shared-compartment persistence profile or retain the provisional
+/// environment.
+#[test]
+fn persistence_remains_available_after_failed_guest_compartment_construction() {
+    let (code, names) = compile(
+        "var caught = false; \
+         try { new Compartment({ globals: { NaN: 1 } }); } \
+         catch (error) { caught = error instanceof TypeError; } \
+         caught;",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    let outcome = machine.run(&code);
+    assert!(outcome.completed, "the constructor failure is catchable");
+    assert_eq!(outcome.result, "true");
+    let bytes = machine
+        .write_snapshot(&sig())
+        .expect("a failed construction does not change snapshot eligibility");
+    let resumed = from_snapshot_bytes(&bytes, &sig())
+        .expect("a failed construction leaves a restorable snapshot");
+    resumed
+        .write_snapshot(&sig())
+        .expect("the restored machine remains snapshot-eligible");
+
+    let mut store = MemoryStore::new();
+    begin_store_session(resumed, &sig(), &mut store)
+        .map_err(|(_, error)| error)
+        .expect("the store verb remains available after the failure");
+}
+
 /// The former W6-12 refusal flips once retained function state travels:
 /// a blob carries an eval-defined function and its defining segment.
 #[test]
