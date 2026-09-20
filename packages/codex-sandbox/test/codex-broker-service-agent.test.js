@@ -169,6 +169,22 @@ test('all Codex scopes share one host-only renewing credential and close with th
   // eslint-disable-next-line no-underscore-dangle
   t.false((await E(first).__getMethodNames__()).includes('current'));
   t.deepEqual(await E(first).attestation(), { sessionId: 'first' });
+  // The operator's redeemer is a facet of the service, never of a scope, and
+  // it can do one thing.
+  // eslint-disable-next-line no-underscore-dangle
+  t.false((await E(first).__getMethodNames__()).includes('resetRedeemer'));
+  const redeemer = await E(service).resetRedeemer();
+  t.deepEqual(
+    // eslint-disable-next-line no-underscore-dangle
+    (await E(redeemer).__getMethodNames__()).filter(
+      name => !name.startsWith('__'),
+    ),
+    ['help', 'redeem'],
+  );
+  t.is(await E(service).resetRedeemer('another'), undefined);
+  await t.throwsAsync(E(redeemer).redeem({ idempotencyKey: 'short' }), {
+    message: /Invalid idempotency key/,
+  });
   cancel();
   await setImmediate();
   t.is(closes, 1);

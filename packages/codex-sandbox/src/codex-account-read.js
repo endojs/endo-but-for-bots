@@ -1,6 +1,6 @@
 // @ts-check
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { boundedJson } from '@endo/hosted-agent/bounded-json.js';
 
 /**
@@ -212,7 +212,7 @@ export const makeCodexAccountRead = ({ credential, accountRef, fetch }) => {
       signal: AbortSignal.timeout(READ_TIMEOUT_MS),
     });
     // No upstream wording leaves here: a status, never a body.
-    response.ok || Fail`Codex usage read refused (HTTP ${response.status})`;
+    response.ok || Fail`Codex usage read refused (HTTP ${q(response.status)})`;
     return readingFromCodexUsage(
       await boundedJson(response, MAX_BODY_BYTES, 'Codex usage read'),
     );
