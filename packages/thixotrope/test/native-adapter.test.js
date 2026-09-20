@@ -24,9 +24,12 @@ test.serial(
         makeTcpNetLayer({ handlers, logger }),
     });
     t.teardown(() => daemon.shutdown());
-    const launcher = daemon.makeResource('native-adapter', {
-      moduleUrl: new URL('./fixtures/native-resource.js', import.meta.url).href,
-    });
+    const launcher = /** @type {{create: () => Promise<any>}} */ (
+      daemon.makeResource('native-adapter', {
+        moduleUrl: new URL('./fixtures/native-resource.js', import.meta.url)
+          .href,
+      })
+    );
     const incarnation = await E(launcher).create();
     const root = await E(incarnation).getRoot();
     const pid = await E(root).pid();
