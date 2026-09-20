@@ -2532,3 +2532,28 @@ pub fn canonicalize(character: i64, fold: bool) -> i64 {
         None => character,
     }
 }
+
+/// Visit every non-identity `u`/`v` case-fold mapping over the Unicode scalar
+/// range. The astral table is keyed by the low 16 bits in XS, so each row is
+/// applied independently in planes 1 through 16.
+pub(crate) fn for_each_unicode_fold_mapping(mut visit: impl FnMut(i32, i32)) {
+    fn visit_table(table: &[CharCase], plane: i64, visit: &mut impl FnMut(i32, i32)) {
+        for row in table {
+            for offset in 0..i64::from(row.count) {
+                let source = (plane << 16) | (i64::from(row.code) + offset);
+                if source > 0x10_FFFF {
+                    continue;
+                }
+                let target = apply_row(source, row);
+                if target != source && (0..=0x10_FFFF).contains(&target) {
+                    visit(source as i32, target as i32);
+                }
+            }
+        }
+    }
+
+    visit_table(FOLD0, 0, &mut visit);
+    for plane in 1..=16 {
+        visit_table(FOLD1, plane, &mut visit);
+    }
+}

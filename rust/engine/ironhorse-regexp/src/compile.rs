@@ -1149,6 +1149,73 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         }))
     }
 
+    fn charset_unicode_fold_targets(&mut self, property: &[i32], include_members: bool) -> NodeId {
+        let mut mapping_count = 0usize;
+        crate::charcase::for_each_unicode_fold_mapping(|_, _| mapping_count += 1);
+        let allocation = mapping_count
+            .checked_mul(std::mem::size_of::<i32>())
+            .unwrap_or_else(|| stop(CompileStop::Resource));
+        self.work.allocate(allocation);
+        self.work.charge(mapping_count as u64 * 2);
+        let mut targets = Vec::new();
+        targets
+            .try_reserve_exact(mapping_count)
+            .unwrap_or_else(|_| stop(CompileStop::Resource));
+        crate::charcase::for_each_unicode_fold_mapping(|source, target| {
+            if charset_contains(property, source) == include_members {
+                targets.push(target);
+            }
+        });
+        let count = targets.len();
+        self.work
+            .charge(count as u64 * (usize::BITS - count.leading_zeros()) as u64);
+        targets.sort_unstable();
+        targets.dedup();
+
+        let mut chars = Vec::with_capacity(targets.len().saturating_mul(2) + 1);
+        chars.push(0);
+        for target in targets {
+            self.work.charge(1);
+            if chars.len() > 1 && *chars.last().expect("range has an end") == target {
+                *chars.last_mut().expect("range has an end") = target + 1;
+            } else {
+                chars.extend_from_slice(&[target, target + 1]);
+            }
+        }
+        chars[0] = (chars.len() - 1) as i32;
+        self.add_node(Kind::CharSet {
+            chars,
+            strings: Vec::new(),
+        })
+    }
+
+    /// Canonicalize a positive Unicode property for the matcher's folded
+    /// subject representation. This is shared by `u` and `v` ignore-case
+    /// matching and runs before `v`-mode complement or set algebra.
+    fn charset_fold_unicode_property(&mut self, set: NodeId) -> PResult<NodeId> {
+        let (property, strings) = self.charset_parts(set)?;
+        if !strings.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
+        let folded_targets = self.charset_unicode_fold_targets(&property, true);
+        self.charset_combine(set, folded_targets, MX_CHARSET_UNION_OP)
+    }
+
+    /// Legacy `u` mode applies case folding after complementing a Unicode
+    /// property. The matcher canonicalizes the subject, so retain the raw
+    /// complement and add the canonical target of every folded source that is
+    /// outside the property. `v` mode deliberately keeps complement after
+    /// folding and therefore does not use this path.
+    fn charset_legacy_unicode_property_not(&mut self, set: NodeId) -> PResult<NodeId> {
+        let (property, strings) = self.charset_parts(set)?;
+        if !strings.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
+        let complement = self.charset_not(set)?;
+        let folded_targets = self.charset_unicode_fold_targets(&property, false);
+        self.charset_combine(complement, folded_targets, MX_CHARSET_UNION_OP)
+    }
+
     /// `fxCharSetCombine`: merge two sorted endpoint lists and their finite
     /// string alternatives under a union/subtract/intersect operation.
     fn charset_combine(&mut self, set1: NodeId, set2: NodeId, op: i32) -> PResult<NodeId> {
@@ -1427,7 +1494,18 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         chars.extend_from_slice(endpoints);
         let set = self.add_node(Kind::CharSet { chars, strings });
         self.next()?;
-        if negate {
+        if self.flags & XS_REGEXP_I != 0 && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
+            if negate && self.flags & XS_REGEXP_U != 0 {
+                self.charset_legacy_unicode_property_not(set)
+            } else {
+                let set = self.charset_fold_unicode_property(set)?;
+                if negate {
+                    self.charset_not(set)
+                } else {
+                    Ok(set)
+                }
+            }
+        } else if negate {
             self.charset_not(set)
         } else {
             Ok(set)
@@ -1690,6 +1768,13 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             self.next()?;
             not = true;
         }
+        if self.character == b']' as i64 {
+            let mut result = self.charset_empty();
+            if not {
+                result = self.charset_not(result)?;
+            }
+            return Ok(result);
+        }
         let (mut left, mut left_kind) = self.charset_operand()?;
         let mut result: Option<NodeId> = None;
         if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
@@ -1780,7 +1865,13 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                             || c == b'p' as i64
                             || c == b'P' as i64
                     );
-                    Ok((self.charset_parse_escape(true)?, i32::from(class)))
+                    let result = self.charset_parse_escape(true)?;
+                    let result = if class {
+                        result
+                    } else {
+                        self.charset_canonicalize_single(result)
+                    };
+                    Ok((result, i32::from(class)))
                 }
             }
             c if is_v_maybe_doubled_punctuator(c) => {
@@ -1789,11 +1880,13 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 if self.character == character {
                     return Err(self.error("invalid range"));
                 }
-                Ok((self.charset_single(character), 0))
+                let result = self.charset_single(character);
+                Ok((self.charset_canonicalize_single(result), 0))
             }
             c if is_v_reserved_punctuator(c) => Err(self.error("invalid range")),
             _ => {
                 let result = self.charset_single(self.character);
+                let result = self.charset_canonicalize_single(result);
                 self.next()?;
                 Ok((result, 0))
             }
@@ -2879,6 +2972,24 @@ fn is_v_reserved_punctuator(c: i64) -> bool {
             c as u8 as char,
             '(' | ')' | '[' | ']' | '{' | '}' | '/' | '-' | '\\' | '|'
         )
+}
+
+fn charset_contains(chars: &[i32], character: i32) -> bool {
+    let mut low = 0usize;
+    let mut high = chars[0] as usize / 2;
+    while low < high {
+        let middle = (low + high) / 2;
+        let begin = chars[1 + middle * 2];
+        let end = chars[2 + middle * 2];
+        if character < begin {
+            high = middle;
+        } else if character >= end {
+            low = middle + 1;
+        } else {
+            return true;
+        }
+    }
+    false
 }
 
 /// The recursion bounds: nesting is refused past [`MAX_NESTING_DEPTH`] with

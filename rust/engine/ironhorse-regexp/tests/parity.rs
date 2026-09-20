@@ -370,7 +370,9 @@ fn corpus() -> Vec<Case> {
         v.push(("[^\\p{ASCII}]", flags, "\u{1F600}", 0));
     }
     v.push(("^\\p{Lowercase_Letter}$", "iu", "A", 0));
-    v.push(("^\\P{Lowercase_Letter}$", "iu", "A", 0));
+    // The pinned XS result for the negative `iu` form is a documented
+    // standards divergence. It is covered by the independent conformance
+    // lane instead of this parity corpus.
     v.push(("^\\p{Lowercase_Letter}$", "iv", "A", 0));
     v.push(("^\\P{Lowercase_Letter}$", "iv", "A", 0));
 
@@ -587,6 +589,25 @@ fn unicode_sets_syntax_and_execution_match_the_pin() {
     for &case in cases {
         assert_eq!(check(case), Ok(true), "/{}/{} should agree", case.0, case.1);
     }
+}
+
+/// XS complements a Unicode property before applying case folding for both
+/// `u` and `v`. ECMA-262 deliberately distinguishes those modes, so keep the
+/// one known `u`-mode result visible instead of silently dropping it from the
+/// parity corpus.
+#[test]
+fn legacy_u_negative_property_divergence_is_intentional() {
+    let pattern = "^\\P{Lowercase_Letter}$";
+    let flags = "iu";
+    let subject = "A";
+
+    let oracle = oracle_regexp(pattern, flags, subject, 0).expect("oracle machine must start");
+    assert!(oracle.compiled, "the XS pin should compile the pattern");
+    assert!(!oracle.matched, "the XS pin preserves its legacy result");
+
+    let program = compile(pattern, flags).expect("IronHorse should compile the pattern");
+    let outcome = match_regexp(&program, subject.as_bytes(), 0);
+    assert!(outcome.matched, "IronHorse should follow current ECMA-262");
 }
 
 /// Inline modifiers are now fully ported: the emitted program, captures, and

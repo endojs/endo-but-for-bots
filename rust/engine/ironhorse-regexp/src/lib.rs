@@ -339,6 +339,8 @@ mod tests {
 
     #[test]
     fn v_flag_sets_and_string_properties_execute() {
+        assert!(!caps("[]", "v", "A").0);
+        assert!(caps("[^]", "v", "A").0);
         assert!(caps("abc", "v", "abc").0);
         assert!(caps("\\p{Script=Greek}+", "v", "\u{03B1}\u{03B2}").0);
         assert!(caps("[\\p{ASCII}]", "v", "A").0);
@@ -355,7 +357,12 @@ mod tests {
         assert!(caps("\\p{sc=Grek}", "u", "\u{03B1}").0);
         assert!(caps("\\p{Script_Extensions=Hira}", "u", "\u{30FC}").0);
         assert!(caps("\\P{ASCII}", "u", "\u{00E9}").0);
-        assert!(!caps("^\\P{Lowercase_Letter}$", "iu", "A").0);
+        assert!(caps("^\\P{Lowercase_Letter}$", "iu", "A").0);
+        assert!(!caps("^\\P{Lowercase_Letter}$", "iv", "A").0);
+        assert!(caps("^\\p{Uppercase_Letter}$", "iu", "a").0);
+        assert!(caps("^\\p{Uppercase_Letter}$", "iv", "a").0);
+        assert!(caps("^\\P{Uppercase_Letter}$", "iu", "A").0);
+        assert!(!caps("^\\P{Uppercase_Letter}$", "iv", "A").0);
         assert!(matches!(
             compile("\\p{letter}", "u"),
             Err(CompileError::Syntax(_))
