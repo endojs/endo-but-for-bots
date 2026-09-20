@@ -175,6 +175,10 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   watchSessions: M.callWhen().returns(M.remotable()),
   watchAccounts: M.callWhen().returns(M.remotable()),
   refreshAccounts: M.callWhen().returns(M.undefined()),
+  redeemAccountReset: M.callWhen(M.string())
+    .optional(M.splitRecord({}, { creditId: M.string(), replay: M.boolean() }))
+    .returns(M.record()),
+  abandonAccountReset: M.callWhen(M.string()).returns(M.record()),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listBackends: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().optional(M.string()).returns(M.arrayOf(M.record())),
@@ -2840,6 +2844,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             subscriptions.length > 0
               ? subscriptions.map(subscription => ({
                   name: `${backendId}-account-${subscription.id}`,
+                  adminName: `${backendId}-admin-${subscription.id}`,
                   key: `${backendId}:${subscription.id}`,
                   subscriptionId: subscription.id,
                   label: subscription.label,
@@ -2847,6 +2852,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
               : [
                   {
                     name: `${backendId}-account`,
+                    adminName: `${backendId}-admin`,
                     key: backendId,
                     subscriptionId: undefined,
                     label: undefined,
@@ -2854,6 +2860,18 @@ export const make = (hostPowers, _context, { env } = {}) => {
                 ];
           for (const account of accounts) {
             if (await E(powers).has(account.name)) {
+              // Where the provider banks rate-limit resets, setup binds the
+              // subscription's admin beside its account: `-admin` for
+              // `-account`.
+              /** @type {any} */
+              let admin;
+              try {
+                if (await E(powers).has(account.adminName)) {
+                  admin = await E(powers).lookup(account.adminName);
+                }
+              } catch {
+                // Status does not wait on it; there is then no redeem button.
+              }
               entries.push({
                 backendId,
                 key: account.key,
@@ -2865,6 +2883,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
                       label: account.label,
                     }),
 
+                ...(admin === undefined ? {} : { admin }),
                 oracle: await E(powers).lookup(account.name),
               });
             }
@@ -5313,6 +5332,29 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
+     * Spend one banked rate-limit reset of an account, because a person
+     * pressed the button. No tool and no ordinary session reaches this.
+     *
+     * @param {string} key The account's `key` from `watchAccounts()`.
+     * @param {{ creditId?: string, replay?: boolean }} [options] Which credit
+     *   (the soonest to expire if none); `replay` asks again about the
+     *   unconfirmed redeem and never starts one.
+     */
+    async redeemAccountReset(key, options = {}) {
+      return accountsWatch.redeemReset(key, options);
+    },
+
+    /**
+     * Give an unconfirmed redeem up. A person's decision too: a redeem made
+     * afterwards spends another credit if this one had been accepted.
+     *
+     * @param {string} key
+     */
+    async abandonAccountReset(key) {
+      return accountsWatch.abandonReset(key);
+    },
+
+    /**
      * @returns {Promise<Array<{ id: string, title: string, description: string }>>}
      */
     async listPresets() {
@@ -5584,7 +5626,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -5599,7 +5641,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
           'listModels(backendId?) — Return backend-scoped models with compound selection ids and supported reasoning efforts; no argument returns the flattened compatibility catalog.',
         getSession: 'getSession(id) — Return the session facet for an id.',
         watchAccounts:
-          'watchAccounts() — A disposable stream of { type: "accounts", accounts }: now, and whenever any account changes, coalesced to the newest. One account per backend that has an account oracle: { backendId, title, plan: { planId, title, state, source }, windows: [{ windowId ("primary" short, "secondary" long), title, usedPercent, resetsAt, windowSeconds, limit, used, remaining }], limitReached, credits: { balance, hasCredits, unlimited } | null, resetCredits: { availableCount, credits } | null, source (observed | declared | remembered | unavailable), observedAt }. A window whose resetsAt has passed is empty again, whatever usedPercent says. Readings arrive with inference responses; subscribing asks no provider anything.',
+          'watchAccounts() — A disposable stream of { type: "accounts", accounts }: now, and whenever any account changes, coalesced to the newest. One account per backend that has an account oracle: { backendId, title, plan: { planId, title, state, source }, windows: [{ windowId ("primary" short, "secondary" long), title, usedPercent, resetsAt, windowSeconds, limit, used, remaining }], limitReached, credits: { balance, hasCredits, unlimited } | null, resetCredits: { availableCount, credits } | null, reset: { pending, last } | null (present where a banked reset can be redeemed; pending is a redeem whose answer is not known), source (observed | declared | remembered | unavailable), observedAt }. A window whose resetsAt has passed is empty again, whatever usedPercent says. Readings arrive with inference responses; subscribing asks no provider anything.',
+        redeemAccountReset:
+          'redeemAccountReset(key, { creditId?, replay? }?) — Spend one banked rate-limit reset of the account with that key (from watchAccounts()), the named credit or the one that expires soonest. For a person who pressed the button; nothing calls this on its own, and a credit is scarce. Answers { outcome: reset | nothingToReset | noCredit | alreadyRedeemed | refused | redeemed, creditId, replayed, pending }. If the answer is lost the account shows reset.pending and a new redeem is refused; { replay: true } asks again with the same stored key, which cannot spend a second credit and never starts a redeem of its own.',
+        abandonAccountReset:
+          'abandonAccountReset(key) — Give that account’s unconfirmed redeem up, when the provider will never say. A redeem made afterwards spends another credit if the abandoned one had been accepted. Answers { pending, last }.',
         refreshAccounts:
           'refreshAccounts() — Ask each account’s provider once for its current figures. For a person who pressed refresh; nothing calls this on a timer.',
         watchSessions:

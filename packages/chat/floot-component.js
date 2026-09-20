@@ -680,6 +680,9 @@ export const flootComponent = (
   // (`factory.watchAccounts()`). Plain data; see floot/src/account-watch.js.
   /** @type {any[]} */
   let accounts = [];
+  // The one redeem a person asked for from this page, and how it went.
+  /** @type {{ key: string, busy: boolean, message: string, error: boolean } | null} */
+  let accountAction = null;
 
   // Voice/meter state (pure data — no audio objects).
   let voiceTranscript = '';
@@ -1049,6 +1052,7 @@ export const flootComponent = (
         ? { ...usageOf(usage), contextPercent: contextPercent(usage) }
         : null,
       accounts,
+      accountAction,
       voice: {
         hasMic,
         hasTts,
@@ -2620,6 +2624,61 @@ export const flootComponent = (
       void Promise.resolve(factory)
         .then(resolved => E(resolved).refreshAccounts())
         .catch(() => {});
+    },
+    /**
+     * Spend one banked rate-limit reset. A credit is scarce and the call
+     * cannot be undone, so the person confirms here, in the host page.
+     * @param key
+     * @param question
+     * @param action
+     */
+    redeemAccountReset(
+      /** @type {string} */ key,
+      /** @type {string} */ question,
+      /** @type {'redeem' | 'replay' | 'abandon'} */ action = 'redeem',
+    ) {
+      if (accountAction?.busy) return;
+      if (!window.confirm(question)) return;
+      accountAction = { key, busy: true, message: '', error: false };
+      notify();
+      void Promise.resolve(factory)
+        .then(resolved => {
+          // The view says which it means. "Ask again" is never a redeem: if
+          // the unconfirmed one was settled while the question was open, the
+          // daemon answers with how and spends nothing.
+          if (action === 'abandon') {
+            return E(resolved).abandonAccountReset(key);
+          }
+          return E(resolved).redeemAccountReset(
+            key,
+            action === 'replay' ? { replay: true } : {},
+          );
+        })
+        .then(
+          answer => {
+            // The outcome arrives with the account, as `reset.last`; a later
+            // ask that was refused leaves it pending, and that is said here.
+            accountAction =
+              answer?.pending === true && answer?.outcome === 'refused'
+                ? {
+                    key,
+                    busy: false,
+                    message:
+                      'That ask was refused; the earlier one is still unconfirmed.',
+                    error: true,
+                  }
+                : null;
+          },
+          error => {
+            accountAction = {
+              key,
+              busy: false,
+              message: /** @type {Error} */ (error)?.message || 'Failed',
+              error: true,
+            };
+          },
+        )
+        .finally(() => notify());
     },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);

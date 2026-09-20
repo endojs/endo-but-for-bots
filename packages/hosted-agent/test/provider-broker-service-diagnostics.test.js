@@ -171,6 +171,7 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
   };
   /** @type {any[]} */
   const kept = [];
+  const redeemed = [];
   /** @type {string[]} */
   const used = [];
   /** @type {any} */
@@ -235,12 +236,32 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
         Far(`${member.id} secret`, {
           readBase64: async () => btoa(`${member.secretName}-key`),
         }),
+      resetRedeemOf:
+        ({ member }) =>
+        async request => {
+          redeemed.push({ member: member.id, ...request });
+          return { outcome: 'reset', words: 'of the provider' };
+        },
       readState: async () => undefined,
       writeState: async state => {
         kept.push(state);
       },
     },
   });
+  // Each member has its own redeemer, reached by id and by nothing else; its
+  // answer is one word.
+  const homeRedeemer = await E(kit.service).resetRedeemer('home');
+  t.deepEqual(
+    await E(homeRedeemer).redeem({
+      idempotencyKey: '0f8fad5b-d9cb-469f-a165-70867728950e',
+    }),
+    { outcome: 'reset' },
+  );
+  t.deepEqual(redeemed, [
+    { member: 'home', idempotencyKey: '0f8fad5b-d9cb-469f-a165-70867728950e' },
+  ]);
+  t.is(await E(kit.service).resetRedeemer('nobody'), undefined);
+  t.is(await E(kit.service).resetRedeemer(), undefined);
   // What it holds, before any session: labels and weights, nothing secret.
   t.deepEqual(await E(kit.service).subscriptions(), [
     { id: 'work', label: 'Work Pro', weight: 20 },

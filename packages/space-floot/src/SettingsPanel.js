@@ -174,6 +174,68 @@ export const SettingsPanel = ({ state, controller }) => {
             section.title,
           ),
           ...section.rows.map(([label, value]) => Row(label, value)),
+          // Spending a banked reset is a person's decision: the host asks
+          // them to confirm, and nothing else ever presses this.
+          section.redeem && controller.redeemAccountReset
+            ? h(
+                'div',
+                { class: 'floot-settings-action', key: `r:${section.id}` },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'floot-settings-refresh',
+                    disabled: state.accountAction?.busy === true,
+                    onClick: () => {
+                      const { redeem } = section;
+                      if (redeem) {
+                        controller.redeemAccountReset?.(
+                          redeem.key,
+                          redeem.confirm,
+                          redeem.pending ? 'replay' : 'redeem',
+                        );
+                      }
+                    },
+                  },
+                  state.accountAction?.busy === true &&
+                    state.accountAction.key === section.id
+                    ? 'Asking…'
+                    : section.redeem.label,
+                ),
+                section.redeem.abandon
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        class: 'floot-settings-refresh',
+                        disabled: state.accountAction?.busy === true,
+                        onClick: () => {
+                          const abandon = section.redeem?.abandon;
+                          if (abandon) {
+                            controller.redeemAccountReset?.(
+                              section.id,
+                              abandon.confirm,
+                              'abandon',
+                            );
+                          }
+                        },
+                      },
+                      section.redeem.abandon.label,
+                    )
+                  : null,
+                state.accountAction?.key === section.id &&
+                  state.accountAction.message
+                  ? h(
+                      'span',
+                      {
+                        class: 'floot-settings-note',
+                        role: state.accountAction.error ? 'alert' : 'status',
+                      },
+                      state.accountAction.message,
+                    )
+                  : null,
+              )
+            : null,
         ]),
       ]
     : [];

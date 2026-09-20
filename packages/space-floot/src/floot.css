@@ -510,6 +510,18 @@
   cursor: pointer;
 }
 
+.floot-settings-action {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.floot-settings-note {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
 .floot-meter {
   display: none;
   position: relative;

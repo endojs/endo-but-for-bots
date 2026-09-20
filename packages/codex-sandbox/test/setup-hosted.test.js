@@ -598,6 +598,19 @@ test.serial(
     });
     // The names used while making the namespace are tucked away.
     t.false(fake.bindings.has(key('codex-sandbox.broker-powers')));
+    // Each member's admin, through which an operator redeems a banked reset,
+    // is bound for Floot beside its account, and into nothing else.
+    for (const id of ['work', 'home']) {
+      t.true(
+        fake.bindings.has(
+          key('floot', 'controller-profile', `codex-admin-${id}`),
+        ),
+      );
+    }
+    t.deepEqual(
+      [...fake.bindings.keys()].filter(name => /codex-admin/.test(name)).length,
+      2,
+    );
 
     // The next start: the set is stored over the old one and never removed
     // first, since that is also when sessions are restored and the broker

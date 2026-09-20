@@ -27,6 +27,7 @@ import { makeAccountReadingSource } from './account-source.js';
 import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makeProviderScopes } from './provider-scopes.js';
+import { makeResetRedeemer } from './reset-redeemer.js';
 import {
   makeSubscriptionPool,
   normalizeSubscriptionSet,
@@ -297,6 +298,8 @@ harden(makeProviderBrokerKit);
  *   shared refreshing credential. Asked once per member.
  * @property {(member: any) => any} [adaptRequestOf]
  * @property {(powers: { member: any, secret: any, credential: any }) => () => Promise<any>} [activeReadOf]
+ * @property {(powers: { member: any, secret: any, credential: any }) => (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>} [resetRedeemOf]
+ *   The member's one call that spends a banked rate-limit reset.
  * @property {() => Promise<any>} [readState] What a previous incarnation kept
  *   of the pool: refusals, and where sessions were last served.
  * @property {(state: any) => Promise<void>} [writeState]
@@ -328,6 +331,7 @@ const makePooledBrokerServiceKit = ({
     credentialOf,
     adaptRequestOf,
     activeReadOf,
+    resetRedeemOf,
     readState = async () => undefined,
     writeState = async () => {},
     now = Date.now,
@@ -338,6 +342,7 @@ const makePooledBrokerServiceKit = ({
    * @property {any} credential
    * @property {any} adaptRequest
    * @property {ReturnType<typeof makeAccountReadingSource>} account
+   * @property {any} redeemer
    */
   /** @type {Map<string, MemberKit>} */
   const kits = new Map();
@@ -367,6 +372,10 @@ const makePooledBrokerServiceKit = ({
         adaptRequest:
           adaptRequestOf === undefined ? undefined : adaptRequestOf(member),
         account,
+        redeemer:
+          resetRedeemOf === undefined
+            ? undefined
+            : makeResetRedeemer(resetRedeemOf({ member, secret, credential })),
       };
       kits.set(member.id, kit);
     }
@@ -485,6 +494,11 @@ const makePooledBrokerServiceKit = ({
       const member = members.find(entry => entry.id === subscriptionId);
       return member === undefined ? undefined : kitOf(member).account.source;
     },
+    resetRedeemerOf: async subscriptionId => {
+      const { members } = await load();
+      const member = members.find(entry => entry.id === subscriptionId);
+      return member === undefined ? undefined : kitOf(member).redeemer;
+    },
     listSubscriptions: async () => {
       const { members } = await load();
       return harden(
@@ -573,13 +587,21 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0] & { activeAccountRead?: () => Promise<any>, subscriptions?: PooledSubscriptions }} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { activeAccountRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions }} options
  *   `activeAccountRead` is the adapter's one read of its provider's usage
- *   endpoint, host-only and only ever run on request. `subscriptions` makes
+ *   endpoint, host-only and only ever run on request. `resetRedeem` is its
+ *   one call that spends a banked rate-limit reset, an operator's and never
+ *   run by anything here. `subscriptions` makes
  *   this a broker over several credentials of one provider instead of one.
  */
 export const makeProviderBrokerServiceKit = options => {
-  const { label, activeAccountRead, subscriptions, ...brokerOptions } = options;
+  const {
+    label,
+    activeAccountRead,
+    resetRedeem,
+    subscriptions,
+    ...brokerOptions
+  } = options;
   const reportAccountError = (/** @type {unknown} */ error) =>
     console.error(
       `${label} account read failed:`,
@@ -614,6 +636,9 @@ export const makeProviderBrokerServiceKit = options => {
   const scopes = makeProviderScopes({
     openIssuer: async () => (await broker.start()).issuer,
     accountSource: account.source,
+    ...(resetRedeem === undefined
+      ? {}
+      : { resetRedeemer: makeResetRedeemer(resetRedeem) }),
   });
   return harden({
     service: scopes.service,
@@ -700,6 +725,9 @@ const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
  *   Synchronous, inert construction of the adapter's one read of its
  *   provider's usage endpoint, for an account oracle's `refresh()`. Host-only:
  *   it holds the credential. Run only on request, never at start.
+ * @param {(powers: { config: Config, secret: any, credential: any, accountRef: string }) => (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>} [options.makeResetRedeem]
+ *   Synchronous, inert construction of the adapter's one call that spends a
+ *   banked rate-limit reset. Host-only, and run only when an operator redeems.
  * @param {typeof makeProviderBrokerServiceKit} [options.makeServiceKit]
  * @param {(error: unknown) => void} [options.reportError]
  * @param {(...args: string[]) => void} [options.log] Where the host-only
@@ -711,6 +739,7 @@ export const makeOwnedProviderBrokerService = ({
   makePolicy,
   makeCredential,
   makeActiveAccountRead,
+  makeResetRedeem,
   makeServiceKit = makeProviderBrokerServiceKit,
   reportError = error =>
     console.error(`${label} broker cleanup pending`, error),
@@ -815,6 +844,21 @@ export const makeOwnedProviderBrokerService = ({
                     accountRef: member.accountRef ?? accountRef,
                   }),
               }),
+          ...(makeResetRedeem === undefined
+            ? {}
+            : {
+                resetRedeemOf: ({
+                  member,
+                  secret: memberSecret,
+                  credential: memberCredential,
+                }) =>
+                  makeResetRedeem({
+                    config: forMember(member),
+                    secret: memberSecret,
+                    credential: memberCredential,
+                    accountRef: member.accountRef ?? accountRef,
+                  }),
+              }),
           readState: () => state.read(),
           writeState: kept => state.write(kept),
         },
@@ -837,6 +881,16 @@ export const makeOwnedProviderBrokerService = ({
         ? {}
         : {
             activeAccountRead: makeActiveAccountRead({
+              config,
+              secret,
+              credential,
+              accountRef,
+            }),
+          }),
+      ...(makeResetRedeem === undefined
+        ? {}
+        : {
+            resetRedeem: makeResetRedeem({
               config,
               secret,
               credential,

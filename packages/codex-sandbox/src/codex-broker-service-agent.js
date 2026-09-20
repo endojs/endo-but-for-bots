@@ -10,6 +10,7 @@ import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { M, matches } from '@endo/patterns';
 
 import { makeCodexAccountRead } from './codex-account-read.js';
+import { makeCodexResetRedeem } from './codex-reset-credit.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 import { makeCodexSubscriptionProfile } from './codex-subscription-profile.js';
 
@@ -82,6 +83,14 @@ export const makeOwnedCodexBrokerService = ({
     // resets from the usage endpoint, with the same renewing credential.
     makeActiveAccountRead: ({ credential, accountRef }) =>
       makeCodexAccountRead({
+        credential,
+        accountRef,
+        fetch: globalThis.fetch,
+      }),
+    // For the operator's subscription admin: the one call that spends a
+    // banked rate-limit reset. Nothing in the broker runs it.
+    makeResetRedeem: ({ credential, accountRef }) =>
+      makeCodexResetRedeem({
         credential,
         accountRef,
         fetch: globalThis.fetch,

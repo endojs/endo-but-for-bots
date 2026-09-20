@@ -458,3 +458,165 @@ test('a broker over several subscriptions gets an oracle each, and one failing d
   );
   t.true(world.names.has('codex-sandbox/account-oracle-work'));
 });
+
+test('a subscription admin is made once, holds only the redeemer and the source, and keeps its store across a re-minted broker', async t => {
+  const world = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  const options = {
+    label: 'Codex',
+    dir: 'codex-sandbox',
+    providerId: 'codex',
+    flootDir: 'floot',
+    backendId: 'codex',
+    resetCredits: true,
+  };
+  await publishAccountOracle(world.host, options);
+  const of = suffix =>
+    world.made.filter(made => made.specifier.endsWith(suffix));
+  t.is(of('/subscription-admin-module.js').length, 1);
+  t.deepEqual(of('/subscription-admin-module.js')[0].resultName, [
+    'codex-sandbox',
+    'subscription-admin',
+  ]);
+  // The redeemer formula's powers are the broker service; the admin's
+  // namespace holds that redeemer and the account source, never the broker.
+  t.is(of('/reset-redeemer-module.js').length, 1);
+  t.is(of('/reset-redeemer-module.js')[0].powers, 'broker-1');
+  const powers = world.guests.get('codex-sandbox.subscription-admin-powers');
+  t.deepEqual([...powers.keys()].sort(), ['account-source', 'reset-redeemer']);
+  t.is(
+    powers.get('account-source'),
+    world.guests
+      .get('codex-sandbox.account-oracle-powers')
+      .get('account-source'),
+  );
+  t.false(world.names.has('codex-sandbox.subscription-admin-powers'));
+  t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
+  t.true(world.names.has('codex-sandbox/subscription-admin-powers'));
+  // Bound for the operator's Floot, and nowhere else.
+  t.is(
+    world.names.get('floot/controller-profile/codex-admin'),
+    world.names.get('codex-sandbox/subscription-admin'),
+  );
+  t.deepEqual(
+    [...world.names.keys()].filter(name => name.endsWith('codex-admin')),
+    ['floot/controller-profile/codex-admin'],
+  );
+
+  // A deploy re-mints the broker: the admin, and so its stored intent, stays;
+  // the redeemer is minted again and the names inside the namespace move.
+  const before = powers.get('reset-redeemer');
+  world.names.set('codex-sandbox/broker-service', 'broker-2');
+  await publishAccountOracle(world.host, options);
+  t.is(of('/subscription-admin-module.js').length, 1);
+  t.is(of('/reset-redeemer-module.js').length, 2);
+  t.is(of('/reset-redeemer-module.js')[1].powers, 'broker-2');
+  t.not(powers.get('reset-redeemer'), before);
+});
+
+test('no admin is provided unless asked, nor for a broker with no redeemer; several subscriptions get one each', async t => {
+  const plain = makeNamingHost({
+    'claude-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  await publishAccountOracle(plain.host, {
+    label: 'Claude',
+    dir: 'claude-sandbox',
+    providerId: 'anthropic',
+    flootDir: 'floot',
+    backendId: 'claude',
+  });
+  t.false(plain.names.has('floot/controller-profile/claude-admin'));
+  t.false(
+    plain.made.some(made =>
+      made.specifier.endsWith('/reset-redeemer-module.js'),
+    ),
+  );
+
+  const none = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  // This broker's resetRedeemer() answers undefined.
+  none.names.set('floot/controller-profile/codex-admin', 'an-older-admin');
+  const without = harden({
+    ...none.host,
+    makeUnconfined: async (worker, specifier, options) => {
+      await none.host.makeUnconfined(worker, specifier, options);
+      if (specifier.endsWith('/reset-redeemer-module.js')) {
+        none.names.set(options.resultName.join('/'), undefined);
+      }
+    },
+  });
+  await publishAccountOracle(without, {
+    label: 'Codex',
+    dir: 'codex-sandbox',
+    providerId: 'codex',
+    flootDir: 'floot',
+    backendId: 'codex',
+    resetCredits: true,
+  });
+  t.true(none.names.has('floot/controller-profile/codex-account'));
+  // A binding from when this broker did redeem is withdrawn: Floot must not
+  // offer a button over an admin whose redeemer is gone.
+  t.false(none.names.has('floot/controller-profile/codex-admin'));
+  t.false(none.names.has('codex-sandbox/reset-redeemer'));
+  t.false(none.names.has('codex-sandbox/subscription-admin'));
+
+  const pooled = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  await publishAccountOracle(pooled.host, {
+    label: 'Codex',
+    dir: 'codex-sandbox',
+    providerId: 'codex',
+    flootDir: 'floot',
+    backendId: 'codex',
+    subscriptionIds: ['work', 'home'],
+    resetCredits: true,
+  });
+  t.true(pooled.names.has('floot/controller-profile/codex-admin-work'));
+  t.true(pooled.names.has('floot/controller-profile/codex-admin-home'));
+  t.deepEqual(
+    pooled.made
+      .filter(made => made.specifier.endsWith('/reset-redeemer-module.js'))
+      .map(made => made.env),
+    [{ ACCOUNT_SUBSCRIPTION_ID: 'work' }, { ACCOUNT_SUBSCRIPTION_ID: 'home' }],
+  );
+});
+
+test('a broker whose worker predates the redeemer leaves no name behind, and the oracle is still provided', async t => {
+  const world = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  // As the daemon does: the name is written, then the value's rejection
+  // (the broker has no such method) is what the mint answers.
+  const old = harden({
+    ...world.host,
+    makeUnconfined: async (worker, specifier, options) => {
+      await world.host.makeUnconfined(worker, specifier, options);
+      if (specifier.endsWith('/reset-redeemer-module.js')) {
+        throw Error('target has no method "resetRedeemer"');
+      }
+    },
+  });
+  await t.notThrowsAsync(() =>
+    publishAccountOracle(old, {
+      label: 'Codex',
+      dir: 'codex-sandbox',
+      providerId: 'codex',
+      flootDir: 'floot',
+      backendId: 'codex',
+      resetCredits: true,
+    }),
+  );
+  t.true(world.names.has('floot/controller-profile/codex-account'));
+  t.false(world.names.has('codex-sandbox/reset-redeemer'));
+  t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
+  t.false(world.names.has('codex-sandbox/subscription-admin'));
+  t.false(world.names.has('floot/controller-profile/codex-admin'));
+});

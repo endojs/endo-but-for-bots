@@ -485,3 +485,16 @@ test('two subscriptions may not share an account or a secret, and an OAuth set n
     { message: /must name its account/ },
   );
 });
+
+test('a subscription id cannot end the way setup names a member’s namespaces', t => {
+  for (const id of ['work-powers', 'work-handle', 'powers', 'handle']) {
+    t.throws(() => normalizeSubscriptionSet({ members: [{ id }] }), {
+      message: /must not be or end in -powers or -handle/,
+    });
+  }
+  t.notThrows(() =>
+    normalizeSubscriptionSet({
+      members: [{ id: 'superpowers' }, { id: 'handles' }],
+    }),
+  );
+});

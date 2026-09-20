@@ -402,6 +402,8 @@ export const main = async (host, { exec } = {}) => {
     flootDir,
     backendId: 'codex',
     ...(subscriptionIds === undefined ? {} : { subscriptionIds }),
+    // ChatGPT plans bank rate-limit resets; an operator redeems them here.
+    resetCredits: true,
   });
   console.log(
     'Hosted Codex ready: common scoped sandbox, retained subscription broker, daemon-owned sessions.',

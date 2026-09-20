@@ -260,6 +260,81 @@ Where that differs from the design below:
 - An account view carries `key`, `subscriptionId` and `label`, and no
   `providerId`.
 
+**Phase 7, Codex reset credits, is implemented.** Not deployed, and the
+consume call has never been made against the service (see the gates below).
+
+- `packages/hosted-agent/src/reset-credit-admin.js` — the operator's admin of
+  one subscription: `consumeResetCredit({ creditId?, replay? })`,
+  `abandonResetIntent()`, `getResetState()`, `refresh()`. The idempotency key
+  is written to the formula's own journal (`reset-intent-v1-*`) before the
+  provider is called, and a failed write means no call.
+- `subscription-admin-module.js` — the retained `make-unconfined` formula. Its
+  namespace holds `reset-redeemer` and `account-source` (both formulas of
+  their own, re-minted over the broker that exists now on every setup run)
+  and the intent; never the broker service. `hosted-setup.js`
+  (`provideSubscriptionAdmin`, the `resetCredits` option of
+  `publishAccountOracle`) provides one per subscription and binds it into
+  Floot's profile as `<backend>-admin` or `<backend>-admin-<id>`.
+- `reset-redeemer.js`, `reset-redeemer-module.js` and
+  `provider-scopes.js`/`provider-broker-service.js` — the broker service's
+  `resetRedeemer(id?)`, per member in a pool.
+- `codex-sandbox/src/codex-reset-credit.js` — the one call.
+- Floot: `redeemAccountReset(key, { creditId?, replay? })`,
+  `abandonAccountReset(key)`, and `reset: { pending, last } | null` on each
+  account of `watchAccounts()`. The view's Subscriptions section has "Redeem a
+  reset", and "Ask again" and "Give up" while one is unconfirmed; the host
+  page asks the person to confirm each.
+
+Where it differs from the design below, or settles what it left open:
+
+- **The caller says whether it is redeeming or asking again.** The design had
+  the consume call "replayed, with the stored key, only when the operator
+  redeems again". A redeem that doubles as a replay can spend two credits: the
+  credit reads `redeemed` between the view drawing "Ask again" and the press,
+  the intent is settled, and the same press would start a redeem of the next
+  credit. So `replay: true` never starts a redeem (it answers how the intent
+  was settled, and calls nobody), and a redeem is refused while one is
+  unconfirmed.
+- **A refusal ends an intent only when it answers the first ask.** HTTP 400,
+  401, 403, 404, 405 and 422 mean this ask spent nothing. After an earlier ask
+  whose answer was lost, that says nothing of the earlier one, so the intent
+  stands, marked `lastAnswer: refused`. A conflict, a timeout, a throttle and
+  every 5xx are not answers.
+- **`abandonResetIntent()` is new.** An intent with no credit id (the reading
+  listed none) can never be settled by a status, and an answer in words this
+  does not know fails every replay. Giving up is the way out, and costs the
+  protection: the view says so before it asks.
+- **An ask that could not have been sent leaves nothing pending**: no
+  redeemer bound (checked before the intent is stored), or a credential that
+  could not be had (`notSent`). After an earlier ask, the intent stands.
+- **The redeem authority is a facet of the broker service**, because the
+  credential lives in that formula's worker and a second credential over one
+  renewable secret would race its rotation. The service is held by setup and
+  the host-side backend; a scope, a grant, a slice and a share have no path to
+  it. The admin's namespace holds the facet as a formula of its own, as the
+  oracle holds the account source.
+- **A `full-control` or `machine-admin` session can reach the admin**, since
+  those presets hand the session Floot's own host, in whose profile the admin
+  is bound. They are root-equivalent by design (they can mint unconfined
+  code); nothing narrower was attempted. No other session can.
+- **There is no `PoolAdmin.member(id)`**: each member has an admin formula of
+  its own, found by pet name. `attenuate` is phase 8.
+- **The reset state rides the accounts stream** instead of a status of the
+  admin's own: Floot asks the admin where it stands (from memory, no provider
+  call) on each reading and after each action.
+- **The credit to spend**, when the operator names none, is the available one
+  that expires soonest; with no list in the reading the provider chooses. With
+  nothing known of the account, the admin reads it once first.
+- **The wire format is a guess** from the pinned CLI's strings:
+  `POST /wham/rate-limit-reset-credits/consume` with `redeem_request_id`,
+  `credit_id` and `credit_type: usage_limit`; the outcome word is looked for
+  in `outcome`, `result`, `status`, `code`, `state` and `redeem_status`, in
+  both spellings. A wrong request is refused (nothing spent); a response this
+  cannot read leaves the redeem unconfirmed, to be settled by the credit's
+  status or given up.
+- A subscription id may not be, or end in, `-powers` or `-handle`: setup names
+  each member's formulas and their namespaces by id.
+
 ## What is the Problem Being Solved?
 
 A hosted agent session spends a subscription: a ChatGPT plan through Codex, a
@@ -1104,6 +1179,12 @@ Phases 1 to 4 are useful with the single subscriptions a deployment has now.
       `/api/oauth/usage`.
 - [ ] Establish from OpenAI's own documentation which windows a reset credit
       clears, and credit expiry. Gates phase 7.
+- [ ] Make one live redeem of a Codex reset credit, to confirm the consume
+      call's request fields and the name of the response field that carries
+      the outcome (`codex-reset-credit.js`, "TO CONFIRM ON A LIVE REDEEM"),
+      and whether a redeemed credit stays listed as `redeemed`. It spends a
+      real credit, so it is the operator's to choose when. Gates use of
+      phase 7.
 - [ ] Find an account identity to bind a Claude member's label to. Phase 5.
 - [ ] Measure a streamed response over a real peer connection, and find that
       connection's frame limit. Gates remote use of phase 4, and phases 8

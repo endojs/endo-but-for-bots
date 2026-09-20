@@ -367,6 +367,9 @@ export const makeFakeDaemon = ({
   /** @type {Set<ReturnType<typeof makeBufferedReader>>} */
   const accountReaders = new Set();
   let accountRefreshes = 0;
+  /** @type {Array<{ key: string, creditId?: string, replay?: boolean, abandon?: boolean }>} */
+  const redeems = [];
+  let redeemFailure = '';
 
   const factory = Far('TestFlootFactory', {
     listSessions: () => harden(sessions.map(session => ({ ...session }))),
@@ -379,6 +382,20 @@ export const makeFakeDaemon = ({
     },
     refreshAccounts: () => {
       accountRefreshes += 1;
+    },
+    redeemAccountReset: (key, options = {}) => {
+      redeems.push({ key, ...options });
+      if (redeemFailure) throw Error(redeemFailure);
+      return harden({
+        outcome: 'reset',
+        creditId: null,
+        replayed: options.replay === true,
+        pending: false,
+      });
+    },
+    abandonAccountReset: key => {
+      redeems.push({ key, abandon: true });
+      return harden({ pending: null, last: null });
     },
     listPresets: () => harden([]),
     listModels: () => harden([]),
@@ -447,6 +464,10 @@ export const makeFakeDaemon = ({
       }
     },
     accountRefreshes: () => accountRefreshes,
+    redeems: () => redeems,
+    failRedeems: (/** @type {string} */ message) => {
+      redeemFailure = message;
+    },
     /**
      * Make reading the transcript slow, as a long conversation's is.
      * @param ms

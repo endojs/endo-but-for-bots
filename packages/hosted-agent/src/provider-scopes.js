@@ -64,12 +64,18 @@ const ScopeInterface = M.interface('ProviderScope', {
  * @param {(subscriptionId?: string) => any} [powers.accountSourceOf] For a
  *   broker over several subscriptions: each one's account source, by id.
  * @param {() => Promise<Array<{ id: string, label: string, weight: number }>>} [powers.listSubscriptions]
+ * @param {any} [powers.resetRedeemer] The broker's facet for spending a
+ *   banked rate-limit reset (`reset-redeemer.js`), where the adapter has one.
+ * @param {(subscriptionId?: string) => any} [powers.resetRedeemerOf] The same,
+ *   per subscription.
  */
 export const makeProviderScopes = ({
   openIssuer,
   accountSource,
   accountSourceOf,
   listSubscriptions,
+  resetRedeemer,
+  resetRedeemerOf,
 }) => {
   /** @type {Map<string, {spec: ProviderScopeSpec, facet: any, revoke(): Promise<void>}>} */
   const scopes = new Map();
@@ -221,6 +227,9 @@ export const makeProviderScopes = ({
         .optional(M.string())
         .returns(M.or(M.remotable(), M.undefined(), M.promise())),
       subscriptions: M.call().returns(M.promise()),
+      resetRedeemer: M.call()
+        .optional(M.string())
+        .returns(M.or(M.remotable(), M.undefined(), M.promise())),
     }),
     {
       provideScope,
@@ -240,6 +249,17 @@ export const makeProviderScopes = ({
       // number or secret name is in it.
       subscriptions: async () =>
         listSubscriptions === undefined ? harden([]) : listSubscriptions(),
+      // An operator's: the one call that spends a banked rate-limit reset of
+      // the account behind this broker, or of one of its subscriptions.
+      // Undefined where the provider has no such thing. A session scope does
+      // not offer it, and neither does a grant.
+      /** @param {string} [subscriptionId] */
+      resetRedeemer: subscriptionId => {
+        if (resetRedeemerOf !== undefined) {
+          return resetRedeemerOf(subscriptionId);
+        }
+        return subscriptionId === undefined ? resetRedeemer : undefined;
+      },
     },
   );
   return harden({ service, close });

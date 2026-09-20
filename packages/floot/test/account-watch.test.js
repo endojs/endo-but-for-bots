@@ -306,3 +306,109 @@ test('a backend with several subscriptions is one account each, told apart by ke
   await reader.return(undefined);
   watch.close();
 });
+
+test('an account with an admin shows where its redeems stand, and a redeem goes through that admin only', async t => {
+  const codex = pushedOracle('codex');
+  const claude = pushedOracle('anthropic');
+  /** @type {any} */
+  let state = { pending: null, last: null };
+  /** @type {any[]} */
+  const consumed = [];
+  let fail = false;
+  const admin = Far('admin', {
+    getResetState: async () => harden(state),
+    consumeResetCredit: async options => {
+      consumed.push(options);
+      if (fail) {
+        state = {
+          pending: {
+            creditId: 'credit-1',
+            startedAt: T0,
+            lastAttemptAt: T0,
+            attempts: 1,
+          },
+          last: null,
+        };
+        throw Error('Reset credit redeem is unconfirmed');
+      }
+      state = {
+        pending: null,
+        last: { outcome: 'reset', creditId: 'credit-1', at: T0 },
+      };
+      return harden({
+        outcome: 'reset',
+        creditId: 'credit-1',
+        replayed: false,
+      });
+    },
+  });
+  const watch = makeAccountsWatch({
+    listOracles: async () => ({
+      entries: [
+        { backendId: 'codex', title: 'Codex', oracle: codex.oracle, admin },
+        { backendId: 'claude', title: 'Claude Code', oracle: claude.oracle },
+      ],
+      unknown: [],
+    }),
+  });
+  const reader = iterateReader(watch.watch());
+  const seen = async predicate => {
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const { value, done } = await reader.next();
+      if (done) throw Error('stream ended');
+      if (predicate(value)) return value;
+    }
+  };
+  const of = (event, backendId) =>
+    event.accounts.find(account => account.backendId === backendId);
+  const first = await seen(
+    event => of(event, 'codex')?.reset && of(event, 'claude') !== undefined,
+  );
+  t.deepEqual(of(first, 'codex').reset, { pending: null, last: null });
+  // No admin, no redeem: the view offers nothing there.
+  t.is(of(first, 'claude').reset, null);
+  await t.throwsAsync(() => watch.redeemReset('claude'), {
+    message: /No banked reset can be redeemed for claude/,
+  });
+
+  fail = true;
+  await t.throwsAsync(() => watch.redeemReset('codex'), {
+    message: /unconfirmed/,
+  });
+  const pending = await seen(event => of(event, 'codex')?.reset?.pending);
+  t.is(of(pending, 'codex').reset.pending.creditId, 'credit-1');
+
+  fail = false;
+  t.deepEqual(await watch.redeemReset('codex', { creditId: 'credit-1' }), {
+    outcome: 'reset',
+    creditId: 'credit-1',
+    replayed: false,
+  });
+  t.deepEqual(consumed, [{}, { creditId: 'credit-1' }]);
+  await t.throwsAsync(() => watch.abandonReset('claude'));
+  const settled = await seen(event => of(event, 'codex')?.reset?.last);
+  t.is(of(settled, 'codex').reset.pending, null);
+  t.is(of(settled, 'codex').reset.last.outcome, 'reset');
+  await reader.return(undefined);
+  watch.close();
+});
+
+test('a reset state is plain data whatever the admin answered', t => {
+  const view = projectAccount(
+    { backendId: 'codex', title: 'Codex' },
+    {},
+    { pending: { creditId: null, attempts: 'x' }, last: { outcome: 7 } },
+  );
+  t.deepEqual(view.reset, {
+    pending: {
+      creditId: null,
+      startedAt: '',
+      lastAttemptAt: '',
+      attempts: 1,
+      lastAnswer: 'unknown',
+    },
+    last: { outcome: '7', creditId: null, at: '' },
+  });
+  t.is(projectAccount({ backendId: 'codex', title: 'Codex' }, {}).reset, null);
+});
