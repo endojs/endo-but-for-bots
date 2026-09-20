@@ -786,8 +786,16 @@ export const flootComponent = (
    * @param {string} [presetId]
    * @param {string} [model]
    * @param {string} [reasoningEffort]
+   * @param {string} [subscription] one of the backend's subscriptions; absent
+   *   or `auto` leaves the choice to the backend
    */
-  const createSession = async (title, presetId, model, reasoningEffort) => {
+  const createSession = async (
+    title,
+    presetId,
+    model,
+    reasoningEffort,
+    subscription,
+  ) => {
     const selected = models.find(candidate => candidate.id === model);
     // Always the record form: it is the only one that can say this session is
     // driven from here, where replies are read aloud. The factory composes
@@ -805,6 +813,7 @@ export const flootComponent = (
           }
         : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(subscription && subscription !== 'auto' ? { subscription } : {}),
     });
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
@@ -818,6 +827,7 @@ export const flootComponent = (
       modelId: info.modelId || '',
       effectiveModelId: info.effectiveModelId || '',
       reasoningEffort: info.reasoningEffort || '',
+      subscription: info.subscription || 'auto',
       messages: [],
       facet,
       loaded: true,
@@ -985,6 +995,7 @@ export const flootComponent = (
         backendLabel: backendLabelOf(s),
         modelLabel: modelLabelOf(s),
         reasoningEffort: s.reasoningEffort || '',
+        subscription: s.subscription || 'auto',
         // The daemon says what each session is doing; for the one on screen
         // this page knows of a turn the moment it is told, and of a failure
         // the moment it sees one.
@@ -1016,6 +1027,8 @@ export const flootComponent = (
         backendTitle: m.backendTitle,
         defaultReasoningEffort: m.defaultReasoningEffort,
         reasoningEfforts: m.reasoningEfforts,
+        // What a session on this model's backend may be pinned to.
+        subscriptions: m.subscriptions || [],
       })),
       messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
@@ -1758,9 +1771,10 @@ export const flootComponent = (
    * @param {string} [presetId]
    * @param {string} [model]
    * @param {string} [reasoningEffort]
+   * @param {string} [subscription]
    */
-  const newSession = (presetId, model, reasoningEffort) => {
-    createSession(undefined, presetId, model, reasoningEffort)
+  const newSession = (presetId, model, reasoningEffort, subscription) => {
+    createSession(undefined, presetId, model, reasoningEffort, subscription)
       .then(() => {
         stick = true;
         setStatus('Ready.');
@@ -2597,8 +2611,9 @@ export const flootComponent = (
       /** @type {string | undefined} */ presetId,
       /** @type {string | undefined} */ model,
       /** @type {string | undefined} */ reasoningEffort,
+      /** @type {string | undefined} */ subscription,
     ) {
-      newSession(presetId, model, reasoningEffort);
+      newSession(presetId, model, reasoningEffort, subscription);
     },
     /** Ask each account's provider for its figures now. */
     refreshAccounts() {
@@ -2788,6 +2803,7 @@ export const flootComponent = (
       modelId: m.modelId || '',
       effectiveModelId: m.effectiveModelId || '',
       reasoningEffort: m.reasoningEffort || '',
+      subscription: m.subscription || 'auto',
       lifecycle: m.lifecycle,
       activity: m.activity,
       pendingCount: Number(m.pendingCount) || 0,
@@ -2968,10 +2984,13 @@ export const flootComponent = (
       backends = backendList.map((/** @type {any} */ b) => ({
         id: b.id,
         title: b.title,
+        subscriptions: Array.isArray(b.subscriptions) ? b.subscriptions : [],
       }));
       models = modelList.map(m => ({
         ...m,
         backendTitle: backendList.find(b => b.id === m.backendId)?.title,
+        subscriptions:
+          backendList.find(b => b.id === m.backendId)?.subscriptions || [],
       }));
       // The first event is the list as it stands. Unavailable sessions are
       // retained too: hiding them would hide recovery work.

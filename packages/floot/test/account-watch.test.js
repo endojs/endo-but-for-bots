@@ -244,3 +244,65 @@ test('a backend that could not be looked up keeps the account it had', async t =
   t.pass();
   watch.close();
 });
+
+test('a backend with several subscriptions is one account each, told apart by key', async t => {
+  const work = pushedOracle('codex');
+  const home = pushedOracle('codex');
+  const watch = makeAccountsWatch({
+    listOracles: async () => ({
+      entries: [
+        {
+          backendId: 'codex',
+          key: 'codex:work',
+          subscriptionId: 'work',
+          label: 'Work Pro',
+          title: 'Codex',
+          oracle: work.oracle,
+        },
+        {
+          backendId: 'codex',
+          key: 'codex:home',
+          subscriptionId: 'home',
+          label: 'Home Plus',
+          title: 'Codex',
+          oracle: home.oracle,
+        },
+      ],
+      unknown: [],
+    }),
+  });
+  const reader = iterateReader(watch.watch());
+  let event = (await reader.next()).value;
+  while (Number(event.accounts.length) < 2) {
+    // eslint-disable-next-line no-await-in-loop
+    event = (await reader.next()).value;
+  }
+  t.deepEqual(
+    event.accounts.map(account => [
+      account.key,
+      account.backendId,
+      account.subscriptionId,
+      account.label,
+    ]),
+    [
+      ['codex:home', 'codex', 'home', 'Home Plus'],
+      ['codex:work', 'codex', 'work', 'Work Pro'],
+    ],
+  );
+  // A reading of one is not the other's.
+  home.account.accept(weekly(88));
+  let heard = (await reader.next()).value;
+  while (
+    heard.accounts.find(account => account.key === 'codex:home')?.windows[0]
+      ?.usedPercent !== 88
+  ) {
+    // eslint-disable-next-line no-await-in-loop
+    heard = (await reader.next()).value;
+  }
+  t.deepEqual(
+    heard.accounts.find(account => account.key === 'codex:work').windows,
+    [],
+  );
+  await reader.return(undefined);
+  watch.close();
+});

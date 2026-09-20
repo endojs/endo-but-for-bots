@@ -45,6 +45,7 @@ export {};
  *   backendLabel?: string,
  *   modelLabel?: string,
  *   reasoningEffort?: string,
+ *   subscription?: string,
  *   status?: 'passive' | 'working' | 'error' | 'idle' | 'streaming',
  *   messageCount?: number,
  *   pendingCount?: number,
@@ -71,6 +72,7 @@ export {};
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],
+ *   subscriptions?: Array<{ id: string, label: string }>,
  * }} FlootModel
  */
 
@@ -154,7 +156,7 @@ export {};
  * @property {(pendingId: number | string, text: string) => void} [editPending]
  * @property {(pendingId: number | string) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
  * @property {(id: string) => void} deleteSession
