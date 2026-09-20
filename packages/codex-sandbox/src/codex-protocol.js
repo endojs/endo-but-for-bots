@@ -1,6 +1,11 @@
 // @ts-check
 
 import { makeError, q, X } from '@endo/errors';
+import {
+  disjointFromInclusive,
+  projectContext,
+  tokenCount,
+} from '@endo/hosted-agent/token-usage.js';
 
 export const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
 harden(DEFAULT_MAX_LINE_BYTES);
@@ -207,3 +212,48 @@ export const toolFromItem = item => {
   }
 };
 harden(toolFromItem);
+
+/**
+ * The `usage` turn event for one `thread/tokenUsage/updated` notification, or
+ * undefined when it carries no `last` breakdown.
+ *
+ * App-server reports the **last request** in `last`, in the Responses API's
+ * convention: `cachedInputTokens` is part of `inputTokens` and
+ * `reasoningOutputTokens` part of `outputTokens`. `totalTokens` is that
+ * request's whole window use; when it is absent the input, the cache writes
+ * and the output are added instead.
+ *
+ * TO CONFIRM ON A LIVE TURN (designs/hosted-agent-subscriptions.md, Known
+ * Gaps): whether `cacheWriteInputTokens` is inside `inputTokens`. It is
+ * treated as beside it, which is right while it is 0, its default. If a live
+ * turn shows it inside, pass `cacheWriteInsideInput: true` below and drop it
+ * from the fallback sum, or the writes are counted twice.
+ *
+ * @param {any} tokenUsage `params.tokenUsage` of the notification
+ */
+export const usageEventFromTokenUsage = tokenUsage => {
+  const last = tokenUsage?.last;
+  if (last === null || typeof last !== 'object') return undefined;
+  const counts = disjointFromInclusive({
+    inputTokens: last.inputTokens,
+    outputTokens: last.outputTokens,
+    cachedInputTokens: last.cachedInputTokens,
+    cacheWriteInputTokens: last.cacheWriteInputTokens,
+    reasoningOutputTokens: last.reasoningOutputTokens,
+  });
+  const usedTokens =
+    tokenCount(last.totalTokens) ||
+    tokenCount(last.inputTokens) +
+      tokenCount(last.cacheWriteInputTokens) +
+      tokenCount(last.outputTokens);
+  const context = projectContext({
+    usedTokens,
+    windowTokens: tokenUsage.modelContextWindow,
+  });
+  return harden({
+    type: 'usage',
+    ...counts,
+    ...(context === undefined ? {} : { context }),
+  });
+};
+harden(usageEventFromTokenUsage);

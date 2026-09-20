@@ -4,6 +4,7 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeSessionTurn } from '../src/session-turn.js';
+import { usageCounts } from './helpers/usage.js';
 
 /**
  * A turn whose body is driven by the test: `writer` is handed out once
@@ -311,6 +312,11 @@ test('tool calls pair with their results across a snapshot', async t => {
     ],
     done: true,
     error: null,
-    usage: { inputTokens: 11, outputTokens: 3, turns: 1, incompleteTurns: 0 },
+    usage: usageCounts({
+      inputTokens: 11,
+      outputTokens: 3,
+      turns: 1,
+      incompleteTurns: 0,
+    }),
   });
 });

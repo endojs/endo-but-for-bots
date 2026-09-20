@@ -7,7 +7,7 @@
 //   { type: 'text-delta', text }              next chunk of assistant text
 //   { type: 'tool-call', id, name, args }     a tool the CLI is invoking
 //   { type: 'tool-result', id, name, result } that tool's output
-//   { type: 'usage', inputTokens, outputTokens }
+//   { type: 'usage', ...counts, context? }     see @endo/hosted-agent/token-usage.js
 //   { type: 'end' } | { type: 'abort', reason }
 //
 // Nothing Claude-specific crosses the hosted seam: Floot persists the tool
@@ -17,6 +17,10 @@
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import {
+  projectContext,
+  tokenCount,
+} from '@endo/hosted-agent/token-usage.js';
 
 /**
  * @typedef {(
@@ -24,7 +28,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  *   | { type: 'text-delta', text: string }
  *   | { type: 'tool-call', id: string, name: string, args: string }
  *   | { type: 'tool-result', id: string, name: string, result: string }
- *   | { type: 'usage', inputTokens: number, outputTokens: number }
+ *   | ({ type: 'usage' } & Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>)
  *   | { type: 'end' }
  *   | { type: 'abort', reason: string }
  * )} HostedTurnEvent
@@ -50,6 +54,63 @@ const renderToolResultText = content => {
   }
   return content === undefined ? '' : JSON.stringify(content);
 };
+
+/**
+ * What one Anthropic `usage` object says a request put in the window: its
+ * three input kinds, which are disjoint, plus its output.
+ *
+ * @param {any} usage
+ */
+const windowUse = usage =>
+  tokenCount(usage?.input_tokens) +
+  tokenCount(usage?.cache_read_input_tokens) +
+  tokenCount(usage?.cache_creation_input_tokens) +
+  tokenCount(usage?.output_tokens);
+
+/**
+ * A model id without a variant suffix such as `[1m]`.
+ * @param name
+ */
+const baseModel = (/** @type {string} */ name) => name.replace(/\[[^\]]*\]$/, '');
+
+/**
+ * The context window of the model that ran the main conversation, from the
+ * `result` event's `modelUsage`, which is keyed by model and may also list a
+ * small model the CLI used on the side, or a subagent's. The named model
+ * wins, then the same model under a variant suffix (`[1m]`); failing both,
+ * the largest window listed, since the side models are the small ones.
+ *
+ * @param {any} modelUsage
+ * @param {string | undefined} model
+ */
+const contextWindowOf = (modelUsage, model) => {
+  if (modelUsage === null || typeof modelUsage !== 'object') return 0;
+  const entries = Object.entries(modelUsage).filter(
+    ([, entry]) => entry !== null && typeof entry === 'object',
+  );
+  const windowOf = (/** @type {[string, unknown] | undefined} */ found) =>
+    found ? tokenCount(/** @type {any} */ (found[1]).contextWindow) : 0;
+  if (model !== undefined) {
+    const named =
+      entries.find(([name]) => name === model) ||
+      entries.find(([name]) => baseModel(name) === baseModel(model));
+    if (windowOf(named) > 0) return windowOf(named);
+  }
+  return Math.max(0, ...entries.map(entry => windowOf(entry)));
+};
+
+/**
+ * Whether an API message's usage says anything. The CLI writes placeholder
+ * messages of its own (model `<synthetic>`, all-zero usage) into the stream,
+ * for instance around an API error; they are not requests.
+ *
+ * @param {any} message
+ */
+const isRealRequest = message =>
+  message?.model !== '<synthetic>' &&
+  message?.usage !== null &&
+  typeof message?.usage === 'object' &&
+  windowUse(message.usage) > 0;
 
 /**
  * Stateful translator from raw `claude -p` stream-json events to hosted turn
@@ -87,6 +148,31 @@ export const makeClaudeHostedTranslator = () => {
   // substantive event so the UI does not keep saying "session starting" while
   // the model is already responding or using a tool.
   let starting = false;
+  // What the main conversation's latest API request put in the window, and
+  // the model that served it. `result.usage` covers the whole turn, so it
+  // cannot say this; each request's own usage can. With partial messages the
+  // input kinds arrive on `message_start` and the final output on
+  // `message_delta`; without them the complete `assistant` event carries both.
+  /** @type {{ input: number, output: number } | undefined} */
+  let lastRequest;
+  /** @type {string | undefined} */
+  let lastModel;
+  // The message whose usage `lastRequest` holds, so the complete `assistant`
+  // events that repeat it (one per content block) do not report it again.
+  /** @type {string | undefined} */
+  let readMessageId;
+  // Whether the request now streaming gave its usage on `message_start`, so
+  // a `message_delta` completes that reading and not an earlier request's.
+  let streamingRequest = false;
+  const contextEvent = () =>
+    lastRequest === undefined || lastRequest.input + lastRequest.output === 0
+      ? []
+      : [
+          /** @type {HostedTurnEvent} */ ({
+            type: 'usage',
+            context: { usedTokens: lastRequest.input + lastRequest.output, windowTokens: 0 },
+          }),
+        ];
 
   /** @param {any} event */
   const handle = event => {
@@ -122,7 +208,35 @@ export const makeClaudeHostedTranslator = () => {
             typeof streamEvent.message?.id === 'string'
               ? streamEvent.message.id
               : undefined;
+          // A new request: whatever the last one read no longer describes
+          // the one streaming, whether or not this one says its usage.
+          streamingRequest = false;
+          if (isRealRequest(streamEvent.message)) {
+            const started = streamEvent.message.usage;
+            lastRequest = {
+              input: windowUse({ ...started, output_tokens: 0 }),
+              output: tokenCount(started.output_tokens),
+            };
+            streamingRequest = true;
+            readMessageId = currentMessageId;
+            if (typeof streamEvent.message.model === 'string') {
+              lastModel = streamEvent.message.model;
+            }
+          }
           streamedCurrentAssistant = false;
+        }
+        if (
+          streamEvent?.type === 'message_delta' &&
+          streamEvent.usage &&
+          streamingRequest &&
+          lastRequest !== undefined
+        ) {
+          // The request is complete: its output count is final.
+          lastRequest = {
+            input: lastRequest.input,
+            output: tokenCount(streamEvent.usage.output_tokens),
+          };
+          out.push(...contextEvent());
         }
         if (
           streamEvent?.type === 'content_block_delta' &&
@@ -148,6 +262,23 @@ export const makeClaudeHostedTranslator = () => {
           typeof messageId === 'string' && streamedMessageIds.size > 0
             ? streamedMessageIds.has(messageId)
             : streamedCurrentAssistant;
+        // Without partial messages this event is the only per-request usage.
+        // With them, `message_start` already read this message; either way a
+        // message is read once, though it arrives once per content block.
+        if (
+          isRealRequest(event.message) &&
+          !(typeof messageId === 'string' && messageId === readMessageId)
+        ) {
+          if (typeof event.message.model === 'string') {
+            lastModel = event.message.model;
+          }
+          lastRequest = {
+            input: windowUse({ ...event.message.usage, output_tokens: 0 }),
+            output: tokenCount(event.message.usage.output_tokens),
+          };
+          readMessageId = typeof messageId === 'string' ? messageId : undefined;
+          out.push(...contextEvent());
+        }
         for (const block of blocks) {
           if (block?.type === 'text' && block.text) {
             leaveStarting('responding');
@@ -211,10 +342,27 @@ export const makeClaudeHostedTranslator = () => {
           out.push({ type: 'text-delta', text: resultText });
         }
         if (event.usage && typeof event.usage === 'object') {
+          // The whole turn, every request of it. Anthropic's input kinds are
+          // already disjoint, and it does not count thinking apart from
+          // output. Reading `input_tokens` alone dropped the cache reads and
+          // writes, which are most of a long session.
+          const context = projectContext({
+            usedTokens:
+              lastRequest === undefined
+                ? 0
+                : lastRequest.input + lastRequest.output,
+            windowTokens: contextWindowOf(event.modelUsage, lastModel),
+          });
           out.push({
             type: 'usage',
-            inputTokens: Number(event.usage.input_tokens) || 0,
-            outputTokens: Number(event.usage.output_tokens) || 0,
+            inputTokens: tokenCount(event.usage.input_tokens),
+            outputTokens: tokenCount(event.usage.output_tokens),
+            cachedInputTokens: tokenCount(event.usage.cache_read_input_tokens),
+            cacheWriteInputTokens: tokenCount(
+              event.usage.cache_creation_input_tokens,
+            ),
+            reasoningOutputTokens: 0,
+            ...(context === undefined ? {} : { context }),
           });
         }
         break;

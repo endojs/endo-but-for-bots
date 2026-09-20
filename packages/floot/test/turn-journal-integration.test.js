@@ -4,6 +4,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
+import { usageCounts } from './helpers/usage.js';
 
 const fixture = () => {
   const store = new Map();
@@ -130,10 +131,10 @@ test('direct tools persist intent before effects and failed effects remain in la
     (await agent.getTurns()).map(turn => turn.state),
     ['failed', 'completed'],
   );
-  t.deepEqual((await agent.getTurns())[0].usage, {
-    inputTokens: 7,
-    outputTokens: 3,
-  });
+  t.deepEqual(
+    (await agent.getTurns())[0].usage,
+    usageCounts({ inputTokens: 7, outputTokens: 3 }),
+  );
   t.deepEqual(
     (await agent.getHistory()).map(
       message => message.content || message.result,
@@ -154,10 +155,10 @@ test('direct tools persist intent before effects and failed effects remain in la
     { extraTools },
   );
   t.deepEqual(await revived.getHistory(), await agent.getHistory());
-  t.deepEqual((await revived.getTurns())[0].usage, {
-    inputTokens: 7,
-    outputTokens: 3,
-  });
+  t.deepEqual(
+    (await revived.getTurns())[0].usage,
+    usageCounts({ inputTokens: 7, outputTokens: 3 }),
+  );
 });
 
 test('failed hosted turn preserves reported partial usage across revival without claiming success', async t => {
@@ -166,7 +167,13 @@ test('failed hosted turn preserves reported partial usage across revival without
   const hostedClient = harden({
     async send() {
       const channel = makeBufferedReader();
-      channel.push({ type: 'usage', inputTokens: 13, outputTokens: 5 });
+      channel.push({
+        type: 'usage',
+        inputTokens: 13,
+        outputTokens: 5,
+        cachedInputTokens: 900,
+        context: { usedTokens: 918, windowTokens: 4000 },
+      });
       channel.push({
         type: 'abort',
         reason: 'Provider failed after metered work',
@@ -192,8 +199,20 @@ test('failed hosted turn preserves reported partial usage across revival without
   );
   const [turn] = await revived.getTurns();
   t.is(turn.state, 'failed');
-  t.deepEqual(turn.usage, { inputTokens: 13, outputTokens: 5 });
-  t.is((await revived.getUsage()).turns, 0);
+  const spent = usageCounts({
+    inputTokens: 13,
+    outputTokens: 5,
+    cachedInputTokens: 900,
+    context: { usedTokens: 918, windowTokens: 4000 },
+  });
+  t.deepEqual(turn.usage, spent);
+  // The turn did not complete, but its tokens were spent and its reading is
+  // the newest the session has: both are in what the session reports.
+  t.deepEqual(await revived.getUsage(), {
+    ...spent,
+    turns: 0,
+    incompleteTurns: 1,
+  });
 });
 
 test('hosted snapshot tools durably authorize effects and preserve failures without stream tool events', async t => {
@@ -698,4 +717,48 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
   t.not(second.turnId, first.turnId);
   t.is(first.tools.length, 1);
   t.is(second.tools.length, 1);
+});
+
+test('a turn stopped before its backend sized the window keeps the size already known', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let turn = 0;
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      turn += 1;
+      if (turn === 1) {
+        channel.push({
+          type: 'usage',
+          inputTokens: 10,
+          outputTokens: 2,
+          context: { usedTokens: 150_000, windowTokens: 200_000 },
+        });
+        channel.push({ type: 'text-delta', text: 'ok' });
+        channel.push({ type: 'end' });
+      } else {
+        // A mid-turn reading: the request is known, the window is not yet.
+        channel.push({
+          type: 'usage',
+          context: { usedTokens: 160_000, windowTokens: 0 },
+        });
+        channel.push({ type: 'abort', reason: 'stopped by the operator' });
+      }
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  await agent.converse('first', makeReplyChannel().writer);
+  await t.throwsAsync(agent.converse('second', makeReplyChannel().writer), {
+    message: /stopped by the operator/,
+  });
+  t.deepEqual((await agent.getUsage()).context, {
+    usedTokens: 160_000,
+    windowTokens: 200_000,
+  });
 });

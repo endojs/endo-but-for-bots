@@ -136,7 +136,7 @@ controller = {
     working: boolean,                // anything is under way, incl. a mail turn
     pendingHold: string,             // why queued messages are not moving, or ''
     status: string,                  // status-bar text
-    usage: { inputTokens, outputTokens } | null,
+    usage: { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, context?, contextPercent } | null,
     // voice (all booleans/numbers/strings — no audio objects):
     voice: {
       hasMic, hasTts, micActive, speaking, ttsEnabled, ttsSpeaking,

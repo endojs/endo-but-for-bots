@@ -24,7 +24,7 @@ import { makeStreamingAnthropicProvider } from './anthropic-streaming.js';
 /**
  * @typedef {object} StreamingProvider
  * @property {(messages: object[], tools: object[]) => Promise<{ message: object }>} chat
- * @property {(messages: object[], tools: object[], onToken?: (delta: string) => void, signal?: AbortSignal) => Promise<{ message: object, usage?: { inputTokens: number, outputTokens: number } }>} chatStream
+ * @property {(messages: object[], tools: object[], onToken?: (delta: string) => void, signal?: AbortSignal) => Promise<{ message: object, usage?: Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage> }>} chatStream
  */
 
 /**

@@ -15,6 +15,7 @@
 //   { type: 'abort', reason }             stream failed
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 /**
  * @typedef {(
@@ -23,7 +24,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
  *   | { type: 'final', text: string }
  *   | { type: 'tool_call', id: string, name: string, args: string }
  *   | { type: 'tool_result', id: string, name: string, result: string }
- *   | { type: 'usage', inputTokens: number, outputTokens: number, turns: number, incompleteTurns: number }
+ *   | ({ type: 'usage', turns: number, incompleteTurns: number } & import('@endo/hosted-agent/token-usage.js').TokenUsage)
  *   | { type: 'end' }
  *   | { type: 'abort', reason: string }
  * )} ReplyEvent
@@ -67,12 +68,12 @@ export const makeReplyChannel = (onClose = null) => {
         name: `${name}`,
         result: `${result}`,
       }),
-    /** @param {{ inputTokens: number, outputTokens: number, turns: number, incompleteTurns?: number }} u */
+    /** @param {Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage> & { turns: number, incompleteTurns?: number }} u */
     usage: u =>
       push({
         type: 'usage',
-        inputTokens: Math.trunc(u.inputTokens) || 0,
-        outputTokens: Math.trunc(u.outputTokens) || 0,
+        // The five disjoint counts, and how full the window is now.
+        ...projectUsage(u),
         turns: Math.trunc(u.turns) || 0,
         incompleteTurns: Math.trunc(u.incompleteTurns || 0) || 0,
       }),

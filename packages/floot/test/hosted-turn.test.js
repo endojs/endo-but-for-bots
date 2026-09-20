@@ -9,6 +9,7 @@ import {
   hostedTurnPartialOf,
   runHostedTurn,
 } from '../src/hosted-turn.js';
+import { usageCounts } from './helpers/usage.js';
 
 test('send response loss still confirms producer stop and records uncertainty', async t => {
   t.timeout(5000);
@@ -78,9 +79,24 @@ test('hosted turns translate normalized lifecycle events', async t => {
           yield { type: 'commentary-delta', text: 'Checking…' };
           yield { type: 'tool-call', id: '1', name: 'shell', args: '{}' };
           yield { type: 'tool-result', id: '1', name: 'shell', result: 'ok' };
-          yield { type: 'usage', inputTokens: 3, outputTokens: 1 };
+          yield {
+            type: 'usage',
+            inputTokens: 3,
+            outputTokens: 1,
+            cachedInputTokens: 100,
+            context: { usedTokens: 104, windowTokens: 1000 },
+          };
           yield { type: 'text-delta', text: 'Done' };
-          yield { type: 'usage', inputTokens: 5, outputTokens: 2 };
+          // A reading that does not know the window keeps the size known.
+          yield {
+            type: 'usage',
+            inputTokens: 5,
+            outputTokens: 2,
+            cachedInputTokens: 104,
+            reasoningOutputTokens: 9,
+            context: { usedTokens: 120, windowTokens: 0 },
+            anything: 'else is dropped',
+          };
           yield { type: 'end' };
         })(),
       );
@@ -103,7 +119,14 @@ test('hosted turns translate normalized lifecycle events', async t => {
   t.deepEqual(result, {
     delivered: true,
     finalContent: 'Done',
-    usage: { inputTokens: 8, outputTokens: 3 },
+    // Counts add across the turn's model calls; the context is the last one.
+    usage: usageCounts({
+      inputTokens: 8,
+      outputTokens: 3,
+      cachedInputTokens: 204,
+      reasoningOutputTokens: 9,
+      context: { usedTokens: 120, windowTokens: 1000 },
+    }),
     toolCalls: [{ id: '1', name: 'shell', args: '{}', result: 'ok' }],
     segments: [
       {
@@ -460,7 +483,7 @@ test('an unresolved tool at turn end fails with an honest partial record', async
   );
   const partial = hostedTurnPartialOf(error);
   t.is(interrupts, 1);
-  t.deepEqual(partial?.usage, { inputTokens: 7, outputTokens: 3 });
+  t.deepEqual(partial?.usage, usageCounts({ inputTokens: 7, outputTokens: 3 }));
   t.deepEqual(partial?.toolCalls, [
     { id: '1', name: 'shell', args: '{}', result: null },
     { id: '2', name: 'lookup', args: '{}', result: 'ok' },
@@ -571,7 +594,7 @@ for (const failure of ['EOF', 'reader rejection']) {
       finalContent: 'partial',
       toolCalls: [],
       segments: [{ type: 'text', text: 'partial' }],
-      usage: { inputTokens: 4, outputTokens: 2 },
+      usage: usageCounts({ inputTokens: 4, outputTokens: 2 }),
     });
   });
 }
@@ -623,10 +646,10 @@ test('normalized abort is already a terminal barrier and retains usage', async t
     { message: 'stopped' },
   );
   t.is(interrupts, 0);
-  t.deepEqual(hostedTurnPartialOf(error)?.usage, {
-    inputTokens: 2,
-    outputTokens: 1,
-  });
+  t.deepEqual(
+    hostedTurnPartialOf(error)?.usage,
+    usageCounts({ inputTokens: 2, outputTokens: 1 }),
+  );
 });
 
 test('durable tool recording failure stops the producer before exposing the tool', async t => {

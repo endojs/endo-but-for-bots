@@ -21,6 +21,7 @@
     "./account.js": "./src/account.js",
     "./account-oracle.js": "./src/account-oracle.js",
     "./turn-ledger.js": "./src/turn-ledger.js",
+    "./token-usage.js": "./src/token-usage.js",
     "./package.json": "./package.json",
     "./provider-broker.js": "./src/provider-broker.js",
     "./provider-paths.js": "./src/provider-paths.js",

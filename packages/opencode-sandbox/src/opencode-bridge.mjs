@@ -44,7 +44,11 @@ const positiveEnvNumber = (raw, fallback) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
-/** Remove secret-shaped material before it can reach the host transcript. */
+/**
+ * Remove secret-shaped material before it can reach the host transcript.
+ * @param text
+ * @param secrets
+ */
 const redactSecrets = (text, secrets) => {
   let out = text;
   for (const secret of secrets) {
@@ -71,6 +75,7 @@ const TURN_TIMEOUT_MS = positiveEnvNumber(
  * Parse the child's `opencode server listening on http://host:port` line. Only
  * the loopback HTTP origin is accepted so the server password cannot be sent
  * to a redirected origin.
+ * @param line
  */
 export const parseListeningLine = line => {
   const match = /listening on (https?:\/\/[^\s]+)/.exec(line);
@@ -91,9 +96,15 @@ export const parseListeningLine = line => {
 /**
  * Message registry: tracks role and summary flags, part types, and which
  * deltas were seen so a completed part without deltas can still be emitted.
+ * @param root0
+ * @param root0.mcpServerName
+ * @param root0.contextWindows
  */
-export const makeMessageRegistry = ({ mcpServerName = '' } = {}) => {
-  const messages = new Map(); // messageID -> { role, summary }
+export const makeMessageRegistry = ({
+  mcpServerName = '',
+  contextWindows = new Map(),
+} = {}) => {
+  const messages = new Map(); // messageID -> { role, summary, model }
   const parts = new Map(); // partID -> { messageID, type, sawDelta }
   const summaryIDs = new Set();
   // opencode names MCP tools `<server>_<tool>` (e.g. `endo_list`), while the
@@ -117,6 +128,11 @@ export const makeMessageRegistry = ({ mcpServerName = '' } = {}) => {
       messages.set(info.id, {
         role: info.role,
         summary: info.summary === true,
+        model:
+          typeof info.providerID === 'string' &&
+          typeof info.modelID === 'string'
+            ? `${info.providerID}/${info.modelID}`
+            : undefined,
       });
       if (isCompactionSummary(info)) summaryIDs.add(info.id);
     },
@@ -163,13 +179,90 @@ export const makeMessageRegistry = ({ mcpServerName = '' } = {}) => {
     partType(partID) {
       return parts.get(partID)?.type;
     },
+    /**
+     * The context window of the model that produced a part; 0 if unknown.
+     * @param partID
+     */
+    contextWindowOfPart(partID) {
+      const model = messages.get(parts.get(partID)?.messageID)?.model;
+      const window = model === undefined ? 0 : contextWindows.get(model);
+      return typeof window === 'number' && window > 0 ? window : 0;
+    },
     sawDelta(partID) {
       return parts.get(partID)?.sawDelta === true;
     },
   });
 };
 
-/** Is this the synthetic compaction continuation prompt? */
+const count = value =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0;
+
+/**
+ * The hosted `usage` event for one finished model step. opencode's `tokens`
+ * are already disjoint: `input` excludes the cache reads and writes, and
+ * `output` excludes `reasoning`. That is `getUsage` in
+ * `packages/opencode/src/session/session.ts` of the fork the image is built
+ * from (`adjustedInputTokens`, `outputTokens - reasoningTokens`), read at its
+ * `build/v1.18.30-endo-session-import` branch. What the step put in the
+ * window is its `total` when the provider gave one, otherwise the sum.
+ *
+ * @param {any} tokens
+ * @param {number} windowTokens 0 when the model's limit is not known
+ */
+export const usageEventFromStep = (tokens, windowTokens) => {
+  const counts = {
+    inputTokens: count(tokens.input),
+    outputTokens: count(tokens.output),
+    cachedInputTokens: count(tokens.cache?.read),
+    cacheWriteInputTokens: count(tokens.cache?.write),
+    reasoningOutputTokens: count(tokens.reasoning),
+  };
+  const usedTokens =
+    count(tokens.total) ||
+    counts.inputTokens +
+      counts.outputTokens +
+      counts.cachedInputTokens +
+      counts.cacheWriteInputTokens +
+      counts.reasoningOutputTokens;
+  return Object.freeze({
+    type: 'usage',
+    ...counts,
+    ...(usedTokens === 0 && windowTokens === 0
+      ? {}
+      : { context: Object.freeze({ usedTokens, windowTokens }) }),
+  });
+};
+
+/**
+ * `provider/model` to context window, from `GET /config/providers`.
+ *
+ * @param {any} listing
+ * @returns {Map<string, number>}
+ */
+export const contextWindowsFrom = listing => {
+  const windows = new Map();
+  const providers = Array.isArray(listing?.providers) ? listing.providers : [];
+  for (const provider of providers) {
+    const models =
+      typeof provider?.id === 'string' &&
+      provider.models !== null &&
+      typeof provider.models === 'object'
+        ? provider.models
+        : {};
+    for (const [modelID, model] of Object.entries(models)) {
+      const window = count(/** @type {any} */ (model)?.limit?.context);
+      if (window > 0) windows.set(`${provider.id}/${modelID}`, window);
+    }
+  }
+  return windows;
+};
+
+/**
+ * Is this the synthetic compaction continuation prompt?
+ * @param part
+ */
 export const isCompactionContinuation = part =>
   part?.type === 'text' &&
   part.synthetic === true &&
@@ -253,11 +346,10 @@ export const mapSseEvent = (event, registry, sessionID) => {
       typeof part.tokens?.output === 'number' &&
       registry.isVisibleAssistantPart(part.id)
     ) {
-      return Object.freeze({
-        type: 'usage',
-        inputTokens: part.tokens.input,
-        outputTokens: part.tokens.output,
-      });
+      return usageEventFromStep(
+        part.tokens,
+        registry.contextWindowOfPart(part.id),
+      );
     }
     // Completed text/reasoning parts are only used when no deltas arrived.
     if (
@@ -329,7 +421,10 @@ export const deriveTerminal = ({
   return Object.freeze({ type: 'end' });
 };
 
-/** Split a byte stream of SSE frames into parsed data payloads. */
+/**
+ * Split a byte stream of SSE frames into parsed data payloads.
+ * @param chunks
+ */
 export async function* iterateSseData(chunks) {
   const decoder = new TextDecoder('utf-8', { fatal: false });
   let buffer = '';
@@ -557,8 +652,23 @@ const main = async () => {
     features: ['import'],
   });
 
+  // Context limits are only for display, so they load beside the first turn
+  // and never delay it. A server that cannot list them still runs turns;
+  // usage then reports a window of 0.
+  const contextWindows = new Map();
+  void api('/config/providers').then(
+    listing => {
+      for (const [model, window] of contextWindowsFrom(listing)) {
+        contextWindows.set(model, window);
+      }
+    },
+    error => {
+      process.stderr.write(`opencode-bridge: no context limits: ${error}\n`);
+    },
+  );
   const registry = makeMessageRegistry({
     mcpServerName: process.env.OPENCODE_MCP_SERVER_NAME || '',
+    contextWindows,
   });
   const pendingPrompts = [];
   let inFlight = false;
