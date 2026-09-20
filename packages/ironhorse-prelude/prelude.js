@@ -113,29 +113,31 @@
 // a guest `Compartment`, which the shim supplies alongside `lockdown`. So the
 // shim route is still the SES profile and this prologue is its preparation.
 //
-// The cast is the assertion, as in the `Iterator` block below: `harden` is a
-// HardenedJS convention rather than a global TypeScript knows about.
+// The cast is the assertion: `harden` is a HardenedJS convention rather than a
+// global TypeScript knows about. (The `Iterator` block below used the same
+// idiom for `globalThis.Iterator`; it no longer needs to.)
 delete (/** @type {any} */ (globalThis).harden);
 
 // --- Iterator ---------------------------------------------------------------
 //
-// Ironhorse advertises every `Iterator.prototype` helper, but the five lazy
-// ones -- map, filter, take, drop, flatMap -- halt the machine with
-// `NotImplemented("Iterator.helper")` when called, which `try`/`catch` cannot
-// recover. Present the pre-helper iterator profile, including the shared
-// prototype, rather than leave half the proposal reachable through iterator
-// instances.
+// GONE, and this note is the gap closing rather than a repair.
 //
-// Guarded, because a realm without `Iterator` is a realm this has nothing to do
-// to; the unguarded form threw there.
-if (globalThis.Iterator) {
-  for (const key of Reflect.ownKeys(globalThis.Iterator.prototype)) {
-    if (key !== Symbol.iterator) delete globalThis.Iterator.prototype[key];
-  }
-  // Removing the global is the point, so the cast is the assertion: tsc types
-  // `globalThis.Iterator` as always-present.
-  /** @type {any} */ (globalThis).Iterator = undefined;
-}
+// This block deleted every `Iterator.prototype` key and then set
+// `globalThis.Iterator = undefined`, for one reason: the five lazy helpers --
+// map, filter, take, drop, flatMap -- halted the machine with
+// `NotImplemented("Iterator.helper")`, and an engine halt is not catchable, so
+// a guest could not defend itself with `try`/`catch`. Presenting the
+// pre-helper profile was the lesser evil.
+//
+// They are implemented now, as instances of `%IteratorHelperPrototype%` whose
+// state survives collection and resume. The amputation would cost both
+// consumers a working ES2025 surface, so it goes -- which is what this file's
+// header asks for: "each should disappear as the gap closes".
+//
+// SES does not merely tolerate them, it USES one:
+// `get-anonymous-intrinsics.js` derives `%IteratorHelperPrototype%` by
+// evaluating `Iterator.from([]).take(0)`, so `lockdown()` runs a lazy helper
+// on its way through, before any guest code does.
 
 // --- console ----------------------------------------------------------------
 //
