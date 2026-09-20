@@ -2,7 +2,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 
-import { isCredentialRejection } from '../src/provider-broker.js';
+import {
+  isCredentialRejection,
+  isSubscriptionExhaustion,
+} from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
 /** @import { ProviderTransportDiagnostic } from '../src/provider-transport.js' */
@@ -468,4 +471,107 @@ test('incremental cancellation settles an outstanding pull', async t => {
   await E(response.reader).return();
   await t.throwsAsync(pull, { message: /failed/ });
   t.is(lease.timers.size, 0);
+});
+
+const tapped = (fetch, onReading) =>
+  makeProviderFetchTransport({
+    fetch,
+    onReading,
+    timeoutMs: 1000,
+    maxRequestBytes: 100n,
+    maxResponseBytes: 100n,
+  });
+
+test('a served response’s rate-limit headers are read, and no header crosses', async t => {
+  const readings = [];
+  const { transport } = tapped(
+    async () =>
+      new Response('ok', {
+        status: 200,
+        headers: {
+          'x-codex-primary-used-percent': '12',
+          'x-codex-primary-window-minutes': '300',
+          'x-codex-secondary-used-percent': '64',
+          'set-cookie': 'canary-secret',
+        },
+      }),
+    reading => readings.push(reading),
+  );
+  const response = await E(transport).request(request);
+  t.deepEqual(Object.keys(response).sort(), ['body', 'status']);
+  t.is(readings.length, 1);
+  t.is(readings[0].status, 200);
+  t.false(readings[0].exhausted);
+  t.deepEqual(
+    readings[0].rateLimits.windows.map(window => window.usedPercent),
+    [12, 64],
+  );
+  t.false(JSON.stringify(readings).includes('canary-secret'));
+  t.true(Object.isFrozen(readings[0]));
+});
+
+test('a drained subscription is classified, after its reading is delivered', async t => {
+  const order = [];
+  const { transport } = tapped(
+    async () =>
+      new Response('{"error":{"type":"usage_limit_reached"}}', {
+        status: 429,
+        headers: {
+          'x-codex-primary-used-percent': '100',
+          'x-codex-primary-reset-at': '1790000000',
+          'x-codex-rate-limit-reached-type': 'rate_limit_reached',
+        },
+      }),
+    reading => order.push(['reading', reading.exhausted, reading.status]),
+  );
+  const refusal = await t.throwsAsync(
+    () =>
+      E(transport)
+        .request(request)
+        .finally(() => order.push(['settled'])),
+    { message: 'Provider subscription exhausted' },
+  );
+  t.true(isSubscriptionExhaustion(refusal));
+  t.false(isCredentialRejection(refusal));
+  // The observer heard before the caller did, so whoever handles the refusal
+  // already knows until when the subscription is blocked.
+  t.deepEqual(order, [['reading', true, 429], ['settled']]);
+
+  // Throttling — a 429 with room left — stays an ordinary failure, and is
+  // still read.
+  const throttledReadings = [];
+  const throttled = tapped(
+    async () =>
+      new Response('slow down', {
+        status: 429,
+        headers: { 'x-codex-primary-used-percent': '40' },
+      }),
+    reading => throttledReadings.push(reading),
+  );
+  const failure = await t.throwsAsync(() =>
+    E(throttled.transport).request(request),
+  );
+  t.false(isSubscriptionExhaustion(failure));
+  t.is(throttledReadings[0].exhausted, false);
+});
+
+test('an observer that throws, or headers that say nothing, change nothing', async t => {
+  const throwing = tapped(
+    async () =>
+      new Response('ok', {
+        status: 200,
+        headers: { 'x-codex-primary-used-percent': '12' },
+      }),
+    () => {
+      throw Error('observer bug');
+    },
+  );
+  t.is((await E(throwing.transport).request(request)).body, 'ok');
+  const silent = [];
+  const plain = tapped(
+    async () => new Response('ok', { status: 200 }),
+    reading => silent.push(reading),
+  );
+  t.is((await E(plain.transport).request(request)).body, 'ok');
+  t.deepEqual(silent, []);
 });

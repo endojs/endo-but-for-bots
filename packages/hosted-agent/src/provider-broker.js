@@ -49,6 +49,25 @@ export const isCredentialRejection = error =>
 harden(isCredentialRejection);
 
 /**
+ * The message a transport uses to report that the upstream refused the request
+ * because the subscription's allowance is used up: a 429 whose rate-limit
+ * headers say so, as opposed to a moment's throttling or any other refusal.
+ * Like the credential classification it is a bare message. When the allowance
+ * comes back is in the account reading the same response produced, which the
+ * transport hands to its observer before it throws this.
+ *
+ * It revises the decision recorded in designs/hosted-agent-broker-oauth.md
+ * that one boolean's worth of information crosses this seam: a pool can only
+ * hand a request to its next subscription if it can tell this refusal from a
+ * failure. Text from the upstream still never crosses.
+ *
+ * @param {unknown} error
+ */
+export const isSubscriptionExhaustion = error =>
+  error instanceof Error && error.message === 'Provider subscription exhausted';
+harden(isSubscriptionExhaustion);
+
+/**
  * Whether a rotation was refused because the record moved under it, as opposed
  * to failing outright.
  *

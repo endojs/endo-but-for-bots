@@ -4,9 +4,12 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Far } from '@endo/far';
 
+import { E } from '@endo/eventual-send';
+
 import {
   listenerDiagnostics,
   makeOwnedProviderBrokerService,
+  makeProviderBrokerServiceKit,
 } from '../src/provider-broker-service.js';
 
 const encode = text => new TextEncoder().encode(text);
@@ -54,7 +57,9 @@ const kitOptionsFor = async (diagnostics, log) => {
       }
     ),
   });
-  const context = Far('context', { whenCancelled: () => new Promise(() => {}) });
+  const context = Far('context', {
+    whenCancelled: () => new Promise(() => {}),
+  });
   await make(Far('secret', { readBase64: async () => '' }), context, {
     env: {},
   });
@@ -75,10 +80,14 @@ test('failure hooks do not depend on the diagnostics flag; the admission trail d
     options.onListenerDiagnostic({ stage: 'endpoint' });
     if (flag === true) options.audit({ event: 'admitted', requests: 1n });
   }
-  t.is(logged.filter(line => line === 'Test broker event admitted 1').length, 1);
+  t.is(
+    logged.filter(line => line === 'Test broker event admitted 1').length,
+    1,
+  );
   t.is(
     logged.filter(
-      line => line === 'Test upstream failure {"stage":"response","status":429}',
+      line =>
+        line === 'Test upstream failure {"stage":"response","status":429}',
     ).length,
     3,
   );
@@ -87,4 +96,65 @@ test('failure hooks do not depend on the diagnostics flag; the admission trail d
       .length,
     3,
   );
+});
+
+test('what the transport reads of the account reaches the service’s account source', async t => {
+  /** @type {any} */
+  let issuerOptions;
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const kit = makeProviderBrokerServiceKit({
+    label: 'Test',
+    policy: /** @type {any} */ ({}),
+    accountRef: 'account',
+    secret: Far('secret', { readBase64: async () => '' }),
+    ownerId: 'owner-account-source',
+    directory: '/tmp/unused',
+    imageRef: `localhost/slice@${digest}`,
+    imageDigest: digest,
+    listenerImageRef: `localhost/listener@${digest}`,
+    runtime: /** @type {any} */ ({ dispose: async () => {} }),
+    makeIssuer: /** @type {any} */ (
+      options => {
+        issuerOptions = options;
+        return { dispose: async () => {} };
+      }
+    ),
+    activeAccountRead: async () =>
+      harden({ plan: { planId: 'pro', title: 'Pro', state: 'active' } }),
+  });
+  const source = await E(kit.service).accountSource();
+  // Dormant: nothing has been served and nothing was asked.
+  t.deepEqual(await E(source).observe(), {});
+  t.is(issuerOptions, undefined);
+
+  // The issuer is built when the first scope opens; drive its observer the
+  // way the transport does.
+  await E(kit.service)
+    .provideScope(
+      'session-a',
+      harden({
+        providerOrigin: 'https://api.example.test',
+        accountRef: 'account',
+      }),
+    )
+    .then(scope => E(scope).start())
+    .catch(() => {});
+  t.is(typeof issuerOptions?.onReading, 'function');
+  issuerOptions.onReading(
+    harden({
+      rateLimits: {
+        windows: [
+          { windowId: 'secondary', title: 'Weekly window', usedPercent: 12 },
+        ],
+        limitReached: false,
+      },
+      status: 200,
+      exhausted: false,
+    }),
+  );
+  t.is((await E(source).observe()).rateLimits.windows[0].usedPercent, 12);
+  // The active read runs only when asked.
+  await E(source).refresh();
+  t.is((await E(source).observe()).plan.planId, 'pro');
+  await kit.close();
 });

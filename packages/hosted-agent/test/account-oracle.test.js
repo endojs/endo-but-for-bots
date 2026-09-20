@@ -4,7 +4,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+
 import { makeAccountOracle } from '../src/account-oracle.js';
+import { makeAccountReadingSource } from '../src/account-source.js';
 
 const T0 = '2026-09-04T12:00:00.000Z';
 const T1 = '2026-09-04T13:00:00.000Z';
@@ -31,13 +34,16 @@ const declaredProfile = harden({
 const makeMemoryJournal = () => {
   /** @type {any} */
   let stored;
+  let writes = 0;
   return {
     journal: {
       read: async () => stored,
       write: async snapshot => {
+        writes += 1;
         stored = snapshot;
       },
     },
+    writes: () => writes,
     peek: () => stored,
     seed: snapshot => {
       stored = snapshot;
@@ -219,6 +225,7 @@ test('the oracle exposes only read methods', async t => {
     'getRateLimits',
     'help',
     'refresh',
+    'watch',
   ]);
   t.true((await E(oracle).help()).includes('observed'));
   t.true((await E(oracle).help('getRateLimits')).includes('bigints'));
@@ -493,4 +500,186 @@ test('a stored section no normalizer can read is replaced, not wedged', async t 
   // nothing prunes the journal, so the only way past a bad entry is to write a
   // newer one.
   t.deepEqual(Object.keys(memory.peek()).sort(), ['rateLimits']);
+});
+
+const weekly = (usedPercent, extra = {}) =>
+  harden({
+    rateLimits: {
+      windows: [
+        {
+          windowId: 'secondary',
+          title: 'Weekly window',
+          usedPercent,
+          resetsAt: '2026-09-11T00:00:00.000Z',
+        },
+      ],
+      limitReached: false,
+      ...extra,
+    },
+    status: 200,
+    exhausted: false,
+  });
+
+/**
+ * An oracle fed by a broker's account source, as the adapters wire it.
+ * @param memory
+ */
+const pushedOracle = memory => {
+  const account = makeAccountReadingSource({ now: () => T0 });
+  let reads = 0;
+  const oracle = makeAccountOracle({
+    providerId: 'codex',
+    now: () => T0,
+    journal: memory.journal,
+    provideObserved: () => E(account.source).observe(),
+    watchObserved: async () => E(account.source).watch(),
+    refreshObserved: async () => {
+      reads += 1;
+      await E(account.source).refresh();
+    },
+  });
+  return { account, oracle, reads: () => reads };
+};
+
+test('a pushed reading reaches watchers without anyone asking again', async t => {
+  const journal = makeMemoryJournal();
+  const { account, oracle, reads } = pushedOracle(journal);
+  const reader = iterateReader(E(oracle).watch());
+  // Nothing served yet: the first answer is honest about knowing nothing.
+  const first = (await reader.next()).value;
+  t.is(first.rateLimits.source, 'unavailable');
+  account.accept(weekly(37));
+  const second = (await reader.next()).value;
+  t.is(second.rateLimits.source, 'observed');
+  t.is(second.rateLimits.windows[0].usedPercent, 37);
+  t.is(second.rateLimits.windows[0].usedFraction, 0.37);
+  // The plan was never observed and is not invented.
+  t.is(second.plan.source, 'unavailable');
+  // Watching is not refreshing: the provider was never asked.
+  t.is(reads(), 0);
+  await reader.return(undefined);
+});
+
+test('a reading is journalled when it changes materially, not on every response', async t => {
+  const journal = makeMemoryJournal();
+  const { account, oracle } = pushedOracle(journal);
+  const reader = iterateReader(E(oracle).watch());
+  await reader.next();
+  const settle = async usedPercent => {
+    account.accept(usedPercent);
+    await reader.next();
+    // The write follows the publication.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  await settle(weekly(37));
+  t.is(journal.writes(), 1);
+  // Creeping within a five-point step writes nothing.
+  await settle(weekly(38));
+  await settle(weekly(39.9));
+  t.is(journal.writes(), 1);
+  // Crossing a step, reaching the limit, and a moved reset each write once.
+  await settle(weekly(40));
+  t.is(journal.writes(), 2);
+  await settle(weekly(40, { limitReached: true }));
+  t.is(journal.writes(), 3);
+  await settle(
+    harden({
+      rateLimits: {
+        windows: [
+          {
+            windowId: 'secondary',
+            title: 'Weekly window',
+            usedPercent: 0,
+            resetsAt: '2026-09-18T00:00:00.000Z',
+          },
+        ],
+        limitReached: false,
+      },
+    }),
+  );
+  t.is(journal.writes(), 4);
+  await reader.return(undefined);
+});
+
+test('after a restart the last reading is remembered, with a blocked window still blocked', async t => {
+  const journal = makeMemoryJournal();
+  const before = pushedOracle(journal);
+  const reader = iterateReader(E(before.oracle).watch());
+  await reader.next();
+  before.account.accept(weekly(100, { limitReached: true }));
+  await reader.next();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await reader.return(undefined);
+
+  // A new incarnation: a fresh source that has served nothing, same journal.
+  const after = pushedOracle(journal);
+  const limits = await E(after.oracle).getRateLimits();
+  t.is(limits.source, 'remembered');
+  t.true(limits.limitReached);
+  t.is(limits.windows[0].usedPercent, 100);
+  t.is(limits.windows[0].resetsAt, '2026-09-11T00:00:00.000Z');
+  // Reading it asked the provider nothing.
+  t.is(after.reads(), 0);
+});
+
+test('an explicit refresh asks the source to read its provider, once', async t => {
+  const { oracle, reads } = pushedOracle(makeMemoryJournal());
+  await E(oracle).getPlan();
+  t.is(reads(), 0);
+  await E(oracle).refresh();
+  t.is(reads(), 1);
+});
+
+test('a reading pushed while the answer is being built is not overwritten by it', async t => {
+  // The journal is slow to read, as a pet store under load is. A 429 arrives
+  // in that window: the build saw the source before it, and must not put its
+  // older view back over it, in the answer or in the journal.
+  const account = makeAccountReadingSource({ now: () => T0 });
+  account.accept(weekly(50));
+  /** @type {any[]} */
+  const written = [];
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let observedOnce = () => {};
+  const observed = new Promise(resolve => {
+    observedOnce = () => resolve(undefined);
+  });
+  const oracle = makeAccountOracle({
+    providerId: 'codex',
+    now: () => T0,
+    journal: {
+      read: async () => {
+        await held;
+        return undefined;
+      },
+      write: async record => {
+        written.push(record);
+      },
+    },
+    provideObserved: async () => {
+      const reading = await E(account.source).observe();
+      observedOnce();
+      return reading;
+    },
+    watchObserved: async () => E(account.source).watch(),
+  });
+  const reader = iterateReader(E(oracle).watch());
+  const first = reader.next();
+  await observed;
+  // The build has read the source and is now waiting on the journal.
+  account.accept(weekly(100, { limitReached: true }));
+  release();
+  let value = (await first).value;
+  while (!value.rateLimits.limitReached) {
+    // eslint-disable-next-line no-await-in-loop
+    value = (await reader.next()).value;
+  }
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const limits = await E(oracle).getRateLimits();
+  t.true(limits.limitReached);
+  t.is(limits.windows[0].usedPercent, 100);
+  t.true(written.at(-1).rateLimits.limitReached);
+  await reader.return(undefined);
 });

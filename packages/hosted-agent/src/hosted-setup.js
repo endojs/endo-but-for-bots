@@ -23,6 +23,11 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import {
+  assertCurrentSpecifier,
+  toCurrentSpecifier,
+} from './current-specifier.js';
+
 /**
  * Read one immutable formula by the ID captured from its current binding.
  * Do not revive it or resolve the mutable pet name again between reads. The
@@ -223,6 +228,152 @@ export const mintWithPowersPath = async (
   }
 };
 harden(mintWithPowersPath);
+
+/**
+ * Provide the account oracle of one subscription: a retained formula with a
+ * namespace of its own (`account-oracle-module.js`), fed by the broker service
+ * whose transport reads the account's rate-limit headers.
+ *
+ * The oracle's namespace holds the broker's read-only account source, as a
+ * formula of its own (`account-source-module.js`), and never the broker
+ * service, which can mint session scopes. That source is minted again over
+ * the broker that exists now on every run, and the oracle's `account-source`
+ * name re-pointed at it; the oracle itself keeps its identity, and so its
+ * journal of readings and any reference a view already holds, across a broker
+ * that a deploy re-minted.
+ *
+ * The names it needs while it is being made are tucked under `dir`
+ * afterwards, and a run that died half way is finished or cleared by the
+ * next.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {object} options
+ * @param {string} options.label The adapter's name for messages.
+ * @param {string} options.dir The adapter's directory pet name.
+ * @param {string[]} options.brokerPath Pet name path of the broker service.
+ * @param {string} options.providerId What the oracle calls its provider.
+ * @param {string} options.specifier The oracle module's import specifier.
+ * @param {string} options.sourceSpecifier The source module's specifier.
+ * @returns {Promise<string[]>} The oracle's pet name path.
+ */
+export const provideAccountOracle = async (
+  hostAgent,
+  { label, dir, brokerPath, providerId, specifier, sourceSpecifier },
+) => {
+  const oraclePath = [dir, 'account-oracle'];
+  const sourcePath = [dir, 'account-source'];
+  const powersPath = [dir, 'account-oracle-powers'];
+  const handlePath = [dir, 'account-oracle-handle'];
+  const handleName = `${dir}.account-oracle-handle`;
+  const powersName = `${dir}.account-oracle-powers`;
+  (await E(hostAgent).has(...brokerPath)) ||
+    Fail`${b(label)} account oracle needs the broker service ${q(brokerPath.join('/'))}`;
+
+  if (await E(hostAgent).has(...sourcePath)) {
+    await E(hostAgent).remove(...sourcePath);
+  }
+  await mintWithPowersPath(hostAgent, {
+    powersPath: brokerPath,
+    temporary: `${dir}.account-source-powers`,
+    specifier: sourceSpecifier,
+    resultName: sourcePath,
+    env: {},
+  });
+  const sourceLocator = await E(hostAgent).locate(...sourcePath);
+
+  if (!(await E(hostAgent).has(...oraclePath))) {
+    // A run that died before the launch left these top-level; start clean.
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(hostAgent).has(stray)) await E(hostAgent).remove(stray);
+    }
+    await E(hostAgent).provideGuest(handleName, { agentName: powersName });
+    const guest = await E(hostAgent).lookup(powersName);
+    await E(guest).storeLocator('account-source', sourceLocator);
+    await E(hostAgent).makeUnconfined('@main', specifier, {
+      powersName,
+      resultName: oraclePath,
+      env: harden({ ACCOUNT_PROVIDER_ID: providerId }),
+    });
+  }
+  // Finish the moves, only into a destination that is still free.
+  for (const [from, to] of [
+    [handleName, handlePath],
+    [powersName, powersPath],
+  ]) {
+    if (
+      // eslint-disable-next-line no-await-in-loop
+      (await E(hostAgent).has(/** @type {string} */ (from))) &&
+      // eslint-disable-next-line no-await-in-loop
+      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(hostAgent).move([from], to);
+    }
+  }
+  // Re-point at the source minted above. The oracle resolves the name on
+  // every call, so this is all a re-minted broker takes.
+  const powers = await E(hostAgent).lookup(powersPath);
+  await E(powers).storeLocator('account-source', sourceLocator);
+  return oraclePath;
+};
+harden(provideAccountOracle);
+
+const moduleSpecifier = (/** @type {string} */ relative) =>
+  assertCurrentSpecifier(
+    toCurrentSpecifier(new URL(relative, import.meta.url).href),
+  );
+
+/**
+ * Provide an adapter's account oracle over its `<dir>/broker-service` and bind
+ * it into Floot's profile beside the backend, as `<backend id>-account`, which
+ * is the name Floot looks for (`watchAccounts()`).
+ *
+ * Status is an observation: a deployment whose oracle could not be provided
+ * still runs sessions. The failure is reported and setup goes on.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {object} options
+ * @param {string} options.label
+ * @param {string} options.dir
+ * @param {string} options.providerId
+ * @param {string} options.flootDir
+ * @param {string} options.backendId The hosted backend's descriptor id.
+ */
+export const publishAccountOracle = async (
+  hostAgent,
+  { label, dir, providerId, flootDir, backendId },
+) => {
+  await null;
+  try {
+    const accountName = `${backendId}-account`;
+    const oraclePath = await provideAccountOracle(hostAgent, {
+      label,
+      dir,
+      brokerPath: [dir, 'broker-service'],
+      providerId,
+      specifier: moduleSpecifier('./account-oracle-module.js'),
+      sourceSpecifier: moduleSpecifier('./account-source-module.js'),
+    });
+    if (await E(hostAgent).has(flootDir, 'controller-profile')) {
+      // copy overwrites an existing binding, as the backend's does.
+      await E(hostAgent).copy(oraclePath, [
+        flootDir,
+        'controller-profile',
+        accountName,
+      ]);
+      console.log(
+        `Bound "${accountName}" into "${flootDir}/controller-profile".`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `${label} account oracle was not provided; sessions are unaffected:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+};
+harden(publishAccountOracle);
 
 /**
  * The spelling checks of a configured slice image that need no Podman — the
