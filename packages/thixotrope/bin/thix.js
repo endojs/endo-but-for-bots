@@ -42,8 +42,7 @@ try {
     [
       'clock-grant',
       'alarms',
-      'http-grant',
-      'http-services',
+      'install-native',
       'revoke-invite',
       'invite',
       'connect',
@@ -73,17 +72,23 @@ try {
         logging.log(JSON.stringify(await client.call('clockGrant', args[0])));
       } else if (command === 'alarms') {
         logging.log(JSON.stringify(await client.call('alarmStatus'), null, 2));
-      } else if (command === 'http-grant') {
-        const [key, port] = args;
+      } else if (command === 'install-native') {
+        const [name, resourceDirectory] = args;
+        if (!name || !resourceDirectory)
+          throw Error(
+            'Usage: thix install-native state-directory inventory-name resource-directory',
+          );
         logging.log(
           JSON.stringify(
-            await client.call('httpGrant', key, Number(port)),
+            await client.call(
+              'installNative',
+              name,
+              paths.resolve(resourceDirectory),
+            ),
             null,
             2,
           ),
         );
-      } else if (command === 'http-services') {
-        logging.log(JSON.stringify(await client.call('httpServices'), null, 2));
       } else if (command === 'mail') {
         await showMailbox(platform.terminal.open(), platform.logging, client);
       } else if (
@@ -157,7 +162,7 @@ try {
     }
   } else {
     logging.log(
-      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|http-grant|http-services|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|install-native|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }

@@ -4,7 +4,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { bundleApplication } from '../src/control/bundle-application.js';
@@ -39,9 +38,20 @@ export const registerHttpIntegration = (test, kind) => {
         throw Error('Expected TCP port');
       const { port } = address;
       await new Promise(resolve => reservation.close(() => resolve(undefined)));
+      const nativeChildren = [];
+      const platform = harden({
+        ...nodePowers,
+        nativeWorkers: harden({
+          start: async options => {
+            const child = await nodePowers.nativeWorkers.start(options);
+            nativeChildren.push(child);
+            return child;
+          },
+        }),
+      });
       const start = async () => {
         const supervisor = await serveThixotrope(
-          nodePowers,
+          platform,
           path,
           kind === 'ironhorse'
             ? {}
@@ -61,20 +71,27 @@ export const registerHttpIntegration = (test, kind) => {
         return { supervisor, client };
       };
       let host = await start();
-      const granted = await host.client.call('httpGrant', 'web', port);
-      t.is(granted.desired, 'allocated');
+      await host.client.call(
+        'installNative',
+        'web',
+        fileURLToPath(new URL('../resources/http/', import.meta.url)),
+      );
+      t.is(
+        await host.client.call(
+          'evaluate',
+          "E(inventory.get('web')).__getMethodNames__().then(names => [...names].filter(name => name !== '__getMethodNames__').sort().join(','))",
+        ),
+        "'help,register'",
+      );
       const { bundle } = await bundleApplication(
         nodePowers.bundler,
         fileURLToPath(new URL('../examples/http-counter.js', import.meta.url)),
       );
       await host.client.call('install', 'site', bundle, [['http', 'web']]);
-      for (let i = 0; i < 100; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        if ((await host.client.call('httpServices'))[0].status === 'listening')
-          break;
-        // eslint-disable-next-line no-await-in-loop
-        await setTimeout(30);
-      }
+      await host.client.call(
+        'evaluate',
+        `E(E(apps).get('site')).start(${port})`,
+      );
       // Use a fresh Node HTTP request: Node 24's fetch client cleanup assigns
       // an error message inherited as read-only under SES lockdown.
       /**
@@ -101,6 +118,12 @@ export const registerHttpIntegration = (test, kind) => {
           outgoing.end();
         });
       t.is(await request('POST', '/incr'), '1\n');
+      await nativeChildren.at(-1).terminate();
+      await host.client.call(
+        'evaluate',
+        `E(E(apps).get('site')).start(${port})`,
+      );
+      t.is(await request('GET', '/read'), '1\n');
       host.client.close();
       await host.supervisor.close();
       host = await start();
@@ -112,19 +135,33 @@ export const registerHttpIntegration = (test, kind) => {
       );
       const store = makeFsStore(nodePowers, path);
       t.false(
-        Object.keys(store.getHubState().sessions).some(key =>
-          key.startsWith('transient:'),
+        Object.keys(store.getHubState().sessions).some(
+          key =>
+            key.startsWith('transient:') &&
+            !key.startsWith('transient:native:'),
         ),
       );
       await host.client.call('evaluate', "E(E(apps).get('site')).close()");
-      t.is((await host.client.call('httpServices'))[0].desired, 'closed');
+      t.is(
+        await host.client.call(
+          'evaluate',
+          "E(E(apps).get('site')).status().then(s => s.status)",
+        ),
+        "'closed'",
+      );
       await t.throwsAsync(() => request('GET', '/read'), {
         code: 'ECONNREFUSED',
       });
       host.client.close();
       await host.supervisor.close();
       host = await start();
-      t.is((await host.client.call('httpServices'))[0].desired, 'closed');
+      t.is(
+        await host.client.call(
+          'evaluate',
+          "E(E(apps).get('site')).status().then(s => s.status)",
+        ),
+        "'closed'",
+      );
       await t.throwsAsync(() => request('GET', '/read'), {
         code: 'ECONNREFUSED',
       });

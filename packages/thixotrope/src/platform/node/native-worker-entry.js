@@ -8,8 +8,9 @@ import process from 'node:process';
 
 import { makePipeNetwork } from '../../net/pipe-network.js';
 import { silentLogger } from '../logging.js';
+import { describeNativePackage } from './native-package.js';
 
-const [workerId, moduleUrl] = process.argv.slice(2);
+const [workerId, moduleUrl, packageJson] = process.argv.slice(2);
 const pipe = makePipeNetwork({
   codec: syrupCodec,
   workerId,
@@ -23,8 +24,20 @@ process.on('message', message => {
 });
 
 try {
+  const identity = JSON.parse(packageJson ?? 'null');
+  if (identity !== null) {
+    const actual = await describeNativePackage(identity.directory);
+    if (actual.digest !== identity.digest || actual.moduleUrl !== moduleUrl)
+      throw Error(
+        'Installed native package has changed; install its new version explicitly',
+      );
+  }
   const namespace = await import(moduleUrl);
+  if (typeof namespace.make !== 'function')
+    throw Error('Native ephemeral module must export make(powers)');
   const root = await namespace.make(harden({}));
+  if (root?.[Symbol.for('passStyle')] !== 'remotable')
+    throw Error('Native ephemeral module must return a remotable root');
   const client = await makeOcapn({
     randomBytes: length => new Uint8Array(randomBytes(length)),
     logger: silentLogger,

@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { HttpHeaders, HttpListenerOptions, HttpListenerPowers } from '../http-listeners.js' */
+/** @import { HttpHeaders, HttpListenerOptions, HttpListenerPowers } from './types.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 
