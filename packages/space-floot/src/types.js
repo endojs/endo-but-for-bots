@@ -72,7 +72,7 @@ export {};
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],
- *   subscriptions?: Array<{ id: string, label: string }>,
+ *   subscriptions?: Array<{ id: string, label: string, pinnedOnly?: boolean }>,
  * }} FlootModel
  */
 
