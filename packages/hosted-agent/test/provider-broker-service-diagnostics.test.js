@@ -158,3 +158,188 @@ test('what the transport reads of the account reaches the service’s account so
   t.is((await E(source).observe()).plan.planId, 'pro');
   await kit.close();
 });
+
+test('a broker over several subscriptions reads its set, hands over, keeps its state, and says what it holds', async t => {
+  const digest = `sha256:${'b'.repeat(64)}`;
+  /** @type {any} */
+  let storedSet = {
+    cacheLifetimeSeconds: 300,
+    members: [
+      { id: 'work', label: 'Work Pro', weight: 20 },
+      { id: 'home', label: 'Home Plus' },
+    ],
+  };
+  /** @type {any[]} */
+  const kept = [];
+  /** @type {string[]} */
+  const used = [];
+  /** @type {any} */
+  let endpoint;
+  const kit = makeProviderBrokerServiceKit({
+    label: 'Test',
+    policy: /** @type {any} */ ({
+      origin: 'https://api.example.test',
+      routes: [{ method: 'POST', path: '/v1/responses' }],
+      models: ['allowed'],
+      maxConcurrentRequests: 4,
+      maxRequestBytes: 1024n,
+      maxResponseBytes: 1024n,
+    }),
+    accountRef: 'pool',
+    secret: undefined,
+    ownerId: 'owner-pooled',
+    directory: '/tmp/unused',
+    imageRef: `localhost/slice@${digest}`,
+    imageDigest: digest,
+    listenerImageRef: `localhost/listener@${digest}`,
+    runtime: /** @type {any} */ ({
+      dispose: async () => {},
+      startKit(input) {
+        endpoint = input.endpoint;
+        const value = Promise.resolve({
+          observe: async () =>
+            harden({
+              endpoint: 'http://127.0.0.1:1',
+              containerName: 'listener',
+              networkNamespaceId: 'net',
+              listenerImageDigest: digest,
+            }),
+          stop: async () => {},
+          closed: new Promise(() => {}),
+        });
+        return { value, stop: async () => {} };
+      },
+    }),
+    fetch: /** @type {any} */ (
+      async (_url, init) => {
+        const key = init.headers.authorization;
+        used.push(key);
+        if (key === 'Bearer work-key') {
+          return new Response('limit', {
+            status: 429,
+            headers: {
+              'x-codex-secondary-used-percent': '100',
+              'x-codex-secondary-reset-at': '4000000000',
+            },
+          });
+        }
+        return new Response('{"ok":true}', {
+          status: 200,
+          headers: { 'x-codex-secondary-used-percent': '7' },
+        });
+      }
+    ),
+    subscriptions: {
+      readSet: async () => storedSet,
+      secretOf: member =>
+        Far(`${member.id} secret`, {
+          readBase64: async () => btoa(`${member.secretName}-key`),
+        }),
+      readState: async () => undefined,
+      writeState: async state => {
+        kept.push(state);
+      },
+    },
+  });
+  // What it holds, before any session: labels and weights, nothing secret.
+  t.deepEqual(await E(kit.service).subscriptions(), [
+    { id: 'work', label: 'Work Pro', weight: 20 },
+    { id: 'home', label: 'Home Plus', weight: 1 },
+  ]);
+  const workSource = await E(kit.service).accountSource('work');
+  t.deepEqual(await E(workSource).observe(), {});
+  t.is(await E(kit.service).accountSource('nobody'), undefined);
+
+  const scope = await E(kit.service).provideScope(
+    'session-a',
+    harden({ providerOrigin: 'https://api.example.test', accountRef: 'pool' }),
+  );
+  await E(scope).start();
+  const body = '{"model":"allowed"}';
+  const request = harden({ method: 'POST', path: '/v1/responses', body });
+  t.is((await E(endpoint).request(request)).body, '{"ok":true}');
+  t.deepEqual(used, ['Bearer work-key', 'Bearer home-key']);
+  // Each account's own source has its own reading.
+  t.is((await E(workSource).observe()).rateLimits.windows[0].usedPercent, 100);
+  const homeSource = await E(kit.service).accountSource('home');
+  t.is((await E(homeSource).observe()).rateLimits.windows[0].usedPercent, 7);
+  // The refusal and where the session was served were offered for keeping.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.is(kept.at(-1).refusals.work.untilMs, 4_000_000_000_000);
+  t.is(kept.at(-1).sessions['session-a'].memberId, 'home');
+
+  // An operator adds a subscription: a write of a value, no retirement. The
+  // next session sees it.
+  storedSet = {
+    ...storedSet,
+    members: [...storedSet.members, { id: 'spare' }],
+  };
+  t.is((await E(kit.service).subscriptions()).length, 3);
+  // The session that was already open keeps working: its grant took the set
+  // as it was, and is not handed a member it does not hold.
+  t.is((await E(endpoint).request(request)).body, '{"ok":true}');
+  await kit.close();
+});
+
+const pooledKit = (digestLetter, ownerId, subscriptions) => {
+  const digest = `sha256:${digestLetter.repeat(64)}`;
+  return makeProviderBrokerServiceKit({
+    label: 'Test',
+    policy: /** @type {any} */ ({}),
+    accountRef: 'pool',
+    secret: undefined,
+    ownerId,
+    directory: '/tmp/unused',
+    imageRef: `localhost/slice@${digest}`,
+    imageDigest: digest,
+    listenerImageRef: `localhost/listener@${digest}`,
+    runtime: /** @type {any} */ ({ dispose: async () => {} }),
+    subscriptions,
+  });
+};
+
+test('a status reader and the first session arriving together share one pool', async t => {
+  let stateReads = 0;
+  const kit = pooledKit('c', 'owner-concurrent', {
+    readSet: async () => ({ members: [{ id: 'work' }, { id: 'home' }] }),
+    secretOf: () => Far('secret', { readBase64: async () => '' }),
+    readState: async () => {
+      stateReads += 1;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return undefined;
+    },
+  });
+  await Promise.all([
+    E(kit.service).subscriptions(),
+    E(kit.service).subscriptions(),
+    E(kit.service).accountSource('work'),
+  ]);
+  t.is(stateReads, 1);
+  await kit.close();
+});
+
+test('a set that is not well formed fails cleanly and leaves the service usable', async t => {
+  /** @type {any} */
+  let stored = { members: [{ id: 'a' }, { id: 'a' }] };
+  const kit = pooledKit('d', 'owner-invalid', {
+    readSet: async () => stored,
+    secretOf: () => Far('secret', { readBase64: async () => '' }),
+    // An OAuth provider: every member must name its account.
+    credentialOf: () => ({}),
+  });
+  await t.throwsAsync(() => E(kit.service).subscriptions(), {
+    message: /distinct/,
+  });
+  stored = { members: [{ id: 'a', accountRef: 'acct_1' }, { id: 'b' }] };
+  await t.throwsAsync(() => E(kit.service).subscriptions(), {
+    message: /must name its account/,
+  });
+  stored = {
+    members: [
+      { id: 'a', accountRef: 'acct_1' },
+      { id: 'b', accountRef: 'acct_2' },
+    ],
+  };
+  t.is((await E(kit.service).subscriptions()).length, 2);
+  await kit.close();
+});

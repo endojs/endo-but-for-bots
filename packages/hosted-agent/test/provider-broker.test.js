@@ -2301,3 +2301,279 @@ test('the bytes stream is bound by the response quota like the text stream', asy
   );
   t.true(lease.cancelled());
 });
+
+/**
+ * A grant over two subscriptions. Each member has a transport of its own that
+ * records what it was sent and answers as scripted: 'ok', 'exhausted' (the
+ * bare classification a real transport throws), or 'broken'.
+ * @param root0
+ * @param root0.scripts
+ * @param root0.order
+ * @param root0.echo
+ */
+const poolSetup = ({ scripts, order = ['first', 'second'], echo } = {}) => {
+  const sent = { first: [], second: [] };
+  const events = [];
+  const member = id =>
+    harden({
+      id,
+      secret: Far(`${id} secret`, {
+        readBase64: async () => btoa(`${id}-credential`),
+      }),
+      adaptRequest: ({ path }) =>
+        harden({ path, headers: { 'x-account': `${id}-account` } }),
+      transport: Far(`${id} transport`, {
+        async request(upstream) {
+          sent[id].push(upstream);
+          const outcome = scripts[id].shift() ?? 'ok';
+          if (outcome === 'exhausted') {
+            throw Error('Provider subscription exhausted');
+          }
+          if (outcome === 'broken') throw Error('Provider transport failed');
+          return harden({ status: 200, body: echo ?? `served by ${id}` });
+        },
+        async requestStream(upstream) {
+          sent[id].push(upstream);
+          const outcome = scripts[id].shift() ?? 'ok';
+          if (outcome === 'exhausted') {
+            throw Error('Provider subscription exhausted');
+          }
+          const parts = [`streamed by ${id} `, 'x'.repeat(40)];
+          return harden({
+            status: 200,
+            reader: Far('reader', {
+              next: async () => {
+                const value = parts.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {},
+            }),
+          });
+        },
+      }),
+    });
+  const lease = makeProviderBrokerGrant(policy, {
+    audit: event => events.push(event.event),
+    pool: {
+      members: [member('first'), member('second')],
+      select: () => {
+        if (order === 'throw') throw Error('pinned subscription is gone');
+        return order;
+      },
+      served: id => events.push(`served:${id}`),
+      exhausted: id => events.push(`exhausted:${id}`),
+    },
+  });
+  return { ...lease, sent, events };
+};
+
+test('a request a drained subscription refuses is served by the next, built afresh for it', async t => {
+  const pool = poolSetup({ scripts: { first: ['exhausted'], second: [] } });
+  const response = await E(pool.endpoint).request(request);
+  t.is(response.body, 'served by second');
+  // Each member was tried once, with its own credential and its own account
+  // header: the request is not replayed, it is rebuilt.
+  t.is(pool.sent.first.length, 1);
+  t.is(pool.sent.second.length, 1);
+  t.is(pool.sent.first[0].headers.authorization, 'Bearer first-credential');
+  t.is(pool.sent.first[0].headers['x-account'], 'first-account');
+  t.is(pool.sent.second[0].headers.authorization, 'Bearer second-credential');
+  t.is(pool.sent.second[0].headers['x-account'], 'second-account');
+  t.is(pool.sent.second[0].body, pool.sent.first[0].body);
+  t.deepEqual(pool.events, [
+    'admitted',
+    'subscription-exhausted',
+    'exhausted:first',
+    'completed',
+    'served:second',
+  ]);
+  // The slot was reserved once and released.
+  t.is((await E(pool.admin).getStatus()).activeRequests, 0);
+});
+
+test('the handover is invisible to a streamed response too', async t => {
+  const pool = poolSetup({ scripts: { first: ['exhausted'], second: [] } });
+  const response = await E(pool.endpoint).requestStream(request);
+  let text = '';
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const chunk = await E(response.reader).next();
+    if (chunk.done) break;
+    text += chunk.value;
+  }
+  t.true(text.startsWith('streamed by second'));
+  t.true(pool.events.includes('exhausted:first'));
+});
+
+test('only exhaustion moves a request: any other failure is the request’s own', async t => {
+  const pool = poolSetup({ scripts: { first: ['broken'], second: [] } });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(pool.sent.second.length, 0);
+  t.false(pool.events.includes('exhausted:first'));
+});
+
+test('every subscription drained is a failure, after one attempt each', async t => {
+  const pool = poolSetup({
+    scripts: { first: ['exhausted'], second: ['exhausted'] },
+  });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(pool.sent.first.length, 1);
+  t.is(pool.sent.second.length, 1);
+  t.deepEqual(
+    pool.events.filter(event => event.startsWith('exhausted:')),
+    ['exhausted:first', 'exhausted:second'],
+  );
+  t.is((await E(pool.admin).getStatus()).activeRequests, 0);
+  // Nothing selected at all (a pinned member that is blocked) fails the
+  // same way, without touching a credential.
+  const none = poolSetup({ scripts: { first: [], second: [] }, order: [] });
+  await t.throwsAsync(() => E(none.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(none.sent.first.length + none.sent.second.length, 0);
+  t.true(none.events.includes('subscriptions-exhausted'));
+  // What the pool says, a pinned id included, is not for the endpoint's
+  // holder: a selection that throws is collapsed like any other failure.
+  const gone = poolSetup({
+    scripts: { first: [], second: [] },
+    order: 'throw',
+  });
+  await t.throwsAsync(() => E(gone.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.is(gone.sent.first.length + gone.sent.second.length, 0);
+});
+
+test('a credential the first subscription was sent is still screened from the second’s response', async t => {
+  // The second upstream echoes the FIRST member's credential, which did reach
+  // an upstream on the refused attempt.
+  const pool = poolSetup({
+    scripts: { first: ['exhausted'], second: [] },
+    echo: 'leaked first-credential here',
+  });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+});
+
+test('a pool’s set must be well formed', t => {
+  const member = id =>
+    harden({ id, secret: Far('s', {}), transport: Far('t', {}) });
+  const make = members =>
+    makeProviderBrokerGrant(policy, {
+      pool: { members, select: () => [], served() {}, exhausted() {} },
+    });
+  t.throws(() => make([]), { message: /Invalid broker subscription set/ });
+  t.throws(() => make([member('a'), member('a')]), {
+    message: /Invalid broker subscription set/,
+  });
+  t.notThrows(() => make([member('a'), member('b')]));
+});
+
+test('a grant ignores members its pool names that it does not hold', async t => {
+  // The set gained `third` after this grant was issued.
+  const pool = poolSetup({
+    scripts: { first: [], second: [] },
+    order: ['third', 'second', 'second', 'first'],
+  });
+  const response = await E(pool.endpoint).request(request);
+  t.is(response.body, 'served by second');
+  t.is(pool.sent.second.length, 1);
+  t.is(pool.sent.first.length, 0);
+});
+
+test('the pool’s bookkeeping cannot change how a request settles', async t => {
+  const events = [];
+  const lease = makeProviderBrokerGrant(policy, {
+    pool: {
+      members: [
+        harden({
+          id: 'only',
+          secret: Far('secret', { readBase64: async () => btoa('only-key') }),
+          transport: Far('transport', {
+            request: async () => harden({ status: 200, body: 'fine' }),
+            requestStream: async () => {
+              throw Error('unused');
+            },
+          }),
+        }),
+      ],
+      select: () => ['only'],
+      served: () => {
+        events.push('served');
+        throw Error('bookkeeping bug');
+      },
+      exhausted() {},
+    },
+  });
+  t.is((await E(lease.endpoint).request(request)).body, 'fine');
+  t.deepEqual(events, ['served']);
+  t.is((await E(lease.admin).getStatus()).activeRequests, 0);
+});
+
+test('a member whose credential cannot be used is reported, and the request is not tried elsewhere', async t => {
+  const told = [];
+  const sent = [];
+  const member = (id, secret, transportRequest) =>
+    harden({
+      id,
+      secret,
+      transport: Far(`${id} transport`, {
+        request: transportRequest,
+        requestStream: async () => {
+          throw Error('unused');
+        },
+      }),
+    });
+  const lease = makeProviderBrokerGrant(policy, {
+    pool: {
+      members: [
+        // Its secret cannot be read.
+        member(
+          'broken',
+          Far('secret', {
+            readBase64: async () => {
+              throw Error('secret store unavailable');
+            },
+          }),
+          async () => harden({ status: 200, body: 'never' }),
+        ),
+        // The upstream rejects its key.
+        member(
+          'rejected',
+          Far('secret', { readBase64: async () => btoa('stale-key') }),
+          async upstream => {
+            sent.push(upstream.headers.authorization);
+            throw Error('Provider credential rejected');
+          },
+        ),
+        member(
+          'fine',
+          Far('secret', { readBase64: async () => btoa('good-key') }),
+          async () => harden({ status: 200, body: 'fine' }),
+        ),
+      ],
+      select: () =>
+        told.length === 0 ? ['broken', 'fine'] : ['rejected', 'fine'],
+      served() {},
+      exhausted() {},
+      unusable: id => told.push(id),
+    },
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.deepEqual(told, ['broken']);
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: 'Provider request failed',
+  });
+  t.deepEqual(told, ['broken', 'rejected']);
+  t.deepEqual(sent, ['Bearer stale-key']);
+});

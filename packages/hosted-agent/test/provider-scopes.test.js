@@ -160,8 +160,12 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
     'accountSource',
     'lookupScope',
     'provideScope',
+    'subscriptions',
   ]);
   t.is(await E(f.service).accountSource(), undefined);
+  // One credential and no declared set: nothing to choose between.
+  t.deepEqual(await E(f.service).subscriptions(), []);
+  t.is(await E(f.service).accountSource('work'), undefined);
   // eslint-disable-next-line no-underscore-dangle
   t.deepEqual([...(await E(a).__getMethodNames__())].sort(), [
     '__getInterfaceGuard__',

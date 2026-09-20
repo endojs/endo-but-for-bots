@@ -156,6 +156,12 @@ export const makeAccountReadingSource = ({
     },
   );
 
-  return harden({ accept, source, close: () => topic.close() });
+  return harden({
+    accept,
+    source,
+    /** The last reading, synchronously, for a pool that ranks on it. */
+    peek: () => last,
+    close: () => topic.close(),
+  });
 };
 harden(makeAccountReadingSource);

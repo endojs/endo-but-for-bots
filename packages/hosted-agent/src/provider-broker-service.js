@@ -24,6 +24,10 @@ import { makeAccountReadingSource } from './account-source.js';
 import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makeProviderScopes } from './provider-scopes.js';
+import {
+  makeSubscriptionPool,
+  normalizeSubscriptionSet,
+} from './subscription-pool.js';
 import { makePublicEgress } from './public-egress.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
@@ -91,6 +95,9 @@ harden(assertBrokerModels);
  * @param {(diagnostic: any) => void} [options.onDiagnostic]
  * @param {(reading: any) => void} [options.onReading] Host-only: what each
  *   inference response's rate-limit headers said about the account.
+ * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['pool']} [options.pool]
+ *   Several subscriptions in place of `secret`, `credential`, `adaptRequest`
+ *   and `onReading`; see the issuer.
  * @param {(diagnostic: any) => void} [options.onListenerDiagnostic] Host-only:
  *   the listener's own per-request failure lines (a stage and header-check
  *   booleans), read from its stderr pipe.
@@ -121,6 +128,7 @@ export const makeProviderBrokerKit = ({
   onDiagnostic,
   onReading,
   onListenerDiagnostic,
+  pool,
   fetch: fetchAuthority = globalThis.fetch,
   runtime,
   runtimeKit,
@@ -148,11 +156,15 @@ export const makeProviderBrokerKit = ({
   const isPresence = value =>
     typeof value === 'function' ||
     (typeof value === 'object' && value !== null);
-  isPresence(secret) ||
-    Fail`${b(label)} broker requires a SecretBlob read facet`;
-  Object.hasOwn(secret, 'readBase64') &&
-    !isPresence(secret.readBase64) &&
-    Fail`${b(label)} broker requires a SecretBlob read facet`;
+  // A broker over several subscriptions has a secret per member, which the
+  // pool supplies with each; one over a single credential has this one.
+  if (pool === undefined) {
+    isPresence(secret) ||
+      Fail`${b(label)} broker requires a SecretBlob read facet`;
+    Object.hasOwn(secret, 'readBase64') &&
+      !isPresence(secret.readBase64) &&
+      Fail`${b(label)} broker requires a SecretBlob read facet`;
+  }
   typeof fetchAuthority === 'function' ||
     Fail`${b(label)} broker requires an outbound fetch authority`;
 
@@ -222,6 +234,7 @@ export const makeProviderBrokerKit = ({
         ...(audit === undefined ? {} : { audit }),
         ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
         ...(onReading === undefined ? {} : { onReading }),
+        ...(pool === undefined ? {} : { pool }),
       });
       assertOpen();
       return harden({ issuer, imageRef });
@@ -267,6 +280,231 @@ export const makeProviderBrokerKit = ({
   return harden({ start, close });
 };
 harden(makeProviderBrokerKit);
+
+/**
+ * What an adapter supplies for a broker over several subscriptions.
+ *
+ * @typedef {object} PooledSubscriptions
+ * @property {() => Promise<any>} readSet The declared set, as stored. Read
+ *   when a grant is issued, so a member an operator added serves the sessions
+ *   opened after it, with no retirement.
+ * @property {(member: { id: string, secretName: string }) => any} secretOf
+ *   The member's SecretBlob read facet (a presence, or a promise for one).
+ * @property {(member: any, secret: any) => any} [credentialOf] The member's
+ *   shared refreshing credential. Asked once per member.
+ * @property {(member: any) => any} [adaptRequestOf]
+ * @property {(powers: { member: any, secret: any, credential: any }) => () => Promise<any>} [activeReadOf]
+ * @property {() => Promise<any>} [readState] What a previous incarnation kept
+ *   of the pool: refusals, and where sessions were last served.
+ * @property {(state: any) => Promise<void>} [writeState]
+ * @property {() => number} [now]
+ */
+
+/**
+ * The service kit of a broker over several subscriptions of one provider. One
+ * listener runtime, one issuer and one set of scopes, as for a single
+ * credential; beneath them a member per subscription, each with its own
+ * secret, credential, account source and transport, and one chooser
+ * (`subscription-pool.js`) that picks the member for each request.
+ *
+ * @param {object} powers
+ * @param {string} powers.label
+ * @param {PooledSubscriptions} powers.subscriptions
+ * @param {any} powers.brokerOptions
+ * @param {(error: unknown) => void} powers.reportAccountError
+ */
+const makePooledBrokerServiceKit = ({
+  label,
+  subscriptions,
+  brokerOptions,
+  reportAccountError,
+}) => {
+  const {
+    readSet,
+    secretOf,
+    credentialOf,
+    adaptRequestOf,
+    activeReadOf,
+    readState = async () => undefined,
+    writeState = async () => {},
+    now = Date.now,
+  } = subscriptions;
+  /**
+   * @typedef {object} MemberKit
+   * @property {any} secret
+   * @property {any} credential
+   * @property {any} adaptRequest
+   * @property {ReturnType<typeof makeAccountReadingSource>} account
+   */
+  /** @type {Map<string, MemberKit>} */
+  const kits = new Map();
+  /** @type {ReturnType<typeof normalizeSubscriptionSet> | undefined} */
+  let set;
+  /** @type {ReturnType<typeof makeSubscriptionPool> | undefined} */
+  let chooser;
+  /** @type {Promise<void>} */
+  let writing = Promise.resolve();
+
+  /** @param {{ id: string, secretName: string }} member */
+  const kitOf = member => {
+    let kit = kits.get(member.id);
+    if (kit === undefined) {
+      const secret = secretOf(member);
+      const credential =
+        credentialOf === undefined ? undefined : credentialOf(member, secret);
+      const account = makeAccountReadingSource({
+        ...(activeReadOf === undefined
+          ? {}
+          : { activeRead: activeReadOf({ member, secret, credential }) }),
+        reportError: reportAccountError,
+      });
+      kit = {
+        secret,
+        credential,
+        adaptRequest:
+          adaptRequestOf === undefined ? undefined : adaptRequestOf(member),
+        account,
+      };
+      kits.set(member.id, kit);
+    }
+    return kit;
+  };
+
+  // A provider whose credential names an account (OAuth) has no pool-wide
+  // account for a member to inherit, so every member must say which.
+  const requireAccountRef = credentialOf !== undefined;
+  /** @type {Promise<unknown>} */
+  let loading = Promise.resolve();
+
+  /**
+   * Read the declared set again, and drop what left it. One at a time and in
+   * order: a status reader and the first session can arrive together, and two
+   * loads racing would each make a chooser, with refusal marks and warm
+   * records the other never sees, and then overwrite each other's state.
+   *
+   * @returns {Promise<ReturnType<typeof normalizeSubscriptionSet>>}
+   */
+  const load = () => {
+    const result = loading.then(async () => {
+      const next = normalizeSubscriptionSet(await readSet(), {
+        requireAccountRef,
+      });
+      for (const [id, kit] of kits) {
+        if (!next.members.some(member => member.id === id)) {
+          kit.account.close();
+          kits.delete(id);
+        }
+      }
+      set = next;
+      if (chooser === undefined) {
+        const initial = await readState().catch(error => {
+          console.error(
+            `${label} pool state could not be read; starting without it:`,
+            error instanceof Error ? error.message : String(error),
+          );
+          return undefined;
+        });
+        chooser = makeSubscriptionPool({
+          members: () =>
+            (set?.members ?? []).map(({ id, label: title, weight }) => ({
+              id,
+              label: title,
+              weight,
+            })),
+          readingOf: id => kits.get(id)?.account.peek().rateLimits,
+          // Asked per request, so an operator's edit of the set applies.
+          cacheLifetimeMs: () => (set?.cacheLifetimeSeconds ?? 300) * 1000,
+          now,
+          ...(initial === undefined ? {} : { initial }),
+          onChange: state => {
+            // One write at a time, in order; a failed write is reported and
+            // the next change writes the whole state again.
+            writing = writing
+              .then(() => writeState(state))
+              .catch(error =>
+                console.error(
+                  `${label} pool state could not be kept:`,
+                  error instanceof Error ? error.message : String(error),
+                ),
+              );
+          },
+        });
+      }
+      return next;
+    });
+    loading = result.catch(() => {});
+    return result;
+  };
+
+  const broker = makeProviderBrokerKit({
+    ...brokerOptions,
+    label,
+    pool: harden({
+      members: async () => {
+        const { members } = await load();
+        return members.map(member => {
+          const kit = kitOf(member);
+          return harden({
+            id: member.id,
+            secret: kit.secret,
+            ...(kit.credential === undefined
+              ? {}
+              : { credential: kit.credential }),
+            ...(kit.adaptRequest === undefined
+              ? {}
+              : { adaptRequest: kit.adaptRequest }),
+            ...(member.accountRef === undefined
+              ? {}
+              : { accountRef: member.accountRef }),
+            onReading: (/** @type {any} */ reading) => {
+              kit.account.accept(reading);
+              brokerOptions.onReading?.(reading);
+            },
+          });
+        });
+      },
+      forSession: (
+        /** @type {string} */ sessionId,
+        /** @type {string} */ preference,
+      ) =>
+        (chooser ?? Fail`${b(label)} pool is not loaded`).forSession(
+          sessionId,
+          preference,
+        ),
+    }),
+  });
+  const scopes = makeProviderScopes({
+    openIssuer: async () => (await broker.start()).issuer,
+    // A status reader asks before any session has opened a grant, so the set
+    // is read here too; it calls no provider.
+    accountSourceOf: async subscriptionId => {
+      const { members } = await load();
+      const member = members.find(entry => entry.id === subscriptionId);
+      return member === undefined ? undefined : kitOf(member).account.source;
+    },
+    listSubscriptions: async () => {
+      const { members } = await load();
+      return harden(
+        members.map(({ id, label: title, weight }) => ({
+          id,
+          label: title,
+          weight,
+        })),
+      );
+    },
+  });
+  return harden({
+    service: scopes.service,
+    close: makeServiceClose({
+      label,
+      scopes,
+      broker,
+      closeAccounts: () => {
+        for (const kit of kits.values()) kit.account.close();
+      },
+    }),
+  });
+};
 
 const LISTENER_DIAGNOSTIC_PREFIX = 'Provider HTTP diagnostic: ';
 
@@ -332,12 +570,26 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0] & { activeAccountRead?: () => Promise<any> }} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { activeAccountRead?: () => Promise<any>, subscriptions?: PooledSubscriptions }} options
  *   `activeAccountRead` is the adapter's one read of its provider's usage
- *   endpoint, host-only and only ever run on request.
+ *   endpoint, host-only and only ever run on request. `subscriptions` makes
+ *   this a broker over several credentials of one provider instead of one.
  */
 export const makeProviderBrokerServiceKit = options => {
-  const { label, activeAccountRead, ...brokerOptions } = options;
+  const { label, activeAccountRead, subscriptions, ...brokerOptions } = options;
+  const reportAccountError = (/** @type {unknown} */ error) =>
+    console.error(
+      `${label} account read failed:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  if (subscriptions !== undefined) {
+    return makePooledBrokerServiceKit({
+      label,
+      subscriptions,
+      brokerOptions,
+      reportAccountError,
+    });
+  }
   // What the account behind this broker's credential has left, as the
   // transport reads it from each response. The source is a facet of the
   // service, so an account oracle can hold it without the scopes' authority,
@@ -346,11 +598,7 @@ export const makeProviderBrokerServiceKit = options => {
     ...(activeAccountRead === undefined
       ? {}
       : { activeRead: activeAccountRead }),
-    reportError: error =>
-      console.error(
-        `${label} account read failed:`,
-        error instanceof Error ? error.message : String(error),
-      ),
+    reportError: reportAccountError,
   });
   const broker = makeProviderBrokerKit({
     ...brokerOptions,
@@ -364,6 +612,26 @@ export const makeProviderBrokerServiceKit = options => {
     openIssuer: async () => (await broker.start()).issuer,
     accountSource: account.source,
   });
+  return harden({
+    service: scopes.service,
+    close: makeServiceClose({
+      label,
+      scopes,
+      broker,
+      closeAccounts: () => account.close(),
+    }),
+  });
+};
+harden(makeProviderBrokerServiceKit);
+
+/**
+ * @param {object} owners
+ * @param {string} owners.label
+ * @param {{ close(): Promise<void> }} owners.scopes
+ * @param {{ close(): Promise<void> }} owners.broker
+ * @param {() => void} owners.closeAccounts
+ */
+const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
   let scopesReleased = false;
   let brokerReleased = false;
   /** @type {Promise<void> | undefined} */
@@ -382,7 +650,7 @@ export const makeProviderBrokerServiceKit = options => {
         brokerReleased = true;
       }
     })();
-    account.close();
+    closeAccounts();
     closing = (async () => {
       const results = await Promise.allSettled([closingScopes, closingBroker]);
       const failures = results.flatMap(result =>
@@ -398,9 +666,8 @@ export const makeProviderBrokerServiceKit = options => {
     });
     return closing;
   };
-  return harden({ service: scopes.service, close });
+  return close;
 };
-harden(makeProviderBrokerServiceKit);
 
 /**
  * Construct a module-instance retained operator entrypoint. Its sole powers

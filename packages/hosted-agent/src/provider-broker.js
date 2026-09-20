@@ -508,6 +508,35 @@ export const makeBrokerOAuthCredential = ({
 };
 harden(makeBrokerOAuthCredential);
 
+/**
+ * One subscription as a grant uses it.
+ *
+ * @typedef {object} BrokerGrantMember
+ * @property {string} id
+ * @property {{ readBase64(): Promise<string> }} secret
+ * @property {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} transport
+ *   This member's own transport, so that what its responses say of the
+ *   account is read as this member's.
+ * @property {ReturnType<typeof makeBrokerOAuthCredential>} [credential]
+ * @property {ProviderRequestAdapter} [adaptRequest]
+ * @property {string} [accountRef] The account an OAuth credential must name.
+ */
+
+/**
+ * @typedef {object} BrokerGrantPool
+ * @property {readonly BrokerGrantMember[]} members
+ * @property {() => string[]} select The member ids to try for the request now
+ *   being admitted, in order. May throw, for a pinned member that is gone.
+ * @property {(memberId: string) => void} served
+ * @property {(memberId: string) => void} exhausted The member refused the
+ *   request as exhausted; its reading, with the time it is back, has already
+ *   reached the member's transport observer.
+ * @property {(memberId: string) => void} [unusable] The member's credential
+ *   would not resolve, or was rejected even after a refresh. The request is
+ *   not tried elsewhere (that failure is not a statement about the request),
+ *   but the pool may skip the member for a while.
+ */
+
 /** The largest chunk a bytes response stream carries. */
 export const RESPONSE_CHUNK_BYTES = 32_768;
 harden(RESPONSE_CHUNK_BYTES);
@@ -634,10 +663,21 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  * Runs after route/model/body admission and before reading credentials.
  * May translate the path within the pinned origin and add non-credential
  * headers; cannot change the method, body, credential, or response bounds.
+ * @param {BrokerGrantPool} [powers.pool]
+ * Several subscriptions of one provider behind this grant, in place of
+ * `secret`, `transport`, `credential` and `adaptRequest`, which describe one.
+ * Each request is tried on the members the pool's `select` names, in order:
+ * a member that refuses it because its allowance is used up (`Provider
+ * subscription exhausted`) is reported to the pool and the request goes to
+ * the next, built afresh for that member — its credential, its adapter
+ * headers (an account header belongs to one account), its transport. Nothing
+ * of a refused attempt reached the caller, so the caller sees one response.
+ * At most one attempt per member per request, beside the one refresh retry
+ * within a member. See designs/hosted-agent-subscriptions.md, "Handover".
  */
 export const makeProviderBrokerGrant = (
   policy,
-  { secret, transport, audit = () => {}, credential, adaptRequest },
+  { secret, transport, audit = () => {}, credential, adaptRequest, pool },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
   const { origin, maxConcurrentRequests, maxRequestBytes, maxResponseBytes } =
@@ -679,19 +719,56 @@ export const makeProviderBrokerGrant = (
   // read synchronously, which requires the credential to be a local object: the
   // single-flight guard it carries only excludes callers sharing that object,
   // so a remote presence to it would not be the guard this mode needs anyway.
+  /** @type {readonly BrokerGrantMember[]} */
+  const members = harden(
+    pool === undefined
+      ? [{ id: 'default', secret, transport, credential, adaptRequest }]
+      : pool.members.map(member => ({ ...member })),
+  );
+  (members.length > 0 &&
+    new Set(members.map(member => member.id)).size === members.length &&
+    members.every(
+      member =>
+        typeof member.id === 'string' &&
+        member.id !== '' &&
+        member.secret !== undefined &&
+        member.transport !== undefined,
+    )) ||
+    Fail`Invalid broker subscription set`;
   if (authMode === 'oauth') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
-    // The grant's account is the operator's selection; a credential for some
-    // other account is a different session's, not this one's.
-    (credential !== undefined &&
-      typeof credential.current === 'function' &&
-      credential.accountRef === accountRef) ||
-      Fail`Unprovisioned broker OAuth mode`;
+    // A member's account is the operator's selection; a credential for some
+    // other account is a different subscription's, not this one's.
+    for (const member of members) {
+      (member.credential !== undefined &&
+        typeof member.credential.current === 'function' &&
+        member.credential.accountRef === (member.accountRef ?? accountRef)) ||
+        Fail`Unprovisioned broker OAuth mode`;
+    }
   }
-  const oauth =
-    authMode === 'oauth'
-      ? (credential ?? Fail`Unprovisioned broker OAuth mode`)
-      : undefined;
+  const oauthMode = authMode === 'oauth';
+  const membersById = new Map(members.map(member => [member.id, member]));
+  // The members to try for a request. A pool may name one this grant does not
+  // hold: the grant took the set as it was when it was issued, and an
+  // operator has since added to it. Such a member is not this grant's to use.
+  const selectOrder = () =>
+    pool === undefined
+      ? ['default']
+      : [...new Set(pool.select())].filter(id => membersById.has(id));
+  /**
+   * The pool's bookkeeping must not change how a request settles: a response
+   * already received is delivered whatever the pool's hook does.
+   *
+   * @param {'served' | 'exhausted' | 'unusable'} hook
+   * @param {string} memberId
+   */
+  const tellPool = (hook, memberId) => {
+    try {
+      pool?.[hook]?.(memberId);
+    } catch (_error) {
+      // Bookkeeping only.
+    }
+  };
   const parsedOrigin = new URL(origin);
   (parsedOrigin.protocol === 'https:' &&
     parsedOrigin.origin === origin &&
@@ -868,13 +945,15 @@ export const makeProviderBrokerGrant = (
    * without re-delegation, and every length derived below is derived from that
    * read rather than cached across it.
    *
+   * @param {BrokerGrantMember} member
    * @param {string} [rejected] - An access token the upstream has just refused,
    * so a credential that still looks current is replaced too.
    * @returns {Promise<ResolvedCredential>}
    */
-  const resolveCredential = async rejected => {
+  const resolveCredential = async (member, rejected) => {
+    const oauth = oauthMode ? member.credential : undefined;
     if (!oauth) {
-      const encoded = await E(secret).readBase64();
+      const encoded = await E(member.secret).readBase64();
       const decoded = decodeSecret(encoded);
       /^[\x21-\x7e]+$/.test(decoded) || Fail`Invalid credential`;
       return harden({ credential: decoded, screens: [decoded, encoded] });
@@ -938,18 +1017,50 @@ export const makeProviderBrokerGrant = (
       new TextEncoder().encode(canonicalBody).length,
     );
     canonicalBytes <= maxRequestBytes || Fail`Request byte quota exceeded`;
-    const adapted = adaptRequest
-      ? adaptRequest(harden({ path, data }))
-      : { path };
-    const upstreamPath = adapted.path;
-    const target = splitInferenceTarget(upstreamPath);
-    (target &&
-      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
-      Fail`Invalid adapted inference target`;
-    const adapterHeaders = forwardableHeaders(adapted.headers ?? {});
-    Object.entries(adapted.headers ?? {}).every(
-      ([name, value]) => adapterHeaders[name] === value,
-    ) || Fail`Invalid adapted inference headers`;
+    /**
+     * A member's translation of the canonical request. Per member, because
+     * what an adapter adds can belong to one account (a ChatGPT account
+     * header), so a request built for one member cannot be replayed under
+     * another.
+     *
+     * @param {BrokerGrantMember} member
+     */
+    const adaptFor = member => {
+      const adapted = member.adaptRequest
+        ? member.adaptRequest(harden({ path, data }))
+        : { path };
+      const upstreamPath = adapted.path;
+      const target = splitInferenceTarget(upstreamPath);
+      (target &&
+        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
+        Fail`Invalid adapted inference target`;
+      const adapterHeaders = forwardableHeaders(adapted.headers ?? {});
+      Object.entries(adapted.headers ?? {}).every(
+        ([name, value]) => adapterHeaders[name] === value,
+      ) || Fail`Invalid adapted inference headers`;
+      return harden({ upstreamPath, adapterHeaders });
+    };
+    // Which subscriptions to try, in order, and the first one's translation:
+    // both before a slot is reserved or any credential read, as the single
+    // translation always was. With a pool a failure here is collapsed like
+    // any other of the request's: what the pool says, a pinned id included,
+    // is the operator's and not for whoever holds the endpoint.
+    /** @type {BrokerGrantMember[]} */
+    let candidates;
+    let firstAdapted;
+    try {
+      candidates = selectOrder().map(
+        id => membersById.get(id) ?? Fail`Unknown broker subscription`,
+      );
+      if (candidates.length === 0) {
+        record('subscriptions-exhausted');
+        throw Fail`Provider subscriptions exhausted`;
+      }
+      firstAdapted = adaptFor(candidates[0]);
+    } catch (error) {
+      if (pool === undefined) throw error;
+      return Fail`Provider request failed`;
+    }
     activeRequests < maxConcurrentRequests ||
       Fail`Provider concurrency limit reached`;
     // Reserve before the secret read; an open stream retains its slot until
@@ -978,11 +1089,18 @@ export const makeProviderBrokerGrant = (
      * retry re-enters here, so every length below is derived from the
      * credentials actually sent rather than cached across the request.
      *
+     * @param {BrokerGrantMember} member
+     * @param {{ upstreamPath: string, adapterHeaders: Record<string, string> }} adapted
      * @param {ResolvedCredential} resolved
      */
-    const dispatch = async ({ credential: token, screens }) => {
+    const dispatch = async (
+      member,
+      { upstreamPath, adapterHeaders },
+      { credential: token, screens },
+    ) => {
       await null;
       checkLive();
+      const { transport: memberTransport } = member;
       for (const screen of screens) {
         if (!exposed.includes(screen)) exposed.push(screen);
       }
@@ -1017,7 +1135,7 @@ export const makeProviderBrokerGrant = (
       /** @param {string} text */
       const echoes = text => exposed.some(screen => text.includes(screen));
       if (streaming) {
-        const response = await E(transport).requestStream(upstream);
+        const response = await E(memberTransport).requestStream(upstream);
         const cancel = () => {
           // Release ownership before the eventual send, including if it fails.
           if (!streams.delete(cancel)) return;
@@ -1126,7 +1244,7 @@ export const makeProviderBrokerGrant = (
           throw _error;
         }
       }
-      const response = await E(transport).request(upstream);
+      const response = await E(memberTransport).request(upstream);
       checkLive();
       (Number.isInteger(response.status) &&
         response.status >= 200 &&
@@ -1143,24 +1261,76 @@ export const makeProviderBrokerGrant = (
       // escape through the grant. Upstream error bodies are never returned.
       return harden({ status: response.status, body: response.body });
     };
-    try {
-      checkLive();
-      const first = await resolveCredential();
+    /**
+     * One subscription's attempt at the request, with its one refresh retry.
+     *
+     * @param {BrokerGrantMember} member
+     * @param {ReturnType<typeof adaptFor>} adapted
+     */
+    const attempt = async (member, adapted) => {
+      const first = await resolveCredential(member).catch(error => {
+        tellPool('unusable', member.id);
+        throw error;
+      });
       try {
-        return await dispatch(first);
+        return await dispatch(member, adapted, first);
       } catch (error) {
         // One retry, and only for the one failure a refresh can fix. A turn
         // whose token was revoked or rotated elsewhere mid-session recovers
         // here; every other failure propagates as it happened. Nothing was
         // delivered to the caller yet: an upstream that rejects the credential
         // does so before the first response byte.
-        if (!oauth || !isCredentialRejection(error)) throw error;
+        if (!oauthMode || !isCredentialRejection(error)) {
+          // A key the upstream rejects cannot be refreshed: the member is
+          // unusable until its secret is replaced.
+          if (isCredentialRejection(error)) tellPool('unusable', member.id);
+          throw error;
+        }
         record('credential-rejected');
         // Naming the refused token is what lets the shared credential tell
         // "replace this one" from "another grant already replaced it": it
         // exchanges only if the record still holds the token that just failed.
-        return await dispatch(await resolveCredential(first.credential));
+        try {
+          return await dispatch(
+            member,
+            adapted,
+            await resolveCredential(member, first.credential),
+          );
+        } catch (retryError) {
+          // Refused again with a fresh credential, or no fresh one to be
+          // had: this member cannot serve until somebody mends it.
+          tellPool('unusable', member.id);
+          throw retryError;
+        }
       }
+    };
+    try {
+      checkLive();
+      /** @type {unknown} */
+      let refusal;
+      for (const [index, member] of candidates.entries()) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await attempt(
+            member,
+            index === 0 ? firstAdapted : adaptFor(member),
+          );
+          tellPool('served', member.id);
+          return result;
+        } catch (error) {
+          // A subscription that is used up refuses at admission, before any
+          // response byte, so the same request can go to the next one. Any
+          // other failure is the request's, and is not tried elsewhere.
+          if (pool === undefined || !isSubscriptionExhaustion(error)) {
+            throw error;
+          }
+          refusal = error;
+          record('subscription-exhausted');
+          tellPool('exhausted', member.id);
+          checkLive();
+        }
+      }
+      throw refusal;
     } catch (_error) {
       finish();
       record('failed');

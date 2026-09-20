@@ -148,6 +148,73 @@ Where phase 4 differs from the design below:
 - `usage` on the endpoint, which the design lists for phase 5, is not here
   yet.
 
+**The broker's half of phases 5 and 6, the pool and the handover, is
+implemented** in `@endo/hosted-agent`. No adapter uses it yet, so no
+deployment can hold two subscriptions: the adapters' setups, Floot's picker
+and the per-member oracles are the other half, and are not written.
+
+- `subscription-pool.js` — the rule and nothing else: `standingOf` (where one
+  subscription stands, from its last reading, at an instant),
+  `selectMembers`, `makeRefusalMarks`, `normalizeSubscriptionSet`, and
+  `makeSubscriptionPool`, which applies them per session and offers its state
+  for keeping when it changes.
+- `provider-broker.js` — a grant takes a `pool` in place of one credential.
+  A request is tried on the members the pool names, in order, **built afresh
+  for each**: its credential, its adapter's headers, its transport. A member
+  that refuses it as exhausted is reported and the request goes to the next;
+  any other failure is the request's own. The echo screen accumulates across
+  members. One admission slot per request, whatever the number of attempts.
+- `provider-grant-issuer.js` — a transport per member per grant, so what a
+  response says of an account is read as that member's. The scope spec
+  carries `subscription` (`auto`, or an id); a single-credential issuer
+  refuses anything but `auto`.
+- `provider-broker-service.js` — `makePooledBrokerServiceKit`, driven by
+  `subscriptions: { readSet, secretOf, credentialOf?, adaptRequestOf?,
+  activeReadOf?, readState?, writeState? }`. The scopes service answers
+  `subscriptions()` and `accountSource(id)`.
+
+Where they differ from the design below:
+
+- **Only local members exist.** There is no wrapped member (another
+  `Subscription`), no `hops`, and no `openEndpoint`: the issuer still starts
+  the listener. Those belong to delegation.
+- **A grant takes the set as it is when it is issued.** A member added later
+  serves the sessions opened after it; a live grant is never handed a member
+  it does not hold. The design said a change is seen at once.
+- **A session's choice is fixed for the life of its scope**, since it is part
+  of the scope's specification.
+- **A reading ages by what it named.** The provider's word that the limit is
+  reached, beside a full window, is about that window and lifts when it
+  resets: a five-hour limit does not block a member for the week. With no
+  window full it stands until every window named has reset. A window that
+  gives no reset time is believed for an hour from the reading, and with no
+  time on the reading not at all; the refusal marks' backoff covers it.
+- **Refusal marks**: requests in flight when a member drains are one refusal,
+  not several in a row; a refusal just after a mark lapsed doubles the pause
+  (one minute to an hour); any later one starts over; a time the provider
+  names always wins.
+- **A member that cannot be used is skipped too**: a secret that will not
+  read, a key the upstream rejects, an OAuth credential rejected after its
+  refresh. The failed request is not tried elsewhere (that failure says
+  nothing about the request); the next one goes elsewhere.
+- **An OAuth set names every member's account**, and no two members may share
+  an account or a secret.
+- **The all-blocked error is not distinct anywhere it could be seen.** The
+  grant collapses it, like a pool's own errors, to `Provider request failed`,
+  because what the pool says (a pinned id) is the operator's; the listener
+  answers a bare 502 either way. It is audited as `subscriptions-exhausted`.
+  A view learns that every subscription is blocked from `watchAccounts()`.
+- **`served` is recorded when a streamed response starts**, so a stream that
+  outlasts the cache lifetime ends "cold".
+- **The pool does not journal readings**; the oracles do. After a restart
+  every member is unknown to the pool and only the refusal marks and the
+  sessions' last members survive, which is what stops a drained account being
+  retried.
+- **No `serving` turn event, no handover notice, no `watchServing()`.** A
+  handover is recorded in the broker's audit trail only.
+- `weight` is declared, not defaulted from a plan, and the attestation still
+  names the pool's label and not its set.
+
 ## What is the Problem Being Solved?
 
 A hosted agent session spends a subscription: a ChatGPT plan through Codex, a
