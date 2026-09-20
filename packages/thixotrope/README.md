@@ -436,7 +436,7 @@ They do not simulate hardware power loss or storage devices that ignore fsync.
 `THIXOTROPE_IRONHORSE_WORKER` can select a different binary.
 
 `makeIronhorseEngine(powers, { workerBinary, bootPaths, storePath, crankBudget,
-requestTimeoutMs })` implements the existing WorkerEngine interface. The
+bootstrapBudget, slotCeiling, chunkCeiling, requestTimeoutMs })` implements the existing WorkerEngine interface. The
 bootstrap uses the real SES shim and compartments. Native `async` functions,
 ordinary promises, closures, and retained capabilities persist in SQLite without guest-side
 serialization. Suspended async activations use the new `ASYN` snapshot atom
@@ -463,6 +463,42 @@ failure in worker metadata, and retires the logical comms session so pending
 calls reject. Other vats continue to run. Failed vats do not replay the same
 poison input after a restart; inspection does not retry that input.
 
+Configure the daemon-wide defaults when starting `thix serve`:
+
+```sh
+THIXOTROPE_CRANK_BUDGET=20000000 \
+THIXOTROPE_BOOTSTRAP_BUDGET=1500000000 \
+THIXOTROPE_SLOT_CEILING=2000000 \
+THIXOTROPE_CHUNK_CEILING=536870912 \
+THIXOTROPE_REQUEST_TIMEOUT_MS=90000 \
+thix serve ./private-state
+```
+
+`thix status ./private-state` reports the effective settings under `ironhorse`.
+Per-vat overrides are not implemented yet.
+
+| Setting | Unit | Default | Supported range |
+| --- | --- | --- | --- |
+| `THIXOTROPE_CRANK_BUDGET` | computrons per guest crank | 10,000,000 | 1 to 2^64−1 |
+| `THIXOTROPE_BOOTSTRAP_BUDGET` | computrons per bootstrap script or peer initialization | 1,000,000,000 | 1 to 2^64−1 |
+| `THIXOTROPE_SLOT_CEILING` | slot records | 1,000,000 | 1 to 2^32−1 |
+| `THIXOTROPE_CHUNK_CEILING` | chunk address-space bytes | 268,435,456 | 1 to 2^32−1 |
+| `THIXOTROPE_REQUEST_TIMEOUT_MS` | milliseconds per worker request | 60,000 | 1 to 2^31−1 |
+
+Supply positive decimal integers; zero does not mean unlimited.
+The engine API also accepts bigint budgets; numeric inputs must fit unsigned 32 bits.
+Status reports computron budgets as decimal strings to preserve precision.
+Heap ceilings are arena limits, not per-crank allowances or total process memory limits.
+
+Execution and heap limits may increase on restart while preserving the workspace.
+Decreases are rejected before workers start; repeat raised settings on subsequent starts so omitted
+settings do not revert to lower defaults.
+The watchdog timeout may change in either direction.
+Raising limits does not automatically retry an already failed vat.
+Older runtime manifests require migration or a fresh directory; the increase policy applies to
+version-2 manifests.
+See [the limits design](designs/ironhorse-limits.md) for compatibility details.
+
 This remains an experimental, local, single-supervisor MVP.
 A kernel-backed directory lease refuses concurrent supervisors.
 Workers hold shared incarnation leases until they exit; a replacement supervisor
@@ -481,8 +517,8 @@ not part of this CLI.
 ### Compatibility and recovery
 
 `runtime.json` records the worker executable hash, ordered bootstrap hashes,
-crank budget, and host delivery protocol.
-The worker's SQLite signature includes the resulting profile digest.
+host delivery protocol, and the current execution limits.
+The worker's SQLite signature includes the code identity digest, excluding mutable limits.
 The supervisor validates this manifest under its lease before restoring heaps or
 cleaning abandoned incarnations, and executes private checked copies throughout
 its lifetime so edits to the original paths cannot change a later wake.
@@ -498,7 +534,7 @@ An inspection of a running store is not a transactional backup.
 
 Recovery is deliberately explicit:
 
-- After process death, reopen with the same runtime and budget; leases release
+- After process death, reopen with the same runtime and equal or higher execution limits; leases release
   when their owning processes exit, and the new supervisor recovers image plus journal.
 - On an identity mismatch, restore the matching executable and bootstrap bytes.
   Do not edit the manifest to bypass the check.
