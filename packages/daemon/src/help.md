@@ -616,24 +616,24 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 
 Blobs store binary content with a content-addressed hash.
 Use text() to read as a string, json() to parse as JSON,
-streamBase64() for streaming access, or getInfo()/fetch()
-for the content-addressed range-I/O surface.
+streamBase64() for base64 streaming, bytes() for byte streaming,
+or byteRange() / textRange() for attenuation.
 
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
 
-## getInfo() -> Promise<{ algorithm, hash, size }>
+## sha256() -> Promise<string>
 
-The content-addressed identity of the blob in one round-trip:
-algorithm ("sha256"), hash (base64), and size (bigint bytes).
-Lets a caller consult a local content store before fetching.
+Return the SHA-256 digest of the selected bytes as base64.
 
-## fetch(offset, length) -> Promise<PassableBytesReader>
+## size() -> Promise<bigint>
 
-Read the byte range [offset, offset + length) without
-streaming the whole blob. offset and length are bigints;
-the range is clamped at end-of-content.
+Return the selected byte length.
+
+## bytes() -> Promise<PassableBytesReader>
+
+Stream all selected bytes.
 
 ## streamBase64(syndicationPromise) -> Promise
 
@@ -648,6 +648,21 @@ Read the entire blob as a UTF-8 string.
 ## json() -> Promise<any>
 
 Read and parse the blob as JSON.
+
+## byteRange(start, end) -> EndoReadable
+
+Attenuate to the half-open byte interval [start, end) of this blob.
+Returns a new EndoReadable with exactly the authority to read the selected
+bytes; ranges compose (a range of a range intersects) and start === end selects
+an empty blob. start and end are bigints. Construction reads no bytes, so it
+resolves synchronously.
+
+## textRange(startLine, endLine) -> Promise<EndoReadable>
+
+Attenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,
+CRLF preserved) of the blob's bytes.
+Returns a new EndoReadable over the corresponding byte slice; it reads bytes to
+find the line boundaries, so it resolves asynchronously.
 
 # Endo Bootstrap - The root interface for the Endo daemon.
 
@@ -721,8 +736,7 @@ peerInfo: { node: string, addresses: string[] }
 
 An immutable, content-addressed directory: entries cannot be added, removed,
 or modified. lookup() returns EndoReadable values for files and nested
-ReadableTree values for subdirectories. Its identity is available via sha256()
-or, uniformly with blobs, via getInfo().
+ReadableTree values for subdirectories. Its identity is available via sha256().
 
 ## help(methodName?) -> string
 
@@ -732,12 +746,9 @@ Get documentation for this interface or a specific method.
 
 The content address of the tree's manifest, as base64.
 
-## getInfo() -> Promise<{ algorithm, hash, size }>
+## size() -> Promise<bigint>
 
-The content-addressed identity of the tree in one round-trip: algorithm
-("sha256"), hash (base64, the same value as sha256()), and size (the byte
-length of the tree's own manifest). The uniform identity accessor shared with
-blobs, so generic code can read a content hash off any blob or tree.
+Return the byte length of the tree's own manifest.
 
 ## has(...names) -> Promise<boolean>
 
@@ -951,7 +962,7 @@ Capture current state as an immutable readable-tree.
 # EndoMountFile - A file within a mounted directory.
 
 A live, host-backed file. Read it with text() / json() / streamBase64(),
-inspect and range-read it with getInfo() / fetch(), write it with
+inspect and read it with sha256() / size() / bytes(), write it with
 writeText() / append() / writeBytes(), or snapshot() it into the content
 store. kind() returns "file" and stat() returns the bigint-nanosecond metadata
 record.
@@ -969,17 +980,32 @@ Return the structural kind of this lookup result.
 Not available on a file.
 Use text() to read its contents.
 
-## getInfo() -> Promise<{ algorithm, hash, size }>
+## sha256() -> Promise<string>
 
-The content-addressed identity of the file's current bytes in one
-round-trip: algorithm ("sha256"), hash (base64), and size (bigint).
-Recomputed each call, since the live file may change.
+Return the SHA-256 digest of the file's current bytes as base64.
 
-## fetch(offset, length) -> Promise<PassableBytesReader>
+## size() -> Promise<bigint>
 
-Read the byte range [offset, offset + length) of the live file without
-streaming the whole thing. offset and length are bigints; the range is
-clamped at end-of-content.
+Return the current byte length.
+
+## bytes() -> Promise<PassableBytesReader>
+
+Stream all current bytes.
+
+## byteRange(start, end) -> ReadableBlobView
+
+Attenuate to the half-open byte interval [start, end) of the live file.
+Returns a read-only ReadableBlob view with exactly the authority to read the
+selected bytes; ranges compose (a range of a range intersects) and the view
+still observes the live file subject to the fixed interval. start and end are
+bigints. Construction reads no bytes, so it resolves synchronously.
+
+## textRange(startLine, endLine) -> Promise<ReadableBlobView>
+
+Attenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,
+CRLF preserved) of the live file's current bytes.
+Returns a read-only ReadableBlob view over the corresponding byte slice; it
+reads bytes to find the line boundaries, so it resolves asynchronously.
 
 ## text() -> Promise<string>
 
@@ -1008,6 +1034,6 @@ Write bytes from an async iterator. Throws if read-only.
 
 ## readOnly() -> ReadableBlob
 
-Returns a structural ReadableBlob view (text, json, streamBase64, getInfo,
-fetch) of this file. The view is a write-disabled face over the live file,
+Returns a structural ReadableBlob view (text, json, streamBase64, sha256,
+size, bytes) of this file. The view is a write-disabled face over the live file,
 not a snapshot. Mount-specific extensions (stat, snapshot) are not on it.

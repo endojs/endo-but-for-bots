@@ -2,6 +2,8 @@
 /// <reference types="ses"/>
 
 /** @import { SnapshotTree } from '@endo/platform/fs/lite/types' */
+/** @import { ERef } from '@endo/eventual-send' */
+/** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { EndoMount, EndoMountControl, FilePowers, MountNameChange } from './types.js' */
 
 import { E } from '@endo/eventual-send';
@@ -16,8 +18,14 @@ import {
   provideSearch,
   GLOB_MAX_RESULTS,
   GREP_MAX_RESULTS,
+  assertByteRange,
+  assertLineRange,
+  composeByteInterval,
+  lineRangeToByteSlice,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
+import { sha256 } from '@endo/sha256';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
@@ -52,7 +60,7 @@ const revokedSentinel = Symbol('mount-revoked');
  *
  * @param {unknown} value
  * @param {string[]} methodNames
- * @returns {asserts value is import('@endo/eventual-send').ERef<import('@endo/exo-stream').PassableBytesReader>}
+ * @returns {asserts value is ERef<PassableBytesReader>}
  */
 const assertReadableBlobSource = (value, methodNames) => {
   if (!methodNames.includes('streamBase64')) {
@@ -76,6 +84,29 @@ const bytesFromRange = bytes => {
   return bytesReaderFromIterator(generator());
 };
 harden(bytesFromRange);
+
+/**
+ * Drain a `PassableBytesReader` (local or remote) into one `Uint8Array`.
+ *
+ * @param {ERef<PassableBytesReader>} reader
+ * @returns {Promise<Uint8Array>}
+ */
+const collectBytes = async reader => {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of iterateBytesReader(/** @type {any} */ (reader))) {
+    chunks.push(chunk);
+    total += chunk.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+};
+harden(collectBytes);
 
 // Monotonic suffix for the scratch path `write()` streams a blob into
 // before atomically renaming it onto the target.  The counter alone is
@@ -1602,7 +1633,7 @@ const makeMountFileExo = (
       return filePowers.readFileText(filePath);
     },
 
-    /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
+    /** @param {ERef<unknown>} synPromise */
     streamBase64(synPromise) {
       /** @returns {AsyncGenerator<Uint8Array>} */
       const readConfined = async function* readConfinedFile() {
@@ -1678,52 +1709,75 @@ const makeMountFileExo = (
       return filePowers.statPath(filePath);
     },
 
-    // `getInfo` / `fetch` are the rich `BlobRef` range-I/O surface over the
-    // *live* file (this is a read-only face, not a snapshot — the content can
-    // still change underneath and is observed on each call). `getInfo` returns
-    // the `{ algorithm, hash, size }` triple of the current bytes (hash base64,
-    // matching `BlobRef`); `fetch` is a windowed read.
+    // The named digest, size, and byte-stream methods expose the current
+    // content of this live file rather than a snapshot.
     //
-    // The hash and size are read with one concurrent `Promise.all` to keep the
-    // window minimal, but a fully atomic snapshot would require a single
-    // combined hash+size host primitive (the XS host hashes by *path*, not over
-    // an in-memory buffer, so there is no portable read-bytes-once path). A
-    // concurrent writer mutating the file between the two reads can therefore
-    // yield a hash and size from adjacent instants; callers needing a stable
-    // identity should `snapshot()` (content-addressed, immutable) rather than
-    // reading a live face. See designs/fs-interface-consolidation.md § C4.
-    async getInfo() {
+    // Separate calls may observe adjacent instants if a concurrent writer
+    // mutates the file; callers needing stable identity should use snapshot().
+    async sha256() {
       await null;
       assertLive();
       await assertConfined(filePath, confinementRoot, filePowers);
-      const [hashHex, fileStat] = await Promise.all([
-        filePowers.sha256(filePath),
-        filePowers.statPath(filePath),
-      ]);
-      return harden({
-        algorithm: 'sha256',
-        hash: encodeBase64(fromHex(hashHex)),
-        size: fileStat.size,
-      });
+      return encodeBase64(fromHex(await filePowers.sha256(filePath)));
     },
-
-    /**
-     * @param {bigint} offset
-     * @param {bigint} length
-     */
-    async fetch(offset, length) {
+    async size() {
       await null;
       assertLive();
       await assertConfined(filePath, confinementRoot, filePowers);
-      // Validate at the bigint→Number boundary (same `toSafeNumber` the
-      // extended `BlobRef.fetch` uses) so negative or out-of-range windows
-      // throw `EINVAL` rather than silently losing precision in `fs.read`.
+      return (await filePowers.statPath(filePath)).size;
+    },
+    async bytes() {
+      await null;
+      assertLive();
+      await assertConfined(filePath, confinementRoot, filePowers);
+      const fileSize = (await filePowers.statPath(filePath)).size;
       const bytes = await filePowers.readFileRange(
         filePath,
-        toSafeNumber(offset, 'offset'),
-        toSafeNumber(length, 'length'),
+        0,
+        toSafeNumber(fileSize, 'size'),
       );
       return bytesFromRange(bytes);
+    },
+
+    // Range *attenuation* (designs/readableblob-range-attenuation.md): a
+    // read-only `ReadableBlob` view over the selected byte (`byteRange`) or line
+    // (`textRange`) interval of this *live* file. The derived view reads
+    // through a read-only face carrying the same `revocation` record, so each
+    // read still observes the source subject to the fixed interval and a range
+    // of a revoked mount revokes with it. `byteRange` reads no bytes, so it
+    // resolves synchronously; `textRange` reads to find LF boundaries, so it is
+    // async.
+    /**
+     * @param {bigint} rangeStart
+     * @param {bigint} rangeEnd
+     */
+    byteRange(rangeStart, rangeEnd) {
+      assertLive();
+      const readOnlyFile = makeMountFileExo(
+        filePath,
+        true,
+        filePowers,
+        confinementRoot,
+        snapshotFile,
+        revocation,
+      );
+      return makeReadableBlobView(readOnlyFile).byteRange(rangeStart, rangeEnd);
+    },
+    /**
+     * @param {number} startLine
+     * @param {number} endLine
+     */
+    async textRange(startLine, endLine) {
+      assertLive();
+      const readOnlyFile = makeMountFileExo(
+        filePath,
+        true,
+        filePowers,
+        confinementRoot,
+        snapshotFile,
+        revocation,
+      );
+      return makeReadableBlobView(readOnlyFile).textRange(startLine, endLine);
     },
 
     async snapshot() {
@@ -1758,39 +1812,121 @@ harden(makeMountFileExo);
 
 /**
  * Structural-narrowing view exposing the read-only `ReadableBlob` surface
- * (`streamBase64`, `text`, `json`) plus the rich range-I/O surface (`getInfo`,
- * `fetch`) over a read-only mount file. This is a write-disabled *face* over a
- * live file — it delegates to the underlying file, so content changes are
- * observed; it just cannot be written through.
+ * (`streamBase64`, `text`, `json`) plus named digest, size, bytes, and range
+ * methods over a
+ * read-only mount file. This is a write-disabled *face* over a live file — it
+ * delegates to the underlying file, so content changes are observed; it just
+ * cannot be written through.
+ *
+ * `interval` is the absolute byte interval over the underlying file this view
+ * exposes: `{ start, end }` with `end === undefined` meaning "to the file's
+ * end". A `byteRange` / `textRange`
+ * attenuation returns a new view over the composed interval, reading through
+ * the same underlying file, so nested ranges intersect and
+ * every read still observes the live source. Reads route through the file's
+ * named read surface rather than a direct call, so a view
+ * works whether the underlying file is a local exo or a remote presence.
  *
  * @param {object} readOnlyFile - An EndoMountFile whose `readOnly` is true.
+ * @param {{ start: number, end: number | undefined }} [interval]
  * @returns {object}
  */
-const makeReadableBlobView = readOnlyFile => {
+const makeReadableBlobView = (
+  readOnlyFile,
+  interval = { start: 0, end: undefined },
+) => {
+  const { start, end } = interval;
+  const isFull = start === 0 && end === undefined;
+
+  /** @returns {Promise<Uint8Array>} the view's currently selected bytes */
+  const readSelected = async () => {
+    // Read through the underlying file's byte stream, then select locally.
+    // Calling its public `byteRange` here would mint another blob view whose
+    // `bytes` method recurs through this function. One underlying read also
+    // ensures the selected bytes come from a single observation of the live
+    // file rather than separate size and content observations.
+    const bytes = await collectBytes(E(readOnlyFile).bytes());
+    const clampedEnd = end === undefined ? bytes.length : end;
+    return bytes.slice(
+      Math.min(start, bytes.length),
+      Math.min(clampedEnd, bytes.length),
+    );
+  };
+
   return makeExo('EndoMountReadableBlob', ReadableBlobRangeInterface, {
-    /** @param {import('@endo/eventual-send').ERef<any>} synPromise */
+    /** @param {ERef<any>} synPromise */
     async streamBase64(synPromise) {
-      return E(readOnlyFile).streamBase64(synPromise);
+      if (isFull) {
+        return E(readOnlyFile).streamBase64(synPromise);
+      }
+      // Attenuated view: stream the selected bytes as one base64 chunk.
+      const pump = makeReaderPump(
+        mapReader(
+          /** @type {any} */ (
+            (async function* selected() {
+              const bytes = await readSelected();
+              if (bytes.length > 0) yield bytes;
+            })()
+          ),
+          encodeBase64,
+        ),
+      );
+      return pump(/** @type {any} */ (synPromise));
     },
     async text() {
-      return E(readOnlyFile).text();
+      return isFull ? E(readOnlyFile).text() : decodeUtf8(await readSelected());
     },
     async json() {
-      return E(readOnlyFile).json();
+      return isFull
+        ? E(readOnlyFile).json()
+        : JSON.parse(decodeUtf8(await readSelected()));
     },
-    async getInfo() {
-      return E(readOnlyFile).getInfo();
+    async sha256() {
+      if (isFull) {
+        return E(readOnlyFile).sha256();
+      }
+      const bytes = await readSelected();
+      return encodeBase64(sha256(bytes));
     },
+    async size() {
+      if (isFull) {
+        return E(readOnlyFile).size();
+      }
+      return BigInt((await readSelected()).length);
+    },
+    async bytes() {
+      return bytesFromRange(await readSelected());
+    },
+    // `byteRange` resolves synchronously (no bytes read) to a new view over the
+    // composed byte interval, intersected with this view's authority.
     /**
-     * @param {bigint} offset
-     * @param {bigint} length
+     * @param {bigint} rangeStart
+     * @param {bigint} rangeEnd
      */
-    async fetch(offset, length) {
-      return E(readOnlyFile).fetch(offset, length);
+    byteRange(rangeStart, rangeEnd) {
+      const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+      const composed = composeByteInterval(start, end, s, e);
+      return makeReadableBlobView(readOnlyFile, composed);
+    },
+    // `textRange` reads the selected bytes to find LF line boundaries, then
+    // returns a view over the corresponding byte slice.
+    /**
+     * @param {number} startLine
+     * @param {number} endLine
+     */
+    async textRange(startLine, endLine) {
+      const { startLine: s, endLine: e } = assertLineRange(startLine, endLine);
+      if (e <= s) {
+        return makeReadableBlobView(readOnlyFile, { start, end: start });
+      }
+      const bytes = await readSelected();
+      const slice = lineRangeToByteSlice(bytes, s, e);
+      const composed = composeByteInterval(start, end, slice.start, slice.end);
+      return makeReadableBlobView(readOnlyFile, composed);
     },
     help(method) {
       return method === undefined
-        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (text, json, streamBase64, getInfo, fetch).'
+        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (bytes, byteRange, text, textRange, json, sha256, size, streamBase64).'
         : `No documentation for method ${q(method)}.`;
     },
   });

@@ -470,7 +470,7 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
    * length)`, reading only that window from disk rather than the whole
    * file. Returns fewer bytes when the window extends past EOF (and an
    * empty array when `offset` is already at or beyond EOF), mirroring
-   * the in-memory `BlobRef.fetch` clamp semantics.
+   * the in-memory byte-range clamp semantics.
    *
    * @param {string} path
    * @param {number} offset
@@ -501,7 +501,7 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
 
   /**
    * Content hash of a file: the hex sha256 of its current bytes. The `hash`
-   * half of a content-addressed `getInfo()` triple for a *live* file (recomputed
+   * digest for a *live* file (recomputed
    * on each call, since the file may change).
    *
    * @param {string} path
