@@ -6,6 +6,17 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[hosted-agent-subscriptions](hosted-agent-subscriptions.md) (added 2026-09-20;
+subscription status for hosted agents read from the rate-limit headers the
+broker drops today and published for views to subscribe to; several
+subscriptions per provider behind one pool that drains the one whose allowance
+resets soonest, stays put while the prompt cache is warm, and redispatches a
+held request on the next subscription when one drains mid-turn; operator-only
+Codex reset credits; context occupancy from every backend, with the Claude
+cached-token undercount it found; and delegation to a peer as two capabilities,
+a runner and an attenuated share with its own journalled budget, over bytes
+exo-streams read with a buffer; records which provider facts came from the
+pinned binaries and which remain unverified),
 [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
 (added 2026-09-14; the ordering proposal for the daemon SES and worker-protocol
 acceptance scope PR #1263 fenced off — fifteen architecture-review findings in
@@ -310,6 +321,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | — | Proposed |
 | [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-17 | In Progress — Tokyo UA at `50d036bc7`; shared queues/emergency stop deployed; bounded history/storage and final conformance pending |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
@@ -550,6 +562,8 @@ hosted-agent broker's OAuth credential lifecycle and the record of why both
 vendor subscription modes stay closed; its buckets are left to #1146 for the
 same reason.
 
+The 2026-09-20 update adds [hosted-agent-subscriptions](hosted-agent-subscriptions.md) (Proposed); its buckets and the M5 totals are left to #1146 for the same reason.
+
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
 **2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design -> 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
@@ -623,6 +637,7 @@ inventing implementation commitments.
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
 | `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
+| `hosted-agent-subscriptions` | M5 | How much of each subscription is left and when it resets, several subscriptions per provider drained soonest-to-expire with mid-turn handover, context occupancy, and delegating a runner or an attenuated share to a peer. Extends the broker and the account oracle. |
 | `hosted-agent-sandbox-unification` | M10 | Shared Claude/Codex/OpenCode runtime and revocable session authority; replaces mandatory request-count/expiry leases and redundant limits. |
 | `daemon-engo-supervisor`, `worker-rust-xs` | M11 | Supervisor and native worker path for `endor`. |
 | `hardener-indexed-cardinality` | Out of milestone | Localized `master`-based hardener performance work; no roadmap dependency or critical-path effect. |
@@ -752,6 +767,7 @@ flowchart TD
         efdeploy[floot-admin-deploy-workflows<br/><i>IN PROGRESS</i>]
         eselfupd[hosted-endo-self-update-loop<br/><i>COMPLETE</i>]
         ebroker[hosted-agent-broker-oauth<br/><i>IN PROGRESS</i>]
+        esubs[hosted-agent-subscriptions<br/><i>PROPOSED</i>]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
@@ -759,6 +775,7 @@ flowchart TD
         eoauth --> eproactive
         eoauth --> esheets
         eoauth -.-> ebroker
+        ebroker --> esubs
         ereminder -.-> eworkflow
         eworkflow --> efdeploy
         efdeploy --> eselfupd
@@ -916,6 +933,8 @@ flowchart TD
     dsand --> hsandbox
     dsecret --> hsandbox
     ebroker --> hsandbox
+    hsandbox --> esubs
+    dsecret --> esubs
 
     %% endo-workflow (eworkflow, Agent Capabilities) composes the daemon
     %% form/request mail, agentry agents, and the git loop; top-level for
@@ -1188,6 +1207,7 @@ from M3's "build the gateway package and ship a self-host story".
 | gateway-key-recovery *(gap)* | — | **Design gap.** Operator-side bearer-token re-issue conditioned on OAuth-proof-of-identity; narrower than the removed endo-gateway Open Question 1 (Pass-Invariant-Eq), whose material is now folded into [gateway-package](gateway-package.md), and which stays open as the broader follow-up of [daemon-agent-network-identity](daemon-agent-network-identity.md). |
 | gateway-stripe-adapter *(gap)* | — | **Design gap.** Reference adapter for the `verifyPaymentProof` power Phase 8 (PR [#396](https://github.com/endojs/endo-but-for-bots/pull/396)) injected. Webhook signature validation, Stripe-API integration, idempotency, refund handling. May be small enough to live as implementation rather than design, but a short design note pinning the wire shape and failure modes reduces drift risk; recommended as a design file. |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | In Progress | Credential custody for hosted agent sessions: `authMode: 'oauth'` in `@endo/hosted-agent`'s provider broker, with expiry, single-flight refresh, a generation-checked write-ahead refresh intent, rotate-only write-back, and account binding, plus the sourced feasibility finding, which differs by vendor: Codex **does** document a path (`chatgptAuthTokens`, where the host owns the ChatGPT auth lifecycle), so that mode is **unproven rather than unavailable** and needs a live session; for Claude Code no vendor exposes the broker role to a third party for an individual subscription. Both modes stay closed here. Answers the "which credential bills this session" half of the metering rows below; distinct from [endoclaw-oauth](endoclaw-oauth.md) (generic agent-side OAuth capability, M7), which it is the bounded inference-only instance of. |
+| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | Proposed | Subscription status read from the rate-limit headers the broker drops today, one account oracle per subscription with a push path, and `watchAccounts()` for views; a per-provider pool that resolves credentials inside one request, drains the member whose allowance resets soonest, stays while the prompt cache is warm, and hands a refused request to the next member; operator-only Codex reset credits with a stored idempotency intent; a disjoint `usage` event with context occupancy, fixing the Claude cached-token undercount; delegation as two capabilities, a runner that owns its listener and an attenuated share with a reserve-then-settle journalled budget; the provider response as a bytes exo-stream with a producer-side read-ahead cap. Answers the "how much is left" half of the metering rows below. Several provider facts are recorded as unverified; each names the phase it gates. |
 | gateway-resource-classes *(gap, may fold into stripe-adapter)* | — | **Design gap.** Phase 8 (PR #396) names compute (computrons), storage, network, and inference (cogitrons) as the resource classes; the per-class measurement surfaces (what counts as a computron, how cogitrons map to upstream provider tokens, how network bytes are counted across HTTP / WS / OCapN) need per-class spec text. Likely folds into `gateway-stripe-adapter` unless the metering becomes its own work. |
 
 **Exit criterion:** A user signs into a hosted gateway via OAuth,
@@ -1813,6 +1833,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | gateway-key-recovery *(gap)* | S-M | 3 days | 5 | Design gap; operator-side bearer-token re-issue (referenced by M6 P4 slice) |
 | gateway-stripe-adapter *(gap)* | S-M | 3 days | 5 | Design gap; reference adapter for `verifyPaymentProof` (referenced by M6 P3 slice) |
 | hosted-agent-broker-oauth | S-M | 3 days | 5 | Broker-side OAuth lifecycle (expiry, single-flight refresh, write-ahead refresh intent, rotate-only write-back, account binding, one bounded retry) plus the vendor feasibility finding; landed. Remaining effort is the live acceptance matrix against a real upstream, not further design. |
+| hosted-agent-subscriptions | L | 3-4 weeks (provisional) | 5 | Nine phases; phases 1 to 4 (usage and context, readings, subscribing, bytes stream) are about one week and useful with a single subscription. The pool, handover and shares depend on live tests with two accounts and a real peer connection; re-estimate after phase 4. Off the critical path. |
 | endo-gateway-mcp | M | ~2 weeks | 6 | MCP JSON-RPC termination; counted under M6 as the MCP-bridge milestone's own work. Design merged today (PR [#376](https://github.com/endojs/endo-but-for-bots/pull/376)) |
 | familiar-unified-weblet-server | M | 3 days | 7 | Web-server restructuring; design revised in PR #100 |
 | familiar-chat-weblet-hosting | M | 4-5 days | 7 | Iframe hosting, guest profiles (1.2x bump) |
