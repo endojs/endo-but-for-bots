@@ -18,6 +18,7 @@ import { E } from '@endo/eventual-send';
 import {
   mintWithPowersPath,
   providePrivateDirectory,
+  publishAccountOracle,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedRenewableCredentials } from '@endo/hosted-agent/managed-renewable-credentials.js';
 import {
@@ -231,6 +232,13 @@ export const main = async (host, { exec } = {}) => {
       env.ENDO_CODEX_BACKEND_NAME || 'codex-backend',
     ]);
   }
+  await publishAccountOracle(host, {
+    label: 'Codex',
+    dir: SANDBOX_DIR,
+    providerId: 'codex',
+    flootDir,
+    backendId: 'codex',
+  });
   console.log(
     'Hosted Codex ready: common scoped sandbox, retained subscription broker, daemon-owned sessions.',
   );

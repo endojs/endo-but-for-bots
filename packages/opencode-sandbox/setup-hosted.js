@@ -61,6 +61,7 @@ import {
   assertRetainedBrokerImages,
   mintWithPowersPath,
   providePrivateDirectory,
+  publishAccountOracle,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { Fail, q } from '@endo/errors';
 
@@ -363,6 +364,13 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       `Floot controller profile "${flootDir}/controller-profile" is absent; skipping the "${backendName}" binding.`,
     );
   }
+  await publishAccountOracle(hostAgent, {
+    label: 'OpenCode',
+    dir: SANDBOX_DIR,
+    providerId: 'openrouter',
+    flootDir,
+    backendId: 'opencode',
+  });
 
   console.log(
     `Hosted OpenCode sandbox ready. Floot sessions on backend "opencode" are recorded under "${SANDBOX_DIR}/session-records" and owned by the daemon.`,

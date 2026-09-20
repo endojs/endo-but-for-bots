@@ -272,7 +272,11 @@ test.serial(
       ENDO_OPENCODE_STATE_DIR: undefined,
     });
     await main(fake.host);
-    t.is(fake.mints.length, 4, 'credential, broker, session storage, backend');
+    t.is(
+      fake.mints.length,
+      5,
+      'credential, broker, session storage, backend, account source',
+    );
     t.deepEqual(fake.reads, [
       ['formula', 'native-sandbox-id'],
       ['env', 'native-sandbox-id'],
@@ -289,7 +293,14 @@ test.serial(
     const { host, bindings, mints, copies, removed } = preflightHost();
     await main(host);
 
-    t.is(mints.length, 4, 'credential + broker + session storage + backend');
+    // The fifth is the broker's read-only account source, minted again over
+    // the broker on every run for the account oracle.
+    t.is(
+      mints.length,
+      5,
+      'credential + broker + session storage + backend + account source',
+    );
+    t.regex(mints[4].specifier, /account-source-module\.js$/);
     t.regex(mints[0].specifier, /managed-credentials-module\.js$/);
     t.is(mints[1].specifier, brokerServiceSpecifier);
     t.is(mints[2].specifier, sessionStorageSpecifier);
@@ -310,11 +321,20 @@ test.serial(
       bindings.has(key('floot', 'controller-profile', 'opencode-backend')),
       'the factory facet is bound into the Floot profile',
     );
-    t.deepEqual(copies.at(-1), {
-      from: ['opencode-sandbox', 'backend'],
-      to: ['floot', 'controller-profile', 'opencode-backend'],
-    });
-    t.deepEqual(removed.at(-1), ['opencode-sandbox', 'backend-next']);
+    // The account oracle's provisioning follows the backend's binding, so
+    // the binding is found, not assumed to be the last thing done.
+    t.deepEqual(
+      copies.find(copy => copy.to.at(-1) === 'opencode-backend'),
+      {
+        from: ['opencode-sandbox', 'backend'],
+        to: ['floot', 'controller-profile', 'opencode-backend'],
+      },
+    );
+    t.true(
+      removed.some(
+        parts => key(...parts) === key('opencode-sandbox', 'backend-next'),
+      ),
+    );
   },
 );
 
@@ -452,7 +472,13 @@ test.serial(
     t.false(bindings.has(key('test-auth.broker-read')));
     t.deepEqual(
       mints.map(mint => [mint.options.resultName].flat().at(-1)),
-      ['test-auth', 'broker-service', 'session-storage', 'backend-next'],
+      [
+        'test-auth',
+        'broker-service',
+        'session-storage',
+        'backend-next',
+        'account-source',
+      ],
     );
   },
 );
@@ -495,7 +521,7 @@ test.serial(
     await main(fake.host);
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().at(-1)),
-      ['test-auth', 'backend-next'],
+      ['test-auth', 'backend-next', 'account-source'],
     );
     t.true(fake.reads.some(([, id]) => id === 'broker-service-id'));
     t.true(fake.reads.some(([, id]) => id === 'session-storage-id'));
@@ -596,7 +622,9 @@ test.serial(
     });
     t.is(inspected.length, 1);
     t.false(
-      resolvedHost.mints.some(mint => mint.specifier === brokerServiceSpecifier),
+      resolvedHost.mints.some(
+        mint => mint.specifier === brokerServiceSpecifier,
+      ),
       'the broker is retained, not re-minted',
     );
     // The listener image is compared the same way when the environment names
@@ -607,7 +635,8 @@ test.serial(
     });
     const listener = retainedHost(retained());
     await t.throwsAsync(main(listener.host), {
-      message: /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
+      message:
+        /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
     });
     t.deepEqual(listener.mints, []);
     await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
