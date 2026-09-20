@@ -148,10 +148,10 @@ Where phase 4 differs from the design below:
 - `usage` on the endpoint, which the design lists for phase 5, is not here
   yet.
 
-**The broker's half of phases 5 and 6, the pool and the handover, is
-implemented** in `@endo/hosted-agent`. No adapter uses it yet, so no
-deployment can hold two subscriptions: the adapters' setups, Floot's picker
-and the per-member oracles are the other half, and are not written.
+**Phases 5 and 6, the pool and the handover, are implemented for Codex.**
+Not deployed, and not exercised against two real accounts: that, and whether
+encrypted reasoning items replay under another account, are still open below.
+Claude and OpenCode brokers still hold one credential each.
 
 - `subscription-pool.js` — the rule and nothing else: `standingOf` (where one
   subscription stands, from its last reading, at an instant),
@@ -214,6 +214,51 @@ Where they differ from the design below:
   handover is recorded in the broker's audit trail only.
 - `weight` is declared, not defaulted from a plan, and the attestation still
   names the pool's label and not its set.
+
+The other half of phase 5, from the broker to the picker:
+
+- `hosted-backend.js` — a descriptor may carry `providerId` and
+  `subscriptions` (`[{ id, label }]`). `hosted-setup.js` provides an oracle
+  per subscription, bound into Floot as `<backend id>-account-<id>`.
+- `provider-broker-service.js` — the owned service's pool mode
+  (`config.pool`): its powers are a namespace holding the stored set, each
+  member's secret, and the pool's journalled state. A member's secret is
+  looked up on every use, so a lookup that failed once is not the member's
+  secret for the life of the broker.
+- `codex-sandbox` — `ENDO_CODEX_SUBSCRIPTIONS`
+  (`HOSTED-SUBSCRIPTION.md`, "Several subscriptions"); `subscription` in the
+  session plan and the scope spec; the factory declares the broker's set and
+  validates a pin.
+- Floot — `createSession({ subscription })`, kept in the registry entry when
+  pinned and sent to the backend only then; `subscription` in `getInfo()` and
+  `listSessions()`; one account per subscription in `watchAccounts()`, keyed
+  `backendId:subscriptionId`. The picker offers the choice when a backend has
+  more than one; a session's chip shows the account it is pinned to, or each
+  of its backend's.
+
+Where that differs from the design below:
+
+- **The operator's setting is the source of truth for the set.** Setup
+  derives the stored value from `ENDO_CODEX_SUBSCRIPTIONS` at every start, so
+  an edit of the stored value itself does not survive a restart. Adding a
+  member is still a write and a secret, with no retirement.
+- **A pooled broker's account, in its configuration, its grants' attestation
+  and its sessions' plans, is the label `pool`.** Moving a deployment from one
+  subscription to several is therefore a retirement that its existing
+  sessions do not survive; setup refuses it before minting anything.
+- **An account change under an existing id is refused by setup**; removed
+  members are not reaped.
+- **A pin cannot be changed**, and a session pinned to a subscription that has
+  since been removed runs on the backend's choice, with a line in the log,
+  rather than never running again. Sub-agents inherit their parent's pin.
+- **An `auto` session shows every account of its backend**, since nothing
+  tells Floot which member served (no `serving` event).
+- **The backend asks its broker what it declares at most every half minute,
+  for at most five seconds**, and "could not ask" is not "none": the last
+  answer stands, a descriptor with no answer yet says nothing of
+  subscriptions, and a pin is then refused as unlistable, not as unknown.
+- An account view carries `key`, `subscriptionId` and `label`, and no
+  `providerId`.
 
 ## What is the Problem Being Solved?
 

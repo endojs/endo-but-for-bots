@@ -321,7 +321,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-20 | In Progress — phases 1 to 4 (usage and context occupancy; account readings from rate-limit headers; `watchAccounts()`; bytes response stream) implemented |
+| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-20 | In Progress — phases 1 to 6 implemented (usage and context occupancy; account readings from rate-limit headers; `watchAccounts()`; bytes response stream; several Codex subscriptions drained soonest to expire, with mid-request handover); not deployed, two-account test outstanding |
 | [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-17 | In Progress — Tokyo UA at `50d036bc7`; shared queues/emergency stop deployed; bounded history/storage and final conformance pending |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
