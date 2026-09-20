@@ -22,8 +22,11 @@ import { Fail, b, q } from '@endo/errors';
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
 import { E } from '@endo/eventual-send';
 
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeAccountJournal } from './account-oracle.js';
+
 import { makeAccountReadingSource } from './account-source.js';
+import { makeBrokerSubscription } from './broker-subscription.js';
 import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makeProviderScopes } from './provider-scopes.js';
@@ -294,6 +297,10 @@ harden(makeProviderBrokerKit);
  *   opened after it, with no retirement.
  * @property {(member: { id: string, secretName: string }) => any} secretOf
  *   The member's SecretBlob read facet (a presence, or a promise for one).
+ * @property {(member: { id: string, subscriptionName: string }) => any} [subscriptionOf]
+ *   For a member that is somebody else's subscription: the `Subscription`
+ *   held under that name (a presence, or a promise for one), resolved on
+ *   every use.
  * @property {(member: any, secret: any) => any} [credentialOf] The member's
  *   shared refreshing credential. Asked once per member.
  * @property {(member: any) => any} [adaptRequestOf]
@@ -315,12 +322,14 @@ harden(makeProviderBrokerKit);
  *
  * @param {object} powers
  * @param {string} powers.label
+ * @param {string} powers.providerId
  * @param {PooledSubscriptions} powers.subscriptions
  * @param {any} powers.brokerOptions
  * @param {(error: unknown) => void} powers.reportAccountError
  */
 const makePooledBrokerServiceKit = ({
   label,
+  providerId,
   subscriptions,
   brokerOptions,
   reportAccountError,
@@ -328,6 +337,7 @@ const makePooledBrokerServiceKit = ({
   const {
     readSet,
     secretOf,
+    subscriptionOf,
     credentialOf,
     adaptRequestOf,
     activeReadOf,
@@ -343,6 +353,7 @@ const makePooledBrokerServiceKit = ({
    * @property {any} adaptRequest
    * @property {ReturnType<typeof makeAccountReadingSource>} account
    * @property {any} redeemer
+   * @property {(() => any) | undefined} subscription For a wrapped member.
    */
   /** @type {Map<string, MemberKit>} */
   const kits = new Map();
@@ -353,9 +364,94 @@ const makePooledBrokerServiceKit = ({
   /** @type {Promise<void>} */
   let writing = Promise.resolve();
 
-  /** @param {{ id: string, secretName: string }} member */
+  /**
+   * A member that is somebody else's subscription: no secret, credential or
+   * redeemer of the operator's. What is known of it is what its share
+   * publishes, followed while this broker lives and kept as a reading like
+   * any other member's, so the pool ranks it and a view shows it.
+   *
+   * @param {{ id: string, subscriptionName: string }} member
+   */
+  const wrappedKitOf = member => {
+    subscriptionOf !== undefined ||
+      Fail`${b(label)} cannot hold another party's subscription`;
+    const subscription = () =>
+      /** @type {NonNullable<typeof subscriptionOf>} */ (subscriptionOf)(
+        member,
+      );
+    const account = makeAccountReadingSource({
+      activeRead: async () =>
+        readingFromShareStatus(await E(subscription()).getStatus()),
+      reportError: reportAccountError,
+      onChange: () => asSubscription.changed(),
+    });
+    let live = true;
+    let stopFollowing = () => {};
+    const follow = async () => {
+      await null;
+      for (let pause = 5000; live; pause = Math.min(pause * 2, 60_000)) {
+        /** @type {any} */
+        let events;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const reader = await E(subscription()).watchStatus();
+          events = iterateReader(reader);
+          stopFollowing = () => {
+            void Promise.resolve(events?.return?.(undefined)).catch(() => {});
+          };
+          // Closed while the reader was being had: `close` found nothing to
+          // stop, and a quiet share would keep this one parked.
+          if (!live) break;
+          // eslint-disable-next-line no-await-in-loop
+          for await (const event of events) {
+            if (!live) break;
+            pause = 5000;
+            account.accept(
+              readingFromShareStatus(/** @type {any} */ (event)?.status),
+            );
+          }
+        } catch (_error) {
+          // Its daemon is away, or it was revoked. Looked for again.
+        } finally {
+          // Ended, or no longer wanted: the far side is told either way.
+          stopFollowing();
+          stopFollowing = () => {};
+        }
+        if (!live) return;
+        // A pause that does not keep the worker alive on its own.
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(resolve => {
+          const timer = globalThis.setTimeout(resolve, pause);
+          /** @type {any} */ (timer).unref?.();
+        });
+      }
+    };
+    void follow();
+    return {
+      secret: undefined,
+      credential: undefined,
+      adaptRequest: undefined,
+      redeemer: undefined,
+      subscription,
+      account: {
+        ...account,
+        close: () => {
+          live = false;
+          // A reader parked on a quiet share would otherwise stay open there.
+          stopFollowing();
+          account.close();
+        },
+      },
+    };
+  };
+
+  /** @param {any} member */
   const kitOf = member => {
     let kit = kits.get(member.id);
+    if (kit === undefined && member.subscriptionName !== undefined) {
+      kit = wrappedKitOf(member);
+      kits.set(member.id, kit);
+    }
     if (kit === undefined) {
       const secret = secretOf(member);
       const credential =
@@ -365,6 +461,7 @@ const makePooledBrokerServiceKit = ({
           ? {}
           : { activeRead: activeReadOf({ member, secret, credential }) }),
         reportError: reportAccountError,
+        onChange: () => asSubscription.changed(),
       });
       kit = {
         secret,
@@ -376,6 +473,7 @@ const makePooledBrokerServiceKit = ({
           resetRedeemOf === undefined
             ? undefined
             : makeResetRedeemer(resetRedeemOf({ member, secret, credential })),
+        subscription: undefined,
       };
       kits.set(member.id, kit);
     }
@@ -456,6 +554,9 @@ const makePooledBrokerServiceKit = ({
         const { members } = await load();
         return members.map(member => {
           const kit = kitOf(member);
+          if (kit.subscription !== undefined) {
+            return harden({ id: member.id, subscription: kit.subscription() });
+          }
           return harden({
             id: member.id,
             secret: kit.secret,
@@ -485,8 +586,24 @@ const makePooledBrokerServiceKit = ({
         ),
     }),
   });
+  const asSubscription = makeBrokerSubscription({
+    providerId,
+    label,
+    models: [...(brokerOptions.policy?.models ?? [])],
+    openEndpoint: async spec =>
+      /** @type {any} */ ((await broker.start()).issuer).openEndpoint(spec),
+    readings: async () => {
+      const { members } = await load();
+      return members.map(member => ({
+        id: member.id,
+        rateLimits: kitOf(member).account.peek().rateLimits,
+      }));
+    },
+    now,
+  });
   const scopes = makeProviderScopes({
     openIssuer: async () => (await broker.start()).issuer,
+    subscription: asSubscription.subscription,
     // A status reader asks before any session has opened a grant, so the set
     // is read here too; it calls no provider.
     accountSourceOf: async subscriptionId => {
@@ -518,10 +635,66 @@ const makePooledBrokerServiceKit = ({
       broker,
       closeAccounts: () => {
         for (const kit of kits.values()) kit.account.close();
+        asSubscription.close();
       },
     }),
   });
 };
+
+/**
+ * What a share says of itself, as a raw account reading, so that a member
+ * which is somebody else's subscription is ranked and shown like the rest:
+ * its budget is a window that resets when the period ends, and a share that
+ * cannot serve is a full window until the time it names.
+ *
+ * @param {any} status
+ */
+export const readingFromShareStatus = status => {
+  if (status === null || typeof status !== 'object') return harden({});
+  const instant = (/** @type {unknown} */ value) =>
+    typeof value === 'string' && Number.isFinite(Date.parse(value))
+      ? new Date(Date.parse(value)).toISOString()
+      : '';
+  const budget =
+    status.budget !== null && typeof status.budget === 'object'
+      ? status.budget
+      : undefined;
+  const tokens = Number(budget?.tokens);
+  const spent = Number(budget?.spent) + Number(budget?.reserved ?? 0);
+  const windows = [];
+  if (budget !== undefined && tokens > 0 && Number.isFinite(spent)) {
+    const seconds = Number(budget.periodSeconds);
+    windows.push({
+      windowId: 'secondary',
+      title: 'Share budget',
+      usedPercent: Math.max(0, Math.min(100, (spent / tokens) * 100)),
+      ...(Number.isSafeInteger(seconds) && seconds > 0
+        ? { windowSeconds: seconds }
+        : {}),
+      resetsAt: instant(budget.periodEndsAt),
+    });
+  }
+  const blocked = status.available === false;
+  if (blocked && !windows.some(window => window.usedPercent >= 100)) {
+    // Blocked by something other than its own budget: what is beneath it, a
+    // floor, a revocation. All a holder is told is until when, if that.
+    windows.push({
+      windowId: 'primary',
+      title: 'Share availability',
+      usedPercent: 100,
+      resetsAt: instant(status.blockedUntil),
+    });
+  }
+  return harden({
+    plan: {
+      planId: 'share',
+      title: 'Share',
+      state: status.over === true ? 'expired' : 'active',
+    },
+    rateLimits: { windows, limitReached: blocked },
+  });
+};
+harden(readingFromShareStatus);
 
 const LISTENER_DIAGNOSTIC_PREFIX = 'Provider HTTP diagnostic: ';
 
@@ -587,7 +760,7 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0] & { activeAccountRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions }} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions }} options
  *   `activeAccountRead` is the adapter's one read of its provider's usage
  *   endpoint, host-only and only ever run on request. `resetRedeem` is its
  *   one call that spends a banked rate-limit reset, an operator's and never
@@ -600,6 +773,7 @@ export const makeProviderBrokerServiceKit = options => {
     activeAccountRead,
     resetRedeem,
     subscriptions,
+    providerId = label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     ...brokerOptions
   } = options;
   const reportAccountError = (/** @type {unknown} */ error) =>
@@ -610,6 +784,7 @@ export const makeProviderBrokerServiceKit = options => {
   if (subscriptions !== undefined) {
     return makePooledBrokerServiceKit({
       label,
+      providerId,
       subscriptions,
       brokerOptions,
       reportAccountError,
@@ -624,6 +799,17 @@ export const makeProviderBrokerServiceKit = options => {
       ? {}
       : { activeRead: activeAccountRead }),
     reportError: reportAccountError,
+    onChange: () => asSubscription.changed(),
+  });
+  const asSubscription = makeBrokerSubscription({
+    providerId,
+    label,
+    models: [...(brokerOptions.policy?.models ?? [])],
+    openEndpoint: async spec =>
+      /** @type {any} */ ((await broker.start()).issuer).openEndpoint(spec),
+    readings: async () => [
+      { id: 'default', rateLimits: account.peek().rateLimits },
+    ],
   });
   const broker = makeProviderBrokerKit({
     ...brokerOptions,
@@ -636,6 +822,7 @@ export const makeProviderBrokerServiceKit = options => {
   const scopes = makeProviderScopes({
     openIssuer: async () => (await broker.start()).issuer,
     accountSource: account.source,
+    subscription: asSubscription.subscription,
     ...(resetRedeem === undefined
       ? {}
       : { resetRedeemer: makeResetRedeemer(resetRedeem) }),
@@ -646,7 +833,10 @@ export const makeProviderBrokerServiceKit = options => {
       label,
       scopes,
       broker,
-      closeAccounts: () => account.close(),
+      closeAccounts: () => {
+        account.close();
+        asSubscription.close();
+      },
     }),
   });
 };
@@ -820,6 +1010,10 @@ export const makeOwnedProviderBrokerService = ({
                 E(current()).replaceBase64(base64, options),
             });
           },
+          // Somebody else's subscription, held in the same namespace under
+          // the name the set gives it. Resolved on every use, like a secret.
+          subscriptionOf: member =>
+            E(namespace).lookup(member.subscriptionName),
           ...(makeCredential === undefined
             ? {}
             : {

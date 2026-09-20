@@ -381,7 +381,14 @@ export const normalizeSubscriptionSet = (
   const projected = members.map(member => {
     (member !== null && typeof member === 'object') ||
       Fail`A subscription must be a record`;
-    const { id, label = id, weight = 1, accountRef, secretName = id } = member;
+    const {
+      id,
+      label = id,
+      weight = 1,
+      accountRef,
+      subscriptionName,
+      secretName = subscriptionName === undefined ? id : undefined,
+    } = member;
     (typeof id === 'string' && SUBSCRIPTION_ID.test(id) && id !== 'auto') ||
       Fail`Invalid subscription id ${q(id)}`;
     // Setup names each member's formulas `<thing>-<id>`, and their
@@ -398,6 +405,17 @@ export const normalizeSubscriptionSet = (
       (typeof accountRef === 'string' &&
         /^[A-Za-z0-9_-]{1,256}$/.test(accountRef)) ||
       Fail`Invalid account for subscription ${q(id)}`;
+    if (subscriptionName !== undefined) {
+      // A member that is somebody else's subscription, handed over as a
+      // share: it has no secret and no account of the operator's, only the
+      // name it is held under.
+      (typeof subscriptionName === 'string' &&
+        SUBSCRIPTION_ID.test(subscriptionName) &&
+        secretName === undefined &&
+        accountRef === undefined) ||
+        Fail`Invalid wrapped subscription ${q(id)}`;
+      return harden({ id, label, weight, subscriptionName });
+    }
     (typeof secretName === 'string' && SUBSCRIPTION_ID.test(secretName)) ||
       Fail`Invalid secret name for subscription ${q(id)}`;
     return harden({
@@ -412,14 +430,23 @@ export const normalizeSubscriptionSet = (
     new Set(values).size === values.length;
   distinct(projected.map(member => member.id)) ||
     Fail`Subscription ids must be distinct`;
-  distinct(projected.map(member => member.secretName)) ||
-    Fail`Subscriptions must not share a secret`;
-  const accounts = projected.flatMap(member =>
-    member.accountRef === undefined ? [] : [member.accountRef],
+  // A secret and a wrapped subscription are names in one namespace.
+  distinct(
+    projected.map(member =>
+      'subscriptionName' in member
+        ? member.subscriptionName
+        : member.secretName,
+    ),
+  ) || Fail`Subscriptions must not share a secret`;
+  const own = projected.filter(member => !('subscriptionName' in member));
+  const accounts = own.flatMap(member =>
+    'accountRef' in member && member.accountRef !== undefined
+      ? [member.accountRef]
+      : [],
   );
   distinct(accounts) || Fail`Subscriptions must not share an account`;
   !requireAccountRef ||
-    accounts.length === projected.length ||
+    accounts.length === own.length ||
     Fail`Every subscription of this provider must name its account`;
   return harden({ cacheLifetimeSeconds, members: projected });
 };

@@ -4,6 +4,7 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { M } from '@endo/patterns';
 
 import {
@@ -11,7 +12,9 @@ import {
   forwardableHeaders,
   splitInferenceTarget,
 } from './provider-paths.js';
+import { makeUsageTap } from './provider-usage.js';
 import { makeSecretRotator } from './secret-rotator.js';
+import { emptyCounts, tokenCount } from './token-usage.js';
 
 /**
  * @typedef {{ method: string, path: string }} Route
@@ -67,6 +70,39 @@ harden(isCredentialRejection);
 export const isSubscriptionExhaustion = error =>
   error instanceof Error && error.message === 'Provider subscription exhausted';
 harden(isSubscriptionExhaustion);
+
+const MEMBER_UNAVAILABLE = 'Provider subscription unavailable';
+const makeMemberUnavailable = () => Error(MEMBER_UNAVAILABLE);
+/** @param {unknown} error */
+const isMemberUnavailable = error =>
+  error instanceof Error && error.message === MEMBER_UNAVAILABLE;
+
+/**
+ * The five counts of a settlement, as numbers and nothing else.
+ *
+ * @param {any} usage
+ */
+const projectCounts = usage =>
+  harden({
+    inputTokens: tokenCount(usage?.inputTokens),
+    outputTokens: tokenCount(usage?.outputTokens),
+    cachedInputTokens: tokenCount(usage?.cachedInputTokens),
+    cacheWriteInputTokens: tokenCount(usage?.cacheWriteInputTokens),
+    reasoningOutputTokens: tokenCount(usage?.reasoningOutputTokens),
+  });
+
+/**
+ * The provider may have done the work though nothing of its answer arrived:
+ * the deadline passed with the request out, or a response broke off after it
+ * had begun. Bare like the others. It changes nothing for the caller, who
+ * sees a failed request; it tells whoever charges for the request that it
+ * was not free.
+ *
+ * @param {unknown} error
+ */
+export const isResponseLost = error =>
+  error instanceof Error && error.message === 'Provider response lost';
+harden(isResponseLost);
 
 /**
  * Whether a rotation was refused because the record moved under it, as opposed
@@ -520,6 +556,13 @@ harden(makeBrokerOAuthCredential);
  * @property {ReturnType<typeof makeBrokerOAuthCredential>} [credential]
  * @property {ProviderRequestAdapter} [adaptRequest]
  * @property {string} [accountRef] The account an OAuth credential must name.
+ * @property {{ provide(): Promise<any>, reset(endpoint: any): void }} [wrapped]
+ *   In place of `secret` and `transport`: this member is somebody else's
+ *   subscription. `provide` answers an inference endpoint opened on it for
+ *   this grant's session, opening it on first use; `reset` forgets one that
+ *   stopped working, so the next `provide` opens another. The request goes
+ *   to it whole, no credential of this broker's is involved, and its response
+ *   comes back untouched: the stream is the far subscription's own reader.
  */
 
 /**
@@ -674,10 +717,27 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  * of a refused attempt reached the caller, so the caller sees one response.
  * At most one attempt per member per request, beside the one refresh retry
  * within a member. See designs/hosted-agent-subscriptions.md, "Handover".
+ * @param {boolean} [powers.revealExhaustion]
+ * Every failure of a request reaches the caller as `Provider request failed`.
+ * With this, one more bare classification does: `Provider subscription
+ * exhausted`, when the request failed because every subscription it could be
+ * served from is used up; and `Provider response lost`, when the provider was
+ * given the whole deadline or had begun to answer, so the work may have been
+ * done. For an endpoint a share sits on, which must tell its holder a limit
+ * from a fault and charge for what was not free; never for a slice's
+ * listener.
  */
 export const makeProviderBrokerGrant = (
   policy,
-  { secret, transport, audit = () => {}, credential, adaptRequest, pool },
+  {
+    secret,
+    transport,
+    audit = () => {},
+    credential,
+    adaptRequest,
+    pool,
+    revealExhaustion = false,
+  },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
   const { origin, maxConcurrentRequests, maxRequestBytes, maxResponseBytes } =
@@ -731,8 +791,8 @@ export const makeProviderBrokerGrant = (
       member =>
         typeof member.id === 'string' &&
         member.id !== '' &&
-        member.secret !== undefined &&
-        member.transport !== undefined,
+        (member.wrapped !== undefined ||
+          (member.secret !== undefined && member.transport !== undefined)),
     )) ||
     Fail`Invalid broker subscription set`;
   if (authMode === 'oauth') {
@@ -740,9 +800,11 @@ export const makeProviderBrokerGrant = (
     // A member's account is the operator's selection; a credential for some
     // other account is a different subscription's, not this one's.
     for (const member of members) {
-      (member.credential !== undefined &&
-        typeof member.credential.current === 'function' &&
-        member.credential.accountRef === (member.accountRef ?? accountRef)) ||
+      // A wrapped member authenticates wherever its subscription lives.
+      member.wrapped !== undefined ||
+        (member.credential !== undefined &&
+          typeof member.credential.current === 'function' &&
+          member.credential.accountRef === (member.accountRef ?? accountRef)) ||
         Fail`Unprovisioned broker OAuth mode`;
     }
   }
@@ -878,7 +940,14 @@ export const makeProviderBrokerGrant = (
       },
       /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async requestStream(request) {
-        return perform(request, true);
+        // The older reader, for a listener image from before the bytes
+        // stream. It is handed no settlement it would never look at.
+        const { status, reader, contentType } = await perform(
+          request,
+          true,
+          false,
+        );
+        return harden({ status, reader, contentType });
       },
       /**
        * The same response as `requestStream`, as a bytes exo-stream: a reader
@@ -899,11 +968,15 @@ export const makeProviderBrokerGrant = (
        * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
        */
       async requestByteStream(request) {
-        const { status, reader, contentType } = await perform(request, true);
+        const { status, reader, contentType, usage, bytesReader } =
+          await perform(request, true, true);
         return harden({
           status,
           contentType,
-          reader: makeScreenedBytesReader(reader, checkLive),
+          reader: bytesReader ?? makeScreenedBytesReader(reader, checkLive),
+          // What the response cost, once the producer has read its end:
+          // `{ usage, began }` (`provider-usage.js`). It always fulfils.
+          usage,
         });
       },
     },
@@ -991,8 +1064,13 @@ export const makeProviderBrokerGrant = (
   /**
    * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
+   * @param bytesOk
    */
-  const perform = async ({ method, path, body, headers }, streaming) => {
+  const perform = async (
+    { method, path, body, headers },
+    streaming,
+    bytesOk = !streaming,
+  ) => {
     // Re-screen on this side of the seam: the listener already dropped the
     // owned headers, and the broker does not take its word for it.
     const forwarded = forwardableHeaders(headers ?? {});
@@ -1026,6 +1104,10 @@ export const makeProviderBrokerGrant = (
      * @param {BrokerGrantMember} member
      */
     const adaptFor = member => {
+      // Somebody else's subscription translates the request where it lives.
+      if (member.wrapped !== undefined) {
+        return harden({ upstreamPath: path, adapterHeaders: {} });
+      }
       const adapted = member.adaptRequest
         ? member.adaptRequest(harden({ path, data }))
         : { path };
@@ -1049,9 +1131,12 @@ export const makeProviderBrokerGrant = (
     let candidates;
     let firstAdapted;
     try {
-      candidates = selectOrder().map(
-        id => membersById.get(id) ?? Fail`Unknown broker subscription`,
-      );
+      candidates = selectOrder()
+        .map(id => membersById.get(id) ?? Fail`Unknown broker subscription`)
+        // Somebody else's subscription streams bytes only. A listener from
+        // before the bytes stream is served by the operator's own accounts,
+        // rather than have a far response started that nobody could read.
+        .filter(member => bytesOk || member.wrapped === undefined);
       if (candidates.length === 0) {
         record('subscriptions-exhausted');
         throw Fail`Provider subscriptions exhausted`;
@@ -1059,6 +1144,13 @@ export const makeProviderBrokerGrant = (
       firstAdapted = adaptFor(candidates[0]);
     } catch (error) {
       if (pool === undefined) throw error;
+      if (
+        revealExhaustion &&
+        error instanceof Error &&
+        error.message === 'Provider subscriptions exhausted'
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
       return Fail`Provider request failed`;
     }
     activeRequests < maxConcurrentRequests ||
@@ -1074,6 +1166,29 @@ export const makeProviderBrokerGrant = (
     };
     requests += 1n;
     record('admitted');
+    // What this request cost, for whoever charges for it. Settled once, by
+    // whichever comes first: the end of the response, its failure or
+    // cancellation, or a refusal before any response. It never rejects.
+    /**
+     * @typedef {object} UsageSettlement
+     * @property {any} usage The five counts, or null when the response never
+     *   said.
+     * @property {boolean} began Whether the provider may have done the work.
+     * @property {boolean} complete Whether the producer read the response to
+     *   its end. One cut short is charged no less than it was reserved at.
+     * @property {number} responseBytes What the producer read of it.
+     */
+    /** @type {(settlement: UsageSettlement) => void} */
+    let settleUsage = () => {};
+    /** @type {Promise<UsageSettlement>} */
+    const usageSettled = new Promise(resolve => {
+      let settled = false;
+      settleUsage = settlement => {
+        if (settled) return;
+        settled = true;
+        resolve(harden(settlement));
+      };
+    });
     /**
      * Every credential this request has handed the upstream, in every form it
      * could come back as. It accumulates across a refreshed retry rather than
@@ -1136,10 +1251,22 @@ export const makeProviderBrokerGrant = (
       const echoes = text => exposed.some(screen => text.includes(screen));
       if (streaming) {
         const response = await E(memberTransport).requestStream(upstream);
+        const tap = makeUsageTap();
+        let bytes = 0n;
         const cancel = () => {
           // Release ownership before the eventual send, including if it fails.
           if (!streams.delete(cancel)) return;
           finish();
+          // The response began and was cut short, so it is not free, and not
+          // cheaper than one that ran: what it said of its cost so far and
+          // how much of it was read, for a meter to set against what it
+          // reserved.
+          settleUsage({
+            usage: tap.finish() ?? null,
+            began: true,
+            complete: false,
+            responseBytes: Number(bytes),
+          });
           void E(response.reader)
             .return()
             .catch(() => {});
@@ -1148,13 +1275,26 @@ export const makeProviderBrokerGrant = (
         if (response.closed !== undefined) {
           // The transport can terminate while the consumer is not pulling.
           // Do not discard buffered final output when normal EOF closes it.
-          void response.closed.then(() => {
+          void response.closed.then((/** @type {any} */ ending) => {
+            // The transport says how it ended. Only the end of the body is
+            // a response read to its end; a deadline or a reset closes it
+            // too, and that is one cut short, whatever it had already said
+            // of its cost.
+            if (ending?.complete !== true) {
+              cancel();
+              return;
+            }
             streams.delete(cancel);
             finish();
+            settleUsage({
+              usage: tap.finish() ?? null,
+              began: true,
+              complete: true,
+              responseBytes: Number(bytes),
+            });
           }, cancel);
         }
         let held = '';
-        let bytes = 0n;
         let reading = false;
         let ended = false;
         const keep =
@@ -1186,10 +1326,19 @@ export const makeProviderBrokerGrant = (
                     Fail`Response byte quota exceeded`;
                   held += chunk.value;
                   !echoes(held) || Fail`Invalid provider response`;
+                  // Numbers only, and from what the producer read: a consumer
+                  // that stops reading does not make the response cheaper.
+                  tap.push(chunk.value);
                   if (chunk.done) {
                     ended = true;
                     streams.delete(cancel);
                     finish();
+                    settleUsage({
+                      usage: tap.finish() ?? null,
+                      began: true,
+                      complete: true,
+                      responseBytes: Number(bytes),
+                    });
                     record('completed');
                     checkLive();
                     const value = held;
@@ -1238,6 +1387,7 @@ export const makeProviderBrokerGrant = (
             reader: stream,
             contentType:
               data.stream === true ? 'text/event-stream' : 'application/json',
+            usage: usageSettled,
           });
         } catch (_error) {
           cancel();
@@ -1257,9 +1407,202 @@ export const makeProviderBrokerGrant = (
       record('completed');
       checkLive();
       finish();
+      const whole = makeUsageTap();
+      whole.push(response.body);
+      const settlement = harden({
+        usage: whole.finish() ?? null,
+        began: true,
+        complete: true,
+        responseBytes: new TextEncoder().encode(response.body).length,
+      });
+      settleUsage(settlement);
       // No upstream headers (including cookies or authentication challenges)
       // escape through the grant. Upstream error bodies are never returned.
-      return harden({ status: response.status, body: response.body });
+      return harden({
+        status: response.status,
+        body: response.body,
+        usage: settlement,
+      });
+    };
+    /**
+     * The request, whole, to a member that is somebody else's subscription.
+     * What comes back is theirs: the stream is their reader, handed on and
+     * not read here, and what it cost is what they settle. A refusal by their
+     * limits reads as this member being used up, so the request goes on to
+     * the next, as it would from an account of the operator's own.
+     *
+     * @param {BrokerGrantMember} member
+     */
+    const dispatchWrapped = async member => {
+      await null;
+      checkLive();
+      const { wrapped } = member;
+      if (wrapped === undefined) throw Fail`Invalid broker subscription set`;
+      const message = harden({
+        method,
+        path,
+        body: canonicalBody,
+        ...(Object.keys(forwarded).length > 0 ? { headers: forwarded } : {}),
+      });
+      /**
+       * The far side's bare words for the request itself. Anything else it
+       * throws (its endpoint was closed, its daemon restarted, the connection
+       * to it dropped) is about the endpoint, and nothing was delivered.
+       *
+       * @param {unknown} error
+       */
+      const aboutTheRequest = error =>
+        error instanceof Error &&
+        [
+          'Provider request failed',
+          'Provider response lost',
+          'Model denied',
+          'Invalid inference JSON',
+          'Inference route denied',
+          'Request byte quota exceeded',
+          'Provider concurrency limit reached',
+        ].includes(error.message);
+      /** @param {unknown} error */
+      const usedUp = error =>
+        error instanceof Error &&
+        (error.message === 'Provider share exhausted' ||
+          error.message === 'Provider subscription exhausted');
+      /** @param {any} far */
+      const send = far =>
+        streaming ? E(far).requestByteStream(message) : E(far).request(message);
+      let result;
+      try {
+        let first;
+        try {
+          first = await wrapped.provide();
+        } catch (_error) {
+          throw makeMemberUnavailable();
+        }
+        try {
+          result = await send(first);
+        } catch (error) {
+          if (usedUp(error) || aboutTheRequest(error)) throw error;
+          const word = error instanceof Error ? error.message : '';
+          if (word !== 'Inference endpoint revoked') {
+            // The share itself cannot serve just now (its store, what is
+            // beneath it, a revocation), or the connection to it failed.
+            // The request is not sent again: it may have arrived. The
+            // endpoint is left as it is, since another request of this
+            // session may be streaming from it; only a lost connection
+            // forgets it, so the next request opens another.
+            if (word !== 'Provider share unavailable') wrapped.reset(first);
+            throw makeMemberUnavailable();
+          }
+          // The far side's own word that this endpoint is gone (its daemon
+          // restarted, or it closed the one used least recently): nothing
+          // of the request was taken up, so it is sent once more, on
+          // another.
+          wrapped.reset(first);
+          checkLive();
+          let again;
+          try {
+            again = await wrapped.provide();
+          } catch (_error) {
+            throw makeMemberUnavailable();
+          }
+          try {
+            result = await send(again);
+          } catch (retryError) {
+            if (usedUp(retryError) || aboutTheRequest(retryError)) {
+              throw retryError;
+            }
+            throw makeMemberUnavailable();
+          }
+        }
+      } catch (error) {
+        if (usedUp(error)) throw Error('Provider subscription exhausted');
+        throw error;
+      }
+      /** Give a far response nobody will read back to where it came from. */
+      const abandon = () => {
+        const reader = result?.reader;
+        if (reader === undefined || reader === null) return;
+        // A bytes reader is closed by taking it up and returning at once:
+        // that is what tells its producer to stop.
+        try {
+          void Promise.resolve(
+            iterateBytesReader(reader, { buffer: 0 }).return(undefined),
+          ).catch(() => {});
+        } catch (_error) {
+          // Not a reader after all; there is nothing to give back.
+        }
+      };
+      try {
+        checkLive();
+        (result !== null &&
+          typeof result === 'object' &&
+          Number.isInteger(result.status) &&
+          Number(result.status) >= 200 &&
+          Number(result.status) < 300 &&
+          (streaming
+            ? result.reader !== undefined && result.reader !== null
+            : typeof result.body === 'string' &&
+              BigInt(new TextEncoder().encode(result.body).length) <=
+                maxResponseBytes)) ||
+          Fail`Invalid provider response`;
+      } catch (error) {
+        abandon();
+        throw error;
+      }
+      // Numbers, and only the ones a settlement has: nothing else another
+      // daemon put there goes on to the next holder.
+      const settled = Promise.resolve(result.usage).then(
+        settlement =>
+          settlement !== null &&
+          typeof settlement === 'object' &&
+          typeof settlement.began === 'boolean'
+            ? {
+                usage:
+                  settlement.usage === null || settlement.usage === undefined
+                    ? null
+                    : projectCounts(settlement.usage),
+                began: settlement.began,
+                complete: settlement.complete === true,
+                responseBytes: tokenCount(settlement.responseBytes),
+              }
+            : { usage: null, began: true, complete: false, responseBytes: 0 },
+        () => ({ usage: null, began: true, complete: false, responseBytes: 0 }),
+      );
+      if (!streaming) {
+        record('completed');
+        finish();
+        const settlement = harden(await settled);
+        settleUsage(settlement);
+        return harden({
+          status: result.status,
+          body: result.body,
+          usage: settlement,
+        });
+      }
+      // The slot is held until the far side has read the end of the stream,
+      // which is when it settles what the response cost. A revoked grant
+      // gives the stream back.
+      const cancel = () => {
+        if (!streams.delete(cancel)) return;
+        abandon();
+      };
+      streams.add(cancel);
+      void settled.then(settlement => {
+        streams.delete(cancel);
+        finish();
+        record(settlement.complete ? 'completed' : 'failed');
+        settleUsage(settlement);
+      });
+      return harden({
+        status: result.status,
+        contentType:
+          data.stream === true ? 'text/event-stream' : 'application/json',
+        usage: usageSettled,
+        // Not a text reader: the bytes stream itself, for `requestByteStream`
+        // to hand on.
+        reader: undefined,
+        bytesReader: result.reader,
+      });
     };
     /**
      * One subscription's attempt at the request, with its one refresh retry.
@@ -1268,6 +1611,7 @@ export const makeProviderBrokerGrant = (
      * @param {ReturnType<typeof adaptFor>} adapted
      */
     const attempt = async (member, adapted) => {
+      if (member.wrapped !== undefined) return dispatchWrapped(member);
       const first = await resolveCredential(member).catch(error => {
         tellPool('unusable', member.id);
         throw error;
@@ -1321,6 +1665,21 @@ export const makeProviderBrokerGrant = (
           // A subscription that is used up refuses at admission, before any
           // response byte, so the same request can go to the next one. Any
           // other failure is the request's, and is not tried elsewhere.
+          if (pool !== undefined && isMemberUnavailable(error)) {
+            // A grant revoked meanwhile is why, not the member.
+            checkLive();
+            // Nothing the next member could not also be given, so it may
+            // have the request. The pool skips this one for a while, as it
+            // does a dead credential. If none is left, the request was
+            // refused by what the subscription can do now and not by
+            // anything about the request, which is what exhaustion means to
+            // whoever holds this: their pool moves on.
+            refusal = Error('Provider subscription exhausted');
+            record('subscription-unavailable');
+            tellPool('unusable', member.id);
+            // eslint-disable-next-line no-continue
+            continue;
+          }
           if (pool === undefined || !isSubscriptionExhaustion(error)) {
             throw error;
           }
@@ -1331,9 +1690,35 @@ export const makeProviderBrokerGrant = (
         }
       }
       throw refusal;
-    } catch (_error) {
+    } catch (error) {
       finish();
       record('failed');
+      // Refused before any response: nothing was spent. Unless the provider
+      // was given the whole deadline, or had begun to answer: then the work
+      // may have been done, and it is charged as a response cut short.
+      settleUsage(
+        isResponseLost(error)
+          ? { usage: null, began: true, complete: false, responseBytes: 0 }
+          : {
+              usage: emptyCounts(),
+              began: false,
+              complete: true,
+              responseBytes: 0,
+            },
+      );
+      if (
+        revealExhaustion &&
+        (isSubscriptionExhaustion(error) ||
+          (error instanceof Error &&
+            error.message === 'Provider subscriptions exhausted'))
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
+      // A caller that fails gets no `usage` to await, so an endpoint a share
+      // sits on is told this way that the request it lost was not free.
+      if (revealExhaustion && isResponseLost(error)) {
+        throw Error('Provider response lost');
+      }
       return Fail`Provider request failed`;
     }
   };

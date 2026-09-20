@@ -23,6 +23,8 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { normalizeShareLimits } from './subscription-share.js';
+
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
@@ -451,6 +453,242 @@ const moduleSpecifier = (/** @type {string} */ relative) =>
   assertCurrentSpecifier(
     toCurrentSpecifier(new URL(relative, import.meta.url).href),
   );
+
+const SHARE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+
+/**
+ * Mint the adapter's broker as a `Subscription` (`subscription-module.js`)
+ * over the broker that exists now, as `<dir>/subscription`, and re-point
+ * every share already made at it. Called on every setup run, since a deploy
+ * re-mints the broker; a share keeps its identity, its limits, its meter and
+ * its revocation.
+ *
+ * `<dir>/subscription` is the operator's subscription whole: it is given to
+ * shares' namespaces and to nothing else.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {object} options
+ * @param {string} options.label
+ * @param {string} options.dir
+ * @param {string[]} options.brokerPath
+ * @param {string} options.specifier The subscription module's specifier.
+ * @returns {Promise<string>} The subscription's locator.
+ */
+export const provideBrokerSubscription = async (
+  hostAgent,
+  { label, dir, brokerPath, specifier },
+) => {
+  const subscriptionPath = [dir, 'subscription'];
+  (await E(hostAgent).has(...brokerPath)) ||
+    Fail`${b(label)} subscription needs the broker service ${q(brokerPath.join('/'))}`;
+  if (await E(hostAgent).has(...subscriptionPath)) {
+    await E(hostAgent).remove(...subscriptionPath);
+  }
+  try {
+    await mintWithPowersPath(hostAgent, {
+      powersPath: brokerPath,
+      temporary: `${dir}.subscription-powers`,
+      specifier,
+      resultName: subscriptionPath,
+      env: {},
+    });
+    (await E(hostAgent).lookup(subscriptionPath)) !== undefined ||
+      Fail`${b(label)} broker offers no subscription`;
+  } catch (error) {
+    // A broker whose worker predates `subscription()`: no name is left.
+    if (await E(hostAgent).has(...subscriptionPath)) {
+      await E(hostAgent).remove(...subscriptionPath);
+    }
+    throw error;
+  }
+  const locator = await E(hostAgent).locate(...subscriptionPath);
+  const names = await E(hostAgent).list(dir);
+  for (const name of Array.isArray(names) ? names : []) {
+    // Only shares made over this adapter's own broker follow it. A share
+    // narrowed from somebody else's says so, and is left alone.
+    const match = /^share-([A-Za-z0-9][A-Za-z0-9_-]{0,31})-powers$/.exec(name);
+    if (match) {
+      // eslint-disable-next-line no-await-in-loop
+      const powers = await E(hostAgent).lookup([dir, name]);
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await E(powers).has('share-of-another'))) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(powers).storeLocator('subscription', locator);
+      }
+    }
+  }
+  return locator;
+};
+harden(provideBrokerSubscription);
+
+/**
+ * Provide an adapter's broker as a `Subscription` over its
+ * `<dir>/broker-service`, and bring the shares made over it along. Like the
+ * account oracle, it is not what sessions run on: a failure is reported and
+ * setup goes on.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {{ label: string, dir: string }} options
+ */
+export const publishBrokerSubscription = async (hostAgent, { label, dir }) => {
+  await null;
+  try {
+    await provideBrokerSubscription(hostAgent, {
+      label,
+      dir,
+      brokerPath: [dir, 'broker-service'],
+      specifier: moduleSpecifier('./subscription-module.js'),
+    });
+  } catch (error) {
+    console.error(
+      `${label} subscription was not provided, so its shares do not serve; sessions are unaffected:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+};
+harden(publishBrokerSubscription);
+
+/**
+ * Provide a share of a subscription: `attenuate(limits)`, as the operator's
+ * provisioning step it has to be, since only a host can mint a formula and a
+ * share is handed out by name.
+ *
+ * It makes, once, a namespace (`<dir>/share-<id>-powers`), the share's kit
+ * over it (`<dir>/share-<id>-kit`, the grantor's: `revoke()`, `getStatus()`)
+ * and the share itself (`<dir>/share-<id>`), which is the name to hand to a
+ * peer. Called again for a share that exists, it rewrites the limits, which
+ * the share reads for every request, and nothing else: the meter, the
+ * revocation and the identity a holder already stored all stay.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {object} options
+ * @param {string} options.label
+ * @param {string} options.dir The adapter's directory pet name.
+ * @param {string} options.shareId
+ * @param {any} [options.limits] `ShareLimits` without `createdAt`, which is
+ *   set when the share is made and kept after. Required for a new share.
+ * @param {string[]} [options.subscriptionPath] What the share is made over:
+ *   `<dir>/subscription` by default, or a share somebody else handed over.
+ * @param {() => string} [options.now] ISO 8601 clock.
+ * @returns {Promise<{ sharePath: string[], kitPath: string[], created: boolean }>}
+ */
+export const provideSubscriptionShare = async (
+  hostAgent,
+  {
+    label,
+    dir,
+    shareId,
+    limits,
+    subscriptionPath,
+    now = () => new Date().toISOString(),
+  },
+) => {
+  SHARE_ID_PATTERN.test(shareId) || Fail`Invalid share id ${q(shareId)}`;
+  // `-powers` and `-handle` are this function's own suffixes.
+  !/(^|-)(powers|handle|kit)$/.test(shareId) ||
+    Fail`Share id ${q(shareId)} must not be or end in -powers, -handle or -kit`;
+  const sharePath = [dir, `share-${shareId}`];
+  const kitPath = [dir, `share-${shareId}-kit`];
+  const powersPath = [dir, `share-${shareId}-powers`];
+  const handlePath = [dir, `share-${shareId}-handle`];
+  const handleName = `${dir}.share-${shareId}-handle`;
+  const powersName = `${dir}.share-${shareId}-powers`;
+  const beneathPath = subscriptionPath ?? [dir, 'subscription'];
+  (await E(hostAgent).has(...beneathPath)) ||
+    Fail`${b(label)} share needs the subscription ${q(beneathPath.join('/'))}`;
+  const beneathLocator = await E(hostAgent).locate(...beneathPath);
+
+  const created = !(await E(hostAgent).has(...kitPath));
+  if (created && (await E(hostAgent).has(...sharePath))) {
+    // The name that was handed out keeps the kit it was made over alive,
+    // whatever became of the kit's own name. A second kit over the same
+    // namespace would be a second meter and a second writer of one record,
+    // and its `revoke()` would not reach the endpoints holders are using.
+    throw Fail`Share ${q(shareId)} is still handed out as ${q(sharePath.join('/'))}, which keeps its kit running; remove that name first, and hand the share out again`;
+  }
+  if (created && (await E(hostAgent).has(...powersPath))) {
+    // The namespace is there and neither the kit nor the share is: somebody
+    // removed them. The namespace is the share (its limits, its meter, its
+    // revocation), so the kit is made over it again rather than beside it
+    // over a new, empty one. (A run that died before the kit was made left
+    // its names at the top level instead, and starts clean below.)
+    await mintWithPowersPath(hostAgent, {
+      powersPath,
+      temporary: `${dir}.share-${shareId}-powers`,
+      specifier: moduleSpecifier('./subscription-share-module.js'),
+      resultName: kitPath,
+      env: { SHARE_ID: shareId },
+    });
+  } else if (created) {
+    limits !== undefined || Fail`A new share needs limits`;
+    const stored = normalizeShareLimits({ ...limits, createdAt: now() });
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(hostAgent).has(stray)) await E(hostAgent).remove(stray);
+    }
+    await E(hostAgent).provideGuest(handleName, { agentName: powersName });
+    const guest = await E(hostAgent).lookup(powersName);
+    await E(guest).storeLocator('subscription', beneathLocator);
+    await E(guest).storeValue(stored, 'share-limits');
+    if (subscriptionPath !== undefined) {
+      // Made over something other than this adapter's broker: setup must not
+      // re-point it at the broker on its next run.
+      await E(guest).storeValue(true, 'share-of-another');
+    }
+    await E(hostAgent).makeUnconfined(
+      '@main',
+      moduleSpecifier('./subscription-share-module.js'),
+      {
+        powersName,
+        resultName: kitPath,
+        env: harden({ SHARE_ID: shareId }),
+      },
+    );
+  }
+  for (const [from, to] of [
+    [handleName, handlePath],
+    [powersName, powersPath],
+  ]) {
+    if (
+      // eslint-disable-next-line no-await-in-loop
+      (await E(hostAgent).has(/** @type {string} */ (from))) &&
+      // eslint-disable-next-line no-await-in-loop
+      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(hostAgent).move([from], to);
+    }
+  }
+  const powers = await E(hostAgent).lookup(powersPath);
+  if (
+    subscriptionPath === undefined &&
+    !(await E(powers).has('share-of-another'))
+  ) {
+    // Over this adapter's own broker: the one that exists now.
+    await E(powers).storeLocator('subscription', beneathLocator);
+  }
+  if (limits !== undefined && (await E(powers).has('share-limits'))) {
+    // The grantor changes its mind: a write of a value. The anchor of the
+    // budget's periods is the share's creation and does not move.
+    const before = await E(powers).lookup('share-limits');
+    await E(powers).storeValue(
+      normalizeShareLimits({ ...limits, createdAt: before.createdAt }),
+      'share-limits',
+    );
+  }
+  if (!(await E(hostAgent).has(...sharePath))) {
+    // What is handed out: the kit's `share()` and nothing more of it.
+    await mintWithPowersPath(hostAgent, {
+      powersPath: kitPath,
+      temporary: `${dir}.share-${shareId}-kit-powers`,
+      specifier: moduleSpecifier('./subscription-share-facet-module.js'),
+      resultName: sharePath,
+      env: {},
+    });
+  }
+  return harden({ sharePath, kitPath, created });
+};
+harden(provideSubscriptionShare);
 
 /**
  * @param {any} hostAgent

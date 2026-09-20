@@ -21,7 +21,9 @@ import {
   mintWithPowersPath,
   prepareRuntimeEnv,
   providePrivateDirectory,
+  provideSubscriptionShare,
   publishAccountOracle,
+  publishBrokerSubscription,
   readProvisionedEnvironment,
   readSliceImageReference,
   resolveFuturePath,
@@ -330,12 +332,24 @@ const makeNamingHost = initial => {
         storeLocator: async (name, locator) => {
           stored.set(name, locator);
         },
+        storeValue: async (value, name) => {
+          stored.set(name, value);
+        },
+        has: async name => stored.has(name),
+        lookup: async name => stored.get(name),
       });
       guests.set(agentName, stored);
       names.set(handleName, `handle:${agentName}`);
       names.set(agentName, guest);
     },
     lookup: async namePath => names.get(joined(namePath)),
+    list: async (...namePath) => {
+      const prefix = `${joined(namePath)}/`;
+      return [...names.keys()]
+        .filter(name => name.startsWith(prefix))
+        .map(name => name.slice(prefix.length))
+        .filter(name => !name.includes('/'));
+    },
     makeUnconfined: async (_worker, specifier, options) => {
       made.push({
         specifier,
@@ -619,4 +633,188 @@ test('a broker whose worker predates the redeemer leaves no name behind, and the
   t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
   t.false(world.names.has('codex-sandbox/subscription-admin'));
   t.false(world.names.has('floot/controller-profile/codex-admin'));
+});
+
+test('a share is a namespace, a kit and the name that is handed out; made once, its limits rewritten, and it follows a re-minted broker', async t => {
+  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const dir = { label: 'Codex', dir: 'codex-sandbox' };
+  // No subscription yet: a share has nothing to be made over.
+  await t.throwsAsync(
+    () =>
+      provideSubscriptionShare(world.host, {
+        ...dir,
+        shareId: 'alice',
+        limits: {},
+      }),
+    { message: /needs the subscription/ },
+  );
+  await publishBrokerSubscription(world.host, dir);
+  const of = suffix =>
+    world.made.filter(made => made.specifier.endsWith(suffix));
+  t.is(of('/subscription-module.js')[0].powers, 'broker-1');
+  t.false(world.names.has('codex-sandbox.subscription-powers'));
+
+  const result = await provideSubscriptionShare(world.host, {
+    ...dir,
+    shareId: 'alice',
+    limits: { budget: { tokens: 1_000_000, periodSeconds: 86_400 } },
+    now: () => '2026-09-20T00:00:00.000Z',
+  });
+  t.deepEqual(result, {
+    sharePath: ['codex-sandbox', 'share-alice'],
+    kitPath: ['codex-sandbox', 'share-alice-kit'],
+    created: true,
+  });
+  const powers = world.guests.get('codex-sandbox.share-alice-powers');
+  t.deepEqual([...powers.keys()].sort(), ['share-limits', 'subscription']);
+  t.deepEqual(powers.get('share-limits'), {
+    createdAt: '2026-09-20T00:00:00.000Z',
+    budget: { tokens: 1_000_000, periodSeconds: 86_400 },
+  });
+  // The kit's powers are the namespace; the share's are the kit, and only it.
+  const kit = of('/subscription-share-module.js')[0];
+  t.deepEqual(kit.env, { SHARE_ID: 'alice' });
+  t.deepEqual(kit.resultName, ['codex-sandbox', 'share-alice-kit']);
+  const facet = of('/subscription-share-facet-module.js')[0];
+  t.is(facet.powers, world.names.get('codex-sandbox/share-alice-kit'));
+  t.deepEqual(facet.resultName, ['codex-sandbox', 'share-alice']);
+  t.false(world.names.has('codex-sandbox.share-alice-powers'));
+  t.false(world.names.has('codex-sandbox.share-alice-kit-powers'));
+  t.true(world.names.has('codex-sandbox/share-alice-powers'));
+
+  // Again, with other limits: a write of a value. Nothing is minted, and
+  // the anchor of the budget's periods does not move.
+  const mintsBefore = world.made.length;
+  const again = await provideSubscriptionShare(world.host, {
+    ...dir,
+    shareId: 'alice',
+    limits: { budget: { tokens: 5000, periodSeconds: 3600 }, reserve: 0.2 },
+    now: () => '2026-12-31T00:00:00.000Z',
+  });
+  t.false(again.created);
+  t.is(world.made.length, mintsBefore);
+  t.deepEqual(powers.get('share-limits'), {
+    createdAt: '2026-09-20T00:00:00.000Z',
+    budget: { tokens: 5000, periodSeconds: 3600 },
+    reserve: 0.2,
+  });
+
+  // A deploy re-mints the broker: the share is not made again, and the name
+  // inside its namespace moves to the new broker's subscription.
+  const before = powers.get('subscription');
+  world.names.set('codex-sandbox/broker-service', 'broker-2');
+  await publishBrokerSubscription(world.host, dir);
+  t.is(of('/subscription-module.js')[1].powers, 'broker-2');
+  t.not(powers.get('subscription'), before);
+  t.is(of('/subscription-share-module.js').length, 1);
+
+  // Bad ids and bad limits are refused before anything is made.
+  for (const shareId of ['bad id', 'x-kit', 'powers', '']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() =>
+      provideSubscriptionShare(world.host, { ...dir, shareId, limits: {} }),
+    );
+  }
+  await t.throwsAsync(() =>
+    provideSubscriptionShare(world.host, {
+      ...dir,
+      shareId: 'bob',
+      limits: { reserve: 2 },
+    }),
+  );
+  await t.throwsAsync(
+    () => provideSubscriptionShare(world.host, { ...dir, shareId: 'bob' }),
+    { message: /needs limits/ },
+  );
+  t.false(world.names.has('codex-sandbox/share-bob-kit'));
+});
+
+test('a share narrowed from somebody else’s is not re-pointed at this adapter’s broker', async t => {
+  const world = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'from-carol': 'carols-share',
+  });
+  const dir = { label: 'Codex', dir: 'codex-sandbox' };
+  await publishBrokerSubscription(world.host, dir);
+  await provideSubscriptionShare(world.host, {
+    ...dir,
+    shareId: 'narrow',
+    limits: { models: ['allowed'] },
+    subscriptionPath: ['from-carol'],
+  });
+  const powers = world.guests.get('codex-sandbox.share-narrow-powers');
+  t.is(powers.get('subscription'), 'locator:carols-share');
+  await publishBrokerSubscription(world.host, dir);
+  t.is(powers.get('subscription'), 'locator:carols-share');
+});
+
+test('a broker with no subscription to offer is reported, and leaves no name', async t => {
+  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const old = harden({
+    ...world.host,
+    makeUnconfined: async (worker, specifier, options) => {
+      await world.host.makeUnconfined(worker, specifier, options);
+      throw Error('target has no method "subscription"');
+    },
+  });
+  await t.notThrowsAsync(() =>
+    publishBrokerSubscription(old, { label: 'Codex', dir: 'codex-sandbox' }),
+  );
+  t.false(world.names.has('codex-sandbox/subscription'));
+  t.false(world.names.has('codex-sandbox.subscription-powers'));
+});
+
+test('a share whose kit is gone is made again over the namespace it had, not beside it', async t => {
+  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const dir = { label: 'Codex', dir: 'codex-sandbox' };
+  await publishBrokerSubscription(world.host, dir);
+  await provideSubscriptionShare(world.host, {
+    ...dir,
+    shareId: 'alice',
+    limits: { budget: { tokens: 1000, periodSeconds: 3600 } },
+    now: () => '2026-09-20T00:00:00.000Z',
+  });
+  const namespace = world.names.get('codex-sandbox/share-alice-powers');
+  // The kit and the name handed out are lost; the namespace (the limits,
+  // the meter, the revocation) is still there.
+  world.names.delete('codex-sandbox/share-alice-kit');
+  world.names.delete('codex-sandbox/share-alice');
+  const again = await provideSubscriptionShare(world.host, {
+    ...dir,
+    shareId: 'alice',
+  });
+  t.true(again.created);
+  const kits = world.made.filter(made =>
+    made.specifier.endsWith('/subscription-share-module.js'),
+  );
+  t.is(kits.length, 2);
+  t.is(kits[1].powers, namespace, 'over the same namespace');
+  t.deepEqual(kits[1].env, { SHARE_ID: 'alice' });
+  t.is(world.names.get('codex-sandbox/share-alice-powers'), namespace);
+  // Nothing was left at the top level.
+  t.deepEqual(
+    [...world.names.keys()].filter(name => name.startsWith('codex-sandbox.')),
+    [],
+  );
+  t.true(world.names.has('codex-sandbox/share-alice'));
+});
+
+test('a kit is not made twice over one namespace while the share is still handed out', async t => {
+  const world = makeNamingHost({ 'codex-sandbox/broker-service': 'broker-1' });
+  const dir = { label: 'Codex', dir: 'codex-sandbox' };
+  await publishBrokerSubscription(world.host, dir);
+  await provideSubscriptionShare(world.host, {
+    ...dir,
+    shareId: 'alice',
+    limits: { budget: { tokens: 1000, periodSeconds: 3600 } },
+  });
+  // Only the kit's name is lost. The share that was handed out still runs
+  // the old kit, its meter and its writes.
+  world.names.delete('codex-sandbox/share-alice-kit');
+  const mints = world.made.length;
+  await t.throwsAsync(
+    () => provideSubscriptionShare(world.host, { ...dir, shareId: 'alice' }),
+    { message: /still handed out/ },
+  );
+  t.is(world.made.length, mints);
 });

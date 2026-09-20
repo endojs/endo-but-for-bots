@@ -164,9 +164,13 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
     'lookupScope',
     'provideScope',
     'resetRedeemer',
+    'subscription',
     'subscriptions',
   ]);
   t.is(await E(f.service).resetRedeemer(), undefined);
+  // The broker as a `Subscription`, for shares: also the operator's, and
+  // also not in this fixture.
+  t.is(await E(f.service).subscription(), undefined);
   t.is(await E(f.service).accountSource(), undefined);
   // One credential and no declared set: nothing to choose between.
   t.deepEqual(await E(f.service).subscriptions(), []);

@@ -8,6 +8,48 @@ import { randomUUID } from 'node:crypto';
 
 import { makeProviderBrokerGrant } from './provider-broker.js';
 import { makeProviderFetchTransport } from './provider-transport.js';
+import { InferenceEndpointInterface } from './subscription-share.js';
+
+/**
+ * How many subscriptions a request may already have passed through when it
+ * arrives here. `subscription-share.js` refuses one hop sooner; this is the
+ * innermost subscription's own check, for whatever reaches it.
+ */
+const MAX_ENDPOINT_HOPS = 4;
+
+/** How long a far subscription gets to open an endpoint for one session. */
+const WRAPPED_OPEN_DEADLINE_MS = 15_000;
+
+/**
+ * A promise that loses to a deadline. What arrives after the deadline is
+ * handed to `late`, so that an endpoint opened too late is given back.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {(value: T) => void} late
+ * @returns {Promise<T>}
+ */
+const withDeadline = (promise, ms, late) =>
+  new Promise((resolve, reject) => {
+    let over = false;
+    const timer = globalThis.setTimeout(() => {
+      over = true;
+      reject(Error('Provider subscription unavailable'));
+    }, ms);
+    /** @type {any} */ (timer).unref?.();
+    promise.then(
+      value => {
+        globalThis.clearTimeout(timer);
+        if (over) late(value);
+        else resolve(value);
+      },
+      error => {
+        globalThis.clearTimeout(timer);
+        if (!over) reject(error);
+      },
+    );
+  });
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from './provider-broker.js' */
 
@@ -50,11 +92,16 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * member refuses to the next (`makeProviderBrokerGrant`). A grant takes the
  * set as it is when the grant is issued; a member added later is seen by the
  * sessions opened after it.
+ * @param {number} [options.wrappedOpenDeadlineMs] How long a member that is
+ * somebody else's subscription gets to open an endpoint for a session.
  */
 /**
  * @typedef {object} IssuerPoolMember
  * @property {string} id
- * @property {any} secret SecretBlob read facet.
+ * @property {any} [subscription] In place of `secret`: this member is
+ *   somebody else's `Subscription` (a share they handed over). Each grant
+ *   opens an endpoint of its own on it, and revokes it with the grant.
+ * @property {any} [secret] SecretBlob read facet.
  * @property {any} [credential] The member's shared refreshing credential.
  * @property {ProviderRequestAdapter} [adaptRequest]
  * @property {string} [accountRef]
@@ -83,6 +130,7 @@ export const makeProviderBrokerGrantIssuer = ({
   adaptRequest,
   makePublicNetwork,
   pool,
+  wrappedOpenDeadlineMs = WRAPPED_OPEN_DEADLINE_MS,
 }) => {
   (/^sha256:[a-f0-9]{64}$/.test(imageDigest) &&
     typeof accountRef === 'string' &&
@@ -137,6 +185,260 @@ export const makeProviderBrokerGrantIssuer = ({
     return result;
   };
   let disposed = false;
+  /**
+   * The credential-bearing core of one grant or endpoint: the broker grant
+   * over this issuer's one credential, or over a transport per member of its
+   * pool. No listener: who serves it to a harness is the caller's business.
+   *
+   * @param {{ sessionId: string, subscription: string }} spec
+   * @param {boolean} revealExhaustion
+   */
+  const makeCore = (spec, revealExhaustion) => {
+    const timeoutMs = requestTimeoutMs;
+    if (pool === undefined) {
+      // Synchronously: a grant over one credential starts its listener in
+      // the turn it was admitted in, as it always has.
+      const transport = makeProviderFetchTransport({
+        fetch,
+        timeoutMs,
+        maxRequestBytes: configuredPolicy.maxRequestBytes,
+        maxResponseBytes: configuredPolicy.maxResponseBytes,
+        onDiagnostic,
+        onReading,
+      });
+      const core = makeProviderBrokerGrant(configuredPolicy, {
+        secret,
+        transport: transport.transport,
+        audit,
+        credential,
+        adaptRequest,
+        revealExhaustion,
+      });
+      return { core, transport, memberTransports: [] };
+    }
+    return makePoolCore(pool, spec, revealExhaustion);
+  };
+  /**
+   * @param {IssuerPool} memberPool
+   * @param {{ sessionId: string, subscription: string, hops?: number }} spec
+   * @param {boolean} revealExhaustion
+   */
+  const makePoolCore = async (memberPool, spec, revealExhaustion) => {
+    const timeoutMs = requestTimeoutMs;
+    // A transport per member, so that what a response says of the account is
+    // read as that member's, whichever of them served a request while
+    // another is mid-stream.
+    /** @type {Array<{ dispose(): void }>} */
+    const memberTransports = [];
+    const declared = [...(await memberPool.members())];
+    const members = declared.flatMap(member => {
+      if (
+        member.subscription !== undefined &&
+        (spec.hops ?? 0) + 2 > MAX_ENDPOINT_HOPS
+      ) {
+        // The far side would refuse to open one hop further. That is about
+        // how far this request has come, which its caller chose, and not
+        // about the member: it is left out of this core, and the pool is not
+        // told it cannot serve.
+        return [];
+      }
+      if (member.subscription !== undefined) {
+        // Somebody else's subscription. Its endpoint for this session is
+        // opened on first use, one hop further from the provider, and never
+        // while this issuer's queue is held: what is beneath it may be a
+        // pool that holds a share of this one, whose issuer would then wait
+        // for the very queue that is waiting for it. Opening has a deadline,
+        // so a far daemon that hangs costs a request a pause and not the
+        // session its grant.
+        /** @type {Promise<any> | undefined} */
+        let opening;
+        /** @type {any} */
+        let current;
+        // Endpoints that stopped working, kept until the grant ends: another
+        // request of this session may still be streaming from one. Bounded;
+        // past that the oldest is given back.
+        /** @type {any[]} */
+        const retired = [];
+        let gone = false;
+        /** @param {any} endpoint */
+        const giveBack = endpoint => {
+          void E(endpoint)
+            .revoke()
+            .catch(() => {});
+        };
+        const provide = () => {
+          !gone || Fail`Provider grant inactive`;
+          if (opening === undefined) {
+            const attempt = withDeadline(
+              E(member.subscription).openEndpoint(
+                harden({
+                  sessionId: spec.sessionId,
+                  subscription: 'auto',
+                  hops: (spec.hops ?? 0) + 1,
+                }),
+              ),
+              wrappedOpenDeadlineMs,
+              giveBack,
+            ).then(endpoint => {
+              if (gone) {
+                giveBack(endpoint);
+                throw Fail`Provider grant inactive`;
+              }
+              current = endpoint;
+              return endpoint;
+            });
+            opening = attempt;
+            // One that could not be opened is tried again by the next
+            // request, not remembered.
+            attempt.catch(() => {
+              if (opening === attempt) opening = undefined;
+            });
+          }
+          return opening;
+        };
+        /** @param {any} endpoint */
+        const reset = endpoint => {
+          // Only the one named: two requests that both found it dead must
+          // not each forget the endpoint the other has just opened.
+          if (current !== endpoint) return;
+          current = undefined;
+          opening = undefined;
+          retired.push(endpoint);
+          while (retired.length > 8) giveBack(retired.shift());
+        };
+        memberTransports.push({
+          dispose: () => {
+            gone = true;
+            const last = opening;
+            opening = undefined;
+            current = undefined;
+            if (last !== undefined) void last.then(giveBack, () => {});
+            for (const endpoint of retired.splice(0)) giveBack(endpoint);
+          },
+        });
+        return [harden({ id: member.id, wrapped: { provide, reset } })];
+      }
+      const memberTransport = makeProviderFetchTransport({
+        fetch,
+        timeoutMs,
+        maxRequestBytes: configuredPolicy.maxRequestBytes,
+        maxResponseBytes: configuredPolicy.maxResponseBytes,
+        onDiagnostic,
+        onReading: member.onReading,
+      });
+      memberTransports.push(memberTransport);
+      return [
+        harden({
+          id: member.id,
+          secret: member.secret,
+          transport: memberTransport.transport,
+          ...(member.credential === undefined
+            ? {}
+            : { credential: member.credential }),
+          ...(member.adaptRequest === undefined
+            ? {}
+            : { adaptRequest: member.adaptRequest }),
+          ...(member.accountRef === undefined
+            ? {}
+            : { accountRef: member.accountRef }),
+        }),
+      ];
+    });
+    try {
+      const core = makeProviderBrokerGrant(configuredPolicy, {
+        audit,
+        revealExhaustion,
+        pool: harden({
+          members,
+          ...memberPool.forSession(spec.sessionId, spec.subscription),
+        }),
+      });
+      return { core, transport: undefined, memberTransports };
+    } catch (error) {
+      for (const memberTransport of memberTransports) memberTransport.dispose();
+      throw error;
+    }
+  };
+
+  /**
+   * An inference endpoint for one session, with no listener and no sandbox:
+   * what a `Subscription` hands out (`subscription-share.js`). The caller
+   * serves it to a harness, or wraps it. It is the same credential-bearing
+   * core a grant has, so the route allowlist, the model allowlist, the byte
+   * bounds, the echo screen and the pool's selection all apply.
+   *
+   * @param {any} requested `{ sessionId, subscription?, hops? }`
+   */
+  const openEndpoint = requested =>
+    serialize(async () => {
+      const spec = harden({
+        sessionId: requested?.sessionId,
+        subscription:
+          requested?.subscription === undefined
+            ? 'auto'
+            : requested.subscription,
+        hops: requested?.hops === undefined ? 0 : requested.hops,
+      });
+      (!disposed &&
+        typeof spec.sessionId === 'string' &&
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(spec.sessionId) &&
+        typeof spec.subscription === 'string' &&
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(spec.subscription) &&
+        (pool !== undefined || spec.subscription === 'auto') &&
+        Number.isSafeInteger(spec.hops) &&
+        Number(spec.hops) >= 0 &&
+        Number(spec.hops) <= MAX_ENDPOINT_HOPS) ||
+        Fail`Provider endpoint request denied`;
+      const made = await makeCore(spec, true);
+      let revoked = false;
+      const fence = async () => {
+        revoked = true;
+        made.transport?.dispose();
+        for (const memberTransport of made.memberTransports) {
+          memberTransport.dispose();
+        }
+        await E(made.core.admin).revoke();
+      };
+      const revoke = async () => {
+        if (!revoked) await fence();
+        grants.delete(revoke);
+        fences.delete(fence);
+      };
+      if (disposed) {
+        await fence();
+        throw Fail`Provider endpoint request denied`;
+      }
+      grants.add(revoke);
+      fences.add(fence);
+      const live = () => {
+        (!revoked && !disposed) || Fail`Inference endpoint revoked`;
+      };
+      return makeExo('InferenceEndpoint', InferenceEndpointInterface, {
+        /** @param {any} message */
+        async request(message) {
+          live();
+          return made.core.endpoint.request(message);
+        },
+        /** @param {any} message */
+        async requestByteStream(message) {
+          live();
+          return made.core.endpoint.requestByteStream(message);
+        },
+        async attestation() {
+          live();
+          return harden({
+            version: 'InferenceEndpointV1',
+            sessionId: spec.sessionId,
+            providerOrigin: configuredPolicy.origin,
+            modelAllowlist: [...configuredPolicy.models],
+            subscription: spec.subscription,
+            hops: spec.hops,
+          });
+        },
+        revoke,
+      });
+    });
+
   /**
    * Retain one grant's cleanup before queued issuance. This is the same issuer,
    * account policy, runtime and admission queue as callable promise issuance.
@@ -233,60 +535,19 @@ export const makeProviderBrokerGrantIssuer = ({
       grants.add(revoke);
       fences.add(fence);
       const timeoutMs = requestTimeoutMs;
-      if (pool === undefined) {
-        transport = makeProviderFetchTransport({
-          fetch,
-          timeoutMs,
-          maxRequestBytes: configuredPolicy.maxRequestBytes,
-          maxResponseBytes: configuredPolicy.maxResponseBytes,
-          onDiagnostic,
-          onReading,
-        });
-        core = makeProviderBrokerGrant(configuredPolicy, {
-          secret,
-          transport: transport.transport,
-          audit,
-          credential,
-          adaptRequest,
-        });
-      } else {
-        // A transport per member, so that what a response says of the
-        // account is read as that member's, whichever of them served a
-        // request while another is mid-stream.
-        const members = [...(await pool.members())].map(member => {
-          const memberTransport = makeProviderFetchTransport({
-            fetch,
-            timeoutMs,
-            maxRequestBytes: configuredPolicy.maxRequestBytes,
-            maxResponseBytes: configuredPolicy.maxResponseBytes,
-            onDiagnostic,
-            onReading: member.onReading,
-          });
-          memberTransports.push(memberTransport);
-          return harden({
-            id: member.id,
-            secret: member.secret,
-            transport: memberTransport.transport,
-            ...(member.credential === undefined
-              ? {}
-              : { credential: member.credential }),
-            ...(member.adaptRequest === undefined
-              ? {}
-              : { adaptRequest: member.adaptRequest }),
-            ...(member.accountRef === undefined
-              ? {}
-              : { accountRef: member.accountRef }),
-          });
-        });
-        checkLive();
-        core = makeProviderBrokerGrant(configuredPolicy, {
-          audit,
-          pool: harden({
-            members,
-            ...pool.forSession(spec.sessionId, spec.subscription),
-          }),
-        });
+      const making = makeCore(spec, false);
+      const made = making instanceof Promise ? await making : making;
+      transport = made.transport;
+      memberTransports.push(...made.memberTransports);
+      core = made.core;
+      if (inactive || disposed) {
+        // Fenced while the core was being made: the fence saw none of this.
+        made.transport?.dispose();
+        for (const memberTransport of made.memberTransports) {
+          memberTransport.dispose();
+        }
       }
+      checkLive();
       if (spec.networkPolicy === 'public-internet') {
         if (!makePublicNetwork) throw Fail`Public network factory unavailable`;
         network = makePublicNetwork(spec);
@@ -411,6 +672,7 @@ export const makeProviderBrokerGrantIssuer = ({
   return harden(
     Object.assign(spec => issueKit(spec).value, {
       issueKit,
+      openEndpoint,
       retryCleanup: () => serialize(() => clean(pending)),
       dispose: () => {
         disposed = true;

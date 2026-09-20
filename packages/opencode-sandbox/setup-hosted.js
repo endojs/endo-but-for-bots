@@ -62,6 +62,7 @@ import {
   mintWithPowersPath,
   providePrivateDirectory,
   publishAccountOracle,
+  publishBrokerSubscription,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { Fail, q } from '@endo/errors';
 
@@ -370,6 +371,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     providerId: 'openrouter',
     flootDir,
     backendId: 'opencode',
+  });
+  // The broker as a Subscription, which shares are made over
+  // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
+  await publishBrokerSubscription(hostAgent, {
+    label: 'OpenCode',
+    dir: SANDBOX_DIR,
   });
 
   console.log(

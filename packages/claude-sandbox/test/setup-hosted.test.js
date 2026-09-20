@@ -463,6 +463,7 @@ test.serial(
         'claude-sandbox/backend-next',
         // The broker's read-only account source, for the account oracle.
         'claude-sandbox/account-source',
+        'claude-sandbox/subscription',
       ],
     );
     // The seed entered the secrets manager once; the credential caplet reads
@@ -632,7 +633,11 @@ test.serial(
     await main(fake.host, { exec: refuseInspect });
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().join('/')),
-      ['claude-sandbox/backend-next', 'claude-sandbox/account-source'],
+      [
+        'claude-sandbox/backend-next',
+        'claude-sandbox/account-source',
+        'claude-sandbox/subscription',
+      ],
     );
     t.deepEqual(fake.secrets.length, 1, 'no second secret');
     t.like(backendMint(fake.mints)?.options.env, {
@@ -715,6 +720,7 @@ test.serial(
         'claude-sandbox/session-storage',
         'claude-sandbox/backend-next',
         'claude-sandbox/account-source',
+        'claude-sandbox/subscription',
       ],
       'the broker is retained, not re-minted',
     );

@@ -75,6 +75,7 @@ import {
   mintWithPowersPath,
   providePrivateDirectory,
   publishAccountOracle,
+  publishBrokerSubscription,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedCredentials } from '@endo/hosted-agent/managed-credentials.js';
 import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service.js';
@@ -454,6 +455,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     providerId: 'anthropic',
     flootDir,
     backendId: 'claude',
+  });
+  // The broker as a Subscription, which shares are made over
+  // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
+  await publishBrokerSubscription(hostAgent, {
+    label: 'Claude',
+    dir: SANDBOX_DIR,
   });
 
   console.log(
