@@ -271,7 +271,7 @@ surface used by content-addressed readers.
 
 Get documentation for this interface or a specific method.
 - help() returns an overview of the interface
-- help("fetch") returns documentation for the fetch method
+- help("bytes") returns documentation for the bytes method
 
 ## streamBase64(syndicationPromise) -> Promise
 
@@ -286,16 +286,31 @@ Read the complete blob as UTF-8 text.
 
 Read the complete blob as UTF-8 text and parse it as JSON.
 
-## getInfo() -> Promise<{ algorithm, hash, size }>
+## sha256() -> Promise<string>
 
-Get the blob's content-address identity and byte length.
-The result carries `algorithm` ("sha256"), a base64 `hash`, and `size` as a
-bigint.
+Return the SHA-256 digest of the selected bytes as base64.
 
-## fetch(offset, length) -> Promise<PassableBytesReader>
+## size() -> Promise<bigint>
 
-Read a byte window from the blob.
-The range is `[offset, offset + length)`, clamped at end of file.
+Return the selected byte length.
+
+## bytes() -> Promise<PassableBytesReader>
+
+Stream all selected bytes.
+
+## byteRange(start, end) -> GitBlob
+
+Attenuate to the half-open byte interval `[start, end)` of this blob.
+Returns a new GitBlob with exactly the authority to read the selected bytes;
+ranges compose (a range of a range intersects) and `start === end` selects an
+empty blob. Construction reads no bytes, so it resolves synchronously.
+
+## textRange(startLine, endLine) -> Promise<GitBlob>
+
+Attenuate to lines `[startLine, endLine)` (0-based, end-exclusive, LF
+boundaries, CRLF preserved) of the blob's bytes.
+Returns a new GitBlob over the corresponding byte slice; it reads bytes to find
+the line boundaries, so it resolves asynchronously.
 
 # GitRemote - A policy-bound remote fetch, pull, and push capability.
 
