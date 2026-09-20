@@ -7411,7 +7411,9 @@ const makeDaemonCore = async (
           // never REDIRECT one.
           if (addresses.length > 0) {
             const knownPeers = /** @type {KnownPeersStore} */ (
-              /** @type {unknown} */ (await provideStoreController(knownPeersId))
+              /** @type {unknown} */ (
+                await provideStoreController(knownPeersId)
+              )
             );
             if (knownPeers.identifyLocal(guestDaemonNode) === undefined) {
               /** @type {PeerInfo} */
