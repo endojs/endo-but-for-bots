@@ -16,6 +16,11 @@ import { makeUsageTap } from './provider-usage.js';
 import { makeSecretRotator } from './secret-rotator.js';
 import { emptyCounts, tokenCount } from './token-usage.js';
 
+export {
+  assertBrokerOAuthRefreshState,
+  makeBrokerMemoryOAuthCredential,
+} from './memory-oauth-credential.js';
+
 /**
  * @typedef {{ method: string, path: string }} Route
  * @typedef {{ origin: string, routes: Route[], models: string[],
