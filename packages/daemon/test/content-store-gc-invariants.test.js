@@ -115,7 +115,7 @@ test.afterEach.always(async t => {
   }
 });
 
-// Both blobs (getInfo().hash) and trees (sha256()) report the content hash as
+// Both blobs and trees report the content hash with sha256() as
 // base64; the content store keys files by hex digest, so convert here.
 const contentPathOf = (statePath, hashBase64) =>
   path.join(statePath, 'store-sha256', encodeHex(decodeBase64(hashBase64)));
@@ -188,7 +188,7 @@ test('does not throw when a content-store blob is already missing', async t => {
     new TextEncoder().encode('about-to-vanish'),
   ]);
   const blob = await E(host).storeBlob(readerRef, 'phantom-blob');
-  const sha256 = (await E(blob).getInfo()).hash;
+  const sha256 = await E(blob).sha256();
   const filePath = contentPathOf(config.statePath, sha256);
 
   // Yank the content file out from under the daemon.
@@ -221,7 +221,7 @@ test('reclaims many distinct content hashes across sequential collections', asyn
       `batch-${i}`,
     );
     // eslint-disable-next-line no-await-in-loop
-    const sha = (await E(blob).getInfo()).hash;
+    const sha = await E(blob).sha256();
     shas.push(sha);
   }
 
@@ -268,7 +268,7 @@ test('retains a shared hash when one of many collected formulas references it', 
     bytesReaderFromIterator([sharedBytes]),
     'keepsake',
   );
-  const sharedSha = (await E(survivor).getInfo()).hash;
+  const sharedSha = await E(survivor).sha256();
 
   // Several blobs that will be collected, one of which dedupes
   // against the survivor.
@@ -280,14 +280,14 @@ test('retains a shared hash when one of many collected formulas references it', 
       `distractor-${i}`,
     );
     // eslint-disable-next-line no-await-in-loop
-    distractorShas.push((await E(blob).getInfo()).hash);
+    distractorShas.push(await E(blob).sha256());
   }
   // The dedupe-against-survivor blob.
   const twin = await E(host).storeBlob(
     bytesReaderFromIterator([sharedBytes]),
     'doomed-twin',
   );
-  t.is((await E(twin).getInfo()).hash, sharedSha);
+  t.is(await E(twin).sha256(), sharedSha);
 
   // Drop every doomed name.  The shared hash should survive
   // because keepsake still references it.

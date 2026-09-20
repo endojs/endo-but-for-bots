@@ -3,13 +3,9 @@
  * Reference content-addressed-store (CAS) consumer for `BlobRef`s
  * (DESIGN.md §6).
  *
- * `BlobRef.getInfo()` carries `{ algorithm, hash, size }`. Callers
- * pipeline it alongside the surrounding call (snapshot, fetch) so
- * the incremental round-trip is zero (DESIGN.md §4.10). A
- * consumer that maintains a local CAS keyed by `(algorithm,
- * hash)` can answer reads locally and skip `BlobRef.fetch()`
- * entirely on cache hits — the central performance claim that
- * motivates BlobRef in the first place.
+ * `BlobRef.sha256()` and `BlobRef.size()` report the content key and length.
+ * A consumer that maintains a local CAS keyed by `(algorithm, hash)` can
+ * answer reads locally and skip `BlobRef.bytes()` on cache hits.
  *
  * Two pieces:
  *
@@ -18,9 +14,9 @@
  *   and small-scale callers; a disk-backed or distributed CAS
  *   that implements the same surface is a drop-in replacement.
  *
- * - `cacheBackedRead(blobRef, cas)` — the consumer. Calls
- *   `getInfo()` once, looks up the CAS, and either serves bytes
- *   from the cache (hit, no `fetch`) or fetches once and
+ * - `cacheBackedRead(blobRef, cas)` — the consumer. Reads the digest and size,
+ *   looks up the CAS, and either serves bytes
+ *   from the cache (hit, no byte stream) or streams once and
  *   populates the cache (miss). Returns the full content as a
  *   `Uint8Array`.
  *
@@ -170,12 +166,12 @@ const drainBytesReader = async (readerRef, expectedSize) => {
 /**
  * Read a `BlobRef`'s bytes, consulting `cas` first. On cache
  * hit, the bytes are served locally without calling
- * `BlobRef.fetch()` — no `fetch` round-trip touches the wire.
+ * `BlobRef.bytes()` — no blob-content round-trip touches the wire.
  * On miss, fetch the full content from the underlying blob,
  * populate the CAS, and return.
  *
- * `BlobRef.getInfo()` is always called (one round-trip); callers
- * that need to avoid even that round-trip should pipeline `getInfo`
+ * `BlobRef.sha256()` is always called (one round-trip); callers
+ * that need to avoid even that round-trip should pipeline the metadata calls
  * alongside the call that produced the BlobRef — see
  * `withCachedReads` in `cached-fs.js` for the realisation.
  *
@@ -191,11 +187,15 @@ const drainBytesReader = async (readerRef, expectedSize) => {
  * @returns {Promise<Uint8Array>}
  */
 export const cacheBackedRead = async (blobRef, cas, range) => {
-  const info = /** @type {BlobInfo} */ (await E(blobRef).getInfo());
+  const [hash, size] = await Promise.all([
+    E(blobRef).sha256(),
+    E(blobRef).size(),
+  ]);
+  const info = harden({ algorithm: 'sha256', hash, size });
   let bytes = cas.get(info);
   if (bytes === undefined) {
     // Miss: pull the full payload over the wire and cache it.
-    const reader = await E(blobRef).fetch(0n, info.size);
+    const reader = await E(blobRef).bytes();
     bytes = await drainBytesReader(reader, info.size);
     cas.put(info, bytes);
   }

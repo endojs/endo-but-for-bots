@@ -18,6 +18,9 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { sha256 } from '@endo/sha256';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -688,9 +691,7 @@ test('persist spawn and evaluation', async t => {
 test('store blob without name fails', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await t.throwsAsync(E(host).storeBlob(readerRef), {
     message: 'Invalid name path',
   });
@@ -701,9 +702,7 @@ test('store with name', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const readerRef = bytesReaderFromIterator([
-      new TextEncoder().encode('hello\n'),
-    ]);
+    const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, 'hello-text');
     const actualText = await E(readable).text();
     t.is(actualText, 'hello\n');
@@ -717,11 +716,11 @@ test('store with name', async t => {
   }
 });
 
-test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)', async t => {
+test('stored blob exposes named digest, size, and byte reads', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
-  const payload = new TextEncoder().encode('hello world\n'); // 12 bytes
+  const payload = encodeUtf8('hello world\n'); // 12 bytes
   const readerRef = bytesReaderFromIterator([payload]);
   const blob = await E(host).storeBlob(readerRef, 'rich-blob');
 
@@ -738,21 +737,101 @@ test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)',
       out.set(c, offset);
       offset += c.length;
     }
-    return new TextDecoder().decode(out);
+    return decodeUtf8(out);
   };
 
-  // getInfo() is the blob's content-address accessor (there is no separate
-  // sha256() method — getInfo().hash, base64, is the canonical content hash).
-  const info = await E(blob).getInfo();
-  t.is(info.algorithm, 'sha256');
-  t.is(info.size, 12n);
-  t.is(info.hash, crypto.createHash('sha256').update(payload).digest('base64'));
+  t.is(await E(blob).size(), 12n);
+  t.is(await E(blob).sha256(), encodeBase64(sha256(payload)));
 
-  // fetch(offset, length) is a windowed read, clamped at EOF.
-  t.is(await collect(await E(blob).fetch(0n, 12n)), 'hello world\n');
-  t.is(await collect(await E(blob).fetch(0n, 5n)), 'hello');
-  t.is(await collect(await E(blob).fetch(6n, 100n)), 'world\n');
-  t.is(await collect(await E(blob).fetch(100n, 4n)), '');
+  // bytes() reads the full selected content.
+  t.is(await collect(await E(blob).bytes()), 'hello world\n');
+  t.is(await E(await E(blob).byteRange(0n, 5n)).text(), 'hello');
+  t.is(await E(await E(blob).byteRange(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).byteRange(100n, 104n)).text(), '');
+});
+
+test('stored blob range attenuation: byteRange / textRange return derived readable blobs', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const payload = encodeUtf8('hello world\n'); // 12 bytes
+  const readerRef = bytesReaderFromIterator([payload]);
+  const blob = await E(host).storeBlob(readerRef, 'range-blob');
+
+  const b64 = bytes => encodeBase64(sha256(bytes));
+
+  // byteRange(start, end) → a derived EndoReadable over [start, end).
+  const hello = await E(blob).byteRange(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  t.is(await E(hello).size(), 5n, 'size reports the selected length');
+  t.is(
+    await E(hello).sha256(),
+    b64(encodeUtf8('hello')),
+    'sha256 reports the selected content digest',
+  );
+
+  // A range of a range intersects (composition, never regaining authority).
+  const el = await E(hello).byteRange(1n, 3n);
+  t.is(await E(el).text(), 'el');
+  // Even a wide child range cannot escape its parent's [0,5) window.
+  const clampedChild = await E(hello).byteRange(3n, 100n);
+  t.is(await E(clampedChild).text(), 'lo');
+
+  // EOF clamp on the top-level blob.
+  const world = await E(blob).byteRange(6n, 100n);
+  t.is(await E(world).text(), 'world\n');
+
+  // start === end selects an empty blob.
+  const empty = await E(blob).byteRange(3n, 3n);
+  t.is(await E(empty).text(), '');
+  t.is(await E(empty).size(), 0n);
+
+  // byteRange composes within the selected authority.
+  t.is(await E(await E(hello).byteRange(1n, 3n)).text(), 'el');
+
+  // EINVAL: an inverted or negative byte range rejects.
+  await t.throwsAsync(E(blob).byteRange(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(E(blob).byteRange(-1n, 2n), { message: /EINVAL|safe/ });
+});
+
+test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text composition', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const store = async text => {
+    const readerRef = bytesReaderFromIterator([encodeUtf8(text)]);
+    return E(host).storeBlob(
+      readerRef,
+      `tr-${Math.random().toString(36).slice(2)}`,
+    );
+  };
+
+  // LF-delimited lines, 0-based end-exclusive; agrees with lines.slice.join.
+  const lf = await store('a\nb\nc\n');
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(1, 3)).text(), 'b\nc');
+  // endLine past the last line clamps to the end.
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n');
+  // start === end selects nothing.
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '');
+
+  // Terminal LF: the trailing empty line is addressable and empty.
+  const term = await store('a\nb\n');
+  t.is(await E(await E(term).textRange(2, 3)).text(), '');
+
+  // CRLF: the CR before LF stays content, so it is preserved.
+  const crlf = await store('x\r\ny\r\n');
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
+
+  // text-after-byte: a byte range then a line range of it.
+  const doc = await store('one\ntwo\nthree\n');
+  const firstEight = await E(doc).byteRange(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(firstEight).text(), 'one\ntwo\n');
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  // byte-after-text: a line range then a byte range of it.
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await E(twoLines).text(), 'one\ntwo');
+  t.is(await E(await E(twoLines).byteRange(0n, 3n)).text(), 'one');
 });
 
 test('store blob in subdirectory', async t => {
@@ -761,9 +840,7 @@ test('store blob in subdirectory', async t => {
   {
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('subdir');
-    const readerRef = bytesReaderFromIterator([
-      new TextEncoder().encode('hello\n'),
-    ]);
+    const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, [
       'subdir',
       'hello-text',
@@ -783,9 +860,7 @@ test('store blob in subdirectory', async t => {
 test('store blob requires a name', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await t.throwsAsync(E(host).storeBlob(readerRef, []), {
     message: 'Invalid name path',
   });
@@ -1742,7 +1817,7 @@ testNeedsNodeManager(
     const summary = await E(importer).createBase64(
       'release',
       'Publish release artifacts',
-      encodeBase64(new TextEncoder().encode(canary)),
+      encodeBase64(encodeUtf8(canary)),
     );
     t.is(summary.state, 'active');
     t.is(summary.description, 'Publish release artifacts');
@@ -1753,19 +1828,13 @@ testNeedsNodeManager(
     t.is(formula.type, 'lookup');
     t.false(JSON.stringify(formula).includes(canary));
     const blob = await E(host).lookup(['secrets', 'release']);
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(blob).readBase64())), canary);
 
     await restart(config);
     const { host: hostAfter } = await makeHost(config, cancelled);
     const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
     t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(blobAfter).readBase64())), canary);
 
     const guest = await E(hostAfter).provideGuest('secret-recipient');
     await E(hostAfter).send(
@@ -1777,22 +1846,19 @@ testNeedsNodeManager(
     const [message] = await E(guest).listMessages();
     await E(guest).adopt(message.number, 'credential', 'release-credential');
     const delegated = await E(guest).lookup('release-credential');
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(delegated).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(delegated).readBase64())), canary);
 
     const sqlite = await fsp.readFile(
       path.join(config.statePath, 'endo.sqlite'),
     );
-    t.false(sqlite.includes(new TextEncoder().encode(canary)));
+    t.false(sqlite.includes(encodeUtf8(canary)));
     const secretFiles = await fsp.readdir(
       path.join(config.statePath, 'secret-store-v1'),
     );
     const envelope = await fsp.readFile(
       path.join(config.statePath, 'secret-store-v1', secretFiles[0]),
     );
-    t.false(envelope.includes(new TextEncoder().encode(canary)));
+    t.false(envelope.includes(encodeUtf8(canary)));
 
     const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
     await E(hostAfter).copy(['secrets', 'release'], ['release-alias']);
@@ -3346,9 +3412,7 @@ test('evaluate name resolved by lookup path', async t => {
 test('list special names', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await E(host).storeBlob(readerRef, 'hello-text');
 
   /** @type {string[]} */
@@ -5070,7 +5134,7 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
  * @param {string} content
  */
 const makeFarBlob = content => {
-  const bytes = new TextEncoder().encode(content);
+  const bytes = encodeUtf8(content);
   return bytesReaderFromIterator([bytes]);
 };
 
@@ -5101,9 +5165,7 @@ const makeFarTree = children => {
 test('locateContent resolves a readable-blob to an xt-only magnet URN', async t => {
   const { host } = await prepareHost(t);
   const payload = 'content-locator payload\n';
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode(payload),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8(payload)]);
   await E(host).storeBlob(readerRef, 'payload-blob');
 
   const contentLocator = await E(host).locateContent('payload-blob');
@@ -5136,9 +5198,7 @@ test('locateContent returns undefined for an unknown name', async t => {
 
 test('storeContent returns the same xt-only locator as locateContent', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('publish me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('publish me\n')]);
   await E(host).storeBlob(readerRef, 'to-publish');
   const located = await E(host).locateContent('to-publish');
   const stored = await E(host).storeContent('to-publish');
@@ -5160,9 +5220,7 @@ test('storeContent rejects a non-content formula', async t => {
 
 test('reverseLocateContent finds the pet names for a content locator', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('reverse me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('reverse me\n')]);
   await E(host).storeBlob(readerRef, 'reverse-blob');
   const contentLocator = await E(host).locateContent('reverse-blob');
   const names = await E(host).reverseLocateContent(contentLocator);
@@ -5171,9 +5229,7 @@ test('reverseLocateContent finds the pet names for a content locator', async t =
 
 test('reverseLocateContent returns all matching names, deduped and sorted', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('shared content\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('shared content\n')]);
   await E(host).storeBlob(readerRef, 'zeta-name');
   // A second pet name for the same content formula (same content identity).
   await E(host).copy(['zeta-name'], ['alpha-name']);
@@ -5184,9 +5240,7 @@ test('reverseLocateContent returns all matching names, deduped and sorted', asyn
 
 test('reverseLocateContent returns an empty array when no content matches', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('lonely\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('lonely\n')]);
   await E(host).storeBlob(readerRef, 'lonely-blob');
   const contentLocator = await E(host).locateContent('lonely-blob');
   await E(host).remove('lonely-blob');
@@ -5206,9 +5260,7 @@ test('internalizeContentLocator rejects a malformed content locator', async t =>
 test('listContent lists only content-bearing entries', async t => {
   const { host } = await prepareHost(t);
   await E(host).storeValue(10, 'ten');
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('listed\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('listed\n')]);
   await E(host).storeBlob(readerRef, 'listed-blob');
   const record = await E(host).listContent();
   t.true('listed-blob' in record);
@@ -5218,9 +5270,7 @@ test('listContent lists only content-bearing entries', async t => {
 
 test('internalizeContentLocator parses a content locator', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('parse me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('parse me\n')]);
   await E(host).storeBlob(readerRef, 'parse-blob');
   const contentLocator = await E(host).locateContent('parse-blob');
   const internalized = await E(host).internalizeContentLocator(contentLocator);
@@ -5251,9 +5301,7 @@ test('a guest carries the content-locate family', async t => {
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
   });
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('guest blob\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('guest blob\n')]);
   await E(host).storeBlob(readerRef, 'guest-blob');
   await E(host).move(['guest-blob'], ['guest-agent', 'guest-blob']);
   const contentLocator = await E(guest).locateContent('guest-blob');
@@ -5262,7 +5310,7 @@ test('a guest carries the content-locate family', async t => {
 
 test('HTTP web-seed loads and verifies a readable blob', async t => {
   const { host, config } = await prepareHost(t);
-  const originalBytes = new TextEncoder().encode('web-seed payload\n');
+  const originalBytes = encodeUtf8('web-seed payload\n');
   await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), 'original');
   const originalLocator = await E(host).locateContent('original');
   const { hash } = parseContentLocator(originalLocator);
@@ -5273,7 +5321,7 @@ test('HTTP web-seed loads and verifies a readable blob', async t => {
   // The first source deliberately serves another valid blob. `loadContent`
   // must reject it on the xt mismatch and continue to the second web seed.
   await E(host).storeBlob(
-    bytesReaderFromIterator([new TextEncoder().encode('wrong payload\n')]),
+    bytesReaderFromIterator([encodeUtf8('wrong payload\n')]),
     'wrong',
   );
   const wrongLocator = await E(host).locateContent('wrong');
@@ -5831,10 +5879,8 @@ test('provideGit tree exposes immutable commit contents', async t => {
   const main = await E(tree).lookup(['src', 'main.js']);
   t.is(await E(main).text(), 'export default 1;\n');
 
-  // GitBlob exposes the rich BlobRef range-I/O surface (getInfo + fetch).
-  const mainInfo = await E(main).getInfo();
-  t.is(mainInfo.algorithm, 'sha256');
-  t.is(mainInfo.size, 18n); // 'export default 1;\n'
+  // GitBlob exposes the rich BlobRef named-read surface.
+  t.is(await E(main).size(), 18n); // 'export default 1;\n'
   /** @param {any} reader */
   const collectText = async reader => {
     const chunks = [];
@@ -5848,10 +5894,10 @@ test('provideGit tree exposes immutable commit contents', async t => {
       out.set(c, off);
       off += c.length;
     }
-    return new TextDecoder().decode(out);
+    return decodeUtf8(out);
   };
-  t.is(await collectText(await E(main).fetch(0n, 6n)), 'export');
-  t.is(await collectText(await E(main).fetch(0n, 18n)), 'export default 1;\n');
+  t.is(await E(await E(main).byteRange(0n, 6n)).text(), 'export');
+  t.is(await collectText(await E(main).bytes()), 'export default 1;\n');
 
   await fs.promises.writeFile(
     path.join(repoPath, 'src', 'main.js'),

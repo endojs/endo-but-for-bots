@@ -1336,14 +1336,29 @@ export interface EndoReadable {
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select the
+   * half-open byte interval `[start, end)` relative to the receiver and return
+   * a new `EndoReadable` with exactly the authority to read it. Ranges compose
+   * and construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): EndoReadable;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF boundaries,
+   * CRLF preserved) of the receiver's current bytes and return the byte slice
+   * as an `EndoReadable`. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<EndoReadable>;
   help(method?: string): string;
 }
 
 export interface EndoReadableTree {
   sha256(): string;
-  getInfo(): Promise<BlobInfo>;
+  size(): Promise<bigint>;
   has(...pathSegments: string[]): Promise<boolean>;
   list(...pathSegments: string[]): Promise<readonly string[]>;
   lookup(
@@ -1369,8 +1384,7 @@ export type MountNameChange =
   { add: string; type: 'file' | 'directory' } | { remove: string };
 
 /**
- * The `{ algorithm, hash, size }` content-address triple returned by a rich
- * blob's `getInfo()`. `hash` is base64; `algorithm` is `'sha256'`.
+ * A content address and byte length used internally by CAS compositions.
  */
 export type BlobInfo = {
   algorithm: string;
@@ -1389,8 +1403,22 @@ export interface ReadableBlobView {
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a new
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   help(method?: string): string;
 }
 
@@ -1438,8 +1466,22 @@ export interface EndoMountFile {
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   writeText(content: string): Promise<void>;
   append(content: string): Promise<void>;
   writeBytes(readableRef: ERef<PassableBytesReader>): Promise<void>;

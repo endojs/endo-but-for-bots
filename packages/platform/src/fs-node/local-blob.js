@@ -1,7 +1,6 @@
 // @ts-check
 
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import harden from '@endo/harden';
 import { encodeBase64 } from '@endo/base64';
 import { makeExo } from '@endo/exo';
@@ -9,42 +8,49 @@ import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { mapReader } from '@endo/stream';
 import { makeNodeReader } from '@endo/stream-node';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { sha256 } from '@endo/sha256';
 
 // `LocalBlob` exposes the whole-value read surface plus the richer `BlobRef`
-// range-I/O surface (`getInfo` / `fetch`) so a remote reader can learn the
+// named read surface (`sha256` / `size` / `bytes`) so a remote reader can learn
 // content hash + size in one round-trip and read byte ranges without
 // streaming the whole file. See designs/fs-interface-consolidation.md § C4.
-import { ReadableBlobRangeReadInterface } from '../fs/interfaces.js';
-import { toSafeNumber } from '../fs/extended/shared/helpers.js';
-
-/** @import { ReadableBlobRangeRead } from '../fs/types.js' */
+// It also carries the range *attenuation* surface (`byteRange` / `textRange`),
+// which returns a new `LocalBlob` over a selected byte or line interval — the
+// same interface, so ranges compose. See
+// designs/readableblob-range-attenuation.md.
+import { ReadableBlobRangeInterface } from '../fs/interfaces.js';
+import {
+  assertByteRange,
+  assertLineRange,
+  composeByteInterval,
+  lineRangeToByteSlice,
+} from '../fs/range-attenuation.js';
+/** @import { ReadableBlobRange } from '../fs/types.js' */
+/** @import { ERef } from '@endo/eventual-send' */
 
 /**
- * Read the byte window `[offset, offset + length)` from `filePath` as a
- * `Uint8Array`, clamped at EOF. Reads only the requested window from disk
- * rather than the whole file, and bounds the allocation by the file size so
- * a huge `length` against a small file cannot drive a multi-GB allocation.
- * Shared by `fetch` (which wraps the bytes in a reader) and `rangeRead`
- * (which returns them directly).
+ * Read the byte window `[off, off + len)` from `filePath` as a `Uint8Array`,
+ * clamped at EOF. `len === undefined` reads to EOF. Reads only the requested
+ * window from disk rather than the whole file, and bounds the allocation by
+ * the file size so a huge `len` against a small file cannot drive a multi-GB
+ * allocation.
  *
  * @param {string} filePath
- * @param {bigint} offset
- * @param {bigint} length
+ * @param {number} off  a validated safe non-negative offset
+ * @param {number | undefined} len  a validated safe non-negative length, or
+ *   `undefined` to read to EOF
  * @returns {Promise<Uint8Array>}
  */
-const readWindow = async (filePath, offset, length) => {
-  // Validate at the bigint→Number boundary (same `toSafeNumber` the daemon
-  // and `BlobRef` paths use) so negative / out-of-range windows throw
-  // `EINVAL` rather than reaching `fs.read` with a bad position.
-  const off = toSafeNumber(offset, 'offset');
-  const len = toSafeNumber(length, 'length');
-  if (len <= 0) {
+const readWindowNumber = async (filePath, off, len) => {
+  if (len !== undefined && len <= 0) {
     return new Uint8Array(0);
   }
   const handle = await fs.promises.open(filePath, 'r');
   try {
     const { size } = await handle.stat();
-    const clamped = Math.min(len, Math.max(0, size - off));
+    const available = Math.max(0, size - off);
+    const clamped = len === undefined ? available : Math.min(len, available);
     if (clamped <= 0) {
       return new Uint8Array(0);
     }
@@ -75,78 +81,113 @@ const bytesFromRange = bytes => {
  * Creates a ReadableBlob Exo from a local file.
  * Streams file content as base64 via @endo/stream-node.
  *
+ * `interval` is the absolute byte interval over the file this handle exposes:
+ * `{ start, end }` with `end === undefined` meaning "to EOF" — an unattenuated
+ * blob over the whole file. A `byteRange` / `textRange` attenuation re-invokes this
+ * factory with a composed interval (the source path plus the interval), so the
+ * derived handle has the same interface and a range of a range intersects.
+ *
  * @param {string} filePath
- * @returns {ReadableBlobRangeRead}
+ * @param {{ start: number, end: number | undefined }} [interval]
+ * @returns {ReadableBlobRange}
  */
-export const makeLocalBlob = filePath => {
-  /** @satisfies {ReadableBlobRangeRead} */
+export const makeLocalBlob = (
+  filePath,
+  interval = { start: 0, end: undefined },
+) => {
+  const { start, end } = interval;
+  // The whole-file fast paths (native `readFile` / streaming) are correct only
+  // for the unattenuated handle; an attenuated view reads its selected bytes.
+  const isFull = start === 0 && end === undefined;
+  const selectedLength = end === undefined ? undefined : end - start;
+  /** @returns {Promise<Uint8Array>} the receiver's currently selected bytes */
+  const readSelected = () => readWindowNumber(filePath, start, selectedLength);
+
+  /** @satisfies {ReadableBlobRange} */
   const localBlobMethods = {
-    /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
+    /** @param {ERef<unknown>} synPromise */
     streamBase64(synPromise) {
-      const nodeReadStream = fs.createReadStream(filePath);
-      const reader = makeNodeReader(nodeReadStream);
-      const pump = makeReaderPump(mapReader(reader, encodeBase64));
+      if (isFull) {
+        const nodeReadStream = fs.createReadStream(filePath);
+        const reader = makeNodeReader(nodeReadStream);
+        const pump = makeReaderPump(mapReader(reader, encodeBase64));
+        return pump(/** @type {any} */ (synPromise));
+      }
+      // Attenuated view: stream the selected bytes as one base64 chunk.
+      const pump = makeReaderPump(
+        mapReader(
+          /** @type {any} */ (
+            (async function* selected() {
+              const bytes = await readSelected();
+              if (bytes.length > 0) yield bytes;
+            })()
+          ),
+          encodeBase64,
+        ),
+      );
       return pump(/** @type {any} */ (synPromise));
     },
-    text: () => fs.promises.readFile(filePath, 'utf-8'),
-    json: async () => JSON.parse(await fs.promises.readFile(filePath, 'utf-8')),
+    text: async () =>
+      isFull
+        ? fs.promises.readFile(filePath, 'utf-8')
+        : decodeUtf8(await readSelected()),
+    json: async () =>
+      JSON.parse(
+        isFull
+          ? await fs.promises.readFile(filePath, 'utf-8')
+          : decodeUtf8(await readSelected()),
+      ),
     // The `{ algorithm, hash, size }` content-address triple. `hash` is base64
-    // to match the extended `BlobRef`. Computed over the current file content.
-    async getInfo() {
-      const bytes = await fs.promises.readFile(filePath);
-      const hash = encodeBase64(createHash('sha256').update(bytes).digest());
-      return harden({
-        algorithm: 'sha256',
-        hash,
-        size: BigInt(bytes.length),
-      });
+    // to match the extended `BlobRef`. Computed over the currently selected
+    // content — for an attenuated view, the selected bytes' own SHA-256.
+    async sha256() {
+      const bytes = isFull
+        ? await fs.promises.readFile(filePath)
+        : await readSelected();
+      return encodeBase64(sha256(bytes));
     },
-    // Windowed read of `[offset, offset + length)`, clamped at EOF — reads only
-    // the requested window from disk rather than the whole file.
+    async size() {
+      return isFull
+        ? BigInt((await fs.promises.stat(filePath)).size)
+        : BigInt((await readSelected()).length);
+    },
+    async bytes() {
+      return bytesFromRange(await readSelected());
+    },
+    // Range *attenuation*: `byteRange` resolves synchronously (no bytes read) to a
+    // new `LocalBlob` over the composed byte interval, intersected with this
+    // handle's authority.
     /**
-     * @param {bigint} offset
-     * @param {bigint} length
+     * @param {bigint} rangeStart
+     * @param {bigint} rangeEnd
      */
-    async fetch(offset, length) {
-      return bytesFromRange(await readWindow(filePath, offset, length));
+    byteRange(rangeStart, rangeEnd) {
+      const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+      const composed = composeByteInterval(start, end, s, e);
+      return makeLocalBlob(filePath, composed);
     },
-    // Whole-value windowed read: the raw bytes of `[offset, offset + length)`,
-    // clamped at EOF, as a `Uint8Array` (the convenience form distinct from
-    // `fetch`'s streaming reader). See interfaces.js
-    // `rangeReadConvenienceMethodGuards`.
-    /**
-     * @param {bigint} offset
-     * @param {bigint} length
-     */
-    async rangeRead(offset, length) {
-      return readWindow(filePath, offset, length);
-    },
-    // Whole-value line-range read: decode the file as UTF-8 and return lines
-    // `[startLine, endLine)` (0-based, end-exclusive) joined with '\n'. A
-    // negative or non-integer index throws EINVAL (via `toSafeNumber`); an
-    // `endLine` past the last line clamps to the end.
+    // `textRange` reads the selected bytes to find LF line boundaries, then
+    // returns a `LocalBlob` over the corresponding byte slice.
     /**
      * @param {number} startLine
      * @param {number} endLine
      */
-    async rangeReadText(startLine, endLine) {
-      const start = toSafeNumber(startLine, 'startLine');
-      const end = toSafeNumber(endLine, 'endLine');
-      if (end <= start) {
-        return '';
+    async textRange(startLine, endLine) {
+      const { startLine: s, endLine: e } = assertLineRange(startLine, endLine);
+      if (e <= s) {
+        return makeLocalBlob(filePath, { start, end: start });
       }
-      const text = await fs.promises.readFile(filePath, 'utf-8');
-      // Split on '\n'; a trailing newline yields a final empty element, which
-      // `slice` handles like any other line. `\r` is left intact (the caller
-      // observes the file's own line endings).
-      const lines = text.split('\n');
-      return lines.slice(start, end).join('\n');
+      const bytes = await readSelected();
+      const slice = lineRangeToByteSlice(bytes, s, e);
+      const composed = composeByteInterval(start, end, slice.start, slice.end);
+      return makeLocalBlob(filePath, composed);
     },
     help: method =>
       method === undefined
-        ? 'LocalBlob: read-only handle to a host file (text, json, streamBase64, getInfo, fetch, rangeRead, rangeReadText).'
+        ? 'LocalBlob: read-only handle to a host file (bytes, byteRange, text, textRange, json, sha256, size, streamBase64).'
         : `No documentation for method ${method}.`,
   };
-  return makeExo('LocalBlob', ReadableBlobRangeReadInterface, localBlobMethods);
+
+  return makeExo('LocalBlob', ReadableBlobRangeInterface, localBlobMethods);
 };
 harden(makeLocalBlob);

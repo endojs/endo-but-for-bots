@@ -19,6 +19,10 @@ import { decodeUtf8 } from '@endo/utf8/decode.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
+  assertByteRange,
+  assertLineRange,
+  composeByteInterval,
+  lineRangeToByteSlice,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import {
@@ -164,7 +168,7 @@ const gitOperationsByCap = new WeakMap();
 
 /**
  * Wrap a byte range as a `PassableBytesReader`, the CapTP-passable bytes
- * stream `BlobRef.fetch` returns. Empty ranges yield a reader that is
+ * stream `BlobRef.bytes` returns. Empty ranges yield a reader that is
  * immediately done. Mirrors the extended layer's `makeBytesReaderFromBytes`.
  *
  * @param {Uint8Array} bytes
@@ -1902,43 +1906,125 @@ const makeDaemonCore = async (
   /**
    * @param {string} sha256
    */
-  const makeReadableBlob = sha256 => {
+  /**
+   * `interval` is the absolute byte interval over the content-store object
+   * this cap exposes: `{ start, end }` with `end === undefined` meaning "to the
+   * object's end" — an unattenuated blob over the whole content. A `byteRange` /
+   * `textRange` attenuation re-invokes this factory with a composed interval
+   * (the same content-store address plus the interval), so the derived cap has
+   * the same `EndoBlob` interface, a range of a range intersects, and no
+   * formula / name / persistence entry is minted for a derived range.
+   *
+   * @param {string} sha256
+   * @param {{ start: number, end: number | undefined }} [interval]
+   */
+  const makeReadableBlob = (
+    sha256,
+    interval = { start: 0, end: undefined },
+  ) => {
+    const { start, end } = interval;
+    // The whole-object fast paths (streaming reader, native `text` / `json`,
+    // the address's own hash) are correct only for the unattenuated cap; an
+    // attenuated view reads its selected bytes.
+    const isFull = start === 0 && end === undefined;
     const { makeFileReader, text, json, size, readRange } =
       /** @type {DaemonContentStoreBlob} */ (contentStore.fetch(sha256));
-    /** @satisfies {ReadableBlobRange} */
+
+    /** @returns {Promise<Uint8Array>} the cap's currently selected bytes */
+    const readSelected = async () => {
+      const total = toSafeNumber(await size(), 'size');
+      const absEnd = end === undefined ? total : Math.min(end, total);
+      const absStart = Math.min(start, absEnd);
+      // `readRange` clamps at EOF, but a fully-clamped length can be 0.
+      return readRange(absStart, absEnd - absStart);
+    };
+
+    /**
+     * @satisfies {ReadableBlobRange & {
+     *   byteRange: (start: bigint, end: bigint) => unknown,
+     *   textRange: (startLine: number, endLine: number) => Promise<unknown>,
+     * }}
+     */
     const readableBlobMethods = {
-      /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
+      /** @param {ERef<unknown>} synPromise */
       streamBase64(synPromise) {
-        const pump = makeReaderPump(mapReader(makeFileReader(), encodeBase64));
+        if (isFull) {
+          const pump = makeReaderPump(
+            mapReader(makeFileReader(), encodeBase64),
+          );
+          return pump(/** @type {any} */ (synPromise));
+        }
+        // Attenuated view: stream the selected bytes as one base64 chunk.
+        const pump = makeReaderPump(
+          mapReader(
+            /** @type {any} */ (
+              (async function* selected() {
+                const bytes = await readSelected();
+                if (bytes.length > 0) yield bytes;
+              })()
+            ),
+            encodeBase64,
+          ),
+        );
         return pump(/** @type {any} */ (synPromise));
       },
-      text,
-      json,
-      // Range-I/O surface (aligns with the extended `BlobRef`): the
-      // `{ algorithm, hash, size }` triple in one round-trip, then a
-      // windowed `fetch`. `hash` is base64 to match `BlobRef.getInfo`
-      // (this `EndoBlob` cap no longer carries a hex `sha256()` accessor;
-      // the hex spelling lives only in the internal content-store address).
-      async getInfo() {
-        return harden({
-          algorithm: 'sha256',
-          hash: encodeBase64(fromHex(sha256)),
-          size: await size(),
-        });
+      text: isFull ? text : async () => decodeUtf8(await readSelected()),
+      json: isFull
+        ? json
+        : async () => JSON.parse(decodeUtf8(await readSelected())),
+      // Named read surface aligned with the extended `BlobRef`. The public
+      // digest is base64; the hex spelling remains the internal
+      // content-store address. An attenuated view reports the selected bytes.
+      async sha256() {
+        if (isFull) {
+          return encodeBase64(fromHex(sha256));
+        }
+        const bytes = await readSelected();
+        const digester = cryptoPowers.makeSha256();
+        digester.update(bytes);
+        return encodeBase64(fromHex(digester.digestHex()));
       },
+      async size() {
+        return isFull ? size() : BigInt((await readSelected()).length);
+      },
+      async bytes() {
+        return bytesFromRange(await readSelected());
+      },
+      // Range *attenuation*: `byteRange` resolves synchronously (no bytes read) to a
+      // new `EndoBlob` over the composed byte interval, intersected with this
+      // cap's authority.
       /**
-       * @param {bigint} offset
-       * @param {bigint} length
+       * @param {bigint} rangeStart
+       * @param {bigint} rangeEnd
        */
-      async fetch(offset, length) {
-        // Validate at the bigint→Number boundary (same `toSafeNumber`
-        // the extended `BlobRef.fetch` uses) so negative or out-of-range
-        // windows throw `EINVAL` rather than silently losing precision.
-        const bytes = await readRange(
-          toSafeNumber(offset, 'offset'),
-          toSafeNumber(length, 'length'),
+      byteRange(rangeStart, rangeEnd) {
+        const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+        const composed = composeByteInterval(start, end, s, e);
+        return makeReadableBlob(sha256, composed);
+      },
+      // `textRange` reads the selected bytes to find LF line boundaries, then
+      // returns an `EndoBlob` over the corresponding byte slice.
+      /**
+       * @param {number} startLine
+       * @param {number} endLine
+       */
+      async textRange(startLine, endLine) {
+        const { startLine: s, endLine: e } = assertLineRange(
+          startLine,
+          endLine,
         );
-        return bytesFromRange(bytes);
+        if (e <= s) {
+          return makeReadableBlob(sha256, { start, end: start });
+        }
+        const bytes = await readSelected();
+        const slice = lineRangeToByteSlice(bytes, s, e);
+        const composed = composeByteInterval(
+          start,
+          end,
+          slice.start,
+          slice.end,
+        );
+        return makeReadableBlob(sha256, composed);
       },
       help: makeHelp(blobHelp),
     };
@@ -2312,50 +2398,92 @@ const makeDaemonCore = async (
    * @param {Uint8Array} bytes
    */
   const makeBytesBlob = bytes => {
-    const sha256Hex = (() => {
-      const digester = cryptoPowers.makeSha256();
-      digester.update(bytes);
-      return digester.digestHex();
-    })();
-    const info = harden({
-      algorithm: 'sha256',
-      hash: encodeBase64(fromHex(sha256Hex)),
-      size: BigInt(bytes.length),
-    });
-    return makeExo(
-      'TransientBlob',
-      BlobInterface,
-      /** @type {any} */ ({
-        help: () => 'Transient in-memory blob',
-        /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
-        streamBase64(synPromise) {
-          const pump = makeReaderPump(
-            mapReader(
-              /** @type {any} */ ([bytes][Symbol.iterator]()),
-              encodeBase64,
-            ),
-          );
-          return pump(/** @type {any} */ (synPromise));
-        },
-        text: async () => decodeUtf8(bytes),
-        json: async () => JSON.parse(decodeUtf8(bytes)),
-        getInfo: () => info,
-        /**
-         * @param {bigint} offset
-         * @param {bigint} length
-         */
-        fetch: async (offset, length) => {
-          const off = toSafeNumber(offset, 'offset');
-          const len = toSafeNumber(length, 'length');
-          const end = Math.min(off + len, bytes.length);
-          const slice =
-            off >= bytes.length || len <= 0
-              ? new Uint8Array(0)
-              : bytes.subarray(off, end);
-          return bytesFromRange(slice);
-        },
-      }),
-    );
+    const captured = bytes;
+    /**
+     * Inner factory shared by the public `makeBytesBlob` and its derived range
+     * attenuations. `[start, end)` is the absolute byte interval over the
+     * captured snapshot this cap exposes; a derived range re-invokes it with a
+     * composed interval (a range of a range intersects and can never regain
+     * authority outside its parent) and reports the *selected* bytes' own
+     * SHA-256.
+     *
+     * @param {number} start
+     * @param {number} end
+     */
+    const makeBytesBlobRange = (start, end) => {
+      // `subarray` is an O(1) view over the captured snapshot — constructing a
+      // range neither copies nor persists bytes.
+      const view = captured.subarray(start, end);
+      const sha256Hex = (() => {
+        const digester = cryptoPowers.makeSha256();
+        digester.update(view);
+        return digester.digestHex();
+      })();
+      const hash = encodeBase64(fromHex(sha256Hex));
+      return makeExo(
+        'TransientBlob',
+        BlobInterface,
+        /** @type {any} */ ({
+          help: () => 'Transient in-memory blob',
+          /** @param {ERef<unknown>} synPromise */
+          streamBase64(synPromise) {
+            const pump = makeReaderPump(
+              mapReader(
+                /** @type {any} */ ([view][Symbol.iterator]()),
+                encodeBase64,
+              ),
+            );
+            return pump(/** @type {any} */ (synPromise));
+          },
+          text: async () => decodeUtf8(view),
+          json: async () => JSON.parse(decodeUtf8(view)),
+          sha256: async () => hash,
+          size: async () => BigInt(view.length),
+          bytes: async () => bytesFromRange(view),
+          // Range *attenuation*: `byteRange` returns a new `TransientBlob` over the
+          // composed interval intersected with this cap's authority; `textRange`
+          // selects a line range of the current bytes and returns the
+          // corresponding byte slice. Both derive from the same snapshot.
+          /**
+           * @param {bigint} rangeStart
+           * @param {bigint} rangeEnd
+           */
+          byteRange(rangeStart, rangeEnd) {
+            const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+            const composed = composeByteInterval(start, end, s, e);
+            return makeBytesBlobRange(
+              composed.start,
+              /** @type {number} */ (composed.end),
+            );
+          },
+          /**
+           * @param {number} startLine
+           * @param {number} endLine
+           */
+          async textRange(startLine, endLine) {
+            const { startLine: s, endLine: e } = assertLineRange(
+              startLine,
+              endLine,
+            );
+            if (e <= s) {
+              return makeBytesBlobRange(start, start);
+            }
+            const slice = lineRangeToByteSlice(view, s, e);
+            const composed = composeByteInterval(
+              start,
+              end,
+              slice.start,
+              slice.end,
+            );
+            return makeBytesBlobRange(
+              composed.start,
+              /** @type {number} */ (composed.end),
+            );
+          },
+        }),
+      );
+    };
+    return makeBytesBlobRange(0, bytes.length);
   };
 
   /** @param {object} ref */

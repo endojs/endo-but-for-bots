@@ -67,12 +67,4 @@ export interface FsBackend {
    * returns `undefined` for a given path.
    */
   qidFor?: <K extends NodeKind>(path: string[], kind: K) => Qid<K> | undefined;
-  /**
-   * Content-address hook for `BlobRef`: reports `{ algorithm, hash }`
-   * (e.g. `git-sha1` + the blob OID) in place of the default SHA-256
-   * over captured bytes. Falls back the same way as `qidFor`.
-   */
-  blobInfoFor?: (
-    path: string[],
-  ) => { algorithm: string; hash: string } | undefined;
 }

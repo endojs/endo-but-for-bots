@@ -129,17 +129,21 @@ const PLATFORM_READABLE_TREE_METHODS = [
 
 /**
  * Method names the rich `ReadableBlob` view exposes: the whole-value surface
- * plus the `BlobRef` range-I/O surface (`getInfo` / `fetch`). The mount-file
- * `readOnly()` view is a write-disabled face over a live file, so it carries
- * the range methods too. See designs/fs-interface-consolidation.md § C4.
+ * plus named digest, size, bytes, and attenuation methods,
+ * designs/readableblob-range-attenuation.md). The mount-file `readOnly()` view
+ * is a write-disabled face over a live file, so it carries the range methods
+ * too. See designs/fs-interface-consolidation.md § C4.
  */
 const PLATFORM_READABLE_BLOB_METHODS = [
   'streamBase64',
   'text',
   'json',
   'help',
-  'getInfo',
-  'fetch',
+  'sha256',
+  'size',
+  'bytes',
+  'byteRange',
+  'textRange',
 ];
 
 /**
@@ -217,10 +221,21 @@ const ENDOMOUNT_EXTENSIONS = [
 ];
 
 /**
- * Mount-specific extensions beyond the platform File contract. `getInfo` /
- * `fetch` are the rich `BlobRef` range-I/O surface over the live file (§ C4).
+ * Mount-specific extensions beyond the platform File contract. Named digest,
+ * size, bytes, and attenuation methods expose the live file;
+ * (designs/readableblob-range-attenuation.md), each returning a read-only
+ * `ReadableBlob` view over the selected interval of the live file.
  */
-const ENDOMOUNTFILE_EXTENSIONS = ['stat', 'getInfo', 'fetch', 'kind', 'list'];
+const ENDOMOUNTFILE_EXTENSIONS = [
+  'stat',
+  'sha256',
+  'size',
+  'bytes',
+  'byteRange',
+  'textRange',
+  'kind',
+  'list',
+];
 
 test('EndoMount diverges from PlatformDirectoryInterface by named extensions only', async t => {
   // The divergence is deliberate and named: callers who hold a plain
@@ -567,12 +582,7 @@ test('EndoMount.snapshot returns a SnapshotTree-shaped capability', async t => {
   t.true(methods.includes('list'));
   t.true(methods.includes('lookup'));
   t.true(methods.includes('sha256'));
-  // The tree also carries the uniform `getInfo()` identity accessor. (Its
-  // *value* behavior is exercised against a real content store in
-  // content-store-gc.test.js and at the platform layer in snapshot-hash.test.js;
-  // this mount mock fabricates non-hex content ids, so only existence is
-  // asserted here.)
-  t.true(methods.includes('getInfo'));
+  t.true(methods.includes('size'));
 });
 
 // --- XS file-powers / Node file-powers contract conformance ---

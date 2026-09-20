@@ -11,7 +11,7 @@ import {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
-  getInfoMethodGuard,
+  rangeAttenuationMethodGuards,
 } from '@endo/platform/fs/lite';
 import {
   NamePathShape,
@@ -710,16 +710,20 @@ export const InspectorInterface = M.interface('EndoInspector', {
 
 // `EndoBlob` is the daemon's immutable-bytes cap and the CapTP remote-read
 // target. It carries the whole-value `readableBlobMethodGuards` (help / text /
-// json / streamBase64) plus the range-I/O `rangeReadMethodGuards` (getInfo /
-// fetch) — i.e. exactly the shared `ReadableBlobRangeInterface`. The content
-// hash is reported by `getInfo().hash` (base64); there is no separate
-// `sha256()` accessor (the daemon's internals always already hold the hex
-// digest from `contentStore.store()` / the formula, so the cap method was
-// only ever a remote accessor, now superseded by `getInfo`). See
+// json / streamBase64) plus the named `rangeReadMethodGuards` (`sha256`,
+// `size`, and `bytes`). See
 // designs/fs-interface-consolidation.md § C4.
 export const BlobInterface = M.interface('EndoBlob', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`byteRange` / `textRange`,
+  // designs/readableblob-range-attenuation.md): return a new `EndoBlob` with
+  // exactly the authority to read the selected byte / line interval, so ranges
+  // compose and can be handed to anything that accepts a readable blob. The
+  // derived cap re-invokes the same factory with a composed absolute interval
+  // over the same content-store address / captured bytes — no formula, name, or
+  // persistence entry for a derived range.
+  ...rangeAttenuationMethodGuards,
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
@@ -852,8 +856,7 @@ export const MountInterface = M.interface('EndoMount', {
 // overlapping methods (`streamBase64`, `text`, `json`, `writeText`,
 // `writeBytes`, `append`, `snapshot`) carry the same shapes as
 // `PlatformFileInterface`; `stat`, `help`, and the `rangeReadMethodGuards`
-// (`getInfo` / `fetch`) are mount-specific extensions.  `getInfo` / `fetch`
-// expose the rich `BlobRef` range-I/O surface over the *live* file.
+// are mount-specific extensions over the live file.
 // `readOnly` narrows to a structural ReadableBlob view that carries the same
 // rich surface.
 export const MountFileInterface = M.interface('EndoMountFile', {
@@ -864,9 +867,14 @@ export const MountFileInterface = M.interface('EndoMountFile', {
   list: M.call().returns(M.promise()),
   // Whole-value read surface (help / streamBase64 / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
-  // (getInfo / fetch) over the live file, plus the mount-file write surface.
+  // over the live file, plus the mount-file write surface.
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`byteRange` / `textRange`): return a read-only
+  // `ReadableBlob` view over the selected byte / line interval of the *live*
+  // file — each read on the derived view still observes the source, subject to
+  // the fixed interval. See designs/readableblob-range-attenuation.md.
+  ...rangeAttenuationMethodGuards,
   writeText: M.call(M.string()).returns(M.promise()),
   append: M.call(M.string()).returns(M.promise()),
   writeBytes: M.call(M.remotable()).returns(M.promise()),
@@ -914,8 +922,8 @@ export {
 // the `SnapshotTree` shape. See designs/fs-interface-consolidation.md § C3.
 export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
-  ...getInfoMethodGuard,
   sha256: M.call().returns(M.string()),
+  size: M.call().returns(M.promise()),
 });
 
 // `EndoRegistry` brokers npm-style package resolution and tarball fetch
