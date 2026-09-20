@@ -5,7 +5,14 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { isCredentialRejection } from './provider-broker.js';
+import {
+  isCredentialRejection,
+  isSubscriptionExhaustion,
+} from './provider-broker.js';
+import {
+  isSubscriptionExhausted,
+  rateLimitReadingFromHeaders,
+} from './rate-limit-headers.js';
 
 /** @import { UpstreamRequest } from './provider-broker.js' */
 
@@ -26,6 +33,17 @@ import { isCredentialRejection } from './provider-broker.js';
  * @property {string} [detail] Host-only: which request-stage check refused.
  */
 
+/**
+ * What one response's headers said about the account that paid for it. Parsed
+ * figures only (`rate-limit-headers.js`); no header text.
+ *
+ * @typedef {object} ProviderAccountReading
+ * @property {{ windows: any[], limitReached: boolean, credits?: any }} rateLimits
+ * @property {number} status The response's HTTP status.
+ * @property {boolean} exhausted Whether this response refused the request
+ *   because the subscription's allowance is used up.
+ */
+
 /** Bounded prefix of a refused body kept for the host observer. */
 const REFUSAL_EXCERPT_BYTES = 1024;
 
@@ -44,6 +62,11 @@ const REFUSAL_EXCERPT_BYTES = 1024;
  * @param {(callback: () => void, delay: number) => unknown} [options.setTimer]
  * @param {(timer: unknown) => void} [options.clearTimer]
  * @param {(diagnostic: ProviderTransportDiagnostic) => void | Promise<void>} [options.onDiagnostic]
+ * @param {(reading: ProviderAccountReading) => void} [options.onReading]
+ *   Host-only. Called synchronously with what a response's rate-limit headers
+ *   say about the account, for every response that says anything, served or
+ *   refused, and before a refusal is thrown: a caller that handles `Provider
+ *   subscription exhausted` already has the reading that says until when.
  */
 export const makeProviderFetchTransport = ({
   fetch,
@@ -51,6 +74,7 @@ export const makeProviderFetchTransport = ({
   maxRequestBytes,
   maxResponseBytes,
   onDiagnostic = undefined,
+  onReading = undefined,
   setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
   clearTimer = timer =>
     globalThis.clearTimeout(
@@ -119,9 +143,10 @@ export const makeProviderFetchTransport = ({
           }
           return harden({ status: response.status, body: parts.join('') });
         } catch (error) {
-          // The credential classification is the one detail worth preserving
-          // across the buffering wrapper; everything else collapses.
+          // The two classifications are the detail worth preserving across
+          // the buffering wrapper; everything else collapses.
           if (isCredentialRejection(error)) throw error;
+          if (isSubscriptionExhaustion(error)) throw error;
           return Fail`Provider transport failed`;
         }
       },
@@ -133,6 +158,7 @@ export const makeProviderFetchTransport = ({
         let reader;
         let finished = false;
         let credentialRejected = false;
+        let subscriptionExhausted = false;
         /** @type {ProviderTransportDiagnostic['stage']} */
         let stage = 'request';
         /** @type {number | undefined} */
@@ -291,6 +317,39 @@ export const makeProviderFetchTransport = ({
           // second dispatch, a token exchange and a secret write, none of which
           // the request and cost quotas meter.
           if (response.status === 401) credentialRejected = true;
+          // The account reading, before the served check and before anything
+          // is thrown: a refusal is exactly where a drained subscription says
+          // when it comes back. Parsed figures only, and an observer's failure
+          // is its own.
+          {
+            const header = (/** @type {string} */ name) =>
+              response.headers.get(name);
+            subscriptionExhausted = isSubscriptionExhausted(
+              response.status,
+              header,
+            );
+            if (onReading !== undefined) {
+              try {
+                const accountReading = rateLimitReadingFromHeaders(header);
+                if (accountReading !== undefined) {
+                  // Synchronous by contract; an observer that returns a
+                  // promise anyway must not leave a rejection unhandled.
+                  const told = /** @type {unknown} */ (
+                    onReading(
+                      harden({
+                        ...accountReading,
+                        status: response.status,
+                        exhausted: subscriptionExhausted,
+                      }),
+                    )
+                  );
+                  void Promise.resolve(told).catch(() => {});
+                }
+              } catch (_error) {
+                // A reading is an observation; it never changes settlement.
+              }
+            }
+          }
           const served =
             Number.isInteger(response.status) &&
             response.status >= 200 &&
@@ -384,6 +443,10 @@ export const makeProviderFetchTransport = ({
           stop();
           // This exact wording is the contract `isCredentialRejection` reads.
           if (credentialRejected) return Fail`Provider credential rejected`;
+          // And this one `isSubscriptionExhaustion`.
+          if (subscriptionExhausted) {
+            return Fail`Provider subscription exhausted`;
+          }
           return Fail`Provider transport failed`;
         }
       },

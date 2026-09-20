@@ -145,11 +145,10 @@ export const makeFakeDaemon = ({
     harden(
       sessions.map(session => ({
         ...session,
-        // eslint-disable-next-line no-use-before-define
+
         activity: parts.get(session.id)?.current ? 'working' : 'passive',
-        // eslint-disable-next-line no-use-before-define
+
         pendingCount:
-          // eslint-disable-next-line no-use-before-define
           parts.get(session.id)?.submissions.read().entries.length || 0,
       })),
     ),
@@ -166,12 +165,14 @@ export const makeFakeDaemon = ({
   const parts = new Map();
 
   /** @param {string} id */
-  /** @returns {SessionParts} */
+  /**
+   * @param id
+   * @returns {SessionParts}
+   */
   const partsFor = id => {
     const existing = parts.get(id);
     if (existing) return existing;
     const touch = (/** @type {any} */ kind = undefined) => {
-      // eslint-disable-next-line no-use-before-define
       created.watch.touch(kind);
       listWatch.touch();
     };
@@ -183,7 +184,6 @@ export const makeFakeDaemon = ({
      * @param {{ pendingId?: string, onBegun?: () => Promise<void> }} [options]
      */
     const startTurn = (text, { pendingId, onBegun } = {}) => {
-      // eslint-disable-next-line no-use-before-define
       if (created.current) throw Error('Session already has an active turn');
       const channel = makeBufferedReader();
       /** @type {(value?: unknown) => void} */
@@ -230,7 +230,7 @@ export const makeFakeDaemon = ({
         turn: ref,
         ...(pendingId ? { pendingId } : {}),
       });
-      // eslint-disable-next-line no-use-before-define
+
       created.current = { view, turn };
       turns.push({
         ...turn,
@@ -240,12 +240,12 @@ export const makeFakeDaemon = ({
             push(event);
             if (event && (event.type === 'end' || event.type === 'abort')) {
               error = event.type === 'abort' ? `${event.reason}` : '';
-              // eslint-disable-next-line no-use-before-define
+
               if (created.current?.turn.ref === ref) created.current = null;
               finish(undefined);
               touch('transcript');
               touch('journal');
-              // eslint-disable-next-line no-use-before-define
+
               void created.submissions.pump();
             }
           },
@@ -285,10 +285,10 @@ export const makeFakeDaemon = ({
           }
           return readHistory(id);
         },
-        // eslint-disable-next-line no-use-before-define
+
         readTurn: () => (created.current ? created.current.view : null),
         readRunning: () => null,
-        // eslint-disable-next-line no-use-before-define
+
         readPending: () => created.submissions.read(),
         readExecution: () => harden({ state: 'running', supported: false }),
         loadNetwork: async () => null,
@@ -297,7 +297,7 @@ export const makeFakeDaemon = ({
       }),
       submissions: makeSessionSubmissions({
         queue: makePendingQueue({ host, id, onChange: () => touch() }),
-        // eslint-disable-next-line no-use-before-define
+
         getCurrentTurn: () => created.current,
         refusal: () => '',
         startTurn,
@@ -360,9 +360,26 @@ export const makeFakeDaemon = ({
     );
   };
 
+  // What each backend's account has left, published as the real factory
+  // does: the whole list to every open reader, now and on change.
+  /** @type {any[]} */
+  let accounts = [];
+  /** @type {Set<ReturnType<typeof makeBufferedReader>>} */
+  const accountReaders = new Set();
+  let accountRefreshes = 0;
+
   const factory = Far('TestFlootFactory', {
     listSessions: () => harden(sessions.map(session => ({ ...session }))),
     watchSessions: () => listWatch.watch(),
+    watchAccounts: () => {
+      const view = makeBufferedReader();
+      accountReaders.add(view);
+      view.push(harden({ type: 'accounts', accounts }));
+      return view.reader;
+    },
+    refreshAccounts: () => {
+      accountRefreshes += 1;
+    },
     listPresets: () => harden([]),
     listModels: () => harden([]),
     getSession: id => facet(id),
@@ -407,7 +424,10 @@ export const makeFakeDaemon = ({
      * @param {string} text
      */
     startTurn: (id, text) => partsFor(id).startTurn(text),
-    /** Something other than a UI turn changed the transcript (mail). */
+    /**
+     * Something other than a UI turn changed the transcript (mail).
+     * @param id
+     */
     touchTranscript: (/** @type {string} */ id) =>
       partsFor(id).watch.touch('transcript'),
     pendingOf: (/** @type {string} */ id) => partsFor(id).submissions.read(),
@@ -416,22 +436,46 @@ export const makeFakeDaemon = ({
     },
     /** Every session-facet call made so far, by method name. */
     calls,
-    /** Make reading the transcript slow, as a long conversation's is. */
+    /**
+     * A reading arrived: publish the accounts to every open reader.
+     * @param next
+     */
+    setAccounts: (/** @type {any[]} */ next) => {
+      accounts = harden(next);
+      for (const view of accountReaders) {
+        view.push(harden({ type: 'accounts', accounts }));
+      }
+    },
+    accountRefreshes: () => accountRefreshes,
+    /**
+     * Make reading the transcript slow, as a long conversation's is.
+     * @param ms
+     */
     setTranscriptDelay: (/** @type {number} */ ms) => {
       transcriptDelayMs = ms;
     },
-    /** The next `count` transcript reads fail. */
+    /**
+     * The next `count` transcript reads fail.
+     * @param times
+     */
     failTranscript: (/** @type {number} */ times) => {
       transcriptFailures = times;
     },
-    /** `enqueue` queues the message and then reports failure. */
+    /**
+     * `enqueue` queues the message and then reports failure.
+     * @param value
+     */
     setFailAfterAccepting: (/** @type {boolean} */ value) => {
       failAfterAccepting = value;
     },
     setHistoryReader: (/** @type {(id: string) => any} */ reader) => {
       readHistory = reader;
     },
-    /** Queue something from "another page". */
+    /**
+     * Queue something from "another page".
+     * @param id
+     * @param text
+     */
     enqueue: (/** @type {string} */ id, /** @type {string} */ text) =>
       partsFor(id).submissions.submit(text),
   };

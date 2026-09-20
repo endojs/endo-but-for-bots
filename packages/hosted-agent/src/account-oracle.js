@@ -3,6 +3,9 @@
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+
+import { makeLatestTopic } from './latest-topic.js';
 
 import {
   HostedAccountInterface,
@@ -38,15 +41,27 @@ import {
  * @param {() => Promise<any>} [options.provideObserved] - A live read from the
  *   provider or a hosted backend, in the same raw shape. Failures are
  *   swallowed into `remembered`/`declared`, never propagated to a reader.
+ * @param {() => Promise<any>} [options.watchObserved] - A stream of live
+ *   readings in that raw shape (an exo-stream reader, or undefined when the
+ *   source has none), for a source that
+ *   learns of the account as a side effect of serving requests. Each reading
+ *   is pushed into the answer as it arrives; nothing is polled.
+ * @param {() => Promise<void>} [options.refreshObserved] - Ask the source to
+ *   read its provider now. Run only by an explicit `refresh()`, never by a
+ *   first read, so an oracle nobody refreshed makes no request of its own.
  * @param {{ read: () => Promise<any>, write: (snapshot: any) => Promise<void> }} [options.journal]
  * @param {() => string} [options.now] - ISO 8601 clock, injectable for tests.
+ * @param {(callback: () => void, ms: number) => unknown} [options.setTimer]
  */
 export const makeAccountOracle = ({
   providerId,
   provideDeclared,
   provideObserved,
+  watchObserved,
+  refreshObserved,
   journal,
   now = () => new Date().toISOString(),
+  setTimer = (callback, ms) => globalThis.setTimeout(callback, ms),
 }) => {
   (typeof providerId === 'string' && providerId !== '') ||
     Fail`Account oracle requires a providerId`;
@@ -55,8 +70,56 @@ export const makeAccountOracle = ({
   let snapshot;
   /** @type {Promise<any> | undefined} */
   let refreshP;
+  // What the journal holds: the observed sections last written. A pushed
+  // reading is written only when it differs from this materially.
+  /** @type {Record<string, any>} */
+  let journalled = {};
+  let journalLoaded = false;
+  const topic = makeLatestTopic();
 
   const SECTIONS = harden(['plan', 'rateLimits', 'rateCard']);
+
+  /**
+   * What of a record is worth a write. A reading arrives with every inference
+   * response and its percentages creep; what a restart must not forget is
+   * coarser: whether the account may spend, when its windows reset, its plan,
+   * its credits, and roughly how full each window is. Five-point steps keep a
+   * busy session to a handful of writes per window.
+   *
+   * @param {Record<string, any>} record
+   */
+  const materialOf = record => {
+    const { plan, rateLimits, rateCard } = record;
+    return JSON.stringify({
+      plan: plan && [plan.planId, plan.state, plan.renewsAt, `${plan.seats}`],
+      rates: rateCard && rateCard.rates.map(rate => `${rate.modelId}`),
+      limits: rateLimits && {
+        reached: rateLimits.limitReached,
+        credits: rateLimits.credits && [
+          rateLimits.credits.hasCredits,
+          rateLimits.credits.unlimited,
+          `${rateLimits.credits.balance ?? ''}`.split('.')[0],
+        ],
+        resets: rateLimits.resetCredits && [
+          rateLimits.resetCredits.availableCount,
+          (rateLimits.resetCredits.credits ?? []).map(credit => [
+            credit.id,
+            credit.status,
+            credit.expiresAt,
+          ]),
+        ],
+        windows: rateLimits.windows.map(window => [
+          window.windowId,
+          window.resetsAt,
+          window.usedFraction === null
+            ? null
+            : Math.floor(window.usedFraction * 20),
+          Number(window.usedFraction ?? 0) >= 1,
+          `${window.limit}`,
+        ]),
+      },
+    });
+  };
 
   /**
    * The sections of a stored snapshot that were genuinely observed.
@@ -249,6 +312,18 @@ export const makeAccountOracle = ({
     // `asRemembered` swallows a malformed section rather than throwing, so a
     // bad stored snapshot never blocks the write that would replace it.
     const remembered = stored ? asRemembered(stored) : {};
+    if (!storedUnreadable) {
+      journalled = {};
+      for (const section of SECTIONS) {
+        if (remembered[section]) {
+          journalled[section] = harden({
+            ...remembered[section],
+            source: 'observed',
+          });
+        }
+      }
+      journalLoaded = true;
+    }
     const next = harden({
       plan:
         observed.plan ||
@@ -295,6 +370,7 @@ export const makeAccountOracle = ({
       if (SECTIONS.some(section => observed[section])) {
         try {
           await journal.write(harden(record));
+          journalled = { ...record };
         } catch (error) {
           console.error(
             `[account-oracle] ${providerId}: could not persist snapshot: ${
@@ -307,17 +383,40 @@ export const makeAccountOracle = ({
     return next;
   };
 
+  // Everything that changes the answer or the journal runs in this one
+  // order: a whole build, or one pushed reading. A reading pushed while a
+  // build was reading the journal used to be applied and then overwritten by
+  // that build's older view of the source, in the answer and in the journal —
+  // and a drained account serves nothing more, so nothing ever corrected it.
+  /** @type {Promise<unknown>} */
+  let order = Promise.resolve();
   /**
-   * Serialize refreshes so concurrent readers share one live read rather than
-   * racing to overwrite the journal.
+   * @template T
+   * @param {() => Promise<T>} step
+   * @returns {Promise<T>}
+   */
+  const inOrder = step => {
+    const result = order.then(step);
+    order = result.catch(() => {});
+    return result;
+  };
+
+  const adopt = (/** @type {any} */ next) => {
+    snapshot = next;
+    topic.publish(next);
+    return next;
+  };
+
+  /**
+   * Concurrent readers share one live read rather than racing to overwrite
+   * the journal.
    */
   const refresh = () => {
     if (!refreshP) {
-      refreshP = build().then(
+      refreshP = inOrder(build).then(
         next => {
-          snapshot = next;
           refreshP = undefined;
-          return next;
+          return adopt(next);
         },
         error => {
           refreshP = undefined;
@@ -330,14 +429,118 @@ export const makeAccountOracle = ({
 
   const current = async () => snapshot || refresh();
 
+  /**
+   * A reading the source pushed. It replaces the observed sections of the
+   * answer at once, is published to watchers, and is journalled only when it
+   * differs materially from what the journal holds.
+   *
+   * @param {unknown} raw
+   */
+  const applyObserved = raw =>
+    inOrder(async () => {
+      // A build inside the order, not `current()`: that would queue a build
+      // behind this step and wait for it.
+      const base = snapshot || adopt(await build());
+      const observed = project(raw, 'observed', now());
+      if (!SECTIONS.some(section => observed[section])) return;
+      adopt(harden({ ...base, ...observed }));
+      if (!journal) return;
+      if (!journalLoaded) {
+        // The journal could not be read when the answer was built. Without
+        // knowing what it holds a partial reading would replace it wholesale,
+        // so look again before writing, and leave it alone if it still fails.
+        try {
+          const stored = await journal.read();
+          journalled = {};
+          const remembered = stored ? asRemembered(stored) : {};
+          for (const section of SECTIONS) {
+            if (remembered[section]) {
+              journalled[section] = harden({
+                ...remembered[section],
+                source: 'observed',
+              });
+            }
+          }
+          journalLoaded = true;
+        } catch (_error) {
+          return;
+        }
+      }
+      const record = { ...journalled, ...observed };
+      if (materialOf(record) === materialOf(journalled)) return;
+      try {
+        await journal.write(harden(record));
+        journalled = record;
+      } catch (error) {
+        console.error(
+          `[account-oracle] ${providerId}: could not persist snapshot: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    });
+
+  // One subscription to the source's readings, started by the first reader
+  // and restarted, with a growing pause, only while somebody is watching: a
+  // source that was re-minted ends its stream, and nobody polls an oracle
+  // that has no audience. There is at most one loop and one pending retry.
+  let watching = false;
+  let retryPending = false;
+  let retryMs = 5000;
+  let failureLogged = false;
+  const ensureWatching = () => {
+    if (watching || retryPending || watchObserved === undefined) return;
+    watching = true;
+    void (async () => {
+      try {
+        const ref = await watchObserved();
+        // A source with nothing to subscribe to is not retried on a timer;
+        // the next reader asks again, which is how a source bound later is
+        // found.
+        if (ref === undefined) {
+          watching = false;
+          return;
+        }
+        const readings = iterateReader(ref);
+        for await (const raw of readings) {
+          retryMs = 5000;
+          failureLogged = false;
+
+          await applyObserved(raw).catch(() => {});
+        }
+      } catch (error) {
+        // Once per outage, not once per attempt.
+        if (!failureLogged) {
+          failureLogged = true;
+          console.error(
+            `[account-oracle] ${providerId}: reading stream failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      watching = false;
+      if (topic.watcherCount() > 0) {
+        retryPending = true;
+        setTimer(() => {
+          retryPending = false;
+          ensureWatching();
+        }, retryMs);
+        retryMs = Math.min(retryMs * 2, 60_000);
+      }
+    })();
+  };
+
   return makeExo('HostedAccount', HostedAccountInterface, {
     async getPlan() {
       await null;
+      ensureWatching();
       return (await current()).plan;
     },
 
     async getRateLimits() {
       await null;
+      ensureWatching();
       return (await current()).rateLimits;
     },
 
@@ -377,7 +580,30 @@ export const makeAccountOracle = ({
     },
 
     async refresh() {
+      await null;
+      ensureWatching();
+      if (refreshObserved !== undefined) {
+        try {
+          await refreshObserved();
+        } catch (error) {
+          console.error(
+            `[account-oracle] ${providerId}: provider read failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
       return refresh();
+    },
+
+    /**
+     * The whole answer, `{ plan, rateLimits, rateCard }`, now and whenever it
+     * changes, coalesced to the newest. Subscribe instead of asking again.
+     */
+    watch() {
+      ensureWatching();
+      if (snapshot === undefined) void current().catch(() => {});
+      return topic.watch();
     },
 
     /** @param {string} [methodName] */
@@ -393,9 +619,11 @@ export const makeAccountOracle = ({
           'estimateCost({ modelId, inputTokens, outputTokens, cachedInputTokens }) — Cost of a token count at the current list price, in micro-units. `missing` names what the rate card could not price.',
         refresh:
           'refresh() — Re-read the provider now and persist the result, so the next answer is observed rather than remembered.',
+        watch:
+          'watch() — A disposable stream of { plan, rateLimits, rateCard }: the current answer, then each change, coalesced to the newest. A rate-limit window carries usedPercent and resetsAt; rateLimits also carries limitReached, credits and resetCredits.',
       };
       if (methodName === undefined) {
-        return 'Account oracle: getPlan(), getRateLimits(), getRateCard(), estimateCost(usage), refresh(). Every answer carries observedAt and a source of observed | declared | remembered | unavailable.';
+        return 'Account oracle: getPlan(), getRateLimits(), getRateCard(), estimateCost(usage), refresh(), watch(). Every answer carries observedAt and a source of observed | declared | remembered | unavailable.';
       }
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },

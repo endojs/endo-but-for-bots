@@ -138,6 +138,7 @@ export {};
  *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
  *   unavailable?: boolean,
  *   usage: import('./usage-label.js').UsageView | null,
+ *   accounts?: import('./account-label.js').Account[],
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
  * }} FlootState
@@ -155,6 +156,7 @@ export {};
  * @property {(id: string) => void} selectSession
  * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
+ * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
  * @property {() => void} toggleTts

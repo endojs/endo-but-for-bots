@@ -33,7 +33,11 @@ const profile = harden({
 // generic entrypoint no service accepts.
 const unsupportedSpecifier = 'file:///generic-agent.js';
 
-/** The exec every mint-path test hands setup: a pinned image is never inspected. */
+/**
+ * The exec every mint-path test hands setup: a pinned image is never inspected.
+ * @param file
+ * @param args
+ */
 const refuseInspect = async (file, args) => {
   throw Error(`unexpected exec ${file} ${args.join(' ')}`);
 };
@@ -164,14 +168,21 @@ const makeFakeHost = ({ failMint } = {}) => {
       },
     })
   );
-  /** Seed a retained managed credential and its secret. */
+  /**
+   * Seed a retained managed credential and its secret.
+   * @param name
+   * @param kind
+   */
   const seedCredential = (name, kind) => {
     bindings.set(key(name), 'cap');
     bindings.set(key('secrets', name), `secret-${name}`);
     secrets.push({ name, description: `Anthropic ${kind}`, base64: '' });
     credentialKinds.set(name, kind);
   };
-  /** Seed a retained broker service with the given persisted profile. */
+  /**
+   * Seed a retained broker service with the given persisted profile.
+   * @param config
+   */
   const seedBroker = config => {
     bindings.set(key('claude-sandbox', 'broker-service'), 'broker-service-id');
     specifiers.set('broker-service-id', brokerServiceSpecifier);
@@ -260,7 +271,10 @@ const brokerMint = mints =>
 const credentialMint = mints =>
   mints.find(mint => /managed-credentials-module\.js$/.test(mint.specifier));
 
-/** The broker profile a retained service reports. */
+/**
+ * The broker profile a retained service reports.
+ * @param overrides
+ */
 const retainedBrokerConfig = (overrides = {}) => ({
   ownerId: 'persisted-broker',
   directory: '/srv/persisted-broker',
@@ -447,6 +461,8 @@ test.serial(
         'claude-sandbox/broker-service',
         'claude-sandbox/session-storage',
         'claude-sandbox/backend-next',
+        // The broker's read-only account source, for the account oracle.
+        'claude-sandbox/account-source',
       ],
     );
     // The seed entered the secrets manager once; the credential caplet reads
@@ -616,7 +632,7 @@ test.serial(
     await main(fake.host, { exec: refuseInspect });
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().join('/')),
-      ['claude-sandbox/backend-next'],
+      ['claude-sandbox/backend-next', 'claude-sandbox/account-source'],
     );
     t.deepEqual(fake.secrets.length, 1, 'no second secret');
     t.like(backendMint(fake.mints)?.options.env, {
@@ -679,7 +695,9 @@ test.serial(
     t.deepEqual(bumped.mints, [], 'refused before the credential mint');
     // A tag is resolved (read-only) to compare; matching the retained digest
     // retains the broker exactly as a pinned reference would.
-    await withEnv(t, { ENDO_CLAUDE_SANDBOX_IMAGE: 'oci:localhost/claude:latest' });
+    await withEnv(t, {
+      ENDO_CLAUDE_SANDBOX_IMAGE: 'oci:localhost/claude:latest',
+    });
     const resolved = makeFakeHost();
     resolved.seedCredential('test-creds', 'apiKey');
     resolved.seedBroker(retainedBrokerConfig());
@@ -693,7 +711,11 @@ test.serial(
     t.is(inspected.length, 1);
     t.deepEqual(
       resolved.mints.map(mint => [mint.options.resultName].flat().join('/')),
-      ['claude-sandbox/session-storage', 'claude-sandbox/backend-next'],
+      [
+        'claude-sandbox/session-storage',
+        'claude-sandbox/backend-next',
+        'claude-sandbox/account-source',
+      ],
       'the broker is retained, not re-minted',
     );
     // The listener image is compared the same way when the environment names
@@ -706,7 +728,8 @@ test.serial(
     listener.seedCredential('test-creds', 'apiKey');
     listener.seedBroker(retainedBrokerConfig());
     await t.throwsAsync(main(listener.host, { exec: refuseInspect }), {
-      message: /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
+      message:
+        /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
     });
     t.deepEqual(listener.mints, []);
   },

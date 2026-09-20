@@ -152,12 +152,16 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
     remoteService,
     [],
   );
+  // `accountSource` is read-only account data and no operator authority: it
+  // reaches no scope, secret, issuer or shutdown.
   t.deepEqual([...serviceMethods].sort(), [
     '__getInterfaceGuard__',
     '__getMethodNames__',
+    'accountSource',
     'lookupScope',
     'provideScope',
   ]);
+  t.is(await E(f.service).accountSource(), undefined);
   // eslint-disable-next-line no-underscore-dangle
   t.deepEqual([...(await E(a).__getMethodNames__())].sort(), [
     '__getInterfaceGuard__',

@@ -9,6 +9,7 @@ import {
 import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { M, matches } from '@endo/patterns';
 
+import { makeCodexAccountRead } from './codex-account-read.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 import { makeCodexSubscriptionProfile } from './codex-subscription-profile.js';
 
@@ -71,6 +72,14 @@ export const makeOwnedCodexBrokerService = ({
         rotate: makeSecretRotator(secret),
         accountRef: config.accountRef,
         now: Date.now,
+        fetch: globalThis.fetch,
+      }),
+    // For an account oracle's refresh(): the plan, the windows and the banked
+    // resets from the usage endpoint, with the same renewing credential.
+    makeActiveAccountRead: ({ credential, accountRef }) =>
+      makeCodexAccountRead({
+        credential,
+        accountRef,
         fetch: globalThis.fetch,
       }),
     makeServiceKit,

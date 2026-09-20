@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { Fail, b, q } from '@endo/errors';
 
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
+import { makeAccountReadingSource } from './account-source.js';
 import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makeProviderScopes } from './provider-scopes.js';
@@ -88,6 +89,8 @@ harden(assertBrokerModels);
  * @param {number} [options.maxSessions]
  * @param {any} [options.audit]
  * @param {(diagnostic: any) => void} [options.onDiagnostic]
+ * @param {(reading: any) => void} [options.onReading] Host-only: what each
+ *   inference response's rate-limit headers said about the account.
  * @param {(diagnostic: any) => void} [options.onListenerDiagnostic] Host-only:
  *   the listener's own per-request failure lines (a stage and header-check
  *   booleans), read from its stderr pipe.
@@ -116,6 +119,7 @@ export const makeProviderBrokerKit = ({
   publicInternet = false,
   audit,
   onDiagnostic,
+  onReading,
   onListenerDiagnostic,
   fetch: fetchAuthority = globalThis.fetch,
   runtime,
@@ -217,6 +221,7 @@ export const makeProviderBrokerKit = ({
           : {}),
         ...(audit === undefined ? {} : { audit }),
         ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
+        ...(onReading === undefined ? {} : { onReading }),
       });
       assertOpen();
       return harden({ issuer, imageRef });
@@ -327,13 +332,37 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0]} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { activeAccountRead?: () => Promise<any> }} options
+ *   `activeAccountRead` is the adapter's one read of its provider's usage
+ *   endpoint, host-only and only ever run on request.
  */
 export const makeProviderBrokerServiceKit = options => {
-  const { label } = options;
-  const broker = makeProviderBrokerKit(options);
+  const { label, activeAccountRead, ...brokerOptions } = options;
+  // What the account behind this broker's credential has left, as the
+  // transport reads it from each response. The source is a facet of the
+  // service, so an account oracle can hold it without the scopes' authority,
+  // and it cannot reach the secret.
+  const account = makeAccountReadingSource({
+    ...(activeAccountRead === undefined
+      ? {}
+      : { activeRead: activeAccountRead }),
+    reportError: error =>
+      console.error(
+        `${label} account read failed:`,
+        error instanceof Error ? error.message : String(error),
+      ),
+  });
+  const broker = makeProviderBrokerKit({
+    ...brokerOptions,
+    label,
+    onReading: reading => {
+      account.accept(reading);
+      brokerOptions.onReading?.(reading);
+    },
+  });
   const scopes = makeProviderScopes({
     openIssuer: async () => (await broker.start()).issuer,
+    accountSource: account.source,
   });
   let scopesReleased = false;
   let brokerReleased = false;
@@ -353,6 +382,7 @@ export const makeProviderBrokerServiceKit = options => {
         brokerReleased = true;
       }
     })();
+    account.close();
     closing = (async () => {
       const results = await Promise.allSettled([closingScopes, closingBroker]);
       const failures = results.flatMap(result =>
@@ -396,6 +426,10 @@ harden(makeProviderBrokerServiceKit);
  * @param {(config: Config, secret: any) => Parameters<typeof makeProviderBrokerGrantIssuer>[0]['credential']} [options.makeCredential]
  *   Synchronous, inert adapter credential construction, once per owned service.
  *   The secret may include renewal CAS authority, never exposed to sessions.
+ * @param {(powers: { config: Config, secret: any, credential: any, accountRef: string }) => () => Promise<any>} [options.makeActiveAccountRead]
+ *   Synchronous, inert construction of the adapter's one read of its
+ *   provider's usage endpoint, for an account oracle's `refresh()`. Host-only:
+ *   it holds the credential. Run only on request, never at start.
  * @param {typeof makeProviderBrokerServiceKit} [options.makeServiceKit]
  * @param {(error: unknown) => void} [options.reportError]
  * @param {(...args: string[]) => void} [options.log] Where the host-only
@@ -406,6 +440,7 @@ export const makeOwnedProviderBrokerService = ({
   readConfig,
   makePolicy,
   makeCredential,
+  makeActiveAccountRead,
   makeServiceKit = makeProviderBrokerServiceKit,
   reportError = error =>
     console.error(`${label} broker cleanup pending`, error),
@@ -443,6 +478,8 @@ export const makeOwnedProviderBrokerService = ({
           }
         : {}),
     };
+    const credential =
+      makeCredential === undefined ? undefined : makeCredential(config, secret);
     const kit = makeServiceKit({
       ...config,
       label,
@@ -450,9 +487,17 @@ export const makeOwnedProviderBrokerService = ({
       accountRef,
       secret,
       adaptRequest,
-      ...(makeCredential === undefined
+      ...(credential === undefined ? {} : { credential }),
+      ...(makeActiveAccountRead === undefined
         ? {}
-        : { credential: makeCredential(config, secret) }),
+        : {
+            activeAccountRead: makeActiveAccountRead({
+              config,
+              secret,
+              credential,
+              accountRef,
+            }),
+          }),
       env,
       ...hooks,
     });

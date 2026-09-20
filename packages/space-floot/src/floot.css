@@ -482,6 +482,33 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.floot-account.blocked {
+  color: var(--fl-danger, #c0392b);
+  opacity: 1;
+}
+.floot-settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-weight: 600;
+}
+.floot-settings-subheading {
+  margin-top: 0.4rem;
+  font-size: 0.85em;
+  color: var(--fl-text-muted);
+}
+.floot-settings-refresh {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 4px;
+  background: var(--fl-surface);
+  color: inherit;
+  cursor: pointer;
+}
 
 .floot-meter {
   display: none;

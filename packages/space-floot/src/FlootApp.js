@@ -9,6 +9,7 @@ import { MessageList } from './MessageList.js';
 import { ComposeBar } from './ComposeBar.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { RecoveryPanel } from './RecoveryPanel.js';
+import { accountBlocked, accountChip } from './account-label.js';
 import { usageLabel } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
@@ -35,7 +36,6 @@ const useControllerState = controller => {
   }, []);
   return controller.getState();
 };
-
 
 /**
  * @param {{
@@ -239,6 +239,15 @@ export const FlootApp = ({ controller }) => {
   };
 
   const tokenLabel = usageLabel(usage);
+  // What the account behind this session's backend has left. Worded from the
+  // last reading at render time, so a window past its reset reads as empty.
+  const account = active
+    ? (state.accounts || []).find(
+        entry => entry.backendId === (active.backendId || 'provider'),
+      )
+    : undefined;
+  const accountNow = Date.now();
+  const accountLabel = accountChip(account, accountNow);
 
   // The journal and a pending network request are labels, not glyphs, so they
   // render as chips beside the icon buttons. A badge carries the part that
@@ -362,7 +371,24 @@ export const FlootApp = ({ controller }) => {
     'div',
     { class: 'floot-status-bar' },
     h('span', null, status || ''),
-    h('span', { class: 'floot-tokens' }, tokenLabel),
+    h(
+      'span',
+      { class: 'floot-tokens' },
+      accountLabel
+        ? h(
+            'span',
+            {
+              class: `floot-account${
+                accountBlocked(account, accountNow) ? ' blocked' : ''
+              }`,
+              title: `${account?.title || ''} subscription`,
+            },
+            accountLabel,
+          )
+        : null,
+      accountLabel && tokenLabel ? ' · ' : '',
+      tokenLabel,
+    ),
   );
 
   return h(

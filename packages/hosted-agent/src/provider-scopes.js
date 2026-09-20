@@ -52,8 +52,10 @@ const ScopeInterface = M.interface('ProviderScope', {
  *
  * @param {object} powers
  * @param {() => Promise<ScopedProviderIssuer>} powers.openIssuer
+ * @param {any} [powers.accountSource] The broker's read-only account source
+ *   (`account-source.js`), offered beside the scopes.
  */
-export const makeProviderScopes = ({ openIssuer }) => {
+export const makeProviderScopes = ({ openIssuer, accountSource }) => {
   /** @type {Map<string, {spec: ProviderScopeSpec, facet: any, revoke(): Promise<void>}>} */
   const scopes = new Map();
   /** @type {Promise<ScopedProviderIssuer> | undefined} */
@@ -198,10 +200,14 @@ export const makeProviderScopes = ({ openIssuer }) => {
       lookupScope: M.call(M.string()).returns(
         M.or(M.remotable(), M.undefined()),
       ),
+      accountSource: M.call().returns(M.or(M.remotable(), M.undefined())),
     }),
     {
       provideScope,
       lookupScope: sessionId => scopes.get(sessionId)?.facet,
+      // Read-only, and no path to a scope, the secret or the issuer: what the
+      // account behind this broker's credential has left.
+      accountSource: () => accountSource,
     },
   );
   return harden({ service, close });

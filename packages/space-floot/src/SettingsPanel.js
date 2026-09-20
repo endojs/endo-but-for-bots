@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 import { h } from 'preact';
 import { NetworkPolicyPanel } from './NetworkPolicyPanel.js';
+import { accountSections } from './account-label.js';
 import { usageRows } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
@@ -146,6 +147,37 @@ export const SettingsPanel = ({ state, controller }) => {
 
   const tokens = usageRows(usage).map(([label, value]) => Row(label, value));
 
+  // Every backend's subscription: what is left, when it resets, and how old
+  // the figures are. Readings arrive with requests; the button asks the
+  // providers once, because a person pressed it.
+  const sections = accountSections(state.accounts, Date.now());
+  const subscriptions = sections.length
+    ? [
+        h(
+          'div',
+          { class: 'floot-settings-heading', key: 'subscriptions' },
+          h('span', null, 'Subscriptions'),
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.refreshAccounts?.(),
+            },
+            'Refresh',
+          ),
+        ),
+        ...sections.flatMap(section => [
+          h(
+            'div',
+            { class: 'floot-settings-subheading', key: `t:${section.id}` },
+            section.title,
+          ),
+          ...section.rows.map(([label, value]) => Row(label, value)),
+        ]),
+      ]
+    : [];
+
   return h(
     'div',
     { class: 'floot-messages' },
@@ -213,6 +245,7 @@ export const SettingsPanel = ({ state, controller }) => {
       ...transcription,
       ...speech,
       ...tokens,
+      ...subscriptions,
       Row('Controller', obj.controller || '—'),
       Row('STT', obj.stt || '—'),
       Row('TTS', obj.tts || '—'),

@@ -1,6 +1,8 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { E } from '@endo/eventual-send';
+import { makeOpenRouterAccountRead } from '@endo/hosted-agent/openrouter-account-read.js';
 import { M, matches } from '@endo/patterns';
 import {
   makeOwnedProviderBrokerService,
@@ -67,6 +69,13 @@ export const makeOwnedOpencodeBrokerService = ({
       policy: buildOpencodeBrokerPolicy({ models: config.models }),
       accountRef: OPENCODE_BROKER_ACCOUNT,
     }),
+    // For an account oracle's refresh(): OpenRouter says nothing about the
+    // account on inference responses, so this read is its only source.
+    makeActiveAccountRead: ({ secret }) =>
+      makeOpenRouterAccountRead({
+        readKey: async () => globalThis.atob(await E(secret).readBase64()),
+        fetch: globalThis.fetch,
+      }),
     makeServiceKit,
     reportError,
   });

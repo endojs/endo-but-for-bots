@@ -74,6 +74,7 @@ import {
   assertRetainedBrokerImages,
   mintWithPowersPath,
   providePrivateDirectory,
+  publishAccountOracle,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedCredentials } from '@endo/hosted-agent/managed-credentials.js';
 import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service.js';
@@ -447,6 +448,13 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       `Floot controller profile "${flootDir}/controller-profile" is absent; skipping the "${backendName}" binding.`,
     );
   }
+  await publishAccountOracle(hostAgent, {
+    label: 'Claude',
+    dir: SANDBOX_DIR,
+    providerId: 'anthropic',
+    flootDir,
+    backendId: 'claude',
+  });
 
   console.log(
     `Hosted Claude sandbox ready. Floot sessions on backend "claude" are recorded under "${SANDBOX_DIR}/session-records" and owned by the daemon.`,

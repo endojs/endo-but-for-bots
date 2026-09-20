@@ -35,6 +35,8 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {string} options.accountRef
  * @param {(event: any) => void} [options.audit]
  * @param {Parameters<typeof makeProviderFetchTransport>[0]['onDiagnostic']} [options.onDiagnostic]
+ * @param {Parameters<typeof makeProviderFetchTransport>[0]['onReading']} [options.onReading]
+ *   Host-only observer of each response's account reading.
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and grant over it.
@@ -52,6 +54,7 @@ export const makeProviderBrokerGrantIssuer = ({
   accountRef,
   audit,
   onDiagnostic,
+  onReading,
   credential,
   adaptRequest,
   makePublicNetwork,
@@ -201,6 +204,7 @@ export const makeProviderBrokerGrantIssuer = ({
         maxRequestBytes: configuredPolicy.maxRequestBytes,
         maxResponseBytes: configuredPolicy.maxResponseBytes,
         onDiagnostic,
+        onReading,
       });
       core = makeProviderBrokerGrant(configuredPolicy, {
         secret,

@@ -12,6 +12,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 
+import { Far } from '@endo/far';
 import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 
 import {
@@ -20,6 +21,7 @@ import {
   mintWithPowersPath,
   prepareRuntimeEnv,
   providePrivateDirectory,
+  publishAccountOracle,
   readProvisionedEnvironment,
   readSliceImageReference,
   resolveFuturePath,
@@ -304,4 +306,116 @@ test('slice image references are checked without Podman and pinned through it', 
     ),
     { message: /Cannot resolve a digest for Adapter sandbox image/ },
   );
+});
+
+/**
+ * A host agent that records names as a flat map of joined paths.
+ * @param initial
+ */
+const makeNamingHost = initial => {
+  const names = new Map(Object.entries(initial));
+  const guests = new Map();
+  const made = [];
+  const joined = namePath =>
+    (Array.isArray(namePath) ? namePath : [namePath]).join('/');
+  const host = Far('host', {
+    has: async (...namePath) => names.has(joined(namePath)),
+    locate: async (...namePath) => `locator:${names.get(joined(namePath))}`,
+    remove: async (...namePath) => {
+      names.delete(joined(namePath));
+    },
+    provideGuest: async (handleName, { agentName }) => {
+      const stored = new Map();
+      const guest = Far('guest', {
+        storeLocator: async (name, locator) => {
+          stored.set(name, locator);
+        },
+      });
+      guests.set(agentName, stored);
+      names.set(handleName, `handle:${agentName}`);
+      names.set(agentName, guest);
+    },
+    lookup: async namePath => names.get(joined(namePath)),
+    makeUnconfined: async (_worker, specifier, options) => {
+      made.push({
+        specifier,
+        ...options,
+        powers: names.get(joined(options.powersName)),
+      });
+      names.set(joined(options.resultName), `formula-${made.length}`);
+    },
+    move: async (from, to) => {
+      names.set(joined(to), names.get(joined(from)));
+      names.delete(joined(from));
+    },
+    copy: async (from, to) => {
+      names.set(joined(to), names.get(joined(from)));
+    },
+  });
+  return { host, names, guests, made };
+};
+
+test('an account oracle is made once, keeps its identity, and follows a re-minted broker', async t => {
+  const world = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  const options = {
+    label: 'Codex',
+    dir: 'codex-sandbox',
+    providerId: 'codex',
+    flootDir: 'floot',
+    backendId: 'codex',
+  };
+  await publishAccountOracle(world.host, options);
+  const oracles = () =>
+    world.made.filter(made =>
+      made.specifier.endsWith('/account-oracle-module.js'),
+    );
+  const sources = () =>
+    world.made.filter(made =>
+      made.specifier.endsWith('/account-source-module.js'),
+    );
+  t.is(oracles().length, 1);
+  t.deepEqual(oracles()[0].resultName, ['codex-sandbox', 'account-oracle']);
+  t.deepEqual(oracles()[0].env, { ACCOUNT_PROVIDER_ID: 'codex' });
+  // The source formula's powers are the broker service; the oracle's
+  // namespace holds that source and never the broker.
+  t.is(sources().length, 1);
+  t.is(sources()[0].powers, 'broker-1');
+  const powers = world.guests.get('codex-sandbox.account-oracle-powers');
+  t.deepEqual([...powers.keys()], ['account-source']);
+  // The names used while making it are tucked under the adapter's directory.
+  t.false(world.names.has('codex-sandbox.account-oracle-powers'));
+  t.false(world.names.has('codex-sandbox.account-source-powers'));
+  t.true(world.names.has('codex-sandbox/account-oracle-powers'));
+  // Floot finds it under the backend's id.
+  t.is(
+    world.names.get('floot/controller-profile/codex-account'),
+    world.names.get('codex-sandbox/account-oracle'),
+  );
+
+  // A deploy re-mints the broker. The oracle is not made again; the source
+  // is, over the new broker, and the name inside the namespace moves to it.
+  const before = powers.get('account-source');
+  world.names.set('codex-sandbox/broker-service', 'broker-2');
+  await publishAccountOracle(world.host, options);
+  t.is(oracles().length, 1);
+  t.is(sources().length, 2);
+  t.is(sources()[1].powers, 'broker-2');
+  t.not(powers.get('account-source'), before);
+});
+
+test('an oracle that cannot be provided is reported and does not fail setup', async t => {
+  const world = makeNamingHost({});
+  await t.notThrowsAsync(() =>
+    publishAccountOracle(world.host, {
+      label: 'Codex',
+      dir: 'codex-sandbox',
+      providerId: 'codex',
+      flootDir: 'floot',
+      backendId: 'codex',
+    }),
+  );
+  t.is(world.made.length, 0);
 });
