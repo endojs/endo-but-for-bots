@@ -2292,8 +2292,9 @@ test('the bytes stream is bound by the response quota like the text stream', asy
   const reader = iterateBytesReader(response.reader, { buffer: 64 });
   await t.throwsAsync(
     async () => {
-      for await (const _bytes of reader) {
-        // drain
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        if ((await reader.next()).done) break;
       }
     },
     { message: /Provider request failed/ },
