@@ -7,7 +7,7 @@
 | **Branch** | `bots/llm`, reviewed on `codex/ironhorse-architecture-review-2026-09-20` |
 | **Scope** | `rust/engine`, `rust/endo/src/ironhorse_engine.rs`, `rust/endo/ironhorse-store-sqlite`, the pinned XS sources used by `xs-oracle`, and the current CI/design contracts |
 | **Method** | Three region maps, three cross-cutting lenses, and three independent verification passes; see [Method](#method) |
-| **Result** | 9 current findings: 1 high, 6 medium, 2 low; 3 are new defects, 1 is a previously documented lead now promoted, and the rest are current known or inherited risks |
+| **Result** | At the reviewed commit: 9 findings (1 high, 6 medium, 2 low); 3 are new defects, 1 is a previously documented lead now promoted, and the rest are current known or inherited risks. Post-review amendments close 4, leaving 5 open. |
 
 Every line number in this directory refers to reviewed commit `62b907421`.
 Read citations against that commit after the tree moves.
@@ -85,6 +85,59 @@ The recommended sequence is:
 | F007 | Medium | Inherited protocol risk | The checkpoint protocol cannot represent an ambiguous durable outcome. |
 | F008 | Low | Previously mapped/known hardening debt | The public RegExp crate exposes incompatible and unchecked representations. |
 | F009 | Low | Residual verification debt | Persistence fuzzing does not compose execution with durable reopen. |
+
+### Post-review amendments
+
+| Id | Current status |
+|---|---|
+| F002 | Fixed after the reviewed commit; see the amendment below. |
+| F003 | Fixed after the reviewed commit; see the amendment below. |
+| F004 | Fixed after the reviewed commit; see the amendment below. |
+| F005 | Fixed after the reviewed commit; see the amendment below. |
+| Additional intrinsic-linking repair | Fixed after the reviewed commit; see below. |
+
+All other rows retain their status at the reviewed commit.
+
+Adversarial follow-up reproduced the unresolved machine-wide name-floor lead.
+A name first linked while a child environment was active could advance the
+shared intrinsic-surface floor and leave the parent without its corresponding
+global binding.
+Relinking now keeps the numeric floor for machine-wide prototype surfaces while
+catching each global object up from its own persisted binding history.
+The binding-history wire shape is unchanged, and existing shared-snapshot
+deletion markers remain authoritative without reinterpretation.
+An allocation refusal restores the pending surface floor before unwinding, so a
+host can raise the ceiling and retry instead of permanently skipping a binding.
+`a_name_first_linked_in_a_child_is_still_installed_in_its_parent` and
+`restored_prospective_permit_applies_to_computed_names_and_preserves_deletions`
+cover both the shared prototype member and per-environment global across live
+and restored machines.
+`a_failed_pending_global_install_remains_retryable` and
+`a_failed_pending_surface_install_retains_its_roster_for_retry` cover allocation
+unwinds; `a_runtime_interned_deleted_global_stays_deleted_across_resume` covers
+the computed deletion ordering.
+This is a guest-visible semantic correction under the current boot identity and
+therefore remains exposed to F001's compatibility-identity gap until that
+finding's recommended release binding lands.
+
+The F004 repair extends the checked XS source overlay to guard both lexical and
+`JSON.parse` numeric classification with explicit finiteness and signed 32-bit
+range tests before converting a double to `txInteger`.
+Values outside that range remain numbers, so optimized oracle builds agree with
+IronHorse at the integer boundaries and for infinity-producing literals.
+The overlay fails closed if either pinned conversion site changes, and boundary
+regressions cover source literals and JSON numbers.
+
+The F005 repair accepts an immediate closing bracket as the empty `v` set and
+its negation as the full set.
+Ignore-case `v` operands and Unicode properties are folded before set algebra
+and complement, while legacy `u` negative properties retain the order of
+complementing before folding by adding canonical targets from outside the raw
+property.
+The XS parity corpus records the intentional negative-`iu` divergence instead
+of treating XS as the standards authority, and an independent IronHorse lane
+covers empty sets, positive and negative properties, singleton operands, and
+set subtraction.
 
 ## Method
 
@@ -234,6 +287,26 @@ change, and a negative resume fixture proving that a prior identity is refused.
 
 **Status:** new and reproduced.
 
+**Amendment (2026-09-20): fixed after the reviewed commit.**
+`construct_compartment` now treats environment creation through final instance
+publication as one transaction, including ordinary guest throws, allocation
+refusals, and Rust unwinds.
+The rollback restores the prior `shared_compartments` profile and removes the
+provisional inactive environment together with its per-environment evaluator
+and constructor-prototype rows.
+It also restores the intrinsic-name installation floor; now-unreachable arena
+allocations are left for the next collection.
+`persistence_remains_available_after_failed_guest_compartment_construction`
+locks the reported `NaN`-endowment reproduction by proving that the caught
+`TypeError` leaves blob snapshot restoreability and store-session admission
+available.
+`every_compartment_allocation_failure_rolls_back_the_transaction` sweeps the
+slot ceiling through each allocation on the default construction path,
+including final instance publication, and checks the same rollback invariants
+before reaching a committed construction.
+This closes F002's observed failure mode; F003's compiler-authority lifetime is
+separate and addressed independently below.
+
 `construct_compartment` sets the machine-wide `shared_compartments` flag before
 creating the environment at
 `ironhorse-vm/src/interp/natives/compartment.rs:98-114`.
@@ -274,6 +347,25 @@ and roll back every non-success exit, including ordinary `Step::Throw` results.
 ### F003 — Medium — A guest child's compiler authority expires with its creator
 
 **Status:** a documented lead, now verified structurally and promoted.
+
+**Amendment (2026-09-20): fixed after the reviewed commit.**
+The machine now exposes its compiler-policy registry to the interpreter through
+a weak reference, preserving the ownership boundary for compilers that capture
+compartments.
+When guest construction inherits a compiler, it registers the same service
+under the child environment id while retaining only a weak reference in the
+environment itself.
+Collection therefore retires the creator's row without retiring the reachable
+child's policy, and later retires the child row when that environment dies.
+Compiler retirement also runs after the public persistence borrow returns, so
+collecting through that raw interpreter seam cannot retain a stale policy row.
+`a_transferred_child_keeps_its_compiler_after_its_creator_is_collected` transfers
+a guest child to a sibling, drops its creator, collects, proves that
+`child.evaluate` still works, then drops the child and proves that the compiler
+service is released.
+`persistence_borrowed_collection_retires_dead_environment_compilers` exercises
+the same two-cycle retirement through `Machine::with_persistence`.
+This closes F003's lifetime-dependent failure mode.
 
 `inherit_compiler` stores only a `Weak` reference in the new environment at
 `interp/natives/compartment.rs:185-204`.
@@ -340,6 +432,12 @@ Pin boundary vectors under optimized and unoptimized builds, narrow the UBSan
 exclusion where practical, and label the patch as an oracle repair.
 Keep XS byte identity and independent ECMAScript correctness as separate gates.
 
+**Post-review amendment.** The checked oracle overlay now guards the lexical
+and JSON numeric classifiers before their `txInteger` casts.
+Signed 32-bit boundaries, large finite values, infinity-producing literals,
+and JSON numbers have direct regressions, and the formerly divergent corpus
+gate now observes the defined numeric result.
+
 ### F005 — Medium — XS parity conceals two current RegExp conformance errors
 
 **Status:** new and independently reproduced.
@@ -371,6 +469,12 @@ Handle an immediate closing bracket as an empty `v` set, and model legacy `u`
 property complement as matcher inversion rather than reusing `v` set algebra.
 Record intended XS divergences explicitly instead of equating oracle parity with
 language conformance.
+
+**Post-review amendment.** The `v` parser now accepts empty positive and
+negative sets.
+The compiler implements the specification's distinct `u` and `v` ignore-case
+ordering for Unicode properties and `v` set operands, with a standards-derived
+execution matrix kept separate from the pinned XS parity corpus.
 
 ### F006 — Medium — Store failure classes merge retry, refusal, and corruption
 
@@ -512,9 +616,6 @@ The following should not be reported as silent defects:
   guest-created compartment currently receives the standard set.
   That is a serious embedding footgun after lockdown, but it is the documented
   contract rather than an implementation violation.
-- The machine-wide `installed_names_len` versus per-environment binding model
-  remains a credible lead connected to the reflection gap, but this review did
-  not reproduce a public wrong result from it.
 - Sloppy function declarations colliding with `globalLexicals` are a documented
   correctness gap; phase 1's `evaluate` path is strict.
 - A dead but uncollected guest-compartment row can keep the persistence gate
