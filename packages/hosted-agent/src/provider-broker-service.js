@@ -516,11 +516,14 @@ const makePooledBrokerServiceKit = ({
         });
         chooser = makeSubscriptionPool({
           members: () =>
-            (set?.members ?? []).map(({ id, label: title, weight }) => ({
-              id,
-              label: title,
-              weight,
-            })),
+            (set?.members ?? []).map(
+              ({ id, label: title, weight, pinnedOnly }) => ({
+                id,
+                label: title,
+                weight,
+                ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
+              }),
+            ),
           readingOf: id => kits.get(id)?.account.peek().rateLimits,
           // Asked per request, so an operator's edit of the set applies.
           cacheLifetimeMs: () => (set?.cacheLifetimeSeconds ?? 300) * 1000,
@@ -594,7 +597,16 @@ const makePooledBrokerServiceKit = ({
       /** @type {any} */ ((await broker.start()).issuer).openEndpoint(spec),
     readings: async () => {
       const { members } = await load();
-      return members.map(member => ({
+      // What an `auto` request can be served from, which is all an endpoint
+      // of this subscription ever asks for. A lane set aside is not that,
+      // and is often a share of this very subscription: counted here, its
+      // budget would read as the broker's own headroom, and its status
+      // would feed the status it is derived from.
+      const serving = members.filter(
+        (/** @type {any} */ member) => member.pinnedOnly !== true,
+      );
+      const counted = serving.length === 0 ? members : serving;
+      return counted.map(member => ({
         id: member.id,
         rateLimits: kitOf(member).account.peek().rateLimits,
       }));
@@ -619,10 +631,12 @@ const makePooledBrokerServiceKit = ({
     listSubscriptions: async () => {
       const { members } = await load();
       return harden(
-        members.map(({ id, label: title, weight }) => ({
+        members.map(({ id, label: title, weight, pinnedOnly }) => ({
           id,
           label: title,
           weight,
+          // A lane set aside: a picker may say so, and `auto` never uses it.
+          ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
         })),
       );
     },

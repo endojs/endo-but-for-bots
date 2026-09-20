@@ -31,6 +31,10 @@ const BACKOFF_MAX_MS = 3_600_000;
  * @property {string} id
  * @property {string} label
  * @property {number} weight Relative size of the plan; for display and ties.
+ * @property {boolean} [pinnedOnly] Served only to a session pinned to it, and
+ *   never chosen for `auto`: a lane set aside for somebody (a delegated
+ *   runner's sessions, through a share), which the operator's own sessions
+ *   must not drain.
  */
 
 /**
@@ -283,7 +287,11 @@ export const selectMembers = ({
       Fail`Subscription ${q(preference)} is not in this provider's set`;
   }
   const candidates = members
-    .filter(member => preference === 'auto' || member.id === preference)
+    .filter(member =>
+      preference === 'auto'
+        ? member.pinnedOnly !== true
+        : member.id === preference,
+    )
     .map((member, index) => {
       const standing = standingOf(readingOf(member.id), nowMs);
       const refused = refusedUntil(member.id, nowMs);
@@ -388,6 +396,7 @@ export const normalizeSubscriptionSet = (
       accountRef,
       subscriptionName,
       secretName = subscriptionName === undefined ? id : undefined,
+      pinnedOnly,
     } = member;
     (typeof id === 'string' && SUBSCRIPTION_ID.test(id) && id !== 'auto') ||
       Fail`Invalid subscription id ${q(id)}`;
@@ -401,6 +410,9 @@ export const normalizeSubscriptionSet = (
       Fail`Invalid label for subscription ${q(id)}`;
     (typeof weight === 'number' && Number.isFinite(weight) && weight > 0) ||
       Fail`Invalid weight for subscription ${q(id)}`;
+    pinnedOnly === undefined ||
+      typeof pinnedOnly === 'boolean' ||
+      Fail`Invalid pinnedOnly for subscription ${q(id)}`;
     accountRef === undefined ||
       (typeof accountRef === 'string' &&
         /^[A-Za-z0-9_-]{1,256}$/.test(accountRef)) ||
@@ -414,7 +426,13 @@ export const normalizeSubscriptionSet = (
         secretName === undefined &&
         accountRef === undefined) ||
         Fail`Invalid wrapped subscription ${q(id)}`;
-      return harden({ id, label, weight, subscriptionName });
+      return harden({
+        id,
+        label,
+        weight,
+        subscriptionName,
+        ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
+      });
     }
     (typeof secretName === 'string' && SUBSCRIPTION_ID.test(secretName)) ||
       Fail`Invalid secret name for subscription ${q(id)}`;
@@ -424,6 +442,7 @@ export const normalizeSubscriptionSet = (
       weight,
       secretName,
       ...(accountRef === undefined ? {} : { accountRef }),
+      ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
     });
   });
   const distinct = (/** @type {unknown[]} */ values) =>

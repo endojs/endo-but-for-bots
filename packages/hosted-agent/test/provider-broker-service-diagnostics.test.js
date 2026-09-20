@@ -7,6 +7,7 @@ import { Far } from '@endo/far';
 import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeSubscriptionShare } from '../src/subscription-share.js';
 import { makeLatestTopic } from '../src/latest-topic.js';
 
@@ -778,3 +779,88 @@ test('what a share says of itself reads as windows', t => {
     ).includes('ignore'),
   );
 });
+
+for (const pinnedOnly of [true, false]) {
+  test(`a share of a broker, held in that broker’s own pool, does not hear its own echo for ever (pinnedOnly: ${pinnedOnly})`, async t => {
+    const digest = `sha256:${'d'.repeat(64)}`;
+    /** @type {any} */
+    let kit;
+    let setReads = 0;
+    /** @type {any[]} */
+    const shareStore = [];
+    const { share, close } = makeSubscriptionShare({
+      shareId: 'alice',
+      provideUnderlying: async () => E(kit.service).subscription(),
+      provideLimits: async () => ({
+        createdAt: new Date(Date.now() - 1000).toISOString(),
+        budget: { tokens: 50_000, periodSeconds: 86_400 },
+      }),
+      journal: {
+        read: async () => shareStore.at(-1),
+        write: async record => {
+          shareStore.push(record);
+        },
+      },
+      log: () => {},
+    });
+    kit = makeProviderBrokerServiceKit({
+      label: 'Test',
+      policy: /** @type {any} */ ({
+        origin: 'https://api.example.test',
+        routes: [{ method: 'POST', path: '/v1/responses' }],
+        models: ['allowed'],
+        maxConcurrentRequests: 4,
+        maxRequestBytes: 1024n,
+        maxResponseBytes: 1024n,
+      }),
+      accountRef: 'pool',
+      secret: undefined,
+      ownerId: `owner-echo-${pinnedOnly}`,
+      directory: '/tmp/unused',
+      imageRef: `localhost/slice@${digest}`,
+      imageDigest: digest,
+      listenerImageRef: `localhost/listener@${digest}`,
+      runtime: /** @type {any} */ ({ dispose: async () => {} }),
+      fetch: /** @type {any} */ (
+        async () => new Response('x', { status: 500 })
+      ),
+      subscriptions: {
+        readSet: async () => {
+          setReads += 1;
+          return {
+            members: [
+              { id: 'own', label: 'Our Pro' },
+              {
+                id: 'lane-alice',
+                label: 'Alice’s lane',
+                subscriptionName: 'share-alice',
+                ...(pinnedOnly ? { pinnedOnly: true } : {}),
+              },
+            ],
+          };
+        },
+        secretOf: member =>
+          Far(`${member.id} secret`, { readBase64: async () => btoa('k') }),
+        subscriptionOf: () => share,
+      },
+    });
+    const subscription = await E(kit.service).subscription();
+    // Somebody watches the broker's status, and the share's: every link of
+    // the cycle is live.
+    const brokerEvents = iterateReader(await E(subscription).watchStatus());
+    const shareEvents = iterateReader(await E(share).watchStatus());
+    await brokerEvents.next();
+    await shareEvents.next();
+    t.like(await E(subscription).getStatus(), { available: true });
+    const before = setReads;
+    await new Promise(resolve => setTimeout(resolve, 400));
+    t.true(
+      setReads - before < 40,
+      `the set was read ${setReads - before} times while nothing changed`,
+    );
+    await brokerEvents.return(undefined);
+    await shareEvents.return(undefined);
+    close();
+    await kit.close();
+  });
+}

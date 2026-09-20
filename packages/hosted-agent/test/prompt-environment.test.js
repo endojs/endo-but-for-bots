@@ -99,13 +99,18 @@ test('a descriptor may say whose credential it spends and which subscriptions a 
     subscriptions: [
       { id: 'work', label: 'Work Pro', weight: 20, accountRef: 'acct_1' },
       { id: 'home', label: 'Home Plus' },
+      { id: 'lane', label: 'Alice’s lane', pinnedOnly: true },
+      { id: 'open', label: 'Open', pinnedOnly: 'yes' },
     ],
   });
   t.is(declared.providerId, 'codex');
-  // An id and the operator's label, and nothing else a broker may know.
+  // An id and the operator's label, whether it is a lane set aside, and
+  // nothing else a broker may know.
   t.deepEqual(declared.subscriptions, [
     { id: 'work', label: 'Work Pro' },
     { id: 'home', label: 'Home Plus' },
+    { id: 'lane', label: 'Alice’s lane', pinnedOnly: true },
+    { id: 'open', label: 'Open' },
   ]);
   // Absent means one credential and nothing to choose.
   t.false('subscriptions' in assertHostedBackendDescriptor(descriptor));
