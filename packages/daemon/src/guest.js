@@ -433,8 +433,21 @@ export const makeGuestMaker = ({
         invitationLocator,
         acceptingHandleId: handleId,
         acceptingNetworksDirectoryId: networksDirectoryId,
-        bindCorrespondent: remoteHandleLocator =>
-          E(directory).storeLocator(namePath, remoteHandleLocator),
+        bindCorrespondent: async remoteHandleLocator => {
+          await null;
+          // Snapshot whatever `correspondentName` held before this speculative
+          // bind so a rejected invitation can restore it rather than clobber a
+          // pre-existing correspondent bound under the same name.
+          const priorLocator = await E(directory).locate(...namePath);
+          await E(directory).storeLocator(namePath, remoteHandleLocator);
+          return async () => {
+            if (priorLocator === undefined) {
+              await E(directory).remove(...namePath);
+            } else {
+              await E(directory).storeLocator(namePath, priorLocator);
+            }
+          };
+        },
       });
     };
 

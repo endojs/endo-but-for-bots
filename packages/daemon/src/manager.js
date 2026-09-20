@@ -7020,9 +7020,16 @@ const makeDaemonCore = async (
    * the inviter's daemon as a peer and records its agent key. That effect is
    * strictly additive — a peer already known is never re-addressed, an
    * agent-key already mapped is never redirected, and an empty address list is
-   * never registered — and the agent-key write is deferred until after
-   * `E(invitation).accept()` proves the invitation, so a forged or unspent
-   * locator cannot mutate routing at all.
+   * never registered.
+   *
+   * Only the agent-key write can be deferred until after
+   * `E(invitation).accept()` proves the invitation. The peer route and the
+   * correspondent pet-name bind must be written earlier (the route so `provide`
+   * can dial the peer, the bind to keep a bad name path from stranding a spent
+   * invitation), so both are written speculatively and then rolled back if the
+   * invitation never proves out: a forged, unspent, or replayed locator leaves
+   * neither a squatted peer route nor a phantom/clobbered correspondent
+   * binding behind.
    *
    * @param {object} args
    * @param {string} args.invitationLocator
@@ -7032,9 +7039,12 @@ const makeDaemonCore = async (
    *   accepting agent's own `@nets`. An empty `@nets` yields an address-less
    *   handle locator (the anonymizing-persona default), so the acceptor is
    *   reachable same-daemon but undialable across daemons.
-   * @param {(remoteHandleLocator: string) => Promise<void>} args.bindCorrespondent
+   * @param {(remoteHandleLocator: string) => Promise<(() => Promise<void>) | undefined>} args.bindCorrespondent
    *   Binds the inviter's remote handle locator under the acceptor-chosen pet
-   *   name in the accepting agent's own directory.
+   *   name in the accepting agent's own directory, returning a rollback that
+   *   restores whatever that pet name held before the bind (an existing
+   *   binding, or nothing). The rollback runs only if the invitation fails to
+   *   prove out, so a rejected accept cannot clobber a pre-existing binding.
    */
   const acceptInvitation = async ({
     invitationLocator,
@@ -7043,6 +7053,23 @@ const makeDaemonCore = async (
     bindCorrespondent,
   }) => {
     await null;
+    /**
+     * Run a best-effort undo of a speculative local write made from the
+     * unverified locator. A rollback failure must not mask the original accept
+     * rejection, so swallow and log it.
+     * @param {(() => Promise<void>) | undefined} rollback
+     */
+    const undoSpeculativeWrite = async rollback => {
+      if (rollback === undefined) {
+        return;
+      }
+      await rollback().catch(error => {
+        console.warn(
+          'acceptInvitation: failed to roll back a speculative write after a rejected invitation accept',
+          error,
+        );
+      });
+    };
     const {
       formulaType,
       number: invitationNumber,
@@ -7085,13 +7112,22 @@ const makeDaemonCore = async (
     //
     // The peer route to the inviter's daemon must exist BEFORE the invitation
     // can be provided across daemons (`provide` below dials `peerKey`), so this
-    // one write cannot be deferred until after the invitation validates. To
-    // keep an unverified, caller-supplied locator from repointing an existing
-    // correspondent's dialing addresses (`addPeerInfo` replaces a known peer
-    // whose addresses differ), register a peer only when we do not already know
-    // it, and never with an empty address list: the accept path may ADD a
-    // route, never REDIRECT or blank one. A genuine invitation from an
-    // already-known peer already has a usable route.
+    // one write cannot be deferred until after the invitation validates the way
+    // the agent-key write below is. To keep an unverified, caller-supplied
+    // locator from repointing an existing correspondent's dialing addresses
+    // (`addPeerInfo` replaces a known peer whose addresses differ), register a
+    // peer only when we do not already know it, and never with an empty address
+    // list: the accept path may ADD a route, never REDIRECT or blank one. A
+    // genuine invitation from an already-known peer already has a usable route.
+    //
+    // This route is written from the unverified locator before the invitation
+    // is proven, so it is speculative: capture an undo and retract it below if
+    // `E(invitation).accept()` never proves the invitation. Without that undo a
+    // forged/unspent/replayed locator naming a not-yet-known node could
+    // durably squat that node's dialing addresses with attacker-chosen ones and
+    // pre-empt the node's legitimate owner at first contact, even though the
+    // accept as a whole throws.
+    let rollbackPeer;
     if (peerKey !== localNodeNumber) {
       const knownPeers = /** @type {KnownPeersStore} */ (
         /** @type {unknown} */ (await provideStoreController(knownPeersId))
@@ -7104,6 +7140,17 @@ const makeDaemonCore = async (
           addresses: hints,
         };
         await networkBroker.addPeerInfo(peerInfo);
+        rollbackPeer = async () => {
+          // Retract only while the entry still resolves to a route: a
+          // concurrent, genuine registration for the same node must win over
+          // this undo. `remove` drops the store entry without canceling the
+          // peer formula, matching `addPeerInfo`'s own stale-peer replacement.
+          if (knownPeers.identifyLocal(peerKey) !== undefined) {
+            await knownPeers.remove(
+              /** @type {PetName} */ (/** @type {unknown} */ (peerKey)),
+            );
+          }
+        };
       }
     }
 
@@ -7151,14 +7198,27 @@ const makeDaemonCore = async (
     // `E(invitation).accept()` is an irreversible single-use consume on the
     // inviter. Doing the fallible bind first mirrors the inviter side's "do all
     // the fallible work first, consume LAST" discipline, so a bad name can
-    // never strand a spent invitation with no local binding and no retry. The
-    // bind is a pure-local, idempotent write that does not depend on the
-    // invitation being accepted, so a subsequent `accept` failure leaves only a
-    // benign local pet-name binding that the whole-accept retry re-establishes.
-    await bindCorrespondent(remoteHandleLocator);
+    // never strand a spent invitation with no local binding and no retry.
+    //
+    // The bind installs an unverified, caller-supplied locator, so it is
+    // speculative until the invitation proves out. `bindCorrespondent` returns
+    // a rollback that restores whatever the chosen pet name held before (an
+    // existing correspondent, or nothing). If the invitation never proves out
+    // — forged, unspent, or replayed — we run that rollback (and the peer
+    // rollback) so a failed accept cannot leave a phantom binding, silently
+    // clobber a pre-existing correspondent bound under the same name, or squat
+    // a peer route: the caller sees the rejection AND its local namespace and
+    // routing state are left as they were.
+    const rollbackCorrespondent = await bindCorrespondent(remoteHandleLocator);
 
-    const invitation = await provide(invitationId, 'invitation');
-    await E(invitation).accept(handleLocator);
+    try {
+      const invitation = await provide(invitationId, 'invitation');
+      await E(invitation).accept(handleLocator);
+    } catch (error) {
+      await undoSpeculativeWrite(rollbackCorrespondent);
+      await undoSpeculativeWrite(rollbackPeer);
+      throw error;
+    }
 
     // Register the inviter's agent key so future sends addressed to that key
     // route to its daemon. Deferred until AFTER the invitation is proven and
@@ -7340,13 +7400,27 @@ const makeDaemonCore = async (
           // every pre-existing relationship with that daemon. Such an acceptor
           // is undialable across daemons anyway, so skipping the write loses
           // nothing.
+          //
+          // `guestDaemonNode` and `addresses` are parsed from the bearer
+          // `guestHandleLocator` this accept() consumes, so — exactly as on the
+          // acceptor-side `acceptInvitation` twin — register a route only for a
+          // node we do not already know, never re-addressing an existing peer.
+          // Otherwise an acceptor could name an already-known, trusted peer's
+          // node number and supply its own addresses, silently redirecting the
+          // inviter's route to that peer. The accept path may ADD a route,
+          // never REDIRECT one.
           if (addresses.length > 0) {
-            /** @type {PeerInfo} */
-            const peerInfo = {
-              node: guestDaemonNode,
-              addresses,
-            };
-            await networkBroker.addPeerInfo(peerInfo);
+            const knownPeers = /** @type {KnownPeersStore} */ (
+              /** @type {unknown} */ (await provideStoreController(knownPeersId))
+            );
+            if (knownPeers.identifyLocal(guestDaemonNode) === undefined) {
+              /** @type {PeerInfo} */
+              const peerInfo = {
+                node: guestDaemonNode,
+                addresses,
+              };
+              await networkBroker.addPeerInfo(peerInfo);
+            }
           }
         }
 

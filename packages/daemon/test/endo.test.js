@@ -4108,6 +4108,57 @@ testNeedsNodeWorker(
 );
 
 testNeedsNodeWorker(
+  'accept rolls back its speculative bind when the invitation is rejected (same daemon)',
+  async t => {
+    // The acceptor-side pet-name bind is written from the caller-supplied
+    // locator BEFORE the invitation is proven (so a bad name path cannot strand
+    // a spent invitation). A rejected accept — forged, unspent, or replayed —
+    // must therefore roll that bind back rather than leave the chosen name
+    // pointing at the unverified handle; least of all may it silently clobber a
+    // pre-existing correspondent already bound under that name.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // B binds a genuine correspondent (A's handle) under 'contact'.
+    const invAB = await E(guestA).invite('to-b');
+    await E(guestB).accept(await E(invAB).locate(), 'contact');
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' initially names A's handle",
+    );
+
+    // Produce a spent invitation from a DIFFERENT correspondent (C), so a
+    // successful clobber would be observable as C's handle replacing A's.
+    const invCB = await E(guestC).invite('to-b-2');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // Redeeming the now-spent invitation from C, reusing the name that already
+    // holds A, must reject AND leave 'contact' bound to A (not C, not stray).
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the rejected accept",
+    );
+  },
+);
+
+testNeedsNodeWorker(
   'EndoGuest transitive invite chain I -> J -> K (same daemon)',
   async t => {
     // A guest that has accepted an invitation can itself invite and accept

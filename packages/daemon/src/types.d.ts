@@ -3090,7 +3090,9 @@ export interface DaemonCore {
     invitationLocator: string;
     acceptingHandleId: FormulaIdentifier;
     acceptingNetworksDirectoryId: FormulaIdentifier;
-    bindCorrespondent: (remoteHandleLocator: string) => Promise<void>;
+    bindCorrespondent: (
+      remoteHandleLocator: string,
+    ) => Promise<(() => Promise<void>) | undefined>;
   }) => Promise<void>;
 
   formulateUnconfined: (
