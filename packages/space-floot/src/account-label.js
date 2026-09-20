@@ -18,9 +18,60 @@
  *   windows: AccountWindow[], limitReached: boolean,
  *   credits: { balance: string | null, hasCredits: boolean, unlimited: boolean } | null,
  *   resetCredits: { availableCount: number, credits: Array<{ id: string, status: string, grantedAt: string, expiresAt: string }> | null } | null,
+ *   reset?: { pending: { creditId: string | null, startedAt: string, lastAttemptAt: string, attempts: number, lastAnswer?: string } | null, last: { outcome: string, creditId: string | null, at: string } | null } | null,
  *   source: string, observedAt: string,
  * }} Account
  */
+
+/** How a settled redeem is worded. */
+const RESET_OUTCOMES = {
+  reset: 'redeemed; the windows were reset',
+  redeemed: 'redeemed',
+  alreadyRedeemed: 'had already been redeemed',
+  nothingToReset: 'nothing to reset; no credit was spent',
+  noCredit: 'no credit was available',
+  refused: 'refused by the provider; no credit was spent',
+  abandoned: 'given up while unconfirmed',
+};
+
+/**
+ * What a person can do about an account's banked resets, or null: nothing is
+ * offered where the daemon bound no admin (`reset` is absent), or where there
+ * is no credit and no redeem waiting for its answer.
+ *
+ * @param {Account} account
+ * @returns {{ key: string, label: string, pending: boolean, confirm: string, abandon: { label: string, confirm: string } | null } | null}
+ */
+export const accountRedeem = account => {
+  if (!account.reset) return null;
+  const key = account.key || account.backendId;
+  const name = account.label
+    ? `${account.title || account.backendId} (${account.label})`
+    : account.title || account.backendId;
+  if (account.reset.pending) {
+    return {
+      key,
+      label: 'Ask again',
+      pending: true,
+      confirm: `Ask ${name} again about the unconfirmed redeem? It is the same request, so it cannot spend a second reset, but it may be the one that spends the first.`,
+      // The way out when the provider will never say.
+      abandon: {
+        label: 'Give up',
+        confirm: `Give up on the unconfirmed redeem of ${name}? If it was in fact accepted, a redeem you make afterwards spends a second reset.`,
+      },
+    };
+  }
+  if (!account.resetCredits || account.resetCredits.availableCount <= 0) {
+    return null;
+  }
+  return {
+    key,
+    label: 'Redeem a reset',
+    pending: false,
+    confirm: `Spend one banked reset of ${name}? It clears the rate-limit windows now and cannot be undone.`,
+    abandon: null,
+  };
+};
 
 /**
  * The accounts a session can be served from: the one it is pinned to, or
@@ -176,7 +227,7 @@ const provenance = (observedAt, source, nowMs) => {
  *
  * @param {Account[] | undefined} accounts
  * @param {number} nowMs
- * @returns {Array<{ id: string, title: string, rows: Array<[string, string]> }>}
+ * @returns {Array<{ id: string, title: string, rows: Array<[string, string]>, redeem: ReturnType<typeof accountRedeem> }>}
  */
 export const accountSections = (accounts, nowMs) =>
   (accounts ?? []).map(account => {
@@ -224,11 +275,36 @@ export const accountSections = (accounts, nowMs) =>
         }`,
       ]);
     }
+    const ago = (/** @type {string} */ at) => {
+      const ms = Date.parse(at);
+      return Number.isFinite(ms) && ms <= nowMs
+        ? ` ${formatSpan(nowMs - ms)} ago`
+        : '';
+    };
+    if (account.reset?.pending) {
+      rows.push([
+        'Redeem',
+        account.reset.pending.lastAnswer === 'refused'
+          ? `unconfirmed: the last ask${ago(account.reset.pending.lastAttemptAt)} was refused, but an earlier one may have been accepted`
+          : `unconfirmed: asked${ago(account.reset.pending.lastAttemptAt)} and no answer came back`,
+      ]);
+    } else if (account.reset?.last) {
+      const { outcome, at } = account.reset.last;
+      rows.push([
+        'Last redeem',
+        `${
+          RESET_OUTCOMES[
+            /** @type {keyof typeof RESET_OUTCOMES} */ (outcome)
+          ] || 'answered in words this does not know'
+        }${ago(at)}`,
+      ]);
+    }
     rows.push([
       'Figures',
       provenance(account.observedAt, account.source, nowMs),
     ]);
     return {
+      redeem: accountRedeem(account),
       id: account.key || account.backendId,
       // A backend with several subscriptions is told apart by their labels.
       title: account.label

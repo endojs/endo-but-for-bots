@@ -1960,3 +1960,94 @@ test.serial(
     t.is(daemon.accountRefreshes(), 0);
   },
 );
+
+test.serial(
+  'a banked reset is redeemed only when a person presses and confirms',
+  async t => {
+    const account = reset => ({
+      key: 'codex:work',
+      backendId: 'codex',
+      subscriptionId: 'work',
+      label: 'Work',
+      title: 'Codex',
+      plan: {
+        planId: 'pro',
+        title: 'Pro',
+        state: 'active',
+        source: 'observed',
+      },
+      windows: [],
+      limitReached: true,
+      credits: null,
+      resetCredits: { availableCount: 1, credits: null },
+      reset,
+      source: 'observed',
+      observedAt: new Date().toISOString(),
+    });
+    let daemon;
+    const { parent } = await setup(t, 1, false, made => {
+      daemon = made;
+      made.setAccounts([account({ pending: null, last: null })]);
+    });
+    parent
+      .querySelector('[aria-label="Settings & transcription"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    const button = text =>
+      /** @type {HTMLButtonElement | undefined} */ (
+        [...parent.querySelectorAll('button')].find(
+          candidate => candidate.textContent === text,
+        )
+      );
+    await waitFor(() => button('Redeem a reset'));
+    t.deepEqual(daemon.redeems(), []);
+
+    // Declined at the question: nothing is asked of the daemon.
+    const questions = [];
+    const confirmBefore = testWindow.confirm;
+    t.teardown(() => {
+      testWindow.confirm = confirmBefore;
+    });
+    testWindow.confirm = question => {
+      questions.push(question);
+      return false;
+    };
+    button('Redeem a reset')?.click();
+    await tick();
+    t.deepEqual(daemon.redeems(), []);
+    t.regex(questions[0], /Spend one banked reset of Codex \(Work\)/);
+
+    testWindow.confirm = () => true;
+    daemon.failRedeems('Reset credit redeem is unconfirmed');
+    button('Redeem a reset')?.click();
+    await waitFor(() =>
+      (
+        parent.querySelector('.floot-settings-note')?.textContent || ''
+      ).includes('unconfirmed'),
+    );
+    // A redeem, and said to be one: never a replay.
+    t.deepEqual(daemon.redeems(), [{ key: 'codex:work' }]);
+
+    // The daemon says a redeem is pending: the button asks again instead.
+    daemon.setAccounts([
+      account({
+        pending: {
+          creditId: null,
+          startedAt: new Date().toISOString(),
+          lastAttemptAt: new Date().toISOString(),
+          attempts: 1,
+        },
+        last: null,
+      }),
+    ]);
+    await waitFor(() => button('Ask again'));
+    daemon.failRedeems('');
+    button('Ask again')?.click();
+    await waitFor(() => daemon.redeems().length === 2);
+    // Asking again says so, so the daemon can never take it for a new redeem.
+    t.deepEqual(daemon.redeems()[1], { key: 'codex:work', replay: true });
+    button('Give up')?.click();
+    await waitFor(() => daemon.redeems().length === 3);
+    t.deepEqual(daemon.redeems()[2], { key: 'codex:work', abandon: true });
+    t.is(daemon.accountRefreshes(), 0);
+  },
+);

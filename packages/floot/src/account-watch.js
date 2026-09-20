@@ -43,6 +43,9 @@ import { makeLatestTopic } from '@endo/hosted-agent/latest-topic.js';
  * @property {boolean} limitReached
  * @property {{ balance: string | null, hasCredits: boolean, unlimited: boolean } | null} credits
  * @property {{ availableCount: number, credits: Array<{ id: string, status: string, grantedAt: string, expiresAt: string }> | null } | null} resetCredits
+ * @property {{ pending: { creditId: string | null, startedAt: string, lastAttemptAt: string, attempts: number, lastAnswer: string } | null, last: { outcome: string, creditId: string | null, at: string } | null } | null} reset
+ *   Present when an operator can redeem a banked reset here: a redeem whose
+ *   answer is not known, and the last one that was settled.
  * @property {string} source observed | declared | remembered | unavailable
  * @property {string} observedAt
  */
@@ -54,9 +57,10 @@ const text = value =>
 /**
  * @param {{ backendId: string, title: string, key?: string, subscriptionId?: string, label?: string }} backend
  * @param {any} snapshot `{ plan, rateLimits, rateCard }` from an oracle
+ * @param {any} [reset] the subscription admin's `getResetState()`, if any
  * @returns {AccountView}
  */
-export const projectAccount = (backend, snapshot) => {
+export const projectAccount = (backend, snapshot, reset) => {
   const plan = snapshot?.plan ?? {};
   const limits = snapshot?.rateLimits ?? {};
   const windows = Array.isArray(limits.windows) ? limits.windows : [];
@@ -111,6 +115,30 @@ export const projectAccount = (backend, snapshot) => {
             : null,
         }
       : null,
+    reset:
+      reset && typeof reset === 'object'
+        ? {
+            pending: reset.pending
+              ? {
+                  creditId: text(reset.pending.creditId),
+                  startedAt: `${reset.pending.startedAt ?? ''}`,
+                  lastAttemptAt: `${reset.pending.lastAttemptAt ?? ''}`,
+                  attempts: Number(reset.pending.attempts) || 1,
+                  lastAnswer:
+                    reset.pending.lastAnswer === 'refused'
+                      ? 'refused'
+                      : 'unknown',
+                }
+              : null,
+            last: reset.last
+              ? {
+                  outcome: `${reset.last.outcome}`,
+                  creditId: text(reset.last.creditId),
+                  at: `${reset.last.at ?? ''}`,
+                }
+              : null,
+          }
+        : null,
     source: `${limits.source ?? 'unavailable'}`,
     observedAt: `${limits.observedAt ?? ''}`,
   });
@@ -121,7 +149,11 @@ harden(projectAccount);
  * One account oracle to follow. `key` tells a backend's subscriptions apart;
  * a backend over one credential has none and is keyed by its id.
  *
- * @typedef {{ backendId: string, title: string, oracle: any, key?: string, subscriptionId?: string, label?: string }} OracleEntry
+ * `admin` is the subscription's admin where the provider banks rate-limit
+ * resets; it is asked for its state (which calls no provider) and, when an
+ * operator says so, to redeem.
+ *
+ * @typedef {{ backendId: string, title: string, oracle: any, admin?: any, key?: string, subscriptionId?: string, label?: string }} OracleEntry
  */
 
 /**
@@ -151,6 +183,12 @@ export const makeAccountsWatch = ({
   /** @type {Map<string, { retryMs: number, logged: boolean, pending: boolean }>} */
   const outages = new Map();
   let reconciling = Promise.resolve();
+  /** @type {Map<string, { entry: OracleEntry, snapshot: any }>} */
+  const held = new Map();
+  /** @type {Map<string, any>} account key to its subscription admin */
+  const admins = new Map();
+  /** @type {Map<string, any>} account key to the admin's last reset state */
+  const resets = new Map();
 
   const publish = () =>
     topic.publish(
@@ -161,6 +199,33 @@ export const makeAccountsWatch = ({
         ),
       }),
     );
+
+  /**
+   * Ask an account's admin where its redeems stand, and tell the views if
+   * that changed. From the admin's memory and the broker's: no provider call.
+   *
+   * @param {string} key
+   */
+  const readReset = async key => {
+    const admin = admins.get(key);
+    if (admin === undefined) return;
+    /** @type {any} */
+    let state;
+    try {
+      state = await E(admin).getResetState();
+    } catch (_error) {
+      // An admin that cannot answer leaves what was known standing.
+      return;
+    }
+    if (admins.get(key) !== admin) return;
+    const before = JSON.stringify(resets.get(key) ?? null);
+    resets.set(key, state);
+    const last = held.get(key);
+    if (last !== undefined && JSON.stringify(state) !== before) {
+      accounts.set(key, projectAccount(last.entry, last.snapshot, state));
+      publish();
+    }
+  };
 
   /** @param {OracleEntry} entry */
   const follow = entry => {
@@ -177,8 +242,11 @@ export const makeAccountsWatch = ({
             return;
           }
           outages.delete(key);
-          accounts.set(key, projectAccount(entry, snapshot));
+          held.set(key, { entry, snapshot });
+          accounts.set(key, projectAccount(entry, snapshot, resets.get(key)));
           publish();
+          // A reading can settle a pending redeem (the credit reads redeemed).
+          void readReset(key);
         }
       } catch (error) {
         const outage = outages.get(key);
@@ -235,10 +303,22 @@ export const makeAccountsWatch = ({
           }
         }
         for (const key of [...accounts.keys()]) {
-          if (!kept(key)) accounts.delete(key);
+          if (!kept(key)) {
+            accounts.delete(key);
+            held.delete(key);
+            admins.delete(key);
+            resets.delete(key);
+          }
         }
         for (const entry of entries) {
           const key = keyOf(entry);
+          if (entry.admin === undefined) {
+            admins.delete(key);
+            resets.delete(key);
+          } else if (admins.get(key) !== entry.admin) {
+            admins.set(key, entry.admin);
+            void readReset(key);
+          }
           const outage = outages.get(key);
           if (following.get(key) !== entry.oracle && !outage?.pending) {
             follow(entry);
@@ -276,6 +356,44 @@ export const makeAccountsWatch = ({
             ),
         ),
       );
+      await Promise.all([...admins.keys()].map(readReset));
+    },
+    /**
+     * Spend one banked rate-limit reset of an account. A person asked: this
+     * is the only path here that can, and nothing calls it on its own.
+     *
+     * @param {string} key
+     * @param {{ creditId?: string, replay?: boolean }} [options]
+     */
+    redeemReset: async (key, options = {}) => {
+      await reconcile();
+      const admin = admins.get(key);
+      if (admin === undefined) {
+        throw Error(`No banked reset can be redeemed for ${key}`);
+      }
+      try {
+        return await E(admin).consumeResetCredit(harden({ ...options }));
+      } finally {
+        // Settled, refused or unconfirmed: the views are told which.
+        await readReset(key);
+      }
+    },
+    /**
+     * Give an account's unconfirmed redeem up. A person asked.
+     *
+     * @param {string} key
+     */
+    abandonReset: async key => {
+      await reconcile();
+      const admin = admins.get(key);
+      if (admin === undefined) {
+        throw Error(`No banked reset can be redeemed for ${key}`);
+      }
+      try {
+        return await E(admin).abandonResetIntent();
+      } finally {
+        await readReset(key);
+      }
     },
     close: () => {
       following.clear();

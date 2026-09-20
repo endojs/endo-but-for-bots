@@ -3,6 +3,7 @@ import test from 'ava';
 
 import {
   accountBlocked,
+  accountRedeem,
   accountChip,
   accountSections,
   accountsOfSession,
@@ -87,6 +88,8 @@ test('the panel words each window, credits, banked resets and the age of the fig
         ['Banked resets', '2, the first expires in 5d'],
         ['Figures', 'as of 3m ago'],
       ],
+      // No admin is bound for this account: nothing is offered.
+      redeem: null,
     },
   ]);
   t.deepEqual(accountSections(undefined, NOW), []);
@@ -240,4 +243,103 @@ test('a session shows the account it is pinned to, or every account of its backe
       ['codex:home', 'Codex — Home Plus'],
     ],
   );
+});
+
+test('a redeem is offered where there is an admin and a credit, and asks again while one is unconfirmed', t => {
+  t.is(accountRedeem(codex), null);
+  const idle = { ...codex, reset: { pending: null, last: null } };
+  t.like(accountRedeem(idle), {
+    key: 'codex',
+    label: 'Redeem a reset',
+    pending: false,
+  });
+  t.regex(accountRedeem(idle)?.confirm || '', /cannot be undone/);
+  t.is(
+    accountRedeem({
+      ...idle,
+      resetCredits: { availableCount: 0, credits: [] },
+    }),
+    null,
+  );
+  t.is(accountRedeem({ ...idle, resetCredits: null }), null);
+
+  const pending = {
+    ...codex,
+    key: 'codex:work',
+    label: 'Work',
+    resetCredits: { availableCount: 0, credits: [] },
+    reset: {
+      pending: {
+        creditId: 'credit-1',
+        startedAt: '2026-09-20T11:50:00.000Z',
+        lastAttemptAt: '2026-09-20T11:55:00.000Z',
+        attempts: 2,
+      },
+      last: null,
+    },
+  };
+  // Even with no credit showing: the unconfirmed one may be why.
+  t.like(accountRedeem(pending), {
+    key: 'codex:work',
+    label: 'Ask again',
+    pending: true,
+  });
+  t.regex(accountRedeem(pending)?.confirm || '', /cannot spend a second/);
+  // Giving up is offered only while one is unconfirmed, and says what it costs.
+  t.is(accountRedeem(idle)?.abandon, null);
+  t.is(accountRedeem(pending)?.abandon?.label, 'Give up');
+  t.regex(accountRedeem(pending)?.abandon?.confirm || '', /spends a second/);
+  t.deepEqual(
+    accountSections(
+      [
+        {
+          ...pending,
+          reset: {
+            ...pending.reset,
+            pending: { ...pending.reset.pending, lastAnswer: 'refused' },
+          },
+        },
+      ],
+      NOW,
+    )[0].rows.find(([label]) => label === 'Redeem'),
+    [
+      'Redeem',
+      'unconfirmed: the last ask 5m ago was refused, but an earlier one may have been accepted',
+    ],
+  );
+  const [section] = accountSections([pending], NOW);
+  t.deepEqual(
+    section.rows.find(([label]) => label === 'Redeem'),
+    ['Redeem', 'unconfirmed: asked 5m ago and no answer came back'],
+  );
+
+  const settled = outcome =>
+    accountSections(
+      [
+        {
+          ...codex,
+          reset: {
+            pending: null,
+            last: { outcome, creditId: null, at: '2026-09-20T11:00:00.000Z' },
+          },
+        },
+      ],
+      NOW,
+    )[0].rows.find(([label]) => label === 'Last redeem');
+  t.deepEqual(settled('reset'), [
+    'Last redeem',
+    'redeemed; the windows were reset 1h ago',
+  ]);
+  t.deepEqual(settled('refused'), [
+    'Last redeem',
+    'refused by the provider; no credit was spent 1h ago',
+  ]);
+  t.deepEqual(settled('abandoned'), [
+    'Last redeem',
+    'given up while unconfirmed 1h ago',
+  ]);
+  t.deepEqual(settled('<b>new</b>'), [
+    'Last redeem',
+    'answered in words this does not know 1h ago',
+  ]);
 });

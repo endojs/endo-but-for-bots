@@ -141,6 +141,7 @@ export {};
  *   unavailable?: boolean,
  *   usage: import('./usage-label.js').UsageView | null,
  *   accounts?: import('./account-label.js').Account[],
+ *   accountAction?: { key: string, busy: boolean, message: string, error: boolean } | null,
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
  * }} FlootState
@@ -159,6 +160,7 @@ export {};
  * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
+ * @property {(key: string, confirm: string, action?: 'redeem' | 'replay' | 'abandon') => void} [redeemAccountReset] Spend one banked rate-limit reset of that account, ask again about an unconfirmed redeem, or give it up, after the person confirms.
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
  * @property {() => void} toggleTts
