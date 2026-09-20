@@ -72,6 +72,13 @@ export const makeProviderPipe = ({
     send,
     bootstrap,
     {
+      // Without this CapTP never tells its peer that a question or an import
+      // is no longer held, and each side keeps every answer it ever gave for
+      // the life of the pipe — for a response stream, every chunk. Measured
+      // over a 16 MB response the broker's heap grew by the size of what it
+      // streamed and a 256 MB listener died after a few hundred megabytes. It
+      // takes both ends: the listener's half arrives with its next image.
+      gcImports: true,
       onReject: (_reason, context) => {
         // Application rejections are delivered to the caller, which can turn
         // them into an HTTP error. They must not tear down the shared listener.

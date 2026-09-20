@@ -3,8 +3,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { Fail } from '@endo/errors';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
+  RESPONSE_CHUNK_BYTES,
   makeBrokerOAuthCredential,
   makeProviderBrokerGrant,
 } from '../src/provider-broker.js';
@@ -2117,4 +2119,184 @@ test('a mark fences exchanging, not using a credential that is still good', asyn
     { message: /Broker credential consumed/ },
   );
   t.is(record.exchanges.length, 0);
+});
+
+const collectBytes = async reader => {
+  const parts = [];
+  for await (const bytes of reader) parts.push(bytes);
+  return parts;
+};
+
+test('the bytes stream is the text stream, read ahead of, with the screen beneath it', async t => {
+  const input = ['hello 😀', ' world!', 'x'.repeat(25)];
+  const lease = streamingSetup([...input]);
+  const response = await E(lease.endpoint).requestByteStream(request);
+  t.is(response.status, 200);
+  t.is(response.contentType, 'application/json');
+  // A consumer that reads well ahead gets the same bytes, in order.
+  const parts = await collectBytes(
+    iterateBytesReader(response.reader, { buffer: 64 }),
+  );
+  t.true(parts.every(part => part instanceof Uint8Array));
+  const joined = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    joined.set(part, offset);
+    offset += part.length;
+  }
+  t.is(new TextDecoder().decode(joined), input.join(''));
+
+  // The credential split across chunks is still caught before its prefix is
+  // disclosed: the screen works on text, beneath the byte encoding.
+  const leaky = streamingSetup([
+    `${'safe-prefix '.repeat(2)}canary-`,
+    'secret',
+  ]);
+  const leakyResponse = await E(leaky.endpoint).requestByteStream(request);
+  const seen = [];
+  await t.throwsAsync(async () => {
+    for await (const bytes of iterateBytesReader(leakyResponse.reader, {
+      buffer: 64,
+    })) {
+      seen.push(new TextDecoder().decode(bytes));
+    }
+  });
+  t.false(seen.join('').includes('canary'));
+});
+
+test('a bytes chunk has a ceiling, whatever the upstream sent at once', async t => {
+  // Over the response quota of the shared policy, so use a roomier one.
+  const big = 'y'.repeat(RESPONSE_CHUNK_BYTES * 2 + 10);
+  let cancelled = false;
+  const chunks = [big];
+  const lease = makeProviderBrokerGrant(
+    harden({ ...policy, maxResponseBytes: 1_000_000n }),
+    {
+      secret: Far('secret', { readBase64: async () => btoa(credential) }),
+      transport: Far('transport', {
+        request: async () => harden({ status: 200, body: '' }),
+        requestStream: async () =>
+          harden({
+            status: 200,
+            reader: Far('reader', {
+              next: async () => {
+                const value = chunks.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {
+                cancelled = true;
+              },
+            }),
+          }),
+      }),
+    },
+  );
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const parts = await collectBytes(
+    iterateBytesReader(response.reader, { buffer: 64 }),
+  );
+  t.true(parts.length >= 3);
+  const largest = Math.max(...parts.map(part => part.length));
+  t.true(largest <= Number(RESPONSE_CHUNK_BYTES));
+  t.is(
+    parts.reduce((n, part) => n + part.length, 0),
+    big.length,
+  );
+  t.false(cancelled);
+});
+
+test('closing the bytes stream while the upstream is quiet cancels the upstream', async t => {
+  let cancelled = false;
+  /** @type {(value: any) => void} */
+  let release = () => {};
+  const lease = makeProviderBrokerGrant(policy, {
+    secret: Far('secret', { readBase64: async () => btoa(credential) }),
+    transport: Far('transport', {
+      request: async () => harden({ status: 200, body: '' }),
+      requestStream: async () =>
+        harden({
+          status: 200,
+          reader: Far('reader', {
+            // Never answers on its own: a model that is thinking.
+            next: () =>
+              new Promise(resolve => {
+                release = resolve;
+              }),
+            return() {
+              cancelled = true;
+              release(harden({ done: true, value: '' }));
+            },
+          }),
+        }),
+    }),
+  });
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 64 });
+  const waiting = reader.next();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  // The pull is parked on a quiet upstream. Closing must not wait for it,
+  // must end the consumer's read cleanly, and must cancel the upstream.
+  t.false(cancelled);
+  await reader.return?.(undefined);
+  t.true((await waiting).done);
+  t.true(cancelled);
+});
+
+test('a revoked grant delivers nothing more over the bytes stream, not even what was already cut', async t => {
+  // One upstream chunk cut into several pieces: the pieces wait in the
+  // wrapper, where the screened reader's own liveness check does not reach.
+  const big = 'z'.repeat(RESPONSE_CHUNK_BYTES * 4);
+  const chunks = [big];
+  let cancelled = false;
+  const lease = makeProviderBrokerGrant(
+    harden({ ...policy, maxResponseBytes: 1_000_000n }),
+    {
+      secret: Far('secret', { readBase64: async () => btoa(credential) }),
+      transport: Far('transport', {
+        request: async () => harden({ status: 200, body: '' }),
+        requestStream: async () =>
+          harden({
+            status: 200,
+            reader: Far('reader', {
+              next: async () => {
+                const value = chunks.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {
+                cancelled = true;
+              },
+            }),
+          }),
+      }),
+    },
+  );
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 0 });
+  const first = await reader.next();
+  t.false(first.done);
+  await E(lease.admin).revoke();
+  const error = await t.throwsAsync(() => reader.next());
+  t.is(error.message, 'Provider request failed');
+  t.true(cancelled);
+});
+
+test('the bytes stream is bound by the response quota like the text stream', async t => {
+  const lease = streamingSetup(['x'.repeat(101)]);
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 64 });
+  await t.throwsAsync(
+    async () => {
+      for await (const _bytes of reader) {
+        // drain
+      }
+    },
+    { message: /Provider request failed/ },
+  );
+  t.true(lease.cancelled());
 });

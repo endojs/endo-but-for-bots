@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { request as httpRequest } from 'node:http';
 
 import { makeProviderHttpListener } from '../src/provider-http.js';
@@ -440,3 +441,95 @@ test.serial('HTTP masks upstream exceptions', async t => {
   t.is(response.statusCode, 502);
   t.is(await readHttpText(response), 'Inference request failed');
 });
+
+test.serial(
+  'an endpoint with a bytes stream is read ahead of, and the body arrives whole',
+  async t => {
+    t.timeout(5000);
+    const text = ['data: one\n\n', 'data: two 😀\n\n', 'data: [DONE]\n\n'];
+    const calls = [];
+    let pulls = 0;
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('endpoint with bytes', {
+        requestStream() {
+          calls.push('requestStream');
+          throw Error('the text reader must not be used');
+        },
+        requestByteStream(message) {
+          calls.push('requestByteStream');
+          t.is(message.method, 'POST');
+          const encoder = new TextEncoder();
+          const source = (async function* chunks() {
+            for (const part of text) {
+              pulls += 1;
+              yield encoder.encode(part);
+            }
+          })();
+          return harden({
+            status: 200,
+            contentType: 'text/event-stream',
+            reader: bytesReaderFromIterator(source),
+          });
+        },
+      }),
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(response.statusCode, 200);
+    t.is(response.headers['content-type'], 'text/event-stream');
+    t.is(await readHttpText(response), text.join(''));
+    t.deepEqual(calls, ['requestByteStream']);
+    t.is(pulls, text.length);
+    // The endpoint is asked what it offers once, not per request.
+    const again = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(await readHttpText(again), text.join(''));
+    t.deepEqual(calls, ['requestByteStream', 'requestByteStream']);
+  },
+);
+
+test.serial(
+  'an endpoint from before the bytes stream is still served, one chunk per call',
+  async t => {
+    t.timeout(5000);
+    const parts = ['alpha ', 'beta'];
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('endpoint without bytes', {
+        requestStream() {
+          const queue = [...parts];
+          return harden({
+            status: 200,
+            contentType: 'application/json',
+            reader: Far('reader', {
+              next: async () => {
+                const value = queue.shift();
+                return harden({
+                  done: value === undefined,
+                  value: value ?? '',
+                });
+              },
+              return() {},
+            }),
+          });
+        },
+      }),
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    t.is(response.statusCode, 200);
+    t.is(await readHttpText(response), parts.join(''));
+  },
+);

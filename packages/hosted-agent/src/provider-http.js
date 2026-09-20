@@ -2,6 +2,7 @@
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { createServer } from 'node:http';
 
 import {
@@ -12,6 +13,19 @@ import {
 
 /** @import { Socket } from 'node:net' */
 /** @import { IncomingMessage, ServerResponse } from 'node:http' */
+
+/**
+ * How far ahead of the HTTP consumer the listener reads a bytes response. On
+ * the pipe to a broker on the same host it costs nothing; across a network to
+ * a peer's broker it is what keeps a token stream from paying a round trip
+ * per chunk.
+ */
+const RESPONSE_READ_AHEAD = 64;
+/**
+ * The base64 of the largest chunk a broker sends (`RESPONSE_CHUNK_BYTES`,
+ * 32 KiB), with room to spare: a chunk past this is not one a broker made.
+ */
+const MAX_BASE64_CHUNK_CHARS = 65_536;
 
 /**
  * @typedef {object} ProviderHttpDiagnostic
@@ -91,6 +105,20 @@ export const makeProviderHttpListener = async ({
   clientAuthorization === 'reject' ||
     clientAuthorization === 'strip' ||
     Fail`Invalid client authorization mode`;
+  // Whether the endpoint offers the bytes stream, asked once. An endpoint
+  // that cannot say is one that does not.
+  /** @type {Promise<boolean> | undefined} */
+  let byteStreams;
+  const offersByteStream = () => {
+    byteStreams ??= Promise.resolve(
+      // eslint-disable-next-line no-underscore-dangle
+      E(endpoint).__getMethodNames__(),
+    ).then(
+      names => Array.isArray(names) && names.includes('requestByteStream'),
+      () => false,
+    );
+    return byteStreams;
+  };
   /** @type {Set<Socket>} */
   const sockets = new Set();
   /** @type {Set<() => void>} */
@@ -134,14 +162,13 @@ export const makeProviderHttpListener = async ({
       return;
     }
     let stopped = false;
-    let reader;
+    /** Close whichever kind of response reader is open. */
+    /** @type {(() => void) | undefined} */
+    let closeReader;
     const stop = () => {
       if (stopped) return;
       stopped = true;
-      if (reader)
-        void E(reader)
-          .return()
-          .catch(() => {});
+      if (closeReader) closeReader();
     };
     pending.add(stop);
     response.once('close', stop);
@@ -180,20 +207,34 @@ export const makeProviderHttpListener = async ({
       parts.push(decoder.decode());
       !stopped || Fail`HTTP consumer disconnected`;
       stage = 'endpoint';
-      const result = await E(endpoint).requestStream(
-        harden({
-          method: 'POST',
-          path: request.url,
-          body: parts.join(''),
-          headers: forwardableHeaders(request.headers),
-        }),
-      );
-      reader = result.reader;
+      const message = harden({
+        method: 'POST',
+        path: request.url,
+        body: parts.join(''),
+        headers: forwardableHeaders(request.headers),
+      });
+      // The bytes stream when the endpoint has one, read ahead of so a
+      // response over a slow link does not pay a round trip per chunk; the
+      // text reader, one call per chunk, when it does not (a broker from
+      // before it). Asked before the last look at the consumer, not after:
+      // a client that went away while this was being learned must not have a
+      // metered request dispatched for it.
+      const byBytes = await offersByteStream();
+      !stopped || Fail`HTTP consumer disconnected`;
+      const result = await (byBytes
+        ? E(endpoint).requestByteStream(message)
+        : E(endpoint).requestStream(message));
+      // Until the response is known to be one worth streaming, closing it is
+      // a call on the reader itself; the bytes stream is not opened, with its
+      // read-ahead, for a response that is about to be refused.
+      const { reader } = result;
+      closeReader = () =>
+        void E(reader)
+          [byBytes ? 'close' : 'return']()
+          .catch(() => {});
       stage = 'response';
       if (stopped) {
-        void E(reader)
-          .return()
-          .catch(() => {});
+        closeReader();
         return;
       }
       /** @type {unknown} */
@@ -206,6 +247,26 @@ export const makeProviderHttpListener = async ({
           result.contentType,
         )) ||
         Fail`Invalid inference response`;
+      /** @type {{ next: () => Promise<IteratorResult<Uint8Array | string>> }} */
+      let chunks;
+      if (byBytes) {
+        const bytesIterator = iterateBytesReader(reader, {
+          buffer: RESPONSE_READ_AHEAD,
+          stringLengthLimit: MAX_BASE64_CHUNK_CHARS,
+        });
+        chunks = bytesIterator;
+        closeReader = () =>
+          void Promise.resolve(bytesIterator.return?.(undefined)).catch(
+            () => {},
+          );
+      } else {
+        chunks = harden({ next: () => E(reader).next() });
+      }
+      // The consumer may have gone while the stream was being opened.
+      if (stopped) {
+        closeReader();
+        return;
+      }
       response.writeHead(status, {
         'content-type': result.contentType,
         'cache-control': 'no-store',
@@ -219,13 +280,19 @@ export const makeProviderHttpListener = async ({
       let responseBytes = 0n;
       for (;;) {
         // eslint-disable-next-line no-await-in-loop
-        const chunk = await E(reader).next();
+        const chunk = await chunks.next();
         !stopped || Fail`HTTP consumer disconnected`;
         if (chunk.done) break;
-        typeof chunk.value === 'string' || Fail`Invalid inference chunk`;
-        responseBytes += BigInt(new TextEncoder().encode(chunk.value).length);
+        const { value } = chunk;
+        (byBytes ? value instanceof Uint8Array : typeof value === 'string') ||
+          Fail`Invalid inference chunk`;
+        responseBytes += BigInt(
+          typeof value === 'string'
+            ? new TextEncoder().encode(value).length
+            : value.byteLength,
+        );
         responseBytes <= maxResponseBytes || Fail`Response too large`;
-        if (!response.write(chunk.value)) {
+        if (!response.write(value)) {
           // Stop pulling upstream while TCP applies backpressure.
           // eslint-disable-next-line no-await-in-loop
           await new Promise((resolve, reject) => {

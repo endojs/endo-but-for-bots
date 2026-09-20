@@ -3,6 +3,7 @@
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { M } from '@endo/patterns';
 
 import {
@@ -507,6 +508,99 @@ export const makeBrokerOAuthCredential = ({
 };
 harden(makeBrokerOAuthCredential);
 
+/** The largest chunk a bytes response stream carries. */
+export const RESPONSE_CHUNK_BYTES = 32_768;
+harden(RESPONSE_CHUNK_BYTES);
+
+/**
+ * A grant's screened text reader (`next()` and `return()`, yielding strings
+ * the echo screen has passed) as a bytes exo-stream. The screen works on
+ * decoded text and cuts on character boundaries, so it stays beneath this and
+ * its output is encoded again here. Chunks are cut to `RESPONSE_CHUNK_BYTES`,
+ * which gives a consumer's read-ahead a known ceiling and its base64 string
+ * limit a number to be set from.
+ *
+ * The cut pieces of one upstream chunk wait here between pulls, and the
+ * screened reader is only consulted when they run out. `checkLive` is
+ * therefore asked before each piece too: a revoked grant delivers nothing
+ * more, including what was already cut.
+ *
+ * `RESPONSE_CHUNK_BYTES` may not grow past 49,152: a listener checks each
+ * base64 chunk against a 65,536-character limit compiled into its image, and
+ * the images deployed are the operator's to replace.
+ *
+ * @param {any} screened
+ * @param {() => void} checkLive throws once the grant may deliver no more
+ */
+const makeScreenedBytesReader = (screened, checkLive) => {
+  const encoder = new TextEncoder();
+  /** @type {Uint8Array[]} */
+  const queued = [];
+  let ended = false;
+  // Set only by this reader's own close. A pull that rejects for any other
+  // reason is a failure and is reported as one.
+  let closedByConsumer = false;
+  const source = harden({
+    next: async () => {
+      await null;
+      for (;;) {
+        if (queued.length > 0) {
+          try {
+            checkLive();
+          } catch (_error) {
+            queued.length = 0;
+            ended = true;
+            // The same wording every other failure of this grant has.
+            throw Fail`Provider request failed`;
+          }
+          return harden({ done: false, value: queued.shift() });
+        }
+        if (ended) return harden({ done: true, value: undefined });
+        let chunk;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          chunk = await E(screened).next();
+        } catch (error) {
+          // The consumer closed while this pull was parked, and the cancelled
+          // upstream read rejected: that is the close, not a failure.
+          if (closedByConsumer) return harden({ done: true, value: undefined });
+          throw error;
+        }
+        if (chunk.done) {
+          ended = true;
+        } else {
+          const bytes = encoder.encode(chunk.value);
+          for (
+            let offset = 0;
+            offset < bytes.byteLength;
+            offset += RESPONSE_CHUNK_BYTES
+          ) {
+            queued.push(bytes.subarray(offset, offset + RESPONSE_CHUNK_BYTES));
+          }
+        }
+      }
+    },
+    return: async () => {
+      closedByConsumer = true;
+      ended = true;
+      queued.length = 0;
+      await E(screened).return();
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]: () => source,
+  });
+  return bytesReaderFromIterator(/** @type {any} */ (source), {
+    // A consumer that closes while the upstream is quiet must not wait for
+    // its next chunk: cancel the upstream read, which the pending pull then
+    // settles on.
+    cancelPending: () => {
+      closedByConsumer = true;
+      ended = true;
+      return E(screened).return();
+    },
+  });
+};
+
 /**
  * A bounded inference capability, not an HTTP listener or sandbox attestation.
  * The trusted transport MUST enforce redirect:'error' before following any
@@ -688,6 +782,17 @@ export const makeProviderBrokerGrant = (
           { headers: M.recordOf(M.string(), M.string()) },
         ),
       ).returns(M.promise()),
+
+      requestByteStream: M.call(
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
+      ).returns(M.promise()),
     }),
     {
       /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
@@ -697,6 +802,32 @@ export const makeProviderBrokerGrant = (
       /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async requestStream(request) {
         return perform(request, true);
+      },
+      /**
+       * The same response as `requestStream`, as a bytes exo-stream: a reader
+       * that a consumer may read ahead of (`iterateBytesReader(reader, {
+       * buffer })`), so a response crossing a slow link does not pay a round
+       * trip per chunk. `requestStream` stays, because the listener is an
+       * image pinned by the operator and an older one knows only that.
+       *
+       * What the producer holds for a consumer that reads ahead is bounded by
+       * the response byte limit and not by the consumer's read-ahead: in
+       * exo-stream the consumer grants credit, and one that grants a great
+       * deal and reads nothing makes the producer drain the upstream at once.
+       * That costs at most `maxResponseBytes`, a third more in base64, per
+       * open response, and `maxConcurrentRequests` of those per grant. Over
+       * the private pipe the pipe's own queue bound trips first and closes
+       * that consumer's pipe alone.
+       *
+       * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
+       */
+      async requestByteStream(request) {
+        const { status, reader, contentType } = await perform(request, true);
+        return harden({
+          status,
+          contentType,
+          reader: makeScreenedBytesReader(reader, checkLive),
+        });
       },
     },
   );

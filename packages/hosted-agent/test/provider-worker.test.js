@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -263,3 +264,114 @@ test.serial(
     t.is(await finished, 0);
   },
 );
+
+for (const bundled of [false, true]) {
+  test.serial(
+    `a bytes response crosses the private pipe whole, read ahead of by the ${bundled ? 'bundled' : 'source'} worker`,
+    async t => {
+      t.timeout(10_000);
+      let entryPath = fileURLToPath(
+        new URL('../src/provider-worker-entry.js', import.meta.url),
+      );
+      if (bundled) {
+        // What the listener image carries: exo-stream, patterns and base64
+        // all have to survive the bundler.
+        const directory = await mkdtemp(join(tmpdir(), 'endo-worker-bundle-'));
+        t.teardown(() => rm(directory, { recursive: true, force: true }));
+        const outfile = join(directory, 'worker.mjs');
+        await build({
+          entryPoints: [entryPath],
+          bundle: true,
+          platform: 'node',
+          format: 'esm',
+          target: 'node22',
+          outfile,
+          banner: {
+            js: "import { createRequire as __endoCreateRequire } from 'node:module'; const require = __endoCreateRequire(import.meta.url);",
+          },
+          logLevel: 'silent',
+        });
+        entryPath = outfile;
+      }
+      const args =
+        process.platform === 'darwin'
+          ? [
+              '--input-type=module',
+              '-e',
+              `delete process.env.__CF_USER_TEXT_ENCODING; await import(${JSON.stringify(pathToFileURL(entryPath).href)});`,
+            ]
+          : [entryPath];
+      const worker = spawn(process.execPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          NODE_VERSION: '22.19.0',
+          YARN_VERSION: '1.22.22',
+          HOME: '/home/node',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+        },
+      });
+      let diagnostics = '';
+      worker.stderr.on('data', chunk => {
+        diagnostics += chunk;
+      });
+      const finished = new Promise(resolve => worker.once('close', resolve));
+      t.teardown(async () => {
+        worker.kill();
+        await finished;
+        if (diagnostics) t.log(diagnostics);
+      });
+      // A token stream: many small chunks.
+      const chunks = Array.from(
+        { length: 300 },
+        (_, index) => `data: token ${index} 😀\n\n`,
+      );
+      const used = [];
+      const endpoint = Far('host-only inference', {
+        requestStream() {
+          used.push('requestStream');
+          throw Fail`the text reader must not be used`;
+        },
+        requestByteStream() {
+          used.push('requestByteStream');
+          const encoder = new TextEncoder();
+          return harden({
+            status: 200,
+            contentType: 'text/event-stream',
+            reader: bytesReaderFromIterator(
+              (async function* source() {
+                for (const chunk of chunks) yield encoder.encode(chunk);
+              })(),
+            ),
+          });
+        },
+      });
+      const pipe = makeProviderPipe({
+        input: worker.stdout,
+        output: worker.stdin,
+        bootstrap: harden({
+          endpoint,
+          limits: {
+            diagnostics: false,
+            maxConnections: 2,
+            maxRequestBytes: 1024n,
+            maxResponseBytes: 1_000_000n,
+            timeoutMs: 5000,
+          },
+        }),
+      });
+      t.teardown(pipe.close);
+      const control = await pipe.getBootstrap();
+      const ready = await E(control).ready();
+      const response = await requestHttp(`${ready.endpoint}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"allowed"}',
+      });
+      t.is(response.statusCode, 200);
+      t.is(await readHttpText(response), chunks.join(''));
+      t.deepEqual(used, ['requestByteStream']);
+    },
+  );
+}
