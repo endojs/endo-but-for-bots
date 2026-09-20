@@ -7,6 +7,7 @@ import { M } from '@endo/patterns';
 
 import {
   isCredentialRejection,
+  isResponseLost,
   isSubscriptionExhaustion,
 } from './provider-broker.js';
 import {
@@ -132,8 +133,10 @@ export const makeProviderFetchTransport = ({
       /** @param {UpstreamRequest} request */
       async request(request) {
         !disposed || Fail`Provider transport disposed`;
+        let responded = false;
         try {
           const response = await E(transport).requestStream(request);
+          responded = true;
           const parts = [];
           for (;;) {
             // eslint-disable-next-line no-await-in-loop
@@ -147,6 +150,12 @@ export const makeProviderFetchTransport = ({
           // the buffering wrapper; everything else collapses.
           if (isCredentialRejection(error)) throw error;
           if (isSubscriptionExhaustion(error)) throw error;
+          // A third, for whoever charges for the request: the provider had
+          // begun to answer, or was given the whole deadline to, so the work
+          // may well have been done though nothing of it arrived.
+          if (responded || isResponseLost(error)) {
+            return Fail`Provider response lost`;
+          }
           return Fail`Provider transport failed`;
         }
       },
@@ -198,16 +207,21 @@ export const makeProviderFetchTransport = ({
         const stopped = new Promise((_, reject) => {
           rejectStopped = reject;
         });
-        /** @type {() => void} */
+        // How the response ended, for whoever accounts for it: `complete`
+        // only when the end of the body was reached. A deadline, a reset, a
+        // body that grew too large and a reader that was returned all close
+        // it too, and none of them is a response read to its end.
+        /** @type {(complete: boolean) => void} */
         let resolveClosed;
         const closed = new Promise(resolve => {
-          resolveClosed = () => resolve(undefined);
+          resolveClosed = complete => resolve(harden({ complete }));
         });
         // A deadline may fire while the caller is not pulling.
         void stopped.catch(() => {});
-        const finish = () => {
+        const finish = (complete = false) => {
           finished = true;
-          resolveClosed();
+          // The first word stands: a later call cannot make it complete.
+          resolveClosed(complete);
           pending.delete(stop);
           clearTimer(timer);
           try {
@@ -413,7 +427,7 @@ export const makeProviderFetchTransport = ({
                     Fail`Provider transport stopped`;
                   if (chunk.done) {
                     const value = decoder.decode();
-                    finish();
+                    finish(true);
                     // The decoder can emit a final value; deliver it before EOF.
                     return harden({ done: value.length === 0, value });
                   }
@@ -447,6 +461,9 @@ export const makeProviderFetchTransport = ({
           if (subscriptionExhausted) {
             return Fail`Provider subscription exhausted`;
           }
+          // And this one `isResponseLost`: the deadline passed with the
+          // request out.
+          if (stage === 'timeout') return Fail`Provider response lost`;
           return Fail`Provider transport failed`;
         }
       },

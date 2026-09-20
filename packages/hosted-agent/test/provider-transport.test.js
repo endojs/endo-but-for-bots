@@ -227,7 +227,7 @@ test('body failures and idle deadlines emit one sanitized diagnostic', async t =
   );
   t.teardown(invalid.dispose);
   await t.throwsAsync(() => E(invalid.transport).request(request), {
-    message: 'Provider transport failed',
+    message: 'Provider response lost',
   });
   const idle = setup(
     async () => new Response(new ReadableStream()),
@@ -308,7 +308,7 @@ test('streamed overflow cancels a response without content length', async t => {
   ]);
   const { transport } = setup(async () => response);
   await t.throwsAsync(() => E(transport).request(request), {
-    message: 'Provider transport failed',
+    message: 'Provider response lost',
   });
   t.true(cancelled());
   t.false(response.body?.locked);
@@ -318,7 +318,7 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
   const { response } = streamResponse([new Uint8Array([0xff])]);
   const lease = setup(async () => response);
   await t.throwsAsync(() => E(lease.transport).request(request), {
-    message: 'Provider transport failed',
+    message: 'Provider response lost',
   });
   // A rejected credential is classified, because a refreshing broker has one
   // decision to make and the status class is enough to make it. That is the
@@ -376,7 +376,7 @@ test('timeout settles even when fetch ignores abort and cancels a late response'
   const pending = E(transport).request(request);
   await started;
   timeout();
-  await t.throwsAsync(pending, { message: 'Provider transport failed' });
+  await t.throwsAsync(pending, { message: 'Provider response lost' });
   const { response, cancelled } = streamResponse([new Uint8Array(1)]);
   deliver(response);
   await held;
