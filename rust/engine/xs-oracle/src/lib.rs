@@ -844,6 +844,28 @@ mod tests {
     }
 
     #[test]
+    fn numeric_inputs_cross_the_integer_boundary_without_undefined_conversion() {
+        for (source, expected) in [
+            ("2147483647", "2147483647"),
+            ("2147483648", "2147483648"),
+            ("-2147483648", "-2147483648"),
+            ("-2147483649", "-2147483649"),
+            ("1e308 + 1e308", "Infinity"),
+            ("1e309", "Infinity"),
+            ("JSON.parse('3000000000')", "3000000000"),
+            ("JSON.parse('1e309')", "Infinity"),
+        ] {
+            let outcome = run(source).expect("oracle machine must start");
+            assert!(
+                outcome.completed,
+                "numeric boundary program {source:?} completes: {}",
+                outcome.error
+            );
+            assert_eq!(outcome.result, expected, "numeric boundary {source:?}");
+        }
+    }
+
+    #[test]
     fn boolean_logic() {
         let o = run("(1 < 2) && (3 >= 3)").expect("machine");
         assert!(o.completed);
