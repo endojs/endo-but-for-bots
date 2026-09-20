@@ -1424,8 +1424,8 @@ enum Req {
     TransitivelyRooted(&'static str),
     /// A named behavioral test in this crate's unit tests is required and
     /// must name the field itself; the note records why no visitor does
-    /// (a boundary-empty transient, or a lease whose only GC effect is
-    /// through another rooted table).
+    /// (a boundary-empty transient, a lease whose only GC effect is through
+    /// another rooted table, or an externally owned weak registry).
     BehavioralTwin(&'static str),
 }
 
@@ -1512,6 +1512,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("bound_functions", &[Req::Edges, Req::PrunedBothPaths], "bind target/this/args"),
     ("proxies", &[Req::Edges, Req::PrunedBothPaths], "proxy target + handler"),
     ("guest_compartments", &[Req::Edges, Req::PrunedBothPaths], "guest Compartment instance \u{2192} its environment global"),
+    ("compiler_registry", &[Req::BehavioralTwin("compiler_registry_is_host_owned_and_weak")], "weak host-owned compiler-policy registry; Machine retires environment keys after collection"),
     ("proxy_revokers", &[Req::Edges, Req::PrunedBothPaths], "revoke-fn back-links"),
     ("ctor_prototype", &[Req::Edges, Req::PrunedBothPaths], "constructor→prototype links"),
     ("private_values", &[Req::Edges, Req::PrunedBothPaths], "private field cells + values"),

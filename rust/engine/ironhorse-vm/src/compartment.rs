@@ -14,8 +14,11 @@
 //! Machine owns compiler services outside its execution core to avoid cycles
 //! through host compilers that capture compartments. Its default compiler serves
 //! shared dynamic constructors; compartment compilers serve their own evaluators.
-//! Retained handles keep the heap alive after Machine drops, but compiler services
-//! expire with that policy owner. Collection is explicit consumer policy.
+//! A guest-created child inherits its compiler under the child's environment id,
+//! so transferring the child also transfers the service lifetime until that
+//! environment is collected. Retained handles keep the heap alive after Machine
+//! drops, but compiler services expire with the machine policy owner. Collection
+//! is explicit consumer policy.
 //! Intrinsic permits control global bindings, not transitive capability access.
 //! Static module cells and evaluation status are persisted; loader services are
 //! explicitly reattached. Dynamic import is unsupported.
@@ -63,7 +66,8 @@ impl Intrinsics {
     }
 }
 
-type CompilerRegistry = RefCell<HashMap<crate::SlotIndex, Rc<dyn crate::SourceCompiler>>>;
+pub(crate) type CompilerRegistry =
+    RefCell<HashMap<crate::SlotIndex, Rc<dyn crate::SourceCompiler>>>;
 
 struct MachineState {
     compilers: std::rc::Weak<CompilerRegistry>,
@@ -921,6 +925,7 @@ impl Machine {
         interpreter.attach_host_registry(&hosts);
         let realm = Rc::clone(interpreter.realm());
         let compilers = Rc::new(CompilerRegistry::default());
+        interpreter.attach_compiler_registry(&compilers);
         Machine {
             hosts,
             compilers: Rc::clone(&compilers),
@@ -947,7 +952,14 @@ impl Machine {
             .try_borrow_mut()
             .map_err(|_| Halt::MachineBusy)?;
         self.machine.prepare_persistence(&mut interpreter)?;
-        Ok(operation(&mut interpreter))
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut interpreter)));
+        drop(interpreter);
+        self.retire_compilers();
+        match result {
+            Ok(result) => Ok(result),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Adopt an admitted shared heap only after every environment's host policy
@@ -987,6 +999,7 @@ impl Machine {
                     .insert(crate::SlotIndex(id.0), compiler.clone());
             }
         }
+        interpreter.attach_compiler_registry(&compilers);
         if let Some(host) = policy.meter_host.take() {
             interpreter.reattach_meter_host(host);
         }
@@ -1242,7 +1255,7 @@ impl Machine {
             }
         })?;
         drop(machine);
-        self.retire_compilers()?;
+        self.retire_compilers();
         Ok(stats)
     }
 
@@ -1252,16 +1265,11 @@ impl Machine {
             interp.prepare_collection()?;
             Ok(operation(interp))
         })??;
-        self.retire_compilers()?;
         Ok(result)
     }
 
-    fn retire_compilers(&self) -> Result<(), Halt> {
-        let machine = self
-            .machine
-            .interpreter
-            .try_borrow()
-            .map_err(|_| Halt::MachineBusy)?;
+    fn retire_compilers(&self) {
+        let machine = self.machine.interpreter.borrow();
         let live = machine.live_environment_ids();
         drop(machine);
         let dead: Vec<_> = self
@@ -1276,7 +1284,6 @@ impl Machine {
             dead.iter().filter_map(|id| compilers.remove(id)).collect()
         };
         drop(retired);
-        Ok(())
     }
 
     /// The single Realm shared by all compartments of this Machine.

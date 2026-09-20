@@ -167,6 +167,20 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     host_callbacks: std::rc::Weak<host::HostRegistry>,
+    #[boot_new(std::rc::Weak::new())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Host-owned compiler policies keyed by the environment whose lifetime
+    /// they serve. Weak here prevents a compiler that captures a compartment
+    /// from forming a cycle through the interpreter.
+    compiler_registry: std::rc::Weak<crate::compartment::CompilerRegistry>,
     #[boot_new(false)]
     #[gc_root(none)]
     #[quiescent(retained)]

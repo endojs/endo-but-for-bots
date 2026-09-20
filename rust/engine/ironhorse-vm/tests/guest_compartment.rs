@@ -8,7 +8,7 @@
 mod common;
 use common::TestCompiler;
 
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::{parse_symbols, Compartment, Interp, Machine};
 
 /// Run `source` on a default machine, as `native_lockdown.rs` does.
 fn result(source: &str) -> String {
@@ -29,6 +29,13 @@ fn result(source: &str) -> String {
         .unwrap()
         .join()
         .unwrap()
+}
+
+fn compartment_result(compartment: &Compartment, source: &str) -> String {
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+    let outcome = compartment.evaluate_with_symbols(&code, &symbols);
+    assert!(outcome.completed, "{source}: {:?}", outcome.halt);
+    outcome.result
 }
 
 const CATCH: &str = r#"
@@ -188,6 +195,111 @@ fn compartments_nest_and_share_one_intrinsic_graph() {
         ),
         "42,42,true,true,true"
     );
+}
+
+#[test]
+fn a_transferred_child_keeps_its_compiler_after_its_creator_is_collected() {
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            let machine = Machine::unfrozen_with_start_global_names(None);
+            let mut creator = machine.compartment(Default::default());
+            let compiler: std::rc::Rc<dyn ironhorse_vm::SourceCompiler> =
+                std::rc::Rc::new(TestCompiler);
+            let compiler_released = std::rc::Rc::downgrade(&compiler);
+            creator.set_source_compiler(compiler);
+            assert_eq!(
+                compartment_result(
+                    &creator,
+                    "globalThis.child = new Compartment(); child.evaluate('40 + 2')",
+                ),
+                "42"
+            );
+
+            let child = creator
+                .global_value("child")
+                .expect("the creator retains the guest child");
+            let mut keeper = machine.compartment(Default::default());
+            keeper
+                .define_global_value("child", &child)
+                .expect("the sibling belongs to the same machine");
+            assert_eq!(compartment_result(&keeper, "child.evaluate('6 * 7')"), "42");
+
+            drop(child);
+            drop(creator);
+            machine.collect().expect("the idle machine collects");
+
+            assert_eq!(
+                compartment_result(&keeper, "child.evaluate('84 / 2')"),
+                "42",
+                "compiler authority follows the reachable child environment"
+            );
+
+            drop(keeper);
+            machine
+                .collect()
+                .expect("the dead compartment instance is collected");
+            machine
+                .collect()
+                .expect("the now-unowned child environment is collected");
+            assert!(
+                compiler_released.upgrade().is_none(),
+                "the child environment releases its compiler policy"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn persistence_borrowed_collection_retires_dead_environment_compilers() {
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            let machine = Machine::unfrozen_with_start_global_names(None);
+            let mut creator = machine.compartment(Default::default());
+            let compiler: std::rc::Rc<dyn ironhorse_vm::SourceCompiler> =
+                std::rc::Rc::new(TestCompiler);
+            let compiler_released = std::rc::Rc::downgrade(&compiler);
+            creator.set_source_compiler(compiler);
+            assert_eq!(
+                compartment_result(
+                    &creator,
+                    "globalThis.child = new Compartment(); child.evaluate('40 + 2')",
+                ),
+                "42"
+            );
+
+            let sweeper = machine.compartment(Default::default());
+            assert_eq!(compartment_result(&sweeper, "0"), "0");
+            drop(creator);
+
+            machine
+                .with_persistence(|interp| interp.collect_garbage())
+                .expect("the idle machine lends its interpreter")
+                .expect("the first collection succeeds");
+            assert!(
+                compiler_released.upgrade().is_some(),
+                "the child environment is retained through the first collection"
+            );
+            let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                machine.with_persistence(|interp| {
+                    interp
+                        .collect_garbage()
+                        .expect("the second collection succeeds");
+                    std::panic::resume_unwind(Box::new("host callback unwinds after collection"));
+                })
+            }));
+            assert!(unwound.is_err(), "the host callback panic is resumed");
+            assert!(
+                compiler_released.upgrade().is_none(),
+                "retirement follows collection even when with_persistence unwinds"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// `prototype/globalThis/defaults.js`: every global is the outer realm's by
