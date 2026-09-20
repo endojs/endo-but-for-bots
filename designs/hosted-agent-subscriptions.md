@@ -3,8 +3,56 @@
 | | |
 |---|---|
 | **Created** | 2026-09-20 |
+| **Updated** | 2026-09-20 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+**Phase 1, usage and context, is implemented.** Not deployed; the OpenCode
+bridge lives in the slice image, so its part takes effect when that image is
+rebuilt (the host accepts an older bridge's two-count lines meanwhile).
+
+- `packages/hosted-agent/src/token-usage.js` — the five disjoint counts, the
+  context reading, and the arithmetic every adapter and Floot share.
+- Adapters: `codex-sandbox/src/codex-protocol.js`
+  (`usageEventFromTokenUsage`), `claude-sandbox/src/claude-hosted-events.js`,
+  `opencode-sandbox/src/opencode-bridge.mjs` and `opencode-protocol.js`.
+- Provider path: `lal/providers/openrouter.js`, `lal/providers/anthropic.js`,
+  `floot/providers/anthropic-streaming.js`.
+- Floot: `agent.js` (totals, turn fold, `getUsage()`), `src/hosted-turn.js`,
+  `src/turn-journal.js`, `src/stream.js`, `src/session-turn.js`,
+  `src/account-tool.js` (cached input is now priced at the cached rate).
+- Views: `chat/floot-component.js`, `space-floot/src/usage-label.js`; the
+  header shows traffic and `ctx N%`, the settings panel the detail.
+
+Where the implementation differs from the design below:
+
+- **`getInfo()` does not carry the context.** It reads the registry entry
+  only, and totals live with the session's agent. The context is in
+  `getUsage()`, the reply stream's `usage` event and the session watch's
+  `usage` event. The watch publishes usage at turn boundaries, so occupancy
+  does not move during a turn.
+- **Readings merge field by field, not plain last-wins** (`mergeContext`). A
+  0 never replaces a known figure: Claude learns the window only at the end of
+  a turn, and a failed turn can report the window and no request. The cost: a
+  session whose model changes to one that never reports a size keeps showing
+  the previous model's.
+- **Claude** reads each request from the stream's `message_start` and
+  `message_delta` (the CLI runs with partial messages), falling back to the
+  complete `assistant` event, and emits mid-turn `usage` events that carry
+  only `context`. The CLI's `<synthetic>` placeholder messages are not
+  requests. The window is the main model's entry in `modelUsage`, matched
+  through a variant suffix such as `[1m]`, else the largest listed.
+- **Codex and OpenCode** take `usedTokens` from the provider's own total
+  (`totalTokens`, `tokens.total`) when there is one. OpenCode's counts were
+  confirmed disjoint in the fork's `getUsage`.
+- **OpenRouter** reads the public model catalog once, beside the first
+  request and with no credential; a reply waits at most two seconds for it; a
+  failed read is retried after five minutes. A routing id (`openrouter/free`)
+  has no window of its own, so an unlisted served model reads 0.
+  **Anthropic's API does not report a window**, so both Anthropic providers
+  report 0.
 
 ## What is the Problem Being Solved?
 
