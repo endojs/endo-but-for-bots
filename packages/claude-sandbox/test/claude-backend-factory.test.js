@@ -308,7 +308,14 @@ test('send() forwards the session model and persona and translates the CLI strea
       name: 'mcp__endo__lookup',
       result: 'found',
     },
-    { type: 'usage', inputTokens: 20, outputTokens: 5 },
+    {
+      type: 'usage',
+      inputTokens: 20,
+      outputTokens: 5,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
     { type: 'end' },
   ]);
 

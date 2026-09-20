@@ -13,7 +13,11 @@ import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
 import { assertBrokerRuntimeConfig } from './app-server-transport.js';
-import { renderToolResult, toolFromItem } from './codex-protocol.js';
+import {
+  renderToolResult,
+  toolFromItem,
+  usageEventFromTokenUsage,
+} from './codex-protocol.js';
 
 const CodexClientInterface = M.interface('CodexClient', {
   send: M.call(M.string())
@@ -1133,14 +1137,8 @@ export const makeCodexClient = ({
         break;
       }
       case 'thread/tokenUsage/updated': {
-        const last = params.tokenUsage?.last;
-        if (last) {
-          pushTurn({
-            type: 'usage',
-            inputTokens: Number(last.inputTokens) || 0,
-            outputTokens: Number(last.outputTokens) || 0,
-          });
-        }
+        const usage = usageEventFromTokenUsage(params.tokenUsage);
+        if (usage) pushTurn(usage);
         break;
       }
       case 'error':

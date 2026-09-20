@@ -9,6 +9,8 @@ import {
   makeMessageRegistry,
   mapSseEvent,
   parseListeningLine,
+  contextWindowsFrom,
+  usageEventFromStep,
 } from '../src/opencode-bridge.mjs';
 
 const SESSION = 'ses_1';
@@ -302,7 +304,15 @@ test('maps step-finish tokens to usage and status to phase', t => {
       registry,
       SESSION,
     ),
-    { type: 'usage', inputTokens: 12, outputTokens: 3 },
+    {
+      type: 'usage',
+      inputTokens: 12,
+      outputTokens: 3,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+      context: { usedTokens: 15, windowTokens: 0 },
+    },
   );
   t.deepEqual(
     mapSseEvent(
@@ -497,4 +507,63 @@ test('canonicalizes MCP-aliased tool names to their Endo names', t => {
       result: '[]',
     },
   );
+});
+
+test('a step reports every token kind and the window of the model that ran it', t => {
+  const contextWindows = contextWindowsFrom({
+    providers: [
+      {
+        id: 'openrouter',
+        models: {
+          'deepseek/v4': { limit: { context: 128_000, output: 8000 } },
+          broken: { limit: {} },
+        },
+      },
+      { id: 'other', models: null },
+    ],
+  });
+  t.deepEqual([...contextWindows], [['openrouter/deepseek/v4', 128_000]]);
+  const registry = makeMessageRegistry({ contextWindows });
+  registry.noteMessage({
+    id: 'msg_a',
+    role: 'assistant',
+    providerID: 'openrouter',
+    modelID: 'deepseek/v4',
+  });
+  t.deepEqual(
+    mapSseEvent(
+      partUpdated({
+        id: 'prt_step',
+        messageID: 'msg_a',
+        type: 'step-finish',
+        tokens: {
+          total: 9000,
+          input: 200,
+          output: 300,
+          reasoning: 500,
+          cache: { read: 7900, write: 100 },
+        },
+      }),
+      registry,
+      SESSION,
+    ),
+    {
+      type: 'usage',
+      inputTokens: 200,
+      outputTokens: 300,
+      cachedInputTokens: 7900,
+      cacheWriteInputTokens: 100,
+      reasoningOutputTokens: 500,
+      context: { usedTokens: 9000, windowTokens: 128_000 },
+    },
+  );
+  // Without a provider total the kinds are added; they are disjoint.
+  t.is(
+    usageEventFromStep(
+      { input: 1, output: 2, reasoning: 3, cache: { read: 4, write: 5 } },
+      0,
+    ).context.usedTokens,
+    15,
+  );
+  t.deepEqual(contextWindowsFrom(undefined).size, 0);
 });

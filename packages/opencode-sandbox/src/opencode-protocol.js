@@ -1,6 +1,7 @@
 // @ts-check
 
 import { Fail, makeError, q, X } from '@endo/errors';
+import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 export const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
 harden(DEFAULT_MAX_LINE_BYTES);
@@ -225,9 +226,10 @@ export const assertBridgeEvent = candidate => {
     )) {
       Fail`usage needs outputTokens`;
     }
-    const inputTokens = /** @type {number} */ (rawInputTokens);
-    const outputTokens = /** @type {number} */ (rawOutputTokens);
-    return harden({ type, inputTokens, outputTokens });
+    // An image built before the bridge learned the other three counts and the
+    // context reading sends these two alone; `projectUsage` reads the rest as
+    // absent rather than refusing the line.
+    return harden({ type, ...projectUsage(candidate) });
   }
   if (type === 'end') {
     return harden({

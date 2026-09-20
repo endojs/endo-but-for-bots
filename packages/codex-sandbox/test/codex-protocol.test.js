@@ -8,6 +8,7 @@ import {
   parseJsonLines,
   renderToolResult,
   toolFromItem,
+  usageEventFromTokenUsage,
 } from '../src/codex-protocol.js';
 
 const chunks = parts => ({
@@ -161,4 +162,55 @@ test('dynamic and MCP tool items flatten to text through the same adapter', t =>
   });
   t.is(mcp?.name, 'docs/search');
   t.is(renderToolResult(mcp?.result), 'three hits');
+});
+
+test('a token usage notification becomes a disjoint usage event', t => {
+  t.deepEqual(
+    usageEventFromTokenUsage({
+      modelContextWindow: 272_000,
+      last: {
+        inputTokens: 41_000,
+        cachedInputTokens: 40_000,
+        outputTokens: 900,
+        reasoningOutputTokens: 600,
+        totalTokens: 41_900,
+      },
+      total: { inputTokens: 1, outputTokens: 1 },
+    }),
+    {
+      type: 'usage',
+      inputTokens: 1000,
+      outputTokens: 300,
+      cachedInputTokens: 40_000,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 600,
+      context: { usedTokens: 41_900, windowTokens: 272_000 },
+    },
+  );
+});
+
+test('usage without a total or a window still reports what it has', t => {
+  // The shape older app-servers send: two counts and nothing else.
+  t.deepEqual(
+    usageEventFromTokenUsage({ last: { inputTokens: 12, outputTokens: 3 } }),
+    {
+      type: 'usage',
+      inputTokens: 12,
+      outputTokens: 3,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+      context: { usedTokens: 15, windowTokens: 0 },
+    },
+  );
+  t.is(usageEventFromTokenUsage({ total: {} }), undefined);
+  t.is(usageEventFromTokenUsage(undefined), undefined);
+  // A null window is how app-server says it does not know.
+  t.is(
+    usageEventFromTokenUsage({
+      modelContextWindow: null,
+      last: { inputTokens: 5, outputTokens: 0 },
+    })?.context?.windowTokens,
+    0,
+  );
 });

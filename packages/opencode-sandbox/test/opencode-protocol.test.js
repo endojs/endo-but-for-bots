@@ -122,6 +122,30 @@ test('validates and projects bridge events by type', t => {
       type: 'usage',
       inputTokens: 1,
       outputTokens: 2,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
+  );
+  // A newer bridge's counts and context survive; anything else is dropped.
+  t.deepEqual(
+    assertBridgeEvent({
+      type: 'usage',
+      inputTokens: 1,
+      outputTokens: 2,
+      cachedInputTokens: 30,
+      reasoningOutputTokens: 4,
+      context: { usedTokens: 37, windowTokens: 1000 },
+      note: 'dropped',
+    }),
+    {
+      type: 'usage',
+      inputTokens: 1,
+      outputTokens: 2,
+      cachedInputTokens: 30,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 4,
+      context: { usedTokens: 37, windowTokens: 1000 },
     },
   );
   t.deepEqual(assertBridgeEvent({ type: 'end', checkpoint: 't1' }), {
