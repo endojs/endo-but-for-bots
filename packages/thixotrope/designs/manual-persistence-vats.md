@@ -1,5 +1,8 @@
 # Manual persistence vats
 
+Historical exploration: the HTTP implementation described here has been replaced by
+[directory-installed native resources](native-resource-installation.md).
+
 Status: exploratory design with a working mechanism probe, not an implemented
 contract or a decision to move the existing clock and HTTP services.
 
