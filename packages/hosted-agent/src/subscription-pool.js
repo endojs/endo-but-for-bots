@@ -384,6 +384,12 @@ export const normalizeSubscriptionSet = (
     const { id, label = id, weight = 1, accountRef, secretName = id } = member;
     (typeof id === 'string' && SUBSCRIPTION_ID.test(id) && id !== 'auto') ||
       Fail`Invalid subscription id ${q(id)}`;
+    // Setup names each member's formulas `<thing>-<id>`, and their
+    // namespaces `<thing>-<id>-powers` and `-handle`: an id that ends so
+    // would name another member's, and `powers` alone the namespace of a
+    // broker that had one credential.
+    !/(^|-)(powers|handle)$/.test(id) ||
+      Fail`Subscription id ${q(id)} must not be or end in -powers or -handle`;
     (typeof label === 'string' && label.length > 0 && label.length <= 128) ||
       Fail`Invalid label for subscription ${q(id)}`;
     (typeof weight === 'number' && Number.isFinite(weight) && weight > 0) ||

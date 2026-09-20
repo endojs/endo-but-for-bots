@@ -334,10 +334,175 @@ export const provideAccountOracle = async (
 };
 harden(provideAccountOracle);
 
+/**
+ * Provide the subscription admin of one subscription: a retained formula with
+ * a namespace of its own (`subscription-admin-module.js`), through which an
+ * operator redeems a banked rate-limit reset.
+ *
+ * It follows the account oracle's shape, and for the same reasons. Its
+ * namespace holds the broker's reset redeemer as a formula of its own
+ * (`reset-redeemer-module.js`), minted again on every run, and the account
+ * source the oracle already has; never the broker service. The admin keeps
+ * its identity across a re-minted broker, and with it the stored intent of a
+ * redeem whose answer was lost.
+ *
+ * Call it after `provideAccountOracle`, which mints the source.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {object} options
+ * @param {string} options.label
+ * @param {string} options.dir
+ * @param {string[]} options.brokerPath
+ * @param {string} options.specifier The admin module's import specifier.
+ * @param {string} options.redeemerSpecifier The redeemer module's specifier.
+ * @param {string} [options.subscriptionId]
+ * @returns {Promise<string[] | undefined>} The admin's pet name path, or
+ *   undefined when this broker has no reset redeemer.
+ */
+export const provideSubscriptionAdmin = async (
+  hostAgent,
+  { label, dir, brokerPath, specifier, redeemerSpecifier, subscriptionId },
+) => {
+  const suffix = subscriptionId === undefined ? '' : `-${subscriptionId}`;
+  const adminPath = [dir, `subscription-admin${suffix}`];
+  const redeemerPath = [dir, `reset-redeemer${suffix}`];
+  const sourcePath = [dir, `account-source${suffix}`];
+  const powersPath = [dir, `subscription-admin${suffix}-powers`];
+  const handlePath = [dir, `subscription-admin${suffix}-handle`];
+  const handleName = `${dir}.subscription-admin${suffix}-handle`;
+  const powersName = `${dir}.subscription-admin${suffix}-powers`;
+  (await E(hostAgent).has(...brokerPath)) ||
+    Fail`${b(label)} subscription admin needs the broker service ${q(brokerPath.join('/'))}`;
+  (await E(hostAgent).has(...sourcePath)) ||
+    Fail`${b(label)} subscription admin needs the account source ${q(sourcePath.join('/'))}`;
+
+  if (await E(hostAgent).has(...redeemerPath)) {
+    await E(hostAgent).remove(...redeemerPath);
+  }
+  // A provider with nothing to redeem answers undefined; a broker whose
+  // running worker is from before it had a redeemer cannot answer at all, and
+  // then the mint itself fails, after it has written the name. Neither leaves
+  // a name behind.
+  let redeemer;
+  try {
+    await mintWithPowersPath(hostAgent, {
+      powersPath: brokerPath,
+      temporary: `${dir}.reset-redeemer${suffix}-powers`,
+      specifier: redeemerSpecifier,
+      resultName: redeemerPath,
+      env:
+        subscriptionId === undefined
+          ? {}
+          : { ACCOUNT_SUBSCRIPTION_ID: subscriptionId },
+    });
+    redeemer = await E(hostAgent).lookup(redeemerPath);
+  } catch (error) {
+    if (await E(hostAgent).has(...redeemerPath)) {
+      await E(hostAgent).remove(...redeemerPath);
+    }
+    throw error;
+  }
+  if (redeemer === undefined) {
+    await E(hostAgent).remove(...redeemerPath);
+    return undefined;
+  }
+  const redeemerLocator = await E(hostAgent).locate(...redeemerPath);
+  const sourceLocator = await E(hostAgent).locate(...sourcePath);
+
+  if (!(await E(hostAgent).has(...adminPath))) {
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(hostAgent).has(stray)) await E(hostAgent).remove(stray);
+    }
+    await E(hostAgent).provideGuest(handleName, { agentName: powersName });
+    const guest = await E(hostAgent).lookup(powersName);
+    await E(guest).storeLocator('reset-redeemer', redeemerLocator);
+    await E(guest).storeLocator('account-source', sourceLocator);
+    await E(hostAgent).makeUnconfined('@main', specifier, {
+      powersName,
+      resultName: adminPath,
+      env: harden({}),
+    });
+  }
+  for (const [from, to] of [
+    [handleName, handlePath],
+    [powersName, powersPath],
+  ]) {
+    if (
+      // eslint-disable-next-line no-await-in-loop
+      (await E(hostAgent).has(/** @type {string} */ (from))) &&
+      // eslint-disable-next-line no-await-in-loop
+      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(hostAgent).move([from], to);
+    }
+  }
+  // Re-point at what was minted over the broker that exists now. The intent
+  // journal in this namespace is not touched.
+  const powers = await E(hostAgent).lookup(powersPath);
+  await E(powers).storeLocator('reset-redeemer', redeemerLocator);
+  await E(powers).storeLocator('account-source', sourceLocator);
+  return adminPath;
+};
+harden(provideSubscriptionAdmin);
+
 const moduleSpecifier = (/** @type {string} */ relative) =>
   assertCurrentSpecifier(
     toCurrentSpecifier(new URL(relative, import.meta.url).href),
   );
+
+/**
+ * @param {any} hostAgent
+ * @param {{ label: string, dir: string, flootDir: string, backendId: string, subscriptionId?: string }} options
+ */
+const publishSubscriptionAdmin = async (
+  hostAgent,
+  { label, dir, flootDir, backendId, subscriptionId },
+) => {
+  await null;
+  const adminName =
+    subscriptionId === undefined
+      ? `${backendId}-admin`
+      : `${backendId}-admin-${subscriptionId}`;
+  try {
+    const adminPath = await provideSubscriptionAdmin(hostAgent, {
+      label,
+      dir,
+      brokerPath: [dir, 'broker-service'],
+      specifier: moduleSpecifier('./subscription-admin-module.js'),
+      redeemerSpecifier: moduleSpecifier('./reset-redeemer-module.js'),
+      ...(subscriptionId === undefined ? {} : { subscriptionId }),
+    });
+    if (
+      adminPath === undefined &&
+      (await E(hostAgent).has(flootDir, 'controller-profile', adminName))
+    ) {
+      // This broker redeems nothing (any more): Floot must not go on
+      // offering a button over an admin whose redeemer is gone.
+      await E(hostAgent).remove(flootDir, 'controller-profile', adminName);
+    }
+    if (
+      adminPath !== undefined &&
+      (await E(hostAgent).has(flootDir, 'controller-profile'))
+    ) {
+      await E(hostAgent).copy(adminPath, [
+        flootDir,
+        'controller-profile',
+        adminName,
+      ]);
+      console.log(
+        `Bound "${adminName}" into "${flootDir}/controller-profile".`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `${label} subscription admin "${adminName}" was not provided; sessions are unaffected:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+};
+harden(publishSubscriptionAdmin);
 
 /**
  * Provide an adapter's account oracle over its `<dir>/broker-service` and bind
@@ -356,10 +521,22 @@ const moduleSpecifier = (/** @type {string} */ relative) =>
  * @param {string} options.backendId The hosted backend's descriptor id.
  * @param {string[]} [options.subscriptionIds] For a broker over several
  *   subscriptions: one oracle each, bound as `<backend id>-account-<id>`.
+ * @param {boolean} [options.resetCredits] The provider banks rate-limit
+ *   resets (Codex): also provide each subscription's admin, through which an
+ *   operator redeems one, bound as `<backend id>-admin` or
+ *   `<backend id>-admin-<id>`. Floot's profile is the only place it is bound.
  */
 export const publishAccountOracle = async (
   hostAgent,
-  { label, dir, providerId, flootDir, backendId, subscriptionIds },
+  {
+    label,
+    dir,
+    providerId,
+    flootDir,
+    backendId,
+    subscriptionIds,
+    resetCredits,
+  },
 ) => {
   await null;
   // One subscription's oracle failing must not cost the others theirs.
@@ -397,6 +574,16 @@ export const publishAccountOracle = async (
         `${label} account oracle "${accountName}" was not provided; sessions are unaffected:`,
         error instanceof Error ? error.message : String(error),
       );
+    }
+    if (resetCredits === true) {
+      // eslint-disable-next-line no-await-in-loop
+      await publishSubscriptionAdmin(hostAgent, {
+        label,
+        dir,
+        flootDir,
+        backendId,
+        ...(subscriptionId === undefined ? {} : { subscriptionId }),
+      });
     }
   }
 };

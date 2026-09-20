@@ -153,15 +153,20 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
     [],
   );
   // `accountSource` is read-only account data and no operator authority: it
-  // reaches no scope, secret, issuer or shutdown.
+  // reaches no scope, secret, issuer or shutdown. `resetRedeemer` is an
+  // operator's, over the account's banked resets and nothing else; the
+  // service is held by setup and the host-side backend, and a scope, a grant
+  // and a slice have no path back to it. This adapter has none to offer.
   t.deepEqual([...serviceMethods].sort(), [
     '__getInterfaceGuard__',
     '__getMethodNames__',
     'accountSource',
     'lookupScope',
     'provideScope',
+    'resetRedeemer',
     'subscriptions',
   ]);
+  t.is(await E(f.service).resetRedeemer(), undefined);
   t.is(await E(f.service).accountSource(), undefined);
   // One credential and no declared set: nothing to choose between.
   t.deepEqual(await E(f.service).subscriptions(), []);
