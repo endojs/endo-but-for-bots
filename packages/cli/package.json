@@ -58,7 +58,7 @@
     "eslint-config-prettier": "catalog:dev",
     "eslint-plugin-eslint-comments": "catalog:dev",
     "eslint-plugin-import": "catalog:dev",
-    "execa": "^9.3.0",
+    "execa": "^10.0.1",
     "typescript": "catalog:dev"
   },
   "files": [
