@@ -114,6 +114,40 @@ Where phases 2 and 3 differ from the design below:
 - **`claude setup-token` and `/api/oauth/usage` remain untested**, so Claude
   has no active read; its headers are the whole of its status.
 
+**Phase 4, the bytes response stream, is implemented.** Not deployed, and it
+reaches a deployment in two steps: the broker's half arrives with the daemon,
+the listener's half with the operator's next listener image.
+
+- `provider-broker.js` — `requestByteStream` on the grant beside
+  `requestStream`: the screened text reader as a bytes exo-stream, in chunks of
+  at most 32 KiB (`RESPONSE_CHUNK_BYTES`). `provider-http.js` — the listener
+  asks the endpoint once what it offers, reads a bytes stream with
+  `iterateBytesReader(reader, { buffer: 64 })`, and falls back to the text
+  reader for a broker from before it.
+- `provider-pipe.js` runs CapTP with `gcImports`. Without it each side kept
+  every answer it gave for the life of the pipe, which for a response stream
+  is every chunk: measured, the broker's heap grew by what it streamed and a
+  256 MB listener died after a few hundred megabytes. It takes both ends, so
+  the listener's half also waits for the next image.
+
+Where phase 4 differs from the design below:
+
+- **The old text reader stays.** The listener is an image the operator pins,
+  so an older listener has to keep working with a newer broker.
+- **The producer does not cap read-ahead at 64, and cannot.** In exo-stream
+  the consumer grants credit, and one that grants a great deal and reads
+  nothing makes the producer drain the upstream at once; the producer cannot
+  tell reading from not reading. What bounds it is the response byte limit:
+  at most `maxResponseBytes`, a third more in base64, per open response, and
+  `maxConcurrentRequests` of those per grant. Over the private pipe the
+  pipe's queue bound (32 MiB) trips first and closes that consumer's pipe
+  alone. An honest listener holds 64 chunks of 32 KiB per response. **A peer
+  connection has no such bound yet**; the delegated phases need one.
+- **A revoked grant stops the bytes stream at the next piece**, including
+  pieces already cut from a chunk the screen had passed.
+- `usage` on the endpoint, which the design lists for phase 5, is not here
+  yet.
+
 ## What is the Problem Being Solved?
 
 A hosted agent session spends a subscription: a ChatGPT plan through Codex, a
