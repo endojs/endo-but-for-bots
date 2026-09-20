@@ -43,6 +43,7 @@ import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
+import { readIronhorseLimits } from '../ironhorse/ironhorse-limits.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
 import { makeAdapterKeeper } from '../adapter-keeper.js';
@@ -117,11 +118,13 @@ export const serveThixotrope = async (
   const socketPath = paths.join(statePath, 'control.sock');
   const peerPath = paths.join(statePath, 'peers.sock');
   const packagePath = paths.fileURLToPath(new URL('../../', import.meta.url));
+  const ironhorseLimits = engine ? undefined : readIronhorseLimits(environment);
   const rawEngine =
     engine ??
     makeIronhorseEngine(
       { processes, files, paths, timers, hashes },
       {
+        ...ironhorseLimits,
         workerBinary:
           environment.get('THIXOTROPE_IRONHORSE_WORKER') ??
           paths.resolve(
@@ -440,6 +443,7 @@ export const serveThixotrope = async (
       status: () =>
         harden({
           workspace: config.workerId,
+          ...(ironhorseLimits ? { ironhorse: ironhorseLimits } : {}),
           workers: daemon.inspectWorkers(),
           timings: Object.fromEntries(
             Object.entries(metrics).map(([name, metric]) => [
