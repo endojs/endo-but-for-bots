@@ -4159,6 +4159,97 @@ testNeedsNodeWorker(
 );
 
 testNeedsNodeWorker(
+  'accept rollback removes a FRESH name it speculatively bound (same daemon)',
+  async t => {
+    // The rollback restores "whatever the pet name held before". The existing
+    // rollback test only covers the branch where a prior binding existed (so
+    // rollback re-stores it); this covers the OTHER branch — a name that held
+    // nothing before the speculative bind — where rollback must `remove()` the
+    // phantom binding, not leave it pointing at the unverified handle. Deleting
+    // the `priorLocator === undefined ? remove() : storeLocator()` split's
+    // remove() arm reddens here.
+    const { host } = await prepareHost(t);
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // Produce a spent invitation from C.
+    const invCB = await E(guestC).invite('to-b');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // 'fresh-contact' has never been bound. Redeeming the now-spent invitation
+    // under it must reject AND leave 'fresh-contact' unbound — the speculative
+    // bind removed, not left as a phantom pointing at C's unverified handle.
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound before the rejected accept',
+    );
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'fresh-contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound again after the rejected accept (phantom removed)',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'concurrent duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
+  async t => {
+    // A client that naively retries its own accept(sameLocator, sameName) —
+    // no attacker required — starts two accepts of the SAME single-use
+    // invitation under the SAME correspondent name. Exactly one wins; the
+    // loser's `E(invitation).accept()` rejects (single-use), running its
+    // correspondent-bind rollback. Without acceptor-side serialization both
+    // calls capture priorLocator === undefined before either commits, so the
+    // loser's rollback `remove()`s the name the winner just bound, permanently
+    // stranding the spent invitation with no local binding. The serial queue
+    // makes the loser observe the winner's committed bind, so its rollback
+    // restores that value rather than deleting it.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+
+    const results = await Promise.allSettled([
+      E(guestB).accept(invitationLocator, 'contact'),
+      E(guestB).accept(invitationLocator, 'contact'),
+    ]);
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    t.is(fulfilled.length, 1, 'exactly one duplicate accept succeeds');
+
+    // The winner's bind survives the loser's rollback: 'contact' still names
+    // A's handle rather than having been un-named.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const contactLocator = await E(guestB).locate('contact');
+    t.truthy(
+      contactLocator,
+      "'contact' remains bound after the duplicate race",
+    );
+    t.is(
+      parseLocator(contactLocator).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the losing duplicate rolled back",
+    );
+  },
+);
+
+testNeedsNodeWorker(
   'EndoGuest transitive invite chain I -> J -> K (same daemon)',
   async t => {
     // A guest that has accepted an invitation can itself invite and accept

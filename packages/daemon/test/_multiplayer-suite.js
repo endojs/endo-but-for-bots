@@ -602,6 +602,123 @@ export const runMultiplayerSuite = ({ test, network }) => {
     },
   );
 
+  // Rebuild a locator with a different connection-hint set, preserving its node,
+  // formula number, and query params. Used to prove the acceptor treats an
+  // unverified locator's hints as advisory-only for an already-known peer.
+  const withHints = (locator, hints) => {
+    const { number, node } = parseId(idFromLocator(locator));
+    const source = new URL(locator);
+    const rebuilt = new URL(
+      `endo://${node}/${[number, ...hints].map(encodeURIComponent).join('@')}`,
+    );
+    for (const [key, value] of source.searchParams) {
+      rebuilt.searchParams.set(key, value);
+    }
+    return rebuilt.toString();
+  };
+
+  // The peer route the acceptor writes from an UNVERIFIED locator is
+  // speculative: a rejected accept (here, a spent invitation from a peer the
+  // acceptor has never met) must retract it, or a forged/spent locator naming
+  // an unknown node durably squats that node's dialing addresses with
+  // caller-chosen ones. The only rollback test elsewhere is same-daemon, where
+  // the peer branch never runs; deleting `rollbackPeer` or its catch-block
+  // invocation reddens here.
+  test.serial(
+    'accept rolls back a speculative cross-daemon peer route on rejection',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      // C mints an invitation; A consumes it, so it is spent. B never meets C.
+      const invC = await E(hostC).invite('bob');
+      const spentCLocator = await E(invC).locate();
+      await E(hostA).accept(spentCLocator, 'from-c'); // consumes invC
+
+      const cPeerInfo = /** @type {import('../src/types.js').PeerInfo} */ (
+        await E(hostC).getPeerInfo()
+      );
+      const cNode = cPeerInfo.node;
+      const peersBefore = /** @type {import('../src/types.js').PeerInfo[]} */ (
+        await E(hostB).listKnownPeers()
+      );
+      t.false(
+        peersBefore.some(p => p.node === cNode),
+        'hostB has not met hostC before the rejected accept',
+      );
+
+      // B attempts the spent C-locator. C is unknown and the locator carries
+      // C's addresses, so B speculatively registers C as a peer, dials C, and
+      // calls accept — which rejects (single-use, already spent).
+      await t.throwsAsync(
+        () => E(hostB).accept(spentCLocator, 'carol'),
+        undefined,
+        'a spent invitation is rejected',
+      );
+
+      const peersAfter = /** @type {import('../src/types.js').PeerInfo[]} */ (
+        await E(hostB).listKnownPeers()
+      );
+      t.false(
+        peersAfter.some(p => p.node === cNode),
+        'the speculative peer route to hostC was retracted after rejection',
+      );
+    },
+  );
+
+  // The acceptor's peer registration is additive-only: an already-known peer is
+  // never re-addressed. A second genuine invitation from a known inviter,
+  // carrying rewritten (bogus) hints, must leave the inviter's real route
+  // intact. Dropping the `identifyLocal(peerKey) === undefined` guard would let
+  // `addPeerInfo` replace the live route with the unverified addresses.
+  test.serial(
+    'accept never redirects an already-known peer route (additive-only)',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      const inv1 = await E(hostA).invite('bob1');
+      const inv2 = await E(hostA).invite('bob2');
+      const loc1 = await E(inv1).locate();
+      const loc2 = await E(inv2).locate();
+
+      // First accept: B learns A's daemon at its real address.
+      await E(hostB).accept(loc1, 'alice1');
+      const aNode = parseId(idFromLocator(loc1)).node;
+      const peersAfterFirst =
+        /** @type {import('../src/types.js').PeerInfo[]} */ (
+          await E(hostB).listKnownPeers()
+        );
+      const aEntryFirst = peersAfterFirst.find(p => p.node === aNode);
+      t.truthy(aEntryFirst, 'hostB registered hostA on the first accept');
+      const realAddresses = aEntryFirst?.addresses ?? [];
+      t.true(realAddresses.length > 0, 'the registered route has addresses');
+
+      // Second accept: a genuine invitation from A, but with its hints rewritten
+      // to a bogus address. A is already known, so the guard must skip
+      // re-registration and keep A's real route (the accept still proves out
+      // over the existing route).
+      const forgedLoc2 = withHints(loc2, ['tcp:203.0.113.7:65000']);
+      await E(hostB).accept(forgedLoc2, 'alice2');
+
+      const peersAfterSecond =
+        /** @type {import('../src/types.js').PeerInfo[]} */ (
+          await E(hostB).listKnownPeers()
+        );
+      const aEntrySecond = peersAfterSecond.find(p => p.node === aNode);
+      t.truthy(
+        aEntrySecond,
+        'hostA is still a known peer after the second accept',
+      );
+      t.deepEqual(
+        aEntrySecond?.addresses,
+        realAddresses,
+        'the bogus hints did not redirect the already-known peer route',
+      );
+    },
+  );
+
   // The invitation object's own cancel() revokes exactly that pending
   // invitation, leaving a sibling invitation for the same guest redeemable.
   test.serial(
