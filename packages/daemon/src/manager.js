@@ -7564,61 +7564,91 @@ const makeDaemonCore = async (
         // would write one (section 4 of the guest-native-invitations design).
         // Skip both writes for the local node.
         if (guestDaemonNode !== localNodeNumber) {
-          // Register the guest's agent key so we can route to its daemon, but
-          // additive-only — exactly as the acceptor-side `acceptInvitation` twin
-          // guards its own `writeRemoteAgentKey` with `getRemoteAgentKey(...) ===
-          // undefined`. `guestHandleNode` is parsed from the bearer
-          // `guestHandleLocator` this bare-capability accept() consumes (anyone
-          // holding the invitation locator may redeem it), with only format
-          // validation, no proof of possession. Without this guard an attacker
-          // holding any valid invitation could name an already-known, trusted
-          // correspondent's agent key and their own daemon as the authority, and
-          // the `INSERT OR REPLACE`-backed write would silently REDIRECT that
-          // correspondent's route to the attacker's daemon — misrouting every
-          // future send addressed to that key. The accept path may ADD an
-          // agent-key route, never redirect an existing one.
-          if (
-            guestHandleNode !== guestDaemonNode &&
-            persistencePowers.getRemoteAgentKey(guestHandleNode) === undefined
-          ) {
-            persistencePowers.writeRemoteAgentKey(
-              guestHandleNode,
-              guestDaemonNode,
-            );
-          }
-
-          // Only register a route when the acceptor advertised addresses. An
-          // acceptor whose own `@nets` is empty (the anonymizing-persona
-          // default) yields an address-less handle locator; registering it
-          // would drive `addPeerInfo` to REPLACE this daemon's existing peer
-          // record for the acceptor's daemon with zero addresses, breaking
-          // every pre-existing relationship with that daemon. Such an acceptor
-          // is undialable across daemons anyway, so skipping the write loses
-          // nothing.
+          // These additive-only routing writes mutate daemon-wide tables
+          // (`remote_agent_key` and the known-peers store) that are ALSO written
+          // by the acceptor-side `acceptInvitation` and by every sibling
+          // invitation's accept handler — and each `makeInvitation` builds its
+          // OWN per-invitation `invitationJobs` queue, so that queue does not
+          // serialize this handler against a DIFFERENT invitation's handler on
+          // the same inviting daemon. Two attacker-supplied `guestHandleLocator`
+          // values (in two distinct invitations redeemed concurrently on this
+          // daemon) naming the same not-yet-known `guestHandleNode`/
+          // `guestDaemonNode` could therefore both observe the `=== undefined`
+          // guard before either writes, and whichever write lands last silently
+          // REDIRECTS the route the other just added — the exact "may ADD, never
+          // REDIRECT" violation the acceptor side closes with its daemon-wide
+          // `acceptInvitationJobs` queue. Serialize this inviter-side
+          // check-then-write on that SAME daemon-wide queue so every additive
+          // routing write across both facets observes the committed state of the
+          // one before it (a later write sees the key/peer already known and
+          // additively skips). Reusing the acceptor's queue (rather than a second
+          // inviter-only queue) also serializes inviter-side writes against
+          // acceptor-side writes to the same table.
           //
-          // `guestDaemonNode` and `addresses` are parsed from the bearer
-          // `guestHandleLocator` this accept() consumes, so — exactly as on the
-          // acceptor-side `acceptInvitation` twin — register a route only for a
-          // node we do not already know, never re-addressing an existing peer.
-          // Otherwise an acceptor could name an already-known, trusted peer's
-          // node number and supply its own addresses, silently redirecting the
-          // inviter's route to that peer. The accept path may ADD a route,
-          // never REDIRECT one.
-          if (addresses.length > 0) {
-            const knownPeers = /** @type {KnownPeersStore} */ (
-              /** @type {unknown} */ (
-                await provideStoreController(knownPeersId)
-              )
-            );
-            if (knownPeers.identifyLocal(guestDaemonNode) === undefined) {
-              /** @type {PeerInfo} */
-              const peerInfo = {
-                node: guestDaemonNode,
-                addresses,
-              };
-              await networkBroker.addPeerInfo(peerInfo);
+          // No deadlock from nesting inside `invitationJobs`: the acceptor-side
+          // critical section holds `acceptInvitationJobs` across its
+          // `E(invitation).accept()` round-trip, but that only re-enters THIS
+          // handler in the same-daemon case — where `guestDaemonNode ===
+          // localNodeNumber` skips this whole block, so the handler never
+          // re-acquires the queue the acceptor already holds. Across daemons the
+          // two `acceptInvitationJobs` are distinct in-memory queues.
+          await acceptInvitationJobs.enqueue(async () => {
+            // Register the guest's agent key so we can route to its daemon, but
+            // additive-only — exactly as the acceptor-side `acceptInvitation` twin
+            // guards its own `writeRemoteAgentKey` with `getRemoteAgentKey(...) ===
+            // undefined`. `guestHandleNode` is parsed from the bearer
+            // `guestHandleLocator` this bare-capability accept() consumes (anyone
+            // holding the invitation locator may redeem it), with only format
+            // validation, no proof of possession. Without this guard an attacker
+            // holding any valid invitation could name an already-known, trusted
+            // correspondent's agent key and their own daemon as the authority, and
+            // the `INSERT OR REPLACE`-backed write would silently REDIRECT that
+            // correspondent's route to the attacker's daemon — misrouting every
+            // future send addressed to that key. The accept path may ADD an
+            // agent-key route, never redirect an existing one.
+            if (
+              guestHandleNode !== guestDaemonNode &&
+              persistencePowers.getRemoteAgentKey(guestHandleNode) === undefined
+            ) {
+              persistencePowers.writeRemoteAgentKey(
+                guestHandleNode,
+                guestDaemonNode,
+              );
             }
-          }
+
+            // Only register a route when the acceptor advertised addresses. An
+            // acceptor whose own `@nets` is empty (the anonymizing-persona
+            // default) yields an address-less handle locator; registering it
+            // would drive `addPeerInfo` to REPLACE this daemon's existing peer
+            // record for the acceptor's daemon with zero addresses, breaking
+            // every pre-existing relationship with that daemon. Such an acceptor
+            // is undialable across daemons anyway, so skipping the write loses
+            // nothing.
+            //
+            // `guestDaemonNode` and `addresses` are parsed from the bearer
+            // `guestHandleLocator` this accept() consumes, so — exactly as on the
+            // acceptor-side `acceptInvitation` twin — register a route only for a
+            // node we do not already know, never re-addressing an existing peer.
+            // Otherwise an acceptor could name an already-known, trusted peer's
+            // node number and supply its own addresses, silently redirecting the
+            // inviter's route to that peer. The accept path may ADD a route,
+            // never REDIRECT one.
+            if (addresses.length > 0) {
+              const knownPeers = /** @type {KnownPeersStore} */ (
+                /** @type {unknown} */ (
+                  await provideStoreController(knownPeersId)
+                )
+              );
+              if (knownPeers.identifyLocal(guestDaemonNode) === undefined) {
+                /** @type {PeerInfo} */
+                const peerInfo = {
+                  node: guestDaemonNode,
+                  addresses,
+                };
+                await networkBroker.addPeerInfo(peerInfo);
+              }
+            }
+          });
         }
 
         // Use storeLocator so the directory properly internalizes the remote

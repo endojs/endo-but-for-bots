@@ -15,7 +15,11 @@ This completes the pair with `EndoGuest.invite`.
   surface.
 - Redeeming a genuine invitation registers the inviter's daemon and agent key
   strictly additively: a known peer is never re-addressed and a mapped agent key
-  is never redirected.
+  is never redirected. This holds under concurrent redemption on both sides —
+  the acceptor's and the inviter's additive routing writes are each serialized
+  daemon-wide, so two invitations redeemed at once that name the same
+  not-yet-known node cannot race past the additive guard and redirect each
+  other's route.
 - A rejected, forged, or replayed invitation locator leaves no peer route, agent
   key, or correspondent binding behind.
 - If the acceptor's network timeout trips while the final consume is in flight
