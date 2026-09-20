@@ -335,6 +335,117 @@ Where it differs from the design below, or settles what it left open:
 - A subscription id may not be, or end in, `-powers` or `-handle`: setup names
   each member's formulas and their namespaces by id.
 
+**Phase 8, shares, is implemented.** Not deployed, and nothing of it has run
+against a real peer connection. A share that a peer holds is served by an
+endpoint with no listener; the peer's runner starting a listener over such an
+endpoint is phase 9.
+
+- `provider-usage.js` — what a response cost, read from the provider's own
+  stream as it passes (OpenAI Responses, Anthropic Messages, chat
+  completions), numbers only. The broker settles it once per request as
+  `{ usage, began, complete, responseBytes }`: on `request` as a record, on
+  `requestByteStream` as a promise that always fulfils. The older
+  `requestStream` carries none.
+- `broker-subscription.js` and `subscription-module.js` — the broker as a
+  `Subscription` (`describe`, `openEndpoint`, `getStatus`, `watchStatus`),
+  reached by the service's `subscription()` and held by setup as
+  `<dir>/subscription`. `provider-grant-issuer.js` `openEndpoint` is the same
+  credentialed core a grant has (routes, models, byte bounds, the echo
+  screen, the pool's selection), with no listener.
+- `subscription-share.js`, `share-meter.js` — the share and its meter.
+  `subscription-share-module.js` is the retained formula: a namespace of its
+  own holding `subscription`, `share-limits` (a stored value, read for every
+  request) and the state journal (`share-state-v1-*`: the revocation and the
+  meter's ceiling). Its value is the grantor's kit; what is handed out is
+  `subscription-share-facet-module.js`, whose value is only the kit's
+  `share()`.
+- `hosted-setup.js` — `provideBrokerSubscription`/`publishBrokerSubscription`
+  (every adapter's setup; re-points each share at the broker that exists now)
+  and `provideSubscriptionShare`.
+- Wrapped members: `subscription-pool.js` admits `{ id, subscriptionName }`;
+  the pooled broker follows the share's status and keeps it as a reading
+  (`readingFromShareStatus`), so the pool ranks it and a view shows it; the
+  grant serves it through an endpoint opened on first use. Codex setup takes
+  `{ id, shareName }` in `ENDO_CODEX_SUBSCRIPTIONS`.
+
+Where it differs from the design below, or settles what it left open:
+
+- **`attenuate(limits)` is `provideSubscriptionShare`, a host-side
+  provisioning step**, not a method of `SubscriptionAdmin`. A share is handed
+  out by name and must revive with the daemon, so it has to be a formula, and
+  a formula's guest namespace cannot mint one. There is no ops entry point or
+  view for it yet beyond that function.
+- **The meter's durable state is a ceiling written ahead**, not a count
+  journalled every so many tokens. Nothing is admitted until `spent +
+  reserved` fits under a ceiling already in the store, and a revival takes
+  the whole ceiling as spent: the unrecorded step and every open reservation,
+  as designed, without having to record reservations. The ceiling is written
+  back down when a large reservation settles small, so a restart does not
+  charge for what was reserved and never used. A step is a fiftieth of the
+  budget.
+- **A response cut short is never cheaper than its reservation.** The design
+  kept the reservation as the charge for a stream with no usage event. A
+  provider also names some usage in its first event, so a settlement says
+  whether it is `complete`, and one that is not is charged the most of its
+  reservation, what it had said so far, and what its size implies
+  (`responseBytes / 4` on top of the request). The same floor applies to a
+  response that never says what it cost, which for chat completions is what a
+  holder who omits `stream_options.include_usage` gets; the request is not
+  rewritten to add it.
+- **A request the provider had its whole deadline for is not free.** The
+  transport has a third bare classification, `Provider response lost` (the
+  deadline passed, or a response broke off after it began). It is let out,
+  with `Provider subscription exhausted`, only through an endpoint opened by
+  `Subscription.openEndpoint`; a slice's listener still sees one word,
+  `Provider request failed`.
+- **A holder is told a fixed set of bare words.** Anything else (a store's
+  error, whatever another daemon threw) reads `Provider share unavailable`
+  and is logged where the share lives. One word covers revoked and expired:
+  `Provider share revoked`.
+- **`reserve` reads `remainingFraction`**, which the broker's status defines
+  as what the best account that can serve has left of its long window, and
+  null when no reading says. Unknown is not below the floor.
+- **Session ids are namespaced `share-<id>-<session>`**, and where that would
+  pass what is beneath accepts (128), the holder's part is replaced by a
+  digest of it, so shares nest and a session keeps one name.
+- **A share keeps at most 256 endpoints open**, closing the one used least
+  recently. The raw `<dir>/subscription` has no such bound and is given to
+  shares' namespaces only.
+- **Wrapped endpoints are opened on first use, outside the issuer's queue,
+  with a deadline.** Opening them while a grant was being made deadlocked a
+  pool that (through anybody's shares) held a share of itself, before the hop
+  limit could refuse; with lazy opening such a request goes round to the
+  limit and is served at the bottom. Past the limit a wrapped member is left
+  out of the core and the pool is not told, since how far a request has come
+  is its caller's doing and not the member's.
+- **A request is sent to a far share again only on its own word that the
+  endpoint is gone** (`Inference endpoint revoked`: its daemon restarted, or
+  it closed the one used least recently). Any other failure that is not
+  about the request makes the member `unusable` to the pool for a while and
+  the request goes to the next member, unsent a second time, since it may
+  have arrived. An endpoint that stopped working is kept until the grant
+  ends, because another request of the session may be streaming from it.
+  When no member is left, an endpoint that reveals it says `Provider
+  subscription exhausted`, whether they were used up or away, so a holder's
+  pool moves on.
+- **A share over another party's share trusts that party's settlement.** The
+  innermost subscription reads the provider's stream; everyone above charges
+  from what it reports. A far side that under-reports costs only the party
+  directly above it, who chose to trust it. A settlement that claims to be
+  complete and to have cost nothing is charged as one that did not say.
+- **There is no deadline on a far request or on its settlement**, only on
+  opening. A far daemon that hangs without disconnecting holds a slot and a
+  reservation until the connection drops.
+- **A wrapped member's stream is passed through, not re-screened**: no
+  credential of this broker's was sent. Its settlement is projected to
+  numbers. The older text reader is served by the operator's own accounts
+  only.
+- **Not built**: `watchServing()` and the `serving` event (a share would mask
+  them anyway); a `percent of my window` estimate; `attenuate` for Claude's
+  and OpenCode's brokers beyond the shared functions (they publish
+  `<dir>/subscription`; nothing provisions a share for them); revoking a
+  share from a view.
+
 ## What is the Problem Being Solved?
 
 A hosted agent session spends a subscription: a ChatGPT plan through Codex, a
@@ -1189,6 +1300,14 @@ Phases 1 to 4 are useful with the single subscriptions a deployment has now.
 - [ ] Measure a streamed response over a real peer connection, and find that
       connection's frame limit. Gates remote use of phase 4, and phases 8
       and 9.
+- [ ] Hand a share to a second daemon over a real peer connection and serve a
+      request through it: that the bytes reader, the `usage` promise and the
+      endpoint survive the hop, and what a lost connection does to a
+      reservation. Gates use of phase 8.
+- [ ] Confirm the three response shapes `provider-usage.js` reads against live
+      streams, in particular whether Codex's `response.completed` always
+      carries `usage` for a ChatGPT subscription. Gates a share's budget
+      meaning what it says.
 - [ ] Find what CPU and memory limits slices have before delegating a runner.
       Gates phase 9.
 - [ ] Decide the per-session storage bound a delegated runner requires.
