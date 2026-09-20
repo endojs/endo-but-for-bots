@@ -159,6 +159,59 @@ image from before the bytes stream is never served by such a member.
 Nothing here has run against a peer connection yet: see "Known Gaps" in
 [`designs/hosted-agent-subscriptions.md`](../../designs/hosted-agent-subscriptions.md).
 
+## Lending the machine
+
+A **delegated runner** is this backend within limits you choose, as a
+capability you can hand to somebody else: they add it to their own Floot as a
+backend, and their sessions are harnesses on your machine, working on their
+project with their own tools. Their Floot and its transcripts stay with them.
+That is not confidentiality from you: you can read everything a harness on
+your machine does.
+
+A runner's sessions spend one subscription that you name, and it should be a
+lane set aside for them: a share, held in the broker's pool and marked
+`pinnedOnly`, so your own sessions never drain it and its limits meter them.
+
+1. Make the share (`provideSubscriptionShare`, above), of your own
+   subscription or one they handed you. Give it its own `expiresAt` and
+   `models`: a request finally passes the share, not the runner.
+2. Declare it as a lane in `ENDO_CODEX_SUBSCRIPTIONS`:
+   `{ "id": "lane-alice", "shareName": "alice-share", "pinnedOnly": true }`,
+   where `alice-share` is a pet name you copied `codex-sandbox/share-alice`
+   to. Restart.
+3. Make the runner, and hand over `codex-sandbox/runner-alice`:
+
+```js
+await provideDelegatedRunner(host, {
+  label: 'Codex',
+  dir: 'codex-sandbox',
+  runnerId: 'alice',
+  limits: {
+    subscription: 'lane-alice',
+    maxSessions: 2,
+    networkPolicies: ['off'], // the default: a harness reaches nothing
+    models: ['gpt-5.2-codex'],
+    storage: 'unbounded', // no adapter bounds a session's directory yet
+    expiresAt: '2026-12-31T00:00:00Z',
+  },
+});
+```
+
+`codex-sandbox/runner-alice-kit` is yours: `revoke()` takes effect at once,
+refuses every further turn and new session, durably, stops its sessions and
+answers which could not be stopped; it destroys nothing. A holder can create, stop and
+destroy only sessions of that runner, and a session's spec may not name a
+host path, a container mount, a subscription or a working directory.
+
+A runner's id has letters, digits and `_`, and no `-`. It must spend a lane
+set aside (a share, `pinnedOnly`); `unmetered: true` is your explicit word
+that it may spend an account whole. A holder's Floot cannot use presets that
+declare a workspace object or container mounts with it: those name a path on
+their machine, which the runner refuses.
+
+Moving a deployment to a pool is a retirement of its broker (see "Several
+subscriptions"), so a lane needs a pooled broker to begin with.
+
 ## Operator settings
 
 Required hosted settings are `ENDO_CODEX_ENABLE=1`, `ENDO_CODEX_HOST_DIR`,

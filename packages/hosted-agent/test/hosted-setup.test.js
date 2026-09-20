@@ -21,9 +21,11 @@ import {
   mintWithPowersPath,
   prepareRuntimeEnv,
   providePrivateDirectory,
+  provideDelegatedRunner,
   provideSubscriptionShare,
   publishAccountOracle,
   publishBrokerSubscription,
+  republishDelegatedRunners,
   readProvisionedEnvironment,
   readSliceImageReference,
   resolveFuturePath,
@@ -817,4 +819,141 @@ test('a kit is not made twice over one namespace while the share is still handed
     { message: /still handed out/ },
   );
   t.is(world.made.length, mints);
+});
+
+/**
+ * A pooled broker's namespace, with one lane set aside and one account.
+ * @param world
+ */
+const withPool = world => {
+  const stored = new Map([
+    [
+      'subscriptions',
+      {
+        members: [
+          { id: 'own', label: 'Own', weight: 1, secretName: 'secret-own' },
+          {
+            id: 'lane-alice',
+            label: 'Alice',
+            weight: 1,
+            subscriptionName: 'share-lane-alice',
+            pinnedOnly: true,
+          },
+          {
+            id: 'open-share',
+            label: 'Open',
+            weight: 1,
+            subscriptionName: 'share-open',
+          },
+        ],
+      },
+    ],
+  ]);
+  world.names.set(
+    'codex-sandbox/broker-powers',
+    Far('broker powers', {
+      has: async name => stored.has(name),
+      lookup: async name => stored.get(name),
+    }),
+  );
+};
+
+test('a delegated runner is a namespace, a kit and the name that is handed out, and follows a re-minted backend', async t => {
+  const world = makeNamingHost({ 'codex-sandbox/backend': 'backend-1' });
+  withPool(world);
+  const dir = { label: 'Codex', dir: 'codex-sandbox' };
+  const limits = {
+    subscription: 'lane-alice',
+    maxSessions: 2,
+    storage: 'unbounded',
+  };
+  // Refused before anything is made: no limits, no storage decision, an id
+  // with the separator in it, and a subscription that is not a lane.
+  await t.throwsAsync(
+    () => provideDelegatedRunner(world.host, { ...dir, runnerId: 'alice' }),
+    { message: /needs limits/ },
+  );
+  await t.throwsAsync(() =>
+    provideDelegatedRunner(world.host, {
+      ...dir,
+      runnerId: 'alice',
+      limits: { subscription: 'lane-alice', maxSessions: 2 },
+    }),
+  );
+  for (const runnerId of ['alice-2', 'kit', 'bad id']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() =>
+      provideDelegatedRunner(world.host, { ...dir, runnerId, limits }),
+    );
+  }
+  for (const subscription of ['own', 'open-share', 'nobody']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        provideDelegatedRunner(world.host, {
+          ...dir,
+          runnerId: 'alice',
+          limits: { ...limits, subscription },
+        }),
+      { message: /must spend a lane set aside/ },
+    );
+  }
+  t.is(world.made.length, 0);
+
+  const result = await provideDelegatedRunner(world.host, {
+    ...dir,
+    runnerId: 'alice',
+    limits,
+  });
+  t.deepEqual(result, {
+    runnerPath: ['codex-sandbox', 'runner-alice'],
+    kitPath: ['codex-sandbox', 'runner-alice-kit'],
+    created: true,
+  });
+  const powers = world.guests.get('codex-sandbox.runner-alice-powers');
+  t.deepEqual([...powers.keys()].sort(), ['backend', 'runner-limits']);
+  t.is(powers.get('backend'), 'locator:backend-1');
+  t.deepEqual(powers.get('runner-limits'), {
+    subscription: 'lane-alice',
+    maxSessions: 2,
+    networkPolicies: ['off'],
+    storage: 'unbounded',
+  });
+  const of = suffix =>
+    world.made.filter(made => made.specifier.endsWith(suffix));
+  t.deepEqual(of('/delegated-runner-module.js')[0].env, { RUNNER_ID: 'alice' });
+  // What is handed out has the kit for its powers, and only the kit.
+  t.is(
+    of('/delegated-runner-facet-module.js')[0].powers,
+    world.names.get('codex-sandbox/runner-alice-kit'),
+  );
+  t.deepEqual(
+    [...world.names.keys()].filter(name => name.startsWith('codex-sandbox.')),
+    [],
+  );
+
+  // A deploy mints the backend again: the runner is not made again.
+  world.names.set('codex-sandbox/backend', 'backend-2');
+  await republishDelegatedRunners(world.host, dir);
+  t.is(powers.get('backend'), 'locator:backend-2');
+  t.is(of('/delegated-runner-module.js').length, 1);
+
+  // Again, with other limits: a write of a value.
+  const again = await provideDelegatedRunner(world.host, {
+    ...dir,
+    runnerId: 'alice',
+    limits: { ...limits, maxSessions: 5 },
+  });
+  t.false(again.created);
+  t.is(powers.get('runner-limits').maxSessions, 5);
+  t.is(of('/delegated-runner-module.js').length, 1);
+
+  // Lending an account whole takes the operator's explicit word.
+  const whole = await provideDelegatedRunner(world.host, {
+    ...dir,
+    runnerId: 'trusted',
+    limits: { ...limits, subscription: 'own' },
+    unmetered: true,
+  });
+  t.true(whole.created);
 });

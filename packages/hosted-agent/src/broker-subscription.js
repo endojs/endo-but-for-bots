@@ -39,6 +39,18 @@ export const makeBrokerSubscription = ({
   now = Date.now,
 }) => {
   const topic = makeLatestTopic();
+  // What was last told, as text. A reading that changes nothing a status
+  // says is not news: without this, a share of this broker held in its own
+  // pool would be told of its own echo for ever (its status follows this
+  // one, and its reading is one of this one's).
+  let told = '';
+  /** @param {any} status */
+  const tell = status => {
+    const text = JSON.stringify(status);
+    if (text === told) return;
+    told = text;
+    topic.publish(harden({ type: 'status', status }));
+  };
 
   const readStatus = async () => {
     const nowMs = now();
@@ -81,8 +93,12 @@ export const makeBrokerSubscription = ({
     getStatus: readStatus,
     async watchStatus() {
       const reader = topic.watch();
+      // A new watcher is told now, whatever was told before.
       void readStatus().then(
-        status => topic.publish(harden({ type: 'status', status })),
+        status => {
+          told = JSON.stringify(status);
+          topic.publish(harden({ type: 'status', status }));
+        },
         () => {},
       );
       return reader;
@@ -114,10 +130,7 @@ export const makeBrokerSubscription = ({
     /** A reading arrived: tell whoever watches. */
     changed: () => {
       if (topic.watcherCount() === 0) return;
-      void readStatus().then(
-        status => topic.publish(harden({ type: 'status', status })),
-        () => {},
-      );
+      void readStatus().then(tell, () => {});
     },
     close: () => topic.close(),
   });

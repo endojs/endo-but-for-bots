@@ -20,6 +20,7 @@ import {
   providePrivateDirectory,
   publishAccountOracle,
   publishBrokerSubscription,
+  republishDelegatedRunners,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedRenewableCredentials } from '@endo/hosted-agent/managed-renewable-credentials.js';
 import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.js';
@@ -280,6 +281,9 @@ export const main = async (host, { exec } = {}) => {
           label: member.label,
           weight: member.weight,
           subscriptionName,
+          // A lane set aside for whoever is pinned to it (a delegated
+          // runner's sessions): never drained by the operator's own.
+          ...('pinnedOnly' in member ? { pinnedOnly: true } : {}),
         });
         // eslint-disable-next-line no-continue
         continue;
@@ -459,6 +463,9 @@ export const main = async (host, { exec } = {}) => {
   // The broker as a Subscription, which shares are made over
   // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
   await publishBrokerSubscription(host, { label: 'Codex', dir: SANDBOX_DIR });
+  // Delegated runners (`provideDelegatedRunner`) follow the backend that was
+  // bound above.
+  await republishDelegatedRunners(host, { label: 'Codex', dir: SANDBOX_DIR });
   console.log(
     'Hosted Codex ready: common scoped sandbox, retained subscription broker, daemon-owned sessions.',
   );

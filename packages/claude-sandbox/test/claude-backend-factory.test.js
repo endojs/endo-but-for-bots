@@ -118,6 +118,7 @@ test('describe() and listModels() present Claude Code as a hosted backend', asyn
     kind: 'hosted',
     continuity: 'transcript',
     toolOwnership: 'endo',
+    providerId: 'anthropic',
     supportedNetworkPolicies: ['off', 'public-internet'],
     // Claude Code names an MCP server's tools mcp__<server>__<tool>.
     promptEnvironment: {
@@ -131,6 +132,57 @@ test('describe() and listModels() present Claude Code as a hosted backend', asyn
   t.deepEqual(models, CLAUDE_CLI_MODELS);
   t.is(models.filter(model => model.default).length, 1);
   t.true(models.every(model => model.reasoningEfforts.length === 0));
+});
+
+test('subscription selection is advertised, validated and forwarded without credentials', async t => {
+  const requests = [];
+  let unavailable = false;
+  const factory = makeClaudeBackendFactory({
+    listSubscriptions: async () => {
+      if (unavailable) throw Error('offline');
+      return harden([
+        { id: 'second', label: 'Second account', secretName: 'must-not-leak' },
+      ]);
+    },
+    provisionSession: async (_id, request) => {
+      requests.push(request);
+      return makeFakeSession().facet;
+    },
+    stopSession: async () => {},
+    removeSession: async () => {},
+  });
+  t.deepEqual((await E(factory).describe()).subscriptions, [
+    { id: 'second', label: 'Second account' },
+  ]);
+  await E(factory).create(
+    harden({ sessionId: 'pinned', subscription: 'second' }),
+    makeToolSet(),
+  );
+  t.is(requests[0].subscription, 'second');
+  await E(factory).create(
+    harden({ sessionId: 'auto', subscription: 'auto' }),
+    makeToolSet(),
+  );
+  t.false(Object.hasOwn(requests[1], 'subscription'));
+  await t.throwsAsync(
+    () =>
+      E(factory).create(
+        harden({ sessionId: 'bad', subscription: 'missing' }),
+        makeToolSet(),
+      ),
+    { message: /Unknown Claude subscription/ },
+  );
+  unavailable = true;
+  t.is((await E(factory).describe()).subscriptions, undefined);
+  await t.throwsAsync(
+    () =>
+      E(factory).create(
+        harden({ sessionId: 'offline', subscription: 'second' }),
+        makeToolSet(),
+      ),
+    { message: /cannot be listed/ },
+  );
+  t.is(requests.length, 2);
 });
 
 test('create() hands the validated request and the pinned tool set to the owner', async t => {

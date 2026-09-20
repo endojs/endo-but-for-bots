@@ -177,6 +177,10 @@ const REQUIRED_DESCRIPTOR_KEYS = harden([
   'toolOwnership',
 ]);
 const OPTIONAL_DESCRIPTOR_KEYS = harden([
+  // The backend keeps a session's directory under the `storageBoundBytes`
+  // its spec names. None does yet; a delegated runner with a storage bound
+  // refuses to run on one that does not say so.
+  'enforcesStorageBound',
   'promptEnvironment',
   'providerId',
   'subscriptions',
@@ -200,12 +204,18 @@ export const assertBackendSubscriptions = candidate => {
   const projected = /** @type {any[]} */ (candidate).map(entry => {
     (entry !== null && typeof entry === 'object') ||
       Fail`A backend subscription must be a record`;
-    const { id, label } = entry;
+    const { id, label, pinnedOnly } = entry;
     (typeof id === 'string' && SUBSCRIPTION_ID.test(id) && id !== 'auto') ||
       Fail`Invalid backend subscription id ${q(id)}`;
     (typeof label === 'string' && label.length > 0 && label.length <= 128) ||
       Fail`Invalid label for backend subscription ${q(id)}`;
-    return harden({ id, label });
+    // A lane set aside for somebody else's sessions: listed, so its account
+    // is shown, and marked, so a picker does not offer it.
+    return harden({
+      id,
+      label,
+      ...(pinnedOnly === true ? { pinnedOnly } : {}),
+    });
   });
   new Set(projected.map(entry => entry.id)).size === projected.length ||
     Fail`Backend subscription ids must be distinct`;
@@ -257,6 +267,9 @@ export const assertHostedBackendDescriptor = descriptor => {
     (typeof descriptor.providerId === 'string' &&
       SUBSCRIPTION_ID.test(descriptor.providerId)) ||
     Fail`Hosted backend descriptor has an invalid provider id`;
+  descriptor.enforcesStorageBound === undefined ||
+    typeof descriptor.enforcesStorageBound === 'boolean' ||
+    Fail`Hosted backend descriptor has an invalid storage bound flag`;
   return harden({
     id: descriptor.id,
     title: descriptor.title,
@@ -269,6 +282,9 @@ export const assertHostedBackendDescriptor = descriptor => {
     ...(descriptor.providerId === undefined
       ? {}
       : { providerId: descriptor.providerId }),
+    ...(descriptor.enforcesStorageBound === true
+      ? { enforcesStorageBound: true }
+      : {}),
     ...(descriptor.subscriptions === undefined
       ? {}
       : {

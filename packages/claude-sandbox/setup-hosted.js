@@ -93,6 +93,7 @@ import { CLAUDE_CLI_MODELS } from './src/claude-backend-factory.js';
 import { ANTHROPIC_BETA_PATTERN } from './src/claude-broker.js';
 import { readClaudeBrokerConfig } from './src/claude-broker-service-agent.js';
 import { assertCredentialKind } from './src/claude-credential-kinds.js';
+import { prepareClaudePool, readClaudePool } from './src/claude-pool-setup.js';
 import {
   SANDBOX_DIR,
   assertRuntimePlacement,
@@ -137,6 +138,7 @@ harden(inferCredentialKind);
 export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
   const { env } = process;
+  const pool = readClaudePool(env);
 
   const credsName = env.ENDO_CLAUDE_CREDS_NAME || 'claude-creds';
   const backendName = env.ENDO_CLAUDE_BACKEND_NAME || 'claude-backend';
@@ -201,6 +203,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   /** @type {CredentialKind | undefined} */
   const requestedKind =
     (namedKind && assertCredentialKind(namedKind)) ||
+    (pool ? 'oauthToken' : undefined) ||
     (oauthToken ? 'oauthToken' : undefined) ||
     (seedApiKey ? inferCredentialKind(seedApiKey) : undefined);
 
@@ -259,6 +262,8 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   let brokerOwnerId = '';
   if (existingBroker) {
     const broker = await readBrokerService(hostAgent);
+    (broker.config.pool === true) === (pool !== undefined) ||
+      Fail`Changing Claude pool mode requires retiring the broker and its sessions first`;
     credsKind = broker.config.credentialKind;
     if (requestedKind !== undefined && requestedKind !== credsKind) {
       throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} reads a ${q(credsKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
@@ -310,12 +315,19 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // Assert before the first mint so a failure cannot leave a half-bound
   // profile behind (the credential mint would otherwise commit first).
   assertCurrentSpecifier(backendModuleSpecifier, 'claude-backend');
-  await provideManagedCredentials(hostAgent, {
-    name: credsName,
-    ...(seedApiKey ? { apiKey: seedApiKey } : {}),
-    kind: credsKind,
-    label: 'Anthropic',
-  });
+  if (pool) {
+    credsKind === 'oauthToken' ||
+      Fail`Claude pools require oauthToken credentials`;
+    const prepared = await prepareClaudePool(hostAgent, pool);
+    await prepared.publish();
+  } else {
+    await provideManagedCredentials(hostAgent, {
+      name: credsName,
+      ...(seedApiKey ? { apiKey: seedApiKey } : {}),
+      kind: credsKind,
+      label: 'Anthropic',
+    });
+  }
 
   await mkdir(workspaceDir, { recursive: true, mode: 0o700 });
   // The MCP socket base must be private and symlink-free: a planted link here
@@ -339,13 +351,16 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       // sends verbatim in its request bodies.
       models: CLAUDE_CLI_MODELS.map(model => model.id),
       credentialKind: credsKind,
+      ...(pool ? { pool: true } : {}),
       ...(anthropicBeta ? { anthropicBeta } : {}),
       ...(publicInternet ? { publicInternet: true } : {}),
       ...(diagnostics ? { diagnostics: true } : {}),
     });
     readClaudeBrokerConfig({ CLAUDE_BROKER_CONFIG: brokerConfig });
     await mintWithPowersPath(hostAgent, {
-      powersPath: ['secrets', credsName],
+      powersPath: pool
+        ? [SANDBOX_DIR, 'broker-powers']
+        : ['secrets', credsName],
       temporary: `${credsName}.broker-read`,
       specifier: brokerServiceSpecifier,
       resultName: [SANDBOX_DIR, 'broker-service'],
@@ -455,6 +470,9 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     providerId: 'anthropic',
     flootDir,
     backendId: 'claude',
+    ...(pool
+      ? { subscriptionIds: pool.set.members.map(member => member.id) }
+      : {}),
   });
   // The broker as a Subscription, which shares are made over
   // (`provideSubscriptionShare`); re-minted here so they follow a new broker.

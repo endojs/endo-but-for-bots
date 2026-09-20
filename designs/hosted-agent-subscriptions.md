@@ -3,11 +3,41 @@
 | | |
 |---|---|
 | **Created** | 2026-09-20 |
-| **Updated** | 2026-09-20 |
+| **Updated** | 2026-09-21 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
 ## Status
+
+### Latest increment — 2026-09-21
+
+Claude and Codex pools were deployed to Tokyo at `58818cd57` on 2026-09-20.
+Codex primary, Claude secondary, and both Auto selections passed live Floot
+smoke turns; the secondary Codex credential remains fenced after an unresolved
+renewal and needs a fresh login.
+Those checks did not prove live mid-request handover.
+
+This increment adds Claude renewable-login imports alongside plain setup-tokens.
+The host broker stores only refresh credentials, scopes, an operator-local
+account binding and write-ahead renewal intent in Secrets.
+Access tokens and expiry are memory-only; restart requires renewal on first use.
+CAS guards and single-flight renewal prevent concurrent exchange and refuse
+replay after an ambiguous result.
+Per-member managed holders have read/conditional-replace authority over one
+pinned record; the sandbox and sessions have neither credential authority.
+Direct usage reads use the same credential and need `user:profile` permission.
+Tokyo runs this increment at `00799f3f5`, with endo-host `6304fd2`, generation 146.
+Both accounts passed direct usage reads, renewal from persisted refresh tokens
+after restart, and pinned Floot inference; all disposable sessions were removed.
+The restart test exposed route-dependent locator comparisons in pool setup.
+The fix compares stable formula IDs and publishes the validated IDs without
+re-resolving mutable names.
+Both normalized Secrets records contain no access token or expiry and no pending
+renewal intent; the old plain-token secret remains unchanged and unselected.
+The final Claude suite passes 222 tests and the focused shared suites pass 121.
+Lint has no errors, but repository-wide declaration/type and docs gates remain
+failing; live exhaustion handover and long-duration soak are not claimed.
+The older phase notes below describe their implementation-time deployment status.
 
 **Phase 1, usage and context, is implemented.** Not deployed; the OpenCode
 bridge lives in the slice image, so its part takes effect when that image is
@@ -148,10 +178,17 @@ Where phase 4 differs from the design below:
 - `usage` on the endpoint, which the design lists for phase 5, is not here
   yet.
 
-**Phases 5 and 6, the pool and the handover, are implemented for Codex.**
-Not deployed, and not exercised against two real accounts: that, and whether
-encrypted reasoning items replay under another account, are still open below.
-Claude and OpenCode brokers still hold one credential each.
+**Phases 5 and 6, the pool and the handover, are implemented for Codex and Claude.**
+The Codex implementation is deployed to Tokyo; two-account acceptance and whether
+encrypted reasoning items replay under another account remain open below.
+Claude's new pool wiring is locally tested but not deployed or live-validated.
+It uses explicit Secrets references, OAuth-only credentials, per-member account
+oracles, and the same selection and exhaustion rules as Codex.
+Floot exposes Auto and named members; an existing session's pin cannot change.
+Opaque Claude tokens cannot establish that two Secrets entries name distinct
+provider accounts; that remains the operator's responsibility.
+See `packages/claude-sandbox/HOSTED-SUBSCRIPTIONS.md` for setup and limitations.
+OpenCode brokers still hold one credential each.
 
 - `subscription-pool.js` — the rule and nothing else: `standingOf` (where one
   subscription stands, from its last reading, at an instant),
@@ -445,6 +482,115 @@ Where it differs from the design below, or settles what it left open:
   and OpenCode's brokers beyond the shared functions (they publish
   `<dir>/subscription`; nothing provisions a share for them); revoking a
   share from a view.
+
+**Phase 9, the delegated runner, is implemented in part.** Not deployed, and
+not run against a peer. What is built is the attenuation and its durable
+state; what is not is listed at the end of this entry.
+
+- `delegated-runner.js` — a `HostedBackendFactory` over another, within
+  limits its operator chose: `{ subscription, maxSessions, networkPolicies,
+  models?, storage, expiresAt? }`. A holder is an untrusted party calling
+  over the network, so every narrowing is enforced in the runner:
+  - Session ids are put under the runner's name (`r-<id>-<session>`, by
+    digest where that would be too long). A runner's id has no `-`, so no two
+    runners' names can spell the same session; with one, `a` + `b-x` and
+    `a-b` + `x` would, and the backend would hand one holder's session, its
+    workspace and its thread, to the other.
+  - The set of sessions and the revocation are one journal record
+    (`runner-state-v1-*`), read again before every change. A slot is taken
+    durably before the session exists and given back only when the session
+    is gone beneath. Only that accounting is serialized: calls beneath are
+    made outside it, each within a deadline, so a holder whose tool set never
+    answers holds up its own `create` and nothing else.
+  - A spec may carry `sessionId`, `model`, `reasoningEffort`, `systemPrompt`
+    (bounded) and `networkPolicy`, each checked for type, and nothing else: a
+    host path, a container mount or an unknown field is refused, not dropped.
+  - The turn facets a session hands back are the runner's own forwarders.
+    Every turn asks again whether the runner stands, so a revoked or expired
+    runner refuses turns on sessions it made earlier, and a turn cannot name
+    a model outside the allowlist. A timer stops the sessions at expiry.
+  - One call at a time per session: a `destroy` and a `create` of one id,
+    sent together, would otherwise end with the slot given back and the
+    session live, uncounted, beyond the allowance and out of a revocation's
+    reach. A `create` that ran out of time keeps its slot, since it may yet
+    complete beneath.
+  - `revoke()` takes effect at once, before anything is written or stopped,
+    then stops each session within a deadline and answers which could not
+    be. It destroys nothing.
+  - The descriptor is projected field by field, with an id of its own
+    (`<backend>-<runner>`) and no subscriptions. What goes wrong beneath
+    reaches a holder as `Runner unavailable`, and is logged for the operator.
+- `delegated-runner-module.js` and `delegated-runner-facet-module.js` — the
+  same kit-and-facet pair a share has: the kit's namespace holds `backend`
+  (re-pointed by setup), `runner-limits` (a stored value, read for every
+  call) and the state; what is handed out is only the kit's `runner()`.
+- `hosted-setup.js` — `provideDelegatedRunner` and
+  `republishDelegatedRunners`, which the Codex setup calls after it binds
+  its backend.
+- A pool member may be `pinnedOnly`: served only to a session pinned to it,
+  never chosen for `auto`. A descriptor lists it, marked, so its account is
+  shown and a picker does not offer it.
+
+Where it differs from the design below, or settles what it left open:
+
+- **The subscription is not an argument of `create`.** The design had
+  `create(spec, toolSet)` accept `spec.subscription` as a capability and the
+  runner start the listener over an endpoint it opened. A session's plan is
+  immutable copy-data and its broker scope is remade from it at every
+  revival, so a capability in a spec would not survive a restart. Instead
+  the runner pins every session to one member of the broker's pool, by id,
+  and that member is a share held in the broker's namespace
+  (`{ id, shareName, pinnedOnly: true }`): the operator's own share for
+  "a runner and a share", or one the holder handed over for "a runner only",
+  in which case the holder's credential still never enters the operator's
+  Secrets. Metering, revocation and restart all come from what phases 5 to 8
+  built. The listener still belongs to the grant issuer, on the operator's
+  machine, which is where a delegated harness runs.
+- **A share of the operator's own broker inside that broker's pool is a
+  cycle by construction**, which is why wrapped endpoints are opened lazily
+  (phase 8) and why such a lane must be `pinnedOnly`: `auto` would otherwise
+  choose it from inside itself until the hop limit.
+- **Storage is said one way or the other.** No adapter bounds a session's
+  directory today, so limits must carry `storage: { maxSessionBytes }`, which
+  is refused until the backend beneath declares `enforcesStorageBound`, or
+  `storage: 'unbounded'`, the operator's explicit word. The design's open
+  decision on the bound stands.
+- **A runner that is over still answers `describe()`**, and lists no models.
+  A holder's Floot asks every backend it knows at once, with no allowance
+  for one that refuses, so a refusal there would cost the holder its other
+  backends.
+- **Two kits over one runner's namespace are not atomic with each other.**
+  Each reads the record again before it writes, and every few seconds
+  otherwise, so one's revocation reaches the other; a write of one landing
+  between the other's read and write can still be lost. Provisioning refuses
+  to make a second kit while the handed-out name exists.
+- **The slot allowance counts sessions that exist**, not ones running: a
+  stopped session keeps its slot until it is destroyed, and so does one whose
+  `create` hung or whose `destroy` keeps failing beneath. That costs only the
+  holder.
+- **A runner must spend a lane set aside**: `provideDelegatedRunner` reads
+  the broker's declared set and refuses a subscription that is not a share
+  and `pinnedOnly`, unless the operator says `unmetered: true`. The share
+  should carry its own `expiresAt` and `models` too: it is the share, not the
+  runner, that a request finally passes.
+- **A set-aside lane is left out of the broker's own status**, and status
+  publications are deduplicated by value. A lane is often a share of the very
+  broker whose pool holds it: counted, its budget read as the broker's
+  headroom, and its status fed the status it was derived from, which went
+  round for ever.
+- **A holder's Floot cannot use presets that declare a workspace object or
+  container mounts** with a runner: its Floot would send a host path of the
+  holder's machine, which the runner refuses.
+- **A runner's own storage root is not built.** Its sessions live under the
+  adapter's roots, told apart by their names.
+- **Not built**: a workspace that is a directory capability of the holder's
+  daemon, served over 9P (the bridge serves a host directory only); an
+  allowance of CPU or memory; the `share only` case end to end, which needs
+  a runner on the holder's machine to start a listener over a far endpoint
+  (`openEndpoint` and the bytes stream are there; nothing starts a listener
+  over one); acceptance over a real peer connection; Claude's and OpenCode's
+  setups do not call `republishDelegatedRunners`, nor take a share as a pool
+  member, since their brokers hold one credential.
 
 ## What is the Problem Being Solved?
 

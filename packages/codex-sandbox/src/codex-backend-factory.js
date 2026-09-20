@@ -153,7 +153,11 @@ export const makeCodexBackendFactory = ({
       // A broker that cannot be asked right now says nothing here; the
       // descriptor is not the place to fail.
       const subscriptions = (await listSubscriptions().catch(() => [])).map(
-        ({ id, label }) => ({ id, label }),
+        (/** @type {any} */ { id, label, pinnedOnly }) => ({
+          id,
+          label,
+          ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
+        }),
       );
       return harden({
         id: 'codex',

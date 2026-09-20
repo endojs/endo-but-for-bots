@@ -3,6 +3,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 
 import {
   ANTHROPIC_MESSAGES_PATH,
@@ -13,10 +14,225 @@ import {
   buildClaudeBrokerPolicy,
   makeClaudeBrokerKit,
 } from '../src/claude-broker.js';
+import { makeOwnedClaudeBrokerService } from '../src/claude-broker-service-agent.js';
+import { makeClaudeSubscriptionCredential } from '../src/subscription-auth.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const listenerImageRef = `localhost/endo-provider@${digest}`;
 const models = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'];
+
+test('owned Claude pool injects refreshed access token, never login JSON', async t => {
+  const runtime = makeFakeRuntime();
+  let base64 = btoa(
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'discarded-imported-access',
+        refreshToken: 'original-renewal',
+        expiresAt: 1000,
+        scopes: ['user:inference', 'user:profile'],
+      },
+    }),
+  );
+  let generation = 0n;
+  const writes = [];
+  const secret = Far('renewable subscription', {
+    readBase64: async () => base64,
+    readBase64WithGeneration: async () => ({ base64, generation }),
+    async replaceBase64(next, options) {
+      if (options.ifGeneration !== generation)
+        throw Error('generation conflict');
+      writes.push(JSON.parse(atob(next)));
+      base64 = next;
+      generation += 1n;
+      return generation;
+    },
+  });
+  const entries = new Map([
+    [
+      'subscriptions',
+      harden({ members: [{ id: 'second', accountRef: 'claude-second' }] }),
+    ],
+    ['second', secret],
+  ]);
+  const used = [];
+  let exchanges = 0;
+  let kit;
+  const make = makeOwnedClaudeBrokerService({
+    makeCredential: powers =>
+      makeClaudeSubscriptionCredential({
+        ...powers,
+        fetch: async url => {
+          t.is(url, 'https://platform.claude.com/v1/oauth/token');
+          exchanges += 1;
+          return new Response(
+            JSON.stringify({
+              access_token: 'refreshed-access',
+              refresh_token: 'rotated-renewal',
+              expires_in: 3600,
+            }),
+          );
+        },
+      }),
+    makeServiceKit: options => {
+      kit = makeProviderBrokerServiceKit({
+        ...options,
+        runtime,
+        fetch: async (_url, init) => {
+          used.push(init.headers.authorization);
+          return new Response('served with renewable credential');
+        },
+      });
+      return kit;
+    },
+  });
+  const service = await make(
+    Far('renewable pool namespace', {
+      lookup: async name => entries.get(name),
+      list: async () => [],
+      storeValue: async (value, name) => entries.set(name, value),
+    }),
+    Far('context', { whenCancelled: () => new Promise(() => {}) }),
+    {
+      env: {
+        CLAUDE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'claude-renewable',
+          directory: '/tmp/unused',
+          imageRef: `localhost/claude@${digest}`,
+          imageDigest: digest,
+          listenerImageRef,
+          models,
+          credentialKind: 'oauthToken',
+          pool: true,
+        }),
+      },
+    },
+  );
+  t.teardown(() => kit.close());
+  const scope = await E(service).provideScope(
+    'renewable-session',
+    harden({
+      providerOrigin: ANTHROPIC_ORIGIN,
+      accountRef: CLAUDE_BROKER_ACCOUNT,
+    }),
+  );
+  await E(scope).start();
+  const response = await E(runtime.starts[0].endpoint).request(
+    harden({
+      method: 'POST',
+      path: ANTHROPIC_MESSAGES_PATH,
+      body: JSON.stringify({ model: models[0] }),
+    }),
+  );
+  t.is(response.body, 'served with renewable credential');
+  t.deepEqual(used, ['Bearer refreshed-access']);
+  t.is(exchanges, 1);
+  t.is(JSON.parse(atob(base64)).refreshToken, 'rotated-renewal');
+  t.true(writes.length >= 3);
+  for (const state of writes) {
+    t.false('accessToken' in state);
+    t.false('expiresAt' in state);
+  }
+});
+
+test('Claude pool hands recognized exhaustion to a second secret but never moves a pinned request', async t => {
+  const runtime = makeFakeRuntime();
+  const used = [];
+  /** @type {Map<string, any>} */
+  const entries = new Map([
+    [
+      'subscriptions',
+      harden({
+        members: [
+          { id: 'first', accountRef: 'claude-first' },
+          { id: 'second', accountRef: 'claude-second' },
+        ],
+      }),
+    ],
+    ...['first', 'second'].map(id => [
+      id,
+      Far(`${id} secret`, {
+        readBase64: async () => btoa(`sk-ant-oat-${id}`),
+        readBase64WithGeneration: async () => ({
+          base64: btoa(`sk-ant-oat-${id}`),
+          generation: 1n,
+        }),
+      }),
+    ]),
+  ]);
+  let kit;
+  const make = makeOwnedClaudeBrokerService({
+    makeServiceKit: options => {
+      kit = makeProviderBrokerServiceKit({
+        ...options,
+        runtime,
+        fetch: async (_url, init) => {
+          const auth = init.headers.authorization;
+          used.push(auth);
+          return auth.endsWith('first')
+            ? new Response('exhausted', {
+                status: 429,
+                headers: {
+                  'anthropic-ratelimit-unified-status': 'rejected',
+                  'anthropic-ratelimit-unified-5h-utilization': '1',
+                  'anthropic-ratelimit-unified-5h-reset': '4000000000',
+                },
+              })
+            : new Response('served');
+        },
+      });
+      return kit;
+    },
+  });
+  const namespace = Far('pool namespace', {
+    lookup: async name => entries.get(name),
+    list: async () => [],
+    storeValue: async (value, name) => entries.set(name, value),
+  });
+  const service = await make(
+    namespace,
+    Far('context', { whenCancelled: () => new Promise(() => {}) }),
+    {
+      env: {
+        CLAUDE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'claude-pooled',
+          directory: '/tmp/unused',
+          imageRef: `localhost/claude@${digest}`,
+          imageDigest: digest,
+          listenerImageRef,
+          models,
+          credentialKind: 'oauthToken',
+          pool: true,
+        }),
+      },
+    },
+  );
+  t.teardown(() => kit.close());
+  const spec = harden({
+    providerOrigin: ANTHROPIC_ORIGIN,
+    accountRef: CLAUDE_BROKER_ACCOUNT,
+  });
+  const scope = await E(service).provideScope('auto-session', spec);
+  await E(scope).start();
+  const request = harden({
+    method: 'POST',
+    path: ANTHROPIC_MESSAGES_PATH,
+    body: JSON.stringify({ model: models[0] }),
+  });
+  const endpoint = runtime.starts[0].endpoint;
+  t.is((await E(endpoint).request(request)).body, 'served');
+  t.deepEqual(used, ['Bearer sk-ant-oat-first', 'Bearer sk-ant-oat-second']);
+  t.is((await E(endpoint).request(request)).body, 'served');
+  t.is(used.length, 3);
+  const pinned = await E(service).provideScope(
+    'pinned-session',
+    harden({ ...spec, subscription: 'first' }),
+  );
+  await E(pinned).start();
+  await t.throwsAsync(() => E(runtime.starts[1].endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(used.length, 3);
+});
 
 const makeFakeRuntime = () => {
   let stops = 0;

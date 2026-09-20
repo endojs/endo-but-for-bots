@@ -452,10 +452,19 @@ export const makeSubscriptionShare = ({
     });
   };
 
+  // What was last told, as text: a change beneath that changes nothing this
+  // status says is not passed on. (A share held in the pool of the very
+  // broker it is made over would otherwise hear its own echo for ever.)
+  let told = '';
   const publish = () => {
     if (topic.watcherCount() === 0) return;
     void readStatus(false).then(
-      status => topic.publish(harden({ type: 'status', status })),
+      status => {
+        const text = JSON.stringify(status);
+        if (text === told) return;
+        told = text;
+        topic.publish(harden({ type: 'status', status }));
+      },
       () => {},
     );
   };
@@ -734,8 +743,12 @@ export const makeSubscriptionShare = ({
     getStatus: () => bare('a status read', () => readStatus(false)),
     async watchStatus() {
       const reader = topic.watch();
+      // A new watcher is told now, whatever was told before.
       void readStatus(false).then(
-        status => topic.publish(harden({ type: 'status', status })),
+        status => {
+          told = JSON.stringify(status);
+          topic.publish(harden({ type: 'status', status }));
+        },
         () => {},
       );
       void follow();

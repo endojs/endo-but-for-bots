@@ -498,3 +498,43 @@ test('a subscription id cannot end the way setup names a member’s namespaces',
     }),
   );
 });
+
+test('a lane set aside is served only to a session pinned to it', t => {
+  const lanes = [
+    { id: 'lane', label: 'Lane', weight: 1, pinnedOnly: true },
+    { id: 'own', label: 'Own', weight: 1 },
+  ];
+  const choose = preference =>
+    selectMembers({
+      members: lanes,
+      readingOf: () => undefined,
+      refusedUntil: () => null,
+      preference,
+      last: undefined,
+      cacheLifetimeMs: 300_000,
+      nowMs: Date.parse('2026-09-20T00:00:00Z'),
+    }).order;
+  t.deepEqual(choose('auto'), ['own']);
+  t.deepEqual(choose('lane'), ['lane']);
+  t.deepEqual(
+    normalizeSubscriptionSet({
+      members: [
+        { id: 'lane', subscriptionName: 'share-lane', pinnedOnly: true },
+        { id: 'own', pinnedOnly: false },
+      ],
+    }).members,
+    [
+      {
+        id: 'lane',
+        label: 'lane',
+        weight: 1,
+        subscriptionName: 'share-lane',
+        pinnedOnly: true,
+      },
+      { id: 'own', label: 'own', weight: 1, secretName: 'own' },
+    ],
+  );
+  t.throws(() =>
+    normalizeSubscriptionSet({ members: [{ id: 'x', pinnedOnly: 'yes' }] }),
+  );
+});

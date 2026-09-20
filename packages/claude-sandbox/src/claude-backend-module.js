@@ -39,6 +39,7 @@
 
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { clearTimeout, setTimeout } from 'node:timers';
 
 import { assertPetNames } from '@endo/daemon/pet-name.js';
 import { Fail, q } from '@endo/errors';
@@ -184,6 +185,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       nativeProfile,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...(request.model ? { model: request.model } : {}),
+      ...(request.subscription ? { subscription: request.subscription } : {}),
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     });
     const text = JSON.stringify(plan);
@@ -267,6 +269,8 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
         Fail`Session ${q(sessionId)} image cannot change; destroy the session first`;
       recorded.credentialKind === plan.credentialKind ||
         Fail`Session ${q(sessionId)} credential kind cannot change; destroy the session first`;
+      recorded.subscription === plan.subscription ||
+        Fail`Session ${q(sessionId)} subscription cannot change; destroy the session first`;
       (recorded.workspaceMountPoint === plan.workspaceMountPoint &&
         recorded.mcpDir === plan.mcpDir &&
         recorded.mounterSocketDir === plan.mounterSocketDir) ||
@@ -296,6 +300,27 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   };
 
   return makeClaudeBackendFactory({
+    listSubscriptions: async () => {
+      await null;
+      let timer;
+      try {
+        return await Promise.race([
+          E(
+            /** @type {Promise<{ subscriptions(): Promise<Array<{ id: string, label: string }>> }>} */ (
+              E(hostAgent).lookup([SANDBOX_DIR, 'broker-service'])
+            ),
+          ).subscriptions(),
+          new Promise((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(Error('Claude broker did not answer in time')),
+              5000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     provisionSession,
     stopSession: sessionId => E(owner).stop(sessionId),
     removeSession: sessionId => E(owner).remove(sessionId),

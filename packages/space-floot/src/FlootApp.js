@@ -69,7 +69,10 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   // backend drain the one that resets soonest and move a turn when one runs
   // out; a choice here pins the session. Offered only when there is a choice.
   const [subscription, setSubscription] = useState('auto');
-  const subscriptions = selectedModel?.subscriptions || [];
+  // A lane set aside for somebody else's sessions is not offered.
+  const subscriptions = (selectedModel?.subscriptions || []).filter(
+    entry => entry.pinnedOnly !== true,
+  );
   const chosenSubscription = subscriptions.some(
     entry => entry.id === subscription,
   )

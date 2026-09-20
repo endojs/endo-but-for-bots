@@ -23,6 +23,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { normalizeRunnerLimits } from './delegated-runner.js';
 import { normalizeShareLimits } from './subscription-share.js';
 
 import {
@@ -520,6 +521,184 @@ export const provideBrokerSubscription = async (
   return locator;
 };
 harden(provideBrokerSubscription);
+
+/**
+ * Provide a delegated runner: an adapter's hosted backend within limits the
+ * operator chose, to hand to somebody else (`delegated-runner.js`).
+ *
+ * Like a share, it is a namespace (`<dir>/runner-<id>-powers`), the
+ * operator's kit over it (`<dir>/runner-<id>-kit`: `revoke()`,
+ * `getStatus()`) and the name to hand out (`<dir>/runner-<id>`). Called
+ * again it rewrites the limits and re-points the backend, and nothing else:
+ * the sessions it counts and its revocation stay.
+ *
+ * The subscription its sessions spend is a member of the broker's pool that
+ * the operator names, which should be a share and set aside (`pinnedOnly`):
+ * that is what meters a holder, and what keeps the operator's own sessions
+ * off it.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {object} options
+ * @param {string} options.label
+ * @param {string} options.dir The adapter's directory pet name.
+ * @param {string} options.runnerId Letters, digits and `_`: no `-`, which
+ *   separates a runner's name from a session's in what the backend sees.
+ * @param {any} [options.limits] `RunnerLimits`. Required for a new runner.
+ * @param {string[]} [options.poolPowersPath] The broker's namespace, where
+ *   the declared set is: `<dir>/broker-powers` by default.
+ * @param {boolean} [options.unmetered] The operator's explicit word that the
+ *   subscription named need not be a lane set aside: the holder then spends
+ *   an account of the operator's with no meter but the provider's.
+ * @returns {Promise<{ runnerPath: string[], kitPath: string[], created: boolean }>}
+ */
+export const provideDelegatedRunner = async (
+  hostAgent,
+  {
+    label,
+    dir,
+    runnerId,
+    limits,
+    poolPowersPath = [dir, 'broker-powers'],
+    unmetered = false,
+  },
+) => {
+  /^[A-Za-z0-9][A-Za-z0-9_]{0,31}$/.test(runnerId) ||
+    Fail`Invalid runner id ${q(runnerId)}`;
+  !/^(powers|handle|kit)$/.test(runnerId) ||
+    Fail`Runner id ${q(runnerId)} is a name this uses`;
+  // Always the adapter's own backend, which setup re-points runners at on
+  // every run (`republishDelegatedRunners`).
+  const backendPath = [dir, 'backend'];
+  const runnerPath = [dir, `runner-${runnerId}`];
+  const kitPath = [dir, `runner-${runnerId}-kit`];
+  const powersPath = [dir, `runner-${runnerId}-powers`];
+  const handlePath = [dir, `runner-${runnerId}-handle`];
+  const handleName = `${dir}.runner-${runnerId}-handle`;
+  const powersName = `${dir}.runner-${runnerId}-powers`;
+  (await E(hostAgent).has(...backendPath)) ||
+    Fail`${b(label)} runner needs the backend ${q(backendPath.join('/'))}`;
+  const backendLocator = await E(hostAgent).locate(...backendPath);
+  const stored =
+    limits === undefined ? undefined : normalizeRunnerLimits(limits);
+  if (stored !== undefined && !unmetered) {
+    // What meters a holder is the share its sessions are pinned to, and what
+    // keeps the operator's own sessions off that share is `pinnedOnly`. A
+    // runner over anything else lends an account whole.
+    /** @type {any} */
+    let declared;
+    if (await E(hostAgent).has(...poolPowersPath)) {
+      const poolPowers = await E(hostAgent).lookup(poolPowersPath);
+      if (await E(poolPowers).has('subscriptions')) {
+        declared = await E(poolPowers).lookup('subscriptions');
+      }
+    }
+    const lane = (declared?.members ?? []).find(
+      (/** @type {any} */ member) => member?.id === stored.subscription,
+    );
+    (lane !== undefined &&
+      lane.subscriptionName !== undefined &&
+      lane.pinnedOnly === true) ||
+      Fail`Runner ${q(runnerId)} must spend a lane set aside: a member of the broker's pool that is a share and pinnedOnly (${q(stored.subscription)} is not)`;
+  }
+
+  const created = !(await E(hostAgent).has(...kitPath));
+  if (created && (await E(hostAgent).has(...runnerPath))) {
+    // As for a share: the name handed out keeps its kit running.
+    throw Fail`Runner ${q(runnerId)} is still handed out as ${q(runnerPath.join('/'))}, which keeps its kit running; remove that name first, and hand the runner out again`;
+  }
+  if (created && (await E(hostAgent).has(...powersPath))) {
+    // The namespace (the limits, the sessions it counts, its revocation)
+    // outlived its kit: the kit is made over it again, not beside it.
+    await mintWithPowersPath(hostAgent, {
+      powersPath,
+      temporary: `${dir}.runner-${runnerId}-powers`,
+      specifier: moduleSpecifier('./delegated-runner-module.js'),
+      resultName: kitPath,
+      env: { RUNNER_ID: runnerId },
+    });
+  } else if (created) {
+    stored !== undefined || Fail`A new runner needs limits`;
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(hostAgent).has(stray)) await E(hostAgent).remove(stray);
+    }
+    await E(hostAgent).provideGuest(handleName, { agentName: powersName });
+    const guest = await E(hostAgent).lookup(powersName);
+    await E(guest).storeLocator('backend', backendLocator);
+    await E(guest).storeValue(stored, 'runner-limits');
+    await E(hostAgent).makeUnconfined(
+      '@main',
+      moduleSpecifier('./delegated-runner-module.js'),
+      {
+        powersName,
+        resultName: kitPath,
+        env: harden({ RUNNER_ID: runnerId }),
+      },
+    );
+  }
+  for (const [from, to] of [
+    [handleName, handlePath],
+    [powersName, powersPath],
+  ]) {
+    if (
+      // eslint-disable-next-line no-await-in-loop
+      (await E(hostAgent).has(/** @type {string} */ (from))) &&
+      // eslint-disable-next-line no-await-in-loop
+      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(hostAgent).move([from], to);
+    }
+  }
+  const powers = await E(hostAgent).lookup(powersPath);
+  // The backend that exists now: an adapter mints it again on every run.
+  await E(powers).storeLocator('backend', backendLocator);
+  if (stored !== undefined) await E(powers).storeValue(stored, 'runner-limits');
+  if (!(await E(hostAgent).has(...runnerPath))) {
+    await mintWithPowersPath(hostAgent, {
+      powersPath: kitPath,
+      temporary: `${dir}.runner-${runnerId}-kit-powers`,
+      specifier: moduleSpecifier('./delegated-runner-facet-module.js'),
+      resultName: runnerPath,
+      env: {},
+    });
+  }
+  return harden({ runnerPath, kitPath, created });
+};
+harden(provideDelegatedRunner);
+
+/**
+ * Re-point every delegated runner of an adapter at the backend that exists
+ * now. Called at the end of the adapter's setup, after it has bound its
+ * backend: a runner keeps its identity, its limits, its sessions and its
+ * revocation across a backend that a deploy re-minted.
+ *
+ * @param {any} hostAgent The `@agent` host powers.
+ * @param {{ label: string, dir: string }} options
+ */
+export const republishDelegatedRunners = async (hostAgent, { label, dir }) => {
+  await null;
+  const backendPath = [dir, 'backend'];
+  try {
+    if (!(await E(hostAgent).has(...backendPath))) return;
+    const locator = await E(hostAgent).locate(...backendPath);
+    const names = await E(hostAgent).list(dir);
+    for (const name of Array.isArray(names) ? names : []) {
+      if (/^runner-[A-Za-z0-9][A-Za-z0-9_]{0,31}-powers$/.test(name)) {
+        // eslint-disable-next-line no-await-in-loop
+        const powers = await E(hostAgent).lookup([dir, name]);
+        // eslint-disable-next-line no-await-in-loop
+        await E(powers).storeLocator('backend', locator);
+      }
+    }
+  } catch (error) {
+    console.error(
+      `${label} delegated runners were not re-pointed at the new backend; sessions are unaffected:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+};
+harden(republishDelegatedRunners);
 
 /**
  * Provide an adapter's broker as a `Subscription` over its
