@@ -36,6 +36,47 @@ const MAX_ATTEMPTS = 3;
 const REQUEST_TIMEOUT_MS = 300_000;
 /** The longest a `Retry-After` is honoured for. */
 const MAX_RETRY_AFTER_MS = 30_000;
+/**
+ * How long a reply waits for the model catalog, which is only read to say how
+ * large the serving model's context window is. The catalog keeps loading
+ * after that; a later reply has it.
+ */
+const CATALOG_WAIT_MS = 2000;
+const CATALOG_TIMEOUT_MS = 20_000;
+/** How long after a failed catalog read the next one waits. */
+const CATALOG_RETRY_MS = 300_000;
+
+/** @param {unknown} value */
+const tokens = value =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0;
+
+/**
+ * OpenRouter's usage in disjoint counts. It follows the OpenAI convention:
+ * `prompt_tokens` includes the cached ones and `completion_tokens` the
+ * reasoning ones. What the request put in the window is both totals.
+ *
+ * @param {any} usage
+ * @param {number} windowTokens 0 when the serving model's size is not known
+ */
+export const usageFromOpenRouter = (usage, windowTokens) => {
+  const prompt = tokens(usage.prompt_tokens);
+  const completion = tokens(usage.completion_tokens);
+  const cached = Math.min(prompt, tokens(usage.prompt_tokens_details?.cached_tokens));
+  const reasoning = Math.min(
+    completion,
+    tokens(usage.completion_tokens_details?.reasoning_tokens),
+  );
+  return {
+    inputTokens: prompt - cached,
+    outputTokens: completion - reasoning,
+    cachedInputTokens: cached,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: reasoning,
+    context: { usedTokens: prompt + completion, windowTokens },
+  };
+};
 
 /**
  * What of a provider response may be shown. A body can carry credentials or
@@ -137,6 +178,7 @@ const describe = facts => {
  * @param {(ms: number, signal?: AbortSignal) => Promise<void>} [options.sleep]
  * @param {number} [options.requestTimeoutMs]
  * @param {(line: string) => void} [options.log]
+ * @param {() => number} [options.now] the clock that spaces catalog reads
  */
 export const makeOpenRouterProvider = ({
   apiKey,
@@ -145,11 +187,83 @@ export const makeOpenRouterProvider = ({
   sleep = defaultSleep,
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
   log = line => console.error(line),
+  now = Date.now,
 }) => {
   if (!apiKey || !apiKey.trim()) throw Error('OpenRouter API key is required');
   if (!model || !model.includes('/')) {
     throw Error('OpenRouter model must include its organization prefix');
   }
+
+  // Model id to context length, from the public catalog: no credential is
+  // sent to it. It is read on the first `chat`, beside that request and never
+  // before it. A read that fails is tried again after a while rather than on
+  // every reply, and until one succeeds the window is reported as 0.
+  /** @type {Promise<Map<string, number> | undefined> | undefined} */
+  let catalog;
+  let catalogRetryAt = 0;
+  const loadCatalog = () => {
+    if (catalog === undefined && now() >= catalogRetryAt) {
+      const reading = (async () => {
+        try {
+          const response = await fetchImpl(
+            'https://openrouter.ai/api/v1/models',
+            {
+              redirect: 'error',
+              signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
+            },
+          );
+          if (!response.ok) throw Error(`HTTP ${response.status}`);
+          const listing = await response.json();
+          const windows = new Map();
+          for (const entry of Array.isArray(listing?.data)
+            ? listing.data
+            : []) {
+            const size = tokens(entry?.context_length);
+            if (size > 0) {
+              // A reply names the model that served it by its dated slug as
+              // often as by its id.
+              for (const name of [entry?.id, entry?.canonical_slug]) {
+                if (typeof name === 'string' && name) windows.set(name, size);
+              }
+            }
+          }
+          return windows;
+        } catch (error) {
+          catalog = undefined;
+          catalogRetryAt = now() + CATALOG_RETRY_MS;
+          log(
+            `[openrouter] no model catalog, so no context window sizes: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return undefined;
+        }
+      })();
+      catalog = reading;
+    }
+    return catalog ?? Promise.resolve(undefined);
+  };
+  /**
+   * @param {unknown} servedModel the model a routing id resolved to
+   */
+  const contextWindowOf = async servedModel => {
+    // A timer of its own, not `sleep`: that one paces retries, and a caller
+    // who replaces it to skip the waits must not skip the catalog too.
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    const waited = new Promise(resolve => {
+      timer = setTimeout(() => resolve(undefined), CATALOG_WAIT_MS);
+    });
+    const windows = await Promise.race([loadCatalog(), waited]);
+    clearTimeout(timer);
+    if (windows === undefined) return 0;
+    const served =
+      typeof servedModel === 'string' ? windows.get(servedModel) : undefined;
+    if (served !== undefined) return served;
+    // A routing id (`openrouter/auto`, `openrouter/free`) lists a nominal
+    // size of its own, which is not the size of whatever it routed to.
+    return model.startsWith('openrouter/') ? 0 : (windows.get(model) ?? 0);
+  };
 
   /**
    * One request. Resolves to the accepted result, or to why there is none and
@@ -251,6 +365,9 @@ export const makeOpenRouterProvider = ({
    * @param {AbortSignal} [signal]
    */
   const chat = async (messages, tools, signal) => {
+    // Beside the request, not after it, so the first reply does not wait on
+    // a second round trip. Its failures are its own and already handled.
+    void loadCatalog();
     let result;
     let timeouts = 0;
     for (let tries = 1; ; tries += 1) {
@@ -349,10 +466,10 @@ export const makeOpenRouterProvider = ({
       ...(Object.keys(servedBy).length ? { servedBy } : {}),
       ...(result.usage
         ? {
-            usage: {
-              inputTokens: result.usage.prompt_tokens || 0,
-              outputTokens: result.usage.completion_tokens || 0,
-            },
+            usage: usageFromOpenRouter(
+              result.usage,
+              await contextWindowOf(result.model),
+            ),
           }
         : {}),
     });

@@ -5,6 +5,20 @@ import { detectProviderKind } from '../providers/config.js';
 
 const options = { apiKey: 'test-not-a-key', model: 'vendor/model' };
 
+const CATALOG_URL = 'https://openrouter.ai/api/v1/models';
+/**
+ * The provider reads the public model catalog once, after its first reply,
+ * to learn context window sizes. These tests script the chat endpoint, so
+ * the catalog is answered here and never reaches their stubs.
+ *
+ * @param {(url: any, init: any) => Promise<Response>} chat
+ * @param {Array<{ id: string, context_length: number }>} [models]
+ */
+const withCatalog = (chat, models = []) => async (url, init) =>
+  url === CATALOG_URL
+    ? new Response(JSON.stringify({ data: models }), { status: 200 })
+    : chat(url, init);
+
 test('OpenRouter requires a key and explicit qualified model', t => {
   t.is(detectProviderKind('https://openrouter.ai/api/v1'), 'openrouter');
   t.not(detectProviderKind('https://openrouter.ai.evil/api/v1'), 'openrouter');
@@ -25,7 +39,7 @@ test('OpenRouter round trips tool calls, reports usage, and honors cancellation'
   };
   const provider = makeOpenRouterProvider({
     ...options,
-    fetchImpl: async (url, init) => {
+    fetchImpl: withCatalog(async (url, init) => {
       t.is(url, 'https://openrouter.ai/api/v1/chat/completions');
       t.is(init.redirect, 'error');
       t.is(init.headers.Authorization, 'Bearer test-not-a-key');
@@ -43,10 +57,16 @@ test('OpenRouter round trips tool calls, reports usage, and honors cancellation'
               message: { role: 'assistant', content: 'Done' },
             },
           ],
-          usage: { prompt_tokens: 12, completion_tokens: 3 },
+          model: 'org/served',
+          usage: {
+            prompt_tokens: 12,
+            completion_tokens: 3,
+            prompt_tokens_details: { cached_tokens: 8 },
+            completion_tokens_details: { reasoning_tokens: 1 },
+          },
         }),
       );
-    },
+    }, [{ id: 'org/served', context_length: 1000 }]),
   });
   const deltas = [];
   const result = await provider.chatStream(
@@ -59,7 +79,16 @@ test('OpenRouter round trips tool calls, reports usage, and honors cancellation'
     controller.signal,
   );
   t.deepEqual(deltas, ['Done']);
-  t.deepEqual(result.usage, { inputTokens: 12, outputTokens: 3 });
+  // Disjoint counts: the cached and reasoning tokens come out of the totals.
+  // The window is the served model's, from the catalog.
+  t.deepEqual(result.usage, {
+    inputTokens: 4,
+    outputTokens: 2,
+    cachedInputTokens: 8,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 1,
+    context: { usedTokens: 15, windowTokens: 1000 },
+  });
 });
 
 test('OpenRouter is never sent an output limit', async t => {
@@ -82,10 +111,10 @@ test('OpenRouter is never sent an output limit', async t => {
   await makeOpenRouterProvider({
     ...options,
     .../** @type {any} */ ({ maxTokens: 8192 }),
-    fetchImpl: respond,
+    fetchImpl: withCatalog(respond),
   }).chat([], []);
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = /** @type {any} */ (respond);
+  globalThis.fetch = /** @type {any} */ (withCatalog(respond));
   try {
     await createProvider({
       LAL_HOST: 'https://openrouter.ai/api/v1',
@@ -109,7 +138,7 @@ test('OpenRouter preserves tool calls and reasoning details across tool rounds',
   let round = 0;
   const provider = makeOpenRouterProvider({
     ...options,
-    fetchImpl: async (url, init) => {
+    fetchImpl: withCatalog(async (url, init) => {
       const body = JSON.parse(init.body);
       round += 1;
       if (round === 1) {
@@ -142,7 +171,7 @@ test('OpenRouter preserves tool calls and reasoning details across tool rounds',
           ],
         }),
       );
-    },
+    }),
   });
   const { message } = await provider.chat(
     [],
@@ -199,7 +228,9 @@ for (const [name, body, status] of failures) {
       ...options,
       sleep: async () => {},
       log: line => t.false(line.includes('test-not-a-key')),
-      fetchImpl: async () => new Response(JSON.stringify(body), { status }),
+      fetchImpl: withCatalog(
+        async () => new Response(JSON.stringify(body), { status }),
+      ),
     });
     const error = await t.throwsAsync(() => provider.chat([], []));
     t.false(error.message.includes('test-not-a-key'));
@@ -235,12 +266,12 @@ const scripted = responses => {
       waits.push(ms);
     },
     log: line => lines.push(line),
-    fetchImpl: async () => {
+    fetchImpl: withCatalog(async () => {
       const respond = responses[requests];
       requests += 1;
       if (!respond) throw Error('more requests than the test scripted');
       return respond();
-    },
+    }),
   });
   return { provider, waits, lines, requests: () => requests };
 };
@@ -366,10 +397,10 @@ test('the caller’s own cancellation is neither reported nor repeated', async t
       waiting.abort(Error('stop pressed while waiting'));
       throw signal?.reason;
     },
-    fetchImpl: async () => {
+    fetchImpl: withCatalog(async () => {
       requests += 1;
       return new Response('{}', { status: 503 });
-    },
+    }),
   });
   await t.throwsAsync(() => provider.chat([], [], waiting.signal), {
     message: 'stop pressed while waiting',
@@ -549,4 +580,132 @@ test('an abort that is not the caller’s is a failure, not a timeout', async t 
   const world = scripted([abort, abort, () => ok('Third')]);
   t.is((await world.provider.chat([], [])).message.content, 'Third');
   for (const line of world.lines) t.notRegex(line, /did not answer within/);
+});
+
+
+test('the context window comes from the catalog, read once and never before a reply', async t => {
+  let catalogReads = 0;
+  const lines = [];
+  const reply = served =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          { finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+        ],
+        ...(served ? { model: served } : {}),
+        usage: { prompt_tokens: 100, completion_tokens: 10 },
+      }),
+    );
+  let served = 'org/routed';
+  const provider = makeOpenRouterProvider({
+    ...options,
+    log: line => lines.push(line),
+    fetchImpl: async (url, init) => {
+      if (url === CATALOG_URL) {
+        catalogReads += 1;
+        // The catalog is public: the key must never be sent to it.
+        t.is(init?.headers, undefined);
+        t.is(init?.redirect, 'error');
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: options.model, context_length: 64_000 },
+              { id: 'org/routed', context_length: 200_000 },
+              {
+                id: 'org/dated',
+                canonical_slug: 'org/dated-20260901',
+                context_length: 32_000,
+              },
+              { id: 'org/nameless' },
+            ],
+          }),
+        );
+      }
+      return reply(served);
+    },
+  });
+  t.is(catalogReads, 0);
+  // The model that served wins over the one that was asked for.
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 200_000);
+  // A served model the catalog does not size falls back to the requested one.
+  served = 'org/nameless';
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 64_000);
+  // A reply that names the dated slug is sized too.
+  served = 'org/dated-20260901';
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 32_000);
+  served = '';
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 64_000);
+  t.is(catalogReads, 1);
+  t.deepEqual(lines.filter(line => line.includes('catalog')), []);
+});
+
+test('a catalog that cannot be read costs the window size, not the reply', async t => {
+  const lines = [];
+  const provider = makeOpenRouterProvider({
+    ...options,
+    log: line => lines.push(line),
+    fetchImpl: async url => {
+      if (url === CATALOG_URL) return new Response('nope', { status: 500 });
+      return new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+          ],
+          usage: { prompt_tokens: 7, completion_tokens: 2 },
+        }),
+      );
+    },
+  });
+  const { usage, message } = await provider.chat([], []);
+  t.is(message.content, 'ok');
+  t.deepEqual(usage.context, { usedTokens: 9, windowTokens: 0 });
+  t.is(lines.filter(line => line.includes('no model catalog')).length, 1);
+  await provider.chat([], []);
+  t.is(lines.filter(line => line.includes('no model catalog')).length, 1);
+});
+
+
+test('a routing id has no window of its own, and a failed catalog is read again later', async t => {
+  let catalogReads = 0;
+  let catalogWorks = false;
+  let clock = 1_000_000;
+  const provider = makeOpenRouterProvider({
+    apiKey: 'test-not-a-key',
+    model: 'openrouter/free',
+    log: () => {},
+    now: () => clock,
+    fetchImpl: async url => {
+      if (url === CATALOG_URL) {
+        catalogReads += 1;
+        if (!catalogWorks) throw Error('network down');
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: 'openrouter/free', context_length: 2_000_000 },
+              { id: 'org/real', context_length: 64_000 },
+            ],
+          }),
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+          ],
+          model: 'org/unlisted',
+          usage: { prompt_tokens: 5, completion_tokens: 1 },
+        }),
+      );
+    },
+  });
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 0);
+  // Not read again on the very next reply…
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 0);
+  t.is(catalogReads, 1);
+  // …but read again once the wait is over. The router's nominal size is not
+  // the size of whatever it routed to, so an unlisted served model reads 0.
+  catalogWorks = true;
+  clock += 301_000;
+  t.is((await provider.chat([], [])).usage.context.windowTokens, 0);
+  t.is(catalogReads, 2);
 });

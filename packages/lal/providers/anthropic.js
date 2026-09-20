@@ -96,7 +96,7 @@ const toAnthropicMessages = messages => {
 /**
  * Create an Anthropic-backed chat provider.
  * @param {{ apiKey: string, model: string }} options
- * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
+ * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage, usage?: Record<string, unknown> }> }}
  */
 export const makeAnthropicProvider = ({ apiKey, model }) => {
   /** @type {Promise<AnthropicClient> | undefined} */
@@ -178,7 +178,36 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
         message.tool_calls = toolCalls;
       }
 
-      return { message };
+      // Anthropic's three input kinds are already disjoint, and it does not
+      // count thinking apart from output. The API does not say how large the
+      // model's window is, so that is reported as unknown.
+      const reported = response.usage;
+      if (!reported || typeof reported !== 'object') return { message };
+      const count = (/** @type {unknown} */ value) =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0
+          ? Math.trunc(value)
+          : 0;
+      const usage = {
+        inputTokens: count(reported.input_tokens),
+        outputTokens: count(reported.output_tokens),
+        cachedInputTokens: count(reported.cache_read_input_tokens),
+        cacheWriteInputTokens: count(reported.cache_creation_input_tokens),
+        reasoningOutputTokens: 0,
+      };
+      return {
+        message,
+        usage: {
+          ...usage,
+          context: {
+            usedTokens:
+              usage.inputTokens +
+              usage.outputTokens +
+              usage.cachedInputTokens +
+              usage.cacheWriteInputTokens,
+            windowTokens: 0,
+          },
+        },
+      };
     },
   };
 };
