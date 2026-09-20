@@ -18,6 +18,12 @@ This completes the pair with `EndoGuest.invite`.
   is never redirected.
 - A rejected, forged, or replayed invitation locator leaves no peer route, agent
   key, or correspondent binding behind.
+- If the acceptor's network timeout trips while the final consume is in flight
+  (a merely-slow inviter), the accept cannot know whether the invitation was
+  consumed — the send is not cancelable. Rather than reporting a clean failure
+  that could strand a one-sided binding, the acceptor keeps its correspondent
+  binding and (already-reachable) peer route and surfaces an outcome-unknown
+  error, so the caller verifies before retrying.
 - The `EndoHost.accept`/`EndoGuest.accept` signatures and the `invite`/`accept`
   CLI commands now name the parameter `correspondentName` (previously
   `guestName`). Existing shell usage is unaffected (the argument is positional).

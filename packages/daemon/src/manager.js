@@ -7077,6 +7077,14 @@ const makeDaemonCore = async (
   // than wedging the queue for the whole daemon. The bound is generous (minutes)
   // so it never trips a merely-slow-but-honest handshake; it exists only to cap
   // an unbounded stall.
+  //
+  // One caveat the mechanism cannot fully close: `Promise.race` does not cancel
+  // the raced send, so a timeout of the FINAL consume step (`E(invitation).accept()`)
+  // cannot know whether the inviter already committed the accept. That one step
+  // therefore treats a timeout as an ambiguous outcome — it KEEPS the acceptor's
+  // speculative bind/route and raises an outcome-unknown error — rather than
+  // rolling back into a one-sided binding. Every earlier step's timeout rolls
+  // back normally (nothing has been consumed yet). See the catch block below.
   const acceptInvitationNetworkTimeoutMs = 2 * 60 * 1000;
   const acceptInvitationJobs = makeSerialJobs();
   const acceptInvitation = async ({
@@ -7103,6 +7111,14 @@ const makeDaemonCore = async (
         );
       });
     };
+    // Errors thrown by a timeout that leaves the invitation's fate UNKNOWN (the
+    // consume step below): `Promise.race` does not cancel the in-flight send, so
+    // the inviter may still consume the invitation after the local timeout
+    // fires. The catch block uses this set to distinguish such an ambiguous
+    // outcome — where the speculative local state must be KEPT, not rolled back —
+    // from a definitive failure. A `WeakSet` marks the error without mutating it,
+    // so it stays hardened-safe.
+    const ambiguousAcceptOutcomes = new WeakSet();
     /**
      * Race a network-crossing step against a timeout so a stalled remote party
      * cannot hold the daemon-wide `acceptInvitationJobs` lock indefinitely. On
@@ -7111,18 +7127,29 @@ const makeDaemonCore = async (
      * @template T
      * @param {Promise<T>} promise
      * @param {string} description - what the step is waiting on, for the error.
+     * @param {object} [options]
+     * @param {boolean} [options.ambiguousOnTimeout] - when true, a timeout of
+     *   this step leaves the invitation's remote fate unknown (the send is not
+     *   cancelable and may still land), so the error is marked ambiguous and the
+     *   caller must NOT treat it as a clean rollback-able failure.
      * @returns {Promise<T>}
      */
-    const withAcceptNetworkTimeout = async (promise, description) => {
+    const withAcceptNetworkTimeout = async (
+      promise,
+      description,
+      { ambiguousOnTimeout = false } = {},
+    ) => {
       /** @type {ReturnType<typeof setTimeout>} */
       let timer;
       const timeout = new Promise((_resolve, reject) => {
         timer = setTimeout(() => {
-          reject(
-            makeError(
-              `acceptInvitation timed out after ${acceptInvitationNetworkTimeoutMs}ms while waiting to ${description}`,
-            ),
+          const error = makeError(
+            `acceptInvitation timed out after ${acceptInvitationNetworkTimeoutMs}ms while waiting to ${description}`,
           );
+          if (ambiguousOnTimeout) {
+            ambiguousAcceptOutcomes.add(error);
+          }
+          reject(error);
         }, acceptInvitationNetworkTimeoutMs);
       });
       // Clear the timer in a `.finally` closure (not a synchronous `finally`
@@ -7206,12 +7233,27 @@ const makeDaemonCore = async (
             addresses: hints,
           };
           await networkBroker.addPeerInfo(peerInfo);
+          // Capture the store id this accept just wrote, read synchronously the
+          // instant our own `addPeerInfo` settled so no concurrent writer can
+          // interleave between the write and this read. The rollback keys off
+          // this id, not mere presence.
+          const writtenPeerId = knownPeers.identifyLocal(peerKey);
           rollbackPeer = async () => {
-            // Retract only while the entry still resolves to a route: a
-            // concurrent, genuine registration for the same node must win over
-            // this undo. `remove` drops the store entry without canceling the
+            // Retract by IDENTITY, not by presence. `addPeerInfo` is also
+            // reachable UNSERIALIZED via the host facet (`EndoHost.addPeerInfo`),
+            // so while this accept's round-trip is still in flight a concurrent,
+            // genuine registration for the same node can replace our speculative
+            // entry with a DIFFERENT store id. A presence-only check
+            // (`identifyLocal(peerKey) !== undefined`) would then delete that
+            // genuine entry on rollback — squatting-by-deletion of a route this
+            // accept never wrote. Remove only while the live id is still the one
+            // we wrote; a replacement (different id) wins over this undo, exactly
+            // as intended. `remove` drops the store entry without canceling the
             // peer formula, matching `addPeerInfo`'s own stale-peer replacement.
-            if (knownPeers.identifyLocal(peerKey) !== undefined) {
+            if (
+              writtenPeerId !== undefined &&
+              knownPeers.identifyLocal(peerKey) === writtenPeerId
+            ) {
               await knownPeers.remove(
                 /** @type {PetName} */ (/** @type {unknown} */ (peerKey)),
               );
@@ -7247,8 +7289,14 @@ const makeDaemonCore = async (
         // connection hints come from the accepting agent's own `@nets`.
         const { number: handleNumber, node: handleNode } =
           parseId(acceptingHandleId);
-        const addresses = await getAllNetworkAddresses(
-          acceptingNetworksDirectoryId,
+        // `getAllNetworkAddresses` fans an eventual send out to every configured
+        // network, so a single hung/misbehaving network object would otherwise
+        // stall the daemon-wide accept queue as surely as a stalled remote peer.
+        // Bound it too. A timeout here is a definitive local failure (nothing has
+        // been consumed remotely yet), so it is NOT marked ambiguous.
+        const addresses = await withAcceptNetworkTimeout(
+          getAllNetworkAddresses(acceptingNetworksDirectoryId),
+          'resolve the accepting agent network addresses',
         );
         const handleLocatorWithoutHandleNode = formatLocatorWithHints(
           formatId({ number: handleNumber, node: localNodeNumber }),
@@ -7307,8 +7355,40 @@ const makeDaemonCore = async (
         await withAcceptNetworkTimeout(
           E(invitation).accept(handleLocator),
           'consume the invitation on the inviting daemon',
+          { ambiguousOnTimeout: true },
         );
       } catch (error) {
+        // A timeout of the consume step is NOT a definitive failure. `Promise.race`
+        // does not cancel the in-flight `E(invitation).accept()` send — there is
+        // no abort primitive across CapTP here — so a merely-slow (not failed)
+        // inviter may still receive it and irreversibly consume the invitation
+        // (rebinding its slot, canceling the controller) AFTER our local timeout
+        // fires. Rolling back here would erase our correspondent bind and peer
+        // route while the inviter believes the relationship is bound: a one-sided,
+        // unrecoverable asymmetry (a retry hits "already accepted, canceled, or
+        // superseded"). So on this ambiguous outcome, KEEP the speculative local
+        // state — the peer was demonstrably reachable (we already dialed it to
+        // `provide` the invitation), so the route is genuine, and the bind is
+        // consistent with a possible remote consume — and surface a distinct
+        // outcome-unknown error telling the caller to verify before retrying,
+        // rather than reporting a clean failure. Every OTHER failure — a genuine
+        // rejection (forged/spent/replayed locator), a bad correspondent bind, or
+        // a timeout of a step before anything could be consumed (address
+        // resolution, or the `provide` dial) — is a true failure whose
+        // speculative writes must be retracted.
+        //
+        // No unit test drives this path: the timeout is a fixed multi-minute
+        // bound with no injection seam, so the timeout-vs-late-success race
+        // cannot be reached within an AVA budget without a real wait.
+        if (
+          typeof error === 'object' &&
+          error !== null &&
+          ambiguousAcceptOutcomes.has(error)
+        ) {
+          throw makeError(
+            `acceptInvitation could not confirm the outcome: consuming the invitation on the inviting daemon timed out after ${acceptInvitationNetworkTimeoutMs}ms, but the inviter may still accept it. The correspondent binding and peer route were left in place; verify whether the correspondent is bound before retrying (a retry may report the invitation already accepted).`,
+          );
+        }
         await undoSpeculativeWrite(rollbackCorrespondent);
         await undoSpeculativeWrite(rollbackPeer);
         throw error;
