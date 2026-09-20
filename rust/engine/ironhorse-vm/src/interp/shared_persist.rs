@@ -477,7 +477,7 @@ impl Interp {
                     .iter()
                     .any(|id| *id == 0 || usize::from(*id) > self.symbol_names.len())
             {
-                return Err(refuse("invalid considered intrinsic name"));
+                return Err(refuse("invalid global binding history name"));
             }
             let mut env = CompartmentEnvironment::new(global);
             env.binding_names = row.binding_names.into_iter().collect();

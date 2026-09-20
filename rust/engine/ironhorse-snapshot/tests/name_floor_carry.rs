@@ -53,7 +53,8 @@ fn a_resumed_non_growing_crank_installs_the_boot_interned_backlog() {
 
 /// A name the GUEST interned (a `JSON.parse` key naming an intrinsic):
 /// same discipline — the non-growing observation reaches the global
-/// only through the floor-gated backlog pass.
+/// only through the relink backlog pass. Intrinsic surfaces use the carried
+/// floor; per-environment globals use their binding history.
 #[test]
 fn a_resumed_non_growing_crank_installs_a_guest_interned_name() {
     assert_twin(
@@ -61,6 +62,21 @@ fn a_resumed_non_growing_crank_installs_a_guest_interned_name() {
         "var o = 0; var t = 0; o = JSON.parse('{\"Math\":1}'); t = 7; t",
         &["var o; var t; t = typeof Math; t"],
         &["object"],
+    );
+}
+
+/// A runtime-interned intrinsic global can be created and deleted without a
+/// static property-name atom. Its per-environment binding history remains
+/// authoritative on both the next live relink and after restore.
+#[test]
+fn a_runtime_interned_deleted_global_stays_deleted_across_resume() {
+    assert_twin(
+        "ih-floor-twin-deleted-global",
+        "var k = String.fromCharCode(77, 97, 116, 104); \
+         var o = JSON.parse('{\"' + k + '\":1}'); \
+         delete globalThis[k]; 0",
+        &["typeof Math"],
+        &["undefined"],
     );
 }
 
@@ -80,9 +96,9 @@ fn a_deleted_seed_accessor_stays_deleted_across_resume() {
     );
 }
 
-/// A computed boot-default name goes through the same floor-gated intrinsic
-/// installation path as reflection. Once the guest deletes the installed
-/// property, neither a non-growing relink nor restore may recreate it.
+/// A computed boot-default name goes through the floor-gated shared-intrinsic
+/// installation path. Once the guest deletes the installed property, neither
+/// a non-growing relink nor restore may recreate it.
 #[test]
 fn a_computed_intrinsic_name_and_its_deletion_survive_resume() {
     assert_twin(

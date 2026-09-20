@@ -277,16 +277,15 @@ impl Interp {
         // (Consumes `symbol_names`, so this both sets the forward table and
         // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
-        // The installed-names floor defaults to the full
-        // restored table — the conservative choice when no floor
-        // traveled (a pre-schema-12 store or container): no partial
-        // install pass may then touch any restored id, which can never
-        // clobber or resurrect a guest edit. When the snapshot carries
-        // the live floor (the `NFLR` atom / small-state section), the
-        // resume path narrows this via
-        // [`Self::restore_installed_names_floor`], so names interned
-        // DURING the last install pass stay lazily installable exactly
-        // as they were live (the `ListFormat.prototype.format` case).
+        // The installed-names floor defaults to the full restored table — the
+        // conservative choice when no floor traveled (a pre-schema-12 store or
+        // container): no partial intrinsic-surface pass may touch a restored
+        // id. When the snapshot carries the live floor (the `NFLR` atom /
+        // small-state section), the resume path narrows this via
+        // [`Self::restore_installed_names_floor`], so names interned DURING the
+        // last install pass stay lazily installable exactly as they were live
+        // (the `ListFormat.prototype.format` case). Per-environment global
+        // catch-up uses `binding_names`, not this machine-wide floor.
         self.installed_names_len = self.symbol_names.len();
         // GlobalProps ledger row: the global object's own-property slots
         // (intrinsic bindings and runtime-materialized `var`/sloppy globals
@@ -296,6 +295,7 @@ impl Interp {
         // state, and boot leaves it empty. Rebuild it by walking the restored
         // chain, so a global created in an earlier crank resolves after resume.
         self.rebuild_global_props();
+        self.rebuild_binding_history();
         // Accessors ledger row, the boot-seeded half: a `proto_accessors`
         // install's PROPERTY slot travels in the arena but its side-table
         // getter entry does not; re-derive it from the boot seeds (the
@@ -304,17 +304,13 @@ impl Interp {
         Ok(())
     }
 
-    /// The installed-names floor: ids at or below it keep
-    /// their existing binding on partial install passes; ids above it —
-    /// names interned during an install pass (the Intl member keys, the
-    /// `format` accessor key) or by the guest — are re-considered,
-    /// create-only, by the next growing relink. Real machine state: a
-    /// resumed machine must adopt the live machine's floor, not the
-    /// restored table's length, or a boot name interned during the last
-    /// install pass can never lazily install after resume (the
-    /// `ListFormat.prototype.format` divergence the Intl carry twins
-    /// caught — the continuous machine installs it at its next growing
-    /// relink; a full-table floor refuses it forever).
+    /// The machine-wide intrinsic-surface floor. Ids above it — names interned
+    /// during an install pass (the Intl member keys, the `format` accessor key)
+    /// or by the guest — are reconsidered, create-only, by the next growing
+    /// relink. A resumed machine must adopt the live floor, not the restored
+    /// table's length, or a boot name interned during the last pass can never
+    /// lazily install after resume. Per-environment global bindings are caught
+    /// up independently from their serialized `binding_names` history.
     pub fn installed_names_floor(&self) -> u32 {
         self.installed_names_len as u32
     }
@@ -328,6 +324,7 @@ impl Interp {
             return false;
         }
         self.installed_names_len = floor as usize;
+        self.rebuild_binding_history();
         true
     }
 
@@ -4191,6 +4188,23 @@ impl Interp {
             self.environment.global_props.insert(s.id, cur);
             cur = s.next;
         }
+    }
+
+    /// Reconstruct the standalone environment's per-global binding history.
+    ///
+    /// Shared-machine images replace this environment with their serialized
+    /// environment rows, which carry `binding_names` directly. A standalone
+    /// image instead carries the historical numeric name floor. Treating ids
+    /// below that floor as bound is the conservative legacy rule that preserves
+    /// deletion markers; surviving global-property ids cover later bindings.
+    fn rebuild_binding_history(&mut self) {
+        self.environment.binding_names.clear();
+        self.environment
+            .binding_names
+            .extend((1..=self.installed_names_len).map(|id| id as u16));
+        self.environment
+            .binding_names
+            .extend(self.environment.global_props.keys().copied());
     }
 
     /// Whether the machine stands at a QUIESCENT crank boundary — the

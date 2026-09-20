@@ -198,6 +198,18 @@ fn compartments_nest_and_share_one_intrinsic_graph() {
 }
 
 #[test]
+fn a_name_first_linked_in_a_child_is_still_installed_in_its_parent() {
+    assert_eq!(
+        result(
+            "var child = new Compartment(); \
+             child.evaluate('typeof Map.prototype.get') + ',' + \
+             eval('typeof Map')"
+        ),
+        "function,function"
+    );
+}
+
+#[test]
 fn a_transferred_child_keeps_its_compiler_after_its_creator_is_collected() {
     std::thread::Builder::new()
         .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)

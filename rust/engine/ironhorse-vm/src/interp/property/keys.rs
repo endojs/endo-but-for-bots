@@ -40,7 +40,7 @@ impl Interp {
     pub(in crate::interp) fn consider_shared_binding(&mut self, id: u16, name: &SymbolName) {
         if self.shared_compartments
             && !self.installing_intrinsics
-            && self.environment.binding_names.insert(id)
+            && !self.environment.binding_names.contains(&id)
         {
             if let Some(name) = name.as_str() {
                 self.materialize_runtime_global(id, name);
@@ -500,8 +500,8 @@ impl Interp {
                     // standard global, method, or accessor. Complete the same
                     // create-only lazy install used by reflective ToPropertyKey
                     // operations before the following property opcode observes
-                    // the object. The installed-name floor preserves earlier
-                    // guest deletion and replacement.
+                    // the object. The shared surface floor and the current
+                    // global's binding history preserve earlier guest edits.
                     self.install_pending_intrinsics();
                     Some(Slot::of(Kind::At, Payload::At(id, 0)))
                 }
@@ -703,9 +703,9 @@ impl Interp {
         // global or intrinsic member. `intern_key` makes the global itself
         // visible immediately; complete the ordinary create-only install pass
         // before the reflective operation continues so that constructor is
-        // not observably hollow for the rest of this crank. The name floor
-        // prevents an already-considered guest deletion or monkeypatch from
-        // being resurrected.
+        // not observably hollow for the rest of this crank. The shared surface
+        // floor and the current global's binding history prevent a guest
+        // deletion or monkeypatch from being resurrected.
         self.install_pending_intrinsics();
         Ok(id)
     }
