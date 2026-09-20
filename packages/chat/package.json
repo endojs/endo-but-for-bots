@@ -75,11 +75,11 @@
     "@endo/space-workflow": "workspace:^",
     "@endo/spaces-util": "workspace:^",
     "@endo/where": "workspace:^",
-    "marked": "^18.0.11",
+    "marked": "^18.0.13",
     "monaco-editor": "^0.56.0",
     "preact": "^10.29.8",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "ses": "workspace:^"
   },
   "devDependencies": {
@@ -91,7 +91,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "happy-dom": "^20.14.0",
+    "happy-dom": "^20.14.5",
     "typescript": "catalog:dev",
     "vite": "^6.0.0"
   },
