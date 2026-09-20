@@ -29,6 +29,7 @@ import { makeTimerPowers } from '../timers.js';
 import { makeFilePowers } from './files.js';
 import { makeHttpListenerPowers } from './http-listeners.js';
 import { makeProcessPowers } from './processes.js';
+import { makeNativeWorkerPowers } from './native-workers.js';
 import { makeSocketPowers } from './sockets.js';
 import { makeSyncFilePowers } from './sync-files.js';
 import { makeTerminalPowers } from './terminal.js';
@@ -125,6 +126,7 @@ export const makeNodePowers = () => {
     files,
     syncFiles,
     processes,
+    nativeWorkers: makeNativeWorkerPowers(),
     sockets,
     httpListeners,
     terminal,
