@@ -5,7 +5,7 @@
 | **Created** | 2026-09-18 |
 | **Updated** | 2026-09-19 |
 | **Author** | kumavis (prompted) |
-| **Status** | In Progress (phase 1 landed, less `globalLexicals` and the step-3 template) |
+| **Status** | In Progress (phase 1 landed, `globalLexicals` included, less the step-3 template; reviewed 2026-09-19, seven defects fixed) |
 | **Source** | The scope boundary [ironhorse-native-lockdown](ironhorse-native-lockdown.md) drew, and the `Compartment` half of [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) |
 
 ## Status
@@ -509,6 +509,43 @@ The work is to re-associate a restored guest instance with its restored
 environment, and to state what happens to a compartment whose
 `source_compiler` the embedder does not reattach.
 
+**Amended 2026-09-19, after the review.** That framing was incomplete: it
+described the instance-to-global association as the only thing that does not
+travel, and the persist gate now refuses for THREE reasons, of which it is one.
+Lifting the refusal needs all three, and the two below are not consequences of
+the first — they key on state that outlives the instance, so they would survive
+a two-column table that solved the association alone.
+
+1. **The association**, as above: `guest_compartments` is
+   `#[snapshot_table(none)]`. It needs a real table (instance -> global), plus
+   re-creating the environment's owner lease on restore so `reap_environments`
+   does not collect an environment whose only holder is a restored instance.
+2. **`globalLexicals` have no `EnvironmentRow` column.** They cannot be
+   recovered by rebuilding from the arena the way `global_props` are, because a
+   lexical cell is deliberately NOT linked into the global object's property
+   chain — that is what keeps the name off `globalThis`. They must be
+   serialized explicitly as `(id, value, writable)` and re-allocated on restore.
+   This is the one piece of compartment state that is neither chain-resident
+   nor currently written, and it rides the ENVIRONMENT, so it outlives the
+   instance.
+3. **`shared_compartments` versus the primordial profile.**
+   `shared_machine_snapshot` emits purely on that flag, which
+   `construct_compartment` sets; on a machine with no shared-realm profile the
+   image carries empty `intrinsic_roots`, and restore rejects it against
+   `new_shared_realm_machine`'s populated set. Measured: such a checkpoint was
+   ACCEPTED and its resume then failed `Corrupt("restore session did not
+   validate")`. Either construction refuses on a machine with no shared-realm
+   profile, or the snapshot path learns to carry a non-shared-realm machine
+   that holds compartments. This is a decision, not just an implementation.
+
+The compiler question the paragraph above already names is sharpened by the
+review: a restored compartment has no compiler until the embedder reattaches
+one, and the present behaviour for a compartment without one is an uncatchable
+`Halt::NotImplemented("eval:no-compiler")` raised by ordinary guest code. That
+is the wrong shape for a guest-triggerable condition whether it arrives by
+restore or by the creating host compartment being dropped, so the two should be
+answered together.
+
 ## Phasing, against the corpus
 
 The 68 files split on whether the case loads a module, and phase 1 is
@@ -779,6 +816,55 @@ mattered.
   the property comes from the `var` declaration, not from the lexical, and the
   lexical is still not a property of the global. The invariant holds.
 
+### Reviewed, and knowingly not acted on
+
+Raised by the review, judged real or plausible, and left alone this pass.
+None was reproduced, so each is a lead rather than a finding; they are recorded
+because an unwritten review finding is a lost one.
+
+- **`global_names: None` is hard-coded in `construct_compartment`.** A guest
+  compartment always gets the standard global set, whatever the creating
+  environment was attenuated to. The comment there argues `global_names` is not
+  attenuation "in any case", which holds PRE-lockdown — `({}).constructor.constructor`
+  still reaches `Function` — but not post-lockdown, where step 2 closes exactly
+  that route. So a host that combines `global_names` attenuation with an
+  installed compiler may have its withholding widened by one guest call.
+  The comment's justification should at minimum be narrowed to the pre-lockdown
+  case.
+- **The inherited compiler is a `Weak` to the CREATING compartment.** Once that
+  host compartment is dropped while a guest compartment it made is still
+  reachable, `guest.evaluate('1')` reaches `Halt::NotImplemented("eval:no-compiler")`
+  — an uncatchable machine halt produced by ordinary guest code. Inheritance
+  defers the host-shaped refusal to the creator's lifetime rather than removing
+  it. This is the same question § 7 owes an answer to for the restore path.
+- **`create_environment` consumes the caller's pending-install backlog.**
+  `installed_names_len` is a single machine-wide floor but installation is
+  per-environment, and `create_environment` sets it from the full name table.
+  Names interned but not yet installed are marked installed while bound only in
+  the NEW compartment. Plausibly the same root cause as the reflection gap
+  above, and worth chasing together.
+- **`compartment_evaluate` reads the row before the coercion that runs guest
+  code.** `compartment_of` resolves `guest_compartments[&instance].global`, then
+  `to_string_units` may run a guest `toString`/`valueOf`. Harmless today only
+  because nothing removes a row mid-crank (GC is inhibited), so it is one
+  ordering change away from a stale index. Coerce first, then look up.
+- **The `TYPEOF` fast-path guard enumerates two of three scopes.** It tests
+  `id_map` and `global_props` but not `global_lexicals`. Unreachable today
+  because the lexical arm is infallible, so a bound lexical never yields `None`
+  — but the guard's stated contract is "absent from every scope", and any future
+  lexical state that can fail to produce a value turns `typeof` into a spurious
+  `ReferenceError`.
+- **`newTarget.prototype` is ignored.** Construction always uses
+  `self.compartment_proto`, so `class C extends Compartment {}; new C()` is not
+  `instanceof C`. A divergence from `OrdinaryCreateFromConstructor`, and not a
+  hole — it makes brand membership and prototype identity inseparable.
+- **The persist gate's first reason depends on a prune nothing schedules.**
+  `guest_compartments` empties only under host-driven collection, so a
+  compartment that became garbage but has not been pruned still blocks a
+  checkpoint, and the refusal says "a live guest `Compartment`" when it is dead.
+  The two reasons added by this pass key on state rather than on the table, so
+  they do not share the defect; the first still does.
+
 ### Open, and found but not chased
 
 A compartment's `globalThis` under-reports its standard globals under
@@ -953,6 +1039,11 @@ than fixed because the fix depends on which of the two engines is right.
       globals under reflection, not only under name resolution. See
       § Adversarial review, "found but not chased": establish first whether the
       host `Compartment` API shares the behaviour and what XS answers.
+- [ ] Work the § Reviewed, and knowingly not acted on list: narrow the
+      `global_names` comment to the pre-lockdown case, decide the no-compiler
+      halt's shape (it is the same question § 7 owes), chase
+      `installed_names_len` alongside the reflection gap, and reorder
+      `compartment_evaluate`'s lookup after its coercion.
 - [ ] Size phase 2 once referrer threading is scoped separately.
 
 ## Prompt
