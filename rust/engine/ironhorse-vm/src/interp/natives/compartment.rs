@@ -192,15 +192,22 @@ impl Interp {
     /// compiler explicitly (`Compartment::set_source_compiler`); a guest
     /// compartment has no embedder to ask, so it inherits.
     fn inherit_compiler(&mut self, previous: crate::value::SlotIndex) {
-        let inherited = self.environment_context_mut(previous).and_then(|env| {
-            env.source_compiler
-                .as_ref()
-                .map(std::rc::Rc::downgrade)
-                .or_else(|| env.shared_compiler.clone())
+        let inherited = self.environment_context(previous).and_then(|env| {
+            env.source_compiler.as_ref().cloned().or_else(|| {
+                env.shared_compiler
+                    .as_ref()
+                    .and_then(std::rc::Weak::upgrade)
+            })
         });
         if let Some(compiler) = inherited {
             self.environment.compiler_required = true;
-            self.environment.shared_compiler = Some(compiler);
+            self.environment.shared_compiler = Some(std::rc::Rc::downgrade(&compiler));
+            if let Some(registry) = self.compiler_registry.upgrade() {
+                registry
+                    .borrow_mut()
+                    .entry(self.environment.global_obj)
+                    .or_insert(compiler);
+            }
         }
     }
 

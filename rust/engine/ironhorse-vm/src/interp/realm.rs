@@ -113,6 +113,13 @@ impl CompartmentEnvironment {
 }
 
 impl Interp {
+    pub(crate) fn attach_compiler_registry(
+        &mut self,
+        registry: &std::rc::Rc<crate::compartment::CompilerRegistry>,
+    ) {
+        self.compiler_registry = std::rc::Rc::downgrade(registry);
+    }
+
     pub(crate) fn set_default_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
         self.environment_context_mut(self.realm.global_object())
             .unwrap()

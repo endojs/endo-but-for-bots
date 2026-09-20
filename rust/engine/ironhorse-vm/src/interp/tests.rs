@@ -1440,6 +1440,16 @@ fn legacy_date_prototype_snapshot_row_is_migrated_away() {
 }
 
 #[test]
+fn compiler_registry_is_host_owned_and_weak() {
+    let mut interp = Interp::new();
+    let registry = std::rc::Rc::new(crate::compartment::CompilerRegistry::default());
+    interp.attach_compiler_registry(&registry);
+    assert!(interp.compiler_registry.upgrade().is_some());
+    drop(registry);
+    assert!(interp.compiler_registry.upgrade().is_none());
+}
+
+#[test]
 fn marker_free_restore_installs_join_and_migrates_arguments_layout() {
     let mut interp = Interp::new();
     let old_names = vec!["seed".into(), "toString".into(), "valueOf".into()];

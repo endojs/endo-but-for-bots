@@ -762,6 +762,7 @@ mod tests {
         ];
         const HOST_WIRING: &[&str] = &[
             // Embedding policy configured outside each activation.
+            "compiler_registry",
             "eval_program_hoist",
             "meter_host",
             "cost",
