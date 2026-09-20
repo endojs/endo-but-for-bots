@@ -958,17 +958,7 @@ impl Interp {
                 let partial = self.environment.global_obj;
                 if partial != previous {
                     self.switch_environment(previous);
-                    self.inactive_environments.remove(&partial);
-                    let evaluators: Vec<_> = self
-                        .functions
-                        .iter()
-                        .filter(|(_, f)| f.global_env == partial)
-                        .map(|(id, _)| *id)
-                        .collect();
-                    for evaluator in evaluators {
-                        self.functions.remove(&evaluator);
-                        self.ctor_prototype.remove(&evaluator);
-                    }
+                    self.discard_inactive_environment(partial);
                 }
                 if payload.is::<crate::value::HeapExhausted>() {
                     Err(Halt::HeapExhausted)
@@ -976,6 +966,36 @@ impl Interp {
                     std::panic::resume_unwind(payload)
                 }
             }
+        }
+    }
+
+    /// Remove an environment whose construction did not commit.
+    ///
+    /// The caller must first switch back to a surviving environment. The
+    /// environment owns the per-compartment evaluator copies minted while its
+    /// intrinsic bindings were installed, so discard those authoritative side
+    /// table rows with it. Arena slots are ordinary unreachable garbage after
+    /// these roots and edges are gone and are reclaimed by the next collection.
+    pub(super) fn discard_inactive_environment(&mut self, target: crate::value::SlotIndex) {
+        debug_assert_ne!(self.environment.global_obj, target);
+        let removed = self.inactive_environments.remove(&target);
+        debug_assert!(removed.is_some(), "discarded environment must be inactive");
+        let evaluators: Vec<_> = self
+            .functions
+            .iter()
+            .filter(|(_, function)| function.global_env == target)
+            .map(|(id, _)| *id)
+            .collect();
+        for evaluator in evaluators {
+            self.functions.remove(&evaluator);
+            self.ctor_prototype.remove(&evaluator);
+        }
+        if let Some(registry) = self.compiler_registry.upgrade() {
+            // A provisional child inherits from a still-live caller, so this
+            // removes only the child's ownership row rather than dropping the
+            // last strong compiler reference inside the interpreter borrow.
+            let retired = registry.borrow_mut().remove(&target);
+            drop(retired);
         }
     }
 

@@ -106,11 +106,11 @@ impl Interp {
         // `prototype/globalThis/defaults.js` observes by identity.
         //
         // Set BEFORE `create_environment` because that is the call whose
-        // behaviour it selects, and restored if that call fails: the flag is
-        // machine-wide and irreversible in the forward direction, so a
-        // construction that throws must not leave the machine's compartment
-        // profile changed with no compartment to show for it.
+        // behaviour it selects. The flag is machine-wide and irreversible in
+        // the forward direction, so every construction failure below restores
+        // it and discards the provisional environment before returning.
         let shared_before = self.shared_compartments;
+        let installed_before = self.installed_names_len;
         self.shared_compartments = true;
         let lease = std::rc::Rc::new(());
         let modules = std::rc::Rc::new(std::cell::RefCell::new(crate::ModuleGraph::default()));
@@ -128,32 +128,24 @@ impl Interp {
         // live-count delta IS the allocation count; charging after the fact
         // costs one environment's overshoot and keeps the charge honest
         // without hand-counting a set that will change.
-        let live_before = self.slots.live_count();
-        let global = match self.create_environment(None, std::rc::Rc::downgrade(&lease), modules) {
-            Ok(global) => global,
-            Err(host) => {
-                self.shared_compartments = shared_before;
-                return Err(Step::Host(host));
-            }
-        };
-        for _ in 0..self.slots.live_count().saturating_sub(live_before) {
-            self.meter.tick_slot_alloc();
-        }
-        // `create_environment` leaves the NEW environment active. Everything
-        // below that touches the compartment's globals must happen here, and
-        // the switch back must happen on every path out.
-        // `catch_unwind` rather than a bare call: `define_global_id` and
-        // `define_global_lexical` both reach `heap_exhausted()`, which is a
-        // `resume_unwind` and not an `Err`, so a plain restore below `result`
-        // would be skipped exactly when the machine survives the panic (the
-        // arena ceiling is caught and converted to `Halt::HeapExhausted`).
-        // Leaking the switch would leave the rest of the crank -- and the
-        // host's own `detach_realm_compiler` teardown -- running against the
-        // half-built compartment's environment. Restore, then re-raise, which
-        // is the discipline `create_environment` and `create_host_function`
-        // already follow.
+        // `create_environment` leaves the NEW environment active. Keep the
+        // whole operation -- including that call and the final instance/table
+        // commit -- inside one unwind boundary. A ceiling hit during the final
+        // instance allocation is just as much a failed construction as a
+        // rejected endowment, and a panic inside `create_environment` must
+        // still restore the caller-owned profile and installation floor after
+        // that helper has cleaned up its partial environment.
+        let mut provisional = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let vm = &mut *self;
+            let live_before = vm.slots.live_count();
+            let global = vm
+                .create_environment(None, std::rc::Rc::downgrade(&lease), modules)
+                .map_err(Step::Host)?;
+            provisional = Some(global);
+            for _ in 0..vm.slots.live_count().saturating_sub(live_before) {
+                vm.meter.tick_slot_alloc();
+            }
             vm.inherit_compiler(previous);
             for (id, value) in endowments {
                 vm.meter.tick_slot_alloc(); // the global property
@@ -167,19 +159,31 @@ impl Interp {
                 vm.meter.tick_slot_alloc(); // the lexical cell
                 vm.define_global_lexical(id, value, writable);
             }
-            Ok::<(), Step>(())
+            vm.meter.tick_slot_alloc(); // the instance
+            let instance = vm.slots.alloc(Slot::instance(vm.compartment_proto));
+            vm.guest_compartments
+                .insert(instance, GuestCompartmentData { global, lease });
+            Ok::<Slot, Step>(Slot::of(Kind::Reference, Payload::Reference(instance)))
         }));
-        self.switch_environment(previous);
+
+        let committed = matches!(&result, Ok(Ok(_)));
+        if let Some(global) = provisional {
+            self.switch_environment(previous);
+            if !committed {
+                self.discard_inactive_environment(global);
+            }
+        }
+        if !committed {
+            self.shared_compartments = shared_before;
+            self.installed_names_len = installed_before;
+        }
         match result {
-            Ok(result) => result?,
+            Ok(result) => result,
+            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
+                Err(Step::Host(Halt::HeapExhausted))
+            }
             Err(payload) => std::panic::resume_unwind(payload),
         }
-
-        self.meter.tick_slot_alloc(); // the instance
-        let instance = self.slots.alloc(Slot::instance(self.compartment_proto));
-        self.guest_compartments
-            .insert(instance, GuestCompartmentData { global, lease });
-        Ok(Slot::of(Kind::Reference, Payload::Reference(instance)))
     }
 
     /// Give a freshly created compartment the calling environment's compiler,
@@ -414,5 +418,63 @@ impl Interp {
         let result = self.eval_source(&units, true);
         self.switch_environment(previous);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct UnusedCompiler;
+
+    impl crate::SourceCompiler for UnusedCompiler {
+        fn compile_source(
+            &self,
+            _source: &str,
+            _strict: bool,
+            _raw_budget: u64,
+            _charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<crate::CompiledSource, crate::SourceCompileError> {
+            unreachable!("the allocation rollback test never evaluates source")
+        }
+    }
+
+    #[test]
+    fn every_compartment_allocation_failure_rolls_back_the_transaction() {
+        let mut saw_failure = false;
+        let mut saw_success = false;
+
+        for allowance in 0..=256 {
+            let mut interp = Interp::new();
+            let registry = std::rc::Rc::new(crate::compartment::CompilerRegistry::default());
+            interp.attach_compiler_registry(&registry);
+            interp.set_source_compiler(std::rc::Rc::new(UnusedCompiler));
+            let previous = interp.current_environment_id();
+            let installed_before = interp.installed_names_len;
+            let ceiling = interp.slots.capacity() + allowance;
+            interp.set_slot_ceiling(ceiling);
+
+            match interp.construct_compartment(&[], 0, Slot::undefined()) {
+                Ok(_) => {
+                    saw_success = true;
+                    break;
+                }
+                Err(Step::Host(Halt::HeapExhausted)) => saw_failure = true,
+                Err(other) => panic!("unexpected construction result: {other:?}"),
+            }
+
+            assert_eq!(interp.current_environment_id(), previous);
+            assert_eq!(interp.live_environment_ids().len(), 1);
+            assert!(interp.guest_compartments.is_empty());
+            assert!(registry.borrow().is_empty());
+            assert!(!interp.shared_compartments);
+            assert_eq!(interp.installed_names_len, installed_before);
+        }
+
+        assert!(saw_failure, "the ceiling sweep must exercise rollback");
+        assert!(
+            saw_success,
+            "the ceiling sweep must reach a committed construction"
+        );
     }
 }
