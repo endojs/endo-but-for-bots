@@ -156,6 +156,9 @@ export const makeClaudeNativeController = ({
           harden({
             providerOrigin: ANTHROPIC_ORIGIN,
             accountRef: CLAUDE_BROKER_ACCOUNT,
+            ...(approved.subscription
+              ? { subscription: approved.subscription }
+              : {}),
             networkPolicy: approved.networkPolicy,
             ...(approved.model ? { model: approved.model } : {}),
           }),

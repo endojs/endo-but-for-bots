@@ -1,6 +1,7 @@
 // @ts-check
 import '@endo/init';
 import test from 'ava';
+import { E } from '@endo/eventual-send';
 import { access, mkdir, mkdtemp, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -236,6 +237,8 @@ const baseEnv = async t => {
     ENDO_CLAUDE_WORKSPACE_DIR: path.join(base, 'workspaces'),
     ENDO_CLAUDE_MCP_DIR: path.join(base, 'mcp'),
     ENDO_CLAUDE_CREDS_NAME: 'test-creds',
+    ENDO_CLAUDE_SUBSCRIPTIONS: undefined,
+    ENDO_CLAUDE_CACHE_LIFETIME_SECONDS: undefined,
     CLAUDE_CREDS_NAME: undefined,
     ENDO_CLAUDE_CREDS_KIND: undefined,
     CLAUDE_CREDS_KIND: undefined,
@@ -285,6 +288,101 @@ const retainedBrokerConfig = (overrides = {}) => ({
   credentialKind: 'apiKey',
   ...overrides,
 });
+
+test.serial(
+  'changing Claude pool mode refuses before any mint or credential change',
+  async t => {
+    await baseEnv(t);
+    const f = makeFakeHost();
+    f.seedBroker(retainedBrokerConfig());
+    await withEnv(t, {
+      ENDO_CLAUDE_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'first', credsName: 'first' },
+      ]),
+    });
+    await t.throwsAsync(() => main(f.host, { exec: refuseInspect }), {
+      message: /retiring the broker/,
+    });
+    t.deepEqual(f.mints, []);
+    t.deepEqual(f.secrets, []);
+    f.seedBroker(
+      retainedBrokerConfig({ pool: true, credentialKind: 'oauthToken' }),
+    );
+    await withEnv(t, { ENDO_CLAUDE_SUBSCRIPTIONS: undefined });
+    await t.throwsAsync(() => main(f.host, { exec: refuseInspect }), {
+      message: /retiring the broker/,
+    });
+    t.deepEqual(f.mints, []);
+  },
+);
+
+test.serial(
+  'pooled setup mints the broker over namespace powers without seeding tokens',
+  async t => {
+    await baseEnv(t);
+    await withEnv(t, {
+      ENDO_CLAUDE_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'first', credsName: 'claude-one' },
+        { id: 'second', credsName: 'claude-two' },
+      ]),
+    });
+    const f = makeFakeHost();
+    const entries = new Map();
+    const namespace = harden({
+      has: async name => entries.has(name),
+      locate: async name => entries.get(name),
+      storeLocator: async (name, locator) => {
+        entries.set(name, locator);
+      },
+      storeValue: async (value, name) => {
+        entries.set(name, value);
+      },
+    });
+    for (const name of ['claude-one', 'claude-two']) {
+      f.bindings.set(key('secrets', name), `secret-${name}`);
+    }
+    const host = /** @type {EndoHost} */ (
+      /** @type {unknown} */ ({
+        ...f.host,
+        lookup: async (...parts) =>
+          key(...parts) === key('claude-sandbox', 'broker-powers')
+            ? namespace
+            : E(f.host).lookup(...parts),
+        locate: async (...parts) => {
+          const value = f.bindings.get(key(...parts));
+          if (value === undefined) throw Error('not bound');
+          return `test:${value}`;
+        },
+        provideGuest: async (name, { agentName }) => {
+          f.bindings.set(key(name), 'handle');
+          f.bindings.set(key(agentName), 'namespace');
+        },
+        move: async (from, to) => {
+          f.bindings.set(key(...to), f.bindings.get(key(...from)));
+          f.bindings.delete(key(...from));
+        },
+      })
+    );
+    await main(host, { exec: refuseInspect });
+    t.like(JSON.parse(brokerMint(f.mints).options.env.CLAUDE_BROKER_CONFIG), {
+      pool: true,
+      credentialKind: 'oauthToken',
+    });
+    t.true(
+      f.copies.some(
+        copy => key(...copy.from) === key('claude-sandbox', 'broker-powers'),
+      ),
+    );
+    t.is(credentialMint(f.mints), undefined);
+    t.deepEqual(f.secrets, []);
+    t.is(entries.get('secret-first'), 'test:secret-claude-one');
+    t.is(entries.get('secret-second'), 'test:secret-claude-two');
+    t.deepEqual(
+      entries.get('subscriptions').members.map(member => member.id),
+      ['first', 'second'],
+    );
+  },
+);
 
 test('inferCredentialKind reads the token prefix and nothing else', t => {
   t.is(inferCredentialKind('sk-ant-oat01-abc'), 'oauthToken');

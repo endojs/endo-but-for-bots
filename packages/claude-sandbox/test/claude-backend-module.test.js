@@ -199,6 +199,15 @@ const fixture = async t => {
         async has(...parts) {
           return bindings.has(key(...parts));
         },
+        async lookup() {
+          return harden({
+            subscriptions: async () =>
+              harden([
+                { id: 'first', label: 'First' },
+                { id: 'second', label: 'Second' },
+              ]),
+          });
+        },
         async diagnostics() {
           return harden({ getFormula: async id => formulas.get(id) });
         },
@@ -238,6 +247,26 @@ const fixture = async t => {
     exists,
   };
 };
+
+test('a recorded Claude subscription pin cannot change on reopen', async t => {
+  const f = await fixture(t);
+  const factory = await make(f.host, undefined, { env: f.env });
+  const spec = harden({ sessionId: 'pinned', subscription: 'first' });
+  await E(factory).create(spec, makeToolSet());
+  t.is(JSON.parse(f.records.get('pinned').plan).subscription, 'first');
+  const revisedBefore = f.log.filter(entry => entry[0] === 'revise').length;
+  for (const subscription of ['second', 'auto']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => E(factory).create(harden({ ...spec, subscription }), makeToolSet()),
+      {
+        message: /subscription cannot change/,
+      },
+    );
+  }
+  t.is(f.log.filter(entry => entry[0] === 'revise').length, revisedBefore);
+  t.is(JSON.parse(f.records.get('pinned').plan).subscription, 'first');
+});
 
 test('resolveBackendConfig defaults nothing', t => {
   const env = {

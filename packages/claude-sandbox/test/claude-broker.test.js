@@ -3,6 +3,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 
 import {
   ANTHROPIC_MESSAGES_PATH,
@@ -13,10 +14,97 @@ import {
   buildClaudeBrokerPolicy,
   makeClaudeBrokerKit,
 } from '../src/claude-broker.js';
+import { makeOwnedClaudeBrokerService } from '../src/claude-broker-service-agent.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const listenerImageRef = `localhost/endo-provider@${digest}`;
 const models = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'];
+
+test('Claude pool hands recognized exhaustion to a second secret but never moves a pinned request', async t => {
+  const runtime = makeFakeRuntime();
+  const used = [];
+  /** @type {Map<string, any>} */
+  const entries = new Map([
+    ['subscriptions', harden({ members: [{ id: 'first' }, { id: 'second' }] })],
+    ...['first', 'second'].map(id => [
+      id,
+      Far(`${id} secret`, { readBase64: async () => btoa(`sk-ant-oat-${id}`) }),
+    ]),
+  ]);
+  let kit;
+  const make = makeOwnedClaudeBrokerService({
+    makeServiceKit: options => {
+      kit = makeProviderBrokerServiceKit({
+        ...options,
+        runtime,
+        fetch: async (_url, init) => {
+          const auth = init.headers.authorization;
+          used.push(auth);
+          return auth.endsWith('first')
+            ? new Response('exhausted', {
+                status: 429,
+                headers: {
+                  'anthropic-ratelimit-unified-status': 'rejected',
+                  'anthropic-ratelimit-unified-5h-utilization': '1',
+                  'anthropic-ratelimit-unified-5h-reset': '4000000000',
+                },
+              })
+            : new Response('served');
+        },
+      });
+      return kit;
+    },
+  });
+  const namespace = Far('pool namespace', {
+    lookup: async name => entries.get(name),
+    list: async () => [],
+    storeValue: async (value, name) => entries.set(name, value),
+  });
+  const service = await make(
+    namespace,
+    Far('context', { whenCancelled: () => new Promise(() => {}) }),
+    {
+      env: {
+        CLAUDE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'claude-pooled',
+          directory: '/tmp/unused',
+          imageRef: `localhost/claude@${digest}`,
+          imageDigest: digest,
+          listenerImageRef,
+          models,
+          credentialKind: 'oauthToken',
+          pool: true,
+        }),
+      },
+    },
+  );
+  t.teardown(() => kit.close());
+  const spec = harden({
+    providerOrigin: ANTHROPIC_ORIGIN,
+    accountRef: CLAUDE_BROKER_ACCOUNT,
+  });
+  const scope = await E(service).provideScope('auto-session', spec);
+  await E(scope).start();
+  const request = harden({
+    method: 'POST',
+    path: ANTHROPIC_MESSAGES_PATH,
+    body: JSON.stringify({ model: models[0] }),
+  });
+  const endpoint = runtime.starts[0].endpoint;
+  t.is((await E(endpoint).request(request)).body, 'served');
+  t.deepEqual(used, ['Bearer sk-ant-oat-first', 'Bearer sk-ant-oat-second']);
+  t.is((await E(endpoint).request(request)).body, 'served');
+  t.is(used.length, 3);
+  const pinned = await E(service).provideScope(
+    'pinned-session',
+    harden({ ...spec, subscription: 'first' }),
+  );
+  await E(pinned).start();
+  await t.throwsAsync(() => E(runtime.starts[1].endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(used.length, 3);
+});
 
 const makeFakeRuntime = () => {
   let stops = 0;

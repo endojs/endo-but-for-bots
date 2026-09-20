@@ -62,6 +62,7 @@ export {
  * @property {MounterEnv} [mounterEnv] Absent means the host's `mount`/`umount`.
  * @property {string} [model]
  * @property {string} [systemPrompt]
+ * @property {string} [subscription]
  */
 
 /**
@@ -100,6 +101,11 @@ export const readClaudeSessionPlan = text => {
   NETWORK_POLICIES.includes(/** @type {string} */ (recorded.networkPolicy)) ||
     Fail`Unknown session plan network policy`;
   assertCredentialKind(recorded.credentialKind);
+  recorded.subscription === undefined ||
+    (typeof recorded.subscription === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(recorded.subscription) &&
+      recorded.subscription !== 'auto') ||
+    Fail`Invalid session plan subscription`;
   for (const name of OPTIONAL_TEXT) {
     recorded[name] === undefined ||
       typeof recorded[name] === 'string' ||

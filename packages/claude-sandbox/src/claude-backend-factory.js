@@ -129,6 +129,7 @@ const isIdleInterrupt = error =>
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {string} [model]
  * @property {string} [systemPrompt]
+ * @property {string} [subscription] A pinned pool member; absent means auto.
  * @property {string} [workspaceHostPath] Operator-supplied worktree; never
  *   owned, never removed.
  */
@@ -149,12 +150,14 @@ const isIdleInterrupt = error =>
  *   The owner's removal: native cleanup, then the recorded storage owner's
  *   deletion, retaining failure and refusing reuse until it succeeds.
  * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ * @param {() => Promise<Array<{ id: string, label: string }>>} [powers.listSubscriptions]
  */
 export const makeClaudeBackendFactory = ({
   provisionSession,
   stopSession,
   removeSession,
   models = CLAUDE_CLI_MODELS,
+  listSubscriptions = async () => [],
 }) => {
   const catalog = harden(models.map(normalizeHostedModelDescriptor));
   const listModels = async () => catalog;
@@ -192,6 +195,17 @@ export const makeClaudeBackendFactory = ({
         !workspaceHostPath.includes('\0')) ||
         Fail`workspaceHostPath must be a normalized absolute host path`;
     }
+    const subscription =
+      spec.subscription === undefined || spec.subscription === 'auto'
+        ? undefined
+        : spec.subscription;
+    if (subscription !== undefined) {
+      const declared = await listSubscriptions().catch(() => {
+        throw Fail`Claude subscriptions cannot be listed right now`;
+      });
+      declared.some(member => member.id === subscription) ||
+        Fail`Unknown Claude subscription ${q(subscription)}`;
+    }
     // A predecessor that cannot stop refuses the successor rather than running
     // beside it: the registry retains its failed stop and rethrows here.
     await sessions.stop(sessionId);
@@ -199,6 +213,7 @@ export const makeClaudeBackendFactory = ({
       sessionId,
       harden({
         networkPolicy,
+        ...(subscription === undefined ? {} : { subscription }),
         ...(spec.model ? { model: spec.model } : {}),
         ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
         ...(workspaceHostPath ? { workspaceHostPath } : {}),
@@ -313,12 +328,17 @@ export const makeClaudeBackendFactory = ({
 
   return makeExo('ClaudeBackendFactory', HostedBackendFactoryInterface, {
     async describe() {
+      const subscriptions = (await listSubscriptions().catch(() => [])).map(
+        ({ id, label }) => ({ id, label }),
+      );
       return harden({
         id: CLAUDE_BACKEND_ID,
         title: 'Claude Code',
         kind: 'hosted',
         continuity: 'transcript',
         toolOwnership: 'endo',
+        providerId: 'anthropic',
+        ...(subscriptions.length ? { subscriptions } : {}),
         supportedNetworkPolicies: NETWORK_POLICIES,
         // What a system prompt must know about this place. Claude Code lists
         // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its

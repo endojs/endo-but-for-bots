@@ -47,6 +47,7 @@ const ConfigShape = M.splitRecord(
     maxSessions: M.number(),
     publicInternet: M.boolean(),
     diagnostics: M.boolean(),
+    pool: M.boolean(),
   },
   harden({}),
 );
@@ -65,6 +66,9 @@ export const readClaudeBrokerConfig = env => {
   const config = harden(JSON.parse(text));
   if (!matches(config, ConfigShape))
     throw Fail`Invalid Claude broker configuration`;
+  config.pool !== true ||
+    config.credentialKind === 'oauthToken' ||
+    Fail`Claude pools require oauthToken credentials`;
   // What the broker grant refuses at every admission is refused here, at
   // construction, where a retained formula would otherwise be bound unusable.
   config.anthropicBeta === undefined ||

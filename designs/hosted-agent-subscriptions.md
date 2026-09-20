@@ -148,10 +148,17 @@ Where phase 4 differs from the design below:
 - `usage` on the endpoint, which the design lists for phase 5, is not here
   yet.
 
-**Phases 5 and 6, the pool and the handover, are implemented for Codex.**
-Not deployed, and not exercised against two real accounts: that, and whether
-encrypted reasoning items replay under another account, are still open below.
-Claude and OpenCode brokers still hold one credential each.
+**Phases 5 and 6, the pool and the handover, are implemented for Codex and Claude.**
+The Codex implementation is deployed to Tokyo; two-account acceptance and whether
+encrypted reasoning items replay under another account remain open below.
+Claude's new pool wiring is locally tested but not deployed or live-validated.
+It uses explicit Secrets references, OAuth-only credentials, per-member account
+oracles, and the same selection and exhaustion rules as Codex.
+Floot exposes Auto and named members; an existing session's pin cannot change.
+Opaque Claude tokens cannot establish that two Secrets entries name distinct
+provider accounts; that remains the operator's responsibility.
+See `packages/claude-sandbox/HOSTED-SUBSCRIPTIONS.md` for setup and limitations.
+OpenCode brokers still hold one credential each.
 
 - `subscription-pool.js` — the rule and nothing else: `standingOf` (where one
   subscription stands, from its last reading, at an instant),
