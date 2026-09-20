@@ -27,6 +27,13 @@ const request = harden({
   path: '/v1/responses',
   body: '{"model":"allowed"}',
 });
+/** A response that began and never said what it cost. */
+const UNSAID = harden({
+  usage: null,
+  began: true,
+  complete: true,
+  responseBytes: 2,
+});
 const credential = 'canary-secret';
 const accessToken = 'canary-access';
 const refreshToken = 'canary-refresh';
@@ -397,7 +404,8 @@ test('broker injects credentials only into fixed transport and canonicalizes JSO
     await E(endpoint).request(
       harden({ ...request, body: '{"model":"denied","model":"allowed"}' }),
     ),
-    { status: 200, body: 'ok' },
+    // The body said nothing of its cost, and the response did begin.
+    { status: 200, body: 'ok', usage: UNSAID },
   );
   t.like(calls[0], {
     url: 'https://api.example.test/v1/responses',
@@ -755,8 +763,11 @@ test('operator configuration cannot enable administrative routes or unprovisione
   );
 });
 
-/** @param {string[]} chunks */
-const streamingSetup = chunks => {
+/**
+ * @param {string[]} chunks
+ * @param {Partial<typeof policy>} [limits]
+ */
+const streamingSetup = (chunks, limits = {}) => {
   let cancelled = false;
   const reader = Far('reader', {
     async next() {
@@ -767,7 +778,7 @@ const streamingSetup = chunks => {
       cancelled = true;
     },
   });
-  const lease = makeProviderBrokerGrant(policy, {
+  const lease = makeProviderBrokerGrant(harden({ ...policy, ...limits }), {
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -1041,6 +1052,7 @@ test('a credential rejected mid-session is refreshed once and the turn survives'
   t.deepEqual(await E(lease.endpoint).request(request), {
     status: 200,
     body: 'ok',
+    usage: UNSAID,
   });
   t.is(lease.exchanges.length, 1);
   t.is(lease.calls[0].headers.authorization, `Bearer ${accessToken}`);
@@ -1226,8 +1238,8 @@ test('two leases over one record never redeem the same refresh token', async t =
   t.deepEqual(
     [a, b],
     [
-      { status: 200, body: 'ok' },
-      { status: 200, body: 'ok' },
+      { status: 200, body: 'ok', usage: UNSAID },
+      { status: 200, body: 'ok', usage: UNSAID },
     ],
   );
   t.is(record.exchanges.length, 1);
@@ -2310,8 +2322,14 @@ test('the bytes stream is bound by the response quota like the text stream', asy
  * @param root0.scripts
  * @param root0.order
  * @param root0.echo
+ * @param root0.revealExhaustion
  */
-const poolSetup = ({ scripts, order = ['first', 'second'], echo } = {}) => {
+const poolSetup = ({
+  scripts,
+  order = ['first', 'second'],
+  echo,
+  revealExhaustion,
+} = {}) => {
   const sent = { first: [], second: [] };
   const events = [];
   const member = id =>
@@ -2357,6 +2375,7 @@ const poolSetup = ({ scripts, order = ['first', 'second'], echo } = {}) => {
     });
   const lease = makeProviderBrokerGrant(policy, {
     audit: event => events.push(event.event),
+    ...(revealExhaustion === undefined ? {} : { revealExhaustion }),
     pool: {
       members: [member('first'), member('second')],
       select: () => {
@@ -2576,4 +2595,149 @@ test('a member whose credential cannot be used is reported, and the request is n
   });
   t.deepEqual(told, ['broken', 'rejected']);
   t.deepEqual(sent, ['Bearer stale-key']);
+});
+
+const ROOMY = harden({ maxResponseBytes: 10_000n });
+const COMPLETED =
+  'data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":60},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":10}}}}\n\n';
+
+test('a streamed response settles what it cost when the producer has read its end', async t => {
+  const lease = streamingSetup(
+    ['data: {"type":"response.output_text.delta","delta":"hi"}\n\n', COMPLETED],
+    ROOMY,
+  );
+  const response = await E(lease.endpoint).requestByteStream(request);
+  let settled = false;
+  void response.usage.then(() => {
+    settled = true;
+  });
+  await null;
+  t.false(settled, 'not before the stream is read');
+  await collectBytes(iterateBytesReader(response.reader, { buffer: 64 }));
+  t.deepEqual(await response.usage, {
+    began: true,
+    complete: true,
+    responseBytes: 248,
+    usage: {
+      inputTokens: 40,
+      outputTokens: 20,
+      cachedInputTokens: 60,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 10,
+    },
+  });
+  // The older reader is handed no settlement.
+  const legacy = await E(
+    streamingSetup([COMPLETED], ROOMY).endpoint,
+  ).requestStream(request);
+  t.false('usage' in legacy);
+});
+
+test('a stream that began and was abandoned settles with what it had said, or nothing', async t => {
+  const lease = streamingSetup(['data: {"delta":"a"}\n\n', COMPLETED], ROOMY);
+  const response = await E(lease.endpoint).requestByteStream(request);
+  const reader = iterateBytesReader(response.reader, { buffer: 0 });
+  await reader.next();
+  await reader.return(undefined);
+  // Cut short: not complete, so a meter charges no less than it reserved.
+  t.like(await response.usage, { began: true, complete: false });
+  t.true(lease.cancelled());
+
+  // Revoking the grant settles its open streams too: nothing waits for ever.
+  const revoked = streamingSetup(['data: {"delta":"a"}\n\n', COMPLETED], ROOMY);
+  const open = await E(revoked.endpoint).requestByteStream(request);
+  E(revoked.admin).revoke();
+  t.deepEqual(await open.usage, {
+    began: true,
+    complete: false,
+    responseBytes: 0,
+    usage: null,
+  });
+});
+
+test('a whole JSON response carries what it cost', async t => {
+  const { endpoint } = setup({
+    respond: async () => ({
+      status: 200,
+      body: '{"object":"response","usage":{"input_tokens":9,"output_tokens":4}}',
+    }),
+  });
+  const response = await E(endpoint).request(request);
+  t.deepEqual(response.usage, {
+    began: true,
+    complete: true,
+    responseBytes: 66,
+    usage: {
+      inputTokens: 9,
+      outputTokens: 4,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
+  });
+});
+
+test('exhaustion is one more bare word only for an endpoint that asked for it', async t => {
+  const scripts = () => ({ first: ['exhausted'], second: ['exhausted'] });
+  const collapsed = poolSetup({ scripts: scripts() });
+  await t.throwsAsync(() => E(collapsed.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  const revealing = poolSetup({ scripts: scripts(), revealExhaustion: true });
+  await t.throwsAsync(() => E(revealing.endpoint).request(request), {
+    message: 'Provider subscription exhausted',
+  });
+  // Every member blocked before the request is even tried reads the same.
+  const blocked = poolSetup({
+    scripts: scripts(),
+    order: [],
+    revealExhaustion: true,
+  });
+  await t.throwsAsync(() => E(blocked.endpoint).request(request), {
+    message: 'Provider subscription exhausted',
+  });
+  // Any other failure stays collapsed, whoever asks.
+  const broken = poolSetup({
+    scripts: { first: ['broken'], second: [] },
+    revealExhaustion: true,
+  });
+  await t.throwsAsync(() => E(broken.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+});
+
+test('a request the provider was given the whole deadline for is not free, though nothing arrived', async t => {
+  const lost = setup({
+    respond: async () => {
+      throw Error('Provider response lost');
+    },
+    respondStream: async () => {
+      throw Error('Provider response lost');
+    },
+  });
+  // The caller sees a failed request, like any other.
+  await t.throwsAsync(() => E(lost.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  // An endpoint a share sits on is told, since a failed call has no usage
+  // to await.
+  const told = makeProviderBrokerGrant(policy, {
+    secret: Far('secret', { readBase64: async () => btoa(credential) }),
+    transport: Far('transport', {
+      request: async () => {
+        throw Error('Provider response lost');
+      },
+    }),
+    revealExhaustion: true,
+  });
+  await t.throwsAsync(() => E(told.endpoint).request(request), {
+    message: 'Provider response lost',
+  });
+  // A transport failure that is not that one stays free.
+  const broken = setup({
+    respondStream: async () => {
+      throw Error('Provider transport failed');
+    },
+  });
+  await t.throwsAsync(() => E(broken.endpoint).requestByteStream(request));
 });

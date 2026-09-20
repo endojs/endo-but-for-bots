@@ -43,11 +43,13 @@ harden(ProviderAccountSourceInterface);
  * @param {() => Promise<any>} [options.activeRead] One read of the provider,
  *   returning a raw reading or undefined. Host-only: it holds the credential.
  * @param {(error: unknown) => void} [options.reportError]
+ * @param {() => void} [options.onChange] Called after each reading is kept.
  */
 export const makeAccountReadingSource = ({
   now = () => new Date().toISOString(),
   activeRead,
   reportError = () => {},
+  onChange = () => {},
 } = {}) => {
   /** @type {{ plan?: any, rateLimits?: any }} */
   let last = harden({});
@@ -105,6 +107,13 @@ export const makeAccountReadingSource = ({
     }
     last = harden(next);
     topic.publish(last);
+    // For the broker's own status (`broker-subscription.js`); a hook of the
+    // host's that must not change how a reading is kept.
+    try {
+      onChange();
+    } catch (_error) {
+      // Nothing to do about it here.
+    }
   };
 
   const refresh = () => {

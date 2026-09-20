@@ -333,7 +333,12 @@ test('lease binds observations and only delegates inference; retry preserves liv
         body: '{"model":"allowed"}',
       }),
     ),
-    { status: 200, body: 'ok' },
+    // The body said nothing of its cost; the response did begin.
+    {
+      status: 200,
+      body: 'ok',
+      usage: { usage: null, began: true, complete: true, responseBytes: 2 },
+    },
   );
   await E(lease).revoke();
   await E(lease).revoke();
@@ -759,4 +764,350 @@ test('a session pinned to one subscription is refused another, and a single-subs
   await t.notThrowsAsync(
     () => single.issuer.issueKit({ ...spec, sessionId: 'auto-ok' }).value,
   );
+});
+
+const inference = harden({
+  method: 'POST',
+  path: '/v1/responses',
+  body: '{"model":"allowed"}',
+});
+
+test('an endpoint without a listener serves the same credentialed core, and is the issuer’s to reap', async t => {
+  /** @type {any[]} */
+  const sent = [];
+  const f = fixture({
+    fetch: async (url, init) => {
+      sent.push({ url, authorization: init.headers.authorization });
+      return new Response('{"usage":{"input_tokens":5,"output_tokens":2}}');
+    },
+  });
+  const endpoint = await f.issuer.openEndpoint({ sessionId: 'share-a-s1' });
+  // No listener was started for it.
+  t.is(f.endpoint(), undefined);
+
+  // eslint-disable-next-line no-underscore-dangle
+  const endpointMethods = await E(endpoint).__getMethodNames__();
+  t.deepEqual(
+    endpointMethods.filter(name => !name.startsWith('__')),
+    ['attestation', 'request', 'requestByteStream', 'revoke'],
+  );
+  t.deepEqual(await E(endpoint).attestation(), {
+    version: 'InferenceEndpointV1',
+    sessionId: 'share-a-s1',
+    providerOrigin: policy.origin,
+    modelAllowlist: [...policy.models],
+    subscription: 'auto',
+    hops: 0,
+  });
+  const response = await E(endpoint).request(inference);
+  t.is(sent[0].authorization, 'Bearer host-secret');
+  t.like(response.usage, { began: true, usage: { inputTokens: 5 } });
+  // The grant's admission rules are the endpoint's too.
+  await t.throwsAsync(() =>
+    E(endpoint).request(harden({ ...inference, body: '{"model":"denied"}' })),
+  );
+  await t.throwsAsync(() =>
+    E(endpoint).request(harden({ ...inference, path: '/v1/files' })),
+  );
+
+  for (const bad of [
+    {},
+    { sessionId: 'bad id' },
+    { sessionId: 's', subscription: 'work' },
+    { sessionId: 's', hops: 5 },
+    { sessionId: 's', hops: -1 },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => f.issuer.openEndpoint(bad), {
+      message: /Provider endpoint request denied/,
+    });
+  }
+
+  await E(endpoint).revoke();
+  await t.throwsAsync(() => E(endpoint).request(inference), {
+    message: /Inference endpoint revoked/,
+  });
+  // Disposing the issuer reaps the endpoints nobody revoked.
+  const left = await f.issuer.openEndpoint({ sessionId: 's2' });
+  await f.issuer.dispose();
+  await t.throwsAsync(() => E(left).request(inference));
+  await t.throwsAsync(() => f.issuer.openEndpoint({ sessionId: 's3' }));
+});
+
+test('an endpoint over a pool hands over, and says so only when every account is used up', async t => {
+  const { makeSubscriptionPool } = await import('../src/subscription-pool.js');
+  /** @type {Record<string, any>} */
+  const latest = {};
+  let homeServes = true;
+  const members = [
+    { id: 'work', label: 'Work', weight: 1 },
+    { id: 'home', label: 'Home', weight: 1 },
+  ];
+  const chooser = makeSubscriptionPool({
+    members: () => members,
+    readingOf: id => latest[id],
+    cacheLifetimeMs: 300_000,
+  });
+  const limited = () =>
+    new Response('limit', {
+      status: 429,
+      headers: {
+        'x-codex-secondary-used-percent': '100',
+        'x-codex-secondary-reset-at': '4000000000',
+      },
+    });
+  const issuer = makeProviderBrokerGrantIssuer({
+    runtime: listenerRuntime(() => {}),
+    secret: undefined,
+    fetch: /** @type {any} */ (
+      async (_url, init) => {
+        if (init.headers.authorization === 'Bearer work-key') return limited();
+        return homeServes ? new Response('{"ok":true}') : limited();
+      }
+    ),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    pool: {
+      members: () =>
+        members.map(({ id }) => ({
+          id,
+          secret: Far(`${id} secret`, {
+            readBase64: async () => btoa(`${id}-key`),
+          }),
+          onReading: reading => {
+            latest[id] = reading.rateLimits;
+          },
+        })),
+      forSession: chooser.forSession,
+    },
+  });
+  const endpoint = await issuer.openEndpoint({ sessionId: 'share-a-s1' });
+  t.is((await E(endpoint).request(inference)).body, '{"ok":true}');
+  homeServes = false;
+  await t.throwsAsync(() => E(endpoint).request(inference), {
+    message: 'Provider subscription exhausted',
+  });
+  // And again, now that both are known to be blocked before it is tried.
+  await t.throwsAsync(() => E(endpoint).request(inference), {
+    message: 'Provider subscription exhausted',
+  });
+  await issuer.dispose();
+});
+
+/**
+ * An issuer over a pool of one account of the operator's own and one member
+ * that is somebody else's subscription.
+ *
+ * @param {(issuer: () => any) => any} makeFar The far subscription, given a
+ *   way to reach this issuer (for a cycle).
+ * @param {object} [options]
+ */
+const wrappedPoolFixture = async (makeFar, options = {}) => {
+  const { makeSubscriptionPool } = await import('../src/subscription-pool.js');
+  /** @type {string[]} */
+  const own = [];
+  const members = [
+    { id: 'far', label: 'Far', weight: 1 },
+    { id: 'own', label: 'Own', weight: 1 },
+  ];
+  const chooser = makeSubscriptionPool({
+    members: () => members,
+    readingOf: () => undefined,
+    cacheLifetimeMs: 300_000,
+  });
+  /** @type {any} */
+  let listenerEndpoint;
+  /** @type {any} */
+  let issuer;
+  const far = makeFar(() => issuer);
+  issuer = makeProviderBrokerGrantIssuer({
+    runtime: listenerRuntime(value => {
+      listenerEndpoint = value;
+    }),
+    secret: undefined,
+    fetch: /** @type {any} */ (
+      async (_url, init) => {
+        own.push(init.headers.authorization);
+        return new Response('{"served":"own"}');
+      }
+    ),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    pool: {
+      members: () => [
+        { id: 'far', subscription: far },
+        {
+          id: 'own',
+          secret: Far('own secret', {
+            readBase64: async () => btoa('own-key'),
+          }),
+        },
+      ],
+      forSession: chooser.forSession,
+    },
+    ...options,
+  });
+  return { issuer, own, endpoint: () => listenerEndpoint };
+};
+
+test('a pool that holds a share of itself neither deadlocks nor goes round for ever', async t => {
+  const { makeSubscriptionShare } =
+    await import('../src/subscription-share.js');
+  const f = await wrappedPoolFixture(issuer => {
+    // The operator's own pool as a Subscription, and a share of it, put back
+    // into that pool.
+    const self = Far('self', {
+      describe: async () => harden({ providerId: 'test', models: ['allowed'] }),
+      getStatus: async () => harden({ available: true }),
+      openEndpoint: requested => issuer().openEndpoint(requested),
+    });
+    return makeSubscriptionShare({
+      shareId: 'loop',
+      provideUnderlying: async () => self,
+      provideLimits: async () => ({ createdAt: '2026-09-20T00:00:00Z' }),
+      journal: { read: async () => undefined, write: async () => {} },
+      log: () => {},
+    }).share;
+  });
+  // The grant is issued at once: nothing is opened while the queue is held.
+  const kit = f.issuer.issueKit(spec);
+  await kit.value;
+  // The request goes round until the hop limit refuses to open another, and
+  // is then served by the operator's own account, at the bottom.
+  const response = await E(f.endpoint()).request(inference);
+  t.is(response.body, '{"served":"own"}');
+  t.deepEqual(f.own, ['Bearer own-key']);
+  await kit.revoke();
+  await f.issuer.dispose();
+});
+
+test('a far subscription that hangs or has gone costs a pause, not the session: the next member serves', async t => {
+  let opens = 0;
+  const f = await wrappedPoolFixture(
+    () =>
+      Far('hanging', {
+        openEndpoint: () => {
+          opens += 1;
+          return new Promise(() => {});
+        },
+      }),
+    { wrappedOpenDeadlineMs: 20 },
+  );
+  const kit = f.issuer.issueKit(spec);
+  await kit.value;
+  t.is((await E(f.endpoint()).request(inference)).body, '{"served":"own"}');
+  t.is(opens, 1);
+  // The pool skips it for a while afterwards, as it does a dead credential.
+  t.is((await E(f.endpoint()).request(inference)).body, '{"served":"own"}');
+  t.is(opens, 1);
+  await kit.revoke();
+});
+
+test('a far endpoint that stopped working is opened again, once; the older text reader never reaches a far subscription', async t => {
+  /** @type {any[]} */
+  const opened = [];
+  let served = 0;
+  const f = await wrappedPoolFixture(() =>
+    Far('restarting', {
+      openEndpoint: async () => {
+        const entry = { revoked: false, index: opened.length };
+        opened.push(entry);
+        return Far('far endpoint', {
+          request: async () => {
+            // The first endpoint died with the far daemon's restart.
+            if (entry.index === 0) throw Error('Inference endpoint revoked');
+            served += 1;
+            return harden({ status: 200, body: '{"served":"far"}' });
+          },
+          requestByteStream: async () => {
+            served += 1;
+            throw Error('not expected');
+          },
+          revoke: async () => {
+            entry.revoked = true;
+          },
+        });
+      },
+    }),
+  );
+  const kit = f.issuer.issueKit(spec);
+  await kit.value;
+  t.is((await E(f.endpoint()).request(inference)).body, '{"served":"far"}');
+  t.is(opened.length, 2);
+  // The dead one is kept until the grant ends: another request of this
+  // session might still have been streaming from it.
+  t.false(opened[0].revoked);
+  // A listener from before the bytes stream is served by our own account.
+  const before = served;
+  const legacy = await E(f.endpoint()).requestStream(inference);
+  let text = '';
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const chunk = await E(legacy.reader).next();
+    text += chunk.value;
+    if (chunk.done) break;
+  }
+  t.is(text, '{"served":"own"}');
+  t.is(served, before);
+  await kit.revoke();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  t.true(opened[0].revoked, 'the dead one is given back with the grant');
+  t.true(opened[1].revoked, 'the live one is revoked with the grant');
+});
+
+test('a far share that cannot serve just now is not sent the request again, and a sibling streaming from it is left alone', async t => {
+  /** @type {any[]} */
+  const opened = [];
+  /** @type {string[]} */
+  const calls = [];
+  const unavailable = true;
+  const f = await wrappedPoolFixture(() =>
+    Far('flaky', {
+      openEndpoint: async () => {
+        const entry = { revoked: false };
+        opened.push(entry);
+        return Far('far endpoint', {
+          request: async () => {
+            calls.push('far');
+            if (unavailable) throw Error('Provider share unavailable');
+            return harden({ status: 200, body: '{"served":"far"}' });
+          },
+          requestByteStream: async () => {
+            throw Error('not expected');
+          },
+          revoke: async () => {
+            entry.revoked = true;
+          },
+        });
+      },
+    }),
+  );
+  const kit = f.issuer.issueKit(spec);
+  await kit.value;
+  // Sent once, refused by the far share's own trouble: our own account
+  // serves, and the far endpoint is neither reopened nor revoked.
+  t.is((await E(f.endpoint()).request(inference)).body, '{"served":"own"}');
+  t.deepEqual(calls, ['far']);
+  t.is(opened.length, 1);
+  t.false(opened[0].revoked);
+  await kit.revoke();
+});
+
+test('how far a request has come is not held against the member: past the hop limit it is left out, and the pool is not told', async t => {
+  let opens = 0;
+  const f = await wrappedPoolFixture(() =>
+    Far('far', {
+      openEndpoint: async () => {
+        opens += 1;
+        throw Error('Too many subscriptions between here and the provider');
+      },
+    }),
+  );
+  // A holder who claims to have come a long way already.
+  const deep = await f.issuer.openEndpoint({ sessionId: 'deep', hops: 3 });
+  t.is((await E(deep).request(inference)).body, '{"served":"own"}');
+  t.is(opens, 0, 'the far member was never asked');
+  await E(deep).revoke();
 });

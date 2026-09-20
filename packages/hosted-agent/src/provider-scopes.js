@@ -68,6 +68,8 @@ const ScopeInterface = M.interface('ProviderScope', {
  *   banked rate-limit reset (`reset-redeemer.js`), where the adapter has one.
  * @param {(subscriptionId?: string) => any} [powers.resetRedeemerOf] The same,
  *   per subscription.
+ * @param {any} [powers.subscription] The broker as a `Subscription`
+ *   (`broker-subscription.js`): endpoints without a listener, for shares.
  */
 export const makeProviderScopes = ({
   openIssuer,
@@ -76,6 +78,7 @@ export const makeProviderScopes = ({
   listSubscriptions,
   resetRedeemer,
   resetRedeemerOf,
+  subscription,
 }) => {
   /** @type {Map<string, {spec: ProviderScopeSpec, facet: any, revoke(): Promise<void>}>} */
   const scopes = new Map();
@@ -230,6 +233,7 @@ export const makeProviderScopes = ({
       resetRedeemer: M.call()
         .optional(M.string())
         .returns(M.or(M.remotable(), M.undefined(), M.promise())),
+      subscription: M.call().returns(M.or(M.remotable(), M.undefined())),
     }),
     {
       provideScope,
@@ -260,6 +264,11 @@ export const makeProviderScopes = ({
         }
         return subscriptionId === undefined ? resetRedeemer : undefined;
       },
+      // An operator's too, and the widest thing here: inference against the
+      // broker's credential with no sandbox, no listener and no meter. Setup
+      // holds it as a formula of its own, and only a share's namespace is
+      // given that; what is handed to anybody else is the share.
+      subscription: () => subscription,
     },
   );
   return harden({ service, close });
