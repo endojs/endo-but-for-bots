@@ -43,7 +43,31 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {ProviderRequestAdapter} [options.adaptRequest] Trusted provider translation.
  * @param {(spec:any)=>{endpoint:any,dispose:()=>void}} [options.makePublicNetwork]
  * Host-only factory for a separately revocable public-egress capability.
+ * @param {IssuerPool} [options.pool] Several subscriptions of this provider,
+ * in place of `secret`, `credential`, `adaptRequest` and `onReading`, which
+ * describe one. Every grant then serves each request from the member the
+ * pool selects for that grant's session, and hands a request a drained
+ * member refuses to the next (`makeProviderBrokerGrant`). A grant takes the
+ * set as it is when the grant is issued; a member added later is seen by the
+ * sessions opened after it.
  */
+/**
+ * @typedef {object} IssuerPoolMember
+ * @property {string} id
+ * @property {any} secret SecretBlob read facet.
+ * @property {any} [credential] The member's shared refreshing credential.
+ * @property {ProviderRequestAdapter} [adaptRequest]
+ * @property {string} [accountRef]
+ * @property {(reading: any) => void} [onReading] What this member's responses
+ *   say of its account.
+ */
+
+/**
+ * @typedef {object} IssuerPool
+ * @property {() => Promise<readonly IssuerPoolMember[]> | readonly IssuerPoolMember[]} members
+ * @property {(sessionId: string, preference: string) => { select(): string[], served(id: string): void, exhausted(id: string): void }} forSession
+ */
+
 export const makeProviderBrokerGrantIssuer = ({
   runtime,
   secret,
@@ -58,6 +82,7 @@ export const makeProviderBrokerGrantIssuer = ({
   credential,
   adaptRequest,
   makePublicNetwork,
+  pool,
 }) => {
   (/^sha256:[a-f0-9]{64}$/.test(imageDigest) &&
     typeof accountRef === 'string' &&
@@ -80,7 +105,8 @@ export const makeProviderBrokerGrantIssuer = ({
   // the selected account, and able to refresh. Without the second half an
   // object that cannot refresh is admitted here, reports `authMode: 'oauth'`
   // in its attestation, and only fails on the first turn.
-  if (authMode === 'oauth') {
+  // A pool's members are checked one by one when a grant is made over them.
+  if (authMode === 'oauth' && pool === undefined) {
     credential !== undefined || Fail`Invalid provider grant issuer policy`;
     credential.accountRef === accountRef ||
       Fail`Invalid provider grant issuer policy`;
@@ -126,9 +152,14 @@ export const makeProviderBrokerGrantIssuer = ({
       model: requested.model,
       networkPolicy:
         requested.networkPolicy === undefined ? 'off' : requested.networkPolicy,
+      // Which subscription this session uses: `auto`, or one by id.
+      subscription:
+        requested.subscription === undefined ? 'auto' : requested.subscription,
     });
     const grantId = `grant-${randomUUID()}`;
     let transport;
+    /** @type {Array<{ dispose(): void }>} */
+    const memberTransports = [];
     let core;
     let worker;
     let workerKit;
@@ -144,6 +175,7 @@ export const makeProviderBrokerGrantIssuer = ({
     const fence = () => {
       inactive = true;
       transport?.dispose();
+      for (const memberTransport of memberTransports) memberTransport.dispose();
       network?.dispose();
       return core ? E(core.admin).revoke() : Promise.resolve();
     };
@@ -189,6 +221,9 @@ export const makeProviderBrokerGrantIssuer = ({
         /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(spec.sessionId) &&
         spec.providerOrigin === configuredPolicy.origin &&
         spec.accountRef === accountRef &&
+        typeof spec.subscription === 'string' &&
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(spec.subscription) &&
+        (pool !== undefined || spec.subscription === 'auto') &&
         (!spec.model || configuredPolicy.models.includes(spec.model))) ||
         Fail`Provider grant request denied`;
       spec.networkPolicy === 'off' ||
@@ -198,21 +233,60 @@ export const makeProviderBrokerGrantIssuer = ({
       grants.add(revoke);
       fences.add(fence);
       const timeoutMs = requestTimeoutMs;
-      transport = makeProviderFetchTransport({
-        fetch,
-        timeoutMs,
-        maxRequestBytes: configuredPolicy.maxRequestBytes,
-        maxResponseBytes: configuredPolicy.maxResponseBytes,
-        onDiagnostic,
-        onReading,
-      });
-      core = makeProviderBrokerGrant(configuredPolicy, {
-        secret,
-        transport: transport.transport,
-        audit,
-        credential,
-        adaptRequest,
-      });
+      if (pool === undefined) {
+        transport = makeProviderFetchTransport({
+          fetch,
+          timeoutMs,
+          maxRequestBytes: configuredPolicy.maxRequestBytes,
+          maxResponseBytes: configuredPolicy.maxResponseBytes,
+          onDiagnostic,
+          onReading,
+        });
+        core = makeProviderBrokerGrant(configuredPolicy, {
+          secret,
+          transport: transport.transport,
+          audit,
+          credential,
+          adaptRequest,
+        });
+      } else {
+        // A transport per member, so that what a response says of the
+        // account is read as that member's, whichever of them served a
+        // request while another is mid-stream.
+        const members = [...(await pool.members())].map(member => {
+          const memberTransport = makeProviderFetchTransport({
+            fetch,
+            timeoutMs,
+            maxRequestBytes: configuredPolicy.maxRequestBytes,
+            maxResponseBytes: configuredPolicy.maxResponseBytes,
+            onDiagnostic,
+            onReading: member.onReading,
+          });
+          memberTransports.push(memberTransport);
+          return harden({
+            id: member.id,
+            secret: member.secret,
+            transport: memberTransport.transport,
+            ...(member.credential === undefined
+              ? {}
+              : { credential: member.credential }),
+            ...(member.adaptRequest === undefined
+              ? {}
+              : { adaptRequest: member.adaptRequest }),
+            ...(member.accountRef === undefined
+              ? {}
+              : { accountRef: member.accountRef }),
+          });
+        });
+        checkLive();
+        core = makeProviderBrokerGrant(configuredPolicy, {
+          audit,
+          pool: harden({
+            members,
+            ...pool.forSession(spec.sessionId, spec.subscription),
+          }),
+        });
+      }
       if (spec.networkPolicy === 'public-internet') {
         if (!makePublicNetwork) throw Fail`Public network factory unavailable`;
         network = makePublicNetwork(spec);

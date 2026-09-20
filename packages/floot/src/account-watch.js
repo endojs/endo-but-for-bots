@@ -33,7 +33,10 @@ import { makeLatestTopic } from '@endo/hosted-agent/latest-topic.js';
 
 /**
  * @typedef {object} AccountView
+ * @property {string} key `backendId`, or `backendId:subscriptionId`
  * @property {string} backendId
+ * @property {string} [subscriptionId] when the backend holds several
+ * @property {string} [label] the operator's name for that subscription
  * @property {string} title the backend's title
  * @property {{ planId: string, title: string, state: string, source: string }} plan
  * @property {AccountWindowView[]} windows
@@ -49,7 +52,7 @@ const text = value =>
   value === null || value === undefined ? null : `${value}`;
 
 /**
- * @param {{ backendId: string, title: string }} backend
+ * @param {{ backendId: string, title: string, key?: string, subscriptionId?: string, label?: string }} backend
  * @param {any} snapshot `{ plan, rateLimits, rateCard }` from an oracle
  * @returns {AccountView}
  */
@@ -58,7 +61,14 @@ export const projectAccount = (backend, snapshot) => {
   const limits = snapshot?.rateLimits ?? {};
   const windows = Array.isArray(limits.windows) ? limits.windows : [];
   return harden({
+    key: backend.key ?? backend.backendId,
     backendId: backend.backendId,
+    ...(backend.subscriptionId === undefined
+      ? {}
+      : {
+          subscriptionId: backend.subscriptionId,
+          label: backend.label ?? backend.subscriptionId,
+        }),
     title: backend.title,
     plan: {
       planId: `${plan.planId ?? ''}`,
@@ -108,8 +118,15 @@ export const projectAccount = (backend, snapshot) => {
 harden(projectAccount);
 
 /**
+ * One account oracle to follow. `key` tells a backend's subscriptions apart;
+ * a backend over one credential has none and is keyed by its id.
+ *
+ * @typedef {{ backendId: string, title: string, oracle: any, key?: string, subscriptionId?: string, label?: string }} OracleEntry
+ */
+
+/**
  * @param {object} powers
- * @param {() => Promise<{ entries: Array<{ backendId: string, title: string, oracle: any }>, unknown: string[] }>} powers.listOracles
+ * @param {() => Promise<{ entries: OracleEntry[], unknown: string[] }>} powers.listOracles
  *   The account oracles bound now, and the backend ids that could not be
  *   looked up this time (whose followers are left alone). Asked again
  *   whenever a view subscribes: an adapter binds its oracle after Floot has
@@ -125,7 +142,7 @@ export const makeAccountsWatch = ({
   const topic = makeLatestTopic();
   /** @type {Map<string, AccountView>} */
   const accounts = new Map();
-  /** @type {Map<string, any>} backendId to the oracle being followed */
+  /** @type {Map<string, any>} account key to the oracle being followed */
   const following = new Map();
   // How long to wait before looking for a backend's oracle again, and whether
   // its outage has been said. Per backend and across attempts: an oracle from
@@ -140,48 +157,49 @@ export const makeAccountsWatch = ({
       harden({
         type: 'accounts',
         accounts: [...accounts.values()].sort((a, b) =>
-          a.backendId.localeCompare(b.backendId),
+          a.key.localeCompare(b.key),
         ),
       }),
     );
 
-  /** @param {{ backendId: string, title: string, oracle: any }} entry */
+  /** @param {OracleEntry} entry */
   const follow = entry => {
-    following.set(entry.backendId, entry.oracle);
+    const key = entry.key ?? entry.backendId;
+    following.set(key, entry.oracle);
     const run = async () => {
       try {
         const snapshots = iterateReader(E(entry.oracle).watch());
         for await (const snapshot of snapshots) {
-          if (following.get(entry.backendId) !== entry.oracle) {
+          if (following.get(key) !== entry.oracle) {
             // Replaced by a newer binding; let that one speak.
 
             await snapshots.return?.(undefined);
             return;
           }
-          outages.delete(entry.backendId);
-          accounts.set(entry.backendId, projectAccount(entry, snapshot));
+          outages.delete(key);
+          accounts.set(key, projectAccount(entry, snapshot));
           publish();
         }
       } catch (error) {
-        const outage = outages.get(entry.backendId);
+        const outage = outages.get(key);
         if (!outage?.logged) {
           log(
-            `[floot-factory] account watch for ${entry.backendId} failed:`,
+            `[floot-factory] account watch for ${key} failed:`,
             error instanceof Error ? error.message : String(error),
           );
         }
       }
-      if (following.get(entry.backendId) !== entry.oracle) return;
+      if (following.get(key) !== entry.oracle) return;
       // The oracle's stream ended: it was re-minted, it closed this reader, or
       // it cannot stream at all. Look for it again while somebody is watching.
-      following.delete(entry.backendId);
-      const outage = outages.get(entry.backendId) ?? {
+      following.delete(key);
+      const outage = outages.get(key) ?? {
         retryMs: 5000,
         logged: false,
         pending: false,
       };
       outage.logged = true;
-      outages.set(entry.backendId, outage);
+      outages.set(key, outage);
       if (topic.watcherCount() > 0 && !outage.pending) {
         outage.pending = true;
         setTimer(() => {
@@ -199,27 +217,30 @@ export const makeAccountsWatch = ({
     reconciling = reconciling
       .then(async () => {
         const { entries, unknown } = await listOracles();
-        const present = new Set([
-          ...entries.map(entry => entry.backendId),
-          // A backend that could not be looked up this time keeps what it
-          // had: one failed lookup must not drop a working follower.
-          ...unknown,
-        ]);
-        for (const backendId of [...following.keys()]) {
-          if (!present.has(backendId)) {
-            following.delete(backendId);
-            accounts.delete(backendId);
+        const keyOf = (/** @type {OracleEntry} */ entry) =>
+          entry.key ?? entry.backendId;
+        const present = new Set(entries.map(keyOf));
+        // A backend that could not be looked up this time keeps what it had,
+        // every subscription of it: one failed lookup must not drop a working
+        // follower.
+        const kept = (/** @type {string} */ key) =>
+          present.has(key) ||
+          unknown.some(
+            backendId => key === backendId || key.startsWith(`${backendId}:`),
+          );
+        for (const key of [...following.keys()]) {
+          if (!kept(key)) {
+            following.delete(key);
+            accounts.delete(key);
           }
         }
-        for (const backendId of [...accounts.keys()]) {
-          if (!present.has(backendId)) accounts.delete(backendId);
+        for (const key of [...accounts.keys()]) {
+          if (!kept(key)) accounts.delete(key);
         }
         for (const entry of entries) {
-          const outage = outages.get(entry.backendId);
-          if (
-            following.get(entry.backendId) !== entry.oracle &&
-            !outage?.pending
-          ) {
+          const key = keyOf(entry);
+          const outage = outages.get(key);
+          if (following.get(key) !== entry.oracle && !outage?.pending) {
             follow(entry);
           }
         }

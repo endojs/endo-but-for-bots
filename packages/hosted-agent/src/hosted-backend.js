@@ -178,8 +178,40 @@ const REQUIRED_DESCRIPTOR_KEYS = harden([
 ]);
 const OPTIONAL_DESCRIPTOR_KEYS = harden([
   'promptEnvironment',
+  'providerId',
+  'subscriptions',
   'supportedNetworkPolicies',
 ]);
+
+const SUBSCRIPTION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * The subscriptions of its provider a backend can serve a session from, as a
+ * picker shows them: an id and the operator's label. Empty, or absent, when
+ * the backend holds one credential and there is nothing to choose. No
+ * credential, account number or secret name is in it.
+ *
+ * @param {unknown} candidate
+ * @returns {Array<{ id: string, label: string }>}
+ */
+export const assertBackendSubscriptions = candidate => {
+  (Array.isArray(candidate) && candidate.length <= 16) ||
+    Fail`A backend may list at most 16 subscriptions`;
+  const projected = /** @type {any[]} */ (candidate).map(entry => {
+    (entry !== null && typeof entry === 'object') ||
+      Fail`A backend subscription must be a record`;
+    const { id, label } = entry;
+    (typeof id === 'string' && SUBSCRIPTION_ID.test(id) && id !== 'auto') ||
+      Fail`Invalid backend subscription id ${q(id)}`;
+    (typeof label === 'string' && label.length > 0 && label.length <= 128) ||
+      Fail`Invalid label for backend subscription ${q(id)}`;
+    return harden({ id, label });
+  });
+  new Set(projected.map(entry => entry.id)).size === projected.length ||
+    Fail`Backend subscription ids must be distinct`;
+  return harden(projected);
+};
+harden(assertBackendSubscriptions);
 
 /**
  * Validate and project the exact capability-free descriptor fields Floot uses
@@ -221,12 +253,27 @@ export const assertHostedBackendDescriptor = descriptor => {
         descriptor.supportedNetworkPolicies.length) ||
       Fail`Invalid supported network policies`;
   }
+  descriptor.providerId === undefined ||
+    (typeof descriptor.providerId === 'string' &&
+      SUBSCRIPTION_ID.test(descriptor.providerId)) ||
+    Fail`Hosted backend descriptor has an invalid provider id`;
   return harden({
     id: descriptor.id,
     title: descriptor.title,
     kind: descriptor.kind,
     continuity: descriptor.continuity,
     toolOwnership: descriptor.toolOwnership,
+    // Which provider's credential the backend spends (`codex`), as distinct
+    // from the backend's own id, and which of that provider's subscriptions
+    // a session may be pinned to.
+    ...(descriptor.providerId === undefined
+      ? {}
+      : { providerId: descriptor.providerId }),
+    ...(descriptor.subscriptions === undefined
+      ? {}
+      : {
+          subscriptions: assertBackendSubscriptions(descriptor.subscriptions),
+        }),
     ...(descriptor.supportedNetworkPolicies === undefined
       ? {}
       : { supportedNetworkPolicies: [...descriptor.supportedNetworkPolicies] }),

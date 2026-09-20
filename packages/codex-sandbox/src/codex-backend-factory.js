@@ -1,6 +1,6 @@
 // @ts-check
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import {
@@ -25,6 +25,9 @@ import { CODEX_TOOL_NAMES, withEndoToolInstructions } from './endo-tools.js';
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
  * @param {readonly any[]} powers.models
  * @param {boolean} [powers.publicInternetEnabled]
+ * @param {() => Promise<Array<{ id: string, label: string }>>} [powers.listSubscriptions]
+ *   The provider's subscriptions a session may be pinned to; none when the
+ *   broker holds one credential.
  */
 export const makeCodexBackendFactory = ({
   provisionSession,
@@ -32,6 +35,7 @@ export const makeCodexBackendFactory = ({
   removeSession,
   models,
   publicInternetEnabled = false,
+  listSubscriptions = async () => [],
 }) => {
   const catalog = harden(models.map(normalizeCodexModelDescriptor));
   const sessions = makeSessionRegistry();
@@ -56,6 +60,19 @@ export const makeCodexBackendFactory = ({
     spec.cwd === undefined ||
       spec.cwd === '/workspace' ||
       Fail`Codex cwd must be /workspace`;
+    // `auto` is the default and is not recorded; an id must be one the broker
+    // declares now, so a typo fails here and not on the first turn.
+    const subscription =
+      spec.subscription === undefined || spec.subscription === 'auto'
+        ? undefined
+        : spec.subscription;
+    if (subscription !== undefined) {
+      const declared = await listSubscriptions().catch(() => {
+        throw Fail`Codex subscriptions cannot be listed right now`;
+      });
+      declared.some(entry => entry.id === subscription) ||
+        Fail`Unknown Codex subscription ${q(subscription)}`;
+    }
     const containerMounts = assertContainerMounts(spec.containerMounts);
     const model =
       spec.model === undefined
@@ -65,7 +82,11 @@ export const makeCodexBackendFactory = ({
     if (selected === undefined) throw Fail`Unknown Codex model`;
     // Floot represents an unselected thinking option as the empty string.
     // Resolve it here, before recording the native session's immutable plan.
-    const { reasoningEffort: requestedEffort, ...rest } = spec;
+    const {
+      reasoningEffort: requestedEffort,
+      subscription: _requestedSubscription,
+      ...rest
+    } = spec;
     const reasoningEffort =
       requestedEffort === undefined || requestedEffort === ''
         ? (selected.defaultReasoningEffort ?? undefined)
@@ -75,6 +96,7 @@ export const makeCodexBackendFactory = ({
       Fail`Unsupported Codex reasoning effort`;
     const request = harden({
       ...rest,
+      ...(subscription === undefined ? {} : { subscription }),
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       model,
       networkPolicy,
@@ -128,12 +150,21 @@ export const makeCodexBackendFactory = ({
   };
   return makeExo('CodexBackendFactory', HostedBackendFactoryInterface, {
     async describe() {
+      // A broker that cannot be asked right now says nothing here; the
+      // descriptor is not the place to fail.
+      const subscriptions = (await listSubscriptions().catch(() => [])).map(
+        ({ id, label }) => ({ id, label }),
+      );
       return harden({
         id: 'codex',
         title: 'Codex',
         kind: 'hosted',
         continuity: 'opaque-reconciled',
         toolOwnership: 'endo',
+        // Whose credential a session here spends, and, when the broker holds
+        // several, which a session may be pinned to.
+        providerId: 'codex',
+        ...(subscriptions.length > 0 ? { subscriptions } : {}),
         supportedNetworkPolicies: policies,
         // What a system prompt must know about this place. Codex receives
         // Endo's tools under their own names, except the one the adapter

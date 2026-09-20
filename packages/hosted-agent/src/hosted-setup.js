@@ -254,18 +254,30 @@ harden(mintWithPowersPath);
  * @param {string} options.providerId What the oracle calls its provider.
  * @param {string} options.specifier The oracle module's import specifier.
  * @param {string} options.sourceSpecifier The source module's specifier.
+ * @param {string} [options.subscriptionId] For a broker over several
+ *   subscriptions: which one this oracle describes. Each has an oracle, a
+ *   journal and a source of its own.
  * @returns {Promise<string[]>} The oracle's pet name path.
  */
 export const provideAccountOracle = async (
   hostAgent,
-  { label, dir, brokerPath, providerId, specifier, sourceSpecifier },
+  {
+    label,
+    dir,
+    brokerPath,
+    providerId,
+    specifier,
+    sourceSpecifier,
+    subscriptionId,
+  },
 ) => {
-  const oraclePath = [dir, 'account-oracle'];
-  const sourcePath = [dir, 'account-source'];
-  const powersPath = [dir, 'account-oracle-powers'];
-  const handlePath = [dir, 'account-oracle-handle'];
-  const handleName = `${dir}.account-oracle-handle`;
-  const powersName = `${dir}.account-oracle-powers`;
+  const suffix = subscriptionId === undefined ? '' : `-${subscriptionId}`;
+  const oraclePath = [dir, `account-oracle${suffix}`];
+  const sourcePath = [dir, `account-source${suffix}`];
+  const powersPath = [dir, `account-oracle${suffix}-powers`];
+  const handlePath = [dir, `account-oracle${suffix}-handle`];
+  const handleName = `${dir}.account-oracle${suffix}-handle`;
+  const powersName = `${dir}.account-oracle${suffix}-powers`;
   (await E(hostAgent).has(...brokerPath)) ||
     Fail`${b(label)} account oracle needs the broker service ${q(brokerPath.join('/'))}`;
 
@@ -274,10 +286,13 @@ export const provideAccountOracle = async (
   }
   await mintWithPowersPath(hostAgent, {
     powersPath: brokerPath,
-    temporary: `${dir}.account-source-powers`,
+    temporary: `${dir}.account-source${suffix}-powers`,
     specifier: sourceSpecifier,
     resultName: sourcePath,
-    env: {},
+    env:
+      subscriptionId === undefined
+        ? {}
+        : { ACCOUNT_SUBSCRIPTION_ID: subscriptionId },
   });
   const sourceLocator = await E(hostAgent).locate(...sourcePath);
 
@@ -339,38 +354,50 @@ const moduleSpecifier = (/** @type {string} */ relative) =>
  * @param {string} options.providerId
  * @param {string} options.flootDir
  * @param {string} options.backendId The hosted backend's descriptor id.
+ * @param {string[]} [options.subscriptionIds] For a broker over several
+ *   subscriptions: one oracle each, bound as `<backend id>-account-<id>`.
  */
 export const publishAccountOracle = async (
   hostAgent,
-  { label, dir, providerId, flootDir, backendId },
+  { label, dir, providerId, flootDir, backendId, subscriptionIds },
 ) => {
   await null;
-  try {
-    const accountName = `${backendId}-account`;
-    const oraclePath = await provideAccountOracle(hostAgent, {
-      label,
-      dir,
-      brokerPath: [dir, 'broker-service'],
-      providerId,
-      specifier: moduleSpecifier('./account-oracle-module.js'),
-      sourceSpecifier: moduleSpecifier('./account-source-module.js'),
-    });
-    if (await E(hostAgent).has(flootDir, 'controller-profile')) {
-      // copy overwrites an existing binding, as the backend's does.
-      await E(hostAgent).copy(oraclePath, [
-        flootDir,
-        'controller-profile',
-        accountName,
-      ]);
-      console.log(
-        `Bound "${accountName}" into "${flootDir}/controller-profile".`,
+  // One subscription's oracle failing must not cost the others theirs.
+  for (const subscriptionId of subscriptionIds ?? [undefined]) {
+    const accountName =
+      subscriptionId === undefined
+        ? `${backendId}-account`
+        : `${backendId}-account-${subscriptionId}`;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const oraclePath = await provideAccountOracle(hostAgent, {
+        label,
+        dir,
+        brokerPath: [dir, 'broker-service'],
+        providerId,
+        specifier: moduleSpecifier('./account-oracle-module.js'),
+        sourceSpecifier: moduleSpecifier('./account-source-module.js'),
+        ...(subscriptionId === undefined ? {} : { subscriptionId }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(hostAgent).has(flootDir, 'controller-profile')) {
+        // copy overwrites an existing binding, as the backend's does.
+        // eslint-disable-next-line no-await-in-loop
+        await E(hostAgent).copy(oraclePath, [
+          flootDir,
+          'controller-profile',
+          accountName,
+        ]);
+        console.log(
+          `Bound "${accountName}" into "${flootDir}/controller-profile".`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `${label} account oracle "${accountName}" was not provided; sessions are unaffected:`,
+        error instanceof Error ? error.message : String(error),
       );
     }
-  } catch (error) {
-    console.error(
-      `${label} account oracle was not provided; sessions are unaffected:`,
-      error instanceof Error ? error.message : String(error),
-    );
   }
 };
 harden(publishAccountOracle);

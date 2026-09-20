@@ -75,3 +75,19 @@ for (const [change, message] of refused) {
     );
   });
 }
+
+test('a plan may pin its session to one of the provider’s subscriptions', t => {
+  // A plan from before subscriptions has none, and reads as before.
+  t.false('subscription' in readCodexSessionPlan(JSON.stringify(plan)));
+  t.is(
+    readCodexSessionPlan(JSON.stringify({ ...plan, subscription: 'work' }))
+      .subscription,
+    'work',
+  );
+  for (const subscription of ['not an id', '', 7, { id: 'work' }]) {
+    t.throws(
+      () => readCodexSessionPlan(JSON.stringify({ ...plan, subscription })),
+      { message: /subscription must be auto or a subscription id/ },
+    );
+  }
+});

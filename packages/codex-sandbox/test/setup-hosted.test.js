@@ -421,3 +421,277 @@ test.serial('public internet and diagnostics are opt-in', async t => {
   t.true(config.publicInternet);
   t.true(config.diagnostics);
 });
+
+/**
+ * The base fake, taught what a pooled setup needs of a host: a secrets
+ * catalog with a record per subscription, a credential formula per member
+ * that names its own account, a guest to hold the broker's powers, and the
+ * naming verbs the setup uses.
+ *
+ * @param {Record<string, string>} accounts credential secret name to account
+ */
+const makePooledHost = accounts => {
+  const fake = makeFakeHost();
+  /** @type {Map<string, Map<string, unknown>>} */
+  const guests = new Map();
+  const credentialFor = account =>
+    harden({
+      readBase64WithGeneration: async () =>
+        harden({
+          base64: btoa(
+            JSON.stringify({
+              version: 'BrokerOAuthStateV1',
+              accountId: account,
+            }),
+          ),
+          generation: 1n,
+        }),
+    });
+  // Which secret each minted credential formula was bound to.
+  const secretOfCredential = name =>
+    JSON.parse(
+      fake.mints.find(mint => key(...[mint.options.resultName].flat()) === name)
+        ?.options.env.CREDENTIAL_SECRET_PATH ?? '[]',
+    )[1];
+  const host = harden({
+    ...fake.host,
+    async lookup(pathOrName) {
+      const parts = Array.isArray(pathOrName) ? pathOrName : [pathOrName];
+      if (parts[0] === '@secrets') {
+        return harden({
+          list: async () =>
+            harden(
+              Object.keys(accounts).map(name => ({
+                petNamePaths: [['secrets', name]],
+              })),
+            ),
+        });
+      }
+      const name = key(...parts);
+      const guest = guests.get(name);
+      if (guest) {
+        return harden({
+          has: async entry => guest.has(entry),
+          lookup: async entry => guest.get(entry),
+          remove: async entry => {
+            guest.removals.push(entry);
+            guest.delete(entry);
+          },
+          storeValue: async (value, entry) => {
+            guest.set(entry, value);
+          },
+          storeLocator: async (entry, locator) => {
+            guest.set(entry, locator);
+          },
+        });
+      }
+      if (
+        parts[0] === 'codex-sandbox' &&
+        `${parts[1]}`.startsWith('credential-')
+      ) {
+        return credentialFor(accounts[secretOfCredential(name)]);
+      }
+      return fake.host.lookup(pathOrName);
+    },
+    async provideGuest(handleName, { agentName }) {
+      guests.set(
+        key(agentName),
+        Object.assign(new Map(), { removals: /** @type {string[]} */ ([]) }),
+      );
+      fake.bindings.set(key(handleName), `${handleName}-id`);
+      fake.bindings.set(key(agentName), `${agentName}-id`);
+    },
+    async move(from, to) {
+      const id = fake.bindings.get(key(...from));
+      fake.bindings.delete(key(...from));
+      fake.bindings.set(key(...to), id);
+      const guest = guests.get(key(...from));
+      if (guest) {
+        guests.delete(key(...from));
+        guests.set(key(...to), guest);
+      }
+    },
+    async locate(...parts) {
+      return `locator:${fake.bindings.get(key(...parts))}`;
+    },
+  });
+  return { ...fake, host, guests };
+};
+
+/**
+ * The specifier the broker was minted with, to re-bind it as retained.
+ * @param fake
+ */
+const brokerSpecifierForTest = fake =>
+  fake.mints.find(
+    mint => [mint.options.resultName].flat().at(-1) === 'broker-service',
+  ).specifier;
+
+test.serial(
+  'several subscriptions: a credential each, the set as a stored value, and a broker over the namespace',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'work', label: 'Work Pro', weight: 20, credsName: 'codex-work' },
+        { id: 'home', credsName: 'codex-home' },
+      ]),
+      ENDO_CODEX_CACHE_LIFETIME_SECONDS: '600',
+    });
+    const fake = makePooledHost({
+      'codex-work': 'account-work',
+      'codex-home': 'account-home',
+    });
+    await main(fake.host, { exec: noExec });
+
+    // A managed credential per member, each over its own secret.
+    const credentialMints = fake.mints.filter(mint =>
+      `${[mint.options.resultName].flat().at(-1)}`.startsWith('credential-'),
+    );
+    t.deepEqual(
+      credentialMints.map(mint => [
+        [mint.options.resultName].flat().at(-1),
+        JSON.parse(mint.options.env.CREDENTIAL_SECRET_PATH)[1],
+      ]),
+      [
+        ['credential-work', 'codex-work'],
+        ['credential-home', 'codex-home'],
+      ],
+    );
+    // The broker's powers are the namespace, not a credential, and its
+    // configuration says so; its account is the pool's label.
+    const broker = fake.mints.find(
+      mint => [mint.options.resultName].flat().at(-1) === 'broker-service',
+    );
+    const config = JSON.parse(broker.options.env.CODEX_BROKER_CONFIG);
+    t.true(config.pool);
+    t.is(config.accountRef, 'pool');
+    const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
+    t.truthy(powers);
+    // Each member's credential under its secret name, and the set, with the
+    // account each credential itself names.
+    // Never under a name of the operator's choosing: the namespace also holds
+    // the set and the pool's state.
+    t.deepEqual([...powers.keys()].sort(), [
+      'secret-home',
+      'secret-work',
+      'subscriptions',
+    ]);
+    t.deepEqual(powers.get('subscriptions'), {
+      cacheLifetimeSeconds: 600,
+      members: [
+        {
+          id: 'work',
+          label: 'Work Pro',
+          weight: 20,
+          secretName: 'secret-work',
+          accountRef: 'account-work',
+        },
+        {
+          id: 'home',
+          label: 'home',
+          weight: 1,
+          secretName: 'secret-home',
+          accountRef: 'account-home',
+        },
+      ],
+    });
+    // The names used while making the namespace are tucked away.
+    t.false(fake.bindings.has(key('codex-sandbox.broker-powers')));
+
+    // The next start: the set is stored over the old one and never removed
+    // first, since that is also when sessions are restored and the broker
+    // reads it; and nothing is minted again for members that exist.
+    const mintsBefore = fake.mints.filter(mint =>
+      `${[mint.options.resultName].flat().at(-1)}`.startsWith('credential-'),
+    ).length;
+    fake.bind(
+      ['codex-sandbox', 'broker-service'],
+      'broker-service-id',
+      brokerSpecifierForTest(fake),
+      JSON.parse(JSON.stringify(broker.options.env)),
+    );
+    await main(fake.host, { exec: noExec });
+    t.false(powers.removals.includes('subscriptions'));
+    t.is(
+      fake.mints.filter(mint =>
+        `${[mint.options.resultName].flat().at(-1)}`.startsWith('credential-'),
+      ).length,
+      mintsBefore,
+    );
+  },
+);
+
+test.serial(
+  'an account change under an existing subscription id is refused',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'work', credsName: 'codex-work' },
+      ]),
+    });
+    const accounts = { 'codex-work': 'account-work' };
+    const fake = makePooledHost(accounts);
+    await main(fake.host, { exec: noExec });
+    // The operator re-imports another account under the same secret name.
+    accounts['codex-work'] = 'account-other';
+    await t.throwsAsync(main(fake.host, { exec: noExec }), {
+      message: /bound to another account/,
+    });
+  },
+);
+
+test.serial(
+  'a broker retained over one credential is not turned into a pool, and nothing is minted trying',
+  async t => {
+    await baseEnv(t);
+    const fake = makePooledHost({ 'codex-work': 'account-work' });
+    // The single-credential deployment as it stands.
+    fake.bindings.set(key('codex-sandbox', 'broker-service'), 'old-broker-id');
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'work', credsName: 'codex-work' },
+      ]),
+    });
+    await t.throwsAsync(main(fake.host, { exec: noExec }), {
+      message: /retire it deliberately/,
+    });
+    t.deepEqual(fake.mints, []);
+    t.is(fake.guests.size, 0);
+  },
+);
+
+test.serial(
+  'a subscriptions setting that is not JSON is refused without quoting it',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, { ENDO_CODEX_SUBSCRIPTIONS: '[{"id": secret-looking-text' });
+    const error = await t.throwsAsync(
+      main(makePooledHost({}).host, { exec: noExec }),
+    );
+    t.false(error.message.includes('secret-looking-text'));
+  },
+);
+
+test.serial(
+  'two subscriptions over one account are refused before the broker is minted',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'a', credsName: 'codex-a' },
+        { id: 'b', credsName: 'codex-b' },
+      ]),
+    });
+    const fake = makePooledHost({ 'codex-a': 'same', 'codex-b': 'same' });
+    await t.throwsAsync(main(fake.host, { exec: noExec }), {
+      message: /must not share an account/,
+    });
+    t.false(
+      fake.mints.some(
+        mint => [mint.options.resultName].flat().at(-1) === 'broker-service',
+      ),
+    );
+  },
+);

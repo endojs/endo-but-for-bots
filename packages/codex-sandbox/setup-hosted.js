@@ -21,6 +21,7 @@ import {
   publishAccountOracle,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedRenewableCredentials } from '@endo/hosted-agent/managed-renewable-credentials.js';
+import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.js';
 import {
   containsPath,
   readMounterEnv,
@@ -64,6 +65,30 @@ const required = (env, name) => {
   if (typeof value !== 'string' || value === '')
     throw Fail`Missing Codex setup setting ${name}`;
   return value;
+};
+
+/**
+ * The namespace a broker over several subscriptions takes as its powers: a
+ * guest of the operator's, tucked under the adapter's directory. It keeps its
+ * identity across runs, so the broker over it is retained like any other.
+ *
+ * @param {any} host
+ */
+const provideBrokerPowers = async host => {
+  const powersPath = [SANDBOX_DIR, 'broker-powers'];
+  const handlePath = [SANDBOX_DIR, 'broker-powers-handle'];
+  const handleName = `${SANDBOX_DIR}.broker-powers-handle`;
+  const powersName = `${SANDBOX_DIR}.broker-powers`;
+  if (!(await E(host).has(...powersPath))) {
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(host).has(stray)) await E(host).remove(stray);
+    }
+    await E(host).provideGuest(handleName, { agentName: powersName });
+    await E(host).move([handleName], handlePath);
+    await E(host).move([powersName], powersPath);
+  }
+  return E(host).lookup(powersPath);
 };
 
 /**
@@ -128,27 +153,164 @@ export const main = async (host, { exec } = {}) => {
     exec,
   );
   const listenerImageRef = required(env, 'ENDO_CODEX_BROKER_LISTENER_IMAGE');
-  const credsName = env.ENDO_CODEX_CREDS_NAME || 'codex-subscription-auth';
-  await provideManagedRenewableCredentials(host, {
-    namePath: [SANDBOX_DIR, 'credential'],
-    secretPath: ['secrets', credsName],
-    label: 'Codex',
-  });
-  const credential = await E(host).lookup([SANDBOX_DIR, 'credential']);
-  let stored;
-  try {
-    stored = JSON.parse(
-      globalThis.atob((await E(credential).readBase64WithGeneration()).base64),
+  /**
+   * Import one subscription's credential as a managed renewable formula and
+   * read the account it names.
+   *
+   * @param {string[]} namePath
+   * @param {string} credsName
+   * @param {string | undefined} declaredAccount
+   */
+  const provideSubscriptionCredential = async (
+    namePath,
+    credsName,
+    declaredAccount,
+  ) => {
+    await provideManagedRenewableCredentials(host, {
+      namePath,
+      secretPath: ['secrets', credsName],
+      label: 'Codex',
+    });
+    const credential = await E(host).lookup(namePath);
+    let stored;
+    try {
+      stored = JSON.parse(
+        globalThis.atob(
+          (await E(credential).readBase64WithGeneration()).base64,
+        ),
+      );
+    } catch {
+      throw Fail`Invalid Codex subscription credential`;
+    }
+    stored?.version === 'BrokerOAuthStateV1' ||
+      Fail`Import the normalized Codex subscription credential before setup`;
+    return assertSubscriptionAccount(
+      declaredAccount || stored.accountId,
+      stored,
     );
-  } catch {
-    throw Fail`Invalid Codex subscription credential`;
+  };
+
+  // Several subscriptions, declared by the operator as
+  // `[{ id, label?, weight?, credsName, accountRef? }]`. The broker's powers
+  // are then a namespace holding the set and each member's credential, not
+  // one credential, so switching an existing deployment to it is a deliberate
+  // retirement of its broker, like any other change of what the broker holds.
+  let declaredSubscriptions;
+  if (env.ENDO_CODEX_SUBSCRIPTIONS) {
+    try {
+      declaredSubscriptions = JSON.parse(env.ENDO_CODEX_SUBSCRIPTIONS);
+    } catch {
+      // Not the parser's message, which quotes what it choked on.
+      throw Fail`ENDO_CODEX_SUBSCRIPTIONS is not JSON`;
+    }
   }
-  stored?.version === 'BrokerOAuthStateV1' ||
-    Fail`Import the normalized Codex subscription credential before setup`;
-  const accountRef = assertSubscriptionAccount(
-    env.ENDO_CODEX_ACCOUNT_REF || stored.accountId,
-    stored,
-  );
+  declaredSubscriptions === undefined ||
+    (Array.isArray(declaredSubscriptions) &&
+      declaredSubscriptions.length > 0) ||
+    Fail`ENDO_CODEX_SUBSCRIPTIONS must be a nonempty list`;
+  const pooled = declaredSubscriptions !== undefined;
+  const brokerPowersPath = pooled
+    ? [SANDBOX_DIR, 'broker-powers']
+    : [SANDBOX_DIR, 'credential'];
+  let accountRef;
+  /** @type {string[] | undefined} */
+  let subscriptionIds;
+  // Before anything is minted: a broker retained over one credential cannot
+  // become a broker over a namespace in place. Refused here, and not by the
+  // retained-service check further down, so that the refusal leaves no
+  // credential formulas, guest or stored set behind it.
+  if (
+    pooled &&
+    (await E(host).has(SANDBOX_DIR, 'broker-service')) &&
+    !(await E(host).has(...brokerPowersPath))
+  ) {
+    throw Fail`The retained Codex broker holds one credential. Declaring several subscriptions changes what it holds: retire it deliberately first. Its sessions are bound to that account and do not carry over.`;
+  }
+  if (pooled) {
+    // What the set said before this run, to refuse an account change under
+    // an id that already exists.
+    const priorAccounts = new Map();
+    if (await E(host).has(...brokerPowersPath)) {
+      const priorPowers = await E(host).lookup(brokerPowersPath);
+      if (await E(priorPowers).has('subscriptions')) {
+        const prior = await E(priorPowers).lookup('subscriptions');
+        for (const member of prior?.members ?? []) {
+          priorAccounts.set(member.id, member.accountRef);
+        }
+      }
+    }
+    const members = [];
+    for (const declared of declaredSubscriptions) {
+      (declared !== null &&
+        typeof declared === 'object' &&
+        typeof declared.credsName === 'string' &&
+        declared.credsName !== '') ||
+        Fail`Every Codex subscription needs an id and a credsName`;
+      const {
+        credsName: memberCreds,
+        accountRef: declaredAccount,
+        ...rest
+      } = declared;
+      // Validated as the broker will validate it, before anything is minted.
+      const [member] = normalizeSubscriptionSet({ members: [rest] }).members;
+      // eslint-disable-next-line no-await-in-loop
+      const memberAccount = await provideSubscriptionCredential(
+        [SANDBOX_DIR, `credential-${member.id}`],
+        memberCreds,
+        declaredAccount,
+      );
+      // A subscription's account is its identity. A different account under
+      // an id that exists is a different subscription: add it under a new
+      // id. (The running broker would otherwise keep a credential bound to
+      // the old account and refuse every grant, and after a restart the same
+      // name would silently spend another account.)
+      !priorAccounts.has(member.id) ||
+        priorAccounts.get(member.id) === memberAccount ||
+        Fail`Codex subscription ${member.id} is bound to another account; add the new account under a new id`;
+      members.push({
+        ...member,
+        // Never the operator's choice: the namespace also holds the set and
+        // the pool's state, and a secret must not take one of their names.
+        secretName: `secret-${member.id}`,
+        accountRef: memberAccount,
+      });
+    }
+    const set = normalizeSubscriptionSet(
+      {
+        members,
+        ...(env.ENDO_CODEX_CACHE_LIFETIME_SECONDS
+          ? {
+              cacheLifetimeSeconds: Number(
+                env.ENDO_CODEX_CACHE_LIFETIME_SECONDS,
+              ),
+            }
+          : {}),
+      },
+      { requireAccountRef: true },
+    );
+    const powers = await provideBrokerPowers(host);
+    for (const member of set.members) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(powers).storeLocator(
+        member.secretName,
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).locate(SANDBOX_DIR, `credential-${member.id}`),
+      );
+    }
+    // The set is a stored value: adding a subscription is this write and a
+    // credential, and the broker reads it again for the next session. Stored
+    // over the old one, never removed first: setup runs at every start, which
+    // is also when sessions are restored and the broker reads this.
+    await E(powers).storeValue(set, 'subscriptions');
+    accountRef = 'pool';
+    subscriptionIds = set.members.map(member => member.id);
+  } else {
+    accountRef = await provideSubscriptionCredential(
+      [SANDBOX_DIR, 'credential'],
+      env.ENDO_CODEX_CREDS_NAME || 'codex-subscription-auth',
+      env.ENDO_CODEX_ACCOUNT_REF,
+    );
+  }
   const brokerEnv = harden({
     CODEX_BROKER_CONFIG: JSON.stringify({
       ownerId,
@@ -163,6 +325,7 @@ export const main = async (host, { exec } = {}) => {
         : {}),
       publicInternet: env.ENDO_CODEX_PUBLIC_INTERNET === '1',
       diagnostics: env.ENDO_CODEX_DIAGNOSTICS === '1',
+      ...(pooled ? { pool: true } : {}),
     }),
   });
   readCodexBrokerConfig(brokerEnv);
@@ -172,7 +335,7 @@ export const main = async (host, { exec } = {}) => {
   });
   /** @type {readonly [string, string, Record<string,string>, string[]][]} */
   const services = [
-    ['broker-service', brokerSpecifier, brokerEnv, [SANDBOX_DIR, 'credential']],
+    ['broker-service', brokerSpecifier, brokerEnv, brokerPowersPath],
     [
       'session-storage',
       storageSpecifier,
@@ -238,6 +401,7 @@ export const main = async (host, { exec } = {}) => {
     providerId: 'codex',
     flootDir,
     backendId: 'codex',
+    ...(subscriptionIds === undefined ? {} : { subscriptionIds }),
   });
   console.log(
     'Hosted Codex ready: common scoped sandbox, retained subscription broker, daemon-owned sessions.',

@@ -5,6 +5,7 @@ import {
   accountBlocked,
   accountChip,
   accountSections,
+  accountsOfSession,
   formatSpan,
   windowNow,
 } from '../src/account-label.js';
@@ -200,4 +201,43 @@ test('the provider’s word that the limit is reached ages by what the reading n
     windows: [{ ...codex.windows[1], usedPercent: 100, resetsAt: '' }],
   };
   t.is(accountChip(undatedFull, NOW), 'wk used up');
+});
+
+test('a session shows the account it is pinned to, or every account of its backend', t => {
+  const work = {
+    ...codex,
+    key: 'codex:work',
+    subscriptionId: 'work',
+    label: 'Work Pro',
+  };
+  const home = {
+    ...codex,
+    key: 'codex:home',
+    subscriptionId: 'home',
+    label: 'Home Plus',
+  };
+  const other = { ...codex, backendId: 'claude', key: 'claude' };
+  const accounts = [work, home, other];
+  t.deepEqual(
+    accountsOfSession(accounts, { backendId: 'codex', subscription: 'home' }),
+    [home],
+  );
+  t.deepEqual(
+    accountsOfSession(accounts, { backendId: 'codex', subscription: 'auto' }),
+    [work, home],
+  );
+  t.deepEqual(accountsOfSession(accounts, { backendId: 'claude' }), [other]);
+  t.deepEqual(accountsOfSession(accounts, undefined), []);
+  t.deepEqual(accountsOfSession(undefined, { backendId: 'codex' }), []);
+  // The settings panel tells a backend's subscriptions apart by label.
+  t.deepEqual(
+    accountSections([work, home], NOW).map(section => [
+      section.id,
+      section.title,
+    ]),
+    [
+      ['codex:work', 'Codex — Work Pro'],
+      ['codex:home', 'Codex — Home Plus'],
+    ],
+  );
 });

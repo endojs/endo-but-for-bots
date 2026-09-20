@@ -17,7 +17,10 @@ import { join } from 'node:path';
 import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
 import { makeCodexBackendFactory } from '../src/codex-backend-factory.js';
 import { adaptEndoTools } from '../src/endo-tools.js';
-import { makeCodexSessionProvisioner } from '../src/codex-backend-module.js';
+import {
+  makeCodexSessionProvisioner,
+  makeSubscriptionLister,
+} from '../src/codex-backend-module.js';
 
 const model = harden({
   id: 'model-a',
@@ -287,5 +290,129 @@ test('the descriptor says what a system prompt must know about Codex', async t =
   t.deepEqual(
     adapted.dynamicTools.map(tool => tool.name),
     ['exec', 'lookup'].map(name => promptEnvironment.toolNames[name] || name),
+  );
+});
+
+test('a backend over several subscriptions says which, and pins a session only to one of them', async t => {
+  /** @type {any[]} */
+  const requests = [];
+  const factory = makeCodexBackendFactory({
+    models: [model],
+    provisionSession: async (_id, request) => {
+      requests.push(request);
+      return Far('Client', {});
+    },
+    stopSession: async () => undefined,
+    removeSession: async () => undefined,
+    listSubscriptions: async () => [
+      { id: 'work', label: 'Work Pro', weight: 20 },
+      { id: 'home', label: 'Home Plus', weight: 1 },
+    ],
+  });
+  const described = assertHostedBackendDescriptor(await E(factory).describe());
+  t.is(described.providerId, 'codex');
+  t.deepEqual(described.subscriptions, [
+    { id: 'work', label: 'Work Pro' },
+    { id: 'home', label: 'Home Plus' },
+  ]);
+  const tools = Far('Tools', {});
+  await E(factory).create(
+    harden({ sessionId: 'a', subscription: 'home' }),
+    tools,
+  );
+  t.is(requests[0].subscription, 'home');
+  // `auto` is the default and is not recorded in the session's plan.
+  await E(factory).create(
+    harden({ sessionId: 'b', subscription: 'auto' }),
+    tools,
+  );
+  await E(factory).create(harden({ sessionId: 'c' }), tools);
+  t.false('subscription' in requests[1]);
+  t.false('subscription' in requests[2]);
+  await t.throwsAsync(
+    E(factory).create(harden({ sessionId: 'd', subscription: 'spare' }), tools),
+    { message: /Unknown Codex subscription "spare"/ },
+  );
+  t.is(requests.length, 3);
+});
+
+test('a backend over one credential offers nothing to choose', async t => {
+  const factory = makeCodexBackendFactory({
+    models: [model],
+    provisionSession: async () => Far('Client', {}),
+    stopSession: async () => undefined,
+    removeSession: async () => undefined,
+  });
+  const described = assertHostedBackendDescriptor(await E(factory).describe());
+  t.is(described.providerId, 'codex');
+  t.false('subscriptions' in described);
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'a', subscription: 'work' }),
+      Far('Tools', {}),
+    ),
+    { message: /Unknown Codex subscription/ },
+  );
+});
+
+test('“could not ask” is not “none”: the broker’s list is cached, bounded and outlives an outage', async t => {
+  let clock = 0;
+  let asks = 0;
+  /** @type {() => Promise<any>} */
+  let answer = async () => [{ id: 'work', label: 'Work Pro' }];
+  const list = makeSubscriptionLister(
+    () => {
+      asks += 1;
+      return answer();
+    },
+    () => clock,
+  );
+  t.deepEqual(await list(), [{ id: 'work', label: 'Work Pro' }]);
+  // Asked again within half a minute: not a second call.
+  await list();
+  t.is(asks, 1);
+  // An outage later leaves the last answer standing.
+  clock += 31_000;
+  answer = async () => {
+    throw Error('broker worker is restarting');
+  };
+  t.deepEqual(await list(), [{ id: 'work', label: 'Work Pro' }]);
+  t.is(asks, 2);
+
+  // With no answer yet, the failure is the caller's to see.
+  const never = makeSubscriptionLister(async () => {
+    throw Error('broker worker is restarting');
+  });
+  await t.throwsAsync(never(), { message: /restarting/ });
+  // A broker from before it could say is believed: it has none.
+  const old = makeSubscriptionLister(async () => {
+    throw Error('target has no method "subscriptions", has ["provideScope"]');
+  });
+  t.deepEqual(await old(), []);
+});
+
+test('a pinned session is refused for the right reason when the broker cannot be asked', async t => {
+  const factory = makeCodexBackendFactory({
+    models: [model],
+    provisionSession: async () => Far('Client', {}),
+    stopSession: async () => undefined,
+    removeSession: async () => undefined,
+    listSubscriptions: async () => {
+      throw Error('broker worker is restarting');
+    },
+  });
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'a', subscription: 'work' }),
+      Far('Tools', {}),
+    ),
+    { message: /cannot be listed right now/ },
+  );
+  // The descriptor is not the place to fail.
+  const described = assertHostedBackendDescriptor(await E(factory).describe());
+  t.false('subscriptions' in described);
+  // A session that pins nothing is unaffected.
+  await t.notThrowsAsync(
+    E(factory).create(harden({ sessionId: 'b' }), Far('Tools', {})),
   );
 });

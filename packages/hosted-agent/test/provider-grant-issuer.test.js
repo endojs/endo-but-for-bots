@@ -636,3 +636,127 @@ test('failed issuance retains A-only cleanup while B remains usable', async t =>
     'ok',
   );
 });
+
+const listenerRuntime = onEndpoint =>
+  harden({
+    startKit(input) {
+      onEndpoint(input.endpoint);
+      const value = Promise.resolve({
+        observe: async () =>
+          harden({
+            endpoint: 'http://127.0.0.1:1234',
+            containerName: 'listener',
+            networkNamespaceId: 'net-1',
+            listenerImageDigest: digest,
+          }),
+        stop: async () => {},
+        closed: new Promise(() => {}),
+      });
+      return { value, stop: async () => {} };
+    },
+  });
+
+test('a pool issuer serves a session from its chosen subscription and reads each account as its own', async t => {
+  const { makeSubscriptionPool } = await import('../src/subscription-pool.js');
+  /** @type {Record<string, any[]>} */
+  const readings = { work: [], home: [] };
+  /** @type {Array<{ url: string, authorization: string }>} */
+  const requests = [];
+  // `work` is drained; `home` serves. Both say so in their headers.
+  const fetchAuthority = async (url, init) => {
+    const authorization = init.headers.authorization;
+    requests.push({ url, authorization });
+    if (authorization === 'Bearer work-key') {
+      return new Response('limit', {
+        status: 429,
+        headers: {
+          'x-codex-secondary-used-percent': '100',
+          'x-codex-secondary-window-minutes': '10080',
+          'x-codex-secondary-reset-at': '4000000000',
+          'x-codex-rate-limit-reached-type': 'rate_limit_reached',
+        },
+      });
+    }
+    return new Response('{"ok":true}', {
+      status: 200,
+      headers: { 'x-codex-secondary-used-percent': '12' },
+    });
+  };
+  const latest = id => readings[id].at(-1)?.rateLimits;
+  const members = [
+    { id: 'work', label: 'Work', weight: 20 },
+    { id: 'home', label: 'Home', weight: 1 },
+  ];
+  const chooser = makeSubscriptionPool({
+    members: () => members,
+    readingOf: latest,
+    cacheLifetimeMs: 300_000,
+  });
+  let endpoint;
+  const issuer = makeProviderBrokerGrantIssuer({
+    runtime: listenerRuntime(value => {
+      endpoint = value;
+    }),
+    secret: undefined,
+    fetch: /** @type {any} */ (fetchAuthority),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    pool: {
+      members: () =>
+        members.map(({ id }) => ({
+          id,
+          secret: Far(`${id} secret`, {
+            readBase64: async () => btoa(`${id}-key`),
+          }),
+          onReading: reading => readings[id].push(reading),
+        })),
+      forSession: chooser.forSession,
+    },
+  });
+  const kit = issuer.issueKit(spec);
+  await kit.value;
+  const response = await E(endpoint).request(
+    harden({
+      method: 'POST',
+      path: '/v1/responses',
+      body: '{"model":"allowed"}',
+    }),
+  );
+  t.is(response.body, '{"ok":true}');
+  // Declared order with nothing known: `work` first; it refused as drained,
+  // and the same request went to `home`.
+  t.deepEqual(
+    requests.map(request => request.authorization),
+    ['Bearer work-key', 'Bearer home-key'],
+  );
+  // Each account's reading reached its own observer, the refusal's included.
+  t.true(readings.work[0].exhausted);
+  t.is(readings.work[0].status, 429);
+  t.is(readings.home[0].rateLimits.windows[0].usedPercent, 12);
+  // The pool now knows `work` is blocked, until the time its refusal named.
+  const standing = chooser.standings().find(entry => entry.id === 'work');
+  t.true(standing.blocked);
+  t.is(standing.blockedUntilMs, 4_000_000_000_000);
+  // The next request of this session does not try `work` again.
+  await E(endpoint).request(
+    harden({
+      method: 'POST',
+      path: '/v1/responses',
+      body: '{"model":"allowed"}',
+    }),
+  );
+  t.is(requests.at(-1).authorization, 'Bearer home-key');
+  t.is(requests.length, 3);
+  await kit.revoke();
+});
+
+test('a session pinned to one subscription is refused another, and a single-subscription issuer refuses a pin', async t => {
+  const single = fixture();
+  await t.throwsAsync(
+    () => single.issuer.issueKit({ ...spec, subscription: 'work' }).value,
+  );
+  await t.notThrowsAsync(
+    () => single.issuer.issueKit({ ...spec, sessionId: 'auto-ok' }).value,
+  );
+});

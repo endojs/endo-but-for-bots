@@ -2795,40 +2795,80 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // `<backend id>-account`. They are looked up when a view subscribes, not
   // captured: the adapters bind theirs after this factory has started.
   const listAccountOracles = async () => {
-    /** @type {Array<{ backendId: string, title: string, oracle: any }>} */
+    /** @type {Array<{ backendId: string, key: string, title: string, subscriptionId?: string, label?: string, oracle: any }>} */
     const entries = [];
     /** @type {string[]} */
     const unknown = [];
     try {
       const own = await getAccountOracle();
-      if (own)
-        entries.push({ backendId: 'provider', title: 'Fae', oracle: own });
+      if (own) {
+        entries.push({
+          backendId: 'provider',
+          key: 'provider',
+          title: 'Fae',
+          oracle: own,
+        });
+      }
     } catch {
       unknown.push('provider');
     }
     // By pet name and one at a time, not through `getHostedBackends()`, which
     // fails as a whole when any one backend cannot describe itself. A backend
-    // bound as `<id>-backend` has its account bound as `<id>-account`.
+    // bound as `<id>-backend` has its account bound as `<id>-account`, or,
+    // when it holds several subscriptions, one each as
+    // `<id>-account-<subscription>`.
     for (const backendName of [...new Set(configuredBackendNames)]) {
       const backendId = backendName.replace(/-backend$/, '');
-      const accountName = `${backendId}-account`;
       try {
-        if (await E(powers).has(accountName)) {
+        if (await E(powers).has(backendName)) {
           let title = backendId;
+          /** @type {Array<{ id: string, label: string }>} */
+          let subscriptions = [];
           try {
-            const described = await E(
-              await E(powers).lookup(backendName),
-            ).describe();
-            if (typeof described?.title === 'string') title = described.title;
+            const described = assertHostedBackendDescriptor(
+              await E(await E(powers).lookup(backendName)).describe(),
+            );
+            title = described.title;
+            subscriptions = described.subscriptions || [];
           } catch {
-            // The title is a nicety; the account is shown under its id.
+            // Without a description there is no telling which subscriptions
+            // it has: whatever is followed for this backend stays, and the
+            // one-credential binding is still tried.
+            unknown.push(backendId);
           }
-          entries.push({
-            backendId,
-            title,
+          const accounts =
+            subscriptions.length > 0
+              ? subscriptions.map(subscription => ({
+                  name: `${backendId}-account-${subscription.id}`,
+                  key: `${backendId}:${subscription.id}`,
+                  subscriptionId: subscription.id,
+                  label: subscription.label,
+                }))
+              : [
+                  {
+                    name: `${backendId}-account`,
+                    key: backendId,
+                    subscriptionId: undefined,
+                    label: undefined,
+                  },
+                ];
+          for (const account of accounts) {
+            if (await E(powers).has(account.name)) {
+              entries.push({
+                backendId,
+                key: account.key,
+                title,
+                ...(account.subscriptionId === undefined
+                  ? {}
+                  : {
+                      subscriptionId: account.subscriptionId,
+                      label: account.label,
+                    }),
 
-            oracle: await E(powers).lookup(accountName),
-          });
+                oracle: await E(powers).lookup(account.name),
+              });
+            }
+          }
         }
       } catch {
         // Not resolvable this time; whatever is followed for it stays.
@@ -3282,7 +3322,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3583,6 +3623,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
       // resolves to the configured model at each turn, so this is as of now.
       effectiveModelId: modelId || model || (backendId ? '' : providerModel),
       reasoningEffort: reasoningEffort || '',
+      // Which of its backend's subscriptions the session uses: `auto`, or the
+      // id it was pinned to when it was created.
+      subscription: entry.subscription || 'auto',
       lifecycle: lifecycle || 'ready',
       // Empty for a session the user opened; set for one an agent
       // spawned, so a client can group or hide the delegated tree.
@@ -4044,6 +4087,24 @@ export const make = (hostPowers, _context, { env } = {}) => {
                   },
                 }),
               );
+              // A session pinned to a subscription its operator has since
+              // removed would otherwise never run again, and Floot has no way
+              // to unpin it. It runs on the backend's own choice instead, and
+              // says so where an operator reads.
+              const declaredSubscriptions =
+                backend.descriptor.subscriptions || [];
+              const pinnedSubscription =
+                entry.subscription &&
+                declaredSubscriptions.some(
+                  declared => declared.id === entry.subscription,
+                )
+                  ? entry.subscription
+                  : undefined;
+              if (entry.subscription && !pinnedSubscription) {
+                console.error(
+                  `[floot-factory] session ${id} is pinned to subscription "${entry.subscription}", which backend "${entry.backendId}" no longer declares; running it on the backend's own choice`,
+                );
+              }
               const mountClient = makeHostedMountClient({
                 id,
                 backend,
@@ -4052,6 +4113,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
                   model: entry.modelId || '',
                   reasoningEffort: entry.reasoningEffort || '',
                   systemPrompt: sessionPrompt,
+                  // Only when pinned, and only to a subscription the backend
+                  // still declares: a backend with nothing to choose from is
+                  // never sent the field.
+                  ...(pinnedSubscription
+                    ? { subscription: pinnedSubscription }
+                    : {}),
                   ...(networkPolicy === undefined ? {} : { networkPolicy }),
                   ...(workspaceHostPath ? { workspaceHostPath } : {}),
                 }),
@@ -4328,6 +4395,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
               entry?.model ||
               (entry?.backendId ? '' : await configuredProviderModel()),
             reasoningEffort: entry?.reasoningEffort || '',
+            subscription: entry?.subscription || 'auto',
             lifecycle: entry?.lifecycle || 'ready',
           });
         },
@@ -4783,6 +4851,18 @@ export const make = (hostPowers, _context, { env } = {}) => {
           `Unsupported reasoning effort "${options.reasoningEffort}" for ${backendId}:${modelId}`,
         );
       }
+      // `auto`, the default, leaves the choice to the backend's pool; an id
+      // pins the session, and must be one the backend declares now.
+      if (options.subscription && options.subscription !== 'auto') {
+        const declared = backend.descriptor.subscriptions || [];
+        if (!declared.some(entry => entry.id === options.subscription)) {
+          throw Error(
+            `Unknown subscription "${options.subscription}" for backend "${backendId}"`,
+          );
+        }
+      }
+    } else if (options.subscription && options.subscription !== 'auto') {
+      throw Error('Only a hosted backend has subscriptions to choose from');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
     // a live session. The object set is re-read from the catalog by id in
@@ -4837,6 +4917,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
             modelId,
             ...(options.reasoningEffort
               ? { reasoningEffort: `${options.reasoningEffort}` }
+              : {}),
+            ...(options.subscription && options.subscription !== 'auto'
+              ? { subscription: `${options.subscription}` }
               : {}),
           }
         : (
@@ -5034,6 +5117,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
               modelId: parent.modelId,
               ...(parent.reasoningEffort
                 ? { reasoningEffort: parent.reasoningEffort }
+                : {}),
+              // And on the same subscription: a session pinned to one must
+              // not have its delegates drain another.
+              ...(parent.subscription
+                ? { subscription: parent.subscription }
                 : {}),
             }
           : parent?.model
@@ -5500,11 +5588,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
       const docs = {
         createSession:
-          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
-          'listBackends() — Return the live provider and hosted backend descriptors.',
+          'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:
-          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, lifecycle, activity, pendingCount}] for all sessions. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
+          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, subscription, lifecycle, activity, pendingCount}] for all sessions. `subscription` is "auto" or the id the session was pinned to. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:

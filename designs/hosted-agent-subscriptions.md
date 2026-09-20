@@ -148,6 +148,118 @@ Where phase 4 differs from the design below:
 - `usage` on the endpoint, which the design lists for phase 5, is not here
   yet.
 
+**Phases 5 and 6, the pool and the handover, are implemented for Codex.**
+Not deployed, and not exercised against two real accounts: that, and whether
+encrypted reasoning items replay under another account, are still open below.
+Claude and OpenCode brokers still hold one credential each.
+
+- `subscription-pool.js` — the rule and nothing else: `standingOf` (where one
+  subscription stands, from its last reading, at an instant),
+  `selectMembers`, `makeRefusalMarks`, `normalizeSubscriptionSet`, and
+  `makeSubscriptionPool`, which applies them per session and offers its state
+  for keeping when it changes.
+- `provider-broker.js` — a grant takes a `pool` in place of one credential.
+  A request is tried on the members the pool names, in order, **built afresh
+  for each**: its credential, its adapter's headers, its transport. A member
+  that refuses it as exhausted is reported and the request goes to the next;
+  any other failure is the request's own. The echo screen accumulates across
+  members. One admission slot per request, whatever the number of attempts.
+- `provider-grant-issuer.js` — a transport per member per grant, so what a
+  response says of an account is read as that member's. The scope spec
+  carries `subscription` (`auto`, or an id); a single-credential issuer
+  refuses anything but `auto`.
+- `provider-broker-service.js` — `makePooledBrokerServiceKit`, driven by
+  `subscriptions: { readSet, secretOf, credentialOf?, adaptRequestOf?,
+  activeReadOf?, readState?, writeState? }`. The scopes service answers
+  `subscriptions()` and `accountSource(id)`.
+
+Where they differ from the design below:
+
+- **Only local members exist.** There is no wrapped member (another
+  `Subscription`), no `hops`, and no `openEndpoint`: the issuer still starts
+  the listener. Those belong to delegation.
+- **A grant takes the set as it is when it is issued.** A member added later
+  serves the sessions opened after it; a live grant is never handed a member
+  it does not hold. The design said a change is seen at once.
+- **A session's choice is fixed for the life of its scope**, since it is part
+  of the scope's specification.
+- **A reading ages by what it named.** The provider's word that the limit is
+  reached, beside a full window, is about that window and lifts when it
+  resets: a five-hour limit does not block a member for the week. With no
+  window full it stands until every window named has reset. A window that
+  gives no reset time is believed for an hour from the reading, and with no
+  time on the reading not at all; the refusal marks' backoff covers it.
+- **Refusal marks**: requests in flight when a member drains are one refusal,
+  not several in a row; a refusal just after a mark lapsed doubles the pause
+  (one minute to an hour); any later one starts over; a time the provider
+  names always wins.
+- **A member that cannot be used is skipped too**: a secret that will not
+  read, a key the upstream rejects, an OAuth credential rejected after its
+  refresh. The failed request is not tried elsewhere (that failure says
+  nothing about the request); the next one goes elsewhere.
+- **An OAuth set names every member's account**, and no two members may share
+  an account or a secret.
+- **The all-blocked error is not distinct anywhere it could be seen.** The
+  grant collapses it, like a pool's own errors, to `Provider request failed`,
+  because what the pool says (a pinned id) is the operator's; the listener
+  answers a bare 502 either way. It is audited as `subscriptions-exhausted`.
+  A view learns that every subscription is blocked from `watchAccounts()`.
+- **`served` is recorded when a streamed response starts**, so a stream that
+  outlasts the cache lifetime ends "cold".
+- **The pool does not journal readings**; the oracles do. After a restart
+  every member is unknown to the pool and only the refusal marks and the
+  sessions' last members survive, which is what stops a drained account being
+  retried.
+- **No `serving` turn event, no handover notice, no `watchServing()`.** A
+  handover is recorded in the broker's audit trail only.
+- `weight` is declared, not defaulted from a plan, and the attestation still
+  names the pool's label and not its set.
+
+The other half of phase 5, from the broker to the picker:
+
+- `hosted-backend.js` — a descriptor may carry `providerId` and
+  `subscriptions` (`[{ id, label }]`). `hosted-setup.js` provides an oracle
+  per subscription, bound into Floot as `<backend id>-account-<id>`.
+- `provider-broker-service.js` — the owned service's pool mode
+  (`config.pool`): its powers are a namespace holding the stored set, each
+  member's secret, and the pool's journalled state. A member's secret is
+  looked up on every use, so a lookup that failed once is not the member's
+  secret for the life of the broker.
+- `codex-sandbox` — `ENDO_CODEX_SUBSCRIPTIONS`
+  (`HOSTED-SUBSCRIPTION.md`, "Several subscriptions"); `subscription` in the
+  session plan and the scope spec; the factory declares the broker's set and
+  validates a pin.
+- Floot — `createSession({ subscription })`, kept in the registry entry when
+  pinned and sent to the backend only then; `subscription` in `getInfo()` and
+  `listSessions()`; one account per subscription in `watchAccounts()`, keyed
+  `backendId:subscriptionId`. The picker offers the choice when a backend has
+  more than one; a session's chip shows the account it is pinned to, or each
+  of its backend's.
+
+Where that differs from the design below:
+
+- **The operator's setting is the source of truth for the set.** Setup
+  derives the stored value from `ENDO_CODEX_SUBSCRIPTIONS` at every start, so
+  an edit of the stored value itself does not survive a restart. Adding a
+  member is still a write and a secret, with no retirement.
+- **A pooled broker's account, in its configuration, its grants' attestation
+  and its sessions' plans, is the label `pool`.** Moving a deployment from one
+  subscription to several is therefore a retirement that its existing
+  sessions do not survive; setup refuses it before minting anything.
+- **An account change under an existing id is refused by setup**; removed
+  members are not reaped.
+- **A pin cannot be changed**, and a session pinned to a subscription that has
+  since been removed runs on the backend's choice, with a line in the log,
+  rather than never running again. Sub-agents inherit their parent's pin.
+- **An `auto` session shows every account of its backend**, since nothing
+  tells Floot which member served (no `serving` event).
+- **The backend asks its broker what it declares at most every half minute,
+  for at most five seconds**, and "could not ask" is not "none": the last
+  answer stands, a descriptor with no answer yet says nothing of
+  subscriptions, and a pin is then refused as unlistable, not as unknown.
+- An account view carries `key`, `subscriptionId` and `label`, and no
+  `providerId`.
+
 ## What is the Problem Being Solved?
 
 A hosted agent session spends a subscription: a ChatGPT plan through Codex, a

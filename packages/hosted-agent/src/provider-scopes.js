@@ -11,6 +11,7 @@ import { M } from '@endo/patterns';
  * @property {string} accountRef
  * @property {string} [model]
  * @property {'off' | 'public-internet'} [networkPolicy]
+ * @property {string} [subscription] `auto` (the default) or a subscription id.
  */
 
 /**
@@ -20,7 +21,13 @@ import { M } from '@endo/patterns';
 
 const SpecShape = M.splitRecord(
   { providerOrigin: M.string(), accountRef: M.string() },
-  { model: M.string(), networkPolicy: M.or('off', 'public-internet') },
+  {
+    model: M.string(),
+    networkPolicy: M.or('off', 'public-internet'),
+    // Which of the provider's subscriptions this session uses: `auto`, or
+    // one by id. Absent means `auto`.
+    subscription: M.string(),
+  },
   harden({}),
 );
 
@@ -54,8 +61,16 @@ const ScopeInterface = M.interface('ProviderScope', {
  * @param {() => Promise<ScopedProviderIssuer>} powers.openIssuer
  * @param {any} [powers.accountSource] The broker's read-only account source
  *   (`account-source.js`), offered beside the scopes.
+ * @param {(subscriptionId?: string) => any} [powers.accountSourceOf] For a
+ *   broker over several subscriptions: each one's account source, by id.
+ * @param {() => Promise<Array<{ id: string, label: string, weight: number }>>} [powers.listSubscriptions]
  */
-export const makeProviderScopes = ({ openIssuer, accountSource }) => {
+export const makeProviderScopes = ({
+  openIssuer,
+  accountSource,
+  accountSourceOf,
+  listSubscriptions,
+}) => {
   /** @type {Map<string, {spec: ProviderScopeSpec, facet: any, revoke(): Promise<void>}>} */
   const scopes = new Map();
   /** @type {Promise<ScopedProviderIssuer> | undefined} */
@@ -75,13 +90,15 @@ export const makeProviderScopes = ({ openIssuer, accountSource }) => {
       accountRef: requested.accountRef,
       model: requested.model,
       networkPolicy: requested.networkPolicy ?? 'off',
+      subscription: requested.subscription ?? 'auto',
     });
     const prior = scopes.get(sessionId);
     if (prior) {
       (prior.spec.providerOrigin === spec.providerOrigin &&
         prior.spec.accountRef === spec.accountRef &&
         prior.spec.model === spec.model &&
-        prior.spec.networkPolicy === spec.networkPolicy) ||
+        prior.spec.networkPolicy === spec.networkPolicy &&
+        prior.spec.subscription === spec.subscription) ||
         Fail`Provider scope specification differs from its retained owner`;
       return prior.facet;
     }
@@ -200,14 +217,29 @@ export const makeProviderScopes = ({ openIssuer, accountSource }) => {
       lookupScope: M.call(M.string()).returns(
         M.or(M.remotable(), M.undefined()),
       ),
-      accountSource: M.call().returns(M.or(M.remotable(), M.undefined())),
+      accountSource: M.call()
+        .optional(M.string())
+        .returns(M.or(M.remotable(), M.undefined(), M.promise())),
+      subscriptions: M.call().returns(M.promise()),
     }),
     {
       provideScope,
       lookupScope: sessionId => scopes.get(sessionId)?.facet,
       // Read-only, and no path to a scope, the secret or the issuer: what the
       // account behind this broker's credential has left.
-      accountSource: () => accountSource,
+      /** @param {string} [subscriptionId] */
+      accountSource: subscriptionId => {
+        if (accountSourceOf !== undefined) {
+          return accountSourceOf(subscriptionId);
+        }
+        return subscriptionId === undefined ? accountSource : undefined;
+      },
+      // The provider's declared subscriptions, `[{ id, label, weight }]`, for
+      // a picker and for status. Empty when this broker holds one credential
+      // and has no set. Labels are the operator's; no credential, account
+      // number or secret name is in it.
+      subscriptions: async () =>
+        listSubscriptions === undefined ? harden([]) : listSubscriptions(),
     },
   );
   return harden({ service, close });

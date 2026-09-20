@@ -1,4 +1,5 @@
 // @ts-check
+/* global setTimeout, clearTimeout */
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
@@ -34,6 +35,58 @@ const current = relative =>
 
 export const controllerSpecifier = current('./codex-native-controller.js');
 harden(controllerSpecifier);
+
+/**
+ * What the broker says a session may be pinned to, asked at most every half
+ * minute and for at most five seconds.
+ *
+ * "Could not ask" is not "none". A broker that answers, or that is from
+ * before it could (it has no such method), is believed. A broker that could
+ * not be reached leaves the last answer standing, and with no answer yet the
+ * failure is the caller's to handle: a descriptor then says nothing about
+ * subscriptions, and a pinned session is refused for that reason and not as
+ * an unknown subscription.
+ *
+ * @param {() => Promise<Array<{ id: string, label: string }>>} ask
+ * @param {() => number} [now]
+ */
+export const makeSubscriptionLister = (ask, now = Date.now) => {
+  /** @type {Array<{ id: string, label: string }> | undefined} */
+  let known;
+  let knownAt = -Infinity;
+  return async () => {
+    await null;
+    if (known !== undefined && now() - knownAt < 30_000) return known;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    try {
+      const answer = await Promise.race([
+        ask(),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(Error('Codex broker did not answer in time')),
+            5000,
+          );
+        }),
+      ]);
+      known = harden(Array.isArray(answer) ? [...answer] : []);
+      knownAt = now();
+      return known;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (/has no method|is not a function/i.test(message)) {
+        known = harden([]);
+        knownAt = now();
+        return known;
+      }
+      if (known !== undefined) return known;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+};
+harden(makeSubscriptionLister);
 
 /**
  * Compose session placement with one durable daemon owner. All identities
@@ -91,7 +144,7 @@ export const makeCodexSessionProvisioner = ({
       containerMounts: request.containerMounts,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...Object.fromEntries(
-        ['model', 'reasoningEffort', 'systemPrompt']
+        ['model', 'reasoningEffort', 'systemPrompt', 'subscription']
           .filter(key => request[key] !== undefined)
           .map(key => [key, request[key]]),
       ),
@@ -230,6 +283,13 @@ export const make = async (host, _context, { env = {} } = {}) => {
   return makeCodexBackendFactory({
     models,
     publicInternetEnabled: brokerConfig.publicInternet === true,
+    // What a session may be pinned to: the broker's declared subscriptions.
+    // A broker over one credential, or one from before it could say, has
+    // none, and there is then nothing to choose.
+    listSubscriptions: makeSubscriptionLister(async () => {
+      const service = await E(host).lookup(['codex-sandbox', 'broker-service']);
+      return E(service).subscriptions();
+    }),
     provisionSession,
     stopSession: id => E(owner).stop(id),
     removeSession: id => E(owner).remove(id),

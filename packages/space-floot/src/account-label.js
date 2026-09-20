@@ -13,6 +13,7 @@
  * }} AccountWindow
  * @typedef {{
  *   backendId: string, title: string,
+ *   key?: string, subscriptionId?: string, label?: string,
  *   plan: { planId: string, title: string, state: string, source: string },
  *   windows: AccountWindow[], limitReached: boolean,
  *   credits: { balance: string | null, hasCredits: boolean, unlimited: boolean } | null,
@@ -20,6 +21,27 @@
  *   source: string, observedAt: string,
  * }} Account
  */
+
+/**
+ * The accounts a session can be served from: the one it is pinned to, or
+ * every account of its backend.
+ *
+ * @param {Account[] | undefined} accounts
+ * @param {{ backendId?: string, subscription?: string } | undefined} session
+ * @returns {Account[]}
+ */
+export const accountsOfSession = (accounts, session) => {
+  if (!session) return [];
+  const ofBackend = (accounts ?? []).filter(
+    account => account.backendId === (session.backendId || 'provider'),
+  );
+  if (session.subscription && session.subscription !== 'auto') {
+    return ofBackend.filter(
+      account => account.subscriptionId === session.subscription,
+    );
+  }
+  return ofBackend;
+};
 
 /**
  * A span of time in its two largest units: "3d 4h", "2h 10m", "45s".
@@ -207,8 +229,11 @@ export const accountSections = (accounts, nowMs) =>
       provenance(account.observedAt, account.source, nowMs),
     ]);
     return {
-      id: account.backendId,
-      title: account.title || account.backendId,
+      id: account.key || account.backendId,
+      // A backend with several subscriptions is told apart by their labels.
+      title: account.label
+        ? `${account.title || account.backendId} — ${account.label}`
+        : account.title || account.backendId,
       rows,
     };
   });

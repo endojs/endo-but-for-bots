@@ -9,7 +9,11 @@ import { MessageList } from './MessageList.js';
 import { ComposeBar } from './ComposeBar.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { RecoveryPanel } from './RecoveryPanel.js';
-import { accountBlocked, accountChip } from './account-label.js';
+import {
+  accountBlocked,
+  accountChip,
+  accountsOfSession,
+} from './account-label.js';
 import { usageLabel } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
@@ -41,7 +45,7 @@ const useControllerState = controller => {
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
- *   onPick: (id: string, model: string, reasoningEffort?: string) => void,
+ *   onPick: (id: string, model: string, reasoningEffort?: string, subscription?: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
@@ -61,6 +65,16 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   );
   const selectedModel = models.find(candidate => candidate.id === model);
   const reasoningEfforts = selectedModel?.reasoningEfforts || [];
+  // Which of the backend's subscriptions the session uses. `auto` lets the
+  // backend drain the one that resets soonest and move a turn when one runs
+  // out; a choice here pins the session. Offered only when there is a choice.
+  const [subscription, setSubscription] = useState('auto');
+  const subscriptions = selectedModel?.subscriptions || [];
+  const chosenSubscription = subscriptions.some(
+    entry => entry.id === subscription,
+  )
+    ? subscription
+    : 'auto';
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -160,6 +174,30 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
             ),
           )
         : null,
+      subscriptions.length > 1
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Subscription'),
+            h(
+              'select',
+              {
+                class: 'floot-model-select floot-subscription-select',
+                value: chosenSubscription,
+                onChange: (/** @type {FlootSafeEvent} */ e) =>
+                  setSubscription(e.target.value),
+              },
+              h(
+                'option',
+                { key: 'auto', value: 'auto' },
+                'Automatic — soonest to reset first',
+              ),
+              subscriptions.map(entry =>
+                h('option', { key: entry.id, value: entry.id }, entry.label),
+              ),
+            ),
+          )
+        : null,
       h(
         'div',
         { class: 'floot-preset-list' },
@@ -170,7 +208,15 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              onClick: () => onPick(p.id, model, reasoningEffort || undefined),
+              onClick: () =>
+                onPick(
+                  p.id,
+                  model,
+                  reasoningEffort || undefined,
+                  chosenSubscription === 'auto'
+                    ? undefined
+                    : chosenSubscription,
+                ),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
             h('div', { class: 'floot-preset-desc' }, p.description || ''),
@@ -226,10 +272,11 @@ export const FlootApp = ({ controller }) => {
     /** @type {string} */ id,
     /** @type {string} */ model,
     /** @type {string | undefined} */ reasoningEffort,
+    /** @type {string | undefined} */ subscription,
   ) => {
     setModalOpen(false);
     setDrawerOpen(false);
-    controller.newSession(id, model, reasoningEffort);
+    controller.newSession(id, model, reasoningEffort, subscription);
   };
 
   const commitTitle = () => {
@@ -241,13 +288,24 @@ export const FlootApp = ({ controller }) => {
   const tokenLabel = usageLabel(usage);
   // What the account behind this session's backend has left. Worded from the
   // last reading at render time, so a window past its reset reads as empty.
-  const account = active
-    ? (state.accounts || []).find(
-        entry => entry.backendId === (active.backendId || 'provider'),
-      )
-    : undefined;
   const accountNow = Date.now();
-  const accountLabel = accountChip(account, accountNow);
+  const sessionAccounts = accountsOfSession(state.accounts, active);
+  // A session pinned to one subscription, or on a backend that has one, shows
+  // that account. An automatic session on a backend with several may be served
+  // by any of them, so each is shown under its label.
+  const account = sessionAccounts.length === 1 ? sessionAccounts[0] : undefined;
+  const accountLabel =
+    sessionAccounts.length > 1
+      ? sessionAccounts
+          .map(entry => {
+            const chip = accountChip(entry, accountNow);
+            return chip
+              ? `${entry.label || entry.subscriptionId}: ${chip}`
+              : '';
+          })
+          .filter(Boolean)
+          .join(' | ')
+      : accountChip(account, accountNow);
 
   // The journal and a pending network request are labels, not glyphs, so they
   // render as chips beside the icon buttons. A badge carries the part that
@@ -379,9 +437,14 @@ export const FlootApp = ({ controller }) => {
             'span',
             {
               class: `floot-account${
-                accountBlocked(account, accountNow) ? ' blocked' : ''
+                sessionAccounts.length > 0 &&
+                sessionAccounts.every(entry =>
+                  accountBlocked(entry, accountNow),
+                )
+                  ? ' blocked'
+                  : ''
               }`,
-              title: `${account?.title || ''} subscription`,
+              title: `${sessionAccounts[0]?.title || ''} subscription`,
             },
             accountLabel,
           )
