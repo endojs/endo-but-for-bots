@@ -449,6 +449,7 @@ fn restored_prospective_permit_applies_to_computed_names_and_preserves_deletions
                 "foreign['Da' + 'te'] = 42; delete foreign['Da' + 'te']; 0",
             );
         }
+        assert_eq!(eval(&b, "typeof Map.prototype.get"), "function");
         let id = a.snapshot_id().unwrap();
         let restored = roundtrip(&m); // Explicitly reattach an unrestricted prospective global-names list.
         let a = restored.claim_compartment(id).unwrap();
@@ -460,6 +461,7 @@ fn restored_prospective_permit_applies_to_computed_names_and_preserves_deletions
             eval(&a, "typeof Date"),
             if delete { "undefined" } else { "function" }
         );
+        assert_eq!(eval(&a, "typeof Map"), "function");
     }
 }
 

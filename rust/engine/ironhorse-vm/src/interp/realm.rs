@@ -45,6 +45,9 @@ impl Realm {
 pub struct CompartmentEnvironment {
     pub(super) global_obj: crate::value::SlotIndex,
     pub(super) modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
+    /// Names this environment has bound on its global object, including
+    /// bindings later deleted. The symbol table and intrinsic prototypes are
+    /// shared across compartments, but this history is per global object.
     pub(super) binding_names: std::collections::BTreeSet<u16>,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     /// The compartment's `globalLexicals` (`fx_Compartment`,
@@ -945,7 +948,7 @@ impl Interp {
             let old = std::mem::replace(&mut self.environment, realm);
             self.inactive_environments.insert(old.global_obj, old);
             let names = self.symbol_names.to_vec();
-            self.install_intrinsic_bindings(&names, 0, false, |_| true);
+            self.install_environment_global_bindings(&names);
             self.environment
                 .binding_names
                 .extend(self.environment.global_props.keys().copied());

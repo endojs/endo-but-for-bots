@@ -205,16 +205,134 @@ impl Interp {
         }
     }
 
-    /// Install the global bindings, prototype methods/data, native
-    /// value data, and well-known symbols for the names that `keep`
-    /// admits — the reusable body of [`Self::link_intrinsics`] (called
-    /// there with `full = true, |_| true`). [`Self::relink_crank`] and
-    /// the `eval`/`Function` bridge call it with `full = false` and a
-    /// filter that admits only the APPENDED ids, so a later unit that
-    /// first references a built-in (`Math`, `arr.map`, an Intl
-    /// namespace) gets it bound WITHOUT re-installing the
-    /// earlier link's bindings — a re-install would clobber a guest
-    /// monkeypatch or deletion of an already-linked property.
+    /// Install one standard global binding if the current environment admits
+    /// it and has not already created or deleted it.
+    fn install_global_intrinsic_binding(&mut self, name: &SymbolName, id: u16) {
+        if self.environment.binding_names.contains(&id) {
+            return;
+        }
+        if self.environment.global_props.contains_key(&id) {
+            // Preserve the deletion marker even if a restored fast index was
+            // rebuilt independently of the environment's binding history.
+            self.environment.binding_names.insert(id);
+            return;
+        }
+        if self.slots.get(self.environment.global_obj).flag & XS_DONT_PATCH_FLAG != 0 {
+            return;
+        }
+        if name != "globalThis"
+            && self
+                .environment
+                .global_names
+                .as_ref()
+                .is_some_and(|global_names| !global_names.contains(name))
+        {
+            return;
+        }
+        if let Some(&func) = name.as_str().and_then(|name| self.intrinsics.get(name)) {
+            let func = self.compartment_evaluator(func);
+            // The global binding is an own property whose value is a
+            // **reference** to the intrinsic function instance, exactly
+            // like any other global property (so `get_variable` /
+            // `get_this_variable` resolve a `Reference`, and `typeof`
+            // sees a callable). Standard intrinsic globals are writable
+            // and configurable but non-enumerable. Not metered — a
+            // pre-existing global.
+            let property =
+                self.create_global_property(id, (Kind::Reference, Payload::Reference(func)));
+            self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
+        } else if let Some(v) = name.as_str().and_then(value_global) {
+            // The primitive value globals `undefined`/`NaN`/`Infinity`
+            // (XS's non-writable realm globals): bound as ordinary global
+            // properties holding the value, so a reference reads it with
+            // no built-in step (pure dispatch, bit-exact against the pin).
+            // Their spec descriptor is `{writable:false, enumerable:false,
+            // configurable:false}` — carry those flags so a `NaN = x`
+            // sloppy assignment is the specified silent no-op and, at
+            // declaration instantiation, a `function NaN(){}` fails
+            // `CanDeclareGlobalFunction` ([`Self::can_declare_global_function`]).
+            let prop = self.create_global_property(id, (v.kind, v.value));
+            self.slots.get_mut(prop).flag |=
+                XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG;
+        } else if name == "globalThis" {
+            // The realm's live `globalThis`: an own global property whose
+            // value **references the global object itself** (XS's
+            // `mxGlobal`, a non-configurable realm global present before
+            // the guest runs, so unmetered). Because it is an ordinary
+            // global property over `global_obj`, three things follow for
+            // free: identifier `globalThis` resolves through the same
+            // `global_props` fast index every other global uses; a
+            // property read/write on it (`globalThis.x`) walks
+            // `global_obj`'s own-property chain — the SAME slots a
+            // `var`/sloppy-global declaration materializes and plain
+            // identifier resolution sees (kept in lock-step by the
+            // `global_obj` arm of `instance_put`/`delete_own_property`);
+            // and the intrinsic bindings (`Object`, `Math`, …) are
+            // reachable as its properties, since each is itself an own
+            // property of `global_obj`. The self-reference
+            // (`globalThis.globalThis === globalThis`) is exact — the
+            // property's value slot points back at `global_obj`.
+            let g = self.environment.global_obj;
+            let property =
+                self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
+            self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
+        }
+    }
+
+    /// Populate only the current environment's standard globals. Creating a
+    /// sibling must not rerun the shared prototype-surface installer with an
+    /// all-names predicate, because that would resurrect shared guest edits.
+    pub(super) fn install_environment_global_bindings(&mut self, names: &[SymbolName]) {
+        let was_installing = self.installing_intrinsics;
+        self.installing_intrinsics = true;
+        for name in names {
+            let Some(&id) = self.symbol_ids.get(name) else {
+                continue;
+            };
+            self.install_global_intrinsic_binding(name, id);
+        }
+        self.installing_intrinsics = was_installing;
+    }
+
+    /// Standard globals currently present in the machine name table but not in
+    /// this environment's binding history, ordered by stable symbol id.
+    ///
+    /// This roster is engine-bounded. Do not scan or clone the guest-growing
+    /// `symbol_names` table here: computed property operations invoke catch-up,
+    /// and a full scan per novel ordinary key would make that path quadratic.
+    fn missing_environment_global_bindings(&self) -> Vec<(u16, SymbolName)> {
+        let mut missing: Vec<_> = self
+            .intrinsics
+            .keys()
+            .filter_map(|name| {
+                self.symbol_ids
+                    .get(*name)
+                    .copied()
+                    .filter(|id| !self.environment.binding_names.contains(id))
+                    .map(|id| (id, SymbolName::from(*name)))
+            })
+            .collect();
+        for name in ["undefined", "NaN", "Infinity", "globalThis"] {
+            if let Some(&id) = self.symbol_ids.get(name) {
+                if !self.environment.binding_names.contains(&id) {
+                    missing.push((id, name.into()));
+                }
+            }
+        }
+        missing.sort_unstable_by_key(|(id, _)| *id);
+        missing.dedup_by_key(|(id, _)| *id);
+        missing
+    }
+
+    /// Install the global bindings, prototype methods/data, native value data,
+    /// and well-known symbols for the names that `keep` admits — the reusable
+    /// body of [`Self::link_intrinsics`] (called
+    /// there with `full = true, |_| true`). [`Self::relink_crank`] and the
+    /// `eval`/`Function` bridge call it with `full = false` and a filter that
+    /// admits only appended ids for the shared intrinsic surface. A separate
+    /// per-environment global catch-up handles an older id first linked by a
+    /// sibling, without re-installing earlier bindings whose guest monkeypatch
+    /// or deletion must win.
     ///
     /// `full` gates the branches that depend on NO program name — the
     /// well-known-symbol installs (`@@toStringTag` tags,
@@ -274,72 +392,7 @@ impl Interp {
             if !keep(id) {
                 continue;
             }
-            if self.environment.global_props.contains_key(&id)
-                || self.slots.get(self.environment.global_obj).flag & XS_DONT_PATCH_FLAG != 0
-            {
-                continue;
-            }
-            if name != "globalThis"
-                && self
-                    .environment
-                    .global_names
-                    .as_ref()
-                    .is_some_and(|global_names| !global_names.contains(name))
-            {
-                continue;
-            }
-            if let Some(&func) = name.as_str().and_then(|name| self.intrinsics.get(name)) {
-                let func = self.compartment_evaluator(func);
-                // The global binding is an own property whose value is a
-                // **reference** to the intrinsic function instance, exactly
-                // like any other global property (so `get_variable` /
-                // `get_this_variable` resolve a `Reference`, and `typeof`
-                // sees a callable). Standard intrinsic globals are writable
-                // and configurable but non-enumerable. Not metered — a
-                // pre-existing global.
-                let property =
-                    self.create_global_property(id, (Kind::Reference, Payload::Reference(func)));
-                self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
-            } else if let Some(v) = name.as_str().and_then(value_global) {
-                // The primitive value globals `undefined`/`NaN`/`Infinity`
-                // (XS's non-writable realm globals): bound as ordinary global
-                // properties holding the value, so a reference reads it with
-                // no built-in step (pure dispatch, bit-exact against the pin).
-                // Their spec descriptor is `{writable:false, enumerable:false,
-                // configurable:false}` — carry those flags so a `NaN = x`
-                // sloppy assignment is the specified silent no-op and, at
-                // declaration instantiation, a `function NaN(){}` fails
-                // `CanDeclareGlobalFunction` ([`Self::can_declare_global_function`]).
-                let prop = self.create_global_property(id, (v.kind, v.value));
-                self.slots.get_mut(prop).flag |=
-                    XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG;
-            } else if name == "globalThis" {
-                // The realm's live `globalThis`: an own global property whose
-                // value **references the global object itself** (XS's
-                // `mxGlobal`, a non-configurable realm global present before
-                // the guest runs, so unmetered). Because it is an ordinary
-                // global property over `global_obj`, three things follow for
-                // free: identifier `globalThis` resolves through the same
-                // `global_props` fast index every other global uses; a
-                // property read/write on it (`globalThis.x`) walks
-                // `global_obj`'s own-property chain — the SAME slots a
-                // `var`/sloppy-global declaration materializes and plain
-                // identifier resolution sees (kept in lock-step by the
-                // `global_obj` arm of `instance_put`/`delete_own_property`);
-                // and the intrinsic bindings (`Object`, `Math`, …) are
-                // reachable as its properties, since each is itself an own
-                // property of `global_obj`. The self-reference
-                // (`globalThis.globalThis === globalThis`) is exact — the
-                // property's value slot points back at `global_obj`.
-                let g = self.environment.global_obj;
-                let property =
-                    self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
-                self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
-            }
-        }
-        if self.shared_compartments {
-            self.installing_intrinsics = was_installing;
-            return;
+            self.install_global_intrinsic_binding(name, id);
         }
         // The seven ES2025 "new Set methods" reach the ARGUMENT's `has`/`keys`
         // members and (through the returned iterator) `next` via `GetSetRecord`,
@@ -488,7 +541,9 @@ impl Interp {
             .any(|ty| self.symbol_ids.contains_key(ty.name));
         let date_ctor = self.intrinsics.get("Date").copied();
         let names_date = self.symbol_ids.contains_key("Date");
-        let methods = std::mem::take(&mut self.proto_methods);
+        // Keep the canonical rosters resident while allocations below can
+        // unwind. A retry must see the same installer inputs.
+        let methods = self.proto_methods.clone();
         for &(proto, mname, mfunc) in &methods {
             // Constructor `prototype` is a mandatory own property even when
             // the program reaches it reflectively through a string key rather
@@ -565,7 +620,6 @@ impl Interp {
                 );
             }
         }
-        self.proto_methods = methods;
         // `%AsyncGeneratorPrototype%.constructor` points to `%AsyncGenerator%`
         // (the common function prototype object), not to the dynamic
         // `%AsyncGeneratorFunction%` constructor.  Its descriptor is
@@ -591,7 +645,7 @@ impl Interp {
             }
         }
         // Inherited prototype data (Error `name`/`message`).
-        let data = std::mem::take(&mut self.proto_data);
+        let data = self.proto_data.clone();
         for (proto, pname, value) in &data {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*proto, pid).is_none()) {
@@ -605,13 +659,12 @@ impl Interp {
                 }
             }
         }
-        self.proto_data = data;
         // Native prototype accessor properties (`Intl.NumberFormat.prototype`'s
         // `format` getter). Installed as a real ordinary accessor property so
         // `getOwnPropertyDescriptor` reveals `{get, set: undefined,
         // enumerable: false, configurable: true}` and a `.format` read invokes
         // the getter with the receiver as `this`. Bound only when referenced.
-        let accessors = std::mem::take(&mut self.proto_accessors);
+        let accessors = self.proto_accessors.clone();
         for &(proto, key, getter, setter, guard) in &accessors {
             if let ProtoAccessorKey::WellKnownSymbol(name) = key {
                 if full {
@@ -660,7 +713,6 @@ impl Interp {
                 );
             }
         }
-        self.proto_accessors = accessors;
         // `Compartment.prototype[Symbol.toStringTag]`, a symbol-keyed DATA
         // property `{value: 'Compartment', writable: false, enumerable: false,
         // configurable: true}` -- `prototype/Symbol.toStringTag.js` reads it
@@ -729,7 +781,7 @@ impl Interp {
         }
         // Native numeric data properties (`Math.PI` &co.): bound as own
         // properties of their owner under the program-local id, unmetered.
-        let vdata = std::mem::take(&mut self.proto_value_data);
+        let vdata = self.proto_value_data.clone();
         for (owner, pname, value) in &vdata {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*owner, pid).is_none()) {
@@ -737,10 +789,9 @@ impl Interp {
                 }
             }
         }
-        self.proto_value_data = vdata;
         // Well-known symbols as own properties of the `Symbol` constructor.
         if let Some(&symbol_ctor) = self.intrinsics.get("Symbol") {
-            let wks = std::mem::take(&mut self.well_known_symbols);
+            let wks = self.well_known_symbols.clone();
             for (name, value) in &wks {
                 if let Some(&wid) = self.symbol_ids.get(*name) {
                     if keep(wid) && (full || self.find_property(symbol_ctor, wid).is_none()) {
@@ -757,7 +808,6 @@ impl Interp {
                     }
                 }
             }
-            self.well_known_symbols = wks;
         }
         // The remaining branches depend on NO program name and run on
         // every FULL link; on a relink or eval-bridge install they are
@@ -1296,28 +1346,48 @@ impl Interp {
         Ok(remapped)
     }
 
-    /// The create-only partial install pass over every id ABOVE the
-    /// installed-names floor — names no install pass has considered:
-    /// ids this relink appended, names interned DURING an earlier
-    /// pass (the `format` accessor key, the Intl member keys), and
-    /// names the guest interned itself (a `JSON.parse` key, a
-    /// defineProperty key). Run on EVERY relink, aligned or not: a
-    /// crank that first references such a name must get it bound
-    /// exactly as a fresh link would. Gating the pass
-    /// on table GROWTH left non-growing cranks reading `undefined`
-    /// where the next growing crank read the binding — the
-    /// deferred-install divergence the Intl carry's twins caught.
-    /// Create-only (a property or global the guest already holds
-    /// wins), and the pass advances the floor, so each id is
-    /// considered exactly once and the aligned hot path pays one
-    /// length comparison once the backlog is empty.
+    /// Install the machine-wide intrinsic-surface suffix and then catch the
+    /// current environment up on standard globals. Prototype surfaces are
+    /// shared across compartments, so `installed_names_len` remains their
+    /// create-only high-water. Globals are per environment: `binding_names`
+    /// records bindings that environment created (including later deletions),
+    /// so a sibling advancing the machine floor cannot suppress a missing
+    /// global here. Run on every relink, aligned or not.
     pub(super) fn install_pending_intrinsics(&mut self) {
-        if self.symbol_names.len() <= self.installed_names_len {
+        if self.symbol_names.len() > self.installed_names_len {
+            let floor = self.installed_names_len;
+            let installing = self.installing_intrinsics;
+            let names = self.symbol_names[floor..].to_vec();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.install_intrinsic_bindings(&names, floor, false, move |id| {
+                    (id as usize) > floor
+                });
+            }));
+            if let Err(payload) = result {
+                // A host ceiling can abort a create-only pass. Leave the
+                // suffix pending so retrying after the host raises the ceiling
+                // completes any property whose allocation did not commit.
+                self.installed_names_len = floor;
+                self.installing_intrinsics = installing;
+                std::panic::resume_unwind(payload);
+            }
+        }
+
+        let missing = self.missing_environment_global_bindings();
+        if missing.is_empty() {
             return;
         }
-        let floor = self.installed_names_len;
-        let names = self.symbol_names[floor..].to_vec();
-        self.install_intrinsic_bindings(&names, floor, false, move |id| (id as usize) > floor);
+        let installing = self.installing_intrinsics;
+        self.installing_intrinsics = true;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for (id, name) in &missing {
+                self.install_global_intrinsic_binding(name, *id);
+            }
+        }));
+        self.installing_intrinsics = installing;
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// Ensure `inst` exposes every modeled string-named own intrinsic before
@@ -1326,12 +1396,11 @@ impl Interp {
     /// entered the program symbol table. Direct property access installs one
     /// requested name, but own-key reflection must reveal the whole surface.
     ///
-    /// Existing ids are only collected, never reinstalled: if guest code has
-    /// already deleted or replaced an intrinsic property, its id lies at or
-    /// below `installed_names_len` and the partial install leaves that edit
-    /// alone. Newly interned names describe boot properties that have never
-    /// been observable in this machine, so their create-only installation is
-    /// sound and unmetered.
+    /// Existing ids are only collected, never reinstalled: the machine-wide
+    /// intrinsic-surface floor and the current environment's binding history
+    /// leave guest deletions and replacements alone. Newly interned names
+    /// describe boot properties that have never been observable in this
+    /// machine, so their create-only installation is sound and unmetered.
     pub(super) fn materialize_intrinsic_own_surface(&mut self, inst: crate::value::SlotIndex) {
         // Materialization is boot work, never authority to extend a sealed object.
         if self.slots.get(inst).flag & XS_DONT_PATCH_FLAG != 0 {
@@ -1394,14 +1463,10 @@ impl Interp {
         }
         member_names.sort_unstable();
         member_names.dedup();
-        let floor = self.installed_names_len;
         for name in member_names {
             self.intern_static_key_unmetered(name);
         }
-        if self.symbol_names.len() > floor {
-            let names = self.symbol_names[floor..].to_vec();
-            self.install_intrinsic_bindings(&names, floor, false, move |id| (id as usize) > floor);
-        }
+        self.install_pending_intrinsics();
     }
 
     /// String-key creation order for a standard intrinsic object's modeled

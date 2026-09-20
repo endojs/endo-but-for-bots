@@ -94,22 +94,10 @@ impl Interp {
         let eval_names =
             crate::symbols::parse_symbols_checked(&compiled.symbols).map_err(Step::Host)?;
         let code = self.relink_program_symbols(&compiled.bytecode, &eval_names)?;
-        // Bind only the ids appended SINCE THE LAST INSTALL PASS (the
-        // installed-names floor — a name interned at
-        // runtime has an id no install has seen, so filtering by this
-        // unit's own pre-relink length refused it forever); ids at or
-        // below the floor keep their existing binding or a guest's
-        // deliberate replacement of it, which a re-install would
-        // clobber — the same floor scoping `relink_crank` applies.
-        let floor = self.installed_names_len;
-        // The install floor is in REALM ids, not this eval unit's local
-        // symbol numbering. Passing eval_names shrank the floor after a
-        // short eval and let the next reflective read resurrect deleted
-        // intrinsics (including SES's tamed constructors).
-        let realm_names = self.symbol_names[floor..].to_vec();
-        self.install_intrinsic_bindings(&realm_names, floor, false, move |id| {
-            (id as usize) > floor
-        });
+        // The symbol table and intrinsic prototypes are machine-wide, but
+        // globals are per environment. Catch this global up from its binding
+        // history even when a sibling advanced the shared surface floor first.
+        self.install_pending_intrinsics();
         // The unit may reference a well-known property name (`length`, `name`,
         // `then`, a RegExp getter, …) the outer program never used; its id is
         // now in the realm table, so refresh the exotic-property id caches that

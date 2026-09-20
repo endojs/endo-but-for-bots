@@ -1450,6 +1450,62 @@ fn compiler_registry_is_host_owned_and_weak() {
 }
 
 #[test]
+fn a_failed_pending_global_install_remains_retryable() {
+    let mut interp = Interp::new();
+    interp.link_intrinsics(&[]);
+    let floor = interp.installed_names_len;
+    let map_name: SymbolName = "Map".into();
+    let map_id = interp.append_name_key(&map_name);
+    interp.shared_compartments = true;
+    assert!(!interp.environment.binding_names.contains(&map_id));
+
+    interp.set_slot_ceiling(interp.slots.capacity());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        interp.intern_key_reserved(map_name.clone());
+    }))
+    .expect_err("runtime global materialization reaches the slot ceiling");
+    assert!(failure.is::<crate::value::HeapExhausted>());
+    assert_eq!(interp.installed_names_len, floor);
+    assert!(!interp.environment.binding_names.contains(&map_id));
+    assert!(!interp.environment.global_props.contains_key(&map_id));
+
+    interp.set_slot_ceiling(u32::MAX);
+    interp.install_pending_intrinsics();
+    assert!(interp.environment.binding_names.contains(&map_id));
+    assert!(interp.environment.global_props.contains_key(&map_id));
+}
+
+#[test]
+fn a_failed_pending_surface_install_retains_its_roster_for_retry() {
+    let mut interp = Interp::new();
+    interp.link_intrinsics(&[]);
+    let floor = interp.installed_names_len;
+    let map_name: SymbolName = "map".into();
+    let map_id = interp.append_name_key(&map_name);
+    interp.shared_compartments = true;
+
+    interp.set_slot_ceiling(interp.slots.capacity());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        interp.install_pending_intrinsics();
+    }))
+    .expect_err("the pending prototype allocation reaches the slot ceiling");
+    assert!(failure.is::<crate::value::HeapExhausted>());
+    assert_eq!(interp.installed_names_len, floor);
+    assert!(interp
+        .ordinary_get_own_descriptor(interp.array_proto, map_id)
+        .is_none());
+
+    interp.set_slot_ceiling(u32::MAX);
+    interp.install_pending_intrinsics();
+    let map = interp
+        .ordinary_get_own_descriptor(interp.array_proto, map_id)
+        .and_then(|descriptor| descriptor.value)
+        .expect("retry installs Array.prototype.map");
+    assert!(matches!(map.value, Payload::Reference(function)
+        if interp.method_of(function) == Some(NativeMethod::ArrayMap)));
+}
+
+#[test]
 fn marker_free_restore_installs_join_and_migrates_arguments_layout() {
     let mut interp = Interp::new();
     let old_names = vec!["seed".into(), "toString".into(), "valueOf".into()];
