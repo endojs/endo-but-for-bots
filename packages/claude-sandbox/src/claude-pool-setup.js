@@ -2,6 +2,10 @@
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import {
+  provideManagedRenewableCredentials,
+  readManagedRenewableCredentials,
+} from '@endo/hosted-agent/managed-renewable-credentials.js';
 import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.js';
 
 /**
@@ -38,7 +42,8 @@ export const readClaudePool = env => {
       id,
       label,
       weight,
-      secretName: `secret-${id}`,
+      secretName: `credential-${id}`,
+      accountRef: `claude-${id}`,
     })),
     ...(env.ENDO_CLAUDE_CACHE_LIFETIME_SECONDS === undefined
       ? {}
@@ -56,8 +61,18 @@ harden(readClaudePool);
  * No token bytes are read, copied or stored by setup.
  * @param {any} host
  * @param {NonNullable<ReturnType<typeof readClaudePool>>} pool
+ * @param {object} [options]
+ * @param {typeof provideManagedRenewableCredentials} [options.provideCredential]
+ * @param {typeof readManagedRenewableCredentials} [options.readCredential]
  */
-export const prepareClaudePool = async (host, pool) => {
+export const prepareClaudePool = async (
+  host,
+  pool,
+  {
+    provideCredential = provideManagedRenewableCredentials,
+    readCredential = readManagedRenewableCredentials,
+  } = {},
+) => {
   const powersPath = ['claude-sandbox', 'broker-powers'];
   const existing = await E(host).has(...powersPath);
   const powers = existing ? await E(host).lookup(powersPath) : undefined;
@@ -71,12 +86,26 @@ export const prepareClaudePool = async (host, pool) => {
   new Set(locators).size === locators.length ||
     Fail`Claude subscriptions must use distinct SecretBlobs`;
   for (const [index, member] of pool.set.members.entries()) {
+    const identityName = `secret-${member.id}`;
     // Even a removed member keeps its identity if later reintroduced.
     // eslint-disable-next-line no-await-in-loop
-    if (powers && (await E(powers).has(member.secretName))) {
+    if (powers && (await E(powers).has(identityName))) {
       // eslint-disable-next-line no-await-in-loop
-      (await E(powers).locate(member.secretName)) === locators[index] ||
+      (await E(powers).locate(identityName)) === locators[index] ||
         Fail`Claude subscription ${member.id} is bound to another secret; use a new id`;
+    }
+    const namePath = ['claude-sandbox', `credential-${member.id}`];
+    // Validate every retained holder before publishing any changed member.
+    // eslint-disable-next-line no-await-in-loop
+    if (await E(host).has(...namePath)) {
+      // eslint-disable-next-line no-await-in-loop
+      const retained = await readCredential(host, {
+        label: 'Claude',
+        namePath,
+      });
+      JSON.stringify(retained.secretPath) ===
+        JSON.stringify(['secrets', pool.secrets[index]]) ||
+        Fail`Claude subscription credential is pinned to another secret`;
     }
   }
   return harden({
@@ -98,8 +127,22 @@ export const prepareClaudePool = async (host, pool) => {
         namespace = await E(host).lookup(powersPath);
       }
       for (const [index, member] of pool.set.members.entries()) {
+        const namePath = ['claude-sandbox', `credential-${member.id}`];
         // eslint-disable-next-line no-await-in-loop
-        await E(namespace).storeLocator(member.secretName, locators[index]);
+        await provideCredential(host, {
+          namePath,
+          secretPath: ['secrets', pool.secrets[index]],
+          label: 'Claude',
+        });
+        // Retain the original blob identity independently of its renewing holder.
+        // eslint-disable-next-line no-await-in-loop
+        await E(namespace).storeLocator(`secret-${member.id}`, locators[index]);
+        // eslint-disable-next-line no-await-in-loop
+        await E(namespace).storeLocator(
+          member.secretName,
+          // eslint-disable-next-line no-await-in-loop
+          await E(host).locate(...namePath),
+        );
       }
       await E(namespace).storeValue(pool.set, 'subscriptions');
     },

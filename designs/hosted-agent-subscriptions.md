@@ -3,11 +3,31 @@
 | | |
 |---|---|
 | **Created** | 2026-09-20 |
-| **Updated** | 2026-09-20 |
+| **Updated** | 2026-09-21 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
 ## Status
+
+### Latest increment — 2026-09-21
+
+Claude and Codex pools were deployed to Tokyo at `58818cd57` on 2026-09-20.
+Codex primary, Claude secondary, and both Auto selections passed live Floot
+smoke turns; the secondary Codex credential remains fenced after an unresolved
+renewal and needs a fresh login.
+Those checks did not prove live mid-request handover.
+
+This increment adds Claude renewable-login imports alongside plain setup-tokens.
+The host broker stores only refresh credentials, scopes, an operator-local
+account binding and write-ahead renewal intent in Secrets.
+Access tokens and expiry are memory-only; restart requires renewal on first use.
+CAS guards and single-flight renewal prevent concurrent exchange and refuse
+replay after an ambiguous result.
+Per-member managed holders have read/conditional-replace authority over one
+pinned record; the sandbox and sessions have neither credential authority.
+Direct usage reads use the same credential and need `user:profile` permission.
+The live deployment and acceptance of this increment remain pending.
+The older phase notes below describe their implementation-time deployment status.
 
 **Phase 1, usage and context, is implemented.** Not deployed; the OpenCode
 bridge lives in the slice image, so its part takes effect when that image is

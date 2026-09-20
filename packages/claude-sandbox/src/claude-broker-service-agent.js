@@ -21,6 +21,10 @@ import {
   makeProviderBrokerServiceKit,
 } from '@endo/hosted-agent/provider-broker-service.js';
 import { M, matches } from '@endo/patterns';
+import {
+  makeClaudeAccountRead,
+  makeClaudeSubscriptionCredential,
+} from './subscription-auth.js';
 
 import {
   ANTHROPIC_BETA_PATTERN,
@@ -48,6 +52,7 @@ const ConfigShape = M.splitRecord(
     publicInternet: M.boolean(),
     diagnostics: M.boolean(),
     pool: M.boolean(),
+    accountRef: M.string(),
   },
   harden({}),
 );
@@ -69,6 +74,9 @@ export const readClaudeBrokerConfig = env => {
   config.pool !== true ||
     config.credentialKind === 'oauthToken' ||
     Fail`Claude pools require oauthToken credentials`;
+  config.accountRef === undefined ||
+    /^[A-Za-z0-9_-]{1,256}$/.test(config.accountRef) ||
+    Fail`Invalid Claude subscription account binding`;
   // What the broker grant refuses at every admission is refused here, at
   // construction, where a retained formula would otherwise be bound unusable.
   config.anthropicBeta === undefined ||
@@ -87,25 +95,48 @@ harden(readClaudeBrokerConfig);
  *
  * @param {object} [powers]
  * @param {typeof makeProviderBrokerServiceKit} [powers.makeServiceKit]
+ * @param {typeof makeClaudeSubscriptionCredential} [powers.makeCredential]
  * @param {(error: unknown) => void} [powers.reportError]
  */
 export const makeOwnedClaudeBrokerService = ({
   makeServiceKit = makeProviderBrokerServiceKit,
+  makeCredential = makeClaudeSubscriptionCredential,
   reportError = error => console.error('Claude broker cleanup pending', error),
 } = {}) =>
   makeOwnedProviderBrokerService({
     label: 'Claude',
     readConfig: readClaudeBrokerConfig,
     makePolicy: config => ({
-      policy: buildClaudeBrokerPolicy({
-        models: config.models,
-        credentialKind: config.credentialKind,
-        ...(config.anthropicBeta === undefined
-          ? {}
-          : { anthropicBeta: config.anthropicBeta }),
-      }),
-      accountRef: CLAUDE_BROKER_ACCOUNT,
+      policy: {
+        ...buildClaudeBrokerPolicy({
+          models: config.models,
+          credentialKind: config.credentialKind,
+          ...(config.anthropicBeta === undefined
+            ? {}
+            : { anthropicBeta: config.anthropicBeta }),
+        }),
+        ...(config.pool === true
+          ? { authMode: /** @type {const} */ ('oauth') }
+          : {}),
+      },
+      accountRef: config.accountRef ?? CLAUDE_BROKER_ACCOUNT,
     }),
+    makeCredential: (config, secret) =>
+      config.pool === true
+        ? makeCredential({
+            secret,
+            rotate: secret,
+            accountRef: config.accountRef ?? CLAUDE_BROKER_ACCOUNT,
+            now: Date.now,
+            fetch: globalThis.fetch,
+          })
+        : undefined,
+    makeActiveAccountRead: ({ credential }) =>
+      credential === undefined
+        ? async () => {
+            throw Fail`Claude usage requires a subscription pool credential`;
+          }
+        : makeClaudeAccountRead({ credential, fetch: globalThis.fetch }),
     makeServiceKit,
     reportError,
   });

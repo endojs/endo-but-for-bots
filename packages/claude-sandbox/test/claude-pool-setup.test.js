@@ -18,6 +18,11 @@ const read = (members = declaration, extra = {}) => {
   return pool;
 };
 
+const prepare = (host, pool) =>
+  prepareClaudePool(host, pool, {
+    provideCredential: async () => ({ minted: true }),
+  });
+
 const fixture = () => {
   const entries = new Map();
   const writes = [];
@@ -43,7 +48,8 @@ const fixture = () => {
         ? secrets.has(parts[1])
         : parts[1] === 'broker-powers' && present,
     lookup: async () => namespace,
-    locate: async (_dir, name) => secrets.get(name),
+    locate: async (dir, name) =>
+      dir === 'secrets' ? secrets.get(name) : `holder:${name}`,
     provideGuest: async () => {
       writes.push('guest');
       present = true;
@@ -82,13 +88,14 @@ test('pool declarations contain only secret references and validate the whole se
 
 test('pool publication retains namespace, secrets and pool journal across setup', async t => {
   const { host, entries, writes } = fixture();
-  const prepared = await prepareClaudePool(host, read());
+  const prepared = await prepare(host, read());
   t.deepEqual(writes, []);
   await prepared.publish();
   t.is(entries.get('secret-second'), 'secret:second');
   t.deepEqual(entries.get('subscriptions'), read().set);
   entries.set('pool-state-v1-test', 'kept');
-  await (await prepareClaudePool(host, read())).publish();
+  t.is(entries.get('credential-second'), 'holder:credential-second');
+  await (await prepare(host, read())).publish();
   t.is(writes.filter(name => name === 'guest').length, 1);
   t.is(entries.get('pool-state-v1-test'), 'kept');
 });
@@ -96,21 +103,43 @@ test('pool publication retains namespace, secrets and pool journal across setup'
 test('missing, aliased and rebound secrets fail before any write', async t => {
   const { host, secrets, writes } = fixture();
   secrets.delete('claude-subscription-2');
-  await t.throwsAsync(() => prepareClaudePool(host, read()), {
+  await t.throwsAsync(() => prepare(host, read()), {
     message: /missing from Secrets/,
   });
   t.deepEqual(writes, []);
   secrets.set('claude-subscription-2', 'secret:first');
-  await t.throwsAsync(() => prepareClaudePool(host, read()), {
+  await t.throwsAsync(() => prepare(host, read()), {
     message: /distinct SecretBlobs/,
   });
   t.deepEqual(writes, []);
   secrets.set('claude-subscription-2', 'secret:second');
-  await (await prepareClaudePool(host, read())).publish();
+  await (await prepare(host, read())).publish();
   writes.length = 0;
   secrets.set('claude-subscription-2', 'secret:replacement');
-  await t.throwsAsync(() => prepareClaudePool(host, read()), {
+  await t.throwsAsync(() => prepare(host, read()), {
     message: /another secret/,
   });
+  t.deepEqual(writes, []);
+});
+
+test('retained renewal holder cannot silently move to another Secrets record', async t => {
+  const { host, writes } = fixture();
+  const withHolder = harden({
+    ...host,
+    has: async (...parts) =>
+      parts[0] === 'claude-sandbox' && parts[1] === 'credential-second'
+        ? true
+        : host.has(...parts),
+  });
+  await t.throwsAsync(
+    () =>
+      prepareClaudePool(withHolder, read(), {
+        readCredential: async () => ({
+          identifier: 'retained',
+          secretPath: ['secrets', 'another-secret'],
+        }),
+      }),
+    { message: /pinned to another secret/ },
+  );
   t.deepEqual(writes, []);
 });

@@ -344,10 +344,18 @@ test.serial(
     const host = /** @type {EndoHost} */ (
       /** @type {unknown} */ ({
         ...f.host,
-        lookup: async (...parts) =>
-          key(...parts) === key('claude-sandbox', 'broker-powers')
-            ? namespace
-            : E(f.host).lookup(...parts),
+        lookup: async (...parts) => {
+          if (key(...parts) === key('claude-sandbox', 'broker-powers'))
+            return namespace;
+          if (key(...parts) === key('@secrets', 'catalog'))
+            return harden({
+              list: async () =>
+                ['claude-one', 'claude-two'].map(name => ({
+                  petNamePaths: [['secrets', name]],
+                })),
+            });
+          return E(f.host).lookup(...parts);
+        },
         locate: async (...parts) => {
           const value = f.bindings.get(key(...parts));
           if (value === undefined) throw Error('not bound');
