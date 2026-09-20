@@ -11,15 +11,15 @@
  * The `tree` is a `SnapshotTree`-shaped eref: `lookup(name | segments)`
  * resolves to a `SnapshotBlob` (a file) or a sub-`SnapshotTree` (a directory).
  * This is the surface `E(mount).snapshot()` / `checkin` produce
- * (`SnapshotBlobInterface` = `streamBase64` / `text` / `json` / `getInfo` /
- * `sha256`; `SnapshotTreeInterface` = `has` / `list` / `lookup` / `getInfo` /
- * `sha256`). A leaf's bytes are read by driving its `streamBase64` responder
- * through `iterateBytesReader`; its size and content hash come from
- * `getInfo()`.
+ * (`SnapshotBlobInterface` = `streamBase64` / `text` / `json` / `sha256` /
+ * `size`; `SnapshotTreeInterface` = `has` / `list` / `lookup` / `sha256` /
+ * `size`). A leaf's bytes are read by driving its `streamBase64` responder
+ * through `iterateBytesReader`; its size and content hash come from `size()`
+ * and `sha256()`.
  *
- * Because both blobs and trees expose `getInfo`, a resolved node is confirmed
- * to be a *file* by the presence of `streamBase64` (introspected via
- * `__getMethodNames__`) — never by `getInfo`. A path that resolves to a
+ * Because both blobs and trees expose metadata methods, a resolved node is
+ * confirmed to be a *file* by the presence of `streamBase64` (introspected via
+ * `__getMethodNames__`). A path that resolves to a
  * directory with no readable index is a `404`, never a `200` we cannot fulfil.
  *
  * The response-policy and caching baseline (design § Browser boundaries,
@@ -119,7 +119,7 @@ const ifNoneMatchMatches = (headerValue, etag) => {
  * Stream a blob's bytes as an async iterable suitable for an
  * {@link HttpResponse} body, by driving the blob's `streamBase64` responder.
  * The snapshot is immutable and content-addressed, so its size cannot drift
- * between the `getInfo()` stat and this read — the streamed length always
+ * between the `size()` call and this read, so the streamed length always
  * matches the advertised `Content-Length`.
  *
  * @param {object} blob  a `SnapshotBlob` eref (`streamBase64`).
@@ -214,8 +214,7 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
     // Resolve to a readable blob; a directory selects its index. Any failure
     // (missing path, directory with no readable index, index that is itself a
     // directory) is a 404 — we never emit a 200 we cannot fulfil. A file is
-    // confirmed by the presence of `streamBase64`, not `getInfo` (both blobs
-    // and trees expose `getInfo`).
+    // confirmed by the presence of `streamBase64`, not shared metadata methods.
     let blob;
     let fileName = pathSegments[pathSegments.length - 1] || index;
     /** @type {bigint} */
@@ -243,11 +242,7 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
           }
         }
       }
-      const info = /** @type {{ hash: string, size: bigint }} */ (
-        await E(node).getInfo()
-      );
-      size = info.size;
-      hash = info.hash;
+      [size, hash] = await Promise.all([E(node).size(), E(node).sha256()]);
       blob = node;
     } catch {
       return plainResponse(404, 'Not found\n');

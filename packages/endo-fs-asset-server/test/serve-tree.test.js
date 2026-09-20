@@ -4,8 +4,8 @@
 // Phase 1 (designs/gateway-sites-publication.md): the serving core.
 // Exercises makeTreeRequestHandler against a fake snapshot that faithfully
 // models the real SnapshotTree / SnapshotBlob surface produced by
-// E(mount).snapshot() (blobs stream via streamBase64 and expose getInfo; trees
-// also expose getInfo) — so no daemon is required and the fake cannot mask the
+// E(mount).snapshot() (blobs stream via streamBase64; blobs and trees expose
+// named metadata accessors) — so no daemon is required and the fake cannot mask the
 // serving core's real byte-read and file-vs-directory paths.
 
 import '@endo/init/debug.js';
@@ -54,32 +54,31 @@ const fakeHash = bytes => {
 };
 
 // Model the REAL SnapshotBlob surface produced by `E(mount).snapshot()`:
-// streamBase64 / text / json / getInfo / sha256 — and deliberately NO `fetch`
-// (fetch lives on the live-mount ReadableBlobRange face, not on snapshots). A
-// fake that carried `fetch` would mask the serving-core's byte-read path.
+// streamBase64 / text / json / size / sha256 — and deliberately no live-file
+// range conveniences. An over-broad fake would mask the serving-core's byte-read path.
 const BlobInterface = M.interface(
   'SnapshotBlob',
   {
     streamBase64: M.call(M.any()).returns(M.promise()),
     text: M.call().returns(M.promise()),
     json: M.call().returns(M.promise()),
-    getInfo: M.call().returns(M.any()),
+    size: M.call().returns(M.promise()),
     sha256: M.call().returns(M.string()),
     help: M.call().optional(M.string()).returns(M.string()),
   },
   { sloppy: true },
 );
 
-// Model the REAL SnapshotTree surface: has / list / lookup / getInfo / sha256.
-// A SnapshotTree DOES expose getInfo (returning the manifest's hash/size), so
-// the serving core must not use getInfo to tell a file from a directory.
+// Model the real SnapshotTree surface: has / list / lookup / size / sha256.
+// Blobs and trees share metadata accessors, so the serving core must use the
+// read surface to distinguish them.
 const TreeInterface = M.interface(
   'SnapshotTree',
   {
     lookup: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(M.any()),
     has: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
     list: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
-    getInfo: M.call().returns(M.any()),
+    size: M.call().returns(M.promise()),
     sha256: M.call().returns(M.string()),
     help: M.call().optional(M.string()).returns(M.string()),
   },
@@ -99,12 +98,7 @@ const makeBlob = bytes =>
     },
     text: async () => decode(bytes),
     json: async () => JSON.parse(decode(bytes)),
-    getInfo: () =>
-      harden({
-        algorithm: 'sha256',
-        hash: fakeHash(bytes),
-        size: BigInt(bytes.length),
-      }),
+    size: async () => BigInt(bytes.length),
     sha256: () => fakeHash(bytes),
     help: () => 'fake snapshot blob',
   });
@@ -136,9 +130,9 @@ const makeTree = files => {
       has: async (...segs) =>
         Object.prototype.hasOwnProperty.call(files, rel(segs.flat().join('/'))),
       list: async () => harden([]),
-      // A real SnapshotTree exposes getInfo/sha256 (the manifest's identity);
-      // the serving core must therefore NOT treat getInfo presence as "file".
-      getInfo: () => harden({ algorithm: 'sha256', hash: 'tree', size: 0n }),
+      // A real SnapshotTree exposes size/sha256 (the manifest's identity), so
+      // the serving core must not treat metadata presence as "file".
+      size: async () => 0n,
       sha256: () => 'tree',
       help: () => 'fake snapshot tree',
     });
@@ -218,7 +212,7 @@ test('a directory whose index is itself a directory 404s', async t => {
     tree: makeTree({ 'empty/index.html/keep.txt': utf8('x') }),
   });
   // `/empty/` -> directory -> lookup index.html -> resolves to a sub-tree,
-  // which isBlob() rejects (no streamBase64) -> 404, before any getInfo.
+  // which isBlob() rejects (no streamBase64) -> 404, before metadata reads.
   t.is((await get(handler, '/empty/')).status, 404);
 });
 
