@@ -5,6 +5,8 @@
 /** @import { ChildProcessPowers, ProcessPowers } from '../platform/processes.js' */
 import harden from '@endo/harden';
 
+import { makeIronhorseLimits } from './ironhorse-limits.js';
+
 /**
  * @param {HashPowers} hashes
  * @param {string} path
@@ -20,11 +22,11 @@ harden(hashFile);
  * @param {FilePowers} powers.files
  * @param {PathPowers} powers.paths
  * @param {HashPowers} powers.hashes
- * @param {{statePath: string, workerBinary: string, bootPaths: string[], crankBudget: number, onLost: () => void}} options
+ * @param {{statePath: string, workerBinary: string, bootPaths: string[], limits: ReturnType<typeof makeIronhorseLimits>, onLost: () => void}} options
  */
 export const acquireIronhorseRuntime = async (
   { processes, files, paths, hashes },
-  { statePath, workerBinary, bootPaths, crankBudget, onLost },
+  { statePath, workerBinary, bootPaths, limits, onLost },
 ) => {
   const { spawn } = processes;
   const { join } = paths;
@@ -104,12 +106,16 @@ export const acquireIronhorseRuntime = async (
       [workerBinary, ...bootPaths].map(file => hashFile(hashes, file)),
     );
     const identity = {
-      format: 1,
+      format: 2,
       hostProtocol: 'sequenced-hub-outbox-v1',
       worker: digests[0],
       bootstrap: digests.slice(1),
-      crankBudget,
     };
+    // Execution ceilings may only increase. They do not identify code or the
+    // snapshot format; retaining the profile allows the same heaps to reopen.
+    // The watchdog is operational and can change in either direction.
+    const { requestTimeoutMs: _timeout, ...executionLimits } = limits;
+    const manifest = { ...identity, limits: executionLimits };
     const profile = hashes.sha256Hex(
       new TextEncoder().encode(JSON.stringify(identity)),
     );
@@ -121,10 +127,26 @@ export const acquireIronhorseRuntime = async (
       if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
         throw error;
     }
-    if (saved && JSON.stringify(saved) !== JSON.stringify(identity)) {
-      throw Error(
-        'Incompatible Ironhorse runtime: worker, bootstrap, or crank budget differs from runtime.json',
-      );
+    if (saved) {
+      const { limits: previous, ...savedIdentity } = saved;
+      if (JSON.stringify(savedIdentity) !== JSON.stringify(identity)) {
+        throw Error(
+          'Incompatible Ironhorse runtime: worker, bootstrap, or manifest format differs from runtime.json; use the original runtime or migrate to a fresh state directory',
+        );
+      }
+      if (!previous)
+        throw Error('Missing Ironhorse execution limits in runtime.json');
+      const { requestTimeoutMs: _previousTimeout, ...normalized } =
+        makeIronhorseLimits(previous);
+      if (JSON.stringify(previous) !== JSON.stringify(normalized))
+        throw Error('Invalid Ironhorse execution limits in runtime.json');
+      for (const name of Object.keys(executionLimits)) {
+        if (BigInt(executionLimits[name]) < BigInt(previous[name])) {
+          throw Error(
+            `Incompatible Ironhorse runtime: ${name} cannot decrease below persisted value ${previous[name]}`,
+          );
+        }
+      }
     }
     if (!saved) {
       const entries = await files.listDirectory(statePath);
@@ -139,11 +161,6 @@ export const acquireIronhorseRuntime = async (
           'Unversioned Ironhorse state: no runtime.json; use the original runtime or a fresh state directory',
         );
       }
-      await files.writeTextAtomic(
-        manifestPath,
-        `${JSON.stringify(identity)}\n`,
-      );
-      await files.syncPath(statePath);
     }
     // Execute private, checked copies: edits to the original paths during a
     // daemon lifetime cannot silently change its next worker incarnation.
@@ -167,6 +184,13 @@ export const acquireIronhorseRuntime = async (
       if (result.status === 'rejected') throw result.reason;
       return result.value;
     });
+    if (JSON.stringify(saved) !== JSON.stringify(manifest)) {
+      await files.writeTextAtomic(
+        manifestPath,
+        `${JSON.stringify(manifest)}\n`,
+      );
+      await files.syncPath(statePath);
+    }
     child.input(0)?.write('prepare\n');
     if (JSON.parse(await receive()).op !== 'ready')
       throw Error('Invalid ownership prepare protocol');

@@ -14,6 +14,7 @@ import {
   counterSource,
 } from '../../src/ironhorse/demo-counter-vats.js';
 import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { readIronhorseLimits } from '../../src/ironhorse/ironhorse-limits.js';
 import { makeFsStore } from '../../src/store/store-fs.js';
 
 import { makeNodePowers } from '../../src/platform/node/powers.js';
@@ -78,7 +79,7 @@ const rawEngine = makeIronhorseEngine(nodePowers, {
     ),
   ),
   storePath: join(statePath, 'heaps'),
-  crankBudget: Number(process.env.THIXOTROPE_CRANK_BUDGET ?? 10_000_000),
+  ...readIronhorseLimits(nodePowers.environment),
 });
 const engine = harden({
   ...rawEngine,
