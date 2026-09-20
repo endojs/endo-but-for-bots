@@ -1,7 +1,7 @@
 //! Build the XS oracle: compile the c/moddable XS engine (the pin
 //! the endor daemon builds today) with the same feature defines as
 //! the xsnap crate, plus the xs_shim.c bridge, into one static
-//! library, with the checked parser-diagnostic overlay below. This is the
+//! library, with the checked source overlays below. This is the
 //! only place the engine workspace touches C.
 //!
 //! We deliberately compile libxs here rather than depending on the
@@ -21,6 +21,7 @@ use std::path::PathBuf;
 // xs_shim.c nor xsnap-platform.c moves under this path. The sanitizer scope
 // regression reads this constant to probe the actual generated source path.
 const LEXICAL_OVERLAY_PATH: &str = "c/moddable/xs/sources/xsLexical.c";
+const JSON_OVERLAY_PATH: &str = "c/moddable/xs/sources/xsJSON.c";
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -48,8 +49,8 @@ fn main() {
         );
     }
 
-    // The source set and feature flags match xsnap. One checked lexical
-    // diagnostic overlay below removes platform-dependent undefined behavior.
+    // The source set and feature flags match xsnap. Checked lexical overlays
+    // below remove platform-dependent undefined behavior.
     let sources = [
         "xsAll.c",
         "xsAPI.c",
@@ -150,21 +151,59 @@ fn main() {
         1,
         "pinned XS RegExp diagnostic call changed; review the lexical overlay"
     );
+    let lexical = lexical.replacen(old, new, 1);
+
+    // fxGetNextNumber used to convert every double to txInteger before
+    // checking whether the value was exactly integral. C leaves conversion of
+    // NaN, infinity, and finite out-of-range values undefined. Keep the pin
+    // untouched, but classify only a finite signed-32-bit value through the
+    // integer path so the optimized oracle remains a defined reference.
+    let old = "\tparser->states[2].number = theNumber;\n\tparser->states[2].integer = (txInteger)parser->states[2].number;\n\ttheNumber = parser->states[2].integer;\n\tif (parser->states[2].number == theNumber)\n\t\tparser->states[2].token = XS_TOKEN_INTEGER;\n\telse\n\t\tparser->states[2].token = XS_TOKEN_NUMBER;";
+    let new = "\tparser->states[2].number = theNumber;\n\tif (c_isfinite(parser->states[2].number) && (-2147483648.0 <= parser->states[2].number) && (parser->states[2].number <= 2147483647.0)) {\n\t\tparser->states[2].integer = (txInteger)parser->states[2].number;\n\t\ttheNumber = parser->states[2].integer;\n\t\tif (parser->states[2].number == theNumber)\n\t\t\tparser->states[2].token = XS_TOKEN_INTEGER;\n\t\telse\n\t\t\tparser->states[2].token = XS_TOKEN_NUMBER;\n\t}\n\telse {\n\t\tparser->states[2].integer = 0;\n\t\tparser->states[2].token = XS_TOKEN_NUMBER;\n\t}";
+    assert_eq!(
+        lexical.matches(old).count(),
+        1,
+        "pinned XS numeric classification changed; review the lexical overlay"
+    );
+    let lexical = lexical.replacen(old, new, 1);
+
     let lexical_overlay =
         PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join(LEXICAL_OVERLAY_PATH);
     std::fs::create_dir_all(lexical_overlay.parent().expect("lexical overlay parent"))
         .expect("create checked upstream overlay directory");
-    std::fs::write(&lexical_overlay, lexical.replacen(old, new, 1))
-        .expect("write checked xsLexical.c overlay");
-    // Its only include is xsScript.h, resolved through xs_sources above.
+    std::fs::write(&lexical_overlay, lexical).expect("write checked xsLexical.c overlay");
+
+    // JSON.parse repeats the same classify-by-cast operation. Keep its runtime
+    // numeric result defined too; otherwise a now-correct literal in a corpus
+    // assertion merely exposes the parser's separate out-of-range cast.
+    let json_path = xs_sources.join("xsJSON.c");
+    let json = std::fs::read_to_string(&json_path).expect("read pinned xsJSON.c");
+    let old = "\t\t\ttheParser->number = fxStringToNumber(the, the->nameBuffer, 0);\n\t\t\ttheParser->integer = (txInteger)theParser->number;\n\t\t\tnumber = theParser->integer;\n\t\t\tif ((theParser->number == number) && (theParser->number != -0))\n\t\t\t\ttheParser->token = XS_JSON_TOKEN_INTEGER;\n\t\t\telse\n\t\t\t\ttheParser->token = XS_JSON_TOKEN_NUMBER;";
+    let new = "\t\t\ttheParser->number = fxStringToNumber(the, the->nameBuffer, 0);\n\t\t\tif (c_isfinite(theParser->number) && (-2147483648.0 <= theParser->number) && (theParser->number <= 2147483647.0)) {\n\t\t\t\ttheParser->integer = (txInteger)theParser->number;\n\t\t\t\tnumber = theParser->integer;\n\t\t\t\tif ((theParser->number == number) && (theParser->number != -0))\n\t\t\t\t\ttheParser->token = XS_JSON_TOKEN_INTEGER;\n\t\t\t\telse\n\t\t\t\t\ttheParser->token = XS_JSON_TOKEN_NUMBER;\n\t\t\t}\n\t\t\telse {\n\t\t\t\ttheParser->integer = 0;\n\t\t\t\ttheParser->token = XS_JSON_TOKEN_NUMBER;\n\t\t\t}";
+    assert_eq!(
+        json.matches(old).count(),
+        1,
+        "pinned XS JSON numeric classification changed; review the source overlay"
+    );
+    let json_overlay =
+        PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join(JSON_OVERLAY_PATH);
+    std::fs::create_dir_all(json_overlay.parent().expect("JSON overlay parent"))
+        .expect("create checked upstream overlay directory");
+    std::fs::write(&json_overlay, json.replacen(old, new, 1))
+        .expect("write checked xsJSON.c overlay");
+
+    // These sources include only headers resolved through xs_sources above.
     for source in &sources {
         if *source == "xsLexical.c" {
             build.file(&lexical_overlay);
+        } else if *source == "xsJSON.c" {
+            build.file(&json_overlay);
         } else {
             build.file(xs_sources.join(source));
         }
     }
     println!("cargo:rerun-if-changed={}", lexical_path.display());
+    println!("cargo:rerun-if-changed={}", json_path.display());
     build.file(&platform_source);
     build.file(manifest_dir.join("csrc/xs_shim.c"));
     build.compile("xsoracle");
