@@ -197,6 +197,111 @@ fn parity_files(dir: &Path, found: &mut Vec<String>) {
     }
 }
 
+/// Run `source` after the harness includes, the SES prelude, AND a real
+/// `lockdown()` — using the same `Lock` the reach pins use, because the
+/// prelude does NOT lock down on its own. An earlier version of this helper
+/// omitted the call and still claimed "after lockdown"; it was measuring a
+/// realm with the shim merely evaluated.
+fn after_lockdown(source: &str) -> String {
+    let includes = ["sta.js", "assert.js"]
+        .iter()
+        .map(|f| read(&format!("packages/test262-runner/test262/harness/{f}")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prelude = read("packages/test262-runner/prelude/ironhorse.js");
+    let lockdown = Lock::Defaults.statement();
+    let program = format!("{includes}\n{prelude}\n{lockdown}{source}");
+    let mut m = Interp::new();
+    m.set_source_compiler(std::rc::Rc::new(TestCompiler));
+    let Ok((code, symbols)) =
+        ironhorse_compile::compile_atoms_goal(&program, ironhorse_compile::Goal::Script, false)
+    else {
+        return "COMPILE".into();
+    };
+    m.link_intrinsics(&parse_symbols(&symbols));
+    let o = m.run(&code);
+    if !o.completed {
+        return format!("HALT {:?}", o.halt);
+    }
+    o.result
+}
+
+/// The five lazy Iterator helpers survive `lockdown()` and work through it.
+///
+/// This is the payoff for implementing them. The prologue used to DELETE every
+/// `Iterator.prototype` key and the `Iterator` global outright, because the
+/// five lazy helpers halted the machine with `NotImplemented("Iterator.helper")`
+/// and an engine halt is not catchable — so a guest could not even defend
+/// itself with `try`/`catch`. With the helpers implemented that amputation is
+/// gone from `@endo/ironhorse-prelude`, which both the corpus and the shipped
+/// worker bundle, and this pins what replaced it.
+///
+/// Note the second case: SES's own `get-anonymous-intrinsics.js` discovers
+/// `%IteratorHelperPrototype%` by EVALUATING `Iterator.from([]).take(0)`, so
+/// lockdown itself runs a lazy helper. If `take` were wrong, lockdown would
+/// fail here rather than in guest code.
+#[test]
+fn the_lazy_iterator_helpers_survive_lockdown() {
+    if !Path::new(&format!(
+        "{ROOT}/packages/test262-runner/prelude/ironhorse.js"
+    ))
+    .exists()
+    {
+        eprintln!("ses-prelude: absent — `yarn workspace @endo/test262-runner build` to run this");
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(|| {
+            // The lockdown really happened, so the rest of this test means
+            // what it says.
+            assert_eq!(after_lockdown("String(typeof harden)"), "function");
+            // `Iterator` is a real global again, not `undefined`.
+            assert_eq!(after_lockdown("typeof Iterator"), "function");
+            // And SES reached its helper prototype, which is what it hardens.
+            assert_eq!(
+                after_lockdown(
+                    "String(Object.getPrototypeOf(Iterator.from([]).take(0)) === \
+                     Object.getPrototypeOf([].values().map(function (v) { return v; })))"
+                ),
+                "true"
+            );
+            // Each helper runs, and a chain of them runs, after lockdown.
+            for (source, expected) in [
+                ("[...[1,2,3].values().map(function (v) { return v * 2; })].join(',')", "2,4,6"),
+                ("[...[1,2,3,4].values().filter(function (v) { return v % 2 === 0; })].join(',')", "2,4"),
+                ("[...[1,2,3,4].values().take(2)].join(',')", "1,2"),
+                ("[...[1,2,3,4].values().drop(2)].join(',')", "3,4"),
+                ("[...[1,2].values().flatMap(function (v) { return [v, v * 10]; })].join(',')", "1,10,2,20"),
+                (
+                    "[...[1,2,3,4,5,6].values().map(function (v) { return v * 2; })\
+                     .filter(function (v) { return v > 4; }).drop(1).take(2)].join(',')",
+                    "8,10",
+                ),
+            ] {
+                assert_eq!(after_lockdown(source), expected, "{source}");
+            }
+            // A lazy helper is hardened by this path exactly as much as its
+            // EAGER sibling and as `Array.prototype.map`. Pinned as PARITY
+            // rather than as an absolute, so this cannot quietly claim a
+            // hardening guarantee the path does not deliver.
+            let lazy = after_lockdown("String(Object.isFrozen(Iterator.prototype.map))");
+            for sibling in [
+                "String(Object.isFrozen(Iterator.prototype.reduce))",
+                "String(Object.isFrozen(Array.prototype.map))",
+            ] {
+                assert_eq!(
+                    lazy,
+                    after_lockdown(sibling),
+                    "a lazy helper must harden like {sibling}"
+                );
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn the_ses_shim_prelude_reaches_a_pinned_slice_of_the_parity_corpus() {
     let prelude = format!("{ROOT}/packages/test262-runner/prelude/ironhorse.js");
