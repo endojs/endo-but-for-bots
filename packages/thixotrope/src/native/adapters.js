@@ -42,6 +42,7 @@ export const makeNativeAdapters = (
             const child = await nativeWorkers.start({
               id,
               moduleUrl: description.moduleUrl,
+              packageIdentity: description.packageIdentity,
               onFrame: bytes => {
                 if (exited) return;
                 if (sink) sink.deliver(bytes);

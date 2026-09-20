@@ -17,21 +17,18 @@ export const make = ({ http }) => {
       return harden({ status: 200, body: `${count}\n` });
     },
   });
-  // Return the application root without waiting for the host registration reply.
-  // The service publication retains the handler; status exposes readiness.
-  let registrationError;
-  E(http)
-    .listen(handler)
-    .catch(error => {
-      registrationError = String(error);
-    });
+  let registration;
   return Far('HttpCounterApplication', {
     help: () =>
-      'status() inspects the HTTP listener, read() returns the persistent count, close() permanently closes the listener.',
+      'start(port) registers HTTP, status() inspects it, read() returns the count, and close() stops serving.',
+    /** @param {number} port */
+    start: async port => {
+      registration = await E(http).register(port, handler);
+      return E(registration).status();
+    },
     read: () => count,
-    status: () => E(http).status(),
-    registrationError: () => registrationError,
-    close: () => E(http).close(),
+    status: () => E(registration).status(),
+    close: () => E(registration).close(),
   });
 };
 harden(make);

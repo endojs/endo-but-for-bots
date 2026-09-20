@@ -3,8 +3,8 @@
  * The local supervisor: the process that owns a Thixotrope state directory
  * and turns it into a running workspace. It is the composition root beneath
  * `bin/thix.js` — the only module that assembles a daemon, the durable and
- * Unix netlayers, the application registry, and the host services (clock,
- * HTTP, mailbox) into one whole, and the only one that holds the engine
+ * Unix netlayers, application and native-resource installation, and the
+ * host services (clock, mailbox), and the only one that holds the engine
  * lease and the private control socket that authorizes administration.
  *
  * Three responsibilities are worth separating when reading it:
@@ -37,6 +37,7 @@ import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
+import { evaluateSource } from './evaluate-source.js';
 import { makeDurableAlarms } from '../alarms/durable-alarms.js';
 import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
@@ -45,9 +46,7 @@ import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
 import { makeAdapterKeeper } from '../adapter-keeper.js';
-import { makeHttpAdapter } from '../http/http-adapter.js';
-import { makeHttpManager } from '../http/http-manager.js';
-import { makeHttpPorts } from '../http/http-port.js';
+import { makeNativeResourceRegistry } from '../native/registry.js';
 import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
@@ -91,7 +90,6 @@ export const serveThixotrope = async (
     syncFiles,
     processes,
     sockets,
-    httpListeners,
     hashes,
     environment,
     user,
@@ -183,10 +181,6 @@ export const serveThixotrope = async (
   const { promise: stopped } = stopKit;
   const requestStop = () => stopKit.resolve();
   let daemon;
-  // The host's whole involvement in HTTP: sockets and the ceilings only it can
-  // enforce. No metadata file, because what is desired lives in the workspace
-  // vat and what is bound lives in an adapter that dies with this process.
-  const httpPorts = makeHttpPorts({ httpListeners, logging, timers });
   // The host's whole involvement in alarms: a durable table of deadlines and
   // one timer for the earliest. It calls nothing; settling a promise resource
   // wakes whichever vat was listening on it.
@@ -239,12 +233,12 @@ export const serveThixotrope = async (
       {
         store: makeFsStore({ syncFiles, paths }, statePath),
         engine: measured,
+        nativeWorkers: platform.nativeWorkers,
         codec: syrupCodec,
         idleSleepMs,
         resources: {
           alarm: alarms.resource,
           alarms: alarms.clockResource,
-          'http-port': httpPorts.resource,
         },
         makeNetlayer: async ({ handlers, logger, resumption }) => {
           // makeThixotropeDaemon already holds the exclusive engine lease.
@@ -297,22 +291,22 @@ export const serveThixotrope = async (
           ? candidates[0].workerId
           : (await daemon.createWorker({ debugLabel: 'workspace' })).workerId;
       config = {
-        version: 1,
+        version: 2,
         workerId,
         publication: `workspace-${workerId}`,
         // Unguessable, because a publication secret is a bearer capability and
         // this one names the object the host calls `started()` on.
-        httpNotice: randomId(),
+        resourceNotice: randomId(),
         initialized: false,
       };
       await save(files, configPath, config);
     }
     if (
-      config?.version !== 1 ||
+      config?.version !== 2 ||
       !daemon.listWorkerIds().includes(config.workerId) ||
       config.publication !== `workspace-${config.workerId}` ||
-      typeof config.httpNotice !== 'string' ||
-      !/^[0-9a-f]{32}$/.test(config.httpNotice) ||
+      typeof config.resourceNotice !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(config.resourceNotice) ||
       typeof config.initialized !== 'boolean'
     )
       throw Error('Invalid workspace metadata');
@@ -400,39 +394,15 @@ export const serveThixotrope = async (
       return opening;
     };
 
-    /**
-     * The HTTP manager lives in the workspace vat, for the same reason the
-     * mail address book does: it is durable policy, and the workspace is the
-     * durable thing a user already owns. Its adapter is a separate vat, which
-     * the keeper builds.
-     *
-     * @type {Promise<any> | undefined}
-     */
-    let httpManager;
-    const getHttpManager = () => {
-      if (httpManager) return httpManager;
-      const opening = workspace
-        .evaluate(
-          `(globalThis.httpManager ??= (${makeHttpManager.toString()})({
-            makeKeeper: (${makeAdapterKeeper.toString()}),
-            vats,
-            adapterSource: ${JSON.stringify(`(${makeHttpAdapter.toString()})()`)},
-          }))`,
-        )
-        .then(async manager => {
-          // Publish under the persisted notice secret and ask the host to call
-          // `started()` there at every startup: waking the workspace would
-          // restore its heap and rebind nothing.
-          daemon.publish(manager, config.httpNotice);
-          workspace.notifyOnStart(config.httpNotice);
-          return manager;
-        });
-      httpManager = opening;
-      void opening.catch(() => {
-        if (httpManager === opening) httpManager = undefined;
-      });
-      return opening;
-    };
+    if (inventory !== undefined) {
+      const lifecycle = await workspace.evaluate(
+        `(globalThis.nativeResources ??= (${makeNativeResourceRegistry.toString()})(
+          inventory, (${makeAdapterKeeper.toString()})
+        )).lifecycle`,
+      );
+      daemon.publish(lifecycle, config.resourceNotice);
+      workspace.notifyOnStart(config.resourceNotice);
+    }
 
     /** @param {unknown} text */
     const parseInvitation = text => {
@@ -457,6 +427,7 @@ export const serveThixotrope = async (
         ),
       };
     };
+    let installingNative = Promise.resolve();
     const adminMethods = {
       help: () => 'Local supervisor: evaluate(source), status(), stop().',
       evaluate: async source => {
@@ -507,20 +478,53 @@ export const serveThixotrope = async (
       reachability: () => daemon.inspectReachability(),
       collect: () => daemon.collectVats(),
       inventoryStatus: () => E(inventory).subscriptionCounts(),
-      httpGrant: async (key, port) => {
-        if (requested) throw Error('Supervisor is stopping');
-        if (typeof key !== 'string' || !key.length)
-          throw Error('Expected inventory key');
-        const listener = await E(await getHttpManager()).grant(
-          daemon.makeResource('http-port', { port }),
-        );
-        await workspace.evaluate('(inventory.set(key, listener), true)', {
-          key,
-          listener,
+      installNative: (name, directory) => {
+        const installing = installingNative.then(async () => {
+          if (requested) throw Error('Supervisor is stopping');
+          if (typeof directory !== 'string')
+            throw Error('Expected a native resource directory');
+          const description = await platform.nativePackages.describe(
+            paths.resolve(directory),
+          );
+          const { bundle, digest: bundleDigest } =
+            await platform.bundler.bundle(description.durablePath);
+          const checked = await platform.nativePackages.describe(
+            description.directory,
+          );
+          if (checked.digest !== description.digest)
+            throw Error('Native package changed during installation');
+          const digest = hashes.sha256Hex(
+            new TextEncoder().encode(
+              JSON.stringify([
+                description.directory,
+                description.digest,
+                bundleDigest,
+              ]),
+            ),
+          );
+          await evaluateSource(
+            workspace,
+            `(endowments => nativeResources.install(endowments.name, endowments.digest, powers => (${bundle}).make(powers), endowments.adapters))`,
+            {
+              name,
+              digest,
+              adapters: daemon.makeResource('native-adapter', {
+                moduleUrl: description.moduleUrl,
+                packageIdentity: {
+                  directory: description.directory,
+                  digest: description.digest,
+                },
+              }),
+            },
+          );
+          return harden({ name, directory: description.directory, digest });
         });
-        return E(listener).status();
+        installingNative = installing.then(
+          () => {},
+          () => {},
+        );
+        return installing;
       },
-      httpServices: async () => E(await getHttpManager()).list(),
       clockGrant: async key => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof key !== 'string' || !key.length || key.length > 128)
@@ -661,15 +665,12 @@ export const serveThixotrope = async (
         // Remove the endpoint while still holding the lease. A successor's
         // socket must never be removed by this process after ownership passes.
         try {
+          await installingNative;
           await closeControl();
         } finally {
           try {
             try {
-              try {
-                alarms.shutdown();
-              } finally {
-                await httpPorts.shutdown();
-              }
+              alarms.shutdown();
             } finally {
               await closePeers();
               await daemon.shutdown();
@@ -689,11 +690,7 @@ export const serveThixotrope = async (
     } finally {
       closeSocket();
       try {
-        try {
-          alarms.shutdown();
-        } finally {
-          await httpPorts.shutdown();
-        }
+        alarms.shutdown();
       } finally {
         await closePeers();
         await daemon?.crash();
