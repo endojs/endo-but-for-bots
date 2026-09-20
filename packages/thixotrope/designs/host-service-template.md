@@ -1,5 +1,8 @@
 # What a host service has to write
 
+Historical comparison: HTTP now follows
+[directory-installed native resources](native-resource-installation.md).
+
 Status: a description of the current shape and an open question, not a selected
 abstraction.
 The [main design](../../../designs/thixotrope.md) describes host resources as

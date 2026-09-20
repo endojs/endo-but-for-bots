@@ -78,8 +78,10 @@ const application = `({ make: ({ http }) => {
   const handler = Far('PendingHttpHandler', {
     handle: () => { count += 1n; return new Promise(() => {}); },
   });
-  E(http).listen(handler).catch(() => {});
+  let registration;
   return Far('Application', {
+    start: async port => { registration = await E(http).register(port, handler); },
+    status: () => E(registration).status(),
     read: () => count,
     waiting: () => waiting,
     wait: () => { waiting = true; return gate; },
@@ -101,8 +103,16 @@ test.serial(
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const port = await freePort(t);
     const first = await start(t, path);
-    await first.client.call('httpGrant', 'web', port);
+    await first.client.call(
+      'installNative',
+      'web',
+      fileURLToPath(new URL('../../resources/http/', import.meta.url)),
+    );
     await first.client.call('install', 'site', application, [['http', 'web']]);
+    await first.client.call(
+      'evaluate',
+      `E(E(apps).get('site')).start(${port})`,
+    );
     t.is(
       await first.client.call(
         'evaluate',
@@ -123,8 +133,11 @@ test.serial(
         "E(E(apps).get('site')).waiting()",
       );
       // eslint-disable-next-line no-await-in-loop
-      const services = await first.client.call('httpServices');
-      if (waiting === 'true' && services[0].status === 'listening') {
+      const status = await first.client.call(
+        'evaluate',
+        "E(E(apps).get('site')).status().then(s => s.status)",
+      );
+      if (waiting === 'true' && status === "'listening'") {
         ready = true;
         break;
       }
@@ -167,11 +180,11 @@ test.serial(
     t.true(accepted, 'guest handler committed its effect before the crash');
     const store = makeFsStore(nodePowers, path);
     t.false(
-      Object.keys(store.getHubState().sessions).some(key =>
-        key.startsWith('transient:'),
+      Object.keys(store.getHubState().sessions).some(
+        key =>
+          key.startsWith('transient:') && !key.startsWith('transient:native:'),
       ),
-      'an in-flight HTTP request creates no transient hub session: the host ' +
-        'reaches the guest through its adapter, so there is nothing to orphan',
+      'HTTP requests use the native adapter session without host-side observers',
     );
     first.child.kill('SIGKILL');
     t.deepEqual(await first.exited, [null, 'SIGKILL']);
@@ -182,8 +195,9 @@ test.serial(
 
     const recovered = await start(t, path);
     t.false(
-      Object.keys(store.getHubState().sessions).some(key =>
-        key.startsWith('transient:'),
+      Object.keys(store.getHubState().sessions).some(
+        key =>
+          key.startsWith('transient:') && !key.startsWith('transient:native:'),
       ),
       'and none appears across the restart either',
     );

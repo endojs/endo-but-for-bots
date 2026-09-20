@@ -4,7 +4,6 @@ import * as childProcess from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
-import * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -27,7 +26,7 @@ import { makeTimerPowers } from '../timers.js';
 // Powers with a Node-specific implementation, each the sole module allowed
 // to see the corresponding Node API.
 import { makeFilePowers } from './files.js';
-import { makeHttpListenerPowers } from './http-listeners.js';
+import { describeNativePackage } from './native-package.js';
 import { makeProcessPowers } from './processes.js';
 import { makeNativeWorkerPowers } from './native-workers.js';
 import { makeSocketPowers } from './sockets.js';
@@ -85,12 +84,6 @@ export const makeNodePowers = () => {
     net,
     chmod: (p, mode) => fsp.chmod(p, mode),
   });
-  const httpListeners = makeHttpListenerPowers({
-    http,
-    setTimeout: (callback, delayMs) => nodeTimers.setTimeout(callback, delayMs),
-    clearTimeout: handle =>
-      nodeTimers.clearTimeout(/** @type {NodeJS.Timeout} */ (handle)),
-  });
   const terminal = makeTerminalPowers({ readline, process });
   const hashes = makeHashPowers({ files });
   const environment = makeEnvironmentPowers({
@@ -128,7 +121,7 @@ export const makeNodePowers = () => {
     processes,
     nativeWorkers: makeNativeWorkerPowers(),
     sockets,
-    httpListeners,
+    nativePackages: harden({ describe: describeNativePackage }),
     terminal,
     hashes,
     environment,

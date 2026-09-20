@@ -61,7 +61,8 @@ They distinguish intended behavior from current implementation gaps.
 - `tui/`: the terminal views the CLI opens over a control connection.
 - `observable-map.js`: the string-keyed observable Map that backs both the
   workspace inventory and the conventional `contacts` address book.
-- `http/`: durable HTTP listener recipes.
+- `native/`: directory installation and disposable native process integration.
+- `resources/http/`: installable durable HTTP manager and native adapter.
 - `ironhorse/`: Ironhorse and XS worker engines and their guest
   fixtures.
 - `platform/`: capability interfaces, and `platform/node/` for the Node
@@ -220,41 +221,48 @@ This initial version provides installation, not live code upgrades.
 
 ## Persistent applications serving HTTP
 
-Grant a listener, then install an application with that capability:
+Install the native resource into this daemon's workspace inventory, then grant its registration
+facet to an application:
 
 ```sh
-thix http-grant ./private-state web 8080
+thix install-native ./private-state web ./resources/http
 thix install ./private-state site ./examples/http-counter.js http=web
-thix http-services ./private-state
+# In `thix attach ./private-state`:
+# await E(E(apps).get('site')).start(8080)
 curl -X POST http://127.0.0.1:8080/incr
 curl http://127.0.0.1:8080/read
 ```
 
-The application calls `E(http).listen(handler)` once, with a guest handler implementing
-`handle({method, path, body})` and returning `{status, body}`.
-The host persists the listener's desired state and a publication of the guest handler.
-Stopping the supervisor closes sockets; restart binds the same port and restores the handler.
-The example's counter lives in its guest heap and survives restart.
-Binding failure remains visible in `http-services`; it does not discard desired state.
+A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
+The durable module runs in the selected workspace; the ephemeral module runs in a separate Node
+process with native platform APIs.
+The primary daemon only loads directory metadata and bundles the durable module, launches and
+connects the native process, and manages its lifetime.
+It contains no HTTP listener implementation or HTTP-specific installation commands.
 
-`E(http).close()` permanently closes that listener identity and releases its publication.
-A new grant can reuse the port, but an old capability cannot close the replacement.
-An interrupted initial registration may be cancelled; inspect `status()` after an uncertain reply.
-Registration is single-use, so deliberately allocate a new listener to try again.
+Installation stores only the public registration facet in the requested inventory slot.
+The HTTP facet provides `register(port, handler, policy?)`; the returned handle provides
+`status()` and `close()`.
+An unavailable port still returns a handle; `status()` retries binding and reports an error
+while inactive, and `close()` withdraws the desired registration.
+The application implements `handle({method, path, body})`, returning `{status, body}`.
+Its counter and the manager's desired registrations survive in their respective durable heaps.
+Sockets, request buffers, deadlines, and response handling live entirely in the native adapter.
+A closed registration cannot close a later registration that reuses its port.
 
-The initial profile supports explicit ports 1024–65535 on IPv4 loopback only.
-Requests require the exact listener Host header, reject foreign browser Origins and cross-site
-Fetch Metadata, and offer no CORS access.
-This blocks ordinary cross-origin browser requests; it does not authenticate local processes.
-Anyone able to connect locally can invoke the application's HTTP interface.
-Requests and responses are limited to 64 KiB, with 16 concurrent requests and a five-second deadline.
-Only method, path, and text body cross into the guest; streaming and arbitrary headers are not exposed.
+The initial HTTP profile uses ports 1024–65535 on IPv4 loopback, text bodies up to 64 KiB,
+16 concurrent requests, and a five-second deadline.
+Restart creates a fresh adapter and reconstructs desired listeners, never pending HTTP requests.
+Already accepted calls into durable application vats may still complete.
+A failed port bind does not prevent other registrations from being restored.
 
-Each request uses a disposable protocol session.
-Response, socket loss, timeout, and supervisor shutdown release that session and its references.
-Restart removes abandoned sessions and never recreates an old HTTP request or socket.
-A guest invocation already accepted can still finish and retain its effects after the client leaves.
-Other guest promise listeners remain durable; losing an HTTP response does not cancel guest work.
+Native installation pins the directory's complete file contents and the durable bundle digest.
+Changing installed source requires a new explicit installation; the old manager will refuse to
+launch an adapter with different code.
+Dependencies outside the resource directory use ordinary Node module resolution and must remain
+compatible with the installed durable bundle.
+The selected state directory currently identifies the daemon's single user workspace.
+See [native resource installation](designs/native-resource-installation.md) for the module contract.
 
 ## Durable alarms and reminders
 
@@ -509,8 +517,8 @@ There is no bootstrap priming workaround for `Symbol.unscopables`.
 Host factories take their platform powers explicitly as their first argument.
 The Node composition entry creates filesystem, socket, subprocess, timer, entropy, and diagnostic
 capabilities; the core never imports that entry or acquires platform authority by default.
-HTTP and clock managers receive a `SyncStringAtom` for metadata, with synchronous string reads and
-writes; their JSON interpretation is independent of the file-backed implementation.
+The alarm host primitive receives a `SyncStringAtom` for metadata.
+Installed native-resource managers keep their durable state in the workspace heap.
 
 ```js
 // The daemon runs under Hardened JavaScript: lock down first.
@@ -601,14 +609,17 @@ outlives its socket, its worker process, and the daemon itself.
 
 A **transient client** is a disposable host-side OCapN session, opened by
 `daemon.openEphemeralClient()` and implemented in `src/net/ephemeral-hub-client.js`.
-The host uses one to make a request into the workspace, as an HTTP request or an
-administrative call does.
+The host uses one to make administrative calls into the workspace.
 Calls it delivers are durable once accepted, but its own pending answers and imported
 references end with the client.
 Session keys are never reused, including across restarts, so a reference from a dead
 transient client can never designate anything again.
 Daemon shutdown drains client creation and closes the outstanding clients before
 releasing the store.
+
+A native adapter also has a transient session, attached directly to its process pipes.
+For HTTP, one session belongs to the adapter incarnation; requests do not create sessions.
+The adapter calls application handlers through this session, without a host-side HTTP observer.
 
 A **view connection** is a control-socket session held by a terminal view in `src/tui/`.
 It exists so the supervisor has something to release: closing the terminal, losing the

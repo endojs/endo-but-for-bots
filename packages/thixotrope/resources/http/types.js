@@ -57,5 +57,5 @@
  * @property {(options: HttpListenerOptions) => Promise<HttpListener>} listen
  */
 
-// Port only: the host implementation is `node/http-listeners.js`.
+// Native adapter transport types; implementation is in listener.js.
 export {};

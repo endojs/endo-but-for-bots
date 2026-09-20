@@ -93,8 +93,12 @@ test.serial('a manager rebuilds its resource vat after a restart', async t => {
     (() => {
       const desired = new Map();
       const keeper = (${makeAdapterKeeper.toString()})({
-        vats,
-        source: ${JSON.stringify(ADAPTER_SOURCE)},
+        create: async () => {
+          const worker = await E(vats).createEphemeralWorker('adapter');
+          const evaluator = await E(worker).getEvaluator();
+          const adapter = await E(evaluator).evaluate(${JSON.stringify(ADAPTER_SOURCE)});
+          return { adapter, retire: () => E(worker).retire() };
+        },
         debugLabel: 'adapter',
         restore: adapter => E(adapter).restore([...desired]),
       });
@@ -180,8 +184,12 @@ test.serial('retiring the adapter builds another on next use', async t => {
     (() => {
       const desired = new Map();
       const keeper = (${makeAdapterKeeper.toString()})({
-        vats,
-        source: ${JSON.stringify(ADAPTER_SOURCE)},
+        create: async () => {
+          const worker = await E(vats).createEphemeralWorker('adapter');
+          const evaluator = await E(worker).getEvaluator();
+          const adapter = await E(evaluator).evaluate(${JSON.stringify(ADAPTER_SOURCE)});
+          return { adapter, retire: () => E(worker).retire() };
+        },
         debugLabel: 'adapter',
         restore: adapter => E(adapter).restore([...desired]),
       });

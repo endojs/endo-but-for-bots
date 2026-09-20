@@ -11,17 +11,17 @@ import { clearTimeout, setTimeout } from 'node:timers';
  * @property {Promise<void>} closed
  *
  * @typedef {object} NativeWorkerPowers
- * @property {(options: {id: string, moduleUrl: string, onFrame: (bytes: Uint8Array) => void, onExit: () => void}) => Promise<NativeWorker>} start
+ * @property {(options: {id: string, moduleUrl: string, packageIdentity?: {directory: string, digest: string}, onFrame: (bytes: Uint8Array) => void, onExit: () => void}) => Promise<NativeWorker>} start
  */
 
 /** @returns {NativeWorkerPowers} */
 export const makeNativeWorkerPowers = () =>
   harden({
-    start: ({ id, moduleUrl, onFrame, onExit }) =>
+    start: ({ id, moduleUrl, packageIdentity, onFrame, onExit }) =>
       new Promise((resolve, reject) => {
         const child = fork(
           new URL('./native-worker-entry.js', import.meta.url),
-          [id, moduleUrl],
+          [id, moduleUrl, JSON.stringify(packageIdentity ?? null)],
           {
             stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
             execArgv: [],
