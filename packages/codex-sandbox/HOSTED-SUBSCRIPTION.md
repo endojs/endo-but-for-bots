@@ -99,6 +99,66 @@ broker's is the label `pool`. Their transcripts stay in Floot.
 Use a `credsName` other than the single subscription's, so that two credential
 formulas never renew one secret record.
 
+## Sharing the subscription
+
+A **share** is this subscription within limits you choose, as a capability you
+can hand to somebody else: metered inference against your account, with no
+path to the credential, the accounts, their windows or the reset credits.
+Whoever holds it can call it from any client, and you can read every request
+sent through it.
+
+Setup keeps `codex-sandbox/subscription`, the broker as a `Subscription`,
+whole and unmetered. It is what shares are made over and is given to nothing
+else. A share is made by the operator's provisioning step
+`provideSubscriptionShare` (`@endo/hosted-agent/hosted-setup.js`), since only
+a host can mint a formula:
+
+```js
+await provideSubscriptionShare(host, {
+  label: 'Codex',
+  dir: 'codex-sandbox',
+  shareId: 'alice',
+  limits: {
+    budget: { tokens: 2_000_000, periodSeconds: 86_400 }, // weighted tokens a day
+    reserve: 0.25, // refuse while under a quarter of the window is left
+    models: ['gpt-5.2-codex'],
+    maxConcurrentRequests: 2,
+    expiresAt: '2026-12-31T00:00:00Z',
+  },
+});
+```
+
+It makes three names under `codex-sandbox`:
+
+| Name | What it is |
+| --- | --- |
+| `share-alice` | the share. **This is the name to hand over.** |
+| `share-alice-kit` | yours: `revoke()`, `getStatus()`. Never handed out. |
+| `share-alice-powers` | its namespace: the limits, the meter, the revocation. |
+
+Calling it again with other limits rewrites them and nothing else; the share
+reads them for every request. The budget's periods are anchored at the
+share's creation and do not move.
+
+**Metering.** A request reserves an estimate (its size plus the output it
+asks for, or `outputEstimate`, 8192 by default) and is refused with
+`Provider share exhausted` if that does not fit. At the end of the response
+the reservation is replaced by what the response cost, cached input at a
+tenth. A response that was cut short, timed out, or never said what it cost
+is charged its reservation, or its size if that is more, never less. A
+restart does not refill a budget, and a revoked share revives revoked.
+
+**A share in your own pool.** A member of `ENDO_CODEX_SUBSCRIPTIONS` may be
+somebody else's subscription that they handed you: store their share under a
+pet name and declare `{ "id": "friend", "shareName": "from-carol" }` in place
+of `credsName`. It has no credential or account of yours. It is ranked by the
+budget its grantor gave it, shown in the Subscriptions panel as a window, and
+a request it refuses as used up goes on to your next subscription. A listener
+image from before the bytes stream is never served by such a member.
+
+Nothing here has run against a peer connection yet: see "Known Gaps" in
+[`designs/hosted-agent-subscriptions.md`](../../designs/hosted-agent-subscriptions.md).
+
 ## Operator settings
 
 Required hosted settings are `ENDO_CODEX_ENABLE=1`, `ENDO_CODEX_HOST_DIR`,

@@ -274,8 +274,8 @@ test.serial(
     await main(fake.host);
     t.is(
       fake.mints.length,
-      5,
-      'credential, broker, session storage, backend, account source',
+      6,
+      'credential, broker, session storage, backend, account source, subscription',
     );
     t.deepEqual(fake.reads, [
       ['formula', 'native-sandbox-id'],
@@ -297,8 +297,8 @@ test.serial(
     // the broker on every run for the account oracle.
     t.is(
       mints.length,
-      5,
-      'credential + broker + session storage + backend + account source',
+      6,
+      'credential + broker + session storage + backend + account source + subscription',
     );
     t.regex(mints[4].specifier, /account-source-module\.js$/);
     t.regex(mints[0].specifier, /managed-credentials-module\.js$/);
@@ -478,6 +478,7 @@ test.serial(
         'session-storage',
         'backend-next',
         'account-source',
+        'subscription',
       ],
     );
   },
@@ -521,7 +522,7 @@ test.serial(
     await main(fake.host);
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().at(-1)),
-      ['test-auth', 'backend-next', 'account-source'],
+      ['test-auth', 'backend-next', 'account-source', 'subscription'],
     );
     t.true(fake.reads.some(([, id]) => id === 'broker-service-id'));
     t.true(fake.reads.some(([, id]) => id === 'session-storage-id'));

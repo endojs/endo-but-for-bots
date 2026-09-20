@@ -708,3 +708,72 @@ test.serial(
     );
   },
 );
+
+test.serial(
+  'a member held as a share has no credential of ours: its name goes into the namespace, and it needs no account',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'work', credsName: 'codex-work' },
+        { id: 'friend', label: 'Carol’s', weight: 2, shareName: 'from-carol' },
+      ]),
+    });
+    const fake = makePooledHost({ 'codex-work': 'account-work' });
+    fake.bindings.set(key('from-carol'), 'carols-share-id');
+    await main(fake.host, { exec: noExec });
+    const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
+    t.deepEqual([...powers.keys()].sort(), [
+      'secret-work',
+      'share-friend',
+      'subscriptions',
+    ]);
+    t.deepEqual(powers.get('subscriptions').members, [
+      {
+        id: 'work',
+        label: 'work',
+        weight: 1,
+        secretName: 'secret-work',
+        accountRef: 'account-work',
+      },
+      {
+        id: 'friend',
+        label: 'Carol’s',
+        weight: 2,
+        subscriptionName: 'share-friend',
+      },
+    ]);
+    // No credential formula was minted for it.
+    t.false(
+      fake.mints.some(
+        mint => [mint.options.resultName].flat().at(-1) === 'credential-friend',
+      ),
+    );
+  },
+);
+
+test.serial(
+  'a share that is not there, or one declared with a credential too, is refused before anything is minted',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'friend', shareName: 'from-nobody' },
+      ]),
+    });
+    const fake = makePooledHost({});
+    await t.throwsAsync(() => main(fake.host, { exec: noExec }), {
+      message: /names a share that is not there/,
+    });
+    t.is(fake.mints.length, 0);
+    withEnv(t, {
+      ENDO_CODEX_SUBSCRIPTIONS: JSON.stringify([
+        { id: 'friend', shareName: 'from-carol', credsName: 'codex-work' },
+      ]),
+    });
+    await t.throwsAsync(() => main(fake.host, { exec: noExec }), {
+      message: /names only its shareName/,
+    });
+    t.is(fake.mints.length, 0);
+  },
+);

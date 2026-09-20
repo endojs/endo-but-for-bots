@@ -19,6 +19,7 @@ import {
   mintWithPowersPath,
   providePrivateDirectory,
   publishAccountOracle,
+  publishBrokerSubscription,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedRenewableCredentials } from '@endo/hosted-agent/managed-renewable-credentials.js';
 import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.js';
@@ -191,7 +192,10 @@ export const main = async (host, { exec } = {}) => {
   };
 
   // Several subscriptions, declared by the operator as
-  // `[{ id, label?, weight?, credsName, accountRef? }]`. The broker's powers
+  // `[{ id, label?, weight?, credsName, accountRef? }]`, or, for a member
+  // that is somebody else's subscription handed over as a share,
+  // `[{ id, label?, weight?, shareName }]`, where `shareName` is the pet name
+  // the operator stored that share under. The broker's powers
   // are then a namespace holding the set and each member's credential, not
   // one credential, so switching an existing deployment to it is a deliberate
   // retirement of its broker, like any other change of what the broker holds.
@@ -240,7 +244,46 @@ export const main = async (host, { exec } = {}) => {
       }
     }
     const members = [];
+    /** @type {Map<string, string>} wrapped member's name to the share's locator */
+    const shareLocators = new Map();
     for (const declared of declaredSubscriptions) {
+      if (
+        declared !== null &&
+        typeof declared === 'object' &&
+        declared.shareName !== undefined
+      ) {
+        // Somebody else's subscription: no credential of ours, no account.
+        const {
+          shareName,
+          credsName: none,
+          accountRef: noAccount,
+          ...rest
+        } = declared;
+        (typeof shareName === 'string' &&
+          /^[a-z0-9][a-z0-9-]{0,127}$/.test(shareName) &&
+          none === undefined &&
+          noAccount === undefined) ||
+          Fail`A Codex subscription held as a share names only its shareName`;
+        const [member] = normalizeSubscriptionSet({ members: [rest] }).members;
+        // eslint-disable-next-line no-await-in-loop
+        (await E(host).has(shareName)) ||
+          Fail`Codex subscription ${member.id} names a share that is not there`;
+        !priorAccounts.has(member.id) ||
+          priorAccounts.get(member.id) === undefined ||
+          Fail`Codex subscription ${member.id} is bound to an account; add the share under a new id`;
+        // Never the operator's choice, like a secret's name.
+        const subscriptionName = `share-${member.id}`;
+        // eslint-disable-next-line no-await-in-loop
+        shareLocators.set(subscriptionName, await E(host).locate(shareName));
+        members.push({
+          id: member.id,
+          label: member.label,
+          weight: member.weight,
+          subscriptionName,
+        });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       (declared !== null &&
         typeof declared === 'object' &&
         typeof declared.credsName === 'string' &&
@@ -290,12 +333,20 @@ export const main = async (host, { exec } = {}) => {
     );
     const powers = await provideBrokerPowers(host);
     for (const member of set.members) {
-      // eslint-disable-next-line no-await-in-loop
-      await E(powers).storeLocator(
-        member.secretName,
+      if ('subscriptionName' in member) {
         // eslint-disable-next-line no-await-in-loop
-        await E(host).locate(SANDBOX_DIR, `credential-${member.id}`),
-      );
+        await E(powers).storeLocator(
+          member.subscriptionName,
+          /** @type {string} */ (shareLocators.get(member.subscriptionName)),
+        );
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await E(powers).storeLocator(
+          member.secretName,
+          // eslint-disable-next-line no-await-in-loop
+          await E(host).locate(SANDBOX_DIR, `credential-${member.id}`),
+        );
+      }
     }
     // The set is a stored value: adding a subscription is this write and a
     // credential, and the broker reads it again for the next session. Stored
@@ -405,6 +456,9 @@ export const main = async (host, { exec } = {}) => {
     // ChatGPT plans bank rate-limit resets; an operator redeems them here.
     resetCredits: true,
   });
+  // The broker as a Subscription, which shares are made over
+  // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
+  await publishBrokerSubscription(host, { label: 'Codex', dir: SANDBOX_DIR });
   console.log(
     'Hosted Codex ready: common scoped sandbox, retained subscription broker, daemon-owned sessions.',
   );
