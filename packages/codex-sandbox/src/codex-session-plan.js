@@ -28,6 +28,7 @@ import { readPinnedSliceImage } from './codex-image-reference.js';
  * @property {string} mounterSocketDir
  * @property {string} [workspaceDir]
  * @property {string} [workspaceHostPath]
+ * @property {string} [subscription] `auto`, or a subscription id
  * @property {ReturnType<typeof readNativeProfile>} nativeProfile
  * @property {ReturnType<typeof readMounterEnv>} [mounterEnv]
  * @property {ReturnType<typeof assertContainerMounts>} containerMounts
@@ -88,6 +89,12 @@ export const readCodexSessionPlan = text => {
       typeof recorded[name] === 'string' ||
       Fail`Codex plan ${q(name)} must be text`;
   }
+  // Which of the provider's subscriptions the session uses: absent or `auto`
+  // leaves it to the broker's pool; an id pins it.
+  recorded.subscription === undefined ||
+    (typeof recorded.subscription === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(recorded.subscription)) ||
+    Fail`Codex plan subscription must be auto or a subscription id`;
   const nativeProfile = readNativeProfile(recorded.nativeProfile);
   const containerMounts = assertContainerMounts(recorded.containerMounts);
   const mounterEnv =
@@ -116,6 +123,9 @@ export const readCodexSessionPlan = text => {
       ...(recorded.systemPrompt === undefined
         ? {}
         : { systemPrompt: recorded.systemPrompt }),
+      ...(recorded.subscription === undefined
+        ? {}
+        : { subscription: recorded.subscription }),
       nativeProfile,
       containerMounts,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),

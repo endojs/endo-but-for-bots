@@ -90,6 +90,7 @@ export const makeCodexNativeController = ({
             accountRef: plan.accountRef,
             networkPolicy: plan.networkPolicy,
             ...(plan.model ? { model: plan.model } : {}),
+            ...(plan.subscription ? { subscription: plan.subscription } : {}),
           }),
         ),
       );

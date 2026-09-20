@@ -27,6 +27,10 @@ const ConfigShape = M.splitRecord(
     maxSessions: M.number(),
     publicInternet: M.boolean(),
     diagnostics: M.boolean(),
+    // Several subscriptions: the formula's powers are then a namespace that
+    // holds the declared set and each member's credential, and `accountRef`
+    // is the pool's label, not an account.
+    pool: M.boolean(),
   },
   harden({}),
 );

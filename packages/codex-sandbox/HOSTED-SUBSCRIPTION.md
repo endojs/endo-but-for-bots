@@ -38,6 +38,67 @@ An access token alone is insufficient; neither access nor refresh tokens enter
 the model sandbox.
 Changing accounts requires deliberate service retirement.
 
+## Several subscriptions
+
+One Codex backend can spend several ChatGPT subscriptions.
+Set `ENDO_CODEX_SUBSCRIPTIONS` to a JSON list, one entry per subscription:
+
+```json
+[
+  { "id": "work", "label": "Work Pro", "weight": 20, "credsName": "codex-work-auth" },
+  { "id": "home", "label": "Home Plus", "credsName": "codex-home-auth" }
+]
+```
+
+- `id` names the subscription everywhere: in the picker, in a session's
+  record, in the account oracle's name (`codex-account-<id>`).
+- `credsName` is the Secrets name of that subscription's imported, normalized
+  `BrokerOAuthStateV1` credential, as for a single subscription.
+  Each entry needs its own, and no two may name the same account.
+- `label` defaults to the id; `weight` (the relative size of the plan, used to
+  show comparable capacity) defaults to 1.
+- `accountRef` may be given; by default it is the account the credential
+  itself names. It is checked against every credential read, as before.
+- `ENDO_CODEX_CACHE_LIFETIME_SECONDS` (default 300) is how long a session stays
+  on the subscription that last served it, which is how long the provider
+  keeps its prompt cache warm.
+
+In this mode `ENDO_CODEX_CREDS_NAME` and `ENDO_CODEX_ACCOUNT_REF` are not read.
+
+Setup mints a managed renewable credential per subscription
+(`codex-sandbox/credential-<id>`) and a namespace, `codex-sandbox/broker-powers`,
+which holds each credential under `secret-<id>`, the declared set as the
+stored value `subscriptions`, and what the pool keeps between restarts
+(`pool-state-v1-*`: which members refused and until when, and where each
+session was last served). The broker's powers are that namespace.
+
+**Choosing.** A session is created with `subscription: "auto"` (the default) or
+an id. `auto` spends from the subscription whose weekly window resets soonest,
+stays on the one that last served the session while the cache is warm, and
+hands a request to the next subscription when one refuses it as used up; the
+CLI sees one response. A pinned session uses its subscription and no other.
+See [`designs/hosted-agent-subscriptions.md`](../../designs/hosted-agent-subscriptions.md).
+
+**Adding a subscription** is an edit of the list and a new credential in
+Secrets; the next daemon start stores the new set, and sessions opened after
+that can use it. Nothing is retired. Sessions already open keep the set they
+started with until their next incarnation.
+
+**Changing the account of an existing id is refused.** A different account is
+a different subscription: add it under a new id. Removing an id leaves its
+credential formula and oracle behind, unused; a session that was pinned to it
+runs on `auto` from then on, and says so in the daemon's log.
+
+**Moving a deployment from one subscription to several is a retirement.**
+The broker then holds a namespace instead of a credential, so setup refuses
+until `codex-sandbox/broker-service` has been retired deliberately, and it
+refuses before it mints anything.
+Existing Codex sessions do not carry over: a session's plan records the
+account its broker was bound to, that record cannot change, and a pooled
+broker's is the label `pool`. Their transcripts stay in Floot.
+Use a `credsName` other than the single subscription's, so that two credential
+formulas never renew one secret record.
+
 ## Operator settings
 
 Required hosted settings are `ENDO_CODEX_ENABLE=1`, `ENDO_CODEX_HOST_DIR`,
@@ -52,6 +113,7 @@ Guest roots, including external workspaces, must not overlap protected state,
 native runtime, or broker storage, including through symlinks.
 
 Other options include `ENDO_CODEX_CREDS_NAME`, `ENDO_CODEX_ACCOUNT_REF`,
+`ENDO_CODEX_SUBSCRIPTIONS`, `ENDO_CODEX_CACHE_LIFETIME_SECONDS`,
 `ENDO_CODEX_MAX_SESSIONS`, `ENDO_CODEX_PUBLIC_INTERNET=1`, and
 `ENDO_CODEX_DIAGNOSTICS=1`.
 Projection settings accept `NINEP_MOUNT_PROGRAM`, `NINEP_UMOUNT_PROGRAM`,
