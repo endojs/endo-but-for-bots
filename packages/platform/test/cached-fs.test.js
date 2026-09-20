@@ -7,21 +7,21 @@
  *
  * `withCachedReads(fs, cas)` is a `Filesystem → Filesystem`
  * transformation that drops into the existing composition algebra.
- * Its read path dispatches `snapshot`, `getInfo`, and the underlying
+ * Its read path dispatches `snapshot`, metadata accessors, and the underlying
  * `read` as a single pipelined CapTP batch, so each wrapper `read`
  * costs exactly one round-trip — same as a plain (uncached) read.
  *
  * Tests:
  *
  *   - **Cache miss** — first read of a file. The transcript shows
- *     `snapshot` + `getInfo` + `read` issued in one batch, then the
+ *     `snapshot` + metadata + `read` issued in one batch, then the
  *     background cache populate (`fetch` + `streamBase64`). The
  *     speculative `read`'s bytes flow to the caller; the
  *     populating `fetch` runs after the caller has already received
  *     the response.
  *
  *   - **Cache hit** — second read of a file whose hash is in the
- *     CAS. The transcript shows `snapshot` + `getInfo` + a
+ *     CAS. The transcript shows `snapshot` + metadata + a
  *     speculative `read` invocation, but the bytes from that
  *     speculative read **never flow** (`@endo/exo-stream` is
  *     pull-based; the wrapper returns a different reader and the
@@ -113,7 +113,7 @@ test('withCachedReads: miss serves speculative read in one RTT batch, populates 
 
   t.is(cas.size, 1, 'CAS populated after the miss');
 
-  // The wrapper's miss path issues `snapshot` + `getInfo` +
+  // The wrapper's miss path issues `snapshot` + metadata calls +
   // (speculative) `read` in a single pipelined batch. Verify all
   // three CTP_CALLs appear in the read's segment of the
   // transcript before any reply to them lands.
@@ -128,8 +128,8 @@ test('withCachedReads: miss serves speculative read in one RTT batch, populates 
     `snapshot in pipelined batch, got ${callsBefore.join(', ')}`,
   );
   t.true(
-    callsBefore.includes('getInfo'),
-    `getInfo in pipelined batch, got ${callsBefore.join(', ')}`,
+    callsBefore.includes('sha256') && callsBefore.includes('size'),
+    `sha256 and size in pipelined batch, got ${callsBefore.join(', ')}`,
   );
   t.true(
     callsBefore.includes('read'),
@@ -176,10 +176,10 @@ test('withCachedReads: hit returns cached bytes without flowing the speculative 
     .filter(e => e.type === 'CTP_CALL')
     .map(e => e.method);
 
-  // The wrapper still dispatches snapshot + getInfo + read in a
-  // batch (it can't know it's a hit before getInfo resolves).
+  // The wrapper still dispatches snapshot + metadata + read in a batch.
   t.true(hitMethods.includes('snapshot'));
-  t.true(hitMethods.includes('getInfo'));
+  t.true(hitMethods.includes('sha256'));
+  t.true(hitMethods.includes('size'));
   t.true(hitMethods.includes('read'));
 
   // The hit signature: the speculative read's PassableBytesReader
@@ -194,7 +194,7 @@ test('withCachedReads: hit returns cached bytes without flowing the speculative 
 
   t.snapshot(
     hitTraffic,
-    'hit transcript: snapshot + getInfo + speculative read, no streamBase64',
+    'hit transcript: snapshot + metadata + speculative read, no streamBase64',
   );
 });
 
@@ -256,10 +256,10 @@ test('withCachedReads: subsequent reads of different ranges of the same file all
   );
 });
 
-test('withCachedReads: subsequent reads through the same File cap skip snapshot+getInfo (zero RTT on hit)', async t => {
+test('withCachedReads: subsequent reads through the same File cap skip snapshot metadata (zero RTT on hit)', async t => {
   // After the first read warms both the CAS and the per-File hash
   // cache, a second read on the *same* File cap should serve the
-  // bytes locally without issuing snapshot/getInfo/read.
+  // bytes locally without issuing snapshot/metadata/read.
   const innerFs = makeInMemoryFilesystem();
   await populateFile(innerFs, 'greet.txt', 'hello, world');
   const { bootstrapRef, transcript } = makeConnectedPair(innerFs);
@@ -290,7 +290,7 @@ test('withCachedReads: subsequent reads through the same File cap skip snapshot+
   t.deepEqual(
     secondCalls,
     [],
-    'zero-RTT second read: no snapshot/getInfo/read crosses the wire',
+    'zero-RTT second read: no snapshot/metadata/read crosses the wire',
   );
 });
 

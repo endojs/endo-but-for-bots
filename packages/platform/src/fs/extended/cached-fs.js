@@ -6,8 +6,8 @@
  * `withCachedReads(fs, cas)` wraps any `Filesystem` cap and produces
  * one with the same interface, where `OpenFile.read(offset, length)`
  * is served from `cas` on cache hits and falls through to the
- * underlying file on misses. Hash discovery (`snapshot()` →
- * `getInfo()`) pipelines through CapTP's eventual-send queue
+ * underlying file on misses. Hash discovery (`snapshot()` followed by
+ * `sha256()` and `size()`) pipelines through CapTP's eventual-send queue
  * alongside the speculative underlying read, so the wrapper costs
  * exactly one round-trip per `read` regardless of hit or miss —
  * matching the cost of a plain `read` with no caching layer.
@@ -17,10 +17,10 @@
  *   1. On every `read`, the wrapper dispatches three calls in the
  *      same synchronous turn (and therefore the same CapTP batch):
  *      - `E(underlyingFile).snapshot()` → `BlobRef`
- *      - `E(blob).getInfo()` → `{ algorithm, hash, size }`
+ *      - `E(blob).sha256()` and `E(blob).size()`
  *      - `E(underlyingOh).read(offset, length)` → speculative
  *        `PassableBytesReader`
- *   2. Await `getInfo`. Look up `(algorithm, hash)` in the CAS.
+ *   2. Await the digest and size. Look up `(algorithm, hash)` in the CAS.
  *   3. On hit, return a reader over the cached slice. The
  *      speculative reader is never iterated, so its bytes never
  *      flow (`@endo/exo-stream` is pull-based) — no bandwidth waste.
@@ -104,8 +104,7 @@ export const withCachedReads = (inner, cas) => {
     const promise = (async () => {
       try {
         if (cas.has(info)) return;
-        const size = toSafeNumber(info.size, 'size');
-        const fullReader = await E(blobP).fetch(0n, BigInt(size));
+        const fullReader = await E(blobP).bytes();
         /** @type {Uint8Array[]} */
         const chunks = [];
         let total = 0;
@@ -384,7 +383,7 @@ const makeCachingDirectory = (
 
 /**
  * Per-File state used by `withCachedReads` to skip the
- * `snapshot + getInfo` round-trip on reads of an unchanged file.
+ * snapshot-metadata round-trip on reads of an unchanged file.
  * The wrapper subscribes to `file.watch()` on first read; any event
  * flips `dirty`, forcing the next read to re-discover the hash and
  * refresh `knownInfo`.
@@ -395,7 +394,7 @@ const makeCachingDirectory = (
  *   haven't read it yet.
  * @property {boolean} dirty
  *   Set to true when the watcher reports any event; cleared on
- *   the next full snapshot/getInfo round-trip.
+ *   the next full snapshot-metadata round-trip.
  * @property {boolean} watchSubscribed
  *   Whether we've already subscribed to the underlying watcher.
  */
@@ -436,7 +435,7 @@ const makeCachingFile = (file, cachedQid, cas, populateInBackground) => {
         // Backings that don't support watch (or the watcher
         // itself failing) shouldn't poison the wrapper. The
         // worst case is the read path falls back to the
-        // snapshot+getInfo flow on every call — same as before.
+        // snapshot-metadata flow on every call — same as before.
       }
     })();
   };
@@ -544,7 +543,7 @@ const makeCachingOpenFile = (
       // Zero-RTT path: if we already know this file's hash from a
       // prior read and a watch subscription hasn't reported any
       // change since, look up the CAS directly. On hit, return
-      // immediately without issuing snapshot/getInfo/read.
+      // immediately without issuing snapshot/metadata/read.
       if (
         watchState !== undefined &&
         watchState.knownInfo !== null &&
@@ -558,19 +557,21 @@ const makeCachingOpenFile = (
           return sliceCached(cached, offset, length);
         }
       }
-      // Fall-through path: snapshot + getInfo + speculative read
+      // Fall-through path: snapshot + metadata + speculative read
       // in one synchronous batch. `@endo/exo-stream` is pull-based,
       // so the speculative reader's bytes don't flow until iterated;
       // on a hit we return a different reader and never iterate the
       // speculative one — no bandwidth waste, no extra RTT.
       const blobP = E(underlyingFile).snapshot();
-      const infoP = E(blobP).getInfo();
+      const infoP = Promise.all([E(blobP).sha256(), E(blobP).size()]).then(
+        ([hash, size]) => harden({ algorithm: 'sha256', hash, size }),
+      );
       const speculativeReadP = E(underlyingOh).read(offset, length);
 
       // Backings without BlobRef support (or that hit an
       // unrecoverable snapshot error — `makeNodeFilesystem.File.
       // snapshot()` returns `null` when `fs.readFile` rejects)
-      // surface as a rejected `infoP` from the `null.getInfo()`
+      // surface as a rejected metadata promise from the missing blob
       // call. Swallow that here so the read still returns the
       // speculative underlying bytes instead of poisoning the
       // whole call.

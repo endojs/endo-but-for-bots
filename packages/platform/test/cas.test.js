@@ -7,26 +7,26 @@
  *
  * The contract: a consumer that holds a CAS keyed by
  * `(algorithm, hash)` can answer reads locally and skip
- * `BlobRef.fetch()` on cache hits. These tests verify the
+ * `BlobRef.bytes()` on cache hits. These tests verify the
  * property by snapshotting the wire transcript for two
  * scenarios:
  *
  *   - **Cache miss** — first read of a new BlobRef. The
- *     transcript shows `BlobRef.getInfo` → `BlobRef.fetch` →
+ *     transcript shows metadata calls → `BlobRef.bytes` →
  *     bytes flowing over the wire. After the read, the CAS
  *     holds the bytes keyed by hash.
  *
  *   - **Cache hit** — second read of a BlobRef whose hash is
  *     already in the CAS. The transcript shows
- *     `BlobRef.getInfo` (still needed to learn the hash) but
- *     **no** `BlobRef.fetch` — the bytes are served from the
- *     local CAS. The `fetch` call (and its byte payload) does
- *     not cross the wire; the `getInfo` call still does. See
+ *     `BlobRef.sha256` (still needed to learn the hash) but
+ *     **no** `BlobRef.bytes` — the bytes are served from the
+ *     local CAS. The byte-stream call (and its payload) does
+ *     not cross the wire; the digest call still does. See
  *     ROADMAP §1.1 / §1.5 for what these in-process CapTP
  *     transcripts do and don't prove.
  *
  * Snapshot fixtures pin the contrast; assertions on the
- * transcript verify the "no fetch on hit" property directly.
+ * transcript verify the "no bytes call on hit" property directly.
  */
 
 import '@endo/init/debug.js';
@@ -84,16 +84,17 @@ test('CAS-cached read: miss populates the CAS and fetches over the wire', async 
   t.is(cas.size, 1, 'CAS now holds one blob');
   await settle();
 
-  // The miss path called both `getInfo` and `fetch`.
+  // The miss path called the named metadata and byte methods.
   const issued = sliceAfterBootstrap(transcript);
   const methods = issued.filter(e => e.type === 'CTP_CALL').map(e => e.method);
-  t.true(methods.includes('getInfo'), 'getInfo travels over the wire');
-  t.true(methods.includes('fetch'), 'fetch travels over the wire on a miss');
+  t.true(methods.includes('sha256'), 'sha256 travels over the wire');
+  t.true(methods.includes('size'), 'size travels over the wire');
+  t.true(methods.includes('bytes'), 'bytes travels over the wire on a miss');
 
-  t.snapshot(transcript, 'cache miss transcript (fetched over wire)');
+  t.snapshot(transcript, 'cache miss transcript (bytes crossed the wire)');
 });
 
-test('CAS-cached read: hit serves locally, no fetch crosses the wire', async t => {
+test('CAS-cached read: hit serves locally, no bytes call crosses the wire', async t => {
   const fs = makeInMemoryFilesystem();
   await populateFile(fs, 'greet.txt', 'hello, world');
   const { bootstrapRef, transcript } = makeConnectedPair(fs);
@@ -122,17 +123,17 @@ test('CAS-cached read: hit serves locally, no fetch crosses the wire', async t =
   const hitMethods = hitTraffic
     .filter(e => e.type === 'CTP_CALL')
     .map(e => e.method);
-  t.true(
-    hitMethods.includes('getInfo'),
-    'getInfo still travels on a hit (the consumer needs the hash to look up)',
-  );
+  t.true(hitMethods.includes('sha256'), 'sha256 still travels on a hit');
   t.is(
-    hitMethods.filter(m => m === 'fetch').length,
+    hitMethods.filter(m => m === 'bytes').length,
     0,
-    'cache hit: no fetch() call crosses the wire',
+    'cache hit: no bytes() call crosses the wire',
   );
 
-  t.snapshot(hitTraffic, 'cache hit transcript (no fetch crosses the wire)');
+  t.snapshot(
+    hitTraffic,
+    'cache hit transcript (no bytes call crosses the wire)',
+  );
 });
 
 test('different blobs in the same CAS stay distinct by hash', async t => {

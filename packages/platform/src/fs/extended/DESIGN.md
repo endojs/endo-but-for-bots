@@ -104,7 +104,7 @@ endo-fs guards stay separate:
 |---|---|---|
 | `Directory` shape | Path-array verbs from a single root: `has(...path)`, `list(...path)`, `lookup(path)`, `write(path, blob)`, `move(src, dst)`, `copy(src, dst)`, `makeDirectory(path)`. No subtype carved out for the directory cap itself. | One-step verbs on a cap: `lookup(name) → Directory \| File`, `mkdir(name)`, `create(name)`, `unlink(name)`, `rename(name, newParent, newName)`. Pipelinable `E(dir).lookup(a).lookup(b)…` chains. |
 | `File` shape | Whole-blob ops: `text()`, `json()`, `streamBase64()`, `writeText(s)`, `writeBytes(blob)`, `append(s)`, `readOnly()`, `snapshot()`. | `open(opts) → OpenFile` for range I/O (`read(offset, length)`, `write(offset)`, `truncate`, `fsync`, `lock`), `snapshot() → BlobRef`, `watch()`, `xattrs()`. |
-| Snapshot model | `SnapshotBlob` / `SnapshotTree` carry an explicit `sha256()` and live in a separate `SnapshotStore` cap. | `Node.snapshot() → BlobRef` with `getInfo() → { algorithm, hash, size }`. CAS-cached reads are a separate composition layer (`withCachedReads`, ROADMAP §2.2). |
+| Snapshot model | `SnapshotBlob` / `SnapshotTree` carry explicit `sha256()` and `size()` methods and live in a separate `SnapshotStore` cap. | `Node.snapshot() -> BlobRef` with `sha256()`, `size()`, and `bytes()`. CAS-cached reads are a separate composition layer (`withCachedReads`, ROADMAP §2.2). |
 | Identity / qid | None; identity is the sha256 of a snapshot. | Eager `qid = { type, pathId, version }` on every live `Directory` / `File` (cf. §4.10). |
 
 Both packages depend on `@endo/exo`, `@endo/patterns`, and
@@ -527,10 +527,10 @@ POSIX-specific stat fields the base omits but `PosixFs` adds:
 
 ### 4.10 Sync getters and pipelining
 
-`qid` (on every `Directory` / `File`) and `BlobRef.hash` /
-`BlobRef.size` are sync getters on the **responder** — the exo
-state is right there, and `getQid()` / `getInfo()` return a
-passable record rather than a promise on the local side.
+`qid` (on every `Directory` / `File`) is a sync getter on the
+**responder** — the exo state is right there, and `getQid()` returns a
+passable record rather than a promise on the local side. Blob metadata is
+available through separately named `sha256()` and `size()` methods.
 
 This is a usage convention, not an eager-state mechanism: the
 responder doesn't go to disk or do any other I/O to answer.
@@ -552,11 +552,12 @@ const [node, qid] = await Promise.all([child, E(child).getQid()]);
 // Identity comparison: 1 RTT for N caps
 const qids = await Promise.all(caps.map(c => E(c).getQid()));
 
-// BlobRef consumption: getInfo + fetch share one batch
+// BlobRef consumption: metadata and bytes share one batch
 const blob = E(file).snapshot();
-const [info, reader] = await Promise.all([
-  E(blob).getInfo(),
-  E(blob).fetch(0n, expectedSize),  // speculative; only flows on cache miss
+const [hash, size, reader] = await Promise.all([
+  E(blob).sha256(),
+  E(blob).size(),
+  E(blob).bytes(), // speculative; only flows on cache miss
 ]);
 ```
 
@@ -608,24 +609,17 @@ by hash*. The producer is not obligated to mint one — many file
 systems have no cheap CAS — so `File.snapshot()` may return `null`.
 When a `BlobRef` is present:
 
-- `hash` and `size` are intended to be eager (carried with the
-  cap; see §4.10). Today, CapTP does not ship state alongside
-  slots, so `getInfo()` costs one round-trip in practice — see
-  §10.1 and ROADMAP §1.1.
-  A caller holding a CAS keyed by `hash` can still skip the
-  `fetch` call (and the byte payload) on a cache hit; what's not
-  yet saved is the `getInfo` round-trip that learns the hash.
-- `fetch(offset, length)` returns a stream identical in shape to
-  `OpenFile.read(offset, length)`. The two are interchangeable from
-  the caller's perspective; the difference is that `fetch` is
-  guaranteed to be reproducible (the bytes won't have changed since
-  the `BlobRef` was minted) and *may* hit a CAS peer rather than the
-  origin.
+- `sha256()` and `size()` identify the captured bytes. Across CapTP they can be
+  pipelined with the call that produces the cap, so they add no incremental
+  round trip on the discovery path.
+- `bytes()` returns a reproducible stream over the complete captured value. A
+  caller holding a CAS keyed by the digest can skip this call and its byte
+  payload on a cache hit.
+- `byteRange(start, end)` and `textRange(startLine, endLine)` attenuate the cap
+  to a selected interval while retaining the same readable-blob surface.
 
-The interface does not specify a hash algorithm. Implementations
-choose; `BlobRef.hash` is an opaque byte string with the algorithm
-identifier in `BlobRef.algorithm` (TBD — provisionally
-`multihash`-encoded, but the interface only treats it as a string).
+Hash algorithms have separately named methods. Adding another algorithm adds a
+method rather than changing a metadata record shape.
 
 `@endo/daemon`'s existing `ReadableTree` is a moral analogue:
 content-addressed, immutable. A reference adapter
@@ -649,10 +643,9 @@ Bulk transfers ride streams sized to the underlying transport, not
 to any protocol's msize equivalent. A 1 GiB read is one method call
 and a stream the caller pulls at its own rate.
 
-Cached content avoids `BlobRef.fetch` (and therefore the byte
-payload) when a peer's CAS knows the hash. The peer still pays
-one round-trip to `BlobRef.getInfo()` to learn the hash before
-deciding to skip the fetch — see §10.1 and ROADMAP §1.1.
+Cached content avoids `BlobRef.bytes()` (and therefore the byte payload) when a
+peer's CAS knows the hash. The digest call can be pipelined with snapshot
+creation; see §10.1 and ROADMAP §1.1.
 
 Writes are async with deferred error reporting at `fsync` —
 matching Linux page-cache semantics and freeing translators from
@@ -1184,7 +1177,7 @@ weaknesses once the cost framework is applied:
 - **"lookup-then-rename is two round-trips"**: `M.await` in the
   `rename` guard collapses this to one. The PATTERN test
   `M.await pipelines lookup → rename to one round-trip` pins it.
-- **"`getQid()` / `BlobRef.getInfo()` is one round-trip"**: callers
+- **"`getQid()` / blob metadata is one round-trip"**: callers
   always need the sync field alongside the call that produced the
   cap (lookup → discriminate, snapshot → fetch, etc.); pipelining
   the getter into the same batch costs zero incremental RTT.

@@ -82,11 +82,9 @@ const probeCapabilities = backend => {
     rename: typeof b.rename === 'function',
     watch: typeof b.watch === 'function',
     statfs: typeof b.statfs === 'function',
-    // Content-address hooks (`qidFor` / `blobInfoFor`) are probed at
-    // their call sites via optional chaining, not here: a backend that
-    // knows a stronger identity than a path (e.g. a git object OID)
-    // supplies them, and both degrade to `synthQid` / SHA-256 when the
-    // method is absent OR returns `undefined` for a given path.
+    // The optional content-address `qidFor` hook is probed at its call site. A
+    // backend that knows a stronger identity than a path (such as a git object
+    // OID) may supply it; otherwise the wrapper uses `synthQid`.
   });
 };
 
@@ -775,16 +773,9 @@ export const wrapBackend = (backend, opts = {}) => {
           throw makeError(X`ENOENT: ${q(path.join('/'))}`);
         }
         const bytes = await backend.read(path);
-        // A content-address backend may supply the native content hash
-        // (e.g. git's `git-sha1` blob OID) via `blobInfoFor`; when it
-        // does we stamp `{ algorithm, hash }` onto the BlobRef instead
-        // of hashing the captured bytes with SHA-256. A missing method
-        // or a per-path `undefined` falls back to the default SHA-256.
-        const infoOverride = backend.blobInfoFor?.(path);
         return makeBlobRefExo(
           bytes,
           `BlobRef: snapshot of ${path.join('/') || '/'}.`,
-          infoOverride,
         );
       },
       help(method) {

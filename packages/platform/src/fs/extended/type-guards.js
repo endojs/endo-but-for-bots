@@ -132,13 +132,6 @@ const WatchFromResultShape = harden({
   watcher: M.remotable('NodeWatcher'),
 });
 
-/** The `BlobInfo` triple `BlobRef.getInfo` reports. */
-const BlobInfoShape = harden({
-  algorithm: M.string(),
-  hash: M.string(),
-  size: M.bigint(),
-});
-
 const FilesystemMethods = {
   root: M.call().returns(M.eref(M.remotable('Directory'))),
   named: M.call(M.string()).returns(M.eref(M.remotable('Directory'))),
@@ -399,28 +392,32 @@ harden(NodeWatcherInterface);
 
 /**
  * `BlobRef` is the content-addressed handle returned by
- * `File.snapshot()` (DESIGN.md §6). `getInfo()` returns
- * `{ algorithm, hash, size }`; `fetch(offset, length)` returns a
- * bytes stream over the immutable bytes captured at snapshot
- * time. `getInfo()` is a sync getter on the responder; callers
- * pipeline it alongside `snapshot` / `fetch` so the round-trip is
- * shared with the surrounding call (DESIGN.md §4.10).
+ * `File.snapshot()` (DESIGN.md §6). `sha256()` and `size()` report identity
+ * and length separately; `bytes()` streams all immutable bytes captured at
+ * snapshot time.
  *
  * `text()` / `json()` are whole-value conveniences mirroring the daemon
  * `EndoBlob` / lite `SnapshotBlob` surface, so a `BlobRef` and a daemon blob
- * are mutually interchangeable for the common read shapes: `getInfo` + `fetch`
- * (range I/O) and `text` + `json` (whole value). `streamBase64` stays
- * daemon-only — the extended layer streams via `fetch` / `PassableBytesReader`
+ * are mutually interchangeable for the common read shapes. `streamBase64`
+ * stays daemon-only; the extended layer streams via `bytes()`
  * rather than the CapTP base64 pump. See
  * designs/fs-interface-consolidation.md § C4.
  */
 export const BlobRefInterface = M.interface('BlobRef', {
-  getInfo: M.call().returns(BlobInfoShape),
-  fetch: M.call(M.bigint(), M.bigint()).returns(
-    M.eref(M.remotable('PassableBytesReader')),
-  ),
+  sha256: M.call().returns(M.promise()),
+  size: M.call().returns(M.promise()),
+  bytes: M.call().returns(M.eref(M.remotable('PassableBytesReader'))),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
+  // Range *attenuation* (designs/readableblob-range-attenuation.md): `byteRange`
+  // resolves synchronously to a derived `BlobRef` over the selected byte
+  // interval (construction reads no bytes); `textRange` reads to find LF
+  // boundaries, so it resolves asynchronously. Both return the same
+  // `ReadableBlob` interface, enforced here rather than as `M.any()`.
+  byteRange: M.call(M.bigint(), M.bigint()).returns(
+    M.remotable('ReadableBlob'),
+  ),
+  textRange: M.call(M.number(), M.number()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 harden(BlobRefInterface);
