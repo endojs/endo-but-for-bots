@@ -779,6 +779,34 @@ mattered.
   the property comes from the `var` declaration, not from the lexical, and the
   lexical is still not a property of the global. The invariant holds.
 
+### Open, and found but not chased
+
+A compartment's `globalThis` under-reports its standard globals under
+REFLECTION, while name resolution inside `evaluate` is unaffected.
+Measured on a crank whose source names the intrinsics only as string literals:
+`Object.getOwnPropertyNames(c.globalThis)` returned just
+`globalThis Compartment Object`, and `c.globalThis['Map']`,
+`c.globalThis['Promise']`, `c.globalThis['Reflect']`, `c.globalThis['Function']`
+and `c.globalThis['eval']` all read `undefined` — while the SAME computed
+access on the outer `globalThis` returned each intrinsic.
+Evaluating anything in the compartment that names one repairs it:
+after `c.evaluate('typeof Map')`, `c.globalThis['Map']` is a function.
+
+The likely mechanism is that `materialize_runtime_global` populates
+`self.environment` — whichever environment is ACTIVE when a name is first
+needed — so a name that becomes a global after the compartment was built lands
+in the default realm rather than in the compartment, while
+`install_intrinsic_bindings` gave the compartment only what was installed at
+`create_environment` time.
+Two things are NOT established: whether the host `Compartment` API shares this
+(it runs the same `create_environment`, so it probably does, which would make
+this pre-existing rather than this work's), and whether XS behaves the same.
+It was found while strengthening
+`a_compartment_global_shares_every_name_but_its_own_evaluators`, which had been
+passing partly because of it — the evaluator terms compared `undefined` against
+a real function and read as "per-compartment" — and is recorded here rather
+than fixed because the fix depends on which of the two engines is right.
+
 ### Open, and deliberately not guessed at
 
 - A function declaration in the compartment's own sloppy evaluators is routed
@@ -921,6 +949,10 @@ mattered.
       `global_lexicals`, so a function declaration in the compartment's own
       sloppy evaluators initializes the global binding it declares instead of
       being routed to the lexical cell. See § Adversarial review, "Open".
+- [ ] Settle whether a compartment's `globalThis` should carry the standard
+      globals under reflection, not only under name resolution. See
+      § Adversarial review, "found but not chased": establish first whether the
+      host `Compartment` API shares the behaviour and what XS answers.
 - [ ] Size phase 2 once referrer threading is scoped separately.
 
 ## Prompt
