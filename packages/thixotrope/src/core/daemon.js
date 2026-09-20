@@ -19,6 +19,7 @@ import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
+import { makeNativeAdapters } from '../native/adapters.js';
 import { makeLogPowers, silentLogger } from '../platform/logging.js';
 import { settleWithin } from '../platform/timers.js';
 import { isSessionToken } from '../store/store-validators.js';
@@ -123,6 +124,7 @@ const START_NOTICE_MS = 10_000;
  * @param {any} options.codec an OCapN codec, e.g. `syrupCodec`
  * @param {(powers: { handlers: any, logger: any, resumption: any }) => Promise<any> | any} options.makeNetlayer
  * @param {Record<string, (description?: unknown) => object>} [options.resources]
+ * @param {import('../platform/node/native-workers.js').NativeWorkerPowers} [options.nativeWorkers]
  * @param {number} [options.idleSleepMs] park a worker after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
@@ -137,6 +139,7 @@ const buildDaemon = async (
     codec,
     makeNetlayer,
     resources = {},
+    nativeWorkers,
     idleSleepMs = undefined,
     verbose = false,
   },
@@ -1054,7 +1057,22 @@ const buildDaemon = async (
         return records.provideResource('worker-facade', { workerId });
       },
     });
+  const nativeAdapters = makeNativeAdapters(
+    { nativeWorkers, random },
+    {
+      hub,
+      importBootstrap: id =>
+        endpointResumed.provideImport({
+          type: 'o',
+          position: hub.introduce(ENDPOINT_SESSION, {
+            session: id,
+            position: 0n,
+          }),
+        }),
+    },
+  );
   Object.assign(resourceMakers, resources, {
+    'native-adapter': nativeAdapters.resource,
     'worker-facade': makeWorkerFacadeResource,
     'worker-controller': makeWorkerControllerResource,
   });
@@ -1116,9 +1134,12 @@ const buildDaemon = async (
 
   const stopDaemon = async () => {
     stopping = true;
+    const transientFailure = makeFirstFailure();
+    await nativeAdapters
+      .shutdown()
+      .catch(error => transientFailure.record(error));
     // A client still being constructed must finish before releasing the lease.
     await openingTransientClients.drain();
-    const transientFailure = makeFirstFailure();
     for (const client of transientClients) {
       try {
         client.close();
