@@ -91,3 +91,38 @@ test('every declared string has the shape of what it names', t => {
     },
   );
 });
+
+test('a descriptor may say whose credential it spends and which subscriptions a session can be pinned to', t => {
+  const declared = assertHostedBackendDescriptor({
+    ...descriptor,
+    providerId: 'codex',
+    subscriptions: [
+      { id: 'work', label: 'Work Pro', weight: 20, accountRef: 'acct_1' },
+      { id: 'home', label: 'Home Plus' },
+    ],
+  });
+  t.is(declared.providerId, 'codex');
+  // An id and the operator's label, and nothing else a broker may know.
+  t.deepEqual(declared.subscriptions, [
+    { id: 'work', label: 'Work Pro' },
+    { id: 'home', label: 'Home Plus' },
+  ]);
+  // Absent means one credential and nothing to choose.
+  t.false('subscriptions' in assertHostedBackendDescriptor(descriptor));
+  for (const subscriptions of [
+    [{ id: 'auto', label: 'Auto' }],
+    [{ id: 'a', label: '' }],
+    [
+      { id: 'a', label: 'A' },
+      { id: 'a', label: 'Again' },
+    ],
+    'work',
+  ]) {
+    t.throws(() =>
+      assertHostedBackendDescriptor({ ...descriptor, subscriptions }),
+    );
+  }
+  t.throws(() =>
+    assertHostedBackendDescriptor({ ...descriptor, providerId: 'not an id' }),
+  );
+});

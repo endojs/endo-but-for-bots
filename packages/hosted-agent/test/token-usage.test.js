@@ -164,7 +164,10 @@ test('a reading merges over the last one field by field', t => {
   const known = { usedTokens: 150_000, windowTokens: 200_000 };
   // A turn that failed may report the window and no request: the occupancy
   // already known stands.
-  t.deepEqual(mergeContext(known, { usedTokens: 0, windowTokens: 200_000 }), known);
+  t.deepEqual(
+    mergeContext(known, { usedTokens: 0, windowTokens: 200_000 }),
+    known,
+  );
   // A mid-turn reading that does not know the window keeps its size.
   t.deepEqual(mergeContext(known, { usedTokens: 160_000, windowTokens: 0 }), {
     usedTokens: 160_000,

@@ -26,6 +26,7 @@
     "./rate-limit-headers.js": "./src/rate-limit-headers.js",
     "./openrouter-account-read.js": "./src/openrouter-account-read.js",
     "./bounded-json.js": "./src/bounded-json.js",
+    "./subscription-pool.js": "./src/subscription-pool.js",
     "./turn-ledger.js": "./src/turn-ledger.js",
     "./token-usage.js": "./src/token-usage.js",
     "./package.json": "./package.json",

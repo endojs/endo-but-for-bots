@@ -20,6 +20,9 @@ import { join } from 'node:path';
 import { Fail, b, q } from '@endo/errors';
 
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
+import { E } from '@endo/eventual-send';
+
+import { makeAccountJournal } from './account-oracle.js';
 import { makeAccountReadingSource } from './account-source.js';
 import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
@@ -683,7 +686,7 @@ const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
  * the original. Separate processes still depend on the broker runtime's
  * native ownership checks, and process loss is not a cleanup acknowledgement.
  *
- * @template {{ ownerId: string, directory: string, imageRef: string, imageDigest: string, listenerImageRef: string, publicInternet?: boolean, maxSessions?: number, diagnostics?: boolean }} Config
+ * @template {{ ownerId: string, directory: string, imageRef: string, imageDigest: string, listenerImageRef: string, publicInternet?: boolean, maxSessions?: number, diagnostics?: boolean, pool?: boolean }} Config
  * @param {object} options
  * @param {string} options.label
  * @param {(env: Record<string, string>) => Config} options.readConfig The
@@ -745,6 +748,81 @@ export const makeOwnedProviderBrokerService = ({
           }
         : {}),
     };
+    if (config.pool === true) {
+      // Several subscriptions: the formula's powers are not one secret but a
+      // namespace of the operator's, holding `subscriptions` (the declared
+      // set, a stored value an operator rewrites to add a member), each
+      // member's secret under its `secretName`, and what the pool keeps.
+      const namespace = /** @type {any} */ (secret);
+      const state = makeAccountJournal({
+        powers: namespace,
+        prefix: 'pool-state-v1-',
+      });
+      const forMember = (/** @type {any} */ member) =>
+        /** @type {Config} */ ({
+          ...config,
+          ...(member.accountRef === undefined
+            ? {}
+            : { accountRef: member.accountRef }),
+        });
+      const pooled = makeServiceKit({
+        ...config,
+        label,
+        policy,
+        accountRef,
+        secret: undefined,
+        subscriptions: {
+          readSet: () => E(namespace).lookup('subscriptions'),
+          // The name is resolved on every use, never captured: a lookup that
+          // failed once (a credential caplet that was not up yet) must not be
+          // the member's secret for the life of the broker. The three verbs
+          // are all a credential's consumers use.
+          secretOf: member => {
+            const current = () => E(namespace).lookup(member.secretName);
+            return harden({
+              readBase64: () => E(current()).readBase64(),
+              readBase64WithGeneration: () =>
+                E(current()).readBase64WithGeneration(),
+              /**
+               * @param {string} base64
+               * @param {any} [options]
+               */
+              replaceBase64: (base64, options) =>
+                E(current()).replaceBase64(base64, options),
+            });
+          },
+          ...(makeCredential === undefined
+            ? {}
+            : {
+                credentialOf: (member, memberSecret) =>
+                  makeCredential(forMember(member), memberSecret),
+              }),
+          // An adapter's translation can name the account (a ChatGPT account
+          // header), so each member has its own.
+          adaptRequestOf: member => makePolicy(forMember(member)).adaptRequest,
+          ...(makeActiveAccountRead === undefined
+            ? {}
+            : {
+                activeReadOf: ({
+                  member,
+                  secret: memberSecret,
+                  credential: memberCredential,
+                }) =>
+                  makeActiveAccountRead({
+                    config: forMember(member),
+                    secret: memberSecret,
+                    credential: memberCredential,
+                    accountRef: member.accountRef ?? accountRef,
+                  }),
+              }),
+          readState: () => state.read(),
+          writeState: kept => state.write(kept),
+        },
+        env,
+        ...hooks,
+      });
+      return harden({ open: async () => pooled.service, close: pooled.close });
+    }
     const credential =
       makeCredential === undefined ? undefined : makeCredential(config, secret);
     const kit = makeServiceKit({

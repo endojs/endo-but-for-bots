@@ -343,3 +343,101 @@ test('a set that is not well formed fails cleanly and leaves the service usable'
   t.is((await E(kit.service).subscriptions()).length, 2);
   await kit.close();
 });
+
+test('an owned service in pool mode takes a namespace, and a secret that was missing once is found later', async t => {
+  const digest = `sha256:${'e'.repeat(64)}`;
+  /** @type {Map<string, any>} */
+  const names = new Map();
+  names.set('subscriptions', {
+    members: [
+      { id: 'work', secretName: 'secret-work', accountRef: 'acct_work' },
+      { id: 'home', secretName: 'secret-home', accountRef: 'acct_home' },
+    ],
+  });
+  names.set(
+    'secret-work',
+    Far('work secret', { readBase64: async () => btoa('work-key') }),
+  );
+  const namespace = Far('namespace', {
+    has: async name => names.has(name),
+    list: async () => [...names.keys()],
+    lookup: async name => {
+      if (!names.has(name)) throw Error(`Unknown pet name ${name}`);
+      return names.get(name);
+    },
+    storeValue: async (value, name) => {
+      names.set(name, value);
+    },
+    remove: async name => {
+      names.delete(name);
+    },
+  });
+  /** @type {any} */
+  let kitOptions;
+  const make = makeOwnedProviderBrokerService({
+    label: 'Test',
+    log: () => {},
+    readConfig: () =>
+      /** @type {any} */ ({
+        ownerId: 'owner-pool-mode',
+        directory: '/tmp/unused',
+        imageRef: `localhost/slice@${digest}`,
+        imageDigest: digest,
+        listenerImageRef: `localhost/listener@${digest}`,
+        accountRef: 'pool',
+        pool: true,
+      }),
+    makePolicy: config =>
+      /** @type {any} */ ({
+        policy: {},
+        accountRef: config.accountRef,
+        adaptRequest: () => ({
+          path: '/x',
+          headers: { 'x-account': config.accountRef },
+        }),
+      }),
+    makeServiceKit: /** @type {any} */ (
+      options => {
+        kitOptions = options;
+        return { service: Far('service', {}), close: async () => {} };
+      }
+    ),
+  });
+  const context = Far('context', {
+    whenCancelled: () => new Promise(() => {}),
+  });
+  await make(namespace, context, { env: {} });
+  const { subscriptions } = kitOptions;
+  t.is(kitOptions.secret, undefined);
+  t.is((await subscriptions.readSet()).members.length, 2);
+  // Each member's translation names its own account, never the pool's label.
+  t.deepEqual(
+    subscriptions.adaptRequestOf({ id: 'work', accountRef: 'acct_work' })({})
+      .headers,
+    { 'x-account': 'acct_work' },
+  );
+  // A secret that is there.
+  const work = subscriptions.secretOf({
+    id: 'work',
+    secretName: 'secret-work',
+  });
+  t.is(atob(await work.readBase64()), 'work-key');
+  // One that is not yet: the failure is this call's, not the member's for
+  // the life of the broker.
+  const home = subscriptions.secretOf({
+    id: 'home',
+    secretName: 'secret-home',
+  });
+  await t.throwsAsync(() => home.readBase64(), { message: /Unknown pet name/ });
+  names.set(
+    'secret-home',
+    Far('home secret', { readBase64: async () => btoa('home-key') }),
+  );
+  t.is(atob(await home.readBase64()), 'home-key');
+  // What the pool keeps goes to a journal in the same namespace, which prunes
+  // only its own names.
+  await subscriptions.writeState({ refusals: {}, sessions: {} });
+  t.deepEqual(await subscriptions.readState(), { refusals: {}, sessions: {} });
+  t.true(names.has('subscriptions'));
+  t.true(names.has('secret-work'));
+});

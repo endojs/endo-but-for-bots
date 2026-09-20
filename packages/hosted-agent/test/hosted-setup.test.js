@@ -419,3 +419,42 @@ test('an oracle that cannot be provided is reported and does not fail setup', as
   );
   t.is(world.made.length, 0);
 });
+
+test('a broker over several subscriptions gets an oracle each, and one failing does not cost the others theirs', async t => {
+  const world = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  // The second member's oracle cannot be made.
+  const failing = harden({
+    ...world.host,
+    makeUnconfined: async (worker, specifier, options) => {
+      if (`${options.resultName}`.includes('account-source-home')) {
+        throw Error('worker unavailable');
+      }
+      return world.host.makeUnconfined(worker, specifier, options);
+    },
+  });
+  await publishAccountOracle(failing, {
+    label: 'Codex',
+    dir: 'codex-sandbox',
+    providerId: 'codex',
+    flootDir: 'floot',
+    backendId: 'codex',
+    subscriptionIds: ['work', 'home', 'spare'],
+  });
+  // Bound under the backend's id and the subscription's, which is the name
+  // Floot looks for.
+  t.true(world.names.has('floot/controller-profile/codex-account-work'));
+  t.false(world.names.has('floot/controller-profile/codex-account-home'));
+  t.true(world.names.has('floot/controller-profile/codex-account-spare'));
+  // Each source formula is told which subscription it is.
+  const sources = world.made.filter(made =>
+    made.specifier.endsWith('/account-source-module.js'),
+  );
+  t.deepEqual(
+    sources.map(made => made.env),
+    [{ ACCOUNT_SUBSCRIPTION_ID: 'work' }, { ACCOUNT_SUBSCRIPTION_ID: 'spare' }],
+  );
+  t.true(world.names.has('codex-sandbox/account-oracle-work'));
+});
