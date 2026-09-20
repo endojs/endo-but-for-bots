@@ -4051,11 +4051,13 @@ testNeedsNodeWorker(
 
     // Same-daemon acceptance registers NO peer: the inviter's daemon is this
     // daemon, so writing a self-peer (or a self-referential remote-agent-key
-    // row) would be spurious. The `acceptInvitation`/`Invitation.accept` guards
-    // that skip those writes are the point of this shape, and an end-to-end
-    // success would otherwise tolerate the extra inert rows silently — so pin
-    // the shared peer store stays empty, and a future removal of either guard
-    // reddens here rather than passing unnoticed.
+    // row) would be spurious. NOTE: this end-to-end check does NOT by itself pin
+    // the same-daemon skips — both agents here have empty `@nets`, so the
+    // orthogonal `hints.length > 0` / `addresses.length > 0` guards keep the peer
+    // store empty even if a same-daemon skip were removed (prover round 4). The
+    // skips are pinned load-bearingly by the multiplayer-suite test "same-daemon
+    // accept writes no peer route with reachable @nets on both sides", which
+    // gives both sides non-empty addresses so only the skips prevent the write.
     t.deepEqual(
       await E(host).listKnownPeers(),
       [],
@@ -4203,18 +4205,25 @@ testNeedsNodeWorker(
 );
 
 testNeedsNodeWorker(
-  'concurrent duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
+  'duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
   async t => {
     // A client that naively retries its own accept(sameLocator, sameName) —
     // no attacker required — starts two accepts of the SAME single-use
-    // invitation under the SAME correspondent name. Exactly one wins; the
-    // loser's `E(invitation).accept()` rejects (single-use), running its
-    // correspondent-bind rollback. Without acceptor-side serialization both
-    // calls capture priorLocator === undefined before either commits, so the
-    // loser's rollback `remove()`s the name the winner just bound, permanently
-    // stranding the spent invitation with no local binding. The serial queue
-    // makes the loser observe the winner's committed bind, so its rollback
-    // restores that value rather than deleting it.
+    // invitation under the SAME correspondent name. The required outcome:
+    // exactly one wins, and the loser's `E(invitation).accept()` rejection
+    // (single-use) and its correspondent-bind rollback do NOT strand the
+    // winner's binding — 'contact' still names A's handle afterward.
+    //
+    // NOTE: this test asserts the OUTCOME, not the serialization mechanism.
+    // prover round 4 showed that removing the `acceptInvitationJobs.enqueue`
+    // wrapper leaves this same-daemon case green, because same-process
+    // eventual-send delivery ordering already serializes these two calls (the
+    // acceptor's writes here touch no network, so no interleaving await opens
+    // the check-then-act window the queue closes). The daemon-wide queue is
+    // load-bearing for the CROSS-daemon race — a forged locator racing a genuine
+    // one for the same not-yet-known peer, where real network awaits interleave
+    // — which this same-daemon shape cannot exercise. This test remains a useful
+    // guard on the duplicate-accept outcome; it does not claim to pin the queue.
     const { host } = await prepareHost(t);
     const guestA = await E(host).provideGuest('guest-a-handle', {
       agentName: 'guest-a',

@@ -667,6 +667,13 @@ export type InvitationFormula = {
    * `invitingHandle ?? hostHandle`.
    */
   invitingHandle?: FormulaIdentifier;
+  /**
+   * The pet-name path in the inviting agent's own store that retains this
+   * pending invitation. Deliberately NOT renamed to `correspondentName`
+   * alongside the `EndoHost.accept`/`EndoGuest.accept` and CLI rename: this is a
+   * persisted on-disk field, so renaming it would be a stored-record schema
+   * change. The concept it names is the correspondent's pet name.
+   */
   guestName: NameOrPath;
   /**
    * @deprecated Legacy field name for {@link invitingAgent}, persisted by

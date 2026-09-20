@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
-import { idFromLocator } from '../src/locator.js';
+import { idFromLocator, parseLocator } from '../src/locator.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
 /**
@@ -715,6 +715,71 @@ export const runMultiplayerSuite = ({ test, network }) => {
         aEntrySecond?.addresses,
         realAddresses,
         'the bogus hints did not redirect the already-known peer route',
+      );
+    },
+  );
+
+  // Same-daemon acceptance (the minion.town shape: inviter and acceptor guests
+  // are siblings under ONE daemon) must register NO peer route and NO
+  // remote-agent-key row — the inviter's daemon IS this daemon, so a self-peer
+  // or self-referential agent-key row would be spurious (section 4 of the
+  // guest-native-invitations design). Two skips enforce this: the acceptor-side
+  // `peerKey !== localNodeNumber` in `acceptInvitation` and the inviter-side
+  // `guestDaemonNode !== localNodeNumber` in `Invitation.accept`.
+  //
+  // Same-daemon coverage that ran with EMPTY `@nets` on both agents could not
+  // pin either skip: the orthogonal `hints.length > 0` (acceptor) and
+  // `addresses.length > 0` (inviter) guards keep the peer store empty on their
+  // own, so deleting a same-daemon skip passed unnoticed (prover round 4). Here
+  // the daemon has a reachable network — so the invitation locator carries
+  // non-empty hints — AND the accepting guest has its own populated `@nets` — so
+  // its handle locator carries non-empty addresses. Both orthogonal guards are
+  // therefore satisfied, leaving the same-daemon skips as the ONLY thing keeping
+  // the shared peer store empty: deleting EITHER skip reddens this test.
+  test.serial(
+    'same-daemon accept writes no peer route with reachable @nets on both sides (guards load-bearing)',
+    async t => {
+      const { host } = await prepareHostWithGcAndNetwork(t);
+      const guestA = await E(host).provideGuest('guest-a-handle', {
+        agentName: 'guest-a-agent',
+      });
+      const guestB = await E(host).provideGuest('guest-b-handle', {
+        agentName: 'guest-b-agent',
+      });
+
+      // Give the accepting guest a reachable `@nets` so its handle locator
+      // carries a non-empty address list — otherwise the inviter-side
+      // `addresses.length > 0` guard, not the same-daemon skip, is what keeps the
+      // peer write from firing.
+      await giveGuestOwnNetwork(host, 'guest-b-agent');
+
+      const invitation = await E(guestA).invite('to-b');
+      const invitationLocator = await E(invitation).locate();
+      // The daemon has a network, so the invitation carries connection hints;
+      // this is what makes the acceptor-side `peerKey !== localNodeNumber` skip
+      // (rather than an empty hint list) the thing preventing a self-peer write.
+      const { hints } = parseLocator(invitationLocator);
+      t.true(
+        hints.length > 0,
+        'the invitation carries connection hints (daemon has a reachable network)',
+      );
+
+      await E(guestB).accept(invitationLocator, 'to-a');
+
+      // Reciprocal binding still succeeds same-daemon.
+      t.truthy(await E(guestA).identify('to-b'));
+      t.truthy(await E(guestB).identify('to-a'));
+
+      // The point of the test: neither the acceptor-side nor the inviter-side
+      // same-daemon skip wrote a self-peer route despite both address lists being
+      // non-empty.
+      const peersAfter = /** @type {import('../src/types.js').PeerInfo[]} */ (
+        await E(host).listKnownPeers()
+      );
+      t.deepEqual(
+        peersAfter,
+        [],
+        'same-daemon accept registers no known-peer entry on either side',
       );
     },
   );
