@@ -1905,3 +1905,58 @@ test('usage from the daemon is read as five counts and a context percent', t => 
   t.is(contextPercent(old), null);
   t.is(contextPercent(null), null);
 });
+
+test.serial(
+  'the account of the session’s backend is shown, and follows the daemon',
+  async t => {
+    const soon = new Date(
+      Date.now() + 3 * 86_400_000 + 3_600_000,
+    ).toISOString();
+    const account = usedPercent => ({
+      backendId: 'provider',
+      title: 'Fae',
+      plan: {
+        planId: 'pro',
+        title: 'Pro',
+        state: 'active',
+        source: 'observed',
+      },
+      windows: [
+        {
+          windowId: 'secondary',
+          title: 'Weekly window',
+          usedPercent,
+          resetsAt: soon,
+          windowSeconds: 604_800,
+          limit: null,
+          used: null,
+          remaining: null,
+        },
+      ],
+      limitReached: Number(usedPercent) >= 100,
+      credits: null,
+      resetCredits: null,
+      source: 'observed',
+      observedAt: new Date().toISOString(),
+    });
+    let daemon;
+    const { parent } = await setup(t, 1, false, made => {
+      daemon = made;
+      made.setAccounts([account(41)]);
+    });
+    await waitFor(() =>
+      (parent.querySelector('.floot-account')?.textContent || '').includes(
+        '41%',
+      ),
+    );
+    t.is(parent.querySelector('.floot-account.blocked'), null);
+    // A later reading arrives without the page asking for anything.
+    daemon.setAccounts([account(100)]);
+    await waitFor(() =>
+      (
+        parent.querySelector('.floot-account.blocked')?.textContent || ''
+      ).includes('used up'),
+    );
+    t.is(daemon.accountRefreshes(), 0);
+  },
+);

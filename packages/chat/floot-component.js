@@ -87,7 +87,10 @@ export const usageOf = value => {
 export const contextPercent = usage => {
   const context = usage?.context;
   if (!context || !(context.windowTokens > 0)) return null;
-  return Math.min(100, Math.round((context.usedTokens / context.windowTokens) * 100));
+  return Math.min(
+    100,
+    Math.round((context.usedTokens / context.windowTokens) * 100),
+  );
 };
 
 /**
@@ -673,6 +676,10 @@ export const flootComponent = (
   let stick = true;
   /** @type {FlootUsage | null} */
   let usage = null;
+  // What each backend's account has left, as the daemon publishes it
+  // (`factory.watchAccounts()`). Plain data; see floot/src/account-watch.js.
+  /** @type {any[]} */
+  let accounts = [];
 
   // Voice/meter state (pure data — no audio objects).
   let voiceTranscript = '';
@@ -1028,6 +1035,7 @@ export const flootComponent = (
       usage: usage
         ? { ...usageOf(usage), contextPercent: contextPercent(usage) }
         : null,
+      accounts,
       voice: {
         hasMic,
         hasTts,
@@ -1352,7 +1360,7 @@ export const flootComponent = (
   // reader opened too late) is opened again, but not for ever: a stream that
   // keeps ending at once is a fault to report, not a loop to spin in.
   let quietEndings = 0;
-   
+
   const reopenSessionView = () => openActiveSession(false);
 
   /**
@@ -2592,6 +2600,12 @@ export const flootComponent = (
     ) {
       newSession(presetId, model, reasoningEffort);
     },
+    /** Ask each account's provider for its figures now. */
+    refreshAccounts() {
+      void Promise.resolve(factory)
+        .then(resolved => E(resolved).refreshAccounts())
+        .catch(() => {});
+    },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);
     },
@@ -2885,6 +2899,51 @@ export const flootComponent = (
     }
   };
 
+  // Subscribe to the accounts, separately from the sessions: a daemon from
+  // before `watchAccounts()` has no such method, and a page that cannot show
+  // balances still has to show sessions. The stream is reopened when it ends
+  // (the daemon closes the oldest readers past a bound) and not when the
+  // method is missing.
+  /** @type {any} */
+  let accountsStream = null;
+  const followAccounts = async () => {
+    await null;
+    for (let pause = 2000; !cancelled; pause = Math.min(pause * 2, 60_000)) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const resolved = await factory;
+        // eslint-disable-next-line no-await-in-loop
+        const stream = iterateReader(await E(resolved).watchAccounts(), {
+          buffer: 1,
+        });
+        accountsStream = stream;
+        // eslint-disable-next-line no-await-in-loop
+        for await (const event of stream) {
+          if (cancelled) return;
+          const value = /** @type {any} */ (event);
+          if (value?.type === 'accounts' && Array.isArray(value.accounts)) {
+            accounts = value.accounts;
+            pause = 2000;
+            notify();
+          }
+        }
+      } catch (error) {
+        // A daemon from before `watchAccounts()`: nothing to follow, ever.
+        // Any other failure is an outage and is tried again.
+        const message = /** @type {Error} */ (error)?.message || '';
+        if (
+          message.includes('watchAccounts') &&
+          /has no method|is not a function/i.test(message)
+        ) {
+          return;
+        }
+      }
+      if (cancelled) return;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, pause));
+    }
+  };
+
   const loadInitialSessions = async () => {
     try {
       factory = await factory;
@@ -2948,9 +3007,13 @@ export const flootComponent = (
     }
   };
   void loadInitialSessions();
+  void followAccounts();
 
   return () => {
     cancelled = true;
+    if (accountsStream) {
+      void Promise.resolve(accountsStream.return()).catch(() => {});
+    }
     void recovery.select(null);
     void network.select(null);
     void execution.select(null);

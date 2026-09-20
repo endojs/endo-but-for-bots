@@ -59,6 +59,7 @@ import {
 import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
+import { makeAccountsWatch } from './src/account-watch.js';
 import { makePendingQueue } from './src/pending-queue.js';
 import { makeSessionSubmissions } from './src/session-submissions.js';
 import {
@@ -172,6 +173,8 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
     .returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   watchSessions: M.callWhen().returns(M.remotable()),
+  watchAccounts: M.callWhen().returns(M.remotable()),
+  refreshAccounts: M.callWhen().returns(M.undefined()),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listBackends: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().optional(M.string()).returns(M.arrayOf(M.record())),
@@ -2384,7 +2387,10 @@ export const makeStreamingAgent = async (
       context = mergeContext(context, projectUsage(turn.usage).context);
     }
     return harden({
-      ...addUsage(addUsage(completed, archivedIncomplete.usage), retained.usage),
+      ...addUsage(
+        addUsage(completed, archivedIncomplete.usage),
+        retained.usage,
+      ),
       ...(context === undefined ? {} : { context }),
       turns: completed.turns,
       incompleteTurns: archivedIncomplete.turns + retained.turns,
@@ -2741,12 +2747,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
     await null;
     const backends = new Map();
     for (const name of [...new Set(configuredBackendNames)]) {
-       
       if (await E(powers).has(name)) {
-         
         const factory = await E(powers).lookup(name);
         const descriptor = assertHostedBackendDescriptor(
-           
           await E(factory).describe(),
         );
         if (backends.has(descriptor.id)) {
@@ -2786,6 +2789,56 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return accountOracleP;
   };
 
+  // What the accounts behind the backends have left, for a view to subscribe
+  // to. Floot's own oracle describes its provider credential; each hosted
+  // adapter binds its subscription's oracle beside its backend, as
+  // `<backend id>-account`. They are looked up when a view subscribes, not
+  // captured: the adapters bind theirs after this factory has started.
+  const listAccountOracles = async () => {
+    /** @type {Array<{ backendId: string, title: string, oracle: any }>} */
+    const entries = [];
+    /** @type {string[]} */
+    const unknown = [];
+    try {
+      const own = await getAccountOracle();
+      if (own)
+        entries.push({ backendId: 'provider', title: 'Fae', oracle: own });
+    } catch {
+      unknown.push('provider');
+    }
+    // By pet name and one at a time, not through `getHostedBackends()`, which
+    // fails as a whole when any one backend cannot describe itself. A backend
+    // bound as `<id>-backend` has its account bound as `<id>-account`.
+    for (const backendName of [...new Set(configuredBackendNames)]) {
+      const backendId = backendName.replace(/-backend$/, '');
+      const accountName = `${backendId}-account`;
+      try {
+        if (await E(powers).has(accountName)) {
+          let title = backendId;
+          try {
+            const described = await E(
+              await E(powers).lookup(backendName),
+            ).describe();
+            if (typeof described?.title === 'string') title = described.title;
+          } catch {
+            // The title is a nicety; the account is shown under its id.
+          }
+          entries.push({
+            backendId,
+            title,
+
+            oracle: await E(powers).lookup(accountName),
+          });
+        }
+      } catch {
+        // Not resolvable this time; whatever is followed for it stays.
+        unknown.push(backendId);
+      }
+    }
+    return { entries, unknown };
+  };
+  const accountsWatch = makeAccountsWatch({ listOracles: listAccountOracles });
+
   // The shared static asset server, an operator-endowed capability the hosted
   // setup binds into this factory's profile so a new-project session can
   // publish its workspace. Resolved on every publish, never cached: the
@@ -2816,14 +2869,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (publisher) {
       await publisher.revoke();
       publishers.delete(id);
-       
+
       publishChains.delete(id);
       return;
     }
     // No tool instance in this incarnation: release from the record.
-     
+
     await loadRegistry();
-     
+
     const entry = (registry || []).find(session => session.id === id);
     if (!entry?.publication) return;
     const assetServer = await getAssetServer();
@@ -2887,7 +2940,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       },
       loadPublication: async () => {
         await loadRegistry();
-         
+
         return (registry || []).find(session => session.id === id)?.publication;
       },
       savePublication: async publication => {
@@ -2895,7 +2948,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Read, modify and write the live array with no await between, like
         // every other registry writer: one captured across the await can be
         // a rebound, stale array, and the write would be lost.
-         
+
         const live = registry;
         /** @type {number} */
         const index = (live || []).findIndex(session => session.id === id);
@@ -3029,7 +3082,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
       const { admin } = live;
       for (let attempt = 0; ; attempt += 1) {
         try {
-           
           await E(admin).terminate();
           break;
         } catch (error) {
@@ -3040,7 +3092,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           ) {
             throw error;
           }
-           
+
           await new Promise(resolve => {
             setTimeout(resolve, HOSTED_RECREATE_SETTLE_INTERVAL_MS);
           });
@@ -3325,7 +3377,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // list's viewers hear of it. Told at once rather than after the write:
     // the list they are shown is the registry in memory, the same one
     // `listSessions` reads.
-     
+
     touchSessionList();
     const result = registryWrite.then(async () => {
       const sequence = registrySequence;
@@ -4007,7 +4059,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
                 dropOwnBinds: async () => {
                   for (const bind of await mountKit.list()) {
                     if (bind.heldByThisSession) {
-                       
                       await mountKit
                         .detach({ innerPath: bind.innerPath })
                         .catch(() => undefined);
@@ -5161,6 +5212,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
+     * What the accounts behind the backends have left, now and whenever it
+     * changes. Subscribing asks no provider anything.
+     */
+    async watchAccounts() {
+      return accountsWatch.watch();
+    },
+
+    /** Ask each account's provider once, because a person asked. */
+    async refreshAccounts() {
+      await accountsWatch.refresh();
+    },
+
+    /**
      * @returns {Promise<Array<{ id: string, title: string, description: string }>>}
      */
     async listPresets() {
@@ -5432,7 +5496,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -5446,6 +5510,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
         listModels:
           'listModels(backendId?) — Return backend-scoped models with compound selection ids and supported reasoning efforts; no argument returns the flattened compatibility catalog.',
         getSession: 'getSession(id) — Return the session facet for an id.',
+        watchAccounts:
+          'watchAccounts() — A disposable stream of { type: "accounts", accounts }: now, and whenever any account changes, coalesced to the newest. One account per backend that has an account oracle: { backendId, title, plan: { planId, title, state, source }, windows: [{ windowId ("primary" short, "secondary" long), title, usedPercent, resetsAt, windowSeconds, limit, used, remaining }], limitReached, credits: { balance, hasCredits, unlimited } | null, resetCredits: { availableCount, credits } | null, source (observed | declared | remembered | unavailable), observedAt }. A window whose resetsAt has passed is empty again, whatever usedPercent says. Readings arrive with inference responses; subscribing asks no provider anything.',
+        refreshAccounts:
+          'refreshAccounts() — Ask each account’s provider once for its current figures. For a person who pressed refresh; nothing calls this on a timer.',
         watchSessions:
           'watchSessions() — A disposable stream of the session list: { type: "snapshot", sessions }, then { type: "session", session } for each session added or changed (including its `activity`: passive | working | error) and { type: "removed", id }. Subscribe rather than calling listSessions() on a timer.',
         renameSession: 'renameSession(id, title) — Rename a session.',
