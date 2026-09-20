@@ -8,7 +8,11 @@ import test from 'ava';
 import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { flootComponent } from '../../floot-component.js';
+import {
+  contextPercent,
+  flootComponent,
+  usageOf,
+} from '../../floot-component.js';
 import {
   makeFakeDaemon,
   staticSessionListWatch,
@@ -1195,6 +1199,9 @@ const occurrences = (parent, text) => parent.textContent.split(text).length - 1;
 /**
  * Sample how many times `text` is on screen, every few milliseconds, until
  * `done()` says stop. A message that blinks out or doubles shows up here.
+ * @param parent
+ * @param text
+ * @param done
  */
 const watchCount = (parent, text, done) =>
   new Promise(resolve => {
@@ -1870,4 +1877,31 @@ test.serial('unmounting releases the screen lock', async t => {
   remount();
   await waitFor(() => lock.held.length === 0);
   t.pass();
+});
+
+test('usage from the daemon is read as five counts and a context percent', t => {
+  const usage = usageOf({
+    type: 'usage',
+    inputTokens: 10,
+    outputTokens: 4,
+    cachedInputTokens: 990,
+    context: { usedTokens: 1004, windowTokens: 4000 },
+    turns: 3,
+    note: 'dropped',
+  });
+  t.deepEqual(usage, {
+    inputTokens: 10,
+    outputTokens: 4,
+    cachedInputTokens: 990,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 0,
+    context: { usedTokens: 1004, windowTokens: 4000 },
+  });
+  t.is(contextPercent(usage), 25);
+  // A daemon from before the newer counts sends two; the window is unknown.
+  const old = usageOf({ inputTokens: 12, outputTokens: 3 });
+  t.is(old.cachedInputTokens, 0);
+  t.is(old.context, undefined);
+  t.is(contextPercent(old), null);
+  t.is(contextPercent(null), null);
 });

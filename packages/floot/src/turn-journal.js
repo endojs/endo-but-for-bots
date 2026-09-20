@@ -2,6 +2,7 @@
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { passStyleOf } from '@endo/pass-style';
+import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 const PREFIX = 'floot-turn-event-';
 const CONTENT_PREFIX = 'floot-turn-content-';
@@ -280,7 +281,13 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
           'servedBy',
           'conversationNodeId',
         ]) {
-          if (event[key] !== undefined) record[key] = event[key];
+          if (event[key] !== undefined) {
+            // Usage is kept as the five disjoint counts and the last context
+            // reading, whatever else a caller attached; a record written
+            // before the newer counts existed reads them as 0.
+            record[key] =
+              key === 'usage' ? projectUsage(event.usage) : event[key];
+          }
         }
       };
     } else if (type === 'resolve') {
@@ -296,7 +303,10 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
     }
   };
 
-  /** A settled turn needs nothing in front of recovery; it may be archived. */
+  /**
+   * A settled turn needs nothing in front of recovery; it may be archived.
+   * @param record
+   */
   const archivable = record =>
     record.terminal === true &&
     (record.state !== 'outcome-unknown' || record.resolution !== undefined);

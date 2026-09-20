@@ -137,7 +137,7 @@ export {};
  *   network?: FlootNetwork,
  *   execution?: { state: string, supported: boolean, changing: boolean, action: string, error: string, blocked: boolean },
  *   unavailable?: boolean,
- *   usage: { inputTokens: number, outputTokens: number } | null,
+ *   usage: import('./usage-label.js').UsageView | null,
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
  * }} FlootState

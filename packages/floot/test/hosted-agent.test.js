@@ -6,6 +6,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
+import { usageCounts } from './helpers/usage.js';
 
 const makeSendSignal = () => {
   let count = 0;
@@ -96,19 +97,30 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     name: 'shell',
     result: 'ok',
   });
-  turns[0].push({ type: 'usage', inputTokens: 9, outputTokens: 2 });
+  turns[0].push({
+    type: 'usage',
+    inputTokens: 9,
+    outputTokens: 2,
+    cachedInputTokens: 400,
+    context: { usedTokens: 411, windowTokens: 2000 },
+  });
   turns[0].push({ type: 'end' });
   await turnP;
 
   const events = await replyP;
   t.deepEqual(events.at(-1), { type: 'end' });
-  t.deepEqual(events.at(-2), {
-    type: 'usage',
-    inputTokens: 9,
-    outputTokens: 2,
-    turns: 1,
-    incompleteTurns: 0,
-  });
+  t.deepEqual(
+    events.at(-2),
+    usageCounts({
+      type: 'usage',
+      inputTokens: 9,
+      outputTokens: 2,
+      cachedInputTokens: 400,
+      context: { usedTokens: 411, windowTokens: 2000 },
+      turns: 1,
+      incompleteTurns: 0,
+    }),
+  );
   // 'Built.' preceded a tool call, so it was flushed as its own message at
   // tool_call time; a final would re-merge it with any later text.
   t.false(events.some(event => event.type === 'final'));
@@ -165,12 +177,19 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     { hostedClient },
     'test prompt',
   );
-  t.deepEqual(await revived.getUsage(), {
-    inputTokens: 9,
-    outputTokens: 2,
-    turns: 2,
-    incompleteTurns: 0,
-  });
+  t.deepEqual(
+    await revived.getUsage(),
+    // The second turn reported nothing, so the window still reads as the
+    // first left it, and the reading survived revival.
+    usageCounts({
+      inputTokens: 9,
+      outputTokens: 2,
+      cachedInputTokens: 400,
+      context: { usedTokens: 411, windowTokens: 2000 },
+      turns: 2,
+      incompleteTurns: 0,
+    }),
+  );
 });
 
 test('failed hosted turns revive before later successful history', async t => {

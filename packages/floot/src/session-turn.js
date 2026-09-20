@@ -40,7 +40,7 @@ import { speakTurn } from './turn-speech.js';
  */
 
 /**
- * @typedef {{ inputTokens: number, outputTokens: number, turns: number }} TurnUsage
+ * @typedef {import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number, incompleteTurns: number }} TurnUsage
  */
 
 /**
@@ -153,12 +153,8 @@ const drainReplyReader = async (reader, status, emit) => {
     } else if (event.type === 'phase') {
       status.phase = event.phase;
     } else if (event.type === 'usage') {
-      status.usage = {
-        inputTokens: event.inputTokens,
-        outputTokens: event.outputTokens,
-        turns: event.turns,
-        incompleteTurns: event.incompleteTurns || 0,
-      };
+      const { type: _type, ...reported } = event;
+      status.usage = { ...reported, incompleteTurns: event.incompleteTurns || 0 };
     } else if (event.type === 'end') {
       terminal = event;
       break;

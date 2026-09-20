@@ -16,6 +16,7 @@ import {
 import { UNSETTLED_TOOL_RESULT } from '../src/hosted-turn.js';
 import { makeReplyChannel } from '../src/stream.js';
 import { makeFlootToolRegistry } from '../src/tool-registry.js';
+import { usageCounts } from './helpers/usage.js';
 
 const failedHistory = (messages, state, status) => [
   ...messages.map(message => ({
@@ -140,12 +141,10 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
   );
   // Nothing completed, and the backend reported no tokens for what it
   // streamed; the turn is counted as one that did not settle.
-  t.deepEqual(await agent.getUsage(), {
-    inputTokens: 0,
-    outputTokens: 0,
-    turns: 0,
-    incompleteTurns: 1,
-  });
+  t.deepEqual(
+    await agent.getUsage(),
+    usageCounts({ turns: 0, incompleteTurns: 1 }),
+  );
 });
 
 test('a failed turn on a transcript backend keeps the delivered prompt', async t => {

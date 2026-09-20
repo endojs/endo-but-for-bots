@@ -43,6 +43,12 @@ import {
   assertHostedBackendDescriptor,
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
+import {
+  addUsage,
+  mergeContext,
+  priceableUsage,
+  projectUsage,
+} from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import {
@@ -522,6 +528,7 @@ const provisionPresetObjects = async (
 
 /**
  * @typedef {object} ClaudeClientConfig
+ * @property
  *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
  *   events. Turns bypass the provider tool loop — the CLI runs its own tools
  *   in the sandbox and keeps its own conversation continuity.
@@ -596,7 +603,7 @@ const provisionPresetObjects = async (
  *   getTurnContent: (ref: { name: string, chars: number }) => Promise<string>,
  *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
- *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number, incompleteTurns: number }>,
+ *   getUsage: () => Promise<import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number, incompleteTurns: number }>,
  *   startInbox: () => void,
  *   shutdown: (allowBackendQuarantine?: boolean) => Promise<void>,
  * }>}
@@ -802,7 +809,28 @@ export const makeStreamingAgent = async (
   // Cumulative token usage for this session, persisted to the guest petstore so
   // it survives a daemon restart. Loaded lazily; updated after each turn.
   const USAGE_NAME = 'floot-usage';
-  /** @type {{ inputTokens: number, outputTokens: number, turns: number } | undefined} */
+  /**
+   * The five disjoint counts and the last context reading of
+   * `@endo/hosted-agent/token-usage.js`, and how many turns completed. Totals
+   * recorded before the three newer counts existed read them as 0.
+   *
+   * @typedef {import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number }} UsageTotals
+   */
+  /** @param {any} stored @returns {UsageTotals} */
+  const totalsFrom = stored => ({
+    ...projectUsage(stored),
+    turns: Number(stored?.turns) || 0,
+  });
+  /**
+   * @param {UsageTotals} totals
+   * @param {unknown} turnUsage
+   * @returns {UsageTotals}
+   */
+  const totalsWithTurn = (totals, turnUsage) => ({
+    ...addUsage(totals, turnUsage),
+    turns: totals.turns + 1,
+  });
+  /** @type {UsageTotals | undefined} */
   let usage;
   const findRecordedUsage = async () => {
     let nodeId = await getOrCreateLeaf();
@@ -810,13 +838,7 @@ export const makeStreamingAgent = async (
       const node = await tree.getNode(nodeId);
       if (!node) break;
       const recorded = /** @type {any} */ (node.metadata?.usageTotals);
-      if (recorded) {
-        return {
-          inputTokens: Number(recorded.inputTokens) || 0,
-          outputTokens: Number(recorded.outputTokens) || 0,
-          turns: Number(recorded.turns) || 0,
-        };
-      }
+      if (recorded) return totalsFrom(recorded);
       nodeId = node.parentId;
     }
     return undefined;
@@ -831,14 +853,9 @@ export const makeStreamingAgent = async (
     if (recorded) {
       usage = recorded;
     } else if (await E(powers).has(USAGE_NAME)) {
-      const stored = /** @type {any} */ (await E(powers).lookup(USAGE_NAME));
-      usage = {
-        inputTokens: Number(stored?.inputTokens) || 0,
-        outputTokens: Number(stored?.outputTokens) || 0,
-        turns: Number(stored?.turns) || 0,
-      };
+      usage = totalsFrom(await E(powers).lookup(USAGE_NAME));
     } else {
-      usage = { inputTokens: 0, outputTokens: 0, turns: 0 };
+      usage = totalsFrom(undefined);
     }
     return usage;
   };
@@ -988,7 +1005,7 @@ export const makeStreamingAgent = async (
 
     /**
      * @param {string} replyText
-     * @param {{ inputTokens: number, outputTokens: number } | undefined} turnUsage
+     * @param {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} turnUsage
      * @param {string | undefined} backendCheckpoint
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
      * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
@@ -1002,11 +1019,7 @@ export const makeStreamingAgent = async (
     ) => {
       await assertTurnToolsSettled(turnId);
       const current = await loadUsage();
-      const nextUsage = {
-        inputTokens: current.inputTokens + (turnUsage?.inputTokens || 0),
-        outputTokens: current.outputTokens + (turnUsage?.outputTokens || 0),
-        turns: current.turns + 1,
-      };
+      const nextUsage = totalsWithTurn(current, turnUsage);
       const messages = receivedMail ? [] : [...inputMessages];
       // A hosted backend that reports segments preserves the real interleaving
       // of text and tool rounds; grouping every call into one assistant message
@@ -1256,8 +1269,8 @@ export const makeStreamingAgent = async (
     let answered = false;
     // Token usage accumulates across this turn's rounds (each tool round is its
     // own provider call).
-    let turnInput = 0;
-    let turnOutput = 0;
+    /** @type {import('@endo/hosted-agent/token-usage.js').TokenUsage} */
+    let turnUsage = projectUsage(undefined);
     writer.setPhase('thinking');
 
     const loop = await runAgenticTurn({
@@ -1349,12 +1362,10 @@ export const makeStreamingAgent = async (
           }
         }
         if (roundUsage) {
-          turnInput += roundUsage.inputTokens || 0;
-          turnOutput += roundUsage.outputTokens || 0;
-          activeJournalUsage = {
-            inputTokens: turnInput,
-            outputTokens: turnOutput,
-          };
+          // Counts add across rounds; the context reading is the last
+          // round's, which is what the window holds now.
+          turnUsage = addUsage(turnUsage, roundUsage);
+          activeJournalUsage = turnUsage;
         }
         return harden({
           message: message || { role: 'assistant', content: streamed },
@@ -1459,11 +1470,7 @@ export const makeStreamingAgent = async (
     // that produced nothing, and the next successful turn committed that
     // inflated figure as authoritative metadata.
     const current = await loadUsage();
-    const totals = harden({
-      inputTokens: current.inputTokens + turnInput,
-      outputTokens: current.outputTokens + turnOutput,
-      turns: current.turns + 1,
-    });
+    const totals = harden(totalsWithTurn(current, turnUsage));
     // Persist the complete answer and accounting in one node. A provider
     // failure leaves no partially answered branch for revival to adopt.
     await assertTurnToolsSettled(turnId);
@@ -1478,7 +1485,7 @@ export const makeStreamingAgent = async (
       type: 'finish',
       state: 'completed',
       output: finalContent,
-      usage: { inputTokens: turnInput, outputTokens: turnOutput },
+      usage: turnUsage,
       ...servedByOfTurn(),
       conversationNodeId: committedNode.id,
     });
@@ -2329,10 +2336,11 @@ export const makeStreamingAgent = async (
    * turn's usage with its finish, and added here; `turns` stays the count of
    * completed turns and `incompleteTurns` counts the rest.
    */
-  /** @type {{ archived: number, inputTokens: number, outputTokens: number, turns: number } | undefined} */
+  /** @type {{ archived: number, usage: import('@endo/hosted-agent/token-usage.js').TokenUsage, turns: number } | undefined} */
   let archivedIncomplete;
   const tally = turns => {
-    const sum = { inputTokens: 0, outputTokens: 0, turns: 0 };
+    let sum = projectUsage(undefined);
+    let count = 0;
     for (const turn of turns) {
       // The synthetic record of a journal imported from before journals is
       // not a turn anybody ran.
@@ -2341,12 +2349,14 @@ export const makeStreamingAgent = async (
         turn.state !== 'completed' &&
         turn.turnId !== 'legacy-import'
       ) {
-        sum.turns += 1;
-        sum.inputTokens += Number(turn.usage?.inputTokens) || 0;
-        sum.outputTokens += Number(turn.usage?.outputTokens) || 0;
+        count += 1;
+        sum = addUsage(sum, turn.usage);
       }
     }
-    return sum;
+    // The readings of turns that did not complete are handled by getUsage,
+    // which knows which turn came last.
+    const { context: _reading, ...counts } = sum;
+    return { usage: counts, turns: count };
   };
   const getUsage = async () => {
     const completed = await loadUsage();
@@ -2359,17 +2369,24 @@ export const makeStreamingAgent = async (
         ...tally(await turnJournal.listArchived()),
       };
     }
-    const retained = tally(await turnJournal.list());
+    const retainedTurns = await turnJournal.list();
+    const retained = tally(retainedTurns);
+    // How full the window is now: the newest reading any turn left, whether
+    // or not that turn completed. The completed totals hold the last reading
+    // of a completed turn; the retained turns, which the journal lists in the
+    // order they began, are merged over it field by field, so a turn that was
+    // stopped before its backend said how large the window is keeps the size
+    // already known. (A retained turn older than the last completed reading
+    // could only win if that completed turn had since been archived, which
+    // takes hundreds of later turns that report nothing.)
+    let context = completed.context;
+    for (const turn of retainedTurns) {
+      context = mergeContext(context, projectUsage(turn.usage).context);
+    }
     return harden({
-      ...completed,
-      inputTokens:
-        completed.inputTokens +
-        archivedIncomplete.inputTokens +
-        retained.inputTokens,
-      outputTokens:
-        completed.outputTokens +
-        archivedIncomplete.outputTokens +
-        retained.outputTokens,
+      ...addUsage(addUsage(completed, archivedIncomplete.usage), retained.usage),
+      ...(context === undefined ? {} : { context }),
+      turns: completed.turns,
       incompleteTurns: archivedIncomplete.turns + retained.turns,
     });
   };
@@ -2381,7 +2398,7 @@ export const makeStreamingAgent = async (
    * it may neither fail nor wait for long — a journal that cannot be read is
    * a reason to report the completed totals, not to abort a reply.
    *
-   * @param {{ inputTokens: number, outputTokens: number, turns: number }} completedTotals
+   * @param {UsageTotals} completedTotals
    */
   const usageToReport = async completedTotals => {
     /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -2724,12 +2741,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
     await null;
     const backends = new Map();
     for (const name of [...new Set(configuredBackendNames)]) {
-      // eslint-disable-next-line no-await-in-loop
+       
       if (await E(powers).has(name)) {
-        // eslint-disable-next-line no-await-in-loop
+         
         const factory = await E(powers).lookup(name);
         const descriptor = assertHostedBackendDescriptor(
-          // eslint-disable-next-line no-await-in-loop
+           
           await E(factory).describe(),
         );
         if (backends.has(descriptor.id)) {
@@ -2799,14 +2816,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (publisher) {
       await publisher.revoke();
       publishers.delete(id);
-      // eslint-disable-next-line no-use-before-define
+       
       publishChains.delete(id);
       return;
     }
     // No tool instance in this incarnation: release from the record.
-    // eslint-disable-next-line no-use-before-define
+     
     await loadRegistry();
-    // eslint-disable-next-line no-use-before-define
+     
     const entry = (registry || []).find(session => session.id === id);
     if (!entry?.publication) return;
     const assetServer = await getAssetServer();
@@ -2870,7 +2887,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       },
       loadPublication: async () => {
         await loadRegistry();
-        // eslint-disable-next-line no-use-before-define
+         
         return (registry || []).find(session => session.id === id)?.publication;
       },
       savePublication: async publication => {
@@ -2878,7 +2895,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Read, modify and write the live array with no await between, like
         // every other registry writer: one captured across the await can be
         // a rebound, stale array, and the write would be lost.
-        // eslint-disable-next-line no-use-before-define
+         
         const live = registry;
         /** @type {number} */
         const index = (live || []).findIndex(session => session.id === id);
@@ -3012,7 +3029,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       const { admin } = live;
       for (let attempt = 0; ; attempt += 1) {
         try {
-          // eslint-disable-next-line no-await-in-loop
+           
           await E(admin).terminate();
           break;
         } catch (error) {
@@ -3023,7 +3040,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           ) {
             throw error;
           }
-          // eslint-disable-next-line no-await-in-loop
+           
           await new Promise(resolve => {
             setTimeout(resolve, HOSTED_RECREATE_SETTLE_INTERVAL_MS);
           });
@@ -3308,7 +3325,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // list's viewers hear of it. Told at once rather than after the write:
     // the list they are shown is the registry in memory, the same one
     // `listSessions` reads.
-    // eslint-disable-next-line no-use-before-define
+     
     touchSessionList();
     const result = registryWrite.then(async () => {
       const sequence = registrySequence;
@@ -3990,7 +4007,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
                 dropOwnBinds: async () => {
                   for (const bind of await mountKit.list()) {
                     if (bind.heldByThisSession) {
-                      // eslint-disable-next-line no-await-in-loop
+                       
                       await mountKit
                         .detach({ innerPath: bind.innerPath })
                         .catch(() => undefined);
@@ -4438,15 +4455,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const modelId = await sessionModelId(entry);
           const cost = modelId
             ? await E(oracle).estimateCost(
-                harden({
-                  modelId,
-                  inputTokens: BigInt(
-                    Math.max(0, Math.trunc(usage.inputTokens || 0)),
-                  ),
-                  outputTokens: BigInt(
-                    Math.max(0, Math.trunc(usage.outputTokens || 0)),
-                  ),
-                }),
+                harden({ modelId, ...priceableUsage(usage) }),
               )
             : undefined;
           return harden({
@@ -4491,7 +4500,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns, incompleteTurns } — tokens include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, turns, incompleteTurns, context? } — the five counts are disjoint (a token is in exactly one) and include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; `context` is { usedTokens, windowTokens }, what the last model request put in the model’s window and the window’s size (0 when the backend does not say), also published by watch() as "usage"; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);

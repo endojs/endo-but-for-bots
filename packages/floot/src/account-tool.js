@@ -2,6 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import { formatMicroUnits } from '@endo/hosted-agent/account.js';
+import { priceableUsage } from '@endo/hosted-agent/token-usage.js';
 
 /**
  * Render a snapshot's provenance the way a model should read it: what the
@@ -66,7 +67,9 @@ export const renderAccountStatus = (snapshot, usage, cost, modelId = '') => {
   }
   if (usage) {
     lines.push(
-      `This session has used ${usage.inputTokens} input and ${usage.outputTokens} output tokens.`,
+      usage.cachedInputTokens
+        ? `This session has used ${usage.inputTokens} input, ${usage.cachedInputTokens} cached input and ${usage.outputTokens} output tokens.`
+        : `This session has used ${usage.inputTokens} input and ${usage.outputTokens} output tokens.`,
     );
     if (cost && cost.currency) {
       lines.push(
@@ -153,12 +156,7 @@ export const makeAccountStatusTool = ({ oracle, getUsage, getModelId }) =>
       const modelId = getModelId ? getModelId() : '';
       if (getUsage) {
         const totals = await getUsage();
-        usage = harden({
-          inputTokens: BigInt(Math.max(0, Math.trunc(totals.inputTokens || 0))),
-          outputTokens: BigInt(
-            Math.max(0, Math.trunc(totals.outputTokens || 0)),
-          ),
-        });
+        usage = priceableUsage(totals);
         if (modelId) {
           cost = await E(oracle).estimateCost(harden({ modelId, ...usage }));
         }

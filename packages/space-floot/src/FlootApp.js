@@ -9,6 +9,7 @@ import { MessageList } from './MessageList.js';
 import { ComposeBar } from './ComposeBar.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { RecoveryPanel } from './RecoveryPanel.js';
+import { usageLabel } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootController, FlootPreset, FlootModel, FlootSafeEvent } from './types.js' */
@@ -35,11 +36,6 @@ const useControllerState = controller => {
   return controller.getState();
 };
 
-const formatTokens = (/** @type {number} */ n) => {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-  return `${n}`;
-};
 
 /**
  * @param {{
@@ -242,10 +238,7 @@ export const FlootApp = ({ controller }) => {
     if (title && active) controller.renameSession(active.id, title);
   };
 
-  const tokenLabel =
-    usage && (usage.inputTokens || usage.outputTokens)
-      ? `↑${formatTokens(usage.inputTokens)} ↓${formatTokens(usage.outputTokens)}`
-      : '';
+  const tokenLabel = usageLabel(usage);
 
   // The journal and a pending network request are labels, not glyphs, so they
   // render as chips beside the icon buttons. A badge carries the part that

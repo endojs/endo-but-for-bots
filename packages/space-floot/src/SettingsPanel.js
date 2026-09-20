@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 import { h } from 'preact';
 import { NetworkPolicyPanel } from './NetworkPolicyPanel.js';
+import { usageRows } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootController, FlootSafeEvent, FlootState } from './types.js' */
@@ -143,9 +144,7 @@ export const SettingsPanel = ({ state, controller }) => {
       ]
     : [Row('Spoken replies', 'no TTS object wired')];
 
-  const tokens = usage
-    ? Row('Tokens', `↑${usage.inputTokens} ↓${usage.outputTokens}`)
-    : Row('Tokens', '—');
+  const tokens = usageRows(usage).map(([label, value]) => Row(label, value));
 
   return h(
     'div',
@@ -213,7 +212,7 @@ export const SettingsPanel = ({ state, controller }) => {
         : null,
       ...transcription,
       ...speech,
-      tokens,
+      ...tokens,
       Row('Controller', obj.controller || '—'),
       Row('STT', obj.stt || '—'),
       Row('TTS', obj.tts || '—'),

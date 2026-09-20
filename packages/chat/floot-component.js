@@ -33,6 +33,64 @@ import {
 // shows a "thinking" indicator. The entry is removed once the turn ends, so a
 // finished reply simply falls back to getHistory().
 /**
+ * What Floot reports a session has used: five disjoint token counts, how many
+ * turns completed or did not, and how full the model's window is now
+ * (`windowTokens` is 0 when the backend does not say).
+ *
+ * @typedef {{
+ *   inputTokens: number,
+ *   outputTokens: number,
+ *   cachedInputTokens: number,
+ *   cacheWriteInputTokens: number,
+ *   reasoningOutputTokens: number,
+ *   context?: { usedTokens: number, windowTokens: number },
+ *   turns?: number,
+ *   incompleteTurns?: number,
+ * }} FlootUsage
+ */
+
+const USAGE_COUNTS = /** @type {const} */ ([
+  'inputTokens',
+  'outputTokens',
+  'cachedInputTokens',
+  'cacheWriteInputTokens',
+  'reasoningOutputTokens',
+]);
+
+/**
+ * The counts and the context of a usage event or snapshot, as numbers. A
+ * daemon from before the newer counts sends two of them; the rest read as 0.
+ *
+ * @param {any} value
+ * @returns {FlootUsage}
+ */
+export const usageOf = value => {
+  const count = (/** @type {unknown} */ n) =>
+    typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+  /** @type {any} */
+  const usage = {};
+  for (const key of USAGE_COUNTS) usage[key] = count(value?.[key]);
+  const usedTokens = count(value?.context?.usedTokens);
+  const windowTokens = count(value?.context?.windowTokens);
+  if (usedTokens > 0 || windowTokens > 0) {
+    usage.context = { usedTokens, windowTokens };
+  }
+  return usage;
+};
+
+/**
+ * How full the window is, as a whole percent, or null when its size is not
+ * known.
+ *
+ * @param {FlootUsage | null | undefined} usage
+ */
+export const contextPercent = usage => {
+  const context = usage?.context;
+  if (!context || !(context.windowTokens > 0)) return null;
+  return Math.min(100, Math.round((context.usedTokens / context.windowTokens) * 100));
+};
+
+/**
  * @typedef {{ role: 'assistant' | 'tool', text?: string, id?: string,
  *   name?: string, args?: string, result?: string | null }} TurnMessage
  * @typedef {{
@@ -45,7 +103,7 @@ import {
  *   phase: string,
  *   done: boolean,
  *   error: string | null,
- *   usage: { inputTokens: number, outputTokens: number, turns: number } | null,
+ *   usage: FlootUsage | null,
  *   whenDone: Promise<void>,
  *   subscribe: (fn: (ev: { type: string }) => void) => () => void,
  *   stop: () => void,
@@ -214,8 +272,7 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
           emit({ type: 'phase' });
         } else if (value.type === 'usage') {
           turn.usage = {
-            inputTokens: value.inputTokens,
-            outputTokens: value.outputTokens,
+            ...usageOf(value),
             turns: value.turns,
             incompleteTurns: value.incompleteTurns || 0,
           };
@@ -614,7 +671,7 @@ export const flootComponent = (
   // host-side (see the scroll observer at mount) because the confined view
   // cannot touch DOM scroll positions.
   let stick = true;
-  /** @type {{ inputTokens: number, outputTokens: number } | null} */
+  /** @type {FlootUsage | null} */
   let usage = null;
 
   // Voice/meter state (pure data — no audio objects).
@@ -701,8 +758,9 @@ export const flootComponent = (
   });
   const execution = makeFlootExecution({ notify });
 
-  /** @param {any[]} history
-   * @returns {HistoryMessage[]} */
+  /**
+   * @param {any[]} history
+    @returns {HistoryMessage[]} */
   const historyMessages = history => {
     return history.map((/** @type {any} */ m) =>
       m.role === 'tool'
@@ -968,7 +1026,7 @@ export const flootComponent = (
       execution: execution.getState(),
       unavailable: Boolean(session?.lifecycle && session.lifecycle !== 'ready'),
       usage: usage
-        ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+        ? { ...usageOf(usage), contextPercent: contextPercent(usage) }
         : null,
       voice: {
         hasMic,
@@ -1294,7 +1352,7 @@ export const flootComponent = (
   // reader opened too late) is opened again, but not for ever: a stream that
   // keeps ending at once is a fault to report, not a loop to spin in.
   let quietEndings = 0;
-  // eslint-disable-next-line no-use-before-define
+   
   const reopenSessionView = () => openActiveSession(false);
 
   /**
@@ -1379,7 +1437,7 @@ export const flootComponent = (
       network.adopt(event.network, Boolean(session.current));
     }
     if ((snapshot || event.type === 'usage') && event.usage) {
-      usage = event.usage;
+      usage = usageOf(event.usage);
     }
     if (event.type === 'journal') void recovery.refresh();
     return true;

@@ -7,6 +7,7 @@
 import { makeError } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { addUsage } from '@endo/hosted-agent/token-usage.js';
 
 // Stands in for a result the backend never reported. Persisted as the tool
 // message's content, so the transcript says what happened instead of carrying
@@ -48,7 +49,7 @@ harden(UNSETTLED_TOOL_RESULT);
  *   stop before dispatch arrives as a leading abort.
  * @property {boolean} [outcomeUnknown] - transport failure may hide external effects.
  * @property {string} finalContent - the reply text that streamed.
- * @property {{ inputTokens: number, outputTokens: number } | undefined} usage
+ * @property {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} usage
  * @property {Array<{ id: string, name: string, args: string, result: string | null }>} toolCalls
  *   - the tool activity that streamed (`result` is null for a call the turn
  *   ended before settling).
@@ -221,7 +222,7 @@ export const runHostedTurn = async ({
   // multi-minute turn is not silent in the UI.
   let lastCommentaryAt = 0;
   let commentaryTail = '';
-  /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
+  /** @type {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} */
   let usage;
   /** @type {Array<{ id: string, name: string, args: string, result: string | null }>} */
   const toolCalls = [];
@@ -380,9 +381,9 @@ export const runHostedTurn = async ({
           // App-server reports `tokenUsage.last` once per model call. An
           // agentic turn can make several model calls around tool use, so the
           // provider-neutral turn total is the sum of these updates.
-          if (!usage) usage = { inputTokens: 0, outputTokens: 0 };
-          usage.inputTokens += Number(event.inputTokens) || 0;
-          usage.outputTokens += Number(event.outputTokens) || 0;
+          // The counts are disjoint and add; `context` is a reading of the
+          // last model call and the latest one wins.
+          usage = addUsage(usage, event);
           break;
         case 'abort':
           terminal = true;
