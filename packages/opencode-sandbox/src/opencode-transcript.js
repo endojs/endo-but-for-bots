@@ -58,6 +58,7 @@ export const importedTurnsFor = records => {
       turns.push({ kind: 'compaction', text: record.summary });
     } else if (record.kind === 'tool-call') {
       const result = resultFor.get(record);
+      /** @type {Record<string, unknown>} */
       let input = {};
       try {
         const parsed = JSON.parse(record.args);

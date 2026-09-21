@@ -276,6 +276,12 @@ conversion summary. This supersedes the earlier repeated-root error count, but
 does not establish a passing docs gate. Remaining diagnostics concern asset
 server method types, OpenCode bridge/transcript annotations, exported native
 controller/setup declarations, and hosted-agent pass-style dependency resolution.
+The OpenCode subset is corrected: bridge option JSDoc now names the actual
+options object, and transcript input has an explicit record type supported by
+its existing JSON object/non-array check. Six input shapes are covered without
+changing normalization behavior. Twenty-six focused tests pass independently,
+scoped lint has no errors, and actual OpenCode documentation conversion passes.
+Other packages' documentation diagnostics remain open.
 Three Floot source contract corrections cover optional cached-input usage,
 snapshot wire validation, and optional tool-preview truncation flags.
 Independent review rejected an unchecked snapshot cast: local callbacks can
@@ -1277,6 +1283,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Correct OpenCode bridge and transcript declaration shapes | 26 focused tests and independent review pass; scoped lint has no errors and package docs convert; annotations only, no state or runtime behavior changes; not deployed |
 | 2026-09-21 | Scope API documentation checking to each package's production roots | Two regression tests and independent review pass; imported dependency errors remain visible; five missing entrypoints recovered; full docs still fails with 13 errors and 104 warnings |
 | 2026-09-21 | Correct Floot source contracts and validate watch events before caching; expand host cleanup audit | 36 focused tests pass; review found unchecked snapshot typing and invalid-data cache poisoning, both corrected; test fixture type errors remain; native recovery integration and deployment pending |
 | 2026-09-21 | Correct cross-package type contracts and separate the setup pool flag from runtime authority | Clean root declaration build passes; 170 hosted-agent tests independently pass plus 59 UI, 11 Claude, and 19 Codex tests; scoped lint and independent source review pass; docs and incremental declaration generation remain failing; not deployed |

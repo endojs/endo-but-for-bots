@@ -94,9 +94,9 @@ export const parseListeningLine = line => {
 /**
  * Message registry: tracks role and summary flags, part types, and which
  * deltas were seen so a completed part without deltas can still be emitted.
- * @param root0
- * @param root0.mcpServerName
- * @param root0.contextWindows
+ * @param {object} [options]
+ * @param {string} [options.mcpServerName]
+ * @param {Map<string, number>} [options.contextWindows]
  */
 export const makeMessageRegistry = ({
   mcpServerName = '',
