@@ -23,7 +23,9 @@ Builder regression tests cover Docker flags and reusable Podman image IDs.
 The base, Claude, and Codex images built on Tokyo; Claude passed an isolated
 tool inventory, Python virtualenv, and C compilation smoke test.
 OpenCode's build, Codex reproducibility verification, live restoration checks,
-and deployment remain pending disk-space cleanup approval.
+and deployment remain pending sufficient build capacity.
+Tokyo generation 154 now has coordinated storage retention and admission checks;
+cleanup restored about 5.2 GiB free, below the six-GiB reserve for new builds.
 Tokyo still runs the previous image pins; the shared-image code is pushed to
 PR #1248 but is not a completed deployment.
 
