@@ -353,6 +353,11 @@ Required in this remediation session, before resuming model-dependent acceptance
   the appropriate runtime adapter where necessary (for example Codex app-server).
 - Share provider discovery between Fae and OpenCode instead of separate static
   OpenRouter lists; project only routes supported by the selected runtime/account.
+- Make the new-session model selector searchable within the selected backend.
+  Match display names and exact model IDs case-insensitively, show a clear
+  no-results state, and preserve keyboard selection and the exact selected route.
+  Verify this with a large discovered OpenRouter catalog; do not truncate the
+  available choices to make an unsearchable selector manageable.
 - Keep discovery distinct from session execution and credential ownership:
   listing models must not create a conversation or start an inference turn.
 - Expose unavailable/failed/stale discovery honestly; do not silently substitute
@@ -366,6 +371,19 @@ Fae with `openrouter/free`, and OpenCode with `openrouter/openrouter/free`.
 The host test drivers must refuse missing routes and existing paid-route manifests
 before inference, while still allowing inspection and cleanup.
 This is required work, not a future deferral or a claim of completed discovery.
+
+Implementation progress: standalone host-only Codex and OpenRouter catalog readers
+now use the existing credential owner and fixed provider metadata endpoints.
+They bound response bodies and descriptors, reject incomplete/duplicate catalogs,
+sanitize failures, and retain provider-advertised reasoning metadata.
+Independent review covered both readers and caught a cross-provider timestamp
+mismatch; both now report epoch milliseconds.
+The initial focused suite passes 24 tests; these are mocked metadata reads, not
+live discovery or inference acceptance.
+Broker/account-generation binding, account-specific route admission and failover,
+static configuration removal, searchable UI, and deployment remain pending.
+The root documentation gate failed with 9035 errors and 113 warnings in the
+project graph; no passing documentation/type gate is claimed.
 
 Model these independently:
 
