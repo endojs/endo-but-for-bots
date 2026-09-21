@@ -308,6 +308,9 @@ All 14 opted-in root type-contract tasks also pass.
 These changes alter type surfaces, not native cleanup or credential behavior;
 incremental generation and the package test-fixture diagnostics remain separate
 open checks. No Tokyo deployment is implied by local documentation success.
+This declaration correction is committed separately from the deferred producer
+research. Its one-line dependency lock update follows in a dedicated lockfile
+commit; no producer prototype or deployment change is included.
 Three Floot source contract corrections cover optional cached-input usage,
 snapshot wire validation, and optional tool-preview truncation flags.
 Independent review rejected an unchecked snapshot cast: local callbacks can

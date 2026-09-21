@@ -35,6 +35,8 @@ import { makeCodexSessionState } from './codex-session-store.js';
 import { adaptEndoTools } from './endo-tools.js';
 import { makeCodexRuntimeVerifier } from './runtime-verifier.js';
 
+/** @import { AppServerTransport } from './codex-client.js' */
+
 /**
  * One inert native incarnation. The shared supervisor owns every acquired
  * scope and projection; this adapter owns only Codex's protocol and evidence
