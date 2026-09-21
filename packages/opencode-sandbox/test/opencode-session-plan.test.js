@@ -161,3 +161,12 @@ test('retired per-session native profiles are refused rather than ignored', t =>
     },
   );
 });
+
+test('retired native session resume IDs are refused rather than ignored', t => {
+  for (const opencodeSessionId of ['', 'ses_old', null]) {
+    t.throws(
+      () => readSessionPlan(JSON.stringify({ ...plan, opencodeSessionId })),
+      { message: /Retired opencodeSessionId field/ },
+    );
+  }
+});

@@ -644,6 +644,19 @@ test('real eager client disposes its slice and never starts the discarded initia
   t.is(f.scopes.size, 0);
 });
 
+test('retired native session resume plan acquires no resources', async t => {
+  const f = fixture(t);
+  const controller = f.makeController();
+  const text = JSON.stringify({
+    ...planFor('a'),
+    opencodeSessionId: 'ses_old',
+  });
+  await t.throwsAsync(E(controller).activate(text, f.resolver), {
+    message: /Retired opencodeSessionId field/,
+  });
+  t.deepEqual(f.events, []);
+});
+
 test('terminating a session that has a live client revokes its grant', async t => {
   // The grant is the only thing between a session and the operator's
   // credential, and it no longer carries an expiry, so an unrevoked one is

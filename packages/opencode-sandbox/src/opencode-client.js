@@ -175,11 +175,6 @@ const defaultMakeStdinWriter = async proc =>
  * @property {string} [systemPrompt] - The session persona baked into the
  *   opencode agent. A `send` whose `options.systemPrompt` differs is refused:
  *   the agent prompt is fixed at config load.
- * @property {string} [opencodeSessionId] - The persisted opencode session id
- *   to resume when this client revives.  When omitted, the bridge creates a
- *   new opencode session.
- * @property {boolean} [resumePriorConversation] - Suppresses the one-shot
- *   `initialPrompt` on a reincarnated client (default false).
  * @property {string} [initialPrompt] - Optional one-shot prompt fired (and
  *   drained) at construction.
  * @property {readonly string[]} [bridgeArgv] - Spawn argv for the in-slice
@@ -220,8 +215,6 @@ export const makeOpencodeClient = ({
   rootfsLabel = '',
   model = '',
   systemPrompt,
-  opencodeSessionId: initialOpencodeSessionId = '',
-  resumePriorConversation = false,
   initialPrompt,
   bridgeArgv = DEFAULT_BRIDGE_ARGV,
   env = {},
@@ -236,8 +229,8 @@ export const makeOpencodeClient = ({
   let cleanupComplete = false;
   let destroyed = false;
   // The captured opencode session id (`ready` event).  Kept in memory and
-  // reported by `status()` so the backend factory can record it for resume.
-  let opencodeSessionId = String(initialOpencodeSessionId || '');
+  // reported by `status()` for diagnostics, not persisted for restoration.
+  let opencodeSessionId = '';
   /** @type {ProcessHandle | null} */
   let proc = null;
   /** @type {any} */
@@ -397,9 +390,13 @@ export const makeOpencodeClient = ({
   // session this process did not start. A later turn continues the
   // conversation the CLI is now holding, so repeating the history would
   // duplicate it.
-  let restorationPending = !resumePriorConversation;
+  let restorationPending = true;
+  // An unsuccessful import may already have changed the native history.
+  // Never retry it or continue without it in this incarnation.
+  let restorationFailed = false;
   /** Whether the bridge in this slice's image understands `op: 'import'`. */
   let bridgeImports = false;
+  let bridgeStartsFresh = false;
 
   const handleEvent = event => {
     if (event.type === 'imported') {
@@ -410,18 +407,9 @@ export const makeOpencodeClient = ({
       // An older bridge sends no feature list and does not answer `import`.
       bridgeImports =
         Array.isArray(event.features) && event.features.includes('import');
-      // A resume that came back under a different id did not resume: the
-      // store no longer held the session this plan recorded, and the bridge
-      // started a fresh one. That case had no handling at all — the session
-      // simply continued context-free, which is the silent version of losing
-      // a conversation. Restoring instead is what the stack's record is for.
-      if (
-        resumePriorConversation &&
-        initialOpencodeSessionId &&
-        event.sessionId !== initialOpencodeSessionId
-      ) {
-        restorationPending = true;
-      }
+      bridgeStartsFresh =
+        Array.isArray(event.features) &&
+        event.features.includes('fresh-session');
       opencodeSessionId = event.sessionId;
       if (resolveReady) resolveReady();
       return;
@@ -698,22 +686,34 @@ export const makeOpencodeClient = ({
           outcome,
           pending: restorationPending,
           records: Array.isArray(turn.transcript) ? turn.transcript.length : 0,
-          resumePriorConversation,
           ...extra,
         }),
       );
+    if (restorationFailed) {
+      throw makeError(
+        X`OpencodeClient(${q(sessionId)}): previous conversation restoration failed; this incarnation cannot accept further turns.`,
+      );
+    }
     if (!restorationPending) {
       describe('skipped: conversation already live');
       return;
     }
     restorationPending = false;
+    restorationFailed = true;
+    if (!bridgeStartsFresh) {
+      throw makeError(
+        X`OpencodeClient(${q(sessionId)}): this image has no fresh-session guarantee; refusing conversation restoration and prompts.`,
+      );
+    }
     const records = Array.isArray(turn.transcript) ? turn.transcript : [];
     if (records.length === 0) {
+      restorationFailed = false;
       describe('skipped: nothing to restore');
       return;
     }
     const turns = importedTurnsFor(records);
     if (turns.length === 0) {
+      restorationFailed = false;
       describe('skipped: no importable turns');
       return;
     }
@@ -748,15 +748,14 @@ export const makeOpencodeClient = ({
       resolveImported = undefined;
     }
     if (!ok) refuse('the import route refused or did not answer');
+    restorationFailed = false;
     describe('imported', { turns: turns.length });
   };
 
   const createClient = () => {
     // Fire-and-forget the initial prompt: queue it as the first turn and
-    // drain it in the background.  Skipped on a reincarnated client whose
-    // opencode session is being resumed, so the env-borne prompt is not
-    // re-fired as a spurious extra turn on every daemon restart.
-    if (initialPrompt && !resumePriorConversation) {
+    // drain it in the background. Hosted controllers do not supply this.
+    if (initialPrompt) {
       const initReader = enqueueTurn(String(initialPrompt), {});
       (async () => {
         for await (const event of iterateReader(

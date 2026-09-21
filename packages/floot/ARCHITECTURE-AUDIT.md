@@ -232,6 +232,41 @@ That integration test passes after shortening its generated socket path for macO
 the fixture retains its unique suffix and does not alter production socket placement.
 Deployment is complete; native conformance and the separate `opencodeSessionId` audit remain open.
 
+### Obsolete native-session resume removed
+
+Current producers never set `opencodeSessionId` in session plans, and the native
+runtime uses an in-memory database and temporary home.
+The parser now rejects that retired field explicitly, including empty values,
+before acquiring session resources.
+The controller no longer supplies resume options or `OPENCODE_SESSION_ID`.
+The client no longer accepts an initial native ID or skips restoration because
+a previous native conversation supposedly exists.
+It still learns the actual native ID from `ready` for diagnostics and keeps
+once-per-incarnation canonical transcript import before the first prompt.
+
+The bridge now creates a fresh native conversation on every startup and neither
+reads nor writes `opencode-session-id` files.
+It advertises `fresh-session`; the new client requires this capability before
+dispatch, so an old resuming bridge cannot silently receive duplicate history.
+Subprocess fixtures cover stale IDs/files, a non-directory state location,
+creation refusal, and malformed creation responses.
+Review also found that failed imports previously cleared the restoration flag,
+allowing the next send to bypass restoration.
+The corrected client fences that incarnation after failed or uncertain restoration
+instead of retrying an import or sending a prompt without the required history.
+
+This slice is not deployed.
+The bridge is baked into the image: rebuild and pin the OpenCode image together
+with the host client at the next coordinated cutover, and retire old session
+plans using the old release first.
+The remaining fire-and-forget `initialPrompt` client path is a separate deletion
+candidate; it has no current hosted-controller caller.
+The full OpenCode suite passes 227 tests, and an independent reviewer reran
+72 client, plan, controller, and subprocess startup tests successfully.
+Package ESLint reports zero errors and 37 warnings; formatting and diff checks pass.
+The scoped TypeDoc run fails with 895 errors in the inherited project graph,
+including missing `Far` declarations; no passing docs/type gate is claimed.
+
 ## FA-05 — Remove or wire the ignored native profile
 
 All three hosted setups require a `nativeProfile`; backend plans persist it and parsers
@@ -803,6 +838,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-11: remove legacy registry import and backup cleanup | Current snapshot crash recovery retained; legacy-only state rejected; 414 Floot tests pass; Tokyo already uses modern snapshots; deployment pending |
 | 2026-09-21 | FA-11: specify private-journal creation/revival boundary | Source analysis and adversarial design review identified ID-reservation and initial-publication races; implementation and fault-injection tests pending; no runtime changes |
 | 2026-09-21 | FA-11: remove private-journal imports and migration acknowledgements | Strict host schema creation/opening, creation fences, and poisoned-mail preservation; 430 Floot tests pass; adversarial review approved; old-release session retirement and coordinated deployment pending |
+| 2026-09-21 | FA-04: remove obsolete native-session resume and fence failed restoration | 227 OpenCode tests pass; 72 independently rerun; old bridge images rejected before prompts; image rebuild/pinning and coordinated deployment pending |
 
 ## Request
 

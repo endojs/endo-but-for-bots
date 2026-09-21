@@ -277,9 +277,6 @@ export const makeOpencodeNativeController = ({
           OPENCODE_BRIDGE_DIRECTORY: '/workspace',
           OPENCODE_SERVER_PASSWORD: makePassword(),
           OPENCODE_MCP_SERVER_NAME: DEFAULT_SERVER_NAME,
-          ...(approved.opencodeSessionId
-            ? { OPENCODE_SESSION_ID: approved.opencodeSessionId }
-            : {}),
         },
       });
       assertCopyData(options);
@@ -319,8 +316,6 @@ export const makeOpencodeNativeController = ({
         rootfsLabel: rootfsLabel(rootfs),
         model: approved.model,
         systemPrompt: approved.systemPrompt,
-        opencodeSessionId: approved.opencodeSessionId,
-        resumePriorConversation: Boolean(approved.opencodeSessionId),
       });
     },
   });

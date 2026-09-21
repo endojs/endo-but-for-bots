@@ -47,7 +47,6 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {MounterEnv} [mounterEnv] Absent means the host's `mount`/`umount`.
  * @property {string} [model]
  * @property {string} [systemPrompt]
- * @property {string} [opencodeSessionId]
  */
 
 /**
@@ -62,7 +61,7 @@ const RECORDED_PATHS = harden([
   'mounterSocketDir',
 ]);
 const OPTIONAL_PATHS = harden(['workspaceDir', 'workspaceHostPath']);
-const OPTIONAL_TEXT = harden(['model', 'systemPrompt', 'opencodeSessionId']);
+const OPTIONAL_TEXT = harden(['model', 'systemPrompt']);
 
 /**
  * Parse recorded plan text. The result is the only plan shape the controller
@@ -80,6 +79,8 @@ export const readSessionPlan = text => {
   const recorded = value;
   !Object.hasOwn(recorded, 'nativeProfile') ||
     Fail`Retired nativeProfile field; recreate this hosted session plan`;
+  !Object.hasOwn(recorded, 'opencodeSessionId') ||
+    Fail`Retired opencodeSessionId field; recreate this hosted session plan`;
   for (const name of ['sessionId', 'sandboxSessionId', 'rootfs']) {
     (typeof recorded[name] === 'string' && recorded[name] !== '') ||
       Fail`Missing session plan field ${q(name)}`;
