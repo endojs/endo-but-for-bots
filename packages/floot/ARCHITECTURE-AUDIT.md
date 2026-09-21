@@ -137,6 +137,17 @@ and proof that old producers can no longer create resources.
 Broad container sweeps are not such proof.
 Deployment of this cleanup behavior remains blocked on that reconciliation:
 after a real restart even a legitimately absent scope currently lacks proof.
+The runtime's exclusive owner symlink also lacked directory flushes.
+The local fix flushes directory ancestry before acquisition and the marker's
+directory before returning an effect-producing owner.
+Release now flushes its unlink and retries failed flushes without deleting a
+successor's marker. A failed publication flush leaves exclusion in place and
+requires explicit recovery; it does not silently treat the marker as stale.
+Four new tests cover pending/failed publication flush, ancestry failure, and
+release retry with a successor present; the adjacent runtime and owner suites
+also pass (39 cases through the package's test configurations).
+This verifies flush ordering and fail-closed behavior on supported filesystems,
+not physical power-loss durability or automatic orphan reconciliation.
 Mount-inspection fix: the default recorded-cleanup socket check now treats only
 ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
 Ten focused tests pass, including vanished-entry success and both inspection

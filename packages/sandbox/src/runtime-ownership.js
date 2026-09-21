@@ -28,13 +28,38 @@ export const acquireRuntimeOwnership = async (
   // The nonce distinguishes successive acquisitions even in the same process.
   // It is published in the exclusive symlink syscall, with no empty-file window.
   const token = `endo-sandbox-owner-v1-${randomUUID()}`;
+  /** @param {string} directoryPath */
+  const syncDirectory = async directoryPath => {
+    const handle = await fs.open(directoryPath, 'r');
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  };
+  // Include the ancestry: the host may have just created the private directory.
+  // No effect-producing owner is returned until its exclusion is durable.
+  let ancestor = parent;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    await syncDirectory(ancestor);
+    const next = path.dirname(ancestor);
+    if (next === ancestor) break;
+    ancestor = next;
+  }
+  let removed = false;
   /** @type {Promise<void> | undefined} */
   let releaseFlight;
   const release = () => {
     releaseFlight ??= (async () => {
-      (await fs.readlink(marker)) === token ||
-        Fail`Runtime ownership changed: ${q(marker)}`;
-      await fs.unlink(marker);
+      if (!removed) {
+        (await fs.readlink(marker)) === token ||
+          Fail`Runtime ownership changed: ${q(marker)}`;
+        await fs.unlink(marker);
+        removed = true;
+      }
+      // Retry a failed flush without unlinking a successor's marker.
+      await syncDirectory(parent);
     })().catch(error => {
       releaseFlight = undefined;
       throw error;
@@ -42,8 +67,10 @@ export const acquireRuntimeOwnership = async (
     return releaseFlight;
   };
   const ownership = harden({ directory: parent, release });
-  // Last acquisition: after publication, immediately return its cleanup owner.
+  // A failed publication flush leaves the exclusive marker in place. No native
+  // effect has been admitted; later opens must not guess that marker is stale.
   await fs.symlink(token, marker);
+  await syncDirectory(parent);
   return ownership;
 };
 harden(acquireRuntimeOwnership);
