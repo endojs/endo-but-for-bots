@@ -9,7 +9,7 @@ import {
   assertCopyArray,
   assertRecord,
   assertRemotable,
-} from '../src/typeGuards.js';
+} from '../src/type-guards.js';
 
 test('isCopyArray', t => {
   t.true(isCopyArray(harden([1, 2, 3])));

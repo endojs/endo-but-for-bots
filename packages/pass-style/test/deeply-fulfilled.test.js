@@ -2,8 +2,8 @@ import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import { Far } from '../src/make-far.js';
-import { makeTagged } from '../src/makeTagged.js';
-import { deeplyFulfilled } from '../src/deeplyFulfilled.js';
+import { makeTagged } from '../src/make-tagged.js';
+import { deeplyFulfilled } from '../src/deeply-fulfilled.js';
 
 // Currently, just copied from deeplyFulfilledObject test.
 // TODO extend to test cases unique to deeplyFulfilled, i.e. primitives

@@ -7,7 +7,7 @@ import {
   confirmFunctionTagRecord,
   isPrimitive,
   getTag,
-} from './passStyle-helpers.js';
+} from './pass-style-helpers.js';
 
 /**
  * @import {Rejector} from '@endo/errors/rejector.js';

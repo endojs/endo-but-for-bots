@@ -68,7 +68,7 @@ assert(getTypedArrayToStringTag);
 
 // Exported for tests.
 /**
- * Duplicates packages/pass-style/src/passStyle-helpers.js to avoid a dependency.
+ * Duplicates packages/pass-style/src/pass-style-helpers.js to avoid a dependency.
  *
  * Deliberately a genuine TypedArray brand check via the `%TypedArray%`
  * `[Symbol.toStringTag]` getter, NOT `ArrayBuffer.isView`. Both are
@@ -78,7 +78,7 @@ assert(getTypedArrayToStringTag);
  * freeze-throw is the sole reason `harden` special-cases here (see
  * `freezeTypedArray`); a `DataView` freezes normally and must take the
  * ordinary `freeze` path, so the DataView-inclusive `isView` would be the
- * wrong, less-precise test. (`byteArray.js` commits to `isView` for a
+ * wrong, less-precise test. (`byte-array.js` commits to `isView` for a
  * different question — emulated-vs-native shape on an already-known
  * `Uint8Array` — where DataViews are already excluded.)
  *

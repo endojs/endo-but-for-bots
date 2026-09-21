@@ -5,7 +5,7 @@ import {
   PASS_STYLE,
   confirmOwnDataDescriptor,
   confirmPassStyle,
-} from './passStyle-helpers.js';
+} from './pass-style-helpers.js';
 
 /**
  * @import {PassStyleHelper} from './internal-types.js'

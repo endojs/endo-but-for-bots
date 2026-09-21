@@ -1,6 +1,6 @@
 import type { RemotableBrand } from '@endo/eventual-send';
 /* eslint-disable no-use-before-define */
-import { PASS_STYLE } from './passStyle-helpers.js';
+import { PASS_STYLE } from './pass-style-helpers.js';
 
 /**
  * JS values that correspond to ocapn Atoms, most of which are JS primitives,

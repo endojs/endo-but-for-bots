@@ -6,7 +6,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import hardenIsNoop from '@endo/harden/is-noop.js';
 import { getMethodNames } from '@endo/eventual-send/utils.js';
-import { passStyleOf } from '../src/passStyleOf.js';
+import { passStyleOf } from '../src/pass-style-of.js';
 import { Far, GET_METHOD_NAMES } from '../src/make-far.js';
 
 /**

@@ -1,7 +1,7 @@
 import harden from '@endo/harden';
 import { Fail } from '@endo/errors';
-import { PASS_STYLE } from './passStyle-helpers.js';
-import { assertPassable } from './passStyleOf.js';
+import { PASS_STYLE } from './pass-style-helpers.js';
+import { assertPassable } from './pass-style-of.js';
 
 /**
  * @import {Passable,CopyTagged} from './types.js'
