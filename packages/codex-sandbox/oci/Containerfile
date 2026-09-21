@@ -18,46 +18,8 @@
 #   # or pass per session:
 #   #   rootfs: "oci:localhost/codex@sha256:<built-digest>"
 
-FROM docker.io/library/node:22.19.0-bookworm-slim@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90
-
-ENV LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  TZ=UTC \
-  SOURCE_DATE_EPOCH=1757376000
-
-# General programming toolchain + what native npm modules and pip need:
-#   - ca-certificates + curl : HTTPS to package registries and the API
-#   - git                    : the backbone of most coding workflows
-#   - ripgrep                : the fast search Codex Code shells out to
-#   - build-essential python3: node-gyp / native addons, pip packages
-# Use an immutable Debian snapshot. The base digest and snapshot timestamp are
-# reviewed together; Check-Valid-Until is disabled because snapshots do not
-# move their Release-file clock forward.
-RUN sed -i \
-      -e 's|deb.debian.org/debian-security|snapshot.debian.org/archive/debian-security/20250908T000000Z|g' \
-      -e 's|deb.debian.org/debian|snapshot.debian.org/archive/debian/20250908T000000Z|g' \
-      /etc/apt/sources.list.d/debian.sources \
-  && ! grep -q 'deb.debian.org' /etc/apt/sources.list.d/debian.sources \
-  && grep -q 'snapshot.debian.org/archive/debian-security/20250908T000000Z' \
-      /etc/apt/sources.list.d/debian.sources \
-  && grep -q 'snapshot.debian.org/archive/debian/20250908T000000Z' \
-      /etc/apt/sources.list.d/debian.sources \
-  && printf 'Acquire::Check-Valid-Until "false";\n' \
-      > /etc/apt/apt.conf.d/99snapshot \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    git \
-    ripgrep \
-    build-essential \
-    python3 \
-    python3-pip \
-    python3-venv \
-  && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt/* \
-  && rm -f /var/cache/ldconfig/aux-cache \
-  && : > /var/log/dpkg.log \
-  && : > /var/log/alternatives.log
+ARG ENDO_DEV_IMAGE
+FROM ${ENDO_DEV_IMAGE}
 
 # Install exactly the lockfile-resolved Codex CLI and platform binary before
 # dropping privileges. npm verifies every downloaded artifact against the

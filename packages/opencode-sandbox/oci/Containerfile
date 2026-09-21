@@ -11,14 +11,8 @@
 # time and the runtime fetch is disabled. The image runs as root inside the
 # slice; privilege separation is the sandbox driver's responsibility.
 
-FROM docker.io/library/node:22-bookworm-slim
-
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    git \
-    ripgrep \
-  && rm -rf /var/lib/apt/lists/*
+ARG ENDO_DEV_IMAGE
+FROM ${ENDO_DEV_IMAGE}
 
 COPY opencode /usr/local/bin/opencode
 RUN chmod 0755 /usr/local/bin/opencode && opencode --version

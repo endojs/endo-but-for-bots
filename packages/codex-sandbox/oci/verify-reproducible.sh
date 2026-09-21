@@ -18,8 +18,8 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-"$script_dir/build-reproducible.sh" "$first" "$image_platform"
-"$script_dir/build-reproducible.sh" "$second" "$image_platform"
+ENGINE=podman "$script_dir/build-reproducible.sh" "$first" "$image_platform"
+ENGINE=podman "$script_dir/build-reproducible.sh" "$second" "$image_platform"
 
 podman push --quiet --digestfile "$first_digest" "$first" \
   "oci:$first_layout:reproducible"
