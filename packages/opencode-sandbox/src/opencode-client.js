@@ -42,7 +42,6 @@ import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 import {
   awaitBarrier,
@@ -175,8 +174,6 @@ const defaultMakeStdinWriter = async proc =>
  * @property {string} [systemPrompt] - The session persona baked into the
  *   opencode agent. A `send` whose `options.systemPrompt` differs is refused:
  *   the agent prompt is fixed at config load.
- * @property {string} [initialPrompt] - Optional one-shot prompt fired (and
- *   drained) at construction.
  * @property {readonly string[]} [bridgeArgv] - Spawn argv for the in-slice
  *   bridge. Defaults to `['node', '/opt/opencode-bridge/bridge.mjs']`.
  * @property {Record<string, string>} [env] - Extra per-spawn env merged on
@@ -215,7 +212,6 @@ export const makeOpencodeClient = ({
   rootfsLabel = '',
   model = '',
   systemPrompt,
-  initialPrompt,
   bridgeArgv = DEFAULT_BRIDGE_ARGV,
   env = {},
   removeState,
@@ -753,21 +749,6 @@ export const makeOpencodeClient = ({
   };
 
   const createClient = () => {
-    // Fire-and-forget the initial prompt: queue it as the first turn and
-    // drain it in the background. Hosted controllers do not supply this.
-    if (initialPrompt) {
-      const initReader = enqueueTurn(String(initialPrompt), {});
-      (async () => {
-        for await (const event of iterateReader(
-          /** @type {any} */ (initReader.reader),
-          { buffer: 8 },
-        )) {
-          // discarded — nobody is watching this turn's transcript
-          void event;
-        }
-      })().catch(() => {});
-    }
-
     /** @type {Promise<void> | undefined} */
     let terminationFlight;
     /** @type {Promise<void> | undefined} */

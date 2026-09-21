@@ -370,8 +370,16 @@ This slice is not deployed.
 The bridge is baked into the image: rebuild and pin the OpenCode image together
 with the host client at the next coordinated cutover, and retire old session
 plans using the old release first.
-The remaining fire-and-forget `initialPrompt` client path is a separate deletion
-candidate; it has no current hosted-controller caller.
+The fire-and-forget `initialPrompt` client path has been removed;
+repository search found no production caller.
+Client construction no longer has a branch that dispatches a prompt and
+silently discards all events/errors.
+A regression verifies construction neither spawns the bridge nor writes a
+command, and only the subsequent explicit send dispatches a turn.
+This removes a replayable side-effect path rather than adding durable state.
+The focused client/controller suites pass 51 tests; changed-file lint has no
+errors. Independent adversarial source review approved this deletion;
+deployment remains pending.
 The full OpenCode suite passes 227 tests, and an independent reviewer reran
 72 client, plan, controller, and subprocess startup tests successfully.
 Package ESLint reports zero errors and 37 warnings; formatting and diff checks pass.
@@ -1008,6 +1016,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | FA-04: remove obsolete OpenCode construction prompt dispatch | 51 client/controller tests pass; independent source review and lint pass; no new durable state; not deployed |
 | 2026-09-21 | FA-07: expose account-scoped broker model catalogs using existing credential owners | 45 shared, three Codex, seven OpenCode, and one real-daemon lifecycle test pass independently; static catalog removal/admission wiring pending; not deployed |
 | 2026-09-21 | Retrospective durability: checkpoint directory flushes (`c645f567f`) | 13 tests and independent review pass; Tokyo filesystem supports required flushes; pushed, not deployed |
 | 2026-09-21 | Retrospective durability: persist marshal formula before name publication and retain pending slot dependencies | Nine manager/persistence tests including concurrent-root removal, lost acknowledgement, and real daemon restart pass; independent review; not deployed |
