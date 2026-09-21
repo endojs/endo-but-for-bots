@@ -46,7 +46,7 @@ no retained formula referring to it.
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
-| FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open; provider-backed model discovery prioritized before further acceptance |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
@@ -335,6 +335,37 @@ The direct runtime is represented internally by the absence of a hosted backend 
 externally as `provider`/Fae.
 OpenRouter catalogs are separately declared in Floot and OpenCode.
 [Account views](src/account-watch.js) use backend-based identities.
+
+Additional operator finding (2026-09-21): Tokyo's Codex menu is restricted to
+`services.endo.codexSandbox.models` in endo-host `hosts/common.nix`.
+`modules/endo-daemon.nix` passes the JSON as `ENDO_CODEX_MODELS`.
+Codex setup copies its IDs into the retained broker configuration as well as the
+backend catalog, so adding a UI model currently changes retained service policy
+and requires deployment/retirement instead of ordinary discovery.
+Only Sol was configured; Luna was therefore absent from the menu.
+The temporary, uncommitted NixOS Luna addition was withdrawn at the operator's request.
+
+Required in this remediation session, before resuming model-dependent acceptance:
+
+- Remove deployment-specified model lists; NixOS must not enumerate UI models.
+- Obtain model options and available thinking/capability metadata from the
+  provider's supported discovery interface, using the configured account through
+  the appropriate runtime adapter where necessary (for example Codex app-server).
+- Share provider discovery between Fae and OpenCode instead of separate static
+  OpenRouter lists; project only routes supported by the selected runtime/account.
+- Keep discovery distinct from session execution and credential ownership:
+  listing models must not create a conversation or start an inference turn.
+- Expose unavailable/failed/stale discovery honestly; do not silently substitute
+  another model or restore a deployment-owned static catalog on failure.
+- Verify the new-session UI receives the discovered choices, including Luna and
+  OpenRouter's free auto route, without editing NixOS or replacing a broker to
+  change those choices. Preserve exact session route pinning and broker authority.
+
+Acceptance cost policy is separate from discovery: test Codex with `gpt-5.6-luna`,
+Fae with `openrouter/free`, and OpenCode with `openrouter/openrouter/free`.
+The host test drivers must refuse missing routes and existing paid-route manifests
+before inference, while still allowing inspection and cleanup.
+This is required work, not a future deferral or a claim of completed discovery.
 
 Model these independently:
 
@@ -839,6 +870,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-11: specify private-journal creation/revival boundary | Source analysis and adversarial design review identified ID-reservation and initial-publication races; implementation and fault-injection tests pending; no runtime changes |
 | 2026-09-21 | FA-11: remove private-journal imports and migration acknowledgements | Strict host schema creation/opening, creation fences, and poisoned-mail preservation; 430 Floot tests pass; adversarial review approved; old-release session retirement and coordinated deployment pending |
 | 2026-09-21 | FA-04: remove obsolete native-session resume and fence failed restoration | 227 OpenCode tests pass; 72 independently rerun; old bridge images rejected before prompts; image rebuild/pinning and coordinated deployment pending |
+| 2026-09-21 | FA-07: prioritize provider-backed model discovery and remove NixOS model enumeration | Operator requirement recorded; NixOS Luna workaround withdrawn; implementation, UI verification, and Luna/free-route acceptance pending |
 
 ## Request
 
