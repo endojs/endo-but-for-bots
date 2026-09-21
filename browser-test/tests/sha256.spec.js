@@ -8,6 +8,20 @@ const { test, expect } = require('@playwright/test');
 const ABC_SHA256 =
   'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
 
+// The browser test needs one bundle exposing both arms — `sha256` from `.` and
+// `sha256Async` from `./async` — so a single Playwright page can check both. No
+// published module exports both, so the bundle entry combines them. Rather than
+// commit a fixture module for this, the entry source is inlined here and served
+// through the `read` power at a virtual location *inside* `packages/sha256/test/`.
+// Keeping the virtual location under the package is what lets the self-imports
+// resolve against the workspace, and importing through `@endo/sha256` /
+// `@endo/sha256/async` (rather than the `src/` implementation files) is what
+// makes the bundle prove the `browser` condition selects the browser builds for
+// both export arms.
+const entrySource =
+  `export { sha256 } from '@endo/sha256';\n` +
+  `export { sha256Async } from '@endo/sha256/async';\n`;
+
 const makeBrowserBundle = async () => {
   await import(
     pathToFileURL(
@@ -34,11 +48,16 @@ const makeBrowserBundle = async () => {
       'packages',
       'sha256',
       'test',
-      'browser-entry.js',
+      // Synthetic — never written to disk; served by `read` below. Placed under
+      // the package's test dir only so its self-imports resolve.
+      'browser-entry.generated.js',
     ),
   ).href;
   /** @param {string} location */
-  const read = location => fs.promises.readFile(new URL(location));
+  const read = location =>
+    location === entryLocation
+      ? Promise.resolve(new TextEncoder().encode(entrySource))
+      : fs.promises.readFile(new URL(location));
   return makeBundle(read, entryLocation, {
     conditions: new Set(['browser']),
   });
