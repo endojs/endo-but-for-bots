@@ -966,6 +966,11 @@ commit: the selection is derived from what the select shows (the search's
 matches), not from all the account offers; a thinking level the refreshed
 model no longer offers is replaced by its highest; the shared read keys the
 "every backend" ask apart from an empty backend name.
+Committed as `64176d7d5` and published; the host pin `84a6b90` removes the
+NixOS model option. The prebuild request on Tokyo was refused by the
+session's deploy guard, so the cutover (prebuild, prepare, broker
+retirement, switch, discovery verification, Luna/free-route acceptance)
+awaits the operator; nothing is deployed.
 Recorded, not changed: a backend may answer up to sixteen accounts of 4096
 descriptors each; a subagent delegated during a catalog outage is a new pin
 and is refused then; the direct provider's `lal` OpenRouter adapter still reads
