@@ -15,6 +15,15 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 const textToBase64 = text => encodeBase64(new TextEncoder().encode(text));
 harden(textToBase64);
 
+/** @param {string[]} path */
+const displaySecretName = path =>
+  path[0] === 'secrets' && path.length > 1
+    ? path.slice(1).join('/')
+    : `/${path.join('/')}`;
+
+/** @param {string[][]} paths */
+const secretNames = paths => paths.map(displaySecretName).sort();
+
 /**
  * @typedef {object} SecretRow
  * @property {string} secretId
@@ -145,7 +154,7 @@ const SecretsView = ({
         h(
           'label',
           null,
-          'Inventory name',
+          'Secret name',
           h('input', {
             name: 'name',
             required: true,
@@ -248,38 +257,23 @@ const SecretsView = ({
               'div',
               { class: 'secret-summary' },
               h(
-                'code',
-                // Only the prefix is rendered, and no `title` carries the
-                // whole identifier: the design calls for a stable prefix, and
-                // the full value is a durable record selector that has no
-                // business sitting in the DOM.
-                { class: 'secret-id' },
-                secretId.slice(0, 12),
+                'h3',
+                { class: 'secret-name' },
+                secretNames(petNamePaths)[0] || 'Unnamed secret',
               ),
-              h('span', { class: 'secret-state' }, summary.state),
-              h('span', null, `generation ${summary.generation}`),
             ),
-            h(
-              'div',
-              { class: 'secret-pet-names' },
-              h('span', null, 'Inventory paths'),
-              petNamePaths.length === 0
-                ? h('span', { class: 'secret-path-missing' }, 'No known paths')
-                : h(
-                    'ul',
-                    null,
-                    ...petNamePaths.map(path =>
-                      h(
-                        'li',
-                        { key: path.join('/') },
-                        h('code', null, path.join('/')),
-                      ),
-                    ),
-                  ),
-            ),
+            petNamePaths.length > 1
+              ? h(
+                  'p',
+                  { class: 'secret-aliases' },
+                  'Also known as: ',
+                  secretNames(petNamePaths).slice(1).join(', '),
+                )
+              : null,
             h(
               'form',
               {
+                class: 'secret-description-form',
                 autocomplete: 'off',
                 /** @param {{ preventDefault: () => void }} event */
                 onSubmit: event => {
@@ -304,6 +298,21 @@ const SecretsView = ({
                   disabled: loading || summary.state === 'revoked',
                 },
                 'Update description',
+              ),
+            ),
+            h(
+              'dl',
+              { class: 'secret-details' },
+              h('dt', null, 'Status'),
+              h('dd', { class: 'secret-state' }, summary.state),
+              h('dt', null, 'Generation'),
+              h('dd', null, String(summary.generation)),
+              h('dt', null, 'ID'),
+              // Only a prefix: never expose the full durable record selector.
+              h(
+                'dd',
+                null,
+                h('code', { class: 'secret-id' }, secretId.slice(0, 12)),
               ),
             ),
             h(
@@ -719,9 +728,14 @@ export const secretsComponent = (
       });
     });
     rows.sort((left, right) => {
-      const leftRevoked = left.summary.state === 'revoked' ? 1 : 0;
-      const rightRevoked = right.summary.state === 'revoked' ? 1 : 0;
-      return leftRevoked - rightRevoked;
+      const leftName = secretNames(left.petNamePaths)[0];
+      const rightName = secretNames(right.petNamePaths)[0];
+      if (leftName === undefined && rightName !== undefined) return 1;
+      if (rightName === undefined && leftName !== undefined) return -1;
+      return (
+        (leftName || '').localeCompare(rightName || '') ||
+        left.secretId.localeCompare(right.secretId)
+      );
     });
     events = auditEvents;
   };
