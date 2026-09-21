@@ -53,6 +53,62 @@ no retained formula referring to it.
 
 ## Findings register
 
+### Pre-merge design review: native recovery scope and proportionality
+
+**Implementation stopped for operator discussion on 2026-09-21.**
+Do not resume the native producer architecture, activate it, or treat the earlier
+conditional adapter approval as approval of its expanded design without this review.
+The operator requires implementation complexity, operational risk, and research
+to be weighed against the actual problem before PR merge.
+
+The demonstrated problem is narrower than automatic crash recovery: after a
+worker/daemon loss, an absent in-memory scope does not prove that its native
+resources stopped. Existing prefix/port-based cleanup also lacks exact ownership
+proof. The committed fail-closed fix preserves state instead of acknowledging
+unproven cleanup. It does not itself require a new privileged recovery service.
+
+The proposed solution expanded from a portable stop adapter into a root-managed
+per-incarnation producer service, durable admission/retirement records, new worker
+bootstrap and authentication, controller relocation over CapTP, per-session native
+runtime/listener composition, immutable release provisioning, and changes to
+cgroup and mount authority. This is a substantial architecture change, not a small
+adapter implementation. It has not had a comparative design review or Tokyo proof.
+
+Mandatory pre-merge review items:
+
+1. **Required outcome and acceptable failure mode.** Decide whether automatic
+   per-session crash recovery is required now. Compare fail-closed behavior plus
+   explicit operator retirement/reset, especially for this disposable test bed.
+   Preserve Secrets, renewal owners, and workspaces in every option.
+2. **Containment granularity and alternatives.** Compare using/verifying the
+   existing daemon or worker shutdown boundary, coordinated whole-service restart,
+   and a new per-session producer boundary. Research actual Podman/conmon/helper
+   process and cgroup placement before selecting an implementation. None is safe
+   merely because a process disappeared or a unit reports inactive.
+3. **Durable ownership protocol.** Review the new lifecycle/append-store format,
+   uncertain writes, operation-payload binding, restart semantics, orphan handling,
+   and full-history storage cost. Twenty tests in four SES configurations support
+   the draft core only; they do not prove native containment or crash recovery.
+4. **Privilege and authentication.** Review the proposed root service, fixed-unit
+   API, bearer/verifier handshake, private sockets, immutable profile/release
+   configuration, and cgroup escape prevention. Replacing unrestricted mount sudo
+   needs its own explicit design; do not silently expand privileged operations.
+5. **Endo integration and authority.** Review the new fixed-worker export and
+   producer wrapper, moving controllers into a separate process, per-incarnation
+   runtime composition, and separating native listeners from shared credential
+   brokers. Confirm formula durability, cancellation, replay, and capability
+   attenuation using actual daemon tests, not only injected local objects.
+6. **Merge/deployment decision.** Choose whether this belongs in PR #1248, should
+   be split into a separately reviewed project, or should be replaced with a
+   smaller operational policy. Set acceptance evidence and a rollback plan before
+   implementation resumes. No speculative native recovery code is merge-ready.
+
+Current checkpoint: the lifecycle/store and their tests are uncommitted drafts;
+the fixed-worker/producer wrapper and package export changes are incomplete and
+uncommitted. No host helper/Nix changes have landed, no old cleanup paths have
+been removed, and none of this architecture has been deployed. The draft is
+preserved for review, not adopted as the selected solution.
+
 ### Retrospective durability audit — required, in progress
 
 The inventory starts at the unified-sandbox design commit `3332f1928` and
@@ -282,6 +338,21 @@ its existing JSON object/non-array check. Six input shapes are covered without
 changing normalization behavior. Twenty-six focused tests pass independently,
 scoped lint has no errors, and actual OpenCode documentation conversion passes.
 Other packages' documentation diagnostics remain open.
+The subsequent declaration correction clears those remaining errors: native
+controllers explicitly import types referenced by their emitted signatures,
+the platform HTTP factory exposes its actual exo methods instead of `object`,
+asset-server introspection types its existing optional capability probe, and
+hosted-agent directly declares its pass-style dependency.
+The ignored declaration/map pair for deleted `setup-peer.js` was quarantined,
+not restored as compatibility code; it remains recoverable outside the checkout.
+Verified generated outputs were quarantined before rebuilding, without moving
+checked-in declarations. The clean root declaration build and full documentation
+run now pass; documentation reports zero errors and 175 warnings.
+Seven HTTP and 44 asset-server tests pass, including the package's daemon tests.
+All 14 opted-in root type-contract tasks also pass.
+These changes alter type surfaces, not native cleanup or credential behavior;
+incremental generation and the package test-fixture diagnostics remain separate
+open checks. No Tokyo deployment is implied by local documentation success.
 Three Floot source contract corrections cover optional cached-input usage,
 snapshot wire validation, and optional tool-preview truncation flags.
 Independent review rejected an unchecked snapshot cast: local callbacks can
@@ -1283,6 +1354,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Repair public native-controller/HTTP declarations and missing hosted-agent type dependency | Clean declarations and full docs pass (0 errors, 175 warnings); 7 HTTP and 44 asset-server tests pass; independently reviewed; incremental generation and native deployment remain pending |
 | 2026-09-21 | Correct OpenCode bridge and transcript declaration shapes | 26 focused tests and independent review pass; scoped lint has no errors and package docs convert; annotations only, no state or runtime behavior changes; not deployed |
 | 2026-09-21 | Scope API documentation checking to each package's production roots | Two regression tests and independent review pass; imported dependency errors remain visible; five missing entrypoints recovered; full docs still fails with 13 errors and 104 warnings |
 | 2026-09-21 | Correct Floot source contracts and validate watch events before caching; expand host cleanup audit | 36 focused tests pass; review found unchecked snapshot typing and invalid-data cache poisoning, both corrected; test fixture type errors remain; native recovery integration and deployment pending |
