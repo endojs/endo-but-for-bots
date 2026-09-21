@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-08 |
-| **Updated** | 2026-09-17 |
+| **Updated** | 2026-09-21 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
@@ -23,6 +23,16 @@ which of them become runtime rather than structural. The broker model is retaine
 only as the documented multi-tenant hardening path (§ *Design Decisions*, item 1)
 should a deployment need structural cross-guest isolation before ocapn's
 domain-socket transport lands.
+
+Updated 2026-09-21 to **check the approach against the actual daemon client API**
+(the maintainer's "please check" / "check the approach against the actual daemon
+client API before landing"). The mechanism is realizable today with **no new daemon
+surface**: `makeEndoClient` → `getBootstrap` → `E(bootstrap).host()` reaches the
+bootstrap root host, and `E(host).lookupById(formulaId)` (guarded
+`M.call(IdShape).returns(M.promise())` on `HostInterface`,
+`packages/daemon/src/interfaces.js`) resolves a formula-identifier string to its
+value. § *Scoping* and § *Dependencies* now cite these named symbols rather than
+describing the resolution abstractly.
 
 ## What is the Problem Being Solved?
 
@@ -130,14 +140,22 @@ it is **never accepted from the MCP client over the wire**: no `tools/call`, no
 a property of the server's configured environment, not a value the confined client
 can name, forge, or vary per call.
 
-**How the server reaches the guest capability.** The server uses the usual Endo
-daemon client (`@endo/daemon`'s client over `whereEndoSock(...)`,
-`packages/where/index.js`) to open a session to the daemon and obtain the
-**bootstrap root host**. It then resolves the configured formula id against that
-root host's ambient daemon powers to get the one guest's attenuated facet — the
-same resolution [endo-claude](endo-claude.md)'s host-only `inferenceProvider`
-performs ("the root that resolves *any* formula id against ambient daemon powers",
-its Design Decision 8). All subsequent `tools/list` / `tools/call` traffic is
+**How the server reaches the guest capability (checked against the daemon client
+API).** The server uses the usual Endo daemon client, exactly as
+`packages/cli/src/context.js` does: `makeEndoClient` (`@endo/daemon`,
+`packages/daemon/src/client.js`) over the socket path
+`whereEndoSock(process.platform, process.env, info)` (`@endo/where`,
+`packages/where/index.js`) returns a `getBootstrap`, and `E(getBootstrap()).host()`
+yields the **bootstrap root host**. That host resolves the configured formula id to
+the one guest's value by the agent-only registry method
+**`E(host).lookupById(formulaId)`** — guarded as
+`lookupById: M.call(IdShape).returns(M.promise())` on `HostInterface`
+(`packages/daemon/src/interfaces.js`), where `IdShape` is the formula-identifier
+string. This is the concrete daemon-client form of "the root that resolves *any*
+formula id against ambient daemon powers" that [endo-claude](endo-claude.md) Design
+Decision 8 names, and it is what makes the maintainer's simplification realizable
+today without any new daemon surface: `lookupById` already exists on the host the
+ordinary client reaches. All subsequent `tools/list` / `tools/call` traffic is
 served against that one resolved facet. The server inherits from `claude` only what
 the confinement slice grants it: **stdio to its parent, and reach to the daemon
 socket** — no other guest's connection, no bearer, no listening port.
@@ -570,7 +588,8 @@ adapter-implementation prerequisite [endo-claude](endo-claude.md) already names.
 **stdio server** (the claude-spawned command named by `--mcp-config`) is a single
 process that, at startup: reads and validates `ENDO_GUEST_FORMULA_ID` from its
 environment, opens a daemon session with the usual client, resolves the one guest's
-facet at the bootstrap root host, takes and pins the pruned `tools/list` snapshot,
+facet at the bootstrap root host (`E(host).lookupById(formulaId)`), takes and pins
+the pruned `tools/list` snapshot,
 then runs the MCP framing loop — decoding `tools/list`/`tools/call` frames off
 stdin, applying the name- and argument-scope dispatch check, invoking the projection
 (`tools/call -> E(facet).method`), and writing replies to stdout.
@@ -667,7 +686,7 @@ positive-confinement test. An implementation is accepted only when these pass.
 | [endo-agent-tools](endo-agent-tools.md) | **Projection.** The MCP adapter (`packages/agent-tools/src/adapters/mcp.js`, a declared stub) that maps a `ToolRecord`'s name/description/parameters/invoke to an MCP tool and dispatches `tools/call` to the facet. This server hosts it over stdio; it does not reinvent it. |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, the `initialize` response *shape*, and the `mcp__<server>__<tool>` naming *grammar* (each transport pins its own `serverInfo.name`, `endo` here vs `endo-gateway` there); differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
 | [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
-| Endo daemon (`@endo/daemon`, `packages/where`) | **Session substrate.** Provides the client (`makeEndoClient` over `whereEndoSock(...)`) and the bootstrap root host against which the formula id resolves to a facet. A **new optional obligation** for multi-tenant hardening: publish a per-session, formula-id-scoped bootstrap (the ocapn offset-0 gateway brought forward) so the connection resolves only the one guest (Open Questions). |
+| Endo daemon (`@endo/daemon`, `packages/where`) | **Session substrate.** Provides the client (`makeEndoClient` over `whereEndoSock(...)`, `getBootstrap`, `E(bootstrap).host()`) and the bootstrap root host against which `E(host).lookupById(formulaId)` (guarded `M.call(IdShape)` on `HostInterface`) resolves the formula id to a facet — the existing surface that makes this simplification need no new daemon method by default. A **new optional obligation** for multi-tenant hardening: publish a per-session, formula-id-scoped bootstrap (the ocapn offset-0 gateway brought forward) so the connection resolves only the one guest (Open Questions). |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | **Slice plumbing (reduced obligation).** Owns the per-spawn slice confining `claude`. Under this simplification the earlier per-guest-socket re-mount and per-guest-uid `SO_PEERCRED` obligations are **withdrawn**; what remains is that the confining slice must let the server reach the daemon socket (§ *Scoping*), the inverse of the earlier draft's scrub-the-socket-path posture. |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
 | `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming convention, adopted (not a construction gate).** This server adopts its flat interface-native camelCase convention; it does **not** key any fail-closed construction throw on that PR's reserved-name list. A bare-name collision against its reservations is at most an advisory warning here. |
