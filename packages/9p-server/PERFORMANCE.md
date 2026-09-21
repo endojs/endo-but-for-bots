@@ -19,11 +19,19 @@ the options by expected gain against effort.
 
 ## Summary
 
-- The stack has nine layers, but only three of them do work per operation that
-  is not already near the floor: the kernel v9fs client (how many 9P messages
-  a syscall becomes), the `@endo/9p-server` bridge (how many CapTP calls a 9P
-  message becomes, and that it handles one message at a time), and the backend
-  (how many syscalls a CapTP call becomes).
+- Measured in one process (§ Measured), the three largest per-operation costs
+  are in the exo and stream layers, not in transport or syscalls: `harden`
+  walking every element of each decoded read chunk (about 154 ms per 128 KiB
+  `Tread`, which is 14 times the rest of the read path), a fresh `makeExo`
+  class definition per `lookup`, `open`, `list` and per read or write stream
+  (about 2 ms each under lockdown), and pure-JS base64 on a Node without the
+  native intrinsic (about 11 ms per 128 KiB, encode plus decode).
+  All three apply in every topology, and each is a small change.
+- Below those, three layers do work per operation that is not already near
+  the floor: the kernel v9fs client (how many 9P messages a syscall becomes),
+  the `@endo/9p-server` bridge (how many CapTP calls a 9P message becomes,
+  and that it handles one message at a time), and the backend (how many
+  syscalls a CapTP call becomes).
 - Whether CapTP costs anything at all depends on where the `Filesystem` cap
   was minted.
   The mounter is minted in the host's `@main` worker.
@@ -183,6 +191,138 @@ A `stat()` of an already-resolved path is one `Tgetattr`.
 Reading a file is `Twalk` (clone) + `Tlopen` + one `Tread` per `iounit`
 (`msize - 24`, `server.js:580`) + `Tclunk`.
 Mapping a file is one 4 KiB `Tread` per page fault.
+
+## Measured
+
+`bench/bench.js` drives the bridge with a raw 9P client over its socket and
+reports the cost of each message type in each topology; `bench/child.js`
+hosts a node-fs `Filesystem` behind one or two netstring CapTP hops on the
+same fd wiring the daemon gives its workers.
+Run it as `LOCKDOWN_REPORTING=none node packages/9p-server/bench/bench.js`
+(the variable only quiets lockdown's intrinsic-removal report).
+It cannot measure layers 1 and 2: the client sends exactly the messages named,
+with no cache and no readahead, which is also what v9fs sends under
+`cache=none`.
+
+The numbers below are from a 4-vCPU Xeon at 2.8 GHz in a Firecracker VM,
+Node v22.22.2, on the tree at the commit above.
+They are single runs; the p99 column shows the spread, and only the ratios and
+orders of magnitude should be relied on.
+
+### As checked in
+
+| op                                     | mem                     | nodefs                  | captp1                              | captp2                              |
+| -------------------------------------- | ----------------------- | ----------------------- | ----------------------------------- | ----------------------------------- |
+| CapTP round trip (`statfs`)            | —                       | —                       | 1264 µs (p99 2513), 2 msgs          | 2738 µs (p99 4513), 2 msgs          |
+| stat one file (Twalk+Tgetattr+Tclunk)  | 1829 µs (p99 5936)      | 2490 µs (p99 7050)      | 4940 µs (p99 15909), 6 msgs         | 7917 µs (p99 24772), 6 msgs         |
+| Tgetattr                               | 176 µs (p99 407)        | 615 µs (p99 1034)       | 1639 µs (p99 4426), 2 msgs          | 2963 µs (p99 13861), 2 msgs         |
+| Twalk 5 names + Tclunk                 | 9586 µs (p99 17536)     | 12433 µs (p99 60868)    | 17148 µs (p99 56901), 20 msgs       | 20589 µs (p99 118308), 20 msgs      |
+| 32 concurrent Tgetattr, per op         | 128 µs                  | 647 µs                  | 1532 µs                             | 2336 µs                             |
+| Tread 131048 B, 8 MiB sequential       | 1 MB/s, 156 ms/Tread    | 1 MB/s, 165 ms/Tread    | 1 MB/s, 169 ms/Tread, 9 msgs, 1.34× bytes | 1 MB/s, 182 ms/Tread, 9 msgs, 1.34× bytes |
+| Tread 4096 B (page-fault pattern)      | 4.2 ms/Tread            | 5.1 ms/Tread            | 9.6 ms/Tread, 9 msgs                | 13.4 ms/Tread, 9 msgs               |
+| Twrite 131048 B, 8 MiB sequential      | 10 MB/s, 13.0 ms/Twrite | 10 MB/s, 12.3 ms/Twrite | 7 MB/s, 17.6 ms/Twrite, 7 msgs, 1.36× bytes | 5 MB/s, 28.7 ms/Twrite, 7 msgs, 1.36× bytes |
+| Treaddir, 1000 entries                 | 104 ms                  | 146 ms                  | 506 ms, 2069 msgs                   | 958 ms, 2069 msgs                   |
+| create+clunk+unlink cycle              | 2515 µs (p99 10085)     | 3556 µs (p99 7823)      | 7725 µs (p99 13112), 10 msgs        | 14011 µs (p99 41972), 10 msgs       |
+
+"msgs" is CapTP messages crossing the first hop per operation, counted at the
+netstring layer; the counts match the calls the table in the previous section
+predicts (two messages per call: the call and its return).
+
+### With one line changed
+
+Replacing `harden` with `freeze` on the record the bytes iterator returns for
+each decoded chunk (`packages/exo-stream/iterate-bytes-reader.js:172`) and
+rerunning:
+
+| op                                | mem                   | nodefs                | captp1                         | captp2                         |
+| --------------------------------- | --------------------- | --------------------- | ------------------------------ | ------------------------------ |
+| Tread 131048 B, 8 MiB sequential  | 11 MB/s, 12.2 ms/Tread | 12 MB/s, 10.8 ms/Tread | 6 MB/s, 20.3 ms/Tread          | 5 MB/s, 25.3 ms/Tread          |
+| Tread 4096 B (page-fault pattern) | 1.5 ms/Tread          | 1.9 ms/Tread          | 6.8 ms/Tread                   | 9.0 ms/Tread                   |
+
+Every other row was unchanged within the run-to-run spread, and the
+`@endo/exo-stream` suite passes with the change (153 tests).
+The change is not in this commit; it is reported here as a measurement.
+
+### What the numbers say
+
+1. **`harden` on a typed array walks every element.**
+   In isolation, `harden(new Uint8Array(n))` costs about 1.2 µs per element
+   here: 3 ms at 4 KiB, 66 ms at 64 KiB, 154 ms at 131048 bytes.
+   `iterateBytesReader` returns `harden({ done: false, value })` for every
+   chunk, with `value` the decoded `Uint8Array`
+   (`packages/exo-stream/iterate-bytes-reader.js:172`), so the checked-in
+   `Tread` cost is that walk plus about 12 ms of everything else, in every
+   topology.
+   `wire.js:157-166` documents the identical cost for 9P frames and chose
+   `freeze`, on the same reasoning: `harden` cannot make the elements of a
+   typed array immutable, so the walk buys nothing.
+   The same line is on the path of every consumer of a bytes reader, not only
+   the bridge.
+2. **`makeExo` defines a class per call.**
+   `makeExo` is `defineExoClass` followed by one `makeInstance`
+   (`packages/exo/src/exo-makers.js:232-241`), and under lockdown that costs
+   about 2.1 ms for the `Directory` interface (a probe of 200 calls; smaller
+   interfaces cost proportionally less).
+   `wrapBackend` mints a fresh exo per `lookup` (`wrap-backend.js:887-888`),
+   per `open` (`:703`), per `list` (`:921`), and each read or write mints a
+   stream exo (`bytes-reader-from-iterator.js:74`,
+   `bytes-writer-from-iterator.js:74`).
+   That is why a five-name `Twalk` costs about 10 ms in memory with no I/O at
+   all, why the stat pattern costs 1.8 ms where a `Tgetattr` costs 0.18 ms,
+   and most of the 1.5 ms a 4 KiB `Tread` still costs after the `harden`
+   fix.
+   The idiomatic fix is one `defineExoClass` per exo kind at `wrapBackend`
+   time (and at module load in `@endo/exo-stream`), with the path or the
+   iterator in `state`; instantiation is then microseconds.
+3. **Base64 is pure JS on this Node.**
+   `@endo/base64` prefers the native `Uint8Array.prototype.toBase64` intrinsic
+   when the engine has one (`packages/base64/src/encode.js:90-127`); Node
+   v22.22.2 does not, so the polyfill runs: 6.4 ms to encode and 4.5 ms to
+   decode 131048 bytes, against 0.25 ms and 0.14 ms through `Buffer`.
+   After the `harden` fix that is most of what a 128 KiB `Tread` or `Twrite`
+   costs in one process.
+   Options: a Node whose V8 ships the intrinsic (check
+   `typeof Uint8Array.prototype.toBase64` on the deployment), a `Buffer` fast
+   path in `@endo/base64` where `Buffer` exists, or not base64-encoding at all
+   (layer 5a).
+   The pattern check on the string is not the cost: matching a 174 KB string
+   against `M.string({ stringLengthLimit })` is 17 µs.
+4. **A CapTP hop is about 1.2 ms; the daemon relay doubles it.**
+   One hop 1.26 ms, two hops 2.74 ms for a trivial call, with `JSON.stringify`
+   of a 174 KB base64 payload at 0.8 ms and `JSON.parse` at 0.2 ms on top for
+   bulk messages.
+   Message counts per operation are exactly the call counts in the previous
+   section: 2 for `Tgetattr`, 20 for a five-name `Twalk`, 9 for `Tread`, 7 for
+   `Twrite`, 2069 for a 1000-entry `Treaddir`, 10 for a create cycle.
+   The stat pattern goes 2.5 ms in process, 4.9 ms one hop, 7.9 ms two hops;
+   a 10000-file `git status` under `cache=none` is 25, 49 or 79 seconds of
+   bridge time before the kernel and the serial dispatch add theirs.
+5. **Nothing overlaps.**
+   Thirty-two `Tgetattr`s issued together take as long as thirty-two issued
+   one after another, in every topology (128 vs 176 µs per op in memory,
+   647 vs 615 on node-fs, 1532 vs 1639 one hop, 2336 vs 2963 two hops).
+   In the hop topologies that is the serial dispatch forbidding the round
+   trips to overlap, which is the cost concurrent dispatch (layer 3) removes.
+6. **The node-fs backend adds about 0.45 ms per `Tgetattr`** (615 µs against
+   176 µs in memory): two `realpath` walks and two `stat`s, as predicted.
+7. **`Treaddir` pays per entry.**
+   About 0.1 to 0.2 ms per entry in one process on the stream-node path, and
+   two CapTP messages per entry across a hop, so 1000 entries cost 0.5 s one
+   hop and 1 s two hops where a paged `Cursor.read` would cost two messages.
+8. **`Twrite` at 12 to 14 ms per 128 KiB in one process** is the base64
+   encode and decode plus the writer exo.
+   The in-memory backend also copies the whole file when a write grows it
+   (`in-memory-backend.js:150-158`), so its write figure overstates a real
+   backing.
+
+### What this changes in the ranking
+
+The three in-process costs go above everything in the earlier list: they
+apply in every topology, they are each a contained change in one package, and
+together they are the difference between a 128 KiB `Tread` at 165 ms and one
+at about 1 ms.
+After them the order below stands, and the harness is the way to check each
+step.
 
 ## Layer by layer
 
@@ -386,6 +526,7 @@ Costs today:
 
 | Option                                                                                                        | Effect                                                                                                              | Effort | Risk                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Define each exo kind once with `defineExoClass` at `wrapBackend` time (`Directory`, `File`, `OpenFile`, `Cursor`, and the watcher, xattrs and blob exos) and instantiate per path, instead of `makeExo` per node | Measured 2.1 ms per `makeExo` becomes microseconds per instance; a five-name `Twalk` goes from about 10 ms of class definitions to the syscalls alone (§ Measured, item 2) | M | Mechanical refactor: per-instance closure state moves to `state`; the per-node methods do not change |
 | Add a bounded pair on `OpenFile`: `readAt(offset, length) → base64 string` and `writeAt(offset, base64) → bytes written`, capped at some size, keeping the stream methods for unbounded transfers | A `Tread` is one message and one reply, no exported sub-cap, no pump; the bridge falls back to streams when the method is absent | M | Interface addition to `OpenFileInterface` and the types; `DESIGN.md:572-602` prefers streams for bulk transfer, which this does not change |
 | Fold `kind` into a single backend `stat` that returns the kind with the attributes, and have `getAttrs`, `lookup` and `open` share it | Halves the syscalls behind `Tgetattr`, `Twalk` and `Tlopen` on node-fs; matches the seam's own "zero redundancy" rule (`designs/endo-fs-backend-seam.md:238-243`) | M | Backend interface change across in-memory, node-fs and from-mount |
 | Let `list()` entries carry attributes when the backend can supply them cheaply (`readdir` plus one `stat` each, or `statx` batching), so a bridge-side `Treaddir` can pre-answer the `Tgetattr`s that follow | `ls -l`, `find` and `git status` stop issuing one `getAttrs` per entry | M | Only pays with the bridge-side stash from layer 3; needs the stash to be safe across renames |
@@ -410,11 +551,15 @@ still runs.
 
 | Option                                                                | Effect                                                                     | Effort | Risk                                             |
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------ | ------------------------------------------------ |
+| `freeze` instead of `harden` the record `iterateBytesReader` returns per chunk (`iterate-bytes-reader.js:172`), as `wire.js` already does for frames | Measured: a 128 KiB `Tread` from 156 to 182 ms down to 11 to 25 ms in every topology; the exo-stream suite passes (§ Measured) | S | `harden` cannot freeze typed-array elements anyway; consumers relying on a frozen record still get one |
+| Define the reader and writer exo classes once at module load instead of `makeExo` per stream (`bytes-reader-from-iterator.js:74`, `bytes-writer-from-iterator.js:74`, `reader-from-iterator.js:53`) | One class definition less per `Tread`, `Twrite` and `Treaddir` (§ Measured, item 2) | S | None |
+| A `Buffer` fast path in `@endo/base64` where `Buffer` exists, or a Node whose V8 ships `Uint8Array.prototype.toBase64` | 6.4 ms encode and 4.5 ms decode per 128 KiB become about 0.25 and 0.14 ms (§ Measured, item 3) | S | The package already dispatches to the intrinsic when present; a `Buffer` branch is Node-only code in a portable package |
 | Bypass the stream for msize-bounded I/O (the `readAt`/`writeAt` pair) | Removes the pump, the sub-cap and two of three messages per `Tread`        | see 4  | see 4                                            |
 | Native bytes in CapTP                                                 | Removes base64 and the string-length validation everywhere                 | L      | A marshal and protocol change well beyond this path |
 | Streams as first-class objects with their own data channel (next section) | Takes bulk bytes off the CapTP message channel altogether                | L      | see next section                                 |
 
-Nothing inside `@endo/exo-stream` itself is worth changing for this path.
+The first two rows are the measured in-process costs of this layer; the
+stream protocol itself, and its buffering, are not where the time goes.
 
 ### 5a. Streams as first-class objects: a data plane beside CapTP
 
@@ -478,6 +623,8 @@ it changes nothing, because there is no transport.
 ### 6. CapTP and the daemon
 
 Role: see "Three topologies".
+Measured, one hop costs about 1.2 ms per call and two hops about 2.5 ms
+(§ Measured, item 4).
 The bridge's pipelining (`packages/9p-server/README.md:29-84`) collapses each
 9P message to one batch, which is the right shape for the remote topology and
 already done.
@@ -505,6 +652,9 @@ used for every workspace and config mount.
 - `write` opens per call with a create fallback (`:166-197`).
 - `list` is a single `readdir` with types (`:107-134`), which is already
   right.
+- Measured, a `Tgetattr` costs 615 µs on node-fs against 176 µs in memory
+  (§ Measured, item 6), so the two walks and two stats are about 0.45 ms per
+  call.
 
 | Option                                                                                    | Effect                                                         | Effort | Risk                                                                                                                    |
 | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------- |
@@ -540,41 +690,59 @@ but the bridge never calls them (see "Correctness items").
 ## Suggested order
 
 Ranked by expected gain per unit of effort, for the deployment as shipped.
+The first three are the measured in-process costs; they apply in every
+topology and each is one package.
 
-1. **Colocate.** Mint operator-exposed filesystems in `@main`, document it,
+1. **`freeze` the decoded chunk record** in `iterateBytesReader` (layer 5).
+   One line; measured 8 to 15 times on every read in every topology, and the
+   package's suite passes with it.
+2. **Define exo classes once** in `wrapBackend` and `@endo/exo-stream`
+   (layers 4 and 5).
+   Removes a 2 ms class definition from every `lookup`, `open`, `list`, read
+   and write.
+3. **Native base64** on Node, by intrinsic or by a `Buffer` fast path in
+   `@endo/base64` (layer 5).
+   The remaining 11 ms of a 128 KiB read or write in one process.
+4. **Colocate.** Mint operator-exposed filesystems in `@main`, document it,
    and detect the other case (layer 6).
    Zero code for the provisioner path, and the only fix that turns a
    cross-worker deployment into a local one.
-2. **Kernel mount options.** Thread `cache`, `msize` and `extraMountOptions`
+5. **Kernel mount options.** Thread `cache`, `msize` and `extraMountOptions`
    from a per-deployment setting into both mount call sites, default to
    `cache=readahead` (or `mmap` on older kernels) plus `noxattr`, and offer
    `cache=loose` per session (layer 2).
    Config-only once threaded; largest win for git.
-3. **Concurrent dispatch with correct `Tflush`** (layer 3).
-   The one structural change; it lets every later win apply per requester
-   rather than per connection.
-4. **The small bridge wins** (layer 3): pipeline the stream call, paged
-   `Treaddir`, stashed qids on `..`, single-use attribute prefetch on
-   `Twalk`, background `Tclunk`, a chunk list on receive.
+6. **Concurrent dispatch with correct `Tflush`** (layer 3).
+   The one structural change; measured, nothing overlaps today, and this is
+   what lets every later win apply per requester rather than per connection.
+7. **The small bridge wins** (layer 3): pipeline the stream call, paged
+   `Treaddir` (measured at two CapTP messages per entry today), stashed qids
+   on `..`, single-use attribute prefetch on `Twalk`, background `Tclunk`, a
+   chunk list on receive.
    Each is under a day and none changes an interface.
-5. **node-fs syscalls** (layer 7): the `FileHandle` LRU and a merged stat.
-   This is the dominant remaining cost in the same-worker topology.
-6. **Bounded `readAt`/`writeAt`** (layers 4 and 5) and a larger `msize`.
+8. **node-fs syscalls** (layer 7): the `FileHandle` LRU and a merged stat.
+   About 0.45 ms per `Tgetattr` today; the dominant in-process cost once
+   items 1 to 3 are done.
+9. **Bounded `readAt`/`writeAt`** (layers 4 and 5) and a larger `msize`.
    Largest win for the cross-worker and remote topologies; modest locally.
-7. **Ranged I/O for `Mount`, node-fs for worktrees** (layer 7).
-   Fixes the quadratic attach path.
-8. **Host-path fast path for provisioner-minted mounts** (layer 6).
-   Highest ceiling, but a policy decision to make first.
-9. **Streams as first-class objects with a data plane** (layer 5a).
-   The long-horizon answer for the cross-worker and remote topologies; a
-   design of its own, and worth writing once items 3 through 6 have shown
-   where the bytes still go.
+10. **Ranged I/O for `Mount`, node-fs for worktrees** (layer 7).
+    Fixes the quadratic attach path.
+11. **Host-path fast path for provisioner-minted mounts** (layer 6).
+    Highest ceiling, but a policy decision to make first.
+12. **Streams as first-class objects with a data plane** (layer 5a).
+    The long-horizon answer for the cross-worker and remote topologies; a
+    design of its own, and worth writing once items 6 through 9 have shown
+    where the bytes still go.
 
 ## How to measure
 
 Measure before and after each step, in each topology, or the results will not
 compose.
 
+- The harness: `LOCKDOWN_REPORTING=none node packages/9p-server/bench/bench.js`
+  (optionally a comma-separated subset of `mem,nodefs,captp1,captp2`) prints
+  the tables in § Measured for the current tree; run it before and after each
+  change, in each topology.
 - Inside the slice: `strace -f -c -e trace=file,desc git status` for syscall
   counts, and wall time for `git status`, `find . -type f | wc -l`,
   `tar cf /dev/null .`, `dd if=<big> of=/dev/null bs=1M`, and a `git commit`.
