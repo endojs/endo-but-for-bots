@@ -6,7 +6,6 @@ import {
   containsPath,
   makeSandboxSessionId,
   readMounterEnv,
-  readNativeProfile,
   readRecordedPath,
 } from '@endo/hosted-agent/session-plan.js';
 
@@ -29,7 +28,6 @@ import { readPinnedSliceImage } from './codex-image-reference.js';
  * @property {string} [workspaceDir]
  * @property {string} [workspaceHostPath]
  * @property {string} [subscription] `auto`, or a subscription id
- * @property {ReturnType<typeof readNativeProfile>} nativeProfile
  * @property {ReturnType<typeof readMounterEnv>} [mounterEnv]
  * @property {ReturnType<typeof assertContainerMounts>} containerMounts
  * @property {string} [model]
@@ -49,6 +47,8 @@ export const readCodexSessionPlan = text => {
   (value && typeof value === 'object' && !Array.isArray(value)) ||
     Fail`Codex session plan must be a record`;
   const recorded = /** @type {Record<string, any>} */ (value);
+  !Object.hasOwn(recorded, 'nativeProfile') ||
+    Fail`Retired nativeProfile field; recreate this hosted session plan`;
   (typeof recorded.sessionId === 'string' &&
     /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(recorded.sessionId)) ||
     Fail`Invalid Codex session identity`;
@@ -95,7 +95,6 @@ export const readCodexSessionPlan = text => {
     (typeof recorded.subscription === 'string' &&
       /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(recorded.subscription)) ||
     Fail`Codex plan subscription must be auto or a subscription id`;
-  const nativeProfile = readNativeProfile(recorded.nativeProfile);
   const containerMounts = assertContainerMounts(recorded.containerMounts);
   const mounterEnv =
     recorded.mounterEnv === undefined
@@ -126,7 +125,6 @@ export const readCodexSessionPlan = text => {
       ...(recorded.subscription === undefined
         ? {}
         : { subscription: recorded.subscription }),
-      nativeProfile,
       containerMounts,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
     }),

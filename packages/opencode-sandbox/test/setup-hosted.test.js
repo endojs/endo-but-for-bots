@@ -169,20 +169,11 @@ const baseEnv = async t => {
     ENDO_OPENCODE_CREDS_NAME: 'test-auth',
     ENDO_OPENROUTER_API_KEY: 'seed-token',
     ENDO_FLOOT_DIR: 'floot',
-    // Daemon-owned sessions require the broker and the resource profile.
+    // Daemon-owned sessions require the broker; resource policy is shared.
     ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
     ENDO_OPENCODE_BROKER_DIR: path.join(base, 'broker'),
     ENDO_OPENCODE_BROKER_OWNER_ID: 'test-broker',
     ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@sha256:${'a'.repeat(64)}`,
-    ENDO_OPENCODE_NATIVE_PROFILE: JSON.stringify({
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    }),
     // The mounter's own operator variables must not leak in from a developer
     // shell that runs the rootless mounter locally.
     NINEP_SUDO: undefined,
@@ -361,32 +352,22 @@ test.serial(
   },
 );
 
-test.serial(
-  'refuses to mint the backend without the broker image or the profile',
-  async t => {
-    const base = await baseEnv(t);
-    await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
-    const noBroker = preflightHost();
-    await t.throwsAsync(main(noBroker.host), {
-      message: /ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required/,
-    });
-    t.deepEqual(noBroker.mints, [], 'refused before any mint');
-    // The workspace root itself is absent: the refusal precedes the mkdir
-    // that would otherwise create it after the credential mint.
-    await t.throwsAsync(
-      access(path.join(base, 'workspaces')),
-      { code: 'ENOENT' },
-      'refused before any directory creation',
-    );
-    await baseEnv(t);
-    await withEnv(t, { ENDO_OPENCODE_NATIVE_PROFILE: undefined });
-    const noProfile = preflightHost();
-    await t.throwsAsync(main(noProfile.host), {
-      message: /ENDO_OPENCODE_NATIVE_PROFILE is required/,
-    });
-    t.deepEqual(noProfile.mints, []);
-  },
-);
+test.serial('refuses to mint the backend without the broker image', async t => {
+  const base = await baseEnv(t);
+  await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
+  const noBroker = preflightHost();
+  await t.throwsAsync(main(noBroker.host), {
+    message: /ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required/,
+  });
+  t.deepEqual(noBroker.mints, [], 'refused before any mint');
+  // The workspace root itself is absent: the refusal precedes the mkdir
+  // that would otherwise create it after the credential mint.
+  await t.throwsAsync(
+    access(path.join(base, 'workspaces')),
+    { code: 'ENOENT' },
+    'refused before any directory creation',
+  );
+});
 
 test.serial(
   'mints the broker service from the managed credential when the listener image is configured',
@@ -520,7 +501,6 @@ test.serial(
     );
     t.deepEqual(Object.keys(backend?.options.env ?? {}).sort(), [
       'OPENCODE_MCP_DIR',
-      'OPENCODE_NATIVE_PROFILE',
       'OPENCODE_WORKSPACE_BASE_DIR',
     ]);
     t.like(backend?.options.env, persistedRoots);
@@ -812,37 +792,6 @@ test.serial(
     );
     t.deepEqual(inspected, [], 'refused before resolving the slice image');
     t.deepEqual(optionLike.mints, [], 'refused before any mint');
-  },
-);
-
-test.serial(
-  'validates the operator native profile before any mint and records it for the backend',
-  async t => {
-    await baseEnv(t);
-    const text = JSON.stringify({
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 2,
-    });
-    await withEnv(t, { ENDO_OPENCODE_NATIVE_PROFILE: text });
-    const valid = preflightHost();
-    await main(valid.host);
-    const backend = valid.mints.find(mint =>
-      /opencode-backend-module\.js$/.test(mint.specifier),
-    );
-    t.is(backend?.options.env.OPENCODE_NATIVE_PROFILE, text);
-    await withEnv(t, {
-      ENDO_OPENCODE_NATIVE_PROFILE: JSON.stringify({ uid: 'root' }),
-    });
-    const invalid = preflightHost();
-    await t.throwsAsync(main(invalid.host), {
-      message: /decimal digit strings/,
-    });
-    t.deepEqual(invalid.mints, []);
   },
 );
 

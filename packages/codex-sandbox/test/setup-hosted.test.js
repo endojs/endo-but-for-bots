@@ -199,15 +199,6 @@ const baseEnv = async t => {
         supportedReasoningEfforts: [],
       },
     ]),
-    ENDO_CODEX_NATIVE_PROFILE: JSON.stringify({
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    }),
     NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
     NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
     NINEP_SUDO: '1',
@@ -354,16 +345,6 @@ test.serial('retained broker configuration cannot silently change', async t => {
     message: /retained service configuration changed/,
   });
   t.is(fake.mints.length, before);
-});
-
-test.serial('invalid native profile is refused before minting', async t => {
-  await baseEnv(t);
-  withEnv(t, { ENDO_CODEX_NATIVE_PROFILE: '{}' });
-  const fake = makeFakeHost();
-  await t.throwsAsync(main(fake.host, { exec: noExec }), {
-    message: /Native profile/,
-  });
-  t.deepEqual(fake.mints, []);
 });
 
 test.serial(

@@ -24,9 +24,6 @@
  *   CLAUDE_WORKSPACE_BASE_DIR  Root of owned per-session workspaces.
  *   CLAUDE_MCP_DIR             Root of per-session private directories
  *                              (socket relay, 9P socket, mount point).
- *   CLAUDE_NATIVE_PROFILE      The deployment resource profile recorded into
- *                              every plan; JSON with digit-string
- *                              quantities, validated before use.
  *   CLAUDE_MOUNTER_ENV         Optional JSON: the rootless mount settings
  *                              recorded into every plan for the session's
  *                              own 9P mounter.
@@ -52,7 +49,6 @@ import {
   makeSandboxSessionId,
   readClaudeSessionPlan,
   readMounterEnv,
-  readNativeProfile,
 } from './claude-session-plan.js';
 import {
   SANDBOX_DIR,
@@ -66,7 +62,7 @@ import {
 
 /** @import { EndoHost } from '@endo/daemon' */
 /** @import { SessionRequest } from './claude-backend-factory.js' */
-/** @import { PlanNativeProfile, RecordedClaudeSessionPlan } from './claude-session-plan.js' */
+/** @import { RecordedClaudeSessionPlan } from './claude-session-plan.js' */
 
 /**
  * Where the daemon session owner keeps this backend's records; shared with
@@ -78,7 +74,7 @@ export { controllerSpecifier };
 
 /**
  * Read the backend's explicit configuration. Nothing is defaulted: a missing
- * root or profile is a setup error, not a guess. The slice image and the
+ * root is a setup error, not a guess. The slice image and the
  * credential kind are not configuration here; they are read from the
  * recorded broker's persisted profile so a plan can never name an image the
  * broker did not pin.
@@ -94,11 +90,6 @@ export const resolveBackendConfig = env => {
     Fail`CLAUDE_WORKSPACE_BASE_DIR must be a normalized absolute path`;
   isNormalizedAbsolutePath(mcpBaseDir) ||
     Fail`CLAUDE_MCP_DIR must be a normalized absolute path`;
-  const profileText = env.CLAUDE_NATIVE_PROFILE;
-  typeof profileText === 'string' || Fail`CLAUDE_NATIVE_PROFILE is required`;
-  /** @type {PlanNativeProfile} */
-  const nativeProfile = JSON.parse(profileText);
-  readNativeProfile(nativeProfile);
   const mounterEnvText = env.CLAUDE_MOUNTER_ENV;
   const mounterEnv =
     mounterEnvText === undefined
@@ -107,7 +98,6 @@ export const resolveBackendConfig = env => {
   return harden({
     workspaceBaseDir,
     mcpBaseDir,
-    nativeProfile,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });
 };
@@ -121,7 +111,7 @@ harden(resolveBackendConfig);
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (hostAgent, _context, { env = {} } = {}) => {
-  const { workspaceBaseDir, mcpBaseDir, nativeProfile, mounterEnv } =
+  const { workspaceBaseDir, mcpBaseDir, mounterEnv } =
     resolveBackendConfig(env);
   // Exact dependency identities are captured once, by verified entrypoint,
   // for the sessions this incarnation records; an existing record keeps the
@@ -182,7 +172,6 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       workspaceMountPoint: path.join(privateDir, 'workspace'),
       mcpDir: path.join(privateDir, 'mcp'),
       mounterSocketDir: path.join(privateDir, '9p'),
-      nativeProfile,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...(request.model ? { model: request.model } : {}),
       ...(request.reasoningEffort

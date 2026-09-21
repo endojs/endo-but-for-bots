@@ -6,19 +6,8 @@ import path from 'node:path';
 import {
   makeSandboxSessionId,
   readMounterEnv,
-  readNativeProfile,
   readSessionPlan,
 } from '../src/opencode-session-plan.js';
-
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
 
 const plan = harden({
   sessionId: 'session-a',
@@ -29,17 +18,12 @@ const plan = harden({
   workspaceMountPoint: '/mounts/session-a-0123456789ab',
   mcpDir: '/private/session-a-0123456789ab/mcp',
   mounterSocketDir: '/private/session-a-0123456789ab/9p',
-  nativeProfile: profile,
   model: 'openrouter/anthropic/claude-sonnet-4',
 });
 
-test('a recorded plan parses with its profile widened and nothing defaulted', t => {
+test('a recorded plan parses without deployment resource settings', t => {
   const parsed = readSessionPlan(JSON.stringify(plan));
-  t.deepEqual(parsed.nativeProfile, {
-    ...profile,
-    memoryBytes: 536_870_912n,
-    cpuQuotaMicros: 200_000n,
-  });
+  t.false(Object.hasOwn(parsed, 'nativeProfile'));
   t.is(parsed.workspaceDir, plan.workspaceDir);
   t.is(parsed.model, plan.model);
   t.false('systemPrompt' in parsed);
@@ -101,16 +85,6 @@ const refused = harden([
     }),
     /"workspaceMountPoint" and "workspaceDir" must be disjoint/,
   ],
-  [
-    'no profile',
-    JSON.stringify({ ...plan, nativeProfile: undefined }),
-    /Missing native profile/,
-  ],
-  [
-    'a numeric quantity',
-    JSON.stringify({ ...plan, nativeProfile: { ...profile, memoryBytes: 1 } }),
-    /decimal digit strings/,
-  ],
 ]);
 
 for (const [name, text, message] of refused) {
@@ -118,31 +92,6 @@ for (const [name, text, message] of refused) {
     t.throws(() => readSessionPlan(/** @type {string} */ (text)), { message });
   });
 }
-
-test('profile quantities widen exactly and reject every non-canonical spelling', t => {
-  t.is(
-    readNativeProfile({ ...profile, memoryBytes: '9223372036854775807' })
-      .memoryBytes,
-    9_223_372_036_854_775_807n,
-  );
-  for (const memoryBytes of [
-    '0',
-    '+1',
-    ' 1',
-    '1e3',
-    '01',
-    '9223372036854775808',
-  ]) {
-    t.throws(
-      () => readNativeProfile({ ...profile, memoryBytes }),
-      undefined,
-      memoryBytes,
-    );
-  }
-  t.throws(() => readNativeProfile({ ...profile, seccomp: 'unconfined' }), {
-    message: /native Podman profile/,
-  });
-});
 
 test('a foreign workspace records no owned directory, and the id derivation is stable', t => {
   const { workspaceDir: _, ...neither } = plan;
@@ -202,4 +151,13 @@ test('mounter settings are recorded verbatim and refused as the mounter would re
       message,
     });
   }
+});
+
+test('retired per-session native profiles are refused rather than ignored', t => {
+  t.throws(
+    () => readSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
+    {
+      message: /Retired nativeProfile field/,
+    },
+  );
 });

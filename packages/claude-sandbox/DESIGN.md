@@ -440,7 +440,7 @@ The hosted backend path now runs on the daemon session owner, the way
   credential the CLI insists on sending (`clientAuthorization: 'strip'`).
 - `src/claude-session-plan.js` — the passive record of one logical session
   (owned or operator-supplied workspace, mount point, private socket
-  directories, native profile, optional mounter settings, model, system
+  directories, optional mounter settings, model, system
   prompt) over the shared primitives in `@endo/hosted-agent/session-plan.js`,
   plus the request's `networkPolicy` (`off` or `public-internet`, attested by
   the broker) and the broker's `credentialKind`, which selects the variable

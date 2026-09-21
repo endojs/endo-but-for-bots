@@ -6,7 +6,7 @@
  * resources and subscription renewal; the replaceable backend records plans.
  * Required: ENDO_CODEX_ENABLE=1, ENDO_CODEX_HOST_DIR,
  * ENDO_CODEX_SANDBOX_IMAGE, ENDO_CODEX_BROKER_LISTENER_IMAGE,
- * ENDO_CODEX_NATIVE_PROFILE and ENDO_CODEX_MODELS (JSON).
+ * ENDO_CODEX_MODELS (JSON).
  * Optional workspace/private roots, Secrets name/account, session concurrency,
  * public-internet/diagnostics switches and rootless NINEP settings remain.
  * No volume registry, storage lease, project-id range or quota helper.
@@ -27,7 +27,6 @@ import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.j
 import {
   containsPath,
   readMounterEnv,
-  readNativeProfile,
   readRecordedPath,
 } from '@endo/hosted-agent/session-plan.js';
 import { join } from 'node:path';
@@ -135,8 +134,6 @@ export const main = async (host, { exec } = {}) => {
         Fail`Codex guest roots overlap protected storage`;
     }
   }
-  const nativeProfile = required(env, 'ENDO_CODEX_NATIVE_PROFILE');
-  readNativeProfile(JSON.parse(nativeProfile));
   const mounterEnv = readMounterEnv(
     Object.fromEntries(
       ['NINEP_MOUNT_PROGRAM', 'NINEP_UMOUNT_PROGRAM', 'NINEP_SUDO']
@@ -435,7 +432,6 @@ export const main = async (host, { exec } = {}) => {
     resultName: next,
     env: harden({
       ...storageEnv,
-      CODEX_NATIVE_PROFILE: nativeProfile,
       CODEX_MOUNTER_ENV: JSON.stringify(mounterEnv),
       CODEX_MODELS: JSON.stringify(models),
     }),

@@ -233,7 +233,6 @@ endo submit <n> ...
 ENDO_CLAUDE_OAUTH_TOKEN=... \
 ENDO_CLAUDE_SANDBOX_IMAGE=oci:localhost/claude-sandbox:latest \
 ENDO_CLAUDE_BROKER_LISTENER_IMAGE=localhost/endo-provider@sha256:... \
-ENDO_CLAUDE_NATIVE_PROFILE='{"uid":1000,...}' \
 endo run --UNCONFINED packages/claude-sandbox/setup-hosted.js --powers @agent
 ```
 

@@ -99,9 +99,8 @@ const CREDENTIAL_PLACEHOLDER = 'claude-broker-placeholder';
  * Fresh inert construction is cancelled by the daemon's construction kit
  * instead. The caller must pre-create and own the private mounterSocketDir
  * and keep all mount/socket paths under stable, disjoint ancestry outside
- * guest writes. Each operation requests the recorded native profile; those
- * are the sandbox's checks, and this helper is not itself evidence of the
- * hosted envelope on a live host.
+ * guest writes. Each operation requests the shared hosted policy resource
+ * settings; the sandbox verifies their enforcement before handing off the slice.
  *
  * @param {object} [powers]
  * @param {typeof makeDefaultMounter} [powers.makeMounter]

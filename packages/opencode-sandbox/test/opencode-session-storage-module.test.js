@@ -31,15 +31,6 @@ test('null-powered storage removes the recorded private directories without a pr
     workspaceMountPoint: join(roots.private, 'one', 'workspace'),
     mcpDir: join(roots.private, 'one', 'mcp'),
     mounterSocketDir: join(roots.private, 'one', '9p'),
-    nativeProfile: {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    },
   };
   await Promise.all(
     [

@@ -2375,15 +2375,6 @@ testNeedsNodeManager(
       await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
     }
     const digest = `sha256:${'a'.repeat(64)}`;
-    const profile = {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    };
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('opencode-sandbox');
     // The same services setup-host.js and setup-hosted.js mint, over the
@@ -2452,7 +2443,6 @@ testNeedsNodeManager(
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           OPENCODE_MCP_DIR: roots.mcpDir,
-          OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
         },
       },
     );
@@ -2498,7 +2488,7 @@ testNeedsNodeManager(
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
     t.is(plan.rootfs, `oci:localhost/opencode@${digest}`);
-    t.deepEqual(plan.nativeProfile, profile);
+    t.false(Object.hasOwn(plan, 'nativeProfile'));
     t.is(await E(record).maybeReadText('lifecycle'), 'starting');
     t.deepEqual([...(await E(record).list('references'))].sort(), [
       'brokerService',
@@ -2546,7 +2536,9 @@ testNeedsNodeManager(
   'the Claude backend records a session through the daemon owner and destroy reaches its storage',
   async t => {
     t.timeout(120_000);
-    const { cancelled, config } = await prepareConfig(t);
+    // Keep the Unix socket below macOS's 104-byte limit in a deep worktree.
+    // getConfigDirectoryName still supplies its unique test/config suffix.
+    const { cancelled, config } = await prepareConfig(t, { configName: 'cl' });
     const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
     const base = config.statePath;
     const roots = {
@@ -2561,15 +2553,6 @@ testNeedsNodeManager(
       await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
     }
     const digest = `sha256:${'a'.repeat(64)}`;
-    const profile = {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    };
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('claude-sandbox');
     // The same services setup-host.js and setup-hosted.js mint, over the
@@ -2652,7 +2635,6 @@ testNeedsNodeManager(
         env: {
           CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           CLAUDE_MCP_DIR: roots.mcpDir,
-          CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
         },
       },
     );
@@ -2692,7 +2674,7 @@ testNeedsNodeManager(
     t.is(plan.rootfs, `oci:localhost/claude@${digest}`);
     t.is(plan.networkPolicy, 'off');
     t.is(plan.credentialKind, 'oauthToken');
-    t.deepEqual(plan.nativeProfile, profile);
+    t.false(Object.hasOwn(plan, 'nativeProfile'));
     t.is(await E(record).maybeReadText('lifecycle'), 'starting');
     t.deepEqual([...(await E(record).list('references'))].sort(), [
       'brokerService',

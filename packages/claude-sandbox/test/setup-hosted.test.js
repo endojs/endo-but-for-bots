@@ -20,16 +20,6 @@ const key = (...parts) => JSON.stringify(parts.flat());
 const digest = `sha256:${'a'.repeat(64)}`;
 const image = `oci:localhost/claude@${digest}`;
 const listenerImageRef = `localhost/listener@sha256:${'c'.repeat(64)}`;
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
 // What the fake reports for a persisted formula it has no entry for: a
 // generic entrypoint no service accepts.
 const unsupportedSpecifier = 'file:///generic-agent.js';
@@ -256,7 +246,6 @@ const baseEnv = async t => {
     ENDO_CLAUDE_BROKER_OWNER_ID: 'test-broker',
     ENDO_CLAUDE_PUBLIC_INTERNET: undefined,
     ENDO_CLAUDE_ANTHROPIC_BETA: undefined,
-    ENDO_CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
     NINEP_SUDO: undefined,
     NINEP_MOUNT_PROGRAM: undefined,
     NINEP_UMOUNT_PROGRAM: undefined,
@@ -454,19 +443,6 @@ test.serial(
         /Invalid Claude sandbox image/,
       ],
       [
-        { ENDO_CLAUDE_NATIVE_PROFILE: undefined },
-        /ENDO_CLAUDE_NATIVE_PROFILE is required/,
-      ],
-      [
-        {
-          ENDO_CLAUDE_NATIVE_PROFILE: JSON.stringify({
-            ...profile,
-            uid: 'root',
-          }),
-        },
-        /uid: .* Must be a number/,
-      ],
-      [
         { ENDO_NINEP_UMOUNT_PROGRAM: 'rm -rf' },
         /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
       ],
@@ -536,7 +512,6 @@ test.serial(
         ENDO_CLAUDE_BROKER_OWNER_ID: 'test-broker',
         ENDO_CLAUDE_BROKER_DIR: path.join(base, 'broker'),
         ENDO_CLAUDE_SANDBOX_IMAGE: image,
-        ENDO_CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
         ENDO_NINEP_UMOUNT_PROGRAM: undefined,
         ENDO_NINEP_SUDO: undefined,
         ENDO_CLAUDE_WORKSPACE_DIR: path.join(base, 'workspaces'),
@@ -643,7 +618,6 @@ test.serial(
     t.deepEqual(backend?.options.env, {
       CLAUDE_WORKSPACE_BASE_DIR: path.join(base, 'workspaces'),
       CLAUDE_MCP_DIR: path.join(base, 'mcp'),
-      CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
       CLAUDE_MOUNTER_ENV: JSON.stringify({
         NINEP_SUDO: '1',
         NINEP_MOUNT_PROGRAM: 'sudo -n mount',

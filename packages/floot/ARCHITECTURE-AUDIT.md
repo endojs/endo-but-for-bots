@@ -44,7 +44,7 @@ no retained formula referring to it.
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fixed locally; compaction policy pending |
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Removed locally; runtime retirement pending |
-| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | In progress — removing ignored configuration |
+| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed locally; coordinated cutover pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
 | FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
@@ -234,7 +234,17 @@ environment variables, while new plan parsers reject the obsolete `nativeProfile
 Existing native session records therefore require retirement/recreation using the old release
 before activation; do not switch first and expect the new parser to clean up old plans.
 The effective hosted slice-resource policy and generic sandbox profiles are unchanged.
-App tests and adversarial review are in progress; this finding is not complete or deployed.
+The app change `refactor(hosted-agent): remove ignored native resource profiles` removes
+profile input from the three hosted setups/backends, plans, and the shared parser helper.
+Adversarial review caught that merely deleting the field left old plans silently accepted;
+all three parsers now explicitly reject an obsolete `nativeProfile` field before acquisition.
+Regression coverage asserts new plans omit it and effective runtime limits remain enforced.
+Focused tests pass: OpenCode 86, Claude 43, Codex 48, shared plan 3, daemon integration 2.
+The reviewer independently ran 80 focused tests and 33 updated parser tests.
+Changed-JavaScript lint has no errors; formatting passes.
+The daemon fixture uses a short unique name for macOS socket limits; native Linux execution
+has not been exercised by these macOS owner/storage lifecycle tests.
+This is implemented and tested locally, not deployed; runtime cutover/conformance remains open.
 
 ## FA-06 — One session provisioner and execution envelope
 
@@ -440,6 +450,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-04 B: delete unused OpenCode CLI state service | OpenCode: 226 passed; shared runtime: 545 passed, one skipped; adversarial source review; runtime retirement and deployment pending |
 | 2026-09-21 | Tokyo retirement inventory (`575b45f68`, host helper `d68f72c`) | Read-only named-binding inspection on release `21bcb3d0`; legacy producers remain; no runtime retirement or deployment |
 | 2026-09-21 | FA-03: preserve generic daemon coverage before legacy deletion | Two real-daemon tests passed; lint/format passed; actual 16-file source removal awaits explicit permission; no deployment |
+| 2026-09-21 | FA-05: remove ignored hosted native profiles | 182 focused tests passed; explicit stale-plan rejection added after review; host Nix syntax passed; coordinated retirement/activation pending |
 
 ## Request
 

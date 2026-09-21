@@ -6,38 +6,8 @@ import {
   isNormalizedAbsolutePath,
   makeSandboxSessionId,
   readMounterEnv,
-  readNativeProfile,
   readRecordedPath,
 } from '../src/session-plan.js';
-
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
-test('the native profile widens its two OCI quantities and refuses every other spelling', t => {
-  const widened = readNativeProfile(profile);
-  t.is(widened.memoryBytes, 536_870_912n);
-  t.is(widened.cpuQuotaMicros, 200_000n);
-  t.is(widened.pids, 128);
-  /** @type {[unknown, RegExp][]} */
-  const refused = [
-    [undefined, /Missing native profile/],
-    [null, /Missing native profile/],
-    [{ ...profile, memoryBytes: 536_870_912 }, /decimal digit strings/],
-    [{ ...profile, cpuQuotaMicros: '0x10' }, /decimal digit strings/],
-    [{ ...profile, memoryBytes: '01' }, /decimal digit strings/],
-    [{ ...profile, uid: 'root' }, /uid/],
-  ];
-  for (const [bad, message] of refused) {
-    t.throws(() => readNativeProfile(bad), { message });
-  }
-});
 
 test('recorded paths are normalized, absolute, non-root, and NUL-free', t => {
   for (const good of ['/a', '/a/b', '/private/var/x']) {

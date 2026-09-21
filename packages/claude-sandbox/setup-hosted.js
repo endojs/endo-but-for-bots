@@ -34,8 +34,6 @@
 //   ENDO_CLAUDE_SANDBOX_IMAGE — OCI rootfs (`oci:<image>` name); pinned to
 //     its digest through Podman when a broker is minted, ignored when one is
 //     retained
-//   ENDO_CLAUDE_NATIVE_PROFILE — the deployment resource profile (JSON)
-//     recorded into every session plan; required, no default
 //   ENDO_NINEP_SUDO=1, ENDO_NINEP_MOUNT_PROGRAM, ENDO_NINEP_UMOUNT_PROGRAM
 //     (or their unprefixed spellings; the ENDO_ spelling wins) — rootless
 //     mount settings recorded into every session plan for the session's own
@@ -82,7 +80,6 @@ import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service
 import {
   isNormalizedAbsolutePath,
   readMounterEnv,
-  readNativeProfile,
 } from '@endo/hosted-agent/session-plan.js';
 
 import {
@@ -163,14 +160,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // the slice is only ever told 502.
   const diagnostics = env.ENDO_CLAUDE_DIAGNOSTICS === '1';
   const anthropicBeta = env.ENDO_CLAUDE_ANTHROPIC_BETA || '';
-  // The deployment resource profile is recorded into each session plan by the
-  // backend. It has no defaults; validate the operator's value before any
-  // mint so a malformed profile cannot reach a formula environment.
-  const nativeProfileText = env.ENDO_CLAUDE_NATIVE_PROFILE;
-  if (typeof nativeProfileText !== 'string') {
-    throw Fail`ENDO_CLAUDE_NATIVE_PROFILE is required: the backend records it into every session plan`;
-  }
-  readNativeProfile(JSON.parse(nativeProfileText));
   // The rootless mount settings a session's own 9P mounter needs, recorded
   // into every plan through the backend. A hosted daemon forwards only
   // ENDO_-prefixed variables to its ENDO_EXTRA subprocesses, so the mounter's
@@ -412,7 +401,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     env: harden({
       CLAUDE_WORKSPACE_BASE_DIR: workspaceDir,
       CLAUDE_MCP_DIR: mcpDir,
-      CLAUDE_NATIVE_PROFILE: nativeProfileText,
       ...(mounterEnvText === undefined
         ? {}
         : { CLAUDE_MOUNTER_ENV: mounterEnvText }),

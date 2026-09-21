@@ -21,9 +21,6 @@
  *   OPENCODE_WORKSPACE_BASE_DIR  Root of owned per-session workspaces.
  *   OPENCODE_MCP_DIR             Root of per-session private directories
  *                                (socket relay, 9P socket, mount point).
- *   OPENCODE_NATIVE_PROFILE      The deployment resource profile recorded into
- *                                every plan; JSON with digit-string
- *                                quantities, validated before use.
  *   OPENCODE_MOUNTER_ENV         Optional JSON: the rootless mount settings
  *                                (`NINEP_SUDO`, `NINEP_MOUNT_PROGRAM`,
  *                                `NINEP_UMOUNT_PROGRAM`) recorded into every
@@ -61,13 +58,12 @@ import {
   isNormalizedAbsolutePath,
   makeSandboxSessionId,
   readMounterEnv,
-  readNativeProfile,
   readSessionPlan,
 } from './opencode-session-plan.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 /** @import { SessionRequest } from './opencode-backend-factory.js' */
-/** @import { PlanNativeProfile, RecordedSessionPlan } from './opencode-session-plan.js' */
+/** @import { RecordedSessionPlan } from './opencode-session-plan.js' */
 
 /** The host-private records directory the session owner is configured on. */
 export const SESSION_RECORDS_PATH = harden([
@@ -85,7 +81,7 @@ harden(controllerSpecifier);
 
 /**
  * Read the backend's explicit configuration. Nothing is defaulted: a missing
- * root or profile is a setup error, not a guess.
+ * root is a setup error, not a guess.
  *
  * @param {Record<string, string>} env
  */
@@ -98,11 +94,6 @@ export const resolveBackendConfig = env => {
     Fail`OPENCODE_WORKSPACE_BASE_DIR must be a normalized absolute path`;
   isNormalizedAbsolutePath(mcpBaseDir) ||
     Fail`OPENCODE_MCP_DIR must be a normalized absolute path`;
-  const profileText = env.OPENCODE_NATIVE_PROFILE;
-  typeof profileText === 'string' || Fail`OPENCODE_NATIVE_PROFILE is required`;
-  /** @type {PlanNativeProfile} */
-  const nativeProfile = JSON.parse(profileText);
-  readNativeProfile(nativeProfile);
   const mounterEnvText = env.OPENCODE_MOUNTER_ENV;
   const mounterEnv =
     mounterEnvText === undefined
@@ -111,7 +102,6 @@ export const resolveBackendConfig = env => {
   return harden({
     workspaceBaseDir,
     mcpBaseDir,
-    nativeProfile,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });
 };
@@ -125,7 +115,7 @@ harden(resolveBackendConfig);
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (hostAgent, _context, { env = {} } = {}) => {
-  const { workspaceBaseDir, mcpBaseDir, nativeProfile, mounterEnv } =
+  const { workspaceBaseDir, mcpBaseDir, mounterEnv } =
     resolveBackendConfig(env);
   // Exact dependency identities are captured once, by verified entrypoint,
   // for the sessions this incarnation records; an existing record keeps the
@@ -186,7 +176,6 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       workspaceMountPoint: path.join(privateDir, 'workspace'),
       mcpDir: path.join(privateDir, 'mcp'),
       mounterSocketDir: path.join(privateDir, '9p'),
-      nativeProfile,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...(request.model ? { model: request.model } : {}),
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),

@@ -56,11 +56,8 @@ import { readSessionPlan } from './opencode-session-plan.js';
  * Fresh inert construction is cancelled by the daemon's construction kit instead.
  * The caller must pre-create and own the private mounterSocketDir and keep all
  * mount/socket paths under stable, disjoint ancestry outside guest writes.
- * Each operation requests the recorded native profile: explicit identity and
- * resource settings, a trusted startup gate, and kernel observation of the
- * gate's posture and declared mounts before release. Those are the sandbox's
- * checks; this helper records and forwards the profile and is not itself
- * evidence of the hosted envelope on a live host.
+ * Each operation requests the shared hosted policy resource settings and
+ * mount table. The sandbox verifies their enforcement before handing off the slice.
  *
  * @param {object} [powers]
  * @param {typeof makeDefaultMounter} [powers.makeMounter]

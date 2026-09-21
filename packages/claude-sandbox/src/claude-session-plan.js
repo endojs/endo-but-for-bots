@@ -18,23 +18,15 @@ import {
   isNormalizedAbsolutePath,
   makeSandboxSessionId as makeSharedSandboxSessionId,
   readMounterEnv,
-  readNativeProfile,
   readRecordedPath,
 } from '@endo/hosted-agent/session-plan.js';
 
 import { assertCredentialKind } from './claude-credential-kinds.js';
 import { assertClaudeEffort } from './claude-effort.js';
 
-/** @import { assertNativePodmanProfile } from '@endo/sandbox/native-podman-profile.js' */
-/** @typedef {import('@endo/hosted-agent/session-plan.js').PlanNativeProfile} PlanNativeProfile */
 /** @typedef {import('@endo/hosted-agent/session-plan.js').MounterEnv} MounterEnv */
 
-export {
-  containsPath,
-  isNormalizedAbsolutePath,
-  readMounterEnv,
-  readNativeProfile,
-};
+export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
 
 /**
  * The approved plan for one logical Claude session. Every path is host
@@ -59,7 +51,6 @@ export {
  * @property {string} workspaceMountPoint Kernel mount, distinct from backing storage.
  * @property {string} mcpDir Private, recorded native socket/relay directory.
  * @property {string} mounterSocketDir Private 9P socket parent, never guest-visible.
- * @property {ReturnType<typeof assertNativePodmanProfile>} nativeProfile
  * @property {MounterEnv} [mounterEnv] Absent means the host's `mount`/`umount`.
  * @property {string} [model]
  * @property {string} [reasoningEffort]
@@ -68,9 +59,8 @@ export {
  */
 
 /**
- * The plan as recorded: the same fields with the two OCI quantities still in
- * their decimal-string form. `readClaudeSessionPlan` widens it.
- * @typedef {Omit<ClaudeSessionPlan, 'nativeProfile'> & { nativeProfile: PlanNativeProfile }} RecordedClaudeSessionPlan
+ * The recorded plan uses the same copy-data fields as the parsed plan.
+ * @typedef {ClaudeSessionPlan} RecordedClaudeSessionPlan
  */
 
 const NETWORK_POLICIES = harden(['off', 'public-internet']);
@@ -96,6 +86,8 @@ export const readClaudeSessionPlan = text => {
     Fail`Session plan must be a record`;
   /** @type {Record<string, unknown>} */
   const recorded = value;
+  !Object.hasOwn(recorded, 'nativeProfile') ||
+    Fail`Retired nativeProfile field; recreate this hosted session plan`;
   for (const name of ['sessionId', 'sandboxSessionId', 'rootfs']) {
     (typeof recorded[name] === 'string' && recorded[name] !== '') ||
       Fail`Missing session plan field ${q(name)}`;
@@ -136,7 +128,6 @@ export const readClaudeSessionPlan = text => {
     recorded.workspaceDir !== undefined ||
       Fail`Session plan must record an owned or an operator-supplied workspace`;
   }
-  const nativeProfile = readNativeProfile(recorded.nativeProfile);
   const mounterEnv =
     recorded.mounterEnv === undefined
       ? undefined
@@ -144,7 +135,6 @@ export const readClaudeSessionPlan = text => {
   return harden(
     /** @type {ClaudeSessionPlan} */ ({
       ...recorded,
-      nativeProfile,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
     }),
   );
