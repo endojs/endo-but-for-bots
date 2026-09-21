@@ -23,8 +23,20 @@ unchanged, and the Rust supervisor treats the body as opaque bytes.
 The OCapN data operations are now separate, non-overlapping lanes:
 `E.get(target).field`, `E.index(target, index)`, and
 `E.untag(target, tag)` dispatch through corresponding `HandledPromise`
-handler methods and distinct slot-machine verbs. Gets reject arrays, indexes
-reject non-arrays, and untag rejects a mismatched tag.
+handler methods (`index` and `untag` join the existing `get`) and distinct
+slot-machine verbs. Gets reject arrays, indexes reject non-arrays, and untag
+rejects a mismatched tag. No method named `__get__`, `index`, or `untag` can
+intercept or impersonate a data operation.
+
+Each data lane carries its own dedicated, compact canonical-CBOR payload
+(`[target, scalar operand, reply]`) instead of reusing the opaque `deliver`
+body, so a supervisor validates and translates the whole operation without
+interpreting guest data. `reply` is required and must be a `Promise`
+descriptor; a `Device` target is rejected; `index` is bounded to the
+JavaScript array-index range. A malformed payload for a claimed data verb is a
+protocol error and fails closed. The protocol has no version negotiation, so
+all seven verbs (`deliver`, `get`, `index`, `untag`, `resolve`, `drop`,
+`abort`) deploy together.
 
 Cap'n Web remap paths encode canonical numeric property accesses as indexes and
 replay numeric path segments with `HandledPromise.index`.

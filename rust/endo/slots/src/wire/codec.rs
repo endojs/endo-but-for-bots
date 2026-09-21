@@ -73,6 +73,20 @@ pub(crate) fn read_top_level(bytes: &[u8]) -> Result<Value> {
         .map_err(|e| SlotError::Invariant(format!("cbor decode: {e}")))
 }
 
+/// Like [`read_top_level`], but rejects any bytes left over after the
+/// single top-level item.  The data lanes decode strictly so a
+/// malformed payload fails closed rather than silently ignoring a
+/// trailing tail.
+pub(crate) fn read_top_level_exact(bytes: &[u8]) -> Result<Value> {
+    let mut cursor = bytes;
+    let value: Value = ciborium::de::from_reader(&mut cursor)
+        .map_err(|e| SlotError::Invariant(format!("cbor decode: {e}")))?;
+    if !cursor.is_empty() {
+        return Err(SlotError::Invariant("trailing CBOR bytes".into()));
+    }
+    Ok(value)
+}
+
 pub(crate) fn as_array(v: &Value) -> Result<&[Value]> {
     match v {
         Value::Array(a) => Ok(a.as_slice()),
