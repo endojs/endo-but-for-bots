@@ -82,11 +82,15 @@ const connectClient = async socketPath => {
     sock.once('connect', resolve);
     sock.once('error', reject);
   });
+  /** @type {Buffer} */
   let buf = Buffer.alloc(0);
   /** @type {Map<number, (msg: any) => void>} */
   const waiters = new Map();
   sock.on('data', chunk => {
-    buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+    // No encoding is set on the socket, so `chunk` is always a Buffer; the
+    // listener's declared type admits a string, so narrow rather than cast.
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    buf = buf.length === 0 ? bytes : Buffer.concat([buf, bytes]);
     for (;;) {
       const parsed = tryParseMessage(buf);
       if (!parsed) break;
