@@ -84,6 +84,7 @@ test('map: capture from enclosing scope', async t => {
 
 test('map: numeric index access (arr[0])', async t => {
   const rec = recordRemap(arr => arr[0]);
+  t.deepEqual(rec.instructions, [['pipeline', 0, [0]]]);
   t.is(await replayRemap(rec, ['a', 'b', 'c']), 'a');
 });
 

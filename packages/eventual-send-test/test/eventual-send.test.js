@@ -168,6 +168,12 @@ test('new HandledPromise expected errors', async t => {
     applyMethod(o, key, args) {
       return [key, ...args].join(',');
     },
+    index(_o, index) {
+      return index;
+    },
+    untag(_o, tag) {
+      return tag;
+    },
   };
 
   // Full handler succeeds.
@@ -199,7 +205,7 @@ test('new HandledPromise expected errors', async t => {
           () => HandledPromise.get(noGet, 'foo'),
           {
             instanceOf: TypeError,
-            message: `"presenceHandler" is defined but has no methods needed for "get" (has ["[Symbol(extraMethod)]","applyFunction","applyMethod"])`,
+            message: `"presenceHandler" is defined but has no methods needed for "get" (has ["[Symbol(extraMethod)]","applyFunction","applyMethod","index","untag"])`,
           },
           `missing get throws`,
         );
@@ -244,6 +250,20 @@ test('new HandledPromise expected errors', async t => {
           'abc,123',
           `missing applyMethod uses applyFunction`,
         );
+        break;
+      }
+      case 'index': {
+        const noIndex = new HandledPromise((_, _2, rwp) => rwp(handler2));
+        await t.throwsAsync(() => HandledPromise.index(noIndex, 0), {
+          message: /no methods needed for "index"/,
+        });
+        break;
+      }
+      case 'untag': {
+        const noUntag = new HandledPromise((_, _2, rwp) => rwp(handler2));
+        await t.throwsAsync(() => HandledPromise.untag(noUntag, 'tag'), {
+          message: /no methods needed for "untag"/,
+        });
         break;
       }
       default:

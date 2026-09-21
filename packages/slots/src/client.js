@@ -7,11 +7,16 @@ import { Remotable } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { Kind, descriptorKey } from './descriptor.js';
+import { makeSelector, getSelectorName } from './selector.js';
 import {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   VERB_DROP,
   VERB_ABORT,
+  INDEX_LIMIT,
   encodeDropPayload,
   decodeDropPayload,
 } from './payload.js';
@@ -80,13 +85,11 @@ const rehydrateError = value => {
  * @param {{
  *   encodeDeliver: (call: {
  *     target: unknown,
- *     method: string,
  *     args: unknown[],
  *     reply?: unknown,
  *   }) => Uint8Array,
  *   decodeDeliver: (bytes: Uint8Array) => {
  *     target: unknown,
- *     method: string,
  *     args: unknown[],
  *     reply: unknown | null,
  *   },
@@ -99,6 +102,36 @@ const rehydrateError = value => {
  *     target: unknown,
  *     isReject: boolean,
  *     value: unknown,
+ *   },
+ *   encodeGet: (op: {
+ *     target: unknown,
+ *     fieldName: string,
+ *     reply: unknown,
+ *   }) => Uint8Array,
+ *   decodeGet: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     fieldName: string,
+ *     reply: unknown,
+ *   },
+ *   encodeIndex: (op: {
+ *     target: unknown,
+ *     index: number,
+ *     reply: unknown,
+ *   }) => Uint8Array,
+ *   decodeIndex: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     index: number,
+ *     reply: unknown,
+ *   },
+ *   encodeUntag: (op: {
+ *     target: unknown,
+ *     tag: string,
+ *     reply: unknown,
+ *   }) => Uint8Array,
+ *   decodeUntag: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     tag: string,
+ *     reply: unknown,
  *   },
  * }} opts.codec
  * @param {SendEnvelope} opts.sendEnvelope
@@ -151,21 +184,25 @@ export const makeSlotClient = ({
     : null;
 
   /**
-   * Send a method call to a presence or to a local value registered
-   * in the c-list.  Returns a promise for the reply.
+   * Track a reply promise and send one result-bearing operation.  The
+   * caller-supplied `encode` turns the freshly minted reply promise
+   * into wire bytes — `encodeDeliver` for a delivery, or a data-lane
+   * codec (`encodeGet` / `encodeIndex` / `encodeUntag`) for the
+   * separate operation lanes.  Because each operation has its own
+   * envelope verb and payload, a delivery cannot impersonate a data
+   * operation, nor the reverse.
    *
-   * @param {unknown} target
-   * @param {string} method
-   * @param {unknown[]} args
+   * @param {string} verb
+   * @param {(reply: unknown) => Uint8Array} encode
    * @returns {Promise<unknown>}
    */
-  const deliver = (target, method, args) => {
+  const sendRequest = (verb, encode) => {
     const { promise: reply, resolve, reject } = makePromiseKit();
-    const bytes = codec.encodeDeliver({ target, method, args, reply });
+    const bytes = encode(reply);
     const replyDesc = clist.lookupByValue(reply);
     if (!replyDesc) {
-      // codec.encodeDeliver just ran exportLocal on `reply`, so this
-      // should be unreachable.
+      // `encode` just ran exportLocal on `reply`, so this should be
+      // unreachable.
       throw makeError(X`reply promise did not receive a descriptor`);
     }
     // Register the settler before send so a synchronous transport
@@ -173,22 +210,68 @@ export const makeSlotClient = ({
     // can still find the matching entry.
     settlers.set(descriptorKey(replyDesc), { resolve, reject });
     if (typeof globalThis.hostTrace === 'function') {
-      globalThis.hostTrace(`slot-client.deliver method=${method}`);
+      globalThis.hostTrace(`slot-client.${verb}`);
     }
-    sendEnvelope(VERB_DELIVER, bytes);
+    sendEnvelope(verb, bytes);
     return reply;
   };
+  harden(sendRequest);
+
+  /**
+   * Send a `deliver` carrying one flat argument vector and track a
+   * reply.  The vector is already selector-prefixed for a method
+   * invocation (see the presence handlers); a function application
+   * passes its arguments unchanged.  Returns a promise for the reply.
+   *
+   * @param {unknown} target
+   * @param {unknown[]} args the complete argument vector for the body
+   * @returns {Promise<unknown>}
+   */
+  const deliver = (target, args) =>
+    sendRequest(VERB_DELIVER, reply => codec.encodeDeliver({ target, args, reply }));
   harden(deliver);
 
   /**
-   * Send a method call without tracking a reply.
+   * Send a `get`: a string-named field access on its own wire lane.
    *
    * @param {unknown} target
-   * @param {string} method
-   * @param {unknown[]} args
+   * @param {string} fieldName
+   * @returns {Promise<unknown>}
    */
-  const deliverSendOnly = (target, method, args) => {
-    const bytes = codec.encodeDeliver({ target, method, args });
+  const sendGet = (target, fieldName) =>
+    sendRequest(VERB_GET, reply => codec.encodeGet({ target, fieldName, reply }));
+  harden(sendGet);
+
+  /**
+   * Send an `index`: a positional list access on its own wire lane.
+   *
+   * @param {unknown} target
+   * @param {number} index
+   * @returns {Promise<unknown>}
+   */
+  const sendIndex = (target, index) =>
+    sendRequest(VERB_INDEX, reply => codec.encodeIndex({ target, index, reply }));
+  harden(sendIndex);
+
+  /**
+   * Send an `untag`: a tag-checked payload access on its own wire lane.
+   *
+   * @param {unknown} target
+   * @param {string} tag
+   * @returns {Promise<unknown>}
+   */
+  const sendUntag = (target, tag) =>
+    sendRequest(VERB_UNTAG, reply => codec.encodeUntag({ target, tag, reply }));
+  harden(sendUntag);
+
+  /**
+   * Send a `deliver` without tracking a reply (fire-and-forget).
+   *
+   * @param {unknown} target
+   * @param {unknown[]} args the complete argument vector for the body
+   */
+  const deliverSendOnly = (target, args) => {
+    const bytes = codec.encodeDeliver({ target, args });
     sendEnvelope(VERB_DELIVER, bytes);
   };
   harden(deliverSendOnly);
@@ -203,6 +286,11 @@ export const makeSlotClient = ({
   const makePresence = desc => {
     const handler = {
       /**
+       * String-named method invocation: prepend the method's
+       * passable-symbol selector to the argument vector, mirroring
+       * `@endo/ocapn`.  Symbol-named methods have no wire selector
+       * and are rejected (they remain unreachable over slot-machine).
+       *
        * @param {unknown} p
        * @param {string | symbol} method
        * @param {unknown[]} args
@@ -211,7 +299,7 @@ export const makeSlotClient = ({
         if (typeof method !== 'string') {
           throw makeError(X`slot-machine calls require string methods`);
         }
-        return deliver(p, method, args);
+        return deliver(p, [makeSelector(method), ...args]);
       },
       /**
        * @param {unknown} p
@@ -222,31 +310,29 @@ export const makeSlotClient = ({
         if (typeof method !== 'string') {
           throw makeError(X`slot-machine calls require string methods`);
         }
-        deliverSendOnly(p, method, args);
+        deliverSendOnly(p, [makeSelector(method), ...args]);
       },
       /**
-       * Treat a presence-as-function call as a `__call__` method
-       * dispatch.  Slot-machine has no separate function-target
-       * convention, so we surface this as a string-keyed method to
-       * keep the wire shape uniform.
+       * Function application: send the argument vector unchanged, no
+       * selector.  The receiver's function Exo consumes the whole
+       * vector via `applyFunction`.
        *
        * @param {unknown} p
        * @param {unknown[]} args
        */
       applyFunction(p, args) {
-        return deliver(p, '__call__', args);
+        return deliver(p, [...args]);
       },
       /**
        * @param {unknown} p
        * @param {unknown[]} args
        */
       applyFunctionSendOnly(p, args) {
-        deliverSendOnly(p, '__call__', args);
+        deliverSendOnly(p, [...args]);
       },
       /**
-       * Property access via `E(p).prop` resolves to a deliver of
-       * the conventional `__get__` method with the property name as
-       * its only argument.  Mirrors CapTP's get-as-call shape.
+       * Property access is carried by the dedicated `get` wire verb, so
+       * a delivery cannot intercept or impersonate it.
        *
        * @param {unknown} p
        * @param {string | symbol} prop
@@ -255,7 +341,29 @@ export const makeSlotClient = ({
         if (typeof prop !== 'string') {
           throw makeError(X`slot-machine property names must be strings`);
         }
-        return deliver(p, '__get__', [prop]);
+        return sendGet(p, prop);
+      },
+      /**
+       * @param {unknown} p
+       * @param {number} index
+       */
+      index(p, index) {
+        if (!Number.isSafeInteger(index) || index < 0 || index >= INDEX_LIMIT) {
+          throw makeError(
+            X`slot-machine index must be a non-negative array index`,
+          );
+        }
+        return sendIndex(p, index);
+      },
+      /**
+       * @param {unknown} p
+       * @param {string} tag
+       */
+      untag(p, tag) {
+        if (typeof tag !== 'string') {
+          throw makeError(X`slot-machine tags must be strings`);
+        }
+        return sendUntag(p, tag);
       },
     };
     // Use the executor's third argument, `resolveWithPresence`, to
@@ -331,6 +439,100 @@ export const makeSlotClient = ({
   harden(makePresence);
 
   /**
+   * Dispatch a decoded inbound delivery to its local target,
+   * mirroring `@endo/ocapn`'s `invokeDeliver`.  A **function** Exo
+   * receives the complete argument vector through `applyFunction`; an
+   * **object** Exo treats the leading argument as a method selector,
+   * validates and decodes it to a string method name, and dispatches
+   * the remaining arguments through `applyMethod`.  A malformed or
+   * non-selector leading argument, or a symbol-named method with no
+   * wire selector, is rejected by `getSelectorName`.
+   *
+   * @param {unknown} target
+   * @param {unknown[]} args
+   * @returns {unknown}
+   */
+  const invokeDeliver = (target, args) => {
+    if (typeof target === 'function') {
+      return HandledPromise.applyFunction(target, args);
+    }
+    if (args.length < 1) {
+      throw makeError(
+        X`slot-machine object delivery requires a leading method selector`,
+      );
+    }
+    const [selector, ...methodArgs] = args;
+    const method = getSelectorName(selector);
+    return HandledPromise.applyMethod(target, method, methodArgs);
+  };
+
+  /**
+   * Route a settled operation result back to its reply promise as a
+   * `resolve` envelope.  Shared by every result-bearing lane: `deliver`
+   * and the three data operations.
+   *
+   * @param {unknown} reply the imported remote reply promise descriptor
+   * @param {unknown} resultP the local result (a value or a thenable)
+   */
+  const settleReply = (reply, resultP) => {
+    if (reply === null) {
+      // Fire-and-forget delivery: nothing to resolve.
+      return;
+    }
+    Promise.resolve(resultP).then(
+      value => {
+        const out = codec.encodeResolve({
+          target: reply,
+          isReject: false,
+          value,
+        });
+        sendEnvelope(VERB_RESOLVE, out);
+      },
+      err => {
+        // Carry both name and message so the receiving side can
+        // rehydrate an Error of the right class.  Stack and cause
+        // are deliberately omitted — they may contain sensitive
+        // information from the rejecting peer's frame.
+        const errLike = /** @type {{ name?: unknown, message?: unknown }} */ (
+          err
+        );
+        const name =
+          typeof errLike?.name === 'string' ? errLike.name : 'Error';
+        const message =
+          typeof errLike?.message === 'string' ? errLike.message : String(err);
+        const out = codec.encodeResolve({
+          target: reply,
+          isReject: true,
+          value: harden({ name, message }),
+        });
+        sendEnvelope(VERB_RESOLVE, out);
+      },
+    );
+  };
+  harden(settleReply);
+
+  /**
+   * Run `dispatch` and route its outcome to `reply`, turning a
+   * synchronous throw into a rejected result rather than a decode-time
+   * failure.  The decode of `bytes` has already happened before this is
+   * called, so a malformed payload fails closed at the decoder (see
+   * `onEnvelope`), not here.
+   *
+   * @param {unknown} reply
+   * @param {() => unknown} dispatch
+   */
+  const dispatchToReply = (reply, dispatch) => {
+    let resultP;
+    try {
+      resultP = dispatch();
+    } catch (err) {
+      resultP = Promise.reject(err);
+    }
+    settleReply(reply, resultP);
+  };
+  harden(dispatchToReply);
+
+  /**
    * Handle an inbound `deliver`: dispatch to the target and, if the
    * call carries a reply descriptor, send a matching `resolve`
    * envelope when the result settles.
@@ -338,48 +540,45 @@ export const makeSlotClient = ({
    * @param {Uint8Array} bytes
    */
   const onDeliver = bytes => {
-    const { target, method, args, reply } = codec.decodeDeliver(bytes);
-    let resultP;
-    try {
-      resultP = HandledPromise.applyMethod(target, method, args);
-    } catch (err) {
-      resultP = Promise.reject(err);
-    }
-    if (reply !== null) {
-      Promise.resolve(resultP).then(
-        value => {
-          const out = codec.encodeResolve({
-            target: reply,
-            isReject: false,
-            value,
-          });
-          sendEnvelope(VERB_RESOLVE, out);
-        },
-        err => {
-          // Carry both name and message so the receiving side can
-          // rehydrate an Error of the right class.  Stack and cause
-          // are deliberately omitted — they may contain sensitive
-          // information from the rejecting peer's frame.
-          const errLike = /** @type {{ name?: unknown, message?: unknown }} */ (
-            err
-          );
-          const name =
-            typeof errLike?.name === 'string' ? errLike.name : 'Error';
-          const message =
-            typeof errLike?.message === 'string'
-              ? errLike.message
-              : String(err);
-          const out = codec.encodeResolve({
-            target: reply,
-            isReject: true,
-            value: harden({ name, message }),
-          });
-          sendEnvelope(VERB_RESOLVE, out);
-        },
-      );
-    }
+    const { target, args, reply } = codec.decodeDeliver(bytes);
+    dispatchToReply(reply, () => invokeDeliver(target, args));
   };
   harden(onDeliver);
+
+  /**
+   * Handle an inbound `get`: a string-named field access.  A `__get__`
+   * (or any) method cannot intercept it — the lane is dispatched
+   * through `HandledPromise.get`, never a delivery.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onGet = bytes => {
+    const { target, fieldName, reply } = codec.decodeGet(bytes);
+    dispatchToReply(reply, () => HandledPromise.get(target, fieldName));
+  };
+  harden(onGet);
+
+  /**
+   * Handle an inbound `index`: a positional list access.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onIndex = bytes => {
+    const { target, index, reply } = codec.decodeIndex(bytes);
+    dispatchToReply(reply, () => HandledPromise.index(target, index));
+  };
+  harden(onIndex);
+
+  /**
+   * Handle an inbound `untag`: a tag-checked payload access.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onUntag = bytes => {
+    const { target, tag, reply } = codec.decodeUntag(bytes);
+    dispatchToReply(reply, () => HandledPromise.untag(target, tag));
+  };
+  harden(onUntag);
 
   /**
    * Handle an inbound `resolve`: route to the matching local reply
@@ -490,6 +689,9 @@ export const makeSlotClient = ({
    */
   const onEnvelope = (verb, payload) => {
     if (verb === VERB_DELIVER) return onDeliver(payload);
+    if (verb === VERB_GET) return onGet(payload);
+    if (verb === VERB_INDEX) return onIndex(payload);
+    if (verb === VERB_UNTAG) return onUntag(payload);
     if (verb === VERB_RESOLVE) return onResolve(payload);
     if (verb === VERB_DROP) {
       onDrop(payload);
@@ -517,6 +719,9 @@ export const makeSlotClient = ({
     deliverSendOnly,
     drop,
     onDeliver,
+    onGet,
+    onIndex,
+    onUntag,
     onResolve,
     onDrop,
     onEnvelope,

@@ -13,13 +13,26 @@ import {
   encodeAbortPayload,
   decodeAbortPayload,
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   VERB_DROP,
   VERB_ABORT,
   isSlotVerb,
+  INDEX_LIMIT,
+  encodeGetPayload,
+  decodeGetPayload,
+  encodeIndexPayload,
+  decodeIndexPayload,
+  encodeUntagPayload,
+  decodeUntagPayload,
 } from '../src/payload.js';
 
 const D = (direction, kind, position) => ({ direction, kind, position });
+
+const hex = bytes =>
+  [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
 
 test('deliver — roundtrip with reply', t => {
   const p = {
@@ -129,10 +142,16 @@ test('abort — non-ASCII utf-8 passes through', t => {
 
 test('verb constants and isSlotVerb', t => {
   t.is(VERB_DELIVER, 'deliver');
+  t.is(VERB_GET, 'get');
+  t.is(VERB_INDEX, 'index');
+  t.is(VERB_UNTAG, 'untag');
   t.is(VERB_RESOLVE, 'resolve');
   t.is(VERB_DROP, 'drop');
   t.is(VERB_ABORT, 'abort');
   t.true(isSlotVerb('deliver'));
+  t.true(isSlotVerb('get'));
+  t.true(isSlotVerb('index'));
+  t.true(isSlotVerb('untag'));
   t.true(isSlotVerb('resolve'));
   t.true(isSlotVerb('drop'));
   t.true(isSlotVerb('abort'));
@@ -195,6 +214,177 @@ test('abort — pinned hex fixture ("bye")', t => {
     [...bytes].map(b => b.toString(16).padStart(2, '0')).join(''),
     '43627965',
   );
+});
+
+// ---- data lanes: get / index / untag ----
+//
+// Each carries a scalar operand and exactly two capability
+// descriptors (target + reply), never the opaque marshalled body a
+// `deliver` carries.  The dedicated shapes let a supervisor validate
+// and translate the whole operation without interpreting guest data.
+
+test('get — roundtrip', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Object, 7),
+    fieldName: 'field',
+    reply: D(Direction.Local, Kind.Promise, 2),
+  };
+  t.deepEqual(decodeGetPayload(encodeGetPayload(p)), p);
+});
+
+test('get — non-ASCII field name roundtrips', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Object, 1),
+    fieldName: 'ключ 💥',
+    reply: D(Direction.Local, Kind.Promise, 0),
+  };
+  t.deepEqual(decodeGetPayload(encodeGetPayload(p)), p);
+});
+
+test('index — roundtrip', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Promise, 3),
+    index: 42,
+    reply: D(Direction.Local, Kind.Promise, 1),
+  };
+  t.deepEqual(decodeIndexPayload(encodeIndexPayload(p)), p);
+});
+
+test('index — answer target preserves pipelining', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Answer, 4),
+    index: 0,
+    reply: D(Direction.Local, Kind.Promise, 5),
+  };
+  t.deepEqual(decodeIndexPayload(encodeIndexPayload(p)), p);
+});
+
+test('untag — roundtrip', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Object, 9),
+    tag: 'example',
+    reply: D(Direction.Local, Kind.Promise, 6),
+  };
+  t.deepEqual(decodeUntagPayload(encodeUntagPayload(p)), p);
+});
+
+test('data lanes — target must not be a device', t => {
+  const reply = D(Direction.Local, Kind.Promise, 1);
+  t.throws(
+    () =>
+      encodeGetPayload({
+        target: D(Direction.Remote, Kind.Device, 1),
+        fieldName: 'x',
+        reply,
+      }),
+    { message: /must not be a device/ },
+  );
+  t.throws(
+    () =>
+      encodeIndexPayload({
+        target: D(Direction.Remote, Kind.Device, 1),
+        index: 0,
+        reply,
+      }),
+    { message: /must not be a device/ },
+  );
+});
+
+test('data lanes — reply must be a promise descriptor', t => {
+  const target = D(Direction.Remote, Kind.Object, 1);
+  t.throws(
+    () =>
+      encodeUntagPayload({
+        target,
+        tag: 't',
+        reply: D(Direction.Local, Kind.Object, 1),
+      }),
+    { message: /reply must be a promise/ },
+  );
+});
+
+test('index — out-of-range index rejected at encode', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Object, 1),
+    index: INDEX_LIMIT,
+    reply: D(Direction.Local, Kind.Promise, 1),
+  };
+  t.throws(() => encodeIndexPayload(p), { message: /out of array-index range/ });
+});
+
+test('index — largest valid index roundtrips', t => {
+  const p = {
+    target: D(Direction.Remote, Kind.Object, 1),
+    index: INDEX_LIMIT - 1,
+    reply: D(Direction.Local, Kind.Promise, 1),
+  };
+  t.deepEqual(decodeIndexPayload(encodeIndexPayload(p)), p);
+});
+
+test('get — invalid utf-8 field name rejected at decode', t => {
+  // Craft a get payload then overwrite the 1-byte field name with an
+  // illegal UTF-8 lead byte (0xff).  Layout:
+  //   [0x83, target(3), fieldhdr(1)=0x41, fieldbyte(1), reply(3)]
+  const bytes = encodeGetPayload({
+    target: D(Direction.Local, Kind.Object, 1),
+    fieldName: 'x',
+    reply: D(Direction.Local, Kind.Promise, 1),
+  });
+  const mutated = new Uint8Array(bytes);
+  mutated[5] = 0xff; // the single field-name byte
+  t.throws(() => decodeGetPayload(mutated), { message: /not valid utf-8/ });
+});
+
+test('data lanes — wrong array length rejected', t => {
+  // A 5-element deliver payload is not a valid 3-element get payload.
+  const deliver = encodeDeliverPayload({
+    target: D(Direction.Local, Kind.Object, 1),
+    body: new Uint8Array(0),
+    targets: [],
+    promises: [],
+    reply: D(Direction.Local, Kind.Promise, 1),
+  });
+  t.throws(() => decodeGetPayload(deliver), { message: /3-element array/ });
+});
+
+test('data lanes — trailing bytes rejected', t => {
+  const bytes = encodeIndexPayload({
+    target: D(Direction.Local, Kind.Object, 1),
+    index: 1,
+    reply: D(Direction.Local, Kind.Promise, 1),
+  });
+  const padded = new Uint8Array(bytes.length + 1);
+  padded.set(bytes);
+  t.throws(() => decodeIndexPayload(padded), { message: /trailing CBOR byte/ });
+});
+
+// Pinned hex fixtures shared with rust/endo/slots/src/wire/payload.rs.
+// Target Local/Object/1, reply Local/Promise/1 in each.
+test('get — pinned hex fixture', t => {
+  const bytes = encodeGetPayload({
+    target: D(Direction.Local, Kind.Object, 1),
+    fieldName: 'x',
+    reply: D(Direction.Local, Kind.Promise, 1),
+  });
+  t.is(hex(bytes), '838200014178820201');
+});
+
+test('index — pinned hex fixture', t => {
+  const bytes = encodeIndexPayload({
+    target: D(Direction.Local, Kind.Object, 1),
+    index: 5,
+    reply: D(Direction.Local, Kind.Promise, 1),
+  });
+  t.is(hex(bytes), '8382000105820201');
+});
+
+test('untag — pinned hex fixture', t => {
+  const bytes = encodeUntagPayload({
+    target: D(Direction.Local, Kind.Object, 1),
+    tag: 't',
+    reply: D(Direction.Local, Kind.Promise, 1),
+  });
+  t.is(hex(bytes), '838200014174820201');
 });
 
 test('deliver — trailing bytes rejected', t => {

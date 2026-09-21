@@ -33,6 +33,11 @@ const checkSegment = segment => {
   return segment;
 };
 
+const getPathSegment = (value, segment) =>
+  typeof segment === 'number'
+    ? HandledPromise.index(value, segment)
+    : HandledPromise.get(value, segment);
+
 /**
  * @param {unknown} root
  * @param {readonly PropertyKey[]} path
@@ -42,11 +47,11 @@ const checkSegment = segment => {
 export const walkPathAndCall = async (root, path, args) => {
   for (const segment of path) checkSegment(segment);
 
-  // Pure property descent: walk every segment via HandledPromise.get.
+  // Pure descent: string segments are gets and numeric segments are indexes.
   if (args === undefined) {
     let cur = await root;
     for (const segment of path) {
-      cur = await HandledPromise.get(cur, segment);
+      cur = await getPathSegment(cur, segment);
     }
     return cur;
   }
@@ -71,9 +76,13 @@ export const walkPathAndCall = async (root, path, args) => {
   // call forward through any handler in play (foreign stub → remote send).
   let cur = await root;
   for (const segment of path.slice(0, -1)) {
-    cur = await HandledPromise.get(cur, segment);
+    cur = await getPathSegment(cur, segment);
   }
   const method = path[path.length - 1];
+  if (typeof method === 'number') {
+    const fn = await HandledPromise.index(cur, method);
+    return HandledPromise.applyFunction(fn, /** @type {unknown[]} */ (args));
+  }
   return HandledPromise.applyMethod(
     cur,
     method,

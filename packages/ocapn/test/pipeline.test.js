@@ -300,7 +300,7 @@ test('pipeline: op:index array access transcript', async t => {
     // Pipelined: fetch provider, call it, then index
     const arrayProvider = E(bootstrapB).fetch(encodeSwissnum('Array Provider'));
     const arrayPromise = E(arrayProvider)();
-    const firstValue = await E.get(arrayPromise)[0];
+    const firstValue = await E.index(arrayPromise, 0);
 
     t.is(firstValue, 'first', 'Should get correct array element');
     recorder.unsubscribe();
@@ -373,7 +373,7 @@ test('pipeline: complex nested access transcript', async t => {
     const dataProvider = E(bootstrapB).fetch(encodeSwissnum('Data Provider'));
     const recordPromise = E(dataProvider).getRecord();
     const itemsPromise = E.get(recordPromise).items;
-    const secondItem = await E.get(itemsPromise)[1];
+    const secondItem = await E.index(itemsPromise, 1);
 
     t.is(secondItem, 'b', 'Should get correct nested value');
     recorder.unsubscribe();

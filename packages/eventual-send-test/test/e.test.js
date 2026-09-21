@@ -7,6 +7,29 @@ test('E reexports', async t => {
   t.is(E.resolve, HandledPromise.resolve, 'E reexports resolve');
 });
 
+test('E separates get, index, and untag operations', async t => {
+  await null;
+  const tagged = harden({
+    [Symbol.for('passStyle')]: 'tagged',
+    [Symbol.toStringTag]: 'example',
+    payload: harden({ answer: 42 }),
+  });
+
+  t.is(await E.get(harden({ answer: 42 })).answer, 42);
+  t.is(await E.index(harden(['zero', 'one']), 1), 'one');
+  t.deepEqual(await E.untag(tagged, 'example'), { answer: 42 });
+
+  await t.throwsAsync(E.get(harden(['zero'])).length, {
+    message: /Cannot get a field from an array/,
+  });
+  await t.throwsAsync(E.index(harden({ 0: 'zero' }), 0), {
+    message: /Cannot index into a non-array value/,
+  });
+  await t.throwsAsync(E.untag(tagged, 'different'), {
+    message: /Tag mismatch/,
+  });
+});
+
 test('E.when', async t => {
   /** @type {any} */
   let stash;
