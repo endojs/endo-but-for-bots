@@ -43,7 +43,7 @@ no retained formula referring to it.
 | FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Open |
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Open |
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
-| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Open |
+| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | In progress — obsolete controller removed |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Open |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
 | FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
@@ -131,7 +131,7 @@ Not deployed; native conformance and resource retirement remain pending.
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
 The current native controller directly constructs `opencode-client.js`.
-The 718-line [old client module](../opencode-sandbox/src/opencode-client-module.js)
+The 718-line old `src/opencode-client-module.js` (at the baseline)
 has no current production mint/import path found in the repository, but is exported and
 may still be referenced by retained formulas.
 Its provisioning, cancellation, Mount facade, and cleanup topology are removal candidates.
@@ -148,6 +148,17 @@ Investigate the obsolete `opencodeSessionId` plan field: current plan creation n
 
 Completion: fresh native OpenCode sessions allocate no unused CLI-state directory and need
 no legacy client module; restoration, tools, stop, and deletion still pass.
+
+Progress: `refactor(opencode-sandbox): remove obsolete client formula entrypoint`
+deletes the old module, its export, and tests dedicated to its removed helpers.
+The current protocol client, native controller, and their tests remain.
+Repository and endo-host reference searches found no current producer of the old entrypoint.
+The focused client/controller/conformance suites pass 60 tests; independent review
+reran 53 client/controller tests and found no source-level blockers.
+Package ESLint reports no errors (36 warnings).
+The unused state-provider removal remains separate work.
+Not deployed: retained legacy formulas must be retired with their old release available
+before switching releases; source deletion alone is not runtime retirement.
 
 ## FA-05 — Remove or wire the ignored native profile
 
@@ -338,6 +349,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 |---|---|---|
 | 2026-09-21 | Initial audit and FA-01–FA-13 register | Source review plus two in-memory reproductions; no remediation or deployment claimed |
 | 2026-09-21 | FA-03: stop creating legacy Claude form topology | 16 setup tests passed; independent review; retained resources untouched; not deployed |
+| 2026-09-21 | FA-04 A: delete obsolete OpenCode client formula | 60 focused tests passed, 53 independently rerun; legacy formula retirement pending; not deployed |
 
 ## Request
 

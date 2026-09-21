@@ -20,9 +20,9 @@
  * interrupted turn (the terminal barrier).  The bridge itself enforces a
  * grace timeout and emits `abort` even if the server does not acknowledge.
  *
- * The slice, mounts, and credential grant are provisioned lazily (see the
- * `provision` thunk and `opencode-client-module.js`), so the exo can be a
- * pure-`env` formula that reincarnates across daemon restarts.
+ * The native controller supplies the slice after acquiring its mounts and
+ * provider grant. The shared session supervisor owns that incarnation and
+ * reclaims its resources; the client runs the in-slice bridge protocol.
  * `terminate()` disposes the slice, unmounts its 9P mounts, drops the
  * mount pet names, and revokes the credential grant, keeping durable
  * workspace + state for the next revival; `destroy()` additionally deletes

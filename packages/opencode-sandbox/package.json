@@ -22,7 +22,6 @@
     "./src/opencode-protocol.js": "./src/opencode-protocol.js",
     "./src/managed-credentials.js": "./src/managed-credentials.js",
     "./src/managed-credentials-module.js": "./src/managed-credentials-module.js",
-    "./src/opencode-client-module.js": "./src/opencode-client-module.js",
     "./src/opencode-client.js": "./src/opencode-client.js",
     "./src/opencode-broker.js": "./src/opencode-broker.js",
     "./src/opencode-broker-service.js": "./src/opencode-broker-service.js",

@@ -657,6 +657,14 @@ that is still open here):
 
 ## Package layout
 
+The legacy `opencode-client-module.js` formula entrypoint has been removed.
+Before deploying this removal to a daemon with retained legacy formulas, stop
+their native work and retire those formulas while the old release is still
+available, or reset the daemon after stopping its native resources.
+Changing the current release first can strand a formula whose cleanup entrypoint
+no longer exists.
+Current sessions use the native controller and shared session supervisor.
+
 New package `packages/opencode-sandbox/`.
 
 | File | Responsibility | Model on |
@@ -669,7 +677,7 @@ New package `packages/opencode-sandbox/`.
 | `src/opencode-state-provider.js` | Per-session 0700 host directory + daemon mount via `host.provideMount`; destroy-only `removeSession` | daemon `host.js:685-741` |
 | `src/container-mount-bridge.js` | `provideContainerMountBridge`/`release…` (refused in phase 1) | `claude-sandbox/src/container-mount-bridge.js` |
 | `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the storage owner is `@endo/hosted-agent/session-storage.js` over that parser, bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
-| `src/opencode-client-module.js` | Credentials → slice env; workspace mount; state volume; MCP mount; server child + bridge process | `claude-client-module.js` + `codex-sandbox/src/app-server-transport.js` |
+| `src/opencode-native-controller.js` | Activate the recorded plan, acquire scopes, project the workspace, configure MCP and the slice, and construct the protocol client under the shared supervisor | `@endo/hosted-agent/session-supervisor.js` |
 | `src/opencode-client.js` | Spawn/command the bridge; session-id handoff; pending-call count; terminal barrier | `codex-client.js` + `claude-client.js` |
 | `src/opencode-bridge.mjs` | In-slice: start `opencode serve`, parse listening line, subscribe SSE, nd-JSON commands/events, summary filtering, terminal derivation, turn bounds | new; baked into the image |
 | `src/opencode-protocol.js` | SSE + nd-JSON framing, event normalization, message registry | `codex-protocol.js` |
