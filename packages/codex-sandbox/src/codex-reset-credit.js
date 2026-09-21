@@ -138,7 +138,8 @@ export const makeCodexResetRedeem = ({ credential, accountRef, fetch }) => {
     );
     // Accepted, but in words this does not know. Whether a credit was spent
     // is for the usage read to say.
-    outcome !== undefined || Fail`Codex reset redeem answer was not understood`;
+    if (outcome === undefined)
+      throw Fail`Codex reset redeem answer was not understood`;
     return harden({ outcome });
   };
 };

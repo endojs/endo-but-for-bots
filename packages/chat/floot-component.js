@@ -654,7 +654,7 @@ export const flootComponent = (
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
    *   model: string, backendId?: string, modelId?: string,
-   *   effectiveModelId?: string, reasoningEffort?: string,
+   *   effectiveModelId?: string, reasoningEffort?: string, subscription?: string,
    *   messages: HistoryMessage[], facet: any, loaded: boolean,
    *   lifecycle?: string,
    *   activity?: 'passive' | 'working' | 'error', pendingCount?: number,
@@ -675,7 +675,7 @@ export const flootComponent = (
    * @typedef {{ id: string, title: string, description: string,
    *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
    *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[],
-   *   supportedNetworkPolicies?: string[] }} FlootModel
+   *   supportedNetworkPolicies?: string[], subscriptions?: { id: string, label: string }[] }} FlootModel
    */
 
   /** @type {FlootPreset[]} */
@@ -2947,7 +2947,7 @@ export const flootComponent = (
   const sortSessions = () => {
     sessions.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   };
-  /** @type {{ return: () => Promise<unknown> } | null} */
+  /** @type {ReturnType<typeof iterateReader> | null} */
   let sessionListStream = null;
 
   /** @param {any} event */
@@ -2984,7 +2984,7 @@ export const flootComponent = (
   // opened again (a few times, not for ever), and the fresh snapshot is
   // reconciled against what is on screen, so the sidebar never freezes
   // silently on a list that stopped reporting.
-  /** @param {AsyncIterator<any> & AsyncIterable<any>} first */
+  /** @param {ReturnType<typeof iterateReader<any>>} first */
   const followSessionList = async first => {
     let list = first;
     let failures = 0;
@@ -3161,7 +3161,7 @@ export const flootComponent = (
     // Closing a subscription detaches this page and nothing else.
     if (sessionView) sessionView.close();
     if (sessionListStream) {
-      void Promise.resolve(sessionListStream.return()).catch(() => {});
+      void Promise.resolve(sessionListStream.return?.()).catch(() => {});
     }
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes

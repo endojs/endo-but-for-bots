@@ -78,6 +78,13 @@ harden(isSubscriptionExhaustion);
 
 const MEMBER_UNAVAILABLE = 'Provider subscription unavailable';
 const makeMemberUnavailable = () => Error(MEMBER_UNAVAILABLE);
+/**
+ * @typedef {object} UsageSettlement
+ * @property {ReturnType<typeof emptyCounts> | null} usage
+ * @property {boolean} began Whether the provider may have done the work.
+ * @property {boolean} complete Whether the producer reached the end.
+ * @property {number} responseBytes Bytes read by the producer.
+ */
 /** @param {unknown} error */
 const isMemberUnavailable = error =>
   error instanceof Error && error.message === MEMBER_UNAVAILABLE;
@@ -554,8 +561,8 @@ harden(makeBrokerOAuthCredential);
  *
  * @typedef {object} BrokerGrantMember
  * @property {string} id
- * @property {{ readBase64(): Promise<string> }} secret
- * @property {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} transport
+ * @property {{ readBase64(): Promise<string> }} [secret]
+ * @property {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} [transport]
  *   This member's own transport, so that what its responses say of the
  *   account is read as this member's.
  * @property {ReturnType<typeof makeBrokerOAuthCredential>} [credential]
@@ -699,8 +706,8 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  *
  * @param {BrokerPolicy} policy
  * @param {object} powers
- * @param {{ readBase64(): Promise<string> }} powers.secret - SecretBlob read facet
- * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} powers.transport
+ * @param {{ readBase64(): Promise<string> }} [powers.secret] - SecretBlob read facet; required without a pool.
+ * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} [powers.transport] Required without a pool.
  * @param {(event: {event: string, requests: bigint}) => void} [powers.audit]
  * @param {ReturnType<typeof makeBrokerOAuthCredential>} [powers.credential]
  * - The shared refreshing credential for this secret record, required by
@@ -978,7 +985,12 @@ export const makeProviderBrokerGrant = (
         return harden({
           status,
           contentType,
-          reader: bytesReader ?? makeScreenedBytesReader(reader, checkLive),
+          reader:
+            bytesReader ??
+            makeScreenedBytesReader(
+              reader ?? Fail`Missing provider stream reader`,
+              checkLive,
+            ),
           // What the response cost, once the producer has read its end:
           // `{ usage, began }` (`provider-usage.js`). It always fulfils.
           usage,
@@ -1031,7 +1043,8 @@ export const makeProviderBrokerGrant = (
   const resolveCredential = async (member, rejected) => {
     const oauth = oauthMode ? member.credential : undefined;
     if (!oauth) {
-      const encoded = await E(member.secret).readBase64();
+      const selectedSecret = member.secret ?? Fail`Missing provider secret`;
+      const encoded = await E(selectedSecret).readBase64();
       const decoded = decodeSecret(encoded);
       /^[\x21-\x7e]+$/.test(decoded) || Fail`Invalid credential`;
       return harden({ credential: decoded, screens: [decoded, encoded] });
@@ -1058,18 +1071,27 @@ export const makeProviderBrokerGrant = (
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {false} streaming
+   * @param {boolean} [bytesOk]
    * @returns {Promise<{status: number, body: string}>}
    */
   /**
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {true} streaming
-   * @returns {Promise<ProviderStream & {contentType: string}>}
+   * @param {false} bytesOk
+   * @returns {Promise<ProviderStream & {contentType: string, usage: Promise<UsageSettlement>}>}
+   */
+  /**
+   * @overload
+   * @param {{method: string, path: string, body: string}} request
+   * @param {true} streaming
+   * @param {boolean} [bytesOk]
+   * @returns {Promise<{status: number, contentType: string, reader?: ProviderStream['reader'], bytesReader?: ReturnType<typeof makeScreenedBytesReader>, usage: Promise<UsageSettlement>}>}
    */
   /**
    * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
-   * @param bytesOk
+   * @param {boolean} bytesOk
    */
   const perform = async (
     { method, path, body, headers },
@@ -1174,15 +1196,6 @@ export const makeProviderBrokerGrant = (
     // What this request cost, for whoever charges for it. Settled once, by
     // whichever comes first: the end of the response, its failure or
     // cancellation, or a refusal before any response. It never rejects.
-    /**
-     * @typedef {object} UsageSettlement
-     * @property {any} usage The five counts, or null when the response never
-     *   said.
-     * @property {boolean} began Whether the provider may have done the work.
-     * @property {boolean} complete Whether the producer read the response to
-     *   its end. One cut short is charged no less than it was reserved at.
-     * @property {number} responseBytes What the producer read of it.
-     */
     /** @type {(settlement: UsageSettlement) => void} */
     let settleUsage = () => {};
     /** @type {Promise<UsageSettlement>} */
@@ -1220,7 +1233,8 @@ export const makeProviderBrokerGrant = (
     ) => {
       await null;
       checkLive();
-      const { transport: memberTransport } = member;
+      const memberTransport =
+        member.transport ?? Fail`Missing provider transport`;
       for (const screen of screens) {
         if (!exposed.includes(screen)) exposed.push(screen);
       }
@@ -1255,7 +1269,8 @@ export const makeProviderBrokerGrant = (
       /** @param {string} text */
       const echoes = text => exposed.some(screen => text.includes(screen));
       if (streaming) {
-        const response = await E(memberTransport).requestStream(upstream);
+        const response = await (E(memberTransport).requestStream?.(upstream) ??
+          Fail`Provider streaming transport unavailable`);
         const tap = makeUsageTap();
         let bytes = 0n;
         const cancel = () => {

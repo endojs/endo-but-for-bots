@@ -11,6 +11,17 @@ const read = pieces => {
   return tap.finish();
 };
 
+test('known zero usage stays distinct from an absent usage observation', t => {
+  t.is(read(['{"message":"no accounting"}']), undefined);
+  t.deepEqual(read(['{"usage":{"prompt_tokens":0,"completion_tokens":0}}']), {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 0,
+  });
+});
+
 test('an OpenAI Responses stream: the terminal event, made disjoint', t => {
   const stream = [
     'event: response.output_text.delta\n',

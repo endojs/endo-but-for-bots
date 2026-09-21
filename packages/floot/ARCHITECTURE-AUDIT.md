@@ -251,8 +251,12 @@ With the local contract corrections and oracle lifecycle changes, the clean
 repository `yarn build:types` passes. Incremental generation still reproduced
 TS5055 output/input collisions and remains a separate build-system issue.
 Tests for the UI/Claude/Codex contract corrections pass (59, 11, and 19 cases);
-scoped lint has no errors. API documentation generation is being rerun against
-the corrected declarations; no documentation-gate success is claimed yet.
+scoped lint has no errors. Independent review also passes 170 hosted-agent tests.
+The root `yarn test:types` also passes all 14 opted-in package tasks.
+API documentation generation against the corrected declarations completed with
+3,148 errors and 152 warnings; this gate remains failing, separately from the
+passing clean declaration build. Incremental generation and documentation need
+further diagnosis; no repository-wide green-build claim is made.
 Daemon publication fix: nine tests exercise pending/failed persistence with
 absent and existing names, successful publication, failed-publication collection,
 and an actual daemon process restart.
@@ -1241,6 +1245,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Correct cross-package type contracts and separate the setup pool flag from runtime authority | Clean root declaration build passes; 170 hosted-agent tests independently pass plus 59 UI, 11 Claude, and 19 Codex tests; scoped lint and independent source review pass; docs and incremental declaration generation remain failing; not deployed |
 | 2026-09-21 | Durable pool identity prerequisite: bind actual capabilities before credential activation | 23 shared and one real-daemon restart test pass independently; read/write uncertainty fenced; full retirement/exclusion and deployment pending |
 | 2026-09-21 | Daemon durability: disposal/collection fences and stale-read invalidation | 32 tests and independent review pass; disposal precedes reclamation; module-specific drains and Tokyo deployment pending |
 | 2026-09-21 | Native-state durability: subprocess SIGKILL recovery at four creation boundaries | Four tests pass; exact child handles and temporary roots only; power-loss and Tokyo lifecycle verification remain pending |

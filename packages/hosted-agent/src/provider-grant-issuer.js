@@ -53,6 +53,28 @@ const withDeadline = (promise, ms, late) =>
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from './provider-broker.js' */
 /** @import { makePoolMemberLifecycle } from './pool-member-lifecycle.js' */
+/** @import { BrokerGrantMember } from './provider-broker.js' */
+
+/**
+ * @typedef {object} IssuerPoolMember
+ * @property {string} id
+ * @property {any} [subscription] In place of `secret`: this member is
+ *   somebody else's `Subscription` (a share they handed over). Each grant
+ *   opens an endpoint of its own on it, and revokes it with the grant.
+ * @property {any} [secret] SecretBlob read facet.
+ * @property {any} [credential] The member's shared refreshing credential.
+ * @property {ReturnType<typeof makePoolMemberLifecycle>} [lifecycle]
+ * @property {ProviderRequestAdapter} [adaptRequest]
+ * @property {string} [accountRef]
+ * @property {(reading: any) => void} [onReading] What this member's responses
+ *   say of its account.
+ */
+
+/**
+ * @typedef {object} IssuerPool
+ * @property {() => Promise<readonly IssuerPoolMember[]> | readonly IssuerPoolMember[]} members
+ * @property {(sessionId: string, preference: string) => { select(): string[], served(id: string): void, exhausted(id: string): void }} forSession
+ */
 
 /**
  * Host-side credential assembly. The worker receives only the bounded inference
@@ -96,27 +118,6 @@ const withDeadline = (promise, ms, late) =>
  * @param {number} [options.wrappedOpenDeadlineMs] How long a member that is
  * somebody else's subscription gets to open an endpoint for a session.
  */
-/**
- * @typedef {object} IssuerPoolMember
- * @property {string} id
- * @property {any} [subscription] In place of `secret`: this member is
- *   somebody else's `Subscription` (a share they handed over). Each grant
- *   opens an endpoint of its own on it, and revokes it with the grant.
- * @property {any} [secret] SecretBlob read facet.
- * @property {any} [credential] The member's shared refreshing credential.
- * @property {ReturnType<typeof makePoolMemberLifecycle>} [lifecycle]
- * @property {ProviderRequestAdapter} [adaptRequest]
- * @property {string} [accountRef]
- * @property {(reading: any) => void} [onReading] What this member's responses
- *   say of its account.
- */
-
-/**
- * @typedef {object} IssuerPool
- * @property {() => Promise<readonly IssuerPoolMember[]> | readonly IssuerPoolMember[]} members
- * @property {(sessionId: string, preference: string) => { select(): string[], served(id: string): void, exhausted(id: string): void }} forSession
- */
-
 export const makeProviderBrokerGrantIssuer = ({
   runtime,
   secret,
@@ -233,7 +234,9 @@ export const makeProviderBrokerGrantIssuer = ({
     /** @type {Array<{ dispose(): void }>} */
     const memberTransports = [];
     const declared = [...(await memberPool.members())];
-    const members = declared.flatMap(member => {
+    /** @param {IssuerPoolMember} member
+     * @returns {BrokerGrantMember[]} */
+    const makeMember = member => {
       const { lifecycle } = member;
       lifecycle?.check();
       if (
@@ -386,7 +389,7 @@ export const makeProviderBrokerGrantIssuer = ({
         fetch:
           lifecycle === undefined
             ? fetch
-            : (...args) => lifecycle.run(() => fetch(...args), true),
+            : (input, init) => lifecycle.run(() => fetch(input, init), true),
         timeoutMs,
         maxRequestBytes: configuredPolicy.maxRequestBytes,
         maxResponseBytes: configuredPolicy.maxResponseBytes,
@@ -420,7 +423,8 @@ export const makeProviderBrokerGrantIssuer = ({
             : { accountRef: member.accountRef }),
         }),
       ];
-    });
+    };
+    const members = declared.flatMap(makeMember);
     try {
       const core = makeProviderBrokerGrant(configuredPolicy, {
         audit,

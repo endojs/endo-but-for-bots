@@ -11,25 +11,29 @@ const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
 const MAX_BYTES = 64 * 1024;
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {string} */
 const assertToken = value => {
-  (typeof value === 'string' &&
+  if (!(
+    typeof value === 'string' &&
     value.length <= MAX_BYTES &&
-    /^[\x21-\x7e]+$/.test(value)) ||
-    Fail`Invalid Claude subscription credential`;
+    /^[\x21-\x7e]+$/.test(value)
+  ))
+    throw Fail`Invalid Claude subscription credential`;
   return value;
 };
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {string[]} */
 const assertScopes = value => {
-  (Array.isArray(value) &&
+  if (!(
+    Array.isArray(value) &&
     value.length <= 64 &&
     value.every(
       scope =>
         typeof scope === 'string' && /^[A-Za-z0-9_:.-]{1,128}$/.test(scope),
     ) &&
-    value.includes('user:inference')) ||
-    Fail`Claude subscription requires inference scope`;
+    value.includes('user:inference')
+  ))
+    throw Fail`Claude subscription requires inference scope`;
   return harden([...new Set(value)]);
 };
 
@@ -80,11 +84,13 @@ export const makeClaudeSubscriptionRefresh = ({ fetch, now }) =>
         }
         const result = await boundedJson(response, MAX_BYTES, 'Claude renewal');
         const lifetime = /** @type {unknown} */ (result.expires_in);
-        (typeof lifetime === 'number' &&
+        if (!(
+          typeof lifetime === 'number' &&
           Number.isFinite(lifetime) &&
           lifetime > 60 &&
-          lifetime <= 366 * 86_400) ||
-          Fail`Invalid Claude token lifetime`;
+          lifetime <= 366 * 86_400
+        ))
+          throw Fail`Invalid Claude token lifetime`;
         result.token_type === undefined ||
           (typeof result.token_type === 'string' &&
             result.token_type.toLowerCase() === 'bearer') ||
@@ -124,6 +130,7 @@ harden(makeClaudeSubscriptionRefresh);
  * Login JSON is normalized with CAS before any exchange, keeping only renewal
  * authority in Secrets. Imported access tokens are deliberately not reused.
  * @param {Omit<Parameters<typeof makeBrokerMemoryOAuthCredential>[0], 'refresh'> & {fetch: typeof globalThis.fetch}} powers
+ * @returns {ReturnType<typeof makeBrokerMemoryOAuthCredential>}
  */
 export const makeClaudeSubscriptionCredential = powers => {
   /** @type {Promise<any> | undefined} */

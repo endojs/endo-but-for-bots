@@ -1169,6 +1169,8 @@ export const makeOwnedProviderBrokerService = ({
    * @param {Record<string,string>} env
    */
   const makeKit = (config, secret, env) => {
+    // This setup flag is not the issuer's runtime pool capability.
+    const { pool: pooled, ...serviceConfig } = config;
     const { policy, accountRef, adaptRequest } = makePolicy(config);
     // Runtime hooks are not configuration fields, and the failure hooks are
     // not optional. An upstream failure reaches the slice as a bare 502 —
@@ -1195,7 +1197,7 @@ export const makeOwnedProviderBrokerService = ({
           }
         : {}),
     };
-    if (config.pool === true) {
+    if (pooled === true) {
       // Several subscriptions: the formula's powers are not one secret but a
       // namespace of the operator's, holding `subscriptions` (the declared
       // set, a stored value an operator rewrites to add a member), each
@@ -1220,8 +1222,8 @@ export const makeOwnedProviderBrokerService = ({
             ? {}
             : { accountRef: member.accountRef }),
         });
-      const pooled = makeServiceKit({
-        ...config,
+      const pooledKit = makeServiceKit({
+        ...serviceConfig,
         label,
         policy,
         accountRef,
@@ -1344,12 +1346,15 @@ export const makeOwnedProviderBrokerService = ({
         env,
         ...hooks,
       });
-      return harden({ open: async () => pooled.service, close: pooled.close });
+      return harden({
+        open: async () => pooledKit.service,
+        close: pooledKit.close,
+      });
     }
     const credential =
       makeCredential === undefined ? undefined : makeCredential(config, secret);
     const kit = makeServiceKit({
-      ...config,
+      ...serviceConfig,
       label,
       policy,
       accountRef,

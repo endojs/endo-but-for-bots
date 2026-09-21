@@ -55,7 +55,11 @@ const kitOptionsFor = async (diagnostics, log) => {
     label: 'Test',
     log,
     readConfig: () =>
-      /** @type {any} */ ({ ownerId: `owner-${diagnostics}`, diagnostics }),
+      /** @type {any} */ ({
+        ownerId: `owner-${diagnostics}`,
+        diagnostics,
+        pool: false,
+      }),
     makePolicy: () => /** @type {any} */ ({ policy: {}, accountRef: 'a' }),
     makeServiceKit: /** @type {any} */ (
       options => {
@@ -80,6 +84,10 @@ test('failure hooks do not depend on the diagnostics flag; the admission trail d
   for (const flag of [undefined, false, true]) {
     // eslint-disable-next-line no-await-in-loop
     const options = await kitOptionsFor(flag, log);
+    t.false(
+      Object.hasOwn(options, 'pool'),
+      'setup flag is not a runtime pool capability',
+    );
     t.is(typeof options.onDiagnostic, 'function', `${flag}`);
     t.is(typeof options.onListenerDiagnostic, 'function', `${flag}`);
     t.is(typeof options.audit, flag === true ? 'function' : 'undefined');

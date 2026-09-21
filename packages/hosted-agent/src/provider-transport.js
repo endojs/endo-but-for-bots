@@ -188,6 +188,7 @@ export const makeProviderFetchTransport = ({
         /** @type {ReadableStream<Uint8Array> | null | undefined} */
         let responseBody;
         let finished = false;
+        let timedOut = false;
         let credentialRejected = false;
         let subscriptionExhausted = false;
         /** @type {ProviderTransportDiagnostic['stage']} */
@@ -263,6 +264,7 @@ export const makeProviderFetchTransport = ({
         };
         pending.add(stop);
         const timer = setTimer(() => {
+          timedOut = true;
           stage = 'timeout';
           reportFailure();
           stop();
@@ -506,7 +508,7 @@ export const makeProviderFetchTransport = ({
           }
           // And this one `isResponseLost`: the deadline passed with the
           // request out.
-          if (stage === 'timeout') return Fail`Provider response lost`;
+          if (timedOut) return Fail`Provider response lost`;
           return Fail`Provider transport failed`;
         } finally {
           acquisitions.delete(acquisition);

@@ -4,7 +4,10 @@ import {
   disjointFromInclusive,
   emptyCounts,
   tokenCount,
+  USAGE_COUNT_KEYS,
 } from './token-usage.js';
+
+/** @import { TokenCounts } from './token-usage.js' */
 
 /**
  * What one inference response cost, read from the response itself as it
@@ -85,7 +88,7 @@ harden(usageFromProviderEvent);
 export const makeUsageTap = () => {
   let partial = '';
   let skipping = false;
-  /** @type {Record<string, number> | undefined} */
+  /** @type {TokenCounts | undefined} */
   let seen;
 
   /** @param {string} line */
@@ -105,7 +108,8 @@ export const makeUsageTap = () => {
     // repeats it) never lowers what an earlier one said, and a cumulative
     // count only grows.
     const next = { ...(seen ?? emptyCounts()) };
-    for (const [key, value] of Object.entries(counts)) {
+    for (const key of USAGE_COUNT_KEYS) {
+      const value = counts[key];
       if (typeof value === 'number' && value > Number(next[key] ?? 0)) {
         next[key] = value;
       }
