@@ -586,6 +586,12 @@ mismatched backend results.
 Fresh Claude/Codex/OpenCode restoration tests use a dedicated manifest.
 Claude and OpenCode completed their seed turns; Codex session creation failed with
 `Codex runtime verification failed` and is under investigation.
+Image inspection confirmed the Codex verifier still expected Node `22.19.0` and
+the old source epoch, whereas the new shared image carries Node `22.23.2`, the
+updated epoch, and locale/time-zone metadata.
+The correction retains exact environment admission and adds an image-contract
+regression plus fixed diagnostic categories without exposing raw probe output.
+Live confirmation on the corrected release is still required.
 No full acceptance pass, cold-store restoration, or image-holder cleanup is claimed.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
