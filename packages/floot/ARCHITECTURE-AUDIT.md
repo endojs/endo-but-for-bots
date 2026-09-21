@@ -447,6 +447,22 @@ nonce/status and `.deploy-complete` marker; the active release remains
 `21bcb3d0` and no resource retirement or activation has been performed.
 Host runbook `ops/hosted-cutover.md` (`9d8f4a7`) records the first-deployment lease-consumer
 gap, temporary stopped image holders, lock ordering, preservation gates, and explicit cleanup.
+The explicit Floot-host inspection (`8d4e918`, four tests) mapped all six native sessions
+to six guest roots without resolving guests or custom services.
+It may revive the built-in host's two workers; it is not a no-process diagnostic.
+The reviewed archive-only helper (`0b0715f`, five tests) then retained those exact guest IDs
+under `retired-floot-workspaces-20260921`, with source and destination identity checks.
+This preserves capability references, not a content backup or native cleanup acknowledgement.
+Secrets and original session bindings remain unchanged.
+
+First-cutover image-holder tooling (`f8b8589`, six initial tests) is committed.
+The first live build stopped before image construction because its deployment-directory
+permission check rejected Tokyo's existing `0770 endo:endo` layout.
+No live permissions were changed.
+The reviewed exclusive-group correction (`11ed01d`, eight holder tests) also refused the
+live layout before construction: `getent group endo` revealed `caddy` is a group member.
+The next correction separates private holder recovery records from the intentionally
+shared deployment spool, rather than relaxing the shared-group safety rule.
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
@@ -538,6 +554,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Prioritize FA-13, preservation-safe old-release retirement, coordinated two-repo deployment, and cross-backend acceptance | User-requested cutover gates recorded; FA-13 implementation under review; no deployment claimed |
 | 2026-09-21 | FA-13 host pipeline (`2bfebce`) and safe expanded inventory (`7402350`) | 20 image/storage tests and five inventory tests passed; adversarial corrections included; live build/activation and resource retirement pending |
 | 2026-09-21 | Recursive retirement inventory (`e0233ec`) and coordinated cutover runbook (`9d8f4a7`) | Nine safety tests; independent review; three legacy modules confirmed on Tokyo; baseline pushed to both remotes; app prebuild completed, old release still active |
+| 2026-09-21 | Floot root mapping (`8d4e918`), capability archive (`0b0715f`), first-cutover holders (`f8b8589`) | Six workspace guest roots retained on Tokyo; four mapping/five archive/six initial holder tests; image build safely stopped on directory-permission mismatch before construction; no retirement or activation |
 
 ## Request
 
