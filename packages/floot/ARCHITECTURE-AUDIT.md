@@ -69,8 +69,9 @@ succeeded. A ready-to-run recovery procedure remains a bounded deployment gate,
 not an instruction to finish the new producer architecture.
 Keep process-loss recovery and cross-worker cleanup proof open in the audit and
 tracked follow-up; do not count them as completed by deferral.
-The uncommitted producer prototypes are being isolated on
-`codex/native-recovery-research` as a non-merge-ready draft tracking PR.
+The producer prototypes are isolated on `codex/native-recovery-research` in
+[draft tracking PR #1323](https://github.com/endojs/endo-but-for-bots/pull/1323),
+not in the current refactor branch and not ready to merge.
 Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 

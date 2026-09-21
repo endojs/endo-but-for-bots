@@ -104,12 +104,12 @@ Public declaration fixes in native-controller files are also unrelated to the re
 ## Preserved prototype, not a selected implementation
 
 Tracking branch: `codex/native-recovery-research`.
-The draft tracking PR is linked from the audit once created.
+Draft tracking PR: [#1323](https://github.com/endojs/endo-but-for-bots/pull/1323).
 It is a draft PR/branch pair serving as an issue-like tracker, not a merge candidate.
 It is stacked on the #1248 branch to avoid presenting the whole refactor as its diff;
 rebase it after #1248 merges before any implementation proposal is reviewed.
 
-Preserve these previously uncommitted files and the two associated package exports
+These previously uncommitted files and the two associated package exports are preserved
 only on that branch:
 
 - `packages/sandbox/src/native-producer-lifecycle.js`
