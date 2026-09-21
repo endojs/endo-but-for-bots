@@ -94,6 +94,15 @@ const ResourceLimitsShape = M.splitRecord(
  * because those are policy questions rather than marshalling ones.
  */
 const SlicePolicyMountShape = M.or(
+  // The public-egress listener's generated DNS file. Keep this distinct from
+  // an arbitrary host bind; policy.js verifies its path and observed contents.
+  M.splitRecord({
+    role: 'resolver',
+    kind: 'resolver',
+    source: M.string(),
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  }),
   M.splitRecord({
     role: M.string(),
     kind: 'tmpfs',

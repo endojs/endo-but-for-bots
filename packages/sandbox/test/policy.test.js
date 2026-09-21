@@ -1,6 +1,12 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { matches } from '@endo/patterns';
+
+import {
+  SandboxMakeOptsShape,
+  SlicePolicyMountShape,
+} from '../src/interfaces.js';
 
 import {
   assemblePolicyArgv,
@@ -224,6 +230,23 @@ test('only the fixed generated resolver is admitted, read-only with observed exa
     ...request,
     mounts: [...request.mounts, resolver],
   });
+  // The same request must cross NativeSandboxScope.make's guard before the
+  // semantic validator/attestation can inspect it. This variant used to be
+  // accepted here but rejected by the public exo shape.
+  t.true(matches(resolver, SlicePolicyMountShape));
+  t.true(
+    matches(
+      harden({ rootfs: { kind: 'oci', ref: `test@${DIGEST}` }, policy }),
+      SandboxMakeOptsShape,
+    ),
+  );
+  for (const change of [
+    { role: 'workspace' },
+    { mode: 'rw' },
+    { destination: '/etc/hosts' },
+  ]) {
+    t.false(matches(harden({ ...resolver, ...change }), SlicePolicyMountShape));
+  }
   t.true(
     assemblePolicyArgv(policy).includes(
       'type=bind,source=/private/provider/public-resolv.conf,destination=/etc/resolv.conf,ro,nosuid,nodev,bind-propagation=rprivate',
