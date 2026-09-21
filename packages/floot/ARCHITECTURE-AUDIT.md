@@ -43,7 +43,7 @@ no retained formula referring to it.
 | FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Fixed locally; bounded selection pending |
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fixed locally; compaction policy pending |
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
-| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | In progress — obsolete controller removed |
+| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Removed locally; runtime retirement pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Open |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
 | FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
@@ -159,7 +159,7 @@ Some current client tests import old helpers; split those tests rather than dele
 current-client coverage.
 
 Separately, [the native controller](../opencode-sandbox/src/opencode-native-controller.js)
-prepares a persistent state directory at baseline lines 145–150 and never uses the result.
+prepared a persistent state directory at baseline lines 145–150 and never used the result.
 The actual runtime uses `OPENCODE_DB=':memory:'` and a home on `/tmp` (lines 259–266).
 The SQLite/WAL persistent-bind comment at lines 172–175 is stale.
 Remove the unused state-provider dependency, setup, allocation, legacy Mount API, and
@@ -176,9 +176,27 @@ Repository and endo-host reference searches found no current producer of the old
 The focused client/controller/conformance suites pass 60 tests; independent review
 reran 53 client/controller tests and found no source-level blockers.
 Package ESLint reports no errors (36 warnings).
-The unused state-provider removal remains separate work.
 Not deployed: retained legacy formulas must be retired with their old release available
 before switching releases; source deletion alone is not runtime retirement.
+
+Progress B: `refactor(opencode-sandbox): remove unused CLI state service` deletes the
+unused state-provider modules, exports, setup, controller allocation, and dependency role.
+The storage owner now receives null powers and removes only its recorded workspace and
+private socket directories; Claude/Codex retain their existing optional CLI-state cleanup.
+The paired endo-host change removes the unused state-directory option and environment value;
+it does not delete any existing directory or data.
+Retained OpenCode storage formulas have the old powers shape and must be recreated alongside
+their backend/session records before this release is activated.
+The shared hosted-agent suite passes 545 tests with one skipped, using loopback socket access.
+Sandbox-restricted runs failed because local test listeners could not bind.
+No Nix evaluation was possible locally because Nix is unavailable; host source review passed.
+The OpenCode package suite passes 226 tests; the reviewer independently ran 84 focused tests
+plus shared-storage and null-powers module checks.
+Review caught a daemon integration fixture still minting the deleted module; it now exercises
+null-powered storage and retains the daemon-owner destroy assertions.
+That integration test passes after shortening its generated socket path for macOS;
+the fixture retains its unique suffix and does not alter production socket placement.
+Deployment and native conformance remain pending, as does the separate `opencodeSessionId` audit.
 
 ## FA-05 — Remove or wire the ignored native profile
 
@@ -371,6 +389,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-03: stop creating legacy Claude form topology | 16 setup tests passed; independent review; retained resources untouched; not deployed |
 | 2026-09-21 | FA-04 A: delete obsolete OpenCode client formula | 60 focused tests passed, 53 independently rerun; legacy formula retirement pending; not deployed |
 | 2026-09-21 | FA-01/02: archive-aware history and hydrated direct-provider replay | 407 package tests passed, 27 independently rerun; tool-ID collision caught and fixed during review; bounded context/compaction pending; not deployed |
+| 2026-09-21 | FA-04 B: delete unused OpenCode CLI state service | OpenCode: 226 passed; shared runtime: 545 passed, one skipped; adversarial source review; runtime retirement and deployment pending |
 
 ## Request
 

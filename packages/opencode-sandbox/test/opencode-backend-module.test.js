@@ -19,7 +19,6 @@ import {
   brokerServiceSpecifier,
   nativeSandboxSpecifier,
   sessionStorageSpecifier,
-  stateProviderSpecifier,
 } from '../src/hosted-runtime-setup.js';
 import {
   SESSION_RECORDS_PATH,
@@ -157,9 +156,6 @@ const fixture = async t => {
       models: ['deepseek/deepseek-v4.1-flash'],
       publicInternet: true,
     }),
-  });
-  seed('state-provider', 'state-id', stateProviderSpecifier, {
-    ENDO_OPENCODE_STATE_DIR: path.join(base, 'state'),
   });
   seed('session-storage', 'storage-id', sessionStorageSpecifier, {
     OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
@@ -352,7 +348,6 @@ test('create() records the plan under the sandbox id with exact dependencies, th
   t.deepEqual(references, {
     sandboxService: 'native-id',
     brokerService: 'broker-id',
-    stateProvider: 'state-id',
     storage: 'storage-id',
   });
   // No formula is minted for the workspace: the controller projects the

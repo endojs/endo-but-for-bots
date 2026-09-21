@@ -88,13 +88,10 @@ The deployment must preserve those ancestors outside guest rename authority.
 When a formula already exists, setup reads its persisted environment through the
 host-only `getFormulaEnvironment` method, using the same verified formula ID as
 the entrypoint check.
-The runtime parent and state root are selected independently: retained formulas
-use persisted values, while missing formulas use requested construction settings.
-An existing state provider must have a supported entrypoint and a persisted state
-root; its ambient environment fallback cannot establish stable placement.
-`setup-hosted.js` requires both formulas (native runtime and state provider) and uses their
-persisted roots.
-Current runtime or state environment values neither override nor need to repeat them.
+The retained native runtime uses its persisted configuration; a missing runtime
+uses the requested construction settings.
+`setup-hosted.js` requires the native runtime but no state provider.
+OpenCode's CLI database is in memory; no durable CLI state root is configured.
 
 Both scripts inspect the existing native runtime formula and refuse a generic or unknown
 entrypoint before provisioning mutations.
@@ -437,12 +434,11 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
 
 ## Credential path
 
-`secrets/<name>` (a `SecretBlob`) → the `f13c7cbd9` managed-credentials cap
-(which delegates only the blob read via `host.copy(['secrets', name],
-[temporary])`, validates the name, and seeds the secret with `createBase64`
-**only when the catalog has no entry`) → materialize **once per provision**
-(formulas reincarnate) → `OPENROUTER_API_KEY` in the slice `env` at
-`sandboxFactory.make()`.
+`secrets/<name>` (a `SecretBlob`) supplies the host-side provider broker.
+The broker holds the real OpenRouter credential and authenticates upstream requests.
+The native controller gives the guest only the broker endpoint and a placeholder
+`OPENROUTER_API_KEY`, never the provider credential.
+The former managed-credentials-to-`sandboxFactory.make()` environment route is retired.
 
 - The secret name is configuration (`ENDO_OPENCODE_CREDS_NAME`, default
   `openrouter-auth`), not a hardcode, and it is deliberately **not** derived
@@ -459,10 +455,8 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
 - Setup inputs must be `ENDO_`-prefixed to survive the daemon's `allowEnvPass`
   filter (`packages/daemon/index.js:88-102`); a bare `OPENROUTER_API_KEY` in
   `secrets.env` would never reach a setup.
-- The cap is bound at `<name>`; any daemon caplet that can resolve that name
-  can mint a grant. Grants are single-shot and capped (128 outstanding), and
-  revocation prevents later materializations but not bytes already delivered.
-  Phase 1 accepts this host-side exposure; broker-only egress removes it.
+- Secret read authority stays host-side. Revocation cannot erase credential bytes
+  already read by a host process; native session cleanup also closes its broker lease.
 - Setup must additionally assert that the module specifier it minted resolves
   through `<stateDir>/current/` (not `releases/<id>/`), or a pruned release
   breaks revival. The assert runs before the first mint so a failure cannot
@@ -470,30 +464,13 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
   under `opencode-sandbox/backend-next` and only then swaps it over the live
   name, so a failed mint leaves the previous backend (and Floot's binding to
   it) working.
-- The state root and the credential name are validated before any mint:
-  `ENDO_OPENCODE_STATE_DIR` must be absolute, normalized, not `/`, and not a
-  symlink (and the provider re-checks `.owners/` and the ownership marker with
-  `lstat`/`realpath` before writing, so a planted link cannot redirect
-  `chmod`/`writeFile` at a host path outside the tree). Per-session MCP sockets
-  default under `$HOME/opencode-mcp`, never a shared world-writable tmp.
-- **Containment, stated honestly.** Phase 1 uses the Claude trust model, and it
-  is weaker than "the key stays out of everything":
-  - the token is rendered into `podman create -e`, so it appears in
-    `podman inspect` and same-uid `ps`, readable by any same-uid process —
-    including other caplets sharing the daemon worker;
-  - the CLI and anything it spawns can read it; an auto-approved shell tool can
-    print it, and that output can reach the transcript, `/workspace`, MCP tool
-    arguments, host-side `HostedToolSet` results, and the persisted
-    `/opencode-state` SQLite/transcript;
-  - manager revocation is not retroactive, and a token captured into persisted
-    state can be replayed by a later incarnation after rotation.
-  Controls: keep slices short-lived, never log the token, and run **negative**
-  tests that plant workspace config/instructions and assert they have no
-  effect, plus token scans over the event stream, stderr, workspace, state
-  volume, and MCP arguments. **Real containment is broker-only egress (phase
-  5)** — codex's model, where the slice holds no credential and a host-side
-  loopback proxy injects auth (`credentialInjection: 'broker-only'`,
-  `backend-factory.js:37`).
+- Workspace and MCP roots and the credential name are validated before minting.
+  Per-session MCP sockets default under `$HOME/opencode-mcp`, never a shared
+  world-writable tmp. There is no OpenCode CLI state directory.
+- **Brokered containment.** The slice receives only a placeholder. The host-side
+  provider broker holds and injects the real credential, independently of the
+  ephemeral CLI database. Never log that credential; regression tests scan the
+  event stream, stderr, workspace, and MCP arguments for leaks.
 
 ## Security-hardening of the runtime
 
@@ -511,7 +488,7 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
   nested `AGENTS.md`/`CLAUDE.md` on file reads even with the flag set
   (`instruction.ts` `find`/`resolve` were ungated); the pinned fork gates
   `find` on the flag. Deployments must use the fork build.
-- **`auth.json` is neutralized.** `XDG_DATA_HOME=/opencode-state`; set
+- **`auth.json` is neutralized.** `XDG_DATA_HOME=/tmp/opencode-home/.local/share`; set
   `OPENCODE_AUTH_CONTENT='{}'` (or otherwise guarantee the path is absent) so
   an auth file written by a previous or compromised incarnation cannot override
   the injected env. Test that a planted `auth.json` has no effect.
@@ -549,52 +526,22 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
 
 ## State, isolation, and teardown
 
-*(Original design; current: no state substrate exists — the CLI store is
-`OPENCODE_DB=:memory:` on the slice's tmpfs, every attested row is
-`nosuid,nodev`, the writable ceiling is computed by `sliceWritableBytes`, and
-"state replay" is not a threat because nothing the guest wrote outlives the
-guest: continuity is the stack's records replayed through the import route.)*
-
-- Workspace: 9P-projected `Filesystem` cap at `/workspace`; Floot owns it.
-- **State substrate (phase-1 prerequisite, not a hardening afterthought).**
-  opencode forces SQLite WAL (`journal_mode=WAL`, `synchronous=NORMAL`,
-  `core/src/database/database.ts:27-31`), and SQLite WAL requires same-host
-  shared memory — it does not work over a network/FUSE filesystem
-  (sqlite.org/wal.html). The claude-style provisioner only projects 9P mounts,
-  so `src/opencode-state-provider.js` creates one 0700 host directory per
-  session under a configured root and mints a **daemon mount** for it via
-  `host.provideMount(absolutePath, petName)`. That matters: the sandbox factory
-  resolves every Mount cap through `@agent.provideHostPath`, which rejects any
-  cap the daemon did not mint (`daemon/src/host.js:700-741`), so a wrapper
-  provider cannot substitute. `removeSession` unmounts and deletes the
-  directory on destroy only. This avoids codex's XFS quota stack; the design's
-  phase 1 has no quota or `nosuid,nodev` (see below), and the NixOS host edits
-  only need a state root directory.
-- **No quota or `nosuid,nodev` in the plain slice path.** The non-policy bind
-  path supports neither; until the volume/policy path is adopted, state is
-  unbounded and binds carry only `readonly` where applicable. The design says
-  so; it does not claim otherwise.
-- `auth.json` is never written and `OPENCODE_AUTH_CONTENT='{}'` makes a planted
-  one inert. The only credential is the injected env.
-- **State replay is a threat.** Continuity is the persisted opencode session,
-  deliberately kept across `terminate`. A compromised turn can plant
-  instructions, tool results, or a captured token in the SQLite/transcript that
-  later incarnations replay, including after rotation. Milestone 4 adds resume
-  bounds, a ledger/provenance check or scrub on resume, and DB growth limits;
-  the token scan covers the state volume in milestone 1/2.
-- `interrupt()` aborts the turn through the bridge and kills the bridge process
-  as a backstop; `admin.terminate()` disposes the slice and mounts but keeps
-  state + workspace; `destroy()` deletes them. `context.whenCancelled()`
-  (formula cancellation / daemon shutdown) runs the same teardown, so the
-  in-flight turn and the server child are reaped on shutdown.
-- **`containerMounts` are refused in phase 1.** `assertContainerMounts`
-  (now `@endo/hosted-agent/hosted-agent-policy.js`, re-exported from
-  `src/opencode-hosted-policy.js`) is shape validation only,
-  and a phase-1 slice has no policy attestation. Refusal is the only available
-  capability mode, but it is not immediate: Floot fires the mount recreate and
-  reports attach success, with the refusal surfacing as a `pendingReport` on
-  the next `send` (`agent.js:3048-3064,2960-3024`). State that in operator
-  docs rather than promising an immediate error.
+- The workspace is projected through 9P at `/workspace` and survives native stop.
+- The CLI uses `OPENCODE_DB=:memory:`; HOME and XDG directories are on tmpfs.
+  No state-provider service, host SQLite directory, or daemon Mount capability
+  is needed. The stack retains the transcript and imports it on a new incarnation.
+  Workspace files and transcript records still survive, so removing the CLI
+  database does not remove the need to treat restored content as untrusted data.
+- The shared supervisor fences provider authority, closes the sandbox and tool
+  bridge, and releases the workspace projection. Native stop preserves workspace
+  storage; destroy removes it only after cleanup acknowledgement.
+- The storage formula has null powers. It removes recorded workspace and private
+  socket directories, with the shared session-storage containment checks.
+- Attested mounts use `nosuid,nodev`. The writable ceiling is computed by
+  `sliceWritableBytes`; this does not impose a quota on the 9P workspace.
+- The guest receives a broker placeholder, never the provider secret.
+  `OPENCODE_AUTH_CONTENT='{}'` suppresses local auth-file configuration.
+- Additional `containerMounts` remain refused by this adapter.
 
 ## Image
 
@@ -664,17 +611,20 @@ available, or reset the daemon after stopping its native resources.
 Changing the current release first can strand a formula whose cleanup entrypoint
 no longer exists.
 Current sessions use the native controller and shared session supervisor.
+The unused state-provider entrypoints have also been removed; stop and remove affected native sessions/records and retire their old session
+storage and state-provider formulas before switching releases, then rerun setup.
+New storage formulas have null powers and only remove recorded workspace and
+private socket directories.
 
 New package `packages/opencode-sandbox/`.
 
 | File | Responsibility | Model on |
 |---|---|---|
 | `package.json` | `@endo/opencode-sandbox`; setup + client module exports; dependency on `@endo/codex-sandbox` if its volume provider is reused, or a copied helper | `packages/claude-sandbox/package.json` |
-| `setup-host.js` | Mint `opencode-sandbox/native-sandbox` (null powers) as the primary runtime and the state provider; the capability-based factory and shared mounter are no longer minted | **claude-sandbox** `setup-host.js` (codex has none) |
+| `setup-host.js` | Mint `opencode-sandbox/native-sandbox` (null powers) as the primary runtime only; the capability-based factory and shared mounter are no longer minted | **claude-sandbox** `setup-host.js` (codex has none) |
 | `setup-hosted.js` | Session dirs, credential provisioning, mint `opencode-sandbox/backend`, bind at `floot/controller-profile/opencode-backend` | `claude-sandbox/setup-hosted.js:223-256`; Tokyo `provideManagedCredentials` |
 | `src/opencode-backend-factory.js` | `HostedBackendFactoryInterface`; lifecycle ordering, live ownership, teardown barriers | `claude-backend-factory.js` |
 | `src/opencode-backend-module.js` | Records each session's plan and exact dependencies with the daemon session owner (`provideSessionOwner`) and starts the native controller; no per-session formulas | replaces the deleted per-session provisioner |
-| `src/opencode-state-provider.js` | Per-session 0700 host directory + daemon mount via `host.provideMount`; destroy-only `removeSession` | daemon `host.js:685-741` |
 | `src/container-mount-bridge.js` | `provideContainerMountBridge`/`release…` (refused in phase 1) | `claude-sandbox/src/container-mount-bridge.js` |
 | `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the storage owner is `@endo/hosted-agent/session-storage.js` over that parser, bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
 | `src/opencode-native-controller.js` | Activate the recorded plan, acquire scopes, project the workspace, configure MCP and the slice, and construct the protocol client under the shared supervisor | `@endo/hosted-agent/session-supervisor.js` |

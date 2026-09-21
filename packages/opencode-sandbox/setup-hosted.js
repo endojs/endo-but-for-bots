@@ -79,7 +79,6 @@ import {
   readNativeSandbox,
   readSessionStorage,
   readSliceImageReference,
-  readStateProvider,
   resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
@@ -164,18 +163,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // existing secret from a possibly stale environment variable.
   const seedApiKey = env.ENDO_OPENROUTER_API_KEY || '';
 
-  // Every session's durable state is mounted through this provider; a backend
-  // minted without it would fail on first provision.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'state-provider'))) {
-    throw Fail`${q(`${SANDBOX_DIR}/state-provider`)} is missing — run setup-host.js first.`;
-  }
   // The native sandbox service is what session controllers acquire scopes from.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox'))) {
     throw Fail`${q(`${SANDBOX_DIR}/native-sandbox`)} is missing — run setup-host.js first.`;
   }
   const runtime = await readNativeSandbox(hostAgent);
-  const state = await readStateProvider(hostAgent);
-  // Like the state root, a retained storage owner's roots are the effective
+  // A retained storage owner's roots are the effective
   // ones: the backend must record sessions where that owner can remove them.
   // The current environment's roots apply only when the owner is minted now.
   const existingStorage = await E(hostAgent).has(
@@ -193,7 +186,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   isNormalizedAbsolutePath(mcpDir) ||
     Fail`ENDO_OPENCODE_MCP_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(mcpDir)}`;
   await assertRuntimePlacement(runtime.config.directory, {
-    stateDir: state.stateDir,
     workspaceDir,
     mcpDir,
   });
@@ -289,23 +281,29 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   }
 
   // Session storage owner — the `storage` role the daemon owner records with
-  // each session and invokes inside record removal. Its powers is the state
-  // provider, so native state removal keeps that provider's marker checks.
+  // each session and invokes inside record removal. It has null powers:
+  // OpenCode's CLI database is ephemeral; the stack retains the transcript.
   if (existingStorage) {
     console.log(
       'Retaining OpenCode session storage with its persisted roots; current workspace and MCP roots are not reapplied.',
     );
   } else {
-    await mintWithPowersPath(hostAgent, {
-      powersPath: [SANDBOX_DIR, 'state-provider'],
-      temporary: 'opencode.state-provider-powers',
-      specifier: sessionStorageSpecifier,
-      resultName: [SANDBOX_DIR, 'session-storage'],
-      env: {
-        OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
-        OPENCODE_MCP_DIR: mcpDir,
-      },
-    });
+    const powersName = 'opencode.storage-null-powers';
+    if (await E(hostAgent).has(powersName))
+      await E(hostAgent).remove(powersName);
+    await E(hostAgent).storeValue(null, powersName);
+    try {
+      await E(hostAgent).makeUnconfined('@main', sessionStorageSpecifier, {
+        powersName,
+        resultName: [SANDBOX_DIR, 'session-storage'],
+        env: harden({
+          OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
+          OPENCODE_MCP_DIR: mcpDir,
+        }),
+      });
+    } finally {
+      await E(hostAgent).remove(powersName);
+    }
     console.log(`Minted ${SANDBOX_DIR}/session-storage`);
   }
 

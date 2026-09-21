@@ -13,6 +13,36 @@ import { join } from 'node:path';
 
 import { makeSessionStorage } from '../src/session-storage.js';
 
+test('ephemeral CLI adapters remove owned directories without a state provider', async t => {
+  const removed = [];
+  const storage = makeSessionStorage({
+    roots: { workspaceDir: '/workspaces', mcpDir: '/private' },
+    readPlan: () =>
+      harden({
+        sandboxSessionId: 'one',
+        workspaceDir: '/workspaces/one',
+        workspaceMountPoint: '/private/one/workspace',
+        mounterSocketDir: '/private/one/9p',
+        mcpDir: '/private/one/mcp',
+      }),
+    inspect: /** @type {any} */ (async () => ({ isSymbolicLink: () => false })),
+    removeDirectory: async path => {
+      removed.push(path);
+    },
+    removeEmptyDirectory: async path => {
+      removed.push(path);
+    },
+  });
+  await storage.remove('{}');
+  t.deepEqual(removed, [
+    '/private/one/workspace',
+    '/private/one/9p',
+    '/private/one/mcp',
+    '/workspaces/one',
+    '/private/one',
+  ]);
+});
+
 test('dynamic-tool adapters remove private storage without inventing an MCP directory', async t => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), 'endo-dynamic-storage-')),

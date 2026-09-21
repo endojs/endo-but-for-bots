@@ -11,16 +11,12 @@ import {
   rm,
   stat,
   symlink,
-  writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { main } from '../setup-host.js';
-import {
-  nativeSandboxSpecifier,
-  stateProviderSpecifier,
-} from '../src/hosted-runtime-setup.js';
+import { nativeSandboxSpecifier } from '../src/hosted-runtime-setup.js';
 
 // A supported entrypoint of another service is an unsupported one for the
 // service under test; the retired capability-based runtime's entrypoint is
@@ -181,54 +177,57 @@ const withRuntime = async t => {
   return { runtimeDir, tmp };
 };
 
-test.serial('mints the native runtime and the state provider', async t => {
-  const { runtimeDir } = await withRuntime(t);
-  const tmp = await makeTmp(t, 'setup-host-state-');
-  const stateDir = path.join(tmp, 'state');
-  await withStateDir(t, stateDir);
-  const { host, bindings, mints, stored, removed } = makeFakeHost();
-  await main(host);
+test.serial(
+  'mints only the native runtime and ignores retired state configuration',
+  async t => {
+    const { runtimeDir } = await withRuntime(t);
+    const tmp = await makeTmp(t, 'setup-host-state-');
+    const stateDir = path.join(tmp, 'state');
+    await withStateDir(t, stateDir);
+    const { host, bindings, mints, stored, removed } = makeFakeHost();
+    await main(host);
 
-  t.deepEqual(
-    mints.map(mint => mint.options.resultName),
-    [
-      ['opencode-sandbox', 'native-sandbox'],
-      ['opencode-sandbox', 'state-provider'],
-    ],
-  );
-  t.true(bindings.has(key('opencode-sandbox', 'state-provider')));
-  t.is(
-    mints[1].options.env.ENDO_OPENCODE_STATE_DIR,
-    stateDir,
-    'the provider is given the validated state root',
-  );
-  // The native service is constructed over a stored literal null, never a
-  // host or denied-method capability, as the primary runtime: it owns the
-  // validated runtime directory itself under the host-derived owner label.
-  t.is(mints[0].specifier, nativeSandboxSpecifier);
-  t.is(mints[0].options.powersName, 'opencode.null-powers');
-  t.deepEqual(stored, [{ value: null, name: 'opencode.null-powers' }]);
-  t.true(removed.some(parts => key(...parts) === key('opencode.null-powers')));
-  t.false(bindings.has(key('opencode.null-powers')), 'alias removed');
-  t.regex(
-    mints[0].options.env.ENDO_SANDBOX_OWNER_ID,
-    /^opencode-[0-9a-f]{64}$/,
-  );
-  t.deepEqual(mints[0].options.env, {
-    ENDO_SANDBOX_OWNER_ID: mints[0].options.env.ENDO_SANDBOX_OWNER_ID,
-    ENDO_SANDBOX_RUNTIME_DIR: await realpath(runtimeDir),
-    ENDO_SANDBOX_GENERATED_MAX_BYTES: '9007199254740993',
-    ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
-  });
-  t.false(
-    bindings.has(key('opencode-sandbox', 'sandbox-factory')),
-    'no capability-based factory is minted',
-  );
-  t.false(
-    bindings.has(key('opencode-sandbox', 'fs-mounter')),
-    'no shared mounter is minted',
-  );
-});
+    t.deepEqual(
+      mints.map(mint => mint.options.resultName),
+      [['opencode-sandbox', 'native-sandbox']],
+    );
+    t.false(bindings.has(key('opencode-sandbox', 'state-provider')));
+    t.false(
+      await stat(stateDir).then(
+        () => true,
+        () => false,
+      ),
+    );
+    // The native service is constructed over a stored literal null, never a
+    // host or denied-method capability, as the primary runtime: it owns the
+    // validated runtime directory itself under the host-derived owner label.
+    t.is(mints[0].specifier, nativeSandboxSpecifier);
+    t.is(mints[0].options.powersName, 'opencode.null-powers');
+    t.deepEqual(stored, [{ value: null, name: 'opencode.null-powers' }]);
+    t.true(
+      removed.some(parts => key(...parts) === key('opencode.null-powers')),
+    );
+    t.false(bindings.has(key('opencode.null-powers')), 'alias removed');
+    t.regex(
+      mints[0].options.env.ENDO_SANDBOX_OWNER_ID,
+      /^opencode-[0-9a-f]{64}$/,
+    );
+    t.deepEqual(mints[0].options.env, {
+      ENDO_SANDBOX_OWNER_ID: mints[0].options.env.ENDO_SANDBOX_OWNER_ID,
+      ENDO_SANDBOX_RUNTIME_DIR: await realpath(runtimeDir),
+      ENDO_SANDBOX_GENERATED_MAX_BYTES: '9007199254740993',
+      ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+    });
+    t.false(
+      bindings.has(key('opencode-sandbox', 'sandbox-factory')),
+      'no capability-based factory is minted',
+    );
+    t.false(
+      bindings.has(key('opencode-sandbox', 'fs-mounter')),
+      'no shared mounter is minted',
+    );
+  },
+);
 
 test.serial(
   'runtime configuration fails before provisioning mutations',
@@ -293,7 +292,7 @@ test.serial(
       ENDO_SANDBOX_GENERATED_MAX_BYTES: 'changed-and-ignored',
     });
     await main(host);
-    t.is(mints.length, 2, 'native service and state provider both reused');
+    t.is(mints.length, 1, 'native service reused');
     t.is(
       mints[0].options.env.ENDO_SANDBOX_GENERATED_MAX_BYTES,
       '9007199254740993',
@@ -332,7 +331,7 @@ test.serial(
     await main(retained.host);
     t.deepEqual(
       retained.mints.map(mint => mint.options.resultName[1]),
-      ['state-provider'],
+      [],
     );
     t.is(
       retained.bindings.get(key('opencode-sandbox', 'sandbox-factory')),
@@ -389,68 +388,9 @@ test.serial(
     await main(fresh.host);
     t.deepEqual(
       fresh.mints.map(mint => mint.options.resultName[1]),
-      ['native-sandbox', 'state-provider'],
+      ['native-sandbox'],
     );
     t.is(await readlink(foreign), 'endo-sandbox-owner-v1-other', 'untouched');
-  },
-);
-
-test.serial(
-  'effective roots are selected independently for retained runtime and state formulas',
-  async t => {
-    await null;
-    for (const [hasNative, hasState] of [
-      [false, false],
-      [true, false],
-      [false, true],
-      [true, true],
-    ]) {
-      // eslint-disable-next-line no-await-in-loop
-      const { runtimeDir, tmp } = await withRuntime(t);
-      const fake = makeFakeHost();
-      const storedState = path.join(tmp, 'persisted-state');
-      if (hasNative) {
-        seedFormula(
-          fake,
-          'native-sandbox',
-          nativeSandboxSpecifier,
-          runtimeEnv(runtimeDir),
-        );
-        // eslint-disable-next-line no-await-in-loop
-        await withEnv(t, {
-          ENDO_SANDBOX_RUNTIME_DIR: 'ignored-relative-path',
-          ENDO_SANDBOX_GENERATED_MAX_BYTES: undefined,
-          ENDO_SANDBOX_GENERATED_MAX_ENTRIES: undefined,
-        });
-      }
-      if (hasState) {
-        seedFormula(fake, 'state-provider', stateProviderSpecifier, {
-          ENDO_OPENCODE_STATE_DIR: storedState,
-        });
-        // eslint-disable-next-line no-await-in-loop
-        await withEnv(t, { ENDO_OPENCODE_STATE_DIR: 'ignored-state-path' });
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await main(fake.host);
-      const names = fake.mints.map(mint => mint.options.resultName[1]);
-      t.deepEqual(
-        names,
-        [!hasNative && 'native-sandbox', !hasState && 'state-provider'].filter(
-          Boolean,
-        ),
-      );
-      t.deepEqual(
-        fake.reads.filter(([kind]) => kind === 'env').map(([, id]) => id),
-        fake.reads.filter(([kind]) => kind === 'formula').map(([, id]) => id),
-      );
-      if (hasState) {
-        t.is(
-          fake.environments.get('persisted-state-provider')
-            .ENDO_OPENCODE_STATE_DIR,
-          storedState,
-        );
-      }
-    }
   },
 );
 
@@ -478,57 +418,6 @@ test.serial(
 );
 
 test.serial(
-  'stored state placement is checked before creating or retaining the runtime',
-  async t => {
-    await null;
-    for (const hasNative of [false, true]) {
-      // eslint-disable-next-line no-await-in-loop
-      const { runtimeDir, tmp } = await withRuntime(t);
-      const fake = makeFakeHost();
-      seedFormula(fake, 'state-provider', stateProviderSpecifier, {
-        ENDO_OPENCODE_STATE_DIR: tmp,
-      });
-      if (hasNative)
-        seedFormula(
-          fake,
-          'native-sandbox',
-          nativeSandboxSpecifier,
-          runtimeEnv(runtimeDir),
-        );
-      // eslint-disable-next-line no-await-in-loop
-      await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
-      t.deepEqual(fake.mints, []);
-      t.is(fake.bindings.size, hasNative ? 2 : 1);
-    }
-  },
-);
-
-test.serial(
-  'state provider requires a supported entrypoint and persisted state root',
-  async t => {
-    await withRuntime(t);
-    const missing = makeFakeHost();
-    seedFormula(missing, 'state-provider', stateProviderSpecifier, {});
-    await t.throwsAsync(main(missing.host), {
-      message: /persisted ENDO_OPENCODE_STATE_DIR/,
-    });
-    t.deepEqual(missing.mints, []);
-    const unsupported = makeFakeHost();
-    seedFormula(unsupported, 'state-provider', legacyFactorySpecifier, {
-      ENDO_OPENCODE_STATE_DIR: '/ignored',
-    });
-    await t.throwsAsync(main(unsupported.host), {
-      message: /unsupported entrypoint/,
-    });
-    t.deepEqual(unsupported.mints, []);
-    t.deepEqual(
-      unsupported.reads.map(([kind]) => kind),
-      ['formula'],
-    );
-  },
-);
-
-test.serial(
   'retains an existing native sandbox service with its persisted runtime',
   async t => {
     const { runtimeDir, tmp } = await withRuntime(t);
@@ -547,7 +436,7 @@ test.serial(
     await main(fake.host);
     t.deepEqual(
       fake.mints.map(mint => mint.options.resultName[1]),
-      ['state-provider'],
+      [],
     );
     t.deepEqual(fake.stored, [], 'no replacement powers are stored');
     // A retained service whose persisted runtime would contain guest storage
@@ -555,7 +444,9 @@ test.serial(
     // effective roots.
     const elsewhere = path.join(tmp, 'native-elsewhere');
     await mkdir(elsewhere, { mode: 0o700 });
-    await withStateDir(t, path.join(elsewhere, 'future-guest-state'));
+    await withEnv(t, {
+      ENDO_OPENCODE_WORKSPACE_DIR: path.join(elsewhere, 'future-workspace'),
+    });
     const misplaced = makeFakeHost();
     seedFormula(misplaced, 'native-sandbox', nativeSandboxSpecifier, {
       ...runtimeEnv(elsewhere),
@@ -578,64 +469,5 @@ test.serial(
     });
     t.deepEqual(unsupported.mints, []);
     t.deepEqual(unsupported.stored, []);
-  },
-);
-
-test.serial('rejects a relative state root before minting', async t => {
-  await withRuntime(t);
-  await withStateDir(t, 'relative/opencode-state');
-  const { host, mints } = makeFakeHost();
-  await t.throwsAsync(main(host), { message: /must be absolute/ });
-  t.is(mints.length, 0);
-});
-
-test.serial('rejects the filesystem root', async t => {
-  await withRuntime(t);
-  await withStateDir(t, '/');
-  const { host, mints } = makeFakeHost();
-  await t.throwsAsync(main(host), { message: /normalized, non-root/ });
-  t.is(mints.length, 0);
-});
-
-test.serial('rejects a symlinked state root', async t => {
-  await withRuntime(t);
-  const target = await makeTmp(t, 'setup-host-target-');
-  const link = `${await makeTmp(t, 'setup-host-link-')}-link`;
-  await symlink(target, link);
-  t.teardown(() => rm(link, { force: true }));
-  await withStateDir(t, link);
-  const { host, bindings, mints } = makeFakeHost();
-  await t.throwsAsync(main(host), { message: /must not be a symlink/ });
-  t.false(
-    bindings.has(key('opencode-sandbox', 'state-provider')),
-    'no provider is minted against a rejected root',
-  );
-  t.is(mints.length, 1, 'the native service is a harmless pre-state mint');
-});
-
-test.serial('rejects a state root that is a file', async t => {
-  await withRuntime(t);
-  const dir = await makeTmp(t, 'setup-host-file-');
-  const file = path.join(dir, 'state');
-  await writeFile(file, 'not a directory\n');
-  await withStateDir(t, file);
-  const { host, bindings } = makeFakeHost();
-  await t.throwsAsync(main(host), { message: /must be a directory/ });
-  t.false(bindings.has(key('opencode-sandbox', 'state-provider')));
-});
-
-test.serial(
-  'adopts an existing private root but refuses a foreign-owned one',
-  async t => {
-    await withRuntime(t);
-    const tmp = await makeTmp(t, 'setup-host-adopt-');
-    const stateDir = path.join(tmp, 'state');
-    await mkdir(stateDir, { mode: 0o700 });
-    await chmod(stateDir, 0o755);
-    await withStateDir(t, stateDir);
-    const { host, bindings } = makeFakeHost();
-    await main(host);
-    t.true(bindings.has(key('opencode-sandbox', 'state-provider')));
-    t.is((await stat(stateDir)).mode % 0o1000, 0o700, 'loose mode tightened');
   },
 );

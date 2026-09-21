@@ -438,11 +438,15 @@ const getConfigDirectoryName = (testTitle, testConfigIndex) => {
  * @param {ExecutionContext<any>} t
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled]
+ * @param {string} [options.configName] Short name for platforms with small socket paths.
  */
-const prepareConfig = async (t, { gcEnabled = true } = {}) => {
+const prepareConfig = async (
+  t,
+  { gcEnabled = true, configName = t.title } = {},
+) => {
   const { cancelled, cancel } = makeCancelKit();
   const config = {
-    ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
+    ...makeConfig('tmp', getConfigDirectoryName(configName, t.context.length)),
     gcEnabled,
   };
 
@@ -2354,14 +2358,15 @@ testNeedsNodeManager(
   'the OpenCode backend records a session through the daemon owner and destroy reaches its storage',
   async t => {
     t.timeout(120_000);
-    const { cancelled, config } = await prepareConfig(t);
+    // Keep the Unix socket below macOS's 104-byte limit in a deep worktree.
+    // getConfigDirectoryName still supplies its unique test/config suffix.
+    const { cancelled, config } = await prepareConfig(t, { configName: 'oc' });
     const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
     const base = config.statePath;
     const roots = {
       workspaceDir: path.join(base, 'opencode-workspaces'),
       mcpDir: path.join(base, 'opencode-private'),
     };
-    const stateDir = path.join(base, 'opencode-state');
     const nativeRuntime = path.join(base, 'opencode-native-runtime');
     const brokerDir = path.join(base, 'opencode-broker');
     for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
@@ -2381,17 +2386,7 @@ testNeedsNodeManager(
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('opencode-sandbox');
     // The same services setup-host.js and setup-hosted.js mint, over the
-    // same powers shapes: host powers, a stored null, a SecretBlob, and the
-    // state provider.
-    await E(host).makeUnconfined(
-      '@node',
-      spec('opencode-sandbox/src/opencode-state-provider-module.js'),
-      {
-        powersName: '@agent',
-        resultName: ['opencode-sandbox', 'state-provider'],
-        env: { ENDO_OPENCODE_STATE_DIR: stateDir },
-      },
-    );
+    // same powers shapes: host powers, a stored null, and a SecretBlob.
     await E(host).storeValue(null, 'opencode.null-powers');
     await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
       powersName: 'opencode.null-powers',
@@ -2433,15 +2428,12 @@ testNeedsNodeManager(
       },
     );
     await E(host).remove('opencode-auth.broker-read');
-    await E(host).copy(
-      ['opencode-sandbox', 'state-provider'],
-      ['opencode.state-provider-powers'],
-    );
+    await E(host).storeValue(null, 'opencode.storage-null-powers');
     await E(host).makeUnconfined(
       '@node',
       spec('opencode-sandbox/src/opencode-session-storage-module.js'),
       {
-        powersName: 'opencode.state-provider-powers',
+        powersName: 'opencode.storage-null-powers',
         resultName: ['opencode-sandbox', 'session-storage'],
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
@@ -2449,7 +2441,7 @@ testNeedsNodeManager(
         },
       },
     );
-    await E(host).remove('opencode.state-provider-powers');
+    await E(host).remove('opencode.storage-null-powers');
     const backend = await E(host).makeUnconfined(
       '@node',
       spec('opencode-sandbox/src/opencode-backend-module.js'),
@@ -2511,7 +2503,6 @@ testNeedsNodeManager(
       'brokerService',
       'client',
       'sandboxService',
-      'stateProvider',
       'storage',
       'worker',
     ]);
@@ -7604,9 +7595,14 @@ test('provideSubMount carries the parent deny list into the child', async t => {
   });
   await t.throwsAsync(E(parent).lookup(['secrets', 'key.pem']));
 
-  const child = await E(host).provideSubMount(parent, [], 'submount-deny-child', {
-    readOnly: true,
-  });
+  const child = await E(host).provideSubMount(
+    parent,
+    [],
+    'submount-deny-child',
+    {
+      readOnly: true,
+    },
+  );
   t.is(await E(await E(child).lookup('index.html')).text(), '<p>hello</p>\n');
   await t.throwsAsync(E(child).lookup(['secrets', 'key.pem']));
   t.false((await E(child).list()).includes('secrets'));

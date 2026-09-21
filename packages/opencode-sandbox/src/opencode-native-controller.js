@@ -142,13 +142,6 @@ export const makeOpencodeNativeController = ({
         (publicNetwork !== undefined) ||
         Fail`Broker network evidence does not match the recorded policy`;
       assertOpen();
-      const stateProvider = await E(resolver).get('stateProvider');
-      assertOpen();
-      const state = await E(stateProvider).prepareSessionDirectory(
-        approved.sandboxSessionId,
-      );
-      assertCopyData(harden(state));
-      assertOpen();
       // Exactly one of the two is recorded; the parser enforces it.
       // Retained before it is established, so a failed mount is still
       // closed by this owner's ordinary cleanup.
@@ -169,10 +162,8 @@ export const makeOpencodeNativeController = ({
       assertOpen();
       await mounter.mount();
       assertOpen();
-      // The attested table. The workspace is the 9P projection this
-      // controller just established; the CLI's own data directory is a bind
-      // rather than a projection because opencode forces SQLite WAL, which
-      // needs a local filesystem.
+      // The workspace is this incarnation's 9P projection. OpenCode's own
+      // database is in memory and its remaining CLI state lives on tmpfs.
       const mounts = [
         {
           role: 'workspace',

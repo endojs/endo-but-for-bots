@@ -238,21 +238,16 @@ const fixture = (t, { realClient = false } = {}) => {
       return grants.get(id);
     },
   });
-  const stateProvider = Far('State', {
-    async prepareSessionDirectory(id) {
-      events.push(`state ${id}`);
-      return harden({ directory: `/state/${id}` });
-    },
-  });
   const roles = {
     sandboxService,
     brokerService,
-    stateProvider,
     tools,
   };
   const resolver = Far('Resolver', {
     async get(role) {
       events.push(`resolve ${role}`);
+      if (role === 'stateProvider')
+        throw Error('OpenCode has no native state provider');
       // Stands in for a service formula that refuses to revive.
       if (faults.resolverFail === role) throw Error(`cannot revive ${role}`);
       return roles[role];

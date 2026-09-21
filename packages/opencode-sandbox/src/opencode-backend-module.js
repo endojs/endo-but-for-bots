@@ -9,7 +9,7 @@
  * Sessions belong to the daemon's session owner. For each Floot session this
  * caplet writes one approved plan and records the exact formula identities of
  * the services it depends on — the native sandbox service, the provider
- * broker, the state provider, and the storage owner — then asks the owner to
+ * broker and the storage owner — then asks the owner to
  * start the native controller with the tool set Floot pinned. The workspace
  * is a recorded directory the controller projects itself, not a formula:
  * this caplet never holds a disposable capability, since the daemon closes a
@@ -50,7 +50,6 @@ import {
   readBrokerService,
   readNativeSandbox,
   readSessionStorage,
-  readStateProvider,
   resolveFuturePath,
 } from './hosted-runtime-setup.js';
 import {
@@ -131,10 +130,9 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   // Exact dependency identities are captured once, by verified entrypoint,
   // for the sessions this incarnation records; an existing record keeps the
   // identities it was created with.
-  const [sandbox, broker, state, storage] = await Promise.all([
+  const [sandbox, broker, storage] = await Promise.all([
     readNativeSandbox(hostAgent),
     readBrokerService(hostAgent),
-    readStateProvider(hostAgent),
     readSessionStorage(hostAgent),
   ]);
   (storage.roots.workspaceDir === workspaceBaseDir &&
@@ -255,7 +253,6 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
         harden({
           sandboxService: sandbox.identifier,
           brokerService: broker.identifier,
-          stateProvider: state.identifier,
           storage: storage.identifier,
         }),
       );
