@@ -67,6 +67,7 @@ No claim of complete retrospective coverage is made yet.
 |---|---|---|
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
 | Pool member identity | `275710d5a` pins identity only in memory; chooser state is persisted. Same-ID rebinding after restart can inherit another account's state. | Persist and validate identity with chooser state; test restart, removed IDs, and failed writes. |
+| Formula disposal and replacement | Remote disposal hooks were invoked as local functions; explicit-cancellation bridge/fencing tests now pass in the working tree. GC drops controllers before asynchronous cleanup begins, exposing a separate revival window under review. | Fence every withdrawal path before controller removal; verify cross-worker retained facets, failed cleanup, mutual dependencies, and GC interleavings before relying on this for one writer. |
 | Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
 | Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic no-overwrite ownership publication, and external durable orphan-retirement intent. Twenty-seven focused tests pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Tests inject failures and reconstruct from disk, not physical power loss. |
@@ -88,6 +89,13 @@ torn formula/name publication, deletion/GC, or native cleanup after worker loss.
 Formula-level cancellation/revival tests must also prove exactly one active
 private-journal writer, rather than assuming object reconstruction over shared
 Maps establishes that invariant.
+Private journal retirement must occur only during terminal deletion, after the
+writer and backend drain, not in generic `cleanupSessionResources`: startup also
+calls that helper for incomplete creation and then reopens the existing schema.
+The factory currently ignores its context; it needs an explicit disposal hook,
+admission fence, and drain of creation, registry/submission writes, and journal
+queues before replacement can safely start.
+An incarnation-local registry does not establish cross-worker exclusion.
 Mount-inspection fix: the default recorded-cleanup socket check now treats only
 ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
 Ten focused tests pass, including vanished-entry success and both inspection
@@ -398,6 +406,14 @@ This removes a replayable side-effect path rather than adding durable state.
 The focused client/controller suites pass 51 tests; changed-file lint has no
 errors. Independent adversarial source review approved this deletion;
 deployment remains pending.
+The equivalent unused Claude construction-time prompt path is also removed,
+including its obsolete replay-detection commentary.
+Fresh and prior-conversation client tests verify that construction stays inert
+and the next explicit send retains its existing resume behavior.
+Fifty-one Claude client/controller tests pass; independent source review approved
+the deletion and changed-file lint reports no errors. Deployment is pending.
+Neither deletion introduces a new persistence mechanism or changes the
+canonical transcript restoration path.
 The full OpenCode suite passes 227 tests, and an independent reviewer reran
 72 client, plan, controller, and subprocess startup tests successfully.
 Package ESLint reports zero errors and 37 warnings; formatting and diff checks pass.
@@ -515,6 +531,32 @@ Required in this remediation session, before resuming model-dependent acceptance
 
 Acceptance cost policy is separate from discovery: test Codex with `gpt-5.6-luna`,
 Fae with `openrouter/free`, and OpenCode with `openrouter/openrouter/free`.
+
+End-to-end discovery/admission implementation sequence:
+
+1. Establish durable account/Secret bindings and exclusive credential ownership.
+   Authority records must fail closed on read/write errors; the chooser's
+   best-effort warm/refusal snapshots cannot carry authority tombstones.
+   Secret generation changes during renewal are not identity changes.
+2. Project account catalogs without adding a second cache or credential owner.
+   Pinned subscriptions use only that account; automatic routing excludes
+   pinned-only accounts and retains model/effort-specific eligibility.
+3. Replace global `policy.models` admission with account-bound checks before
+   sending inference, including failover and subscription/share restrictions.
+   Missing discovery never becomes wildcard permission or a static fallback.
+4. Wire factory and session model listings to the same provider catalog.
+   Preserve exact model/effort pins in durable plans and on restoration;
+   unavailable models must not be replaced with a new default.
+   OpenCode's current send path rejects nonempty reasoning effort, so provider
+   effort metadata alone does not justify exposing that runtime control.
+5. Remove Nix/setup model enumeration and Floot's hardcoded OpenRouter lists.
+   Add OpenCode's route prefix only at its adapter boundary; Fae and OpenCode
+   must share provider discovery rather than separate model authorities.
+
+Required regressions include disjoint account catalogs, different effort sets,
+partial failure, all-unavailable/empty catalogs, removed accounts during reads,
+pinned-account refusal without fallback, share restrictions, and exact route
+roundtrips through picker, persisted plan, CLI adapter, and broker.
 The host test drivers must refuse missing routes and existing paid-route manifests
 before inference, while still allowing inspection and cleanup.
 This is required work, not a future deferral or a claim of completed discovery.
@@ -1034,6 +1076,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Remove obsolete Claude construction prompt dispatch; record disposal and account-admission prerequisites | 51 client/controller tests, independent source review and lint pass; explicit restoration unchanged; not deployed |
 | 2026-09-21 | Retrospective durability: uniquely allocated native state and durable ownership/retirement records | 27 focused tests and independent review pass; breaking storage layout approved; old-release retirement and Tokyo verification pending |
 | 2026-09-21 | FA-04: remove obsolete OpenCode construction prompt dispatch | 51 client/controller tests pass; independent source review and lint pass; no new durable state; not deployed |
 | 2026-09-21 | FA-07: expose account-scoped broker model catalogs using existing credential owners | 45 shared, three Codex, seven OpenCode, and one real-daemon lifecycle test pass independently; static catalog removal/admission wiring pending; not deployed |

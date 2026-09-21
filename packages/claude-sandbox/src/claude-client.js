@@ -43,7 +43,6 @@ import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { mapReader } from '@endo/stream';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import {
   awaitBarrier,
@@ -195,7 +194,7 @@ const defaultStderrIterable = proc =>
  * @property {(extraMounts?: readonly ExtraMountSpec[]) => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
  *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
  *   are ignored and the slice + mount are created on first use (the
- *   first `send()` or `initialPrompt`), memoized thereafter. This is
+ *   first `send()`), memoized thereafter. This is
  *   what lets the client be a pure-`env` formula: it constructs
  *   instantly and re-mounts / re-mints its container on demand, so
  *   daemon boot is never blocked on a container start. Receives the
@@ -227,9 +226,7 @@ const defaultStderrIterable = proc =>
  *   error or silently fork a fresh conversation), and a post-restart
  *   turn must resume whenever a transcript exists even if the one-shot
  *   construction-time detection raced or failed. A detector throw falls
- *   back to the in-memory flag. Also gates `initialPrompt`, so a
- *   reincarnated formula does not re-fire its initial prompt as a
- *   spurious extra turn on every daemon restart.
+ *   back to the in-memory flag.
  * @property {(records: readonly any[]) => Promise<string | undefined>} [restoreTranscript] -
  *   Write this conversation into the session's config directory from the
  *   stack's own transcript records, and answer the session id the CLI should
@@ -258,8 +255,6 @@ const defaultStderrIterable = proc =>
  * @property {Record<string, string>} [env] - Extra per-spawn env
  *   merged on top of the slice's env. The slice's env already carries
  *   the credential, so this is normally empty.
- * @property {string} [initialPrompt] - Optional one-shot prompt fired
- *   (and drained) at construction.
  * @property {(proc: ProcessHandle) => AsyncIterable<Uint8Array>} [makeStdoutIterable]
  *   - Adapter from a `ProcessHandle` to its stdout byte stream.
  *   Injectable for tests; defaults to the `@endo/exo-stream` reader.
@@ -294,7 +289,6 @@ export const makeClaudeClient = ({
   systemPrompt,
   mcpConfigPath,
   env = {},
-  initialPrompt,
   detectPriorConversation,
   resolveResumeSessionId,
   restoreTranscript,
@@ -338,8 +332,8 @@ export const makeClaudeClient = ({
   // which skips the restore branch below and resumes the stale store --
   // precisely the behaviour the records exist to replace.
   let conversationStarted = false;
-  // Whether the *next* spawn should resume at all, and whether `initialPrompt`
-  // has already been answered. The detector, when present, is the ground truth
+  // Whether the *next* spawn should resume at all.
+  // The detector, when present, is the ground truth
   // (it reads the persisted transcript), so a turn killed before Claude
   // persisted anything does not poison the next turn with a resume that has
   // nothing to resume, and a post-restart turn resumes whenever a transcript
@@ -779,29 +773,6 @@ export const makeClaudeClient = ({
     turnChain = turn.catch(() => {});
     return reader;
   };
-
-  // Fire-and-forget the initial prompt: queue it as the first turn and
-  // drain it in the background so the buffer does not grow unbounded if
-  // the caller never pulls. Explicit `send()`s queue after it.
-  //
-  // Only on a genuinely fresh session: the prompt rides in the formula env,
-  // so a reincarnated formula would otherwise re-fire it as a spurious extra
-  // turn on every daemon restart (and, when resume detection missed, that
-  // re-fired turn would become the fresh conversation all later `--continue`
-  // turns build on — total context loss).
-  if (initialPrompt && !priorConversation()) {
-    const initReader = runTurn(initialPrompt);
-    (async () => {
-      // Drain without closing: closing would fire onClose and kill the very
-      // turn we are running.
-      for await (const event of iterateReader(/** @type {any} */ (initReader), {
-        buffer: 8,
-      })) {
-        // discarded — nobody is watching this turn's transcript
-        void event;
-      }
-    })().catch(() => {});
-  }
 
   // Serialize attach-set changes so two overlapping `setExtraMounts` calls
   // never interleave their teardown/re-provision sequences.
