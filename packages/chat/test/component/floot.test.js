@@ -1962,6 +1962,79 @@ test.serial(
 );
 
 test.serial(
+  'settings show remaining capacity for each provider and neutral stale readings',
+  async t => {
+    const account = (
+      /** @type {string} */ backendId,
+      /** @type {number} */ usedPercent,
+    ) => ({
+      backendId,
+      title: backendId,
+      plan: {
+        planId: 'pro',
+        title: 'Pro',
+        state: 'active',
+        source: 'observed',
+      },
+      windows: [
+        {
+          windowId: 'weekly',
+          title: 'Weekly window',
+          usedPercent,
+          resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+          windowSeconds: 604_800,
+          limit: null,
+          used: null,
+          remaining: null,
+        },
+      ],
+      limitReached: usedPercent >= 100,
+      credits: null,
+      resetCredits: null,
+      source: 'observed',
+      observedAt: new Date().toISOString(),
+    });
+    let daemon;
+    const { parent } = await setup(t, 1, false, made => {
+      daemon = made;
+      made.setAccounts([account('codex', 17), account('claude-code', 100)]);
+    });
+    parent
+      .querySelector('[aria-label="Settings & transcription"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(
+      () => parent.querySelectorAll('.floot-capacity-meter').length === 2,
+    );
+    const meters = [...parent.querySelectorAll('.floot-capacity-meter')];
+    t.deepEqual(
+      meters.map(meter => Number(meter.getAttribute('value') || 0)),
+      [83, 0],
+    );
+    t.deepEqual(
+      meters.map(meter => meter.getAttribute('aria-valuetext')),
+      ['83% remaining', '0% remaining'],
+    );
+    t.is(
+      meters[0].getAttribute('aria-label'),
+      'codex: Weekly window remaining',
+    );
+    t.regex(parent.textContent || '', /17% used.*resets in/s);
+    daemon.setAccounts([
+      { ...account('codex', 17), source: 'remembered' },
+      account('claude-code', 100),
+    ]);
+    await waitFor(
+      () => parent.querySelectorAll('.floot-capacity-meter').length === 1,
+    );
+    t.is(parent.querySelectorAll('.floot-capacity-unknown').length, 1);
+    t.regex(
+      parent.textContent || '',
+      /Unknown — refresh stale or unknown reading/,
+    );
+  },
+);
+
+test.serial(
   'a banked reset is redeemed only when a person presses and confirms',
   async t => {
     const account = reset => ({

@@ -1,5 +1,7 @@
 // @ts-check
 
+import harden from '@endo/harden';
+
 /**
  * How a backend's account is worded for a person: what its plan is, how full
  * each rate-limit window is and when it resets, credits, banked resets, and
@@ -185,6 +187,50 @@ export const accountChip = (account, nowMs) => {
 const UNDATED_BLOCK_MS = 3_600_000;
 
 /**
+ * Capacity is a recent observation, not a prediction that a reset refilled it.
+ * An hour is the display freshness bound; it does not alter pool scheduling.
+ * @param {Account} account
+ * @param {number} nowMs
+ */
+export const accountCapacity = (account, nowMs) =>
+  account.windows.map(window => {
+    const observed = Date.parse(account.observedAt);
+    const reset = Date.parse(window.resetsAt);
+    const lastRedeem = [
+      'reset',
+      'redeemed',
+      'alreadyRedeemed',
+      'abandoned',
+    ].includes(account.reset?.last?.outcome || '')
+      ? Date.parse(account.reset?.last?.at || '')
+      : NaN;
+    let note = '';
+    if (account.reset?.pending) note = 'reset unconfirmed';
+    else if (
+      (Number.isFinite(reset) && reset <= nowMs) ||
+      lastRedeem > observed
+    )
+      note = 'refresh after reset';
+    else if (
+      account.source !== 'observed' ||
+      !Number.isFinite(observed) ||
+      observed > nowMs ||
+      nowMs - observed >= UNDATED_BLOCK_MS
+    )
+      note = 'refresh stale or unknown reading';
+    else if (
+      typeof window.usedPercent !== 'number' ||
+      !Number.isFinite(window.usedPercent)
+    )
+      note = 'usage not published';
+    const remaining = note
+      ? null
+      : Math.max(0, Math.min(100, 100 - Number(window.usedPercent)));
+    return { title: window.title || window.windowId, remaining, note };
+  });
+harden(accountCapacity);
+
+/**
  * Whether the account cannot spend right now, as far as is known.
  *
  * A full window blocks until it resets. The provider's own word that the
@@ -237,15 +283,19 @@ export const accountSections = (accounts, nowMs) =>
       rows.push(['Plan', account.plan.title || account.plan.planId]);
     }
     for (const window of account.windows) {
-      const { usedPercent, expired, resetsInMs } = windowNow(window, nowMs);
+      const { expired, resetsInMs } = windowNow(window, nowMs);
+      const usedPercent = window.usedPercent;
       const used =
-        usedPercent === null ? 'usage not published' : `${usedPercent}% used`;
+        typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)
+          ? 'usage not published'
+          : `${expired ? 'last observed ' : ''}${usedPercent}% used`;
       const counts =
         window.remaining !== null && window.limit !== null
           ? `, ${window.remaining} of ${window.limit} left`
           : '';
       let reset = '';
-      if (expired) reset = ' — has reset since this reading';
+      if (expired)
+        reset = ' — has reset since this reading; refresh after reset';
       else if (resetsInMs !== null)
         reset = ` — resets in ${formatSpan(resetsInMs)}`;
       rows.push([window.title || window.windowId, `${used}${counts}${reset}`]);
