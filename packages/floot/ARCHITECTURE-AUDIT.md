@@ -382,6 +382,18 @@ The initial focused suite passes 24 tests; these are mocked metadata reads, not
 live discovery or inference acceptance.
 Broker/account-generation binding, account-specific route admission and failover,
 static configuration removal, searchable UI, and deployment remain pending.
+Pool review found that editing a member's account or secret binding under an
+existing ID reused its cached credential handler and could mix old credentials
+with new account metadata.
+A reviewed per-incarnation guard now pins each accepted ID's authority tuple,
+including removed-ID tombstones, and rejects rebinding before changing live state.
+Labels, weights, and pinned-only metadata remain editable; 12 diagnostics tests pass.
+This is not complete ownership retirement: same-authority removal/re-add can
+still create another credential handler while old grants exist, unchanged secret
+pet names can resolve to replaced capabilities, and identity pins do not yet
+survive restart alongside persisted chooser state.
+Resolve those lifecycle/generation cases before claiming account-bound discovery
+and safe renewal ownership complete.
 The root documentation gate failed with 9035 errors and 113 warnings in the
 project graph; no passing documentation/type gate is claimed.
 

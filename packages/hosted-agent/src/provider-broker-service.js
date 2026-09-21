@@ -357,6 +357,12 @@ const makePooledBrokerServiceKit = ({
    */
   /** @type {Map<string, MemberKit>} */
   const kits = new Map();
+  // A member ID is an authority identity, not an editable display label.
+  // Keep tombstones for removed IDs: old grants and account facets can still
+  // refer to them. Relabeling or reweighting is safe; rebinding requires a new
+  // ID, not pairing a cached credential with a new account/header.
+  /** @type {Map<string, string>} */
+  const memberBindings = new Map();
   /** @type {ReturnType<typeof normalizeSubscriptionSet> | undefined} */
   let set;
   /** @type {ReturnType<typeof makeSubscriptionPool> | undefined} */
@@ -499,6 +505,22 @@ const makePooledBrokerServiceKit = ({
       const next = normalizeSubscriptionSet(await readSet(), {
         requireAccountRef,
       });
+      const bindings = next.members.map(member => [
+        member.id,
+        JSON.stringify([
+          member.secretName ?? null,
+          member.subscriptionName ?? null,
+          member.accountRef ?? null,
+        ]),
+      ]);
+      // Validate the entire update before changing any kit, chooser, or pin.
+      for (const [id, binding] of bindings) {
+        const previous = memberBindings.get(id);
+        previous === undefined ||
+          previous === binding ||
+          Fail`Subscription member authority changed; use a new member ID`;
+      }
+      for (const [id, binding] of bindings) memberBindings.set(id, binding);
       for (const [id, kit] of kits) {
         if (!next.members.some(member => member.id === id)) {
           kit.account.close();

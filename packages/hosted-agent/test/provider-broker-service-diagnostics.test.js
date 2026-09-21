@@ -412,6 +412,68 @@ test('a set that is not well formed fails cleanly and leaves the service usable'
   await kit.close();
 });
 
+test('pool member IDs cannot be rebound to another authority within an incarnation', async t => {
+  const original = {
+    id: 'work',
+    secretName: 'key-one',
+    accountRef: 'acct_one',
+  };
+  /** @type {any} */
+  let stored = { members: [original] };
+  let credentials = 0;
+  const observed = [];
+  const kit = pooledKit('a', 'owner-binding', {
+    readSet: async () => stored,
+    secretOf: member =>
+      Far('secret', {
+        readBase64: async () => btoa(member.secretName),
+      }),
+    credentialOf: () => {
+      credentials += 1;
+      return {};
+    },
+    activeReadOf:
+      ({ member }) =>
+      async () => {
+        observed.push(member.accountRef);
+        return {};
+      },
+  });
+  t.teardown(() => kit.close());
+  const source = await E(kit.service).accountSource('work');
+  t.is(credentials, 1);
+  for (const changed of [
+    { ...original, accountRef: 'acct_two' },
+    { ...original, secretName: 'key-two' },
+    { id: 'work', subscriptionName: 'shared' },
+  ]) {
+    stored = { members: [changed] };
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(kit.service).subscriptions(), {
+      message: /authority changed; use a new member ID/,
+    });
+  }
+  t.is(credentials, 1);
+  // Rejection does not claim to revoke already issued account capabilities.
+  await E(source).refresh();
+  t.deepEqual(observed, ['acct_one']);
+  stored = {
+    members: [{ ...original, label: 'Renamed', weight: 2, pinnedOnly: true }],
+  };
+  t.deepEqual(await E(kit.service).subscriptions(), [
+    { id: 'work', label: 'Renamed', weight: 2, pinnedOnly: true },
+  ]);
+  // Removal must not permit the same ID to mean a different account later.
+  stored = { members: [{ id: 'other', accountRef: 'acct_other' }] };
+  await E(kit.service).subscriptions();
+  stored = { members: [{ ...original, accountRef: 'acct_two' }] };
+  await t.throwsAsync(() => E(kit.service).subscriptions(), {
+    message: /authority changed; use a new member ID/,
+  });
+  stored = { members: [original] };
+  t.is((await E(kit.service).subscriptions())[0].id, 'work');
+});
+
 test('an owned service in pool mode takes a namespace, and a secret that was missing once is found later', async t => {
   const digest = `sha256:${'e'.repeat(64)}`;
   /** @type {Map<string, any>} */
