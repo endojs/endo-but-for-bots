@@ -266,6 +266,16 @@ passing clean declaration build. Incremental generation and documentation need
 further diagnosis; no repository-wide green-build claim is made.
 The documentation run repeatedly compiles root-project diagnostics in several
 package conversions; its error total is not a count of distinct defects.
+The package-mode docs reader now selects each package's production roots using
+TypeDoc's public options API, retaining explicit entrypoints and normal imported
+dependency checking. Generated declarations no longer hide JavaScript roots.
+Two regression tests and independent review pass; five previously missing
+entrypoints now convert. The full documentation run completes with 13 errors
+and 104 warnings: 12 distinct source/declaration diagnostics plus the failed
+conversion summary. This supersedes the earlier repeated-root error count, but
+does not establish a passing docs gate. Remaining diagnostics concern asset
+server method types, OpenCode bridge/transcript annotations, exported native
+controller/setup declarations, and hosted-agent pass-style dependency resolution.
 Three Floot source contract corrections cover optional cached-input usage,
 snapshot wire validation, and optional tool-preview truncation flags.
 Independent review rejected an unchecked snapshot cast: local callbacks can
@@ -1267,6 +1277,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Scope API documentation checking to each package's production roots | Two regression tests and independent review pass; imported dependency errors remain visible; five missing entrypoints recovered; full docs still fails with 13 errors and 104 warnings |
 | 2026-09-21 | Correct Floot source contracts and validate watch events before caching; expand host cleanup audit | 36 focused tests pass; review found unchecked snapshot typing and invalid-data cache poisoning, both corrected; test fixture type errors remain; native recovery integration and deployment pending |
 | 2026-09-21 | Correct cross-package type contracts and separate the setup pool flag from runtime authority | Clean root declaration build passes; 170 hosted-agent tests independently pass plus 59 UI, 11 Claude, and 19 Codex tests; scoped lint and independent source review pass; docs and incremental declaration generation remain failing; not deployed |
 | 2026-09-21 | Durable pool identity prerequisite: bind actual capabilities before credential activation | 23 shared and one real-daemon restart test pass independently; read/write uncertainty fenced; full retirement/exclusion and deployment pending |
