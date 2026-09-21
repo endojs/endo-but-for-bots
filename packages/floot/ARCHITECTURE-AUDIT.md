@@ -32,11 +32,190 @@ For every remediation commit, update the affected finding here:
 - Mark resolved only when its completion criteria are met; explain intentional deferrals.
 - Update the change log and the design index when the overall status changes.
 
+Every new implementation also requires a durability audit against the Endo
+daemon's formula patterns before deployment approval.
+This requirement is retrospective: audit all implementation changes already
+landed as part of this refactor, not merely future changes or open findings.
+Existing deployed status and passing local tests do not waive this check.
+Inventory each implemented change and its durable boundary, record authoritative
+replay/restart evidence, and reopen findings where that evidence is missing or
+contradicts correct ownership and recovery.
+Review durable owners and dependencies, reconstruction and replay, cancellation
+and retirement, failed-write recovery, and previously issued capabilities.
+Identify deliberately ephemeral state and prove that reconstructing it cannot
+duplicate side effects or revive retired authority.
+Tests of local objects alone do not establish daemon restart/replay correctness;
+record and test the relevant durable formula boundary.
+
 Source locations below describe the baseline and may move as code is removed.
 Repository reachability does not prove that an exported or dynamically minted module has
 no retained formula referring to it.
 
 ## Findings register
+
+### Retrospective durability audit — required, in progress
+
+The inventory starts at the unified-sandbox design commit `3332f1928` and
+includes the current branch plus associated endo-host implementation changes.
+Earlier infrastructure still used by the refactor remains in scope; this seed
+is not an exclusion boundary.
+The ancestry range through `65e939889` contains 345 commits, including upstream
+changes that still need classification rather than an assumption of relevance.
+No claim of complete retrospective coverage is made yet.
+
+| Boundary | Current evidence / defect | Required follow-up |
+|---|---|---|
+| Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
+| Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
+| Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
+| Credential ownership and Secret rebinding | Owned pool bindings now retain actual capabilities and reject mutable-name rebinding. Surviving grants/facets and independent credential owners still need lifecycle enforcement. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
+| Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
+| Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
+| Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
+| Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
+| Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
+| Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
+| Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
+
+All rows above remain open except the classification of deliberately transient
+picker state; that classification does not waive session-creation verification.
+Full supervisor/storage, journal/restoration, broker/credential, publication,
+network/image, and host deployment coverage is being inventoried separately.
+Existing Tokyo evidence is retained: generation 159 / app `81f3428e3` passed
+four-backend seed, actual daemon restart, and recall with the new private schema
+and OpenCode fresh-session path.
+That happy path does not prove archive-boundary recovery, unsettled effects,
+torn formula/name publication, deletion/GC, or native cleanup after worker loss.
+Formula-level cancellation/revival tests must also prove exactly one active
+private-journal writer, rather than assuming object reconstruction over shared
+Maps establishes that invariant.
+Private journal retirement must occur only during terminal deletion, after the
+writer and backend drain, not in generic `cleanupSessionResources`: startup also
+calls that helper for incomplete creation and then reopens the existing schema.
+The factory currently ignores its context; it needs an explicit disposal hook,
+admission fence, and drain of creation, registry/submission writes, and journal
+queues before replacement can safely start.
+An incarnation-local registry does not establish cross-worker exclusion.
+The daemon barrier now rejects reconstruction while exact-formula disposal is
+pending or failed, including dependency cancellation.
+It rejects rather than waits, so mutually dependent cleanup lookups cannot
+deadlock on each other's reconstruction.
+Collection sets its fence before controller withdrawal and invalidates in-flight
+formula reads; stale disk bytes cannot re-enter the cache after deletion.
+Controller disposal precedes storage deletion, and worker disconnection is
+attempted even if reclamation fails.
+Failed disposal preserves storage; failed deletion/reclamation retains a fence.
+Successful collection removes its fence and in-flight read tracking is bounded
+by outstanding reads, not an ever-growing successful-collection tombstone set.
+Four actual cross-worker disposal tests and four manager/persistence GC fault
+tests pass, alongside context, construction, and marshal tests (32 total).
+Failure boundaries identified during review included remote-hook invocation, revival
+during deletion, a late inspector read, and skipped cleanup after reclamation
+failure. The final tests cover these boundaries.
+The fences last only for the current daemon incarnation; native resources still
+require independent reconciliation after process loss.
+Mount-inspection fix: the default recorded-cleanup socket check now treats only
+ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
+Ten focused tests pass, including vanished-entry success and both inspection
+failures; this adds no durable state or replayed effect and does not close the
+separate missing-native-cleanup-proof finding.
+Codex checkpoint fix: acknowledgement waits for the post-rename directory flush;
+flush failures reject even when the new value is already visible.
+Reopening retries ancestry flushes after incomplete preparation, and an absent
+deletion retry still flushes a potentially unacknowledged unlink.
+Thirteen focused tests cover these boundaries, with independent adversarial review.
+Tokyo's endo user successfully opened and synced `/var/lib/endo/codex-state`
+and every ancestor through `/` using the production flags; `/var/lib/endo`
+is on `/dev/vdb`, ext4.
+This proves filesystem/permission support, not deployment or a power-loss test.
+Repository type generation remains blocked by widespread TS5055 stale-output
+errors; no global typecheck success is claimed.
+Daemon publication fix: nine tests exercise pending/failed persistence with
+absent and existing names, successful publication, failed-publication collection,
+and an actual daemon process restart.
+With collection enabled, replacing a directory's sole name with a copy record
+containing its capability preserves the referenced directory and contents,
+including after restart; the new marshal slot retains the original formula.
+All seven deferred-publication callers were inspected; none requires names to
+be published before formulation.
+Independent adversarial review reproduced an additional defect: another
+operation can remove the last root of a referenced capability while formula
+persistence is pending, before the new dependency edges are registered.
+The regression observed the referenced directory's persisted formula disappear.
+The working-tree correction pins every distinct marshal slot before the first
+await, retains the new formula through publication, and releases temporary pins
+on both success and failure.
+Independent adversarial review and the concurrent-removal regression now pass.
+Failed persistence releases the temporary dependency pins, allowing collection
+after the sole old root was removed.
+After-write lost-acknowledgement injection preserves absent/existing names but
+leaves an unnamed durable formula; its reclamation remains an open requirement.
+Restart is orderly, not physical power loss between each persistence step.
+Existing graph cleanup after a throwing operation runs on a subsequent graph
+operation; the failed-publication collection test explicitly drains that work.
+Catalog integration evidence: independent runs pass 45 shared catalog/scopes/
+projection tests, three Codex adapter tests, seven OpenCode adapter tests, and
+one real-daemon formula cancellation/reconstruction test.
+The latter verifies renewal completion precedes close acknowledgement and
+successor construction; the old in-worker facet remains fenced afterward.
+No durable catalog cache or model-admission policy is introduced in this slice.
+Pool identity now uses a separate authoritative `pool-identities-v1-*` journal,
+not the chooser's best-effort capacity/cache state.
+The broker resolves a declared Secret/share name to its actual capability and
+persists that binding before constructing a credential handler.
+Consumers retain that capability instead of repeatedly resolving a mutable name.
+Read, schema, lookup, and write uncertainty fence the journal instance; it never
+silently starts with empty authority history.
+The real-daemon test persists formula-backed capabilities across restart and
+checks identity, tombstones, and pet-name rebinding refusal.
+An injected durable-write failure constructs zero credential handlers.
+This is a prerequisite, not complete pooling: retired IDs cannot be reactivated,
+and historically bound capabilities cannot be assigned another ID.
+The journal retains those capability references.
+Full owner draining/retirement, safe retirement epochs, and cross-formula/worker
+exclusion remain open. Distinct Secrets containing copied credentials are not
+detected as the same provider renewal authority.
+The host-only `modelCatalog(subscriptionId?)` result reports each account
+separately as current, unavailable, or unsupported; it is not a pool-wide
+permission to serve a model.
+Adapters use the existing credential owner and do not start a sandbox or
+inference turn for discovery.
+Codex derives its client version from the packaged OCI manifest; OpenRouter
+projection preserves raw provider routes and only advertised reasoning efforts.
+Static setup/factory/NixOS lists and Fae discovery wiring still need removal
+or replacement before FA-07 can be considered complete.
+Native state recovery now has operator approval for a breaking layout rewrite:
+uniquely allocated directories with atomically published ownership records.
+A marker-before-fixed-directory draft was rejected because crash recovery
+could adopt a foreign directory; that draft was removed.
+Implementation and independent adversarial review are complete locally.
+Native data now lives at `native_allocations/<session>-<nonce>/data`; only that
+directory enters the sandbox, while ownership and retirement records stay
+host-private.
+Records bind the allocation and data directory device/inode identities using
+bigint strings; missing or substituted published data is not recreated or adopted.
+Creation retries flush ancestry and ownership publication; deletion retries
+flush prior unlinks even when the corresponding name is already absent.
+Orphan cleanup first preserves proof outside the allocation, so partial recursive
+deletion cannot erase the evidence needed for a later retry.
+Unproven partial allocations are inventoried but left for operator investigation.
+Review caught and corrected five issues: publication retry flushing, absent
+deletion retry flushing, ancestry flushing, orphan proof loss during deletion,
+and allocation path incompatibility with sandbox mount policy.
+Seventeen shared, eight Codex, and two Claude tests pass independently.
+Four additional subprocess tests stop a separate Node process with SIGKILL at
+directory creation, record opening, complete record writing, and publication.
+Recovery runs only after the child has closed, with no child cleanup handlers.
+Unpublished allocations are not adopted; complete unreferenced ownership proof
+permits scoped cleanup, while incomplete proof is preserved.
+Published allocation identity survives reconstruction without directory reuse.
+These tests strengthen process-loss evidence but do not simulate power loss,
+filesystem write-cache loss, or native Podman lifecycle integration.
+The administrative owner must serialize per-session lifecycle work and keep
+the root quiescent during orphan cleanup; host paths must remain stable.
+These storage operations do not establish that native consumers have stopped.
+Retire affected test sessions and old native storage using the old release before
+deployment, preserving Secrets, renewal credentials, and workspaces.
 
 | ID | Priority | Finding | Evidence class | Status |
 |---|---|---|---|---|
@@ -46,7 +225,7 @@ no retained formula referring to it.
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
-| FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open; provider-backed model discovery prioritized before further acceptance |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
@@ -259,8 +438,24 @@ This slice is not deployed.
 The bridge is baked into the image: rebuild and pin the OpenCode image together
 with the host client at the next coordinated cutover, and retire old session
 plans using the old release first.
-The remaining fire-and-forget `initialPrompt` client path is a separate deletion
-candidate; it has no current hosted-controller caller.
+The fire-and-forget `initialPrompt` client path has been removed;
+repository search found no production caller.
+Client construction no longer has a branch that dispatches a prompt and
+silently discards all events/errors.
+A regression verifies construction neither spawns the bridge nor writes a
+command, and only the subsequent explicit send dispatches a turn.
+This removes a replayable side-effect path rather than adding durable state.
+The focused client/controller suites pass 51 tests; changed-file lint has no
+errors. Independent adversarial source review approved this deletion;
+deployment remains pending.
+The equivalent unused Claude construction-time prompt path is also removed,
+including its obsolete replay-detection commentary.
+Fresh and prior-conversation client tests verify that construction stays inert
+and the next explicit send retains its existing resume behavior.
+Fifty-one Claude client/controller tests pass; independent source review approved
+the deletion and changed-file lint reports no errors. Deployment is pending.
+Neither deletion introduces a new persistence mechanism or changes the
+canonical transcript restoration path.
 The full OpenCode suite passes 227 tests, and an independent reviewer reran
 72 client, plan, controller, and subprocess startup tests successfully.
 Package ESLint reports zero errors and 37 warnings; formatting and diff checks pass.
@@ -329,12 +524,121 @@ three adapters through partial acquisition failure, stop/retry, restart, and del
 
 ## FA-07 — Separate runtime, provider, account, and route
 
+Implementation review gate: every new implementation must be audited against
+the Endo daemon's durable formula patterns, not only its in-memory behavior.
+Identify the durable formula owner and dependencies, what is replayed on daemon
+restart, which state is intentionally reconstructible, and how cancellation,
+retirement, and failed writes affect previously issued capabilities.
+For model discovery, catalog snapshots may be reconstructed, but account/member
+identity and renewal ownership must not silently change or duplicate on replay.
+Add restart/replay coverage for durable claims and explicitly record any missing
+evidence before treating an implementation as ready for deployment.
+
 Floot owns the direct-provider inference loop in `agent.js`, while hosted runtimes implement
 a separate backend interface.
 The direct runtime is represented internally by the absence of a hosted backend ID and
 externally as `provider`/Fae.
 OpenRouter catalogs are separately declared in Floot and OpenCode.
 [Account views](src/account-watch.js) use backend-based identities.
+
+Additional operator finding (2026-09-21): Tokyo's Codex menu is restricted to
+`services.endo.codexSandbox.models` in endo-host `hosts/common.nix`.
+`modules/endo-daemon.nix` passes the JSON as `ENDO_CODEX_MODELS`.
+Codex setup copies its IDs into the retained broker configuration as well as the
+backend catalog, so adding a UI model currently changes retained service policy
+and requires deployment/retirement instead of ordinary discovery.
+Only Sol was configured; Luna was therefore absent from the menu.
+The temporary, uncommitted NixOS Luna addition was withdrawn at the operator's request.
+
+Required in this remediation session, before resuming model-dependent acceptance:
+
+- Remove deployment-specified model lists; NixOS must not enumerate UI models.
+- Obtain model options and available thinking/capability metadata from the
+  provider's supported discovery interface, using the configured account through
+  the appropriate runtime adapter where necessary (for example Codex app-server).
+- Share provider discovery between Fae and OpenCode instead of separate static
+  OpenRouter lists; project only routes supported by the selected runtime/account.
+- Make the new-session model selector searchable within the selected backend.
+  Match display names and exact model IDs case-insensitively, show a clear
+  no-results state, and preserve keyboard selection and the exact selected route.
+  Verify this with a large discovered OpenRouter catalog; do not truncate the
+  available choices to make an unsearchable selector manageable.
+- Keep discovery distinct from session execution and credential ownership:
+  listing models must not create a conversation or start an inference turn.
+- Expose unavailable/failed/stale discovery honestly; do not silently substitute
+  another model or restore a deployment-owned static catalog on failure.
+- Verify the new-session UI receives the discovered choices, including Luna and
+  OpenRouter's free auto route, without editing NixOS or replacing a broker to
+  change those choices. Preserve exact session route pinning and broker authority.
+
+Acceptance cost policy is separate from discovery: test Codex with `gpt-5.6-luna`,
+Fae with `openrouter/free`, and OpenCode with `openrouter/openrouter/free`.
+
+End-to-end discovery/admission implementation sequence:
+
+1. Establish durable account/Secret bindings and exclusive credential ownership.
+   Authority records must fail closed on read/write errors; the chooser's
+   best-effort warm/refusal snapshots cannot carry authority tombstones.
+   Secret generation changes during renewal are not identity changes.
+2. Project account catalogs without adding a second cache or credential owner.
+   Pinned subscriptions use only that account; automatic routing excludes
+   pinned-only accounts and retains model/effort-specific eligibility.
+3. Replace global `policy.models` admission with account-bound checks before
+   sending inference, including failover and subscription/share restrictions.
+   Missing discovery never becomes wildcard permission or a static fallback.
+4. Wire factory and session model listings to the same provider catalog.
+   Preserve exact model/effort pins in durable plans and on restoration;
+   unavailable models must not be replaced with a new default.
+   OpenCode's current send path rejects nonempty reasoning effort, so provider
+   effort metadata alone does not justify exposing that runtime control.
+5. Remove Nix/setup model enumeration and Floot's hardcoded OpenRouter lists.
+   Add OpenCode's route prefix only at its adapter boundary; Fae and OpenCode
+   must share provider discovery rather than separate model authorities.
+
+Required regressions include disjoint account catalogs, different effort sets,
+partial failure, all-unavailable/empty catalogs, removed accounts during reads,
+pinned-account refusal without fallback, share restrictions, and exact route
+roundtrips through picker, persisted plan, CLI adapter, and broker.
+The host test drivers must refuse missing routes and existing paid-route manifests
+before inference, while still allowing inspection and cleanup.
+This is required work, not a future deferral or a claim of completed discovery.
+
+Implementation progress: standalone host-only Codex and OpenRouter catalog readers
+now use the existing credential owner and fixed provider metadata endpoints.
+They bound response bodies and descriptors, reject incomplete/duplicate catalogs,
+sanitize failures, and retain provider-advertised reasoning metadata.
+Independent review covered both readers and caught a cross-provider timestamp
+mismatch; both now report epoch milliseconds.
+The initial focused suite passes 24 tests; these are mocked metadata reads, not
+live discovery or inference acceptance.
+An additional one-shot metadata-only probe on Tokyo successfully read 443
+account-filtered OpenRouter models, including 375 text-output/tool-capable models.
+The requested `openrouter/free` route advertised text/image input, text output,
+tools, a 200000-token context, and no concrete reasoning-effort metadata.
+No inference or credential writes were performed; this does not test Codex discovery.
+The new-session picker now searches names and IDs within its selected backend,
+retains all choices, and preserves exact routes and existing thinking selections.
+Independent review and component tests cover a 150-model catalog and no-results
+handling; all 52 Floot component tests pass after correcting an outdated quota-label
+assertion to match the existing label formatter and its unit test.
+This is not a live-browser accessibility or deployed picker acceptance result.
+Broker/account-generation binding, account-specific route admission and failover,
+static configuration removal, live searchable-UI verification, and deployment
+remain pending.
+Pool review found that editing a member's account or secret binding under an
+existing ID reused its cached credential handler and could mix old credentials
+with new account metadata.
+A reviewed per-incarnation guard now pins each accepted ID's authority tuple,
+including removed-ID tombstones, and rejects rebinding before changing live state.
+Labels, weights, and pinned-only metadata remain editable; 12 diagnostics tests pass.
+This is not complete ownership retirement: same-authority removal/re-add can
+still create another credential handler while old grants exist, unchanged secret
+pet names can resolve to replaced capabilities, and identity pins do not yet
+survive restart alongside persisted chooser state.
+Resolve those lifecycle/generation cases before claiming account-bound discovery
+and safe renewal ownership complete.
+The root documentation gate failed with 9035 errors and 113 warnings in the
+project graph; no passing documentation/type gate is claimed.
 
 Model these independently:
 
@@ -814,6 +1118,15 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Durable pool identity prerequisite: bind actual capabilities before credential activation | 23 shared and one real-daemon restart test pass independently; read/write uncertainty fenced; full retirement/exclusion and deployment pending |
+| 2026-09-21 | Daemon durability: disposal/collection fences and stale-read invalidation | 32 tests and independent review pass; disposal precedes reclamation; module-specific drains and Tokyo deployment pending |
+| 2026-09-21 | Native-state durability: subprocess SIGKILL recovery at four creation boundaries | Four tests pass; exact child handles and temporary roots only; power-loss and Tokyo lifecycle verification remain pending |
+| 2026-09-21 | Remove obsolete Claude construction prompt dispatch; record disposal and account-admission prerequisites | 51 client/controller tests, independent source review and lint pass; explicit restoration unchanged; not deployed |
+| 2026-09-21 | Retrospective durability: uniquely allocated native state and durable ownership/retirement records | 27 focused tests and independent review pass; breaking storage layout approved; old-release retirement and Tokyo verification pending |
+| 2026-09-21 | FA-04: remove obsolete OpenCode construction prompt dispatch | 51 client/controller tests pass; independent source review and lint pass; no new durable state; not deployed |
+| 2026-09-21 | FA-07: expose account-scoped broker model catalogs using existing credential owners | 45 shared, three Codex, seven OpenCode, and one real-daemon lifecycle test pass independently; static catalog removal/admission wiring pending; not deployed |
+| 2026-09-21 | Retrospective durability: checkpoint directory flushes (`c645f567f`) | 13 tests and independent review pass; Tokyo filesystem supports required flushes; pushed, not deployed |
+| 2026-09-21 | Retrospective durability: persist marshal formula before name publication and retain pending slot dependencies | Nine manager/persistence tests including concurrent-root removal, lost acknowledgement, and real daemon restart pass; independent review; not deployed |
 | 2026-09-21 | Initial audit and FA-01–FA-13 register | Source review plus two in-memory reproductions; no remediation or deployment claimed |
 | 2026-09-21 | FA-03: stop creating legacy Claude form topology | 16 setup tests passed; independent review; retained resources untouched; not deployed |
 | 2026-09-21 | FA-04 A: delete obsolete OpenCode client formula | 60 focused tests passed, 53 independently rerun; legacy formula retirement pending; not deployed |
@@ -839,6 +1152,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-11: specify private-journal creation/revival boundary | Source analysis and adversarial design review identified ID-reservation and initial-publication races; implementation and fault-injection tests pending; no runtime changes |
 | 2026-09-21 | FA-11: remove private-journal imports and migration acknowledgements | Strict host schema creation/opening, creation fences, and poisoned-mail preservation; 430 Floot tests pass; adversarial review approved; old-release session retirement and coordinated deployment pending |
 | 2026-09-21 | FA-04: remove obsolete native-session resume and fence failed restoration | 227 OpenCode tests pass; 72 independently rerun; old bridge images rejected before prompts; image rebuild/pinning and coordinated deployment pending |
+| 2026-09-21 | FA-07: prioritize provider-backed model discovery and remove NixOS model enumeration | Operator requirement recorded; NixOS Luna workaround withdrawn; implementation, UI verification, and Luna/free-route acceptance pending |
 
 ## Request
 

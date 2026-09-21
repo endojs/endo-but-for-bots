@@ -652,23 +652,20 @@ test('rejected provisioning still has a cleanup owner whose failures are retried
   t.is((await client.status()).stopped, true);
 });
 
-test('initialPrompt is fired and drained at construction', async t => {
+test('construction does not spawn or dispatch an unobserved turn', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
-  const client = makeOpencodeClient(baseArgs(fake, { initialPrompt: 'hello' }));
-
+  const client = makeOpencodeClient(baseArgs(fake));
+  await tick();
+  await tick();
+  t.deepEqual(fake.spawnCalls, []);
+  t.deepEqual(bridge.commands, []);
   bridge.push(readyLine('ses_1'));
-  // Let the initial turn dispatch.
-  await tick();
-  await tick();
-  bridge.push(JSON.stringify({ type: 'end' }));
-
-  // The explicit send awaits the initial turn's completion.
   const reader = await client.send('next');
   await tick();
   t.deepEqual(
     bridge.commands.map(line => JSON.parse(line).text),
-    ['hello', 'next'],
+    ['next'],
   );
   bridge.push(JSON.stringify({ type: 'end' }));
   t.is((await drain(reader)).pop()?.type, 'end');

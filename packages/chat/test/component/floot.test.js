@@ -142,10 +142,39 @@ test.serial(
     };
     const options = () => [...select('Model').options].map(o => o.value);
     t.deepEqual(options(), ['openrouter/free', 'vendor/model:free']);
+    const searchInput = () => {
+      const input = parent.querySelector('input[aria-label="Search models"]');
+      if (!(input instanceof testWindow.HTMLInputElement)) {
+        throw Error('Missing model search input');
+      }
+      return input;
+    };
+    const search = async value => {
+      const input = searchInput();
+      input.value = value;
+      input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+      await tick();
+    };
+    await search('  AUTO FREE  ');
+    t.deepEqual(options(), ['openrouter/free']);
+    await search('VENDOR/MODEL:FREE');
+    t.deepEqual(options(), ['vendor/model:free']);
+    t.is(select('Model').value, 'vendor/model:free');
+    t.true(select('Model').textContent.includes('vendor/model:free'));
+    await search('Sol');
+    t.deepEqual(options(), [], 'search remains inside the selected backend');
+    t.true(select('Model').disabled);
+    t.true(parent.textContent.includes('No models match your search'));
+    t.true(parent.querySelector('.floot-preset-card')?.hasAttribute('disabled'));
     t.true(select('Backend').textContent.includes('Fae'));
     await change('Backend', 'codex');
     t.deepEqual(options(), ['codex:sol']);
+    t.is(searchInput().value, '');
+    t.false(select('Model').disabled);
     t.is(parent.querySelectorAll('select')[2].value, 'high');
+    await change('Thinking level', 'low');
+    await search('SOL');
+    t.is(select('Thinking level').value, 'low');
     await change('Backend', 'provider');
     t.is(parent.querySelectorAll('select').length, 2);
     t.is(select('Model').value, 'openrouter/free');
@@ -164,6 +193,7 @@ test.serial(
       .querySelector('[aria-label="New session"]')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(() => parent.querySelector('[aria-label="Backend"]'));
+    t.is(searchInput().value, '');
     await change('Backend', 'codex');
     parent
       .querySelector('.floot-preset-card')
@@ -207,6 +237,71 @@ test.serial(
     t.is(capacityRefreshes, 1);
     settings?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(() => capacityRefreshes === 2);
+  },
+);
+
+test.serial(
+  'new session model search does not truncate catalog routes',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const models = Array.from({ length: 150 }, (_, index) => ({
+      id: `opencode:openrouter/vendor/model-${index}`,
+      modelId: `openrouter/vendor/model-${index}`,
+      title: 'Shared display name',
+      backendId: 'opencode',
+    }));
+    const created = [];
+    const facet = farSession('SearchSession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = farFactory('SearchFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'One' }]),
+      listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+      listBackends: () => harden([{ id: 'opencode', title: 'OpenCode' }]),
+      listModels: () => harden(models),
+      getSession: () => facet,
+      createSession: options => {
+        created.push(options);
+        return facet;
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() => parent.querySelector('.floot-session-item'));
+    await tick(50);
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('[aria-label="Model"]'));
+    const select = parent.querySelector('select[aria-label="Model"]');
+    const input = parent.querySelector('input[aria-label="Search models"]');
+    if (
+      !(select instanceof testWindow.HTMLSelectElement) ||
+      !(input instanceof testWindow.HTMLInputElement)
+    ) {
+      throw Error('Missing accessible model controls');
+    }
+    t.is(select.options.length, 150);
+    input.value = 'OPENROUTER/VENDOR/MODEL-149';
+    input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await tick();
+    t.is(select.options.length, 1);
+    t.is(select.value, models[149].id);
+    t.true(select.textContent.includes(models[149].modelId));
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 1);
+    t.is(created[0].model, models[149].id);
+    t.is(created[0].backendId, 'opencode');
   },
 );
 
@@ -2162,7 +2257,7 @@ test.serial(
     t.is(parent.querySelectorAll('.floot-capacity-unknown').length, 1);
     t.regex(
       parent.textContent || '',
-      /Unknown — refresh stale or unknown reading/,
+      /Unknown — saved reading; no live reading available/,
     );
   },
 );

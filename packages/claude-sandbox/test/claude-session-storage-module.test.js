@@ -83,7 +83,9 @@ test('the storage caplet requires both roots and removes one recorded plan throu
 test.serial(
   'the state provider caplet requires its root, reads the formula env before the process env, and prepares owned directories',
   async t => {
-    const base = await mkdtemp(path.join(os.tmpdir(), 'claude-state-'));
+    const base = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), 'claude-state-')),
+    );
     t.teardown(() => rm(base, { recursive: true, force: true }));
     // Hermetic against a deployment shell that exports the fallback.
     const previous = process.env.ENDO_CLAUDE_STATE_DIR;
@@ -98,8 +100,12 @@ test.serial(
     process.env.ENDO_CLAUDE_STATE_DIR = path.join(base, 'ambient');
     const ambient = makeStateProvider(null, undefined, { env: {} });
     t.is(
-      (await ambient.prepareSessionDirectory('session-b')).directory,
-      path.join(base, 'ambient', 'session-b'),
+      path.dirname(
+        path.dirname(
+          (await ambient.prepareSessionDirectory('session-b')).directory,
+        ),
+      ),
+      path.join(base, 'ambient', 'native_allocations'),
       'the daemon-process fallback applies when the formula env is silent',
     );
     const provider = makeStateProvider(null, undefined, {
@@ -107,8 +113,8 @@ test.serial(
     });
     const { directory } = await provider.prepareSessionDirectory('session-a');
     t.is(
-      directory,
-      path.join(base, 'state', 'session-a'),
+      path.dirname(path.dirname(directory)),
+      path.join(base, 'state', 'native_allocations'),
       'the formula env wins',
     );
     t.true(await exists(directory));

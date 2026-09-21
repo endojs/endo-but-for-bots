@@ -3,6 +3,10 @@
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeOpenRouterAccountRead } from '@endo/hosted-agent/openrouter-account-read.js';
+import {
+  makeOpenRouterModelRead,
+  modelsFromOpenRouterCatalog,
+} from '@endo/hosted-agent/openrouter-model-read.js';
 import { M, matches } from '@endo/patterns';
 import {
   makeOwnedProviderBrokerService,
@@ -55,10 +59,12 @@ harden(readOpencodeBrokerConfig);
  *
  * @param {object} [powers]
  * @param {typeof makeProviderBrokerServiceKit} [powers.makeServiceKit]
+ * @param {typeof globalThis.fetch} [powers.fetch]
  * @param {(error: unknown) => void} [powers.reportError]
  */
 export const makeOwnedOpencodeBrokerService = ({
   makeServiceKit = makeProviderBrokerServiceKit,
+  fetch = globalThis.fetch,
   reportError = error =>
     console.error('OpenCode broker cleanup pending', error),
 } = {}) =>
@@ -76,6 +82,19 @@ export const makeOwnedOpencodeBrokerService = ({
         readKey: async () => globalThis.atob(await E(secret).readBase64()),
         fetch: globalThis.fetch,
       }),
+    makeModelRead: ({ secret }) => {
+      const read = makeOpenRouterModelRead({
+        readKey: async () => globalThis.atob(await E(secret).readBase64()),
+        fetch,
+      });
+      return async () => {
+        const result = await read();
+        return harden({
+          observedAt: result.observedAt,
+          models: modelsFromOpenRouterCatalog(result.models),
+        });
+      };
+    },
     makeServiceKit,
     reportError,
   });

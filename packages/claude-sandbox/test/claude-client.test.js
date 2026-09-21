@@ -585,16 +585,15 @@ test('a detector throw falls back to the in-memory flag', async t => {
   t.true(fake.spawned[1].argv.includes('--continue'));
 });
 
-test('initialPrompt is skipped when a prior conversation exists', async t => {
-  // The prompt rides in the formula env, so a reincarnated formula would
-  // otherwise re-fire it as a spurious extra turn on every daemon restart.
+test('construction with a prior conversation waits for an explicit send', async t => {
   const fake = makeFakeSlice([[]]);
   const client = makeClaudeClient(
     baseArgs(fake, makeFakeMount(), {
-      initialPrompt: 'hello',
       detectPriorConversation: () => true,
     }),
   );
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(fake.spawned.length, 0);
   await drain(await client.send('next'));
   t.is(fake.spawned.length, 1);
   t.is(fake.spawned[0].argv[2], 'next');
@@ -671,22 +670,17 @@ test('a store that outlived the daemon does not decide the conversation', async 
   t.false(fake.spawned[0].argv.includes('--resume'));
 });
 
-test('initialPrompt is fired and drained at construction', async t => {
-  const fake = makeFakeSlice([[enc.encode('{"type":"result"}\n')], []]);
+test('fresh construction does not dispatch an unobserved prompt', async t => {
+  const fake = makeFakeSlice([[]]);
   const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { initialPrompt: 'hello' }),
+    baseArgs(fake, makeFakeMount()),
   );
-
-  // The next explicit send awaits the initial prompt's completion, so
-  // by the time it resolves the initial spawn has already happened.
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(fake.spawned.length, 0);
   await drain(await client.send('next'));
-
-  t.is(fake.spawned.length, 2);
-  t.is(fake.spawned[0].argv[2], 'hello');
-  t.is(fake.spawned[1].argv[2], 'next');
-  // The second turn continues the conversation started by the initial
-  // prompt.
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.is(fake.spawned.length, 1);
+  t.is(fake.spawned[0].argv[2], 'next');
+  t.false(fake.spawned[0].argv.includes('--continue'));
 });
 
 // ---------------------------------------------------------------------------

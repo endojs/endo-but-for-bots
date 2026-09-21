@@ -4571,6 +4571,176 @@ testNeedsNodeWorker('cancel because of requested capability', async t => {
   );
 });
 
+testNeedsNodeWorker.serial(
+  'pool identity capability journal survives real daemon reconstruction',
+  async t => {
+    t.timeout(30_000);
+    const base = await fsp.mkdtemp('/tmp/endo-pool-identity-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    let { host } = await makeHost(config, cancelled);
+    await E(host).evaluate(
+      '@node',
+      "makeExo('SecretA', M.interface('SecretA', { tag: M.call().returns(M.string()) }), { tag: () => 'a' })",
+      [],
+      [],
+      'key-a',
+    );
+    await E(host).evaluate(
+      '@node',
+      "makeExo('SecretB', M.interface('SecretB', { tag: M.call().returns(M.string()) }), { tag: () => 'b' })",
+      [],
+      [],
+      'key-b',
+    );
+    const specifier = new URL(
+      '../../hosted-agent/test/_pool-identity-probe.js',
+      import.meta.url,
+    ).href;
+    const probe = await E(host).makeUnconfined('@node', specifier, {
+      powersName: '@agent',
+      resultName: 'identity-probe',
+    });
+    const a = harden({ id: 'a', secretName: 'key-a', accountRef: 'account-a' });
+    const b = harden({ id: 'b', secretName: 'key-b', accountRef: 'account-b' });
+    const first = await E(probe).bind(harden([a]));
+    t.is(first[0].authority, await E(host).lookup('key-a'));
+    await E(probe).bind(harden([a, b]));
+    await E(probe).bind(harden([b]));
+    await restart(config);
+    ({ host } = await makeHost(config, cancelled));
+    const revived = await E(host).lookup('identity-probe');
+    const restored = await E(revived).bind(harden([b]));
+    t.is(restored[0].authority, await E(host).lookup('key-b'));
+    t.is(await E(restored[0].authority).tag(), 'b');
+    await t.throwsAsync(E(revived).bind(harden([a, b])), {
+      message: /journal is fenced/,
+    });
+    // Recreate only the probe journal, then rebound the same pet name to a
+    // different real formula. Persisted capability identity must detect it.
+    const fresh = await E(host).makeUnconfined('@node', specifier, {
+      powersName: '@agent',
+      resultName: 'identity-probe-2',
+    });
+    await E(host).storeValue(await E(host).lookup('key-a'), 'key-b');
+    await t.throwsAsync(E(fresh).bind(harden([b])), {
+      message: /journal is fenced/,
+    });
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'catalog formula reconstruction drains admitted renewal before replacement',
+  async t => {
+    t.timeout(30_000);
+    // Keep native socket paths below macOS's limit even in a deep worktree.
+    const base = await fsp.mkdtemp('/tmp/endo-catalog-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    const { host } = await makeHost(config, cancelled);
+    const fixture = name =>
+      new URL(
+        `../../hosted-agent/test/_catalog-lifecycle-${name}.js`,
+        import.meta.url,
+      ).href;
+    const control = await E(host).makeUnconfined('@node', fixture('control'), {
+      powersName: '@none',
+      resultName: 'catalog-control',
+    });
+    const original = await E(host).makeUnconfined('@node', fixture('owner'), {
+      powersName: 'catalog-control',
+      resultName: 'catalog-owner',
+    });
+    const identity = await E(host).identify('catalog-owner');
+    await E(host).storeIdentifier(['@pins', 'catalog-owner'], identity);
+    // This keeper holds the old facet inside its worker, independently of
+    // cancellation revoking the client's CapTP route to the owner formula.
+    const keeper = await E(host).evaluate(
+      '@node',
+      "makeExo('OldCatalogKeeper', M.interface('OldCatalogKeeper', { read: M.call().returns(M.promise()) }), { read: () => E(original).modelCatalog() })",
+      ['original'],
+      ['catalog-owner'],
+      'catalog-keeper',
+    );
+    const reading = E(original).modelCatalog();
+    const oldResult = reading.then(
+      () => 'served',
+      () => 'rejected',
+    );
+    await E(control).entered();
+    await E(host).cancel('catalog-owner');
+    await waitForCondition(async () =>
+      (await E(control).events()).includes('close-start'),
+    );
+    let replaced = false;
+    const replacement = E(host)
+      .lookup(['@pins', 'catalog-owner'])
+      .then(value => {
+        replaced = true;
+        return value;
+      });
+    void replacement.catch(() => {});
+    await t.throwsAsync(E(keeper).read(), { message: /closed|cancel|revok/i });
+    t.deepEqual(await E(control).events(), [
+      'construct',
+      'renew-start',
+      'close-start',
+    ]);
+    t.false(replaced);
+    await E(control).release();
+    const next = await replacement;
+    t.is(await oldResult, 'rejected');
+    t.deepEqual(await E(control).events(), [
+      'construct',
+      'renew-start',
+      'close-start',
+      'renew-finish',
+      'close-ack',
+      'construct',
+    ]);
+    t.is(await E(host).identify('@pins', 'catalog-owner'), identity);
+    await t.throwsAsync(E(keeper).read(), { message: /closed|cancel|revok/i });
+    t.deepEqual(await E(next).modelCatalog(), {
+      accounts: [
+        {
+          subscriptionId: 'default',
+          state: 'current',
+          observedAt: 1,
+          models: [],
+        },
+      ],
+    });
+    t.deepEqual((await E(control).events()).slice(-2), [
+      'renew-start',
+      'renew-finish',
+    ]);
+  },
+);
+
 testNeedsNodeWorker(
   'unconfined service can respond to cancellation',
   async t => {

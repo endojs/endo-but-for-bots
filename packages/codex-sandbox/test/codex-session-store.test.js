@@ -107,6 +107,100 @@ test('writes land atomically and leave no temporary behind', async t => {
   t.true(names[0].endsWith('.json'));
 });
 
+test('write acknowledgement waits for the directory flush after rename', async t => {
+  t.timeout(5000);
+  const dir = await makeTmp(t);
+  let block = false;
+  let entered = () => {};
+  let release = () => {};
+  const flushing = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const store = await makeDirectoryValueStore(
+    path.join(dir, 'entries'),
+    'test',
+    {
+      syncDirectory: async () => {
+        if (block) {
+          entered();
+          await held;
+        }
+      },
+    },
+  );
+  block = true;
+  let acknowledged = false;
+  const writing = store
+    .storeValue(harden({ value: 1 }), 'checkpoint')
+    .then(() => {
+      acknowledged = true;
+    });
+  await flushing;
+  t.deepEqual(await store.lookup('checkpoint'), { value: 1 });
+  t.false(acknowledged);
+  release();
+  await writing;
+  t.true(acknowledged);
+});
+
+test('failed directory flush rejects an uncertain write and deletion retry flushes absence', async t => {
+  const dir = await makeTmp(t);
+  let fail = false;
+  let flushes = 0;
+  const store = await makeDirectoryValueStore(
+    path.join(dir, 'entries'),
+    'test',
+    {
+      syncDirectory: async () => {
+        flushes += 1;
+        if (fail) throw Error('directory flush refused');
+      },
+    },
+  );
+  fail = true;
+  await t.throwsAsync(store.storeValue(harden({ value: 1 }), 'checkpoint'), {
+    message: 'directory flush refused',
+  });
+  t.deepEqual(await store.lookup('checkpoint'), { value: 1 });
+  await t.throwsAsync(store.remove('checkpoint'), {
+    message: 'directory flush refused',
+  });
+  t.false(await store.has('checkpoint'));
+  fail = false;
+  const before = flushes;
+  await store.remove('checkpoint');
+  t.is(
+    flushes,
+    before + 1,
+    'absence is not a substitute for flushing a prior unlink',
+  );
+});
+
+test('reopening retries directory ancestry flush after failed preparation', async t => {
+  const dir = await makeTmp(t);
+  const root = path.join(dir, 'nested', 'entries');
+  await t.throwsAsync(
+    makeDirectoryValueStore(root, 'test', {
+      syncDirectory: async () => {
+        throw Error('prepare flush refused');
+      },
+    }),
+    { message: 'prepare flush refused' },
+  );
+  const flushed = [];
+  await makeDirectoryValueStore(root, 'test', {
+    syncDirectory: async directory => {
+      flushed.push(directory);
+    },
+  });
+  t.true(flushed.some(directory => directory.endsWith('/nested/entries')));
+  t.true(flushed.some(directory => directory.endsWith('/nested')));
+  t.is(flushed.at(-1), path.parse(dir).root);
+});
+
 test('a name that could escape the directory is refused', async t => {
   const dir = await makeTmp(t);
   const store = await makeDirectoryValueStore(path.join(dir, 'entries'));

@@ -366,6 +366,173 @@ const pooledKit = (digestLetter, ownerId, subscriptions) => {
   });
 };
 
+test('catalog discovery retains account boundaries and isolates failed readings', async t => {
+  const owners = [];
+  const reads = [];
+  const kit = pooledKit('b', 'owner-models', {
+    readSet: async () => ({
+      members: [
+        { id: 'work', accountRef: 'acct_work' },
+        { id: 'home', accountRef: 'acct_home' },
+      ],
+    }),
+    secretOf: member => ({ member: member.id }),
+    credentialOf: member => {
+      const credential = { owner: member.id };
+      owners.push(credential);
+      return credential;
+    },
+    modelReadOf:
+      ({ member, secret, credential }) =>
+      async () => {
+        t.is(secret.member, member.id);
+        t.true(owners.includes(credential));
+        reads.push(member.id);
+        if (member.id === 'home') throw Error('SECRET must not escape');
+        return {
+          observedAt: 123,
+          models: [
+            {
+              id: 'model-a',
+              title: 'Model A',
+              description: '',
+              default: true,
+              defaultReasoningEffort: null,
+              reasoningEfforts: [],
+            },
+          ],
+        };
+      },
+  });
+  t.teardown(() => kit.close());
+  t.deepEqual(reads, []);
+  const catalog = await E(kit.service).modelCatalog();
+  t.is(owners.length, 2);
+  t.deepEqual(
+    catalog.accounts.map(account => [account.subscriptionId, account.state]),
+    [
+      ['work', 'current'],
+      ['home', 'unavailable'],
+    ],
+  );
+  t.is(catalog.accounts[0].models[0].id, 'model-a');
+  t.deepEqual(catalog.accounts[1].models, []);
+  t.false(JSON.stringify(catalog).includes('SECRET'));
+  await E(kit.service).modelCatalog('work');
+  t.is(owners.length, 2, 'discovery reuses existing credential owners');
+  t.deepEqual(reads, ['work', 'home', 'work']);
+  await t.throwsAsync(() => E(kit.service).modelCatalog('missing'), {
+    message: /Unknown provider subscription/,
+  });
+});
+
+test('discovery constructor failure does not discard the credential owner or leak its error', async t => {
+  let owners = 0;
+  const kit = pooledKit('b', 'owner-model-failure', {
+    readSet: async () => ({ members: [{ id: 'work' }] }),
+    secretOf: () => {
+      owners += 1;
+      return {};
+    },
+    modelReadOf: () => {
+      throw Error('SECRET constructor failure');
+    },
+  });
+  t.teardown(() => kit.close());
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    t.deepEqual(await E(kit.service).modelCatalog(), {
+      accounts: [
+        {
+          subscriptionId: 'work',
+          state: 'unavailable',
+          observedAt: null,
+          models: [],
+        },
+      ],
+    });
+  }
+  t.is(owners, 1);
+});
+
+test('a removed account cannot publish its pending catalog as current', async t => {
+  t.timeout(5000);
+  let stored = { members: [{ id: 'work' }] };
+  let finish;
+  let started;
+  const began = new Promise(resolve => {
+    started = resolve;
+  });
+  const pending = new Promise(resolve => {
+    finish = resolve;
+  });
+  const kit = pooledKit('b', 'owner-model-retired', {
+    readSet: async () => stored,
+    secretOf: () => ({}),
+    modelReadOf: () => async () => {
+      started();
+      return pending;
+    },
+  });
+  t.teardown(() => kit.close());
+  const reading = E(kit.service).modelCatalog('work');
+  await began;
+  stored = { members: [{ id: 'home' }] };
+  await E(kit.service).subscriptions();
+  finish({ observedAt: 123, models: [] });
+  t.deepEqual(await reading, {
+    accounts: [
+      {
+        subscriptionId: 'work',
+        state: 'unavailable',
+        observedAt: null,
+        models: [],
+      },
+    ],
+  });
+});
+
+test('catalog batch rechecks a fast account after a slower account finishes', async t => {
+  t.timeout(5000);
+  let stored = { members: [{ id: 'fast' }, { id: 'slow' }] };
+  let finishSlow;
+  let markFast;
+  const fastDone = new Promise(resolve => {
+    markFast = resolve;
+  });
+  const slow = new Promise(resolve => {
+    finishSlow = resolve;
+  });
+  const snapshot = { observedAt: 123, models: [] };
+  const kit = pooledKit('b', 'owner-model-batch', {
+    readSet: async () => stored,
+    secretOf: () => ({}),
+    modelReadOf:
+      ({ member }) =>
+      async () => {
+        if (member.id === 'slow') return slow;
+        markFast();
+        return snapshot;
+      },
+  });
+  t.teardown(() => kit.close());
+  const reading = E(kit.service).modelCatalog();
+  await fastDone;
+  // Let the fast account complete normalization before changing membership.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  stored = { members: [{ id: 'slow' }] };
+  await E(kit.service).subscriptions();
+  finishSlow(snapshot);
+  const result = await reading;
+  t.deepEqual(
+    result.accounts.map(account => [account.subscriptionId, account.state]),
+    [
+      ['fast', 'unavailable'],
+      ['slow', 'current'],
+    ],
+  );
+});
+
 test('a status reader and the first session arriving together share one pool', async t => {
   let stateReads = 0;
   const kit = pooledKit('c', 'owner-concurrent', {
@@ -412,7 +579,69 @@ test('a set that is not well formed fails cleanly and leaves the service usable'
   await kit.close();
 });
 
-test('an owned service in pool mode takes a namespace, and a secret that was missing once is found later', async t => {
+test('pool member IDs cannot be rebound to another authority within an incarnation', async t => {
+  const original = {
+    id: 'work',
+    secretName: 'key-one',
+    accountRef: 'acct_one',
+  };
+  /** @type {any} */
+  let stored = { members: [original] };
+  let credentials = 0;
+  const observed = [];
+  const kit = pooledKit('a', 'owner-binding', {
+    readSet: async () => stored,
+    secretOf: member =>
+      Far('secret', {
+        readBase64: async () => btoa(member.secretName),
+      }),
+    credentialOf: () => {
+      credentials += 1;
+      return {};
+    },
+    activeReadOf:
+      ({ member }) =>
+      async () => {
+        observed.push(member.accountRef);
+        return {};
+      },
+  });
+  t.teardown(() => kit.close());
+  const source = await E(kit.service).accountSource('work');
+  t.is(credentials, 1);
+  for (const changed of [
+    { ...original, accountRef: 'acct_two' },
+    { ...original, secretName: 'key-two' },
+    { id: 'work', subscriptionName: 'shared' },
+  ]) {
+    stored = { members: [changed] };
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(kit.service).subscriptions(), {
+      message: /authority changed; use a new member ID/,
+    });
+  }
+  t.is(credentials, 1);
+  // Rejection does not claim to revoke already issued account capabilities.
+  await E(source).refresh();
+  t.deepEqual(observed, ['acct_one']);
+  stored = {
+    members: [{ ...original, label: 'Renamed', weight: 2, pinnedOnly: true }],
+  };
+  t.deepEqual(await E(kit.service).subscriptions(), [
+    { id: 'work', label: 'Renamed', weight: 2, pinnedOnly: true },
+  ]);
+  // Removal must not permit the same ID to mean a different account later.
+  stored = { members: [{ id: 'other', accountRef: 'acct_other' }] };
+  await E(kit.service).subscriptions();
+  stored = { members: [{ ...original, accountRef: 'acct_two' }] };
+  await t.throwsAsync(() => E(kit.service).subscriptions(), {
+    message: /authority changed; use a new member ID/,
+  });
+  stored = { members: [original] };
+  t.is((await E(kit.service).subscriptions())[0].id, 'work');
+});
+
+test('an owned pool binds actual secret capabilities before activation and refuses name rebinding', async t => {
   const digest = `sha256:${'e'.repeat(64)}`;
   /** @type {Map<string, any>} */
   const names = new Map();
@@ -425,6 +654,10 @@ test('an owned service in pool mode takes a namespace, and a secret that was mis
   names.set(
     'secret-work',
     Far('work secret', { readBase64: async () => btoa('work-key') }),
+  );
+  names.set(
+    'secret-home',
+    Far('home secret', { readBase64: async () => btoa('home-key') }),
   );
   const namespace = Far('namespace', {
     has: async name => names.has(name),
@@ -457,7 +690,7 @@ test('an owned service in pool mode takes a namespace, and a secret that was mis
       }),
     makePolicy: config =>
       /** @type {any} */ ({
-        policy: {},
+        policy: { origin: 'https://provider.test' },
         accountRef: config.accountRef,
         adaptRequest: () => ({
           path: '/x',
@@ -490,24 +723,89 @@ test('an owned service in pool mode takes a namespace, and a secret that was mis
     secretName: 'secret-work',
   });
   t.is(atob(await work.readBase64()), 'work-key');
-  // One that is not yet: the failure is this call's, not the member's for
-  // the life of the broker.
+  // Capture the actual capability, not a wrapper that follows the pet name.
   const home = subscriptions.secretOf({
     id: 'home',
     secretName: 'secret-home',
   });
-  await t.throwsAsync(() => home.readBase64(), { message: /Unknown pet name/ });
+  t.is(atob(await home.readBase64()), 'home-key');
   names.set(
     'secret-home',
-    Far('home secret', { readBase64: async () => btoa('home-key') }),
+    Far('replacement secret', {
+      readBase64: async () => btoa('replacement-key'),
+    }),
   );
   t.is(atob(await home.readBase64()), 'home-key');
+  await t.throwsAsync(subscriptions.readSet(), {
+    message: /journal is fenced/,
+  });
   // What the pool keeps goes to a journal in the same namespace, which prunes
   // only its own names.
   await subscriptions.writeState({ refusals: {}, sessions: {} });
   t.deepEqual(await subscriptions.readState(), { refusals: {}, sessions: {} });
   t.true(names.has('subscriptions'));
   t.true(names.has('secret-work'));
+});
+
+test('failed authoritative identity write prevents owned-pool credential construction', async t => {
+  const digest = `sha256:${'f'.repeat(64)}`;
+  const secret = Far('UnactivatedSecret', {
+    readBase64: async () => {
+      throw Error('must not read');
+    },
+  });
+  const namespace = Far('FailedIdentityStorage', {
+    list: () => ['subscriptions', 'key'],
+    has: () => false,
+    lookup: name =>
+      name === 'subscriptions'
+        ? harden({
+            members: [
+              { id: 'member', secretName: 'key', accountRef: 'account' },
+            ],
+          })
+        : secret,
+    storeValue: () => {
+      throw Error('Cannot commit authoritative binding');
+    },
+  });
+  let constructed = 0;
+  const make = makeOwnedProviderBrokerService({
+    label: 'IdentityWriteFailure',
+    readConfig: () =>
+      /** @type {any} */ ({
+        ownerId: 'identity-failed-write',
+        pool: true,
+        directory: '/tmp/unused',
+        imageRef: `localhost/fixture@${digest}`,
+        imageDigest: digest,
+        listenerImageRef: `localhost/fixture@${digest}`,
+      }),
+    makePolicy: () =>
+      /** @type {any} */ ({
+        policy: { origin: 'https://provider.test', models: ['model'] },
+        accountRef: 'pool',
+      }),
+    makeCredential: () => {
+      constructed += 1;
+      return {};
+    },
+  });
+  let cancel = () => {};
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = () => reject(Error('done'));
+  });
+  void cancelled.catch(() => {});
+  t.teardown(() => cancel());
+  const service = await make(
+    namespace,
+    Far('IdentityContext', { whenCancelled: () => cancelled }),
+    { env: {} },
+  );
+  await t.throwsAsync(E(service).subscriptions(), {
+    message: /journal is fenced/,
+  });
+  t.is(constructed, 0);
 });
 
 test('a pool member that is somebody else’s share is served through its endpoint, ranked by its budget, and handed over from', async t => {

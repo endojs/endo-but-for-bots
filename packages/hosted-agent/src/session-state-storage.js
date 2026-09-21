@@ -1,257 +1,399 @@
 // @ts-check
 
 /**
- * Durable, host-backed per-session state shared by the CLI adapters: one host
- * directory per session under a configured root, owned through a marker in a
- * provider-owned `.owners/` directory beside (never inside) the session
- * directory, so a sandboxed guest that gets the directory rw cannot delete or
- * rewrite it. Native storage preparation returns only a host path record; it
- * neither creates nor receives daemon Mount capabilities. Removal refuses an
- * existing directory without that marker. These APIs are host-only: a
- * returned path is native placement information, not guest filesystem
- * authority or proof that a running sandbox has stopped.
- *
+ * Crash-recoverable native placement. Host-private allocation records select
+ * uniquely allocated data directories by inode; publication is an atomic
+ * no-overwrite hard link into the session namespace. Only data enters a guest
+ * mount. Neither missing process-local handles nor directory names prove
+ * ownership, and unpublished allocations are never reused by another session.
  * @module
  */
 
 import { constants } from 'node:fs';
 import {
   chmod,
+  link,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
+  readdir,
   realpath,
   rm,
-  stat,
 } from 'node:fs/promises';
 import path from 'node:path';
-
 import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 const SESSION_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/;
-const OWNERS_DIRECTORY = '.owners';
+const ALLOCATION_PATTERN = /^[a-z0-9][a-zA-Z0-9-]{0,140}$/;
 
-/** @param {string} nativePath */
-const lstatIfPresent = async nativePath => {
+/** @param {string} target */
+const inspect = async target => {
   try {
-    return await lstat(nativePath);
+    return await lstat(target, { bigint: true });
   } catch (error) {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
       return undefined;
-    }
-    // A failed observation is not proof that cleanup has already completed.
     throw error;
   }
 };
 
+/** @param {string} directory */
+const flushDirectory = async directory => {
+  const handle = await open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+};
+
 /**
- * @param {string} stateRoot - absolute host directory for session state.
+ * The administrative owner must serialize preparation/removal for each
+ * session, including across providers. Orphan inventory/removal additionally
+ * requires all allocation/publication operations at this root to be quiescent.
+ * Roots and ancestors must remain under stable host control. This does not
+ * acknowledge native stop or defend against hostile host-level path races.
+ * @param {string} stateRoot
+ * @param {object} [powers]
+ * @param {typeof flushDirectory} [powers.syncDirectory]
+ * @param {(directory: string) => Promise<void>} [powers.removeDirectory]
+ * @param {(stage: 'directory-created' | 'record-opened' | 'record-written' | 'record-published' | 'allocation-removed') => Promise<void>} [powers.checkpoint] Test-only process-loss injection.
  */
-export const makeStateStorageOperations = stateRoot => {
-  (typeof stateRoot === 'string' && path.isAbsolute(stateRoot)) ||
-    Fail`stateRoot must be an absolute path`;
+export const makeStateStorageOperations = (
+  stateRoot,
+  {
+    checkpoint = async () => {},
+    syncDirectory = flushDirectory,
+    removeDirectory = directory =>
+      rm(directory, { recursive: true, force: true }),
+  } = {},
+) => {
+  (typeof stateRoot === 'string' &&
+    path.isAbsolute(stateRoot) &&
+    path.normalize(stateRoot) === stateRoot &&
+    stateRoot !== '/') ||
+    Fail`stateRoot must be a normalized absolute non-root path`;
+  const owners = `${stateRoot}/.owners`;
+  const allocations = `${stateRoot}/native_allocations`;
+  const retirements = `${stateRoot}/.retirements`;
 
   /** @param {string} sessionId */
-  const sessionPaths = sessionId => {
+  const markerPath = sessionId => {
     SESSION_ID_PATTERN.test(sessionId) || Fail`Invalid session id`;
-    return harden({
-      // Concatenation (not path.resolve) so a crafted id cannot escape; the
-      // id pattern already forbids separators, and this makes it explicit.
-      directory: `${stateRoot}/${sessionId}`,
-      ownerMarker: `${stateRoot}/${OWNERS_DIRECTORY}/${sessionId}`,
-    });
+    return `${owners}/${sessionId}`;
+  };
+  /** @param {string} allocation */
+  const allocationPath = allocation => {
+    ALLOCATION_PATTERN.test(allocation) || Fail`Invalid allocation id`;
+    return `${allocations}/${allocation}`;
   };
 
-  /**
-   * The `.owners/` directory is provider-owned and sits outside the mounted
-   * session dir. Refuse to follow a symlink at its path: chmod/mkdir through
-   * one would let a stale or planted link redirect provider writes to an
-   * arbitrary host path.
-   *
-   * @param {string} resolvedRoot - canonical state root (already symlink-free)
-   */
-  const inspectOwnersDirectory = async resolvedRoot => {
-    const owners = `${stateRoot}/${OWNERS_DIRECTORY}`;
-    const info = await lstatIfPresent(owners);
-    if (info?.isSymbolicLink()) {
-      throw Fail`Ownership directory must not be a symlink: ${owners}`;
+  /** @param {boolean} create */
+  const validateRoots = async create => {
+    const root = await inspect(stateRoot);
+    !root?.isSymbolicLink() || Fail`State root must not be a symlink`;
+    !root || root.isDirectory() || Fail`State root is not a directory`;
+    if (!root && !create) return false;
+    let ancestor = path.dirname(stateRoot);
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const info = await inspect(ancestor);
+      !info?.isSymbolicLink() || Fail`State root contains symbolic links`;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
     }
-    if (info && !info.isDirectory()) {
-      throw Fail`Ownership directory is not a directory: ${owners}`;
-    }
-    if (info) {
-      (await realpath(owners)) === `${resolvedRoot}/${OWNERS_DIRECTORY}` ||
-        Fail`Ownership directory contains symbolic links`;
-    }
-    return info;
-  };
-
-  /** @param {string} resolvedRoot */
-  const ensureOwnersDirectory = async resolvedRoot => {
-    const owners = `${stateRoot}/${OWNERS_DIRECTORY}`;
-    if (!(await inspectOwnersDirectory(resolvedRoot))) {
-      try {
-        await mkdir(owners, { mode: 0o700 });
-      } catch (error) {
-        // A concurrent preparation may have won the create; re-verify
-        // below instead of failing the session.
-        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST') {
-          throw error;
-        }
+    if (create) await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+    // Native roots (including ancestors) are host-owned and must not be aliases.
+    (await realpath(stateRoot)) === stateRoot ||
+      Fail`State root contains symbolic links`;
+    for (const directory of [owners, allocations, retirements]) {
+      // eslint-disable-next-line no-await-in-loop
+      const info = await inspect(directory);
+      !info?.isSymbolicLink() ||
+        Fail`Ownership directory must not be a symlink`;
+      !info ||
+        info.isDirectory() ||
+        Fail`Ownership directory is not a directory`;
+      if (create) {
+        // eslint-disable-next-line no-await-in-loop
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        // eslint-disable-next-line no-await-in-loop
+        await chmod(directory, 0o700);
       }
     }
-    await inspectOwnersDirectory(resolvedRoot);
-    await chmod(owners, 0o700);
-    return owners;
+    if (create) {
+      // A prior mkdir may have succeeded before its parent's fsync failed.
+      // Retry the ancestry flush even when every directory already exists.
+      let directory = stateRoot;
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        await syncDirectory(directory);
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
+    }
+    return true;
   };
 
-  /**
-   * Classify an ownership marker without ever following a symlink at its path:
-   * a planted link could otherwise redirect reads (or the later write) at a
-   * file outside the state tree.
-   *
-   * @param {string} ownerMarker
-   * @param {string} sessionId
-   * @returns {Promise<'absent' | 'owned' | 'foreign'>}
-   */
-  const readMarkerState = async (ownerMarker, sessionId) => {
-    const info = await lstatIfPresent(ownerMarker);
-    if (!info) return 'absent';
-    info.isSymbolicLink() &&
-      Fail`Ownership marker must not be a symlink: ${ownerMarker}`;
-    info.isFile() ||
-      Fail`Ownership marker is not a regular file: ${ownerMarker}`;
-    const marker = await readFile(ownerMarker, 'utf8');
-    return marker.trim() === sessionId ? 'owned' : 'foreign';
-  };
-
-  /**
-   * @param {string} sessionId
-   * @returns {Promise<string | undefined>} the directory, or undefined when
-   *   the session has no state directory (already removed).
-   */
-  const assertOwnedDirectory = async sessionId => {
-    const { directory, ownerMarker } = sessionPaths(sessionId);
-    const rootInfo = await lstatIfPresent(stateRoot);
-    if (!rootInfo) return undefined;
-    rootInfo.isSymbolicLink() &&
-      Fail`State root must not be a symlink: ${stateRoot}`;
-    rootInfo.isDirectory() || Fail`State root is not a directory`;
-    await inspectOwnersDirectory(await realpath(stateRoot));
-    const info = await lstatIfPresent(directory);
+  /** @param {string} location */
+  const readRecord = async location => {
+    const info = await inspect(location);
     if (!info) return undefined;
-    info.isSymbolicLink() && Fail`Session state path is a symbolic link`;
-    info.isDirectory() || Fail`Session state path is not a directory`;
-    (await readMarkerState(ownerMarker, sessionId)) === 'owned' ||
+    (!info.isSymbolicLink() && info.isFile() && info.size <= 4096n) ||
+      Fail`Invalid ownership record`;
+    let record;
+    try {
+      record = JSON.parse(await readFile(location, 'utf8'));
+    } catch {
+      throw Fail`Session state directory is not owned by this session`;
+    }
+    (record &&
+      Object.keys(record).sort().join(',') ===
+        'allocation,allocationDev,allocationIno,dataDev,dataIno,sessionId,version' &&
+      record.version === 1 &&
+      typeof record.sessionId === 'string' &&
+      SESSION_ID_PATTERN.test(record.sessionId) &&
+      typeof record.allocation === 'string' &&
+      ALLOCATION_PATTERN.test(record.allocation) &&
+      record.allocation.startsWith(`${record.sessionId}-`) &&
+      ['allocationDev', 'allocationIno', 'dataDev', 'dataIno'].every(
+        key =>
+          typeof record[key] === 'string' && /^[0-9]{1,32}$/.test(record[key]),
+      )) ||
       Fail`Session state directory is not owned by this session`;
+    return record;
+  };
+
+  /**
+   * @param {any} record
+   * @param {boolean} [allowMissing]
+   */
+  const validateAllocation = async (record, allowMissing = false) => {
+    const allocation = allocationPath(record.allocation);
+    const info = await inspect(allocation);
+    if (!info && allowMissing) return undefined;
+    (info &&
+      !info.isSymbolicLink() &&
+      info.isDirectory() &&
+      String(info.dev) === record.allocationDev &&
+      String(info.ino) === record.allocationIno) ||
+      Fail`Session state allocation is not owned by this session`;
+    const directory = `${allocation}/data`;
+    const data = await inspect(directory);
+    if (!data && allowMissing) return undefined;
+    (data &&
+      !data.isSymbolicLink() &&
+      data.isDirectory() &&
+      String(data.dev) === record.dataDev &&
+      String(data.ino) === record.dataIno) ||
+      Fail`Session state directory is not owned by this session or is a symbolic link`;
     return directory;
   };
 
-  /**
-   * Create or reopen native state without any daemon formulation or lookup.
-   * @param {string} sessionId
-   * @returns {Promise<{directory: string}>}
-   */
-  const prepareSessionDirectory = async sessionId => {
-    const { directory, ownerMarker } = sessionPaths(sessionId);
-    const rootInfo = await lstatIfPresent(stateRoot);
-    rootInfo?.isSymbolicLink() &&
-      Fail`State root must not be a symlink: ${stateRoot}`;
-    await mkdir(stateRoot, { recursive: true, mode: 0o700 });
-    const resolvedRoot = await realpath(stateRoot);
-    try {
-      await mkdir(directory, { mode: 0o700 });
-    } catch {
-      // Already present: verify rather than recreate. A symlinked path or a
-      // directory owned by another session must not be reused.
-      const info = await lstatIfPresent(directory);
-      (!info || !info.isDirectory()) &&
-        Fail`Cannot create session state directory`;
-      (await realpath(directory)) === `${resolvedRoot}/${sessionId}` ||
-        Fail`Session state path contains symbolic links`;
-      (await readMarkerState(ownerMarker, sessionId)) === 'owned' ||
+  /** @param {string} sessionId */
+  const assertOwnedDirectory = async sessionId => {
+    const marker = markerPath(sessionId);
+    if (!(await validateRoots(false))) return undefined;
+    const record = await readRecord(marker);
+    if (!record) {
+      // Legacy/unknown fixed-path state is never silently adopted or deleted.
+      !(await inspect(`${stateRoot}/${sessionId}`)) ||
         Fail`Session state directory is not owned by this session`;
+      return undefined;
     }
-    const info = await stat(directory);
-    info.isDirectory() || Fail`Session state path is not a directory`;
-    // Verify the canonical path before chmod or any write, so a swapped link
-    // cannot redirect them outside the state tree.
-    (await realpath(directory)) === `${resolvedRoot}/${sessionId}` ||
-      Fail`Session state path contains symbolic links`;
-    await chmod(directory, 0o700);
-    await ensureOwnersDirectory(resolvedRoot);
-    const markerState = await readMarkerState(ownerMarker, sessionId);
-    markerState !== 'foreign' ||
+    record.sessionId === sessionId ||
       Fail`Session state directory is not owned by this session`;
-    if (markerState === 'owned') {
-      // Normalize a pre-existing marker rather than trusting its mode.
-      await chmod(ownerMarker, 0o600);
+    return validateAllocation(record, true);
+  };
+
+  /** @param {string} sessionId */
+  const prepareSessionDirectory = async sessionId => {
+    const marker = markerPath(sessionId);
+    await validateRoots(true);
+    const existing = await assertOwnedDirectory(sessionId);
+    if (existing) {
+      await chmod(existing, 0o700);
+      // link may have succeeded before a previous publication fsync failed.
+      await syncDirectory(owners);
+      return harden({ directory: existing });
     }
-    if (markerState === 'absent') {
-      // O_NOFOLLOW: never write through a symlink swapped in after the lstat.
-      /* eslint-disable no-bitwise */
-      const flags =
-        constants.O_WRONLY |
+    !(await readRecord(marker)) ||
+      Fail`Published session state directory is missing`;
+    const allocation = await mkdtemp(`${allocations}/${sessionId}-`);
+    const directory = `${allocation}/data`;
+    await mkdir(directory, { mode: 0o700 });
+    const allocationInfo = await inspect(allocation);
+    const dataInfo = await inspect(directory);
+    if (!allocationInfo?.isDirectory() || !dataInfo?.isDirectory()) {
+      throw Fail`Allocated session directory is unavailable`;
+    }
+    await syncDirectory(directory);
+    await syncDirectory(allocation);
+    await syncDirectory(allocations);
+    await checkpoint('directory-created');
+    const record = {
+      version: 1,
+      sessionId,
+      allocation: path.basename(allocation),
+      allocationDev: String(allocationInfo.dev),
+      allocationIno: String(allocationInfo.ino),
+      dataDev: String(dataInfo.dev),
+      dataIno: String(dataInfo.ino),
+    };
+    const recordPath = `${allocation}/record`;
+    /* eslint-disable no-bitwise */
+    const handle = await open(
+      recordPath,
+      constants.O_WRONLY |
         constants.O_CREAT |
-        constants.O_TRUNC |
-        constants.O_NOFOLLOW;
-      /* eslint-enable no-bitwise */
-      const handle = await open(ownerMarker, flags, 0o600);
-      try {
-        await handle.writeFile(`${sessionId}\n`);
-      } finally {
-        await handle.close();
-      }
-      await chmod(ownerMarker, 0o600);
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    /* eslint-enable no-bitwise */
+    try {
+      await checkpoint('record-opened');
+      await handle.writeFile(`${JSON.stringify(record)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
-    return harden({ directory });
+    await syncDirectory(allocation);
+    await checkpoint('record-written');
+    !(await inspect(`${stateRoot}/${sessionId}`)) ||
+      Fail`Session state directory is not owned by this session`;
+    await validateAllocation(record);
+    // Hard-link publication cannot replace another session record or directory.
+    await link(recordPath, marker);
+    await syncDirectory(owners);
+    await checkpoint('record-published');
+    return harden({ directory: await validateAllocation(record) });
+  };
+
+  /** @param {string} sessionId */
+  const removeSessionDirectory = async sessionId => {
+    const marker = markerPath(sessionId);
+    await assertOwnedDirectory(sessionId);
+    if (!(await validateRoots(false))) return;
+    const record = await readRecord(marker);
+    if (record) {
+      // validateAllocation above refuses substitutions. An interrupted removal
+      // may already have removed data or the allocation; absence is retryable.
+      await removeDirectory(allocationPath(record.allocation));
+      await syncDirectory(allocations);
+      await checkpoint('allocation-removed');
+      await rm(marker);
+    }
+    // Retrying after unlink succeeded must still flush its publication.
+    if (await inspect(owners)) await syncDirectory(owners);
+  };
+
+  /** Read-only inventory; malformed/partial allocations are never deletion proof. */
+  const inspectAllocations = async () => {
+    if (!(await validateRoots(false))) return harden([]);
+    const published = new Set();
+    for (const name of await readdir(owners).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    })) {
+      // eslint-disable-next-line no-await-in-loop
+      const record = await readRecord(`${owners}/${name}`);
+      record?.sessionId === name || Fail`Invalid published session identity`;
+      published.add(record.allocation);
+    }
+    const result = [];
+    const allocationNames = await readdir(allocations).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    const retiringNames = await readdir(retirements).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const allocation of new Set([...allocationNames, ...retiringNames])) {
+      let state = 'unproven';
+      try {
+        const location = allocationPath(allocation);
+        // Do not follow an unknown allocation symlink to read its record.
+        // eslint-disable-next-line no-await-in-loop
+        const retired = await readRecord(`${retirements}/${allocation}`);
+        // eslint-disable-next-line no-await-in-loop
+        const info = await inspect(location);
+        !info ||
+          (info.isDirectory() && !info.isSymbolicLink()) ||
+          Fail`Unknown allocation`;
+        // eslint-disable-next-line no-await-in-loop
+        const record = retired || (await readRecord(`${location}/record`));
+        record?.allocation === allocation || Fail`Unknown allocation`;
+        // eslint-disable-next-line no-await-in-loop
+        await validateAllocation(record, retired !== undefined);
+        state = published.has(allocation)
+          ? 'published'
+          : retired
+            ? 'retiring'
+            : 'unreferenced';
+      } catch {
+        // Report, do not infer that an unreadable/partial allocation is ours.
+      }
+      result.push({ allocation, state });
+    }
+    return harden(result);
   };
 
   /**
-   * Destroy-side native cleanup after the owner has stopped its sandbox.
-   * Never called on a plain terminate/cancel, which must keep the state. Only
-   * a directory carrying this session's (provider-owned) marker is removed,
-   * and a missing directory is already removed.
-   * @param {string} sessionId
+   * Administrative cleanup requires quiescent producers and stopped native
+   * consumers. Only a complete inode-bound unreferenced record permits removal.
+   * Unproven allocations require separate explicit operator investigation.
+   * @param {string} allocation
    */
-  const removeSessionDirectory = async sessionId => {
-    const { ownerMarker } = sessionPaths(sessionId);
-    const directory = await assertOwnedDirectory(sessionId);
-    (await readMarkerState(ownerMarker, sessionId)) !== 'foreign' ||
-      Fail`Session state directory is not owned by this session`;
-    if (directory === undefined) {
-      // Directory already gone; drop any orphaned ownership marker too.
-      await rm(ownerMarker, { force: true });
+  const removeUnreferencedAllocation = async allocation => {
+    const location = allocationPath(allocation);
+    if (!(await validateRoots(false))) return;
+    const retirement = `${retirements}/${allocation}`;
+    if (!(await inspect(location)) && !(await inspect(retirement))) {
+      // A previous attempt may have unlinked its intent before fsync failed.
+      if (await inspect(allocations)) await syncDirectory(allocations);
+      if (await inspect(retirements)) await syncDirectory(retirements);
       return;
     }
-    await rm(directory, { recursive: true, force: true });
-    await rm(ownerMarker, { force: true });
+    const inventory = await inspectAllocations();
+    inventory.some(
+      entry =>
+        entry.allocation === allocation &&
+        ['unreferenced', 'retiring'].includes(entry.state),
+    ) || Fail`Allocation is published or ownership is unproven`;
+    if (!(await readRecord(retirement))) {
+      await link(`${allocationPath(allocation)}/record`, retirement);
+    }
+    await syncDirectory(retirements);
+    await removeDirectory(allocationPath(allocation));
+    await syncDirectory(allocations);
+    await rm(retirement);
+    await syncDirectory(retirements);
   };
 
   return harden({
     prepareSessionDirectory,
     removeSessionDirectory,
     assertOwnedDirectory,
+    inspectAllocations,
+    removeUnreferencedAllocation,
   });
 };
 harden(makeStateStorageOperations);
 
 /**
- * Native state authority confined to one configured root. This requires no
- * daemon host powers and returns only copy data. The administrative owner must
- * stop the sandbox and release its Mount formulas before deleting native state.
- * Keep the original provider identity for later removal; another provider's
- * current root is not the placement of an existing session.
- * The administrative owner must serialize preparation and removal for each
- * session, including across provider instances. This storage has no independent
- * queue or takeover mechanism. Its root and ancestors must remain under stable
- * host control, outside guest mounts; path checks do not prevent concurrent
- * replacement of ancestor directories by another host process.
- * @param {object} options
- * @param {string} options.stateRoot
+ * Native placement authority, not proof that a sandbox stopped. The caller
+ * retains the original provider identity and serializes lifecycle operations.
+ * Only data directories enter guest mounts; allocation/ownership roots remain
+ * host-private. Unknown or unpublished state is never reused.
+ * @param {{ stateRoot: string }} options
  */
 export const makeSessionStateStorage = ({ stateRoot }) => {
   const { prepareSessionDirectory, removeSessionDirectory } =
