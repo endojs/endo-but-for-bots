@@ -631,19 +631,47 @@ export const makeDelegatedRunner = ({
             : { promptEnvironment: beneath.promptEnvironment }),
         });
       }),
-    listModels: () =>
+    modelCatalog: () =>
       bare('listing models', async () => {
         await refresh();
         const limits = await readLimits();
-        // A runner that is over offers nothing to start.
-        if (isOver(limits)) return harden([]);
-        const catalog = await E(await provideFactory()).listModels();
-        return harden(
-          (Array.isArray(catalog) ? catalog : []).filter(
-            (/** @type {any} */ entry) =>
-              limits.models === undefined || limits.models.includes(entry?.id),
-          ),
+        // What a holder is offered is its lane's account, under a name of
+        // its own: a holder cannot pin, and learns no operator's
+        // subscription id. A runner that is over offers nothing to start.
+        const nothing = harden({
+          subscriptionId: 'default',
+          state: 'unavailable',
+          observedAt: null,
+          models: [],
+        });
+        if (isOver(limits)) return harden({ accounts: [nothing] });
+        const answered = await E(await provideFactory()).modelCatalog(
+          limits.subscription,
         );
+        const account = (
+          Array.isArray(answered?.accounts) ? answered.accounts : []
+        ).find(
+          (/** @type {any} */ entry) =>
+            entry?.subscriptionId === limits.subscription,
+        );
+        if (account === undefined) return harden({ accounts: [nothing] });
+        return harden({
+          accounts: [
+            {
+              subscriptionId: 'default',
+              state: account.state,
+              observedAt: account.observedAt,
+              models: (Array.isArray(account.models)
+                ? account.models
+                : []
+              ).filter(
+                (/** @type {any} */ entry) =>
+                  limits.models === undefined ||
+                  limits.models.includes(entry?.id),
+              ),
+            },
+          ],
+        });
       }),
     /**
      * @param {Record<string, any>} spec
@@ -750,7 +778,7 @@ export const makeDelegatedRunner = ({
         });
       }),
     help: () =>
-      `Delegated runner "${runnerId}": a hosted backend factory within its operator's limits. describe, listModels, create({ sessionId, model, reasoningEffort?, systemPrompt?, networkPolicy? }, toolSet), stop, destroy. Sessions are this runner's own; the subscription, the network, the models and the number of sessions are its operator's choice, and a spec names nothing of the host.`,
+      `Delegated runner "${runnerId}": a hosted backend factory within its operator's limits. describe, modelCatalog, create({ sessionId, model, reasoningEffort?, systemPrompt?, networkPolicy? }, toolSet), stop, destroy. Sessions are this runner's own; the subscription, the network, the models and the number of sessions are its operator's choice, and a spec names nothing of the host.`,
   });
 
   const admin = makeExo('RunnerAdmin', RunnerAdminInterface, {

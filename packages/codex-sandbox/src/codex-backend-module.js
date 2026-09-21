@@ -21,6 +21,12 @@ import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
+import {
+  makeBackendCatalog,
+  recordedPinAnswers,
+  revisedPin,
+} from '@endo/hosted-agent/backend-catalog.js';
+
 import { makeCodexBackendFactory } from './codex-backend-factory.js';
 import { readCodexBrokerConfig } from './codex-broker-service-agent.js';
 import { readCodexSessionPlan } from './codex-session-plan.js';
@@ -98,6 +104,8 @@ harden(makeSubscriptionLister);
  * @param {readonly string[]} powers.protectedRoots Host-only records and services.
  * @param {string} powers.imageRef
  * @param {string} powers.accountRef
+ * @param {ReturnType<typeof makeBackendCatalog>} powers.catalog Admits a new
+ *   session's pin against the accounts it may be served from.
  * @param {Record<string,string>} [powers.mounterEnv]
  */
 export const makeCodexSessionProvisioner = ({
@@ -108,6 +116,7 @@ export const makeCodexSessionProvisioner = ({
   protectedRoots,
   imageRef,
   accountRef,
+  catalog,
   mounterEnv,
 }) => {
   readRecordedPath('workspace root', workspaceRoot);
@@ -125,6 +134,27 @@ export const makeCodexSessionProvisioner = ({
   const provision = async (sessionId, request, tools) => {
     const sandboxSessionId = makeSandboxSessionId(sessionId, 'codex');
     const privateDir = join(privateRoot, sandboxSessionId);
+    const record = await E(owner).inspect(sessionId);
+    // The recorded pin is authoritative for a reopen that names it, or
+    // nothing; a new session's pin, or a changed one, is admitted by the
+    // account's catalog now, with the model's own default effort when none
+    // is chosen. Missing discovery refuses rather than substituting.
+    // An effort changed on its own keeps the recorded model.
+    const recordedPlan =
+      record?.plan === undefined
+        ? undefined
+        : readCodexSessionPlan(record.plan);
+    const pin =
+      recordedPlan !== undefined && recordedPinAnswers(recordedPlan, request)
+        ? {
+            ...(recordedPlan.model === undefined
+              ? {}
+              : { model: recordedPlan.model }),
+            ...(recordedPlan.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: recordedPlan.reasoningEffort }),
+          }
+        : await catalog.resolve(revisedPin(recordedPlan, request));
     const proposed = harden({
       sessionId,
       sandboxSessionId,
@@ -139,10 +169,11 @@ export const makeCodexSessionProvisioner = ({
       containerMounts: request.containerMounts,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...Object.fromEntries(
-        ['model', 'reasoningEffort', 'systemPrompt', 'subscription']
+        ['systemPrompt', 'subscription']
           .filter(key => request[key] !== undefined)
           .map(key => [key, request[key]]),
       ),
+      ...pin,
     });
     const text = JSON.stringify(proposed);
     const plan = readCodexSessionPlan(text);
@@ -173,7 +204,6 @@ export const makeCodexSessionProvisioner = ({
           Fail`Codex operator workspace overlaps session storage`;
       }
     }
-    const record = await E(owner).inspect(sessionId);
     if (record === undefined) {
       await E(owner).create(sessionId, text, harden({ ...dependencies }));
     } else {
@@ -247,15 +277,27 @@ export const make = async (host, _context, { env = {} } = {}) => {
     env.CODEX_MOUNTER_ENV === undefined
       ? undefined
       : JSON.parse(env.CODEX_MOUNTER_ENV);
-  typeof env.CODEX_MODELS === 'string' || Fail`Missing CODEX_MODELS`;
-  const models = JSON.parse(env.CODEX_MODELS);
-  (Array.isArray(models) &&
-    models.every(model => brokerConfig.models.includes(model.id))) ||
-    Fail`Codex catalog must be admitted by its broker`;
   const owner = await E(host).provideSessionOwner(
     harden(['codex-sandbox', 'session-records']),
     controllerSpecifier,
   );
+  // What a session may be pinned to: the broker's declared subscriptions.
+  // A broker over one credential, or one from before it could say, has
+  // none, and there is then nothing to choose.
+  const listSubscriptions = makeSubscriptionLister(async () => {
+    const service = await E(host).lookup(['codex-sandbox', 'broker-service']);
+    return E(service).subscriptions();
+  });
+  // What each account lists, from the ChatGPT model list under the broker's
+  // credential, with the reasoning levels the provider declares.
+  const catalog = makeBackendCatalog({
+    label: 'Codex',
+    readCatalog: async subscriptionId => {
+      const service = await E(host).lookup(['codex-sandbox', 'broker-service']);
+      return E(service).modelCatalog(subscriptionId);
+    },
+    listSubscriptions,
+  });
   const provisionSession = makeCodexSessionProvisioner({
     owner,
     dependencies: harden({
@@ -269,18 +311,13 @@ export const make = async (host, _context, { env = {} } = {}) => {
     protectedRoots,
     imageRef: brokerConfig.imageRef,
     accountRef: brokerConfig.accountRef,
+    catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });
   return makeCodexBackendFactory({
-    models,
+    catalog,
     publicInternetEnabled: brokerConfig.publicInternet === true,
-    // What a session may be pinned to: the broker's declared subscriptions.
-    // A broker over one credential, or one from before it could say, has
-    // none, and there is then nothing to choose.
-    listSubscriptions: makeSubscriptionLister(async () => {
-      const service = await E(host).lookup(['codex-sandbox', 'broker-service']);
-      return E(service).subscriptions();
-    }),
+    listSubscriptions,
     provisionSession,
     stopSession: id => E(owner).stop(id),
     removeSession: id => E(owner).remove(id),

@@ -15,7 +15,8 @@ export const assertProviderGrantV1 = (grant, requirements) => {
     'endpoint',
     'imageDigest',
     'grantId',
-    'modelAllowlist',
+    'model',
+    'modelAdmission',
     'networkNamespaceId',
     'providerOrigin',
     'sessionId',
@@ -79,16 +80,18 @@ export const assertProviderGrantV1 = (grant, requirements) => {
   ) {
     throw makeError(X`broker grant endpoint is not provider-bound loopback`);
   }
+  // The grant was issued for the session's pinned model, admitted at
+  // issuance against the account's own catalog, and admits each request by
+  // that catalog again (so a runtime's side requests on other listed models
+  // are served). No operator allowlist is attested: there is none.
   if (
-    !Array.isArray(grant.modelAllowlist) ||
-    grant.modelAllowlist.length === 0 ||
-    grant.modelAllowlist.some(
-      model => typeof model !== 'string' || model === '',
-    ) ||
-    new Set(grant.modelAllowlist).size !== grant.modelAllowlist.length ||
-    (requirements.model && !grant.modelAllowlist.includes(requirements.model))
+    grant.modelAdmission !== 'account-catalog' ||
+    !(grant.model === null || typeof grant.model === 'string') ||
+    (requirements.model
+      ? grant.model !== requirements.model
+      : grant.model !== null)
   ) {
-    throw makeError(X`broker grant model allowlist is invalid`);
+    throw makeError(X`broker grant model binding is invalid`);
   }
   return harden(grant);
 };

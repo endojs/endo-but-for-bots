@@ -78,17 +78,26 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
         toolOwnership: 'endo',
         supportedNetworkPolicies: ['off', 'public-internet'],
       }),
-    listModels: () =>
-      harden([
-        {
-          id: 'm',
-          title: 'Model',
-          description: '',
-          default: true,
-          defaultReasoningEffort: null,
-          reasoningEfforts: [],
-        },
-      ]),
+    modelCatalog: () =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: [
+              {
+                id: 'm',
+                title: 'Model',
+                description: '',
+                default: true,
+                defaultReasoningEffort: null,
+                reasoningEfforts: [],
+              },
+            ],
+          },
+        ],
+      }),
     create: async (spec, toolSet) => {
       tools = toolSet;
       creates.push(spec);

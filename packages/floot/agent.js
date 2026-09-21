@@ -40,10 +40,14 @@ import {
 } from '@endo/fae/src/subagent.js';
 import { DEFAULT_MAX_SUBAGENT_DEPTH } from '@endo/fae/src/subagent-host.js';
 import { resolveAuthToken } from '@endo/fae/src/credentials.js';
+import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
+import { makeAnthropicModelRead } from '@endo/hosted-agent/anthropic-model-read.js';
+import { normalizeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
+import { makeModelCatalogOwner } from '@endo/hosted-agent/model-catalog.js';
 import {
-  assertHostedBackendDescriptor,
-  normalizeHostedModelDescriptor,
-} from '@endo/hosted-agent';
+  makeOpenRouterModelRead,
+  modelsFromOpenRouterCatalog,
+} from '@endo/hosted-agent/openrouter-model-read.js';
 import {
   addUsage,
   mergeContext,
@@ -193,6 +197,7 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listBackends: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().optional(M.string()).returns(M.arrayOf(M.record())),
+  listModelCatalogs: M.callWhen().returns(M.arrayOf(M.record())),
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
@@ -377,34 +382,14 @@ export const refreshPresetEntry = entry => {
 };
 harden(refreshPresetEntry);
 
-// Catalog of models selectable for a new session. A session that does not pin
-// one of these follows the factory's configured default model (the `model` in
-// the `llm-provider` config, or the provider's own fallback). Ids are passed
-// verbatim to the provider, so they must be valid for the configured backend —
-// these are the Anthropic ids used by the default provider.
-const MODELS = [
-  {
-    id: 'claude-opus-4-8',
-    title: 'Claude Opus 4.8',
-    description: 'Most capable — best for hard reasoning and agentic work.',
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    title: 'Claude Sonnet 4.6',
-    description: 'Balanced speed and capability — a good default.',
-  },
-  {
-    id: 'claude-haiku-4-5-20251001',
-    title: 'Claude Haiku 4.5',
-    description: 'Fastest and cheapest — best for quick, simple turns.',
-  },
-];
+// The models selectable for a new session are what each backend's accounts
+// list now, read from the provider: the direct provider's under Floot's own
+// credential (`getProviderCatalog`), a hosted backend's from its broker
+// (`modelCatalog`). Nothing here names a model. A session that does not pin
+// one follows the factory's configured default model (the `model` in the
+// `llm-provider` config, or the provider's own fallback).
 // Recognize persisted legacy sessions so revival refuses them explicitly.
 const CLAUDE_CLI_MODEL_ID = 'claude-cli';
-// Mirrors createStreamingProvider's fallback so the UI's notion of "default"
-// agrees with what an unpinned session actually runs.
-const DEFAULT_MODEL_ID = 'claude-sonnet-4-6';
-const isKnownModel = id => MODELS.some(m => m.id === id);
 const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
 
 /**
@@ -2683,7 +2668,11 @@ export const resolveSharedWorkspaceHostPath = async (
 };
 harden(resolveSharedWorkspaceHostPath);
 
-export const make = async (hostPowers, context, { env } = {}) => {
+export const make = async (
+  hostPowers,
+  context,
+  { env, fetch: fetchAuthority = globalThis.fetch } = {},
+) => {
   const ownership = makeFactoryOwnership();
   const makeOwnedExo = (name, iface, methods) =>
     makeExo(name, iface, ownership.methods(methods));
@@ -2715,6 +2704,256 @@ export const make = async (hostPowers, context, { env } = {}) => {
         });
     }
     return providerConfigP;
+  };
+
+  // The direct provider's own model discovery: what the configured account
+  // may be served, read from the provider under Floot's credential and held
+  // for a while (`@endo/hosted-agent/model-catalog.js`). The same readers a
+  // hosted OpenRouter or Anthropic broker uses; no list of models lives here.
+  // A provider kind with no discovery reports itself unsupported and offers
+  // nothing, rather than a list somebody typed.
+  /** @type {Promise<ReturnType<typeof makeModelCatalogOwner>> | undefined} */
+  let providerCatalogP;
+  const getProviderCatalog = () => {
+    providerCatalogP ??= (async () => {
+      const cfg = await getProviderConfig();
+      const kind = cfg?.provider || 'anthropic';
+      const readKey = () => resolveAuthToken({ powers, config: cfg });
+      /** @type {(() => Promise<any>) | undefined} */
+      let read;
+      if (kind === 'openrouter') {
+        const readCatalog = makeOpenRouterModelRead({
+          readKey,
+          fetch: fetchAuthority,
+        });
+        read = async () => {
+          const result = await readCatalog();
+          return harden({
+            observedAt: result.observedAt,
+            models: modelsFromOpenRouterCatalog(result.models),
+          });
+        };
+      } else if (kind === 'anthropic') {
+        read = makeAnthropicModelRead({
+          readAuthorization: async () =>
+            harden({ header: 'x-api-key', token: await readKey() }),
+          fetch: fetchAuthority,
+        });
+      }
+      return makeModelCatalogOwner({ read });
+    })().catch(error => {
+      providerCatalogP = undefined;
+      throw error;
+    });
+    return providerCatalogP;
+  };
+
+  /** What last went wrong reading each hosted backend's catalog, by id. */
+  const catalogTrouble = new Map();
+  /**
+   * What a hosted backend's accounts list now, as its factory projects them.
+   * A backend that cannot be asked is every account unavailable: nothing is
+   * offered from it, and nothing is admitted. Why is logged once per change
+   * of what went wrong, so an operator seeing "unavailable" in the picker
+   * has something to go on; the readers' messages name no credential and
+   * no provider body.
+   *
+   * @param {string} id
+   * @param {{ factory: any, descriptor: any }} backend
+   */
+  /** Reads in flight, by backend id (`''` for all): a second ask joins one. */
+  const catalogReads = new Map();
+  /**
+   * `listModels()` and `listModelCatalogs()` are read together by the
+   * picker; one read of the backends serves both rather than each asking
+   * every backend again.
+   *
+   * @param {string} [backendId]
+   */
+  const readCatalogs = backendId => {
+    // `undefined` (every backend) and `''` (no backend of that name) are
+    // different asks and get different answers.
+    const key = backendId;
+    let pending = catalogReads.get(key);
+    if (pending === undefined) {
+      pending = readCatalogsNow(backendId).finally(() => {
+        catalogReads.delete(key);
+      });
+      catalogReads.set(key, pending);
+    }
+    return pending;
+  };
+
+  const readHostedCatalog = async (id, backend) => {
+    try {
+      const accounts = normalizeBackendCatalog(
+        await E(backend.factory).modelCatalog(),
+      );
+      if (catalogTrouble.delete(id)) {
+        console.error(
+          `[floot-factory] Model catalog for backend "${id}" is readable again.`,
+        );
+      }
+      return accounts;
+    } catch (error) {
+      const message = `${error instanceof Error ? error.message : error}`.slice(
+        0,
+        200,
+      );
+      if (catalogTrouble.get(id) !== message) {
+        catalogTrouble.set(id, message);
+        console.error(
+          `[floot-factory] Model catalog unavailable for backend "${id}": ${message}`,
+        );
+      }
+      const declared = backend.descriptor.subscriptions || [];
+      return harden(
+        (declared.length ? declared : [{ id: 'default' }]).map(entry =>
+          harden({
+            subscriptionId: entry.id,
+            ...(entry.label === undefined ? {} : { label: entry.label }),
+            ...(entry.pinnedOnly === true ? { pinnedOnly: true } : {}),
+            state: 'unavailable',
+            observedAt: null,
+            models: [],
+          }),
+        ),
+      );
+    }
+  };
+
+  /**
+   * The rows a picker and the acceptance drivers read: one per model a
+   * backend offers, with the accounts that list it, and the accounts'
+   * discovery states beside them.
+   *
+   * @param {string} [backendId]
+   */
+  const readCatalogsNow = async backendId => {
+    /** @type {any[]} */
+    const models = [];
+    /** @type {any[]} */
+    const catalogs = [];
+    if (backendId === undefined || backendId === 'provider') {
+      let cfg;
+      try {
+        cfg = await getProviderConfig();
+      } catch (_error) {
+        cfg = undefined;
+      }
+      const defaultModel = `${cfg?.model || ''}`;
+      let snapshot;
+      try {
+        snapshot = await (await getProviderCatalog()).snapshot();
+      } catch (_error) {
+        snapshot = harden({
+          state: 'unavailable',
+          observedAt: null,
+          models: [],
+        });
+      }
+      catalogs.push(
+        harden({
+          backendId: 'provider',
+          accounts: [
+            {
+              subscriptionId: 'default',
+              state: snapshot.state,
+              observedAt: snapshot.observedAt,
+              modelCount: snapshot.models.length,
+            },
+          ],
+        }),
+      );
+      for (const model of snapshot.models) {
+        models.push(
+          harden({
+            id: model.id,
+            selectionId: model.id,
+            backendId: 'provider',
+            modelId: model.id,
+            title: model.title,
+            description: model.description,
+            // What an unpinned session runs, when the account lists it.
+            default: model.id === defaultModel,
+            defaultReasoningEffort: null,
+            reasoningEfforts: [],
+            subscriptionIds: ['default'],
+          }),
+        );
+      }
+    }
+    if (backendId !== 'provider') {
+      const hosted = await getHostedBackends();
+      if (backendId !== undefined && !hosted.has(backendId)) {
+        throw Error(`Unknown hosted backend "${backendId}"`);
+      }
+      const selected = [...hosted.entries()].filter(
+        ([id]) => backendId === undefined || id === backendId,
+      );
+      // Every backend is asked at once: one slow provider does not hold the
+      // others' listings back, and the rows keep the backends' order.
+      const read = await Promise.all(
+        selected.map(
+          async ([id, backend]) =>
+            /** @type {const} */ ([id, await readHostedCatalog(id, backend)]),
+        ),
+      );
+      for (const [id, accounts] of read) {
+        catalogs.push(
+          harden({
+            backendId: id,
+            accounts: accounts.map(account =>
+              harden({
+                subscriptionId: account.subscriptionId,
+                ...(account.label === undefined
+                  ? {}
+                  : { label: account.label }),
+                ...(account.pinnedOnly === true ? { pinnedOnly: true } : {}),
+                state: account.state,
+                observedAt: account.observedAt,
+                modelCount: account.models.length,
+              }),
+            ),
+          }),
+        );
+        /** @type {Map<string, { model: any, subscriptionIds: string[] }>} */
+        const byModel = new Map();
+        for (const account of accounts) {
+          for (const model of account.models) {
+            const entry = byModel.get(model.id);
+            if (entry === undefined) {
+              byModel.set(model.id, {
+                model,
+                subscriptionIds: [account.subscriptionId],
+              });
+            } else {
+              entry.subscriptionIds.push(account.subscriptionId);
+            }
+          }
+        }
+        for (const { model, subscriptionIds } of byModel.values()) {
+          models.push(
+            harden({
+              id: hostedModelId(id, model.id),
+              selectionId: hostedModelId(id, model.id),
+              backendId: id,
+              modelId: model.id,
+              title: model.title,
+              description: model.description,
+              // A backend-scoped listing keeps the provider's default; the
+              // flattened one marks only the direct provider's configured
+              // model, which is what an unpinned session runs.
+              default: backendId === undefined ? false : model.default,
+              defaultReasoningEffort: model.defaultReasoningEffort,
+              reasoningEfforts: model.reasoningEfforts,
+              subscriptionIds,
+            }),
+          );
+        }
+      }
+    }
+    return harden({ models, catalogs });
   };
 
   // Legacy credential-in-slice Claude clients are deliberately not admitted.
@@ -4893,13 +5132,45 @@ export const make = async (hostPowers, context, { env } = {}) => {
       promptEnvironment =
         backend.descriptor.promptEnvironment ||
         UNDECLARED_HOSTED_PROMPT_ENVIRONMENT;
-      const models = await E(backend.factory).listModels();
-      const chosen = models.find(candidate => candidate.id === modelId);
+      // `auto`, the default, leaves the choice to the backend's pool; an id
+      // pins the session, and must be one the backend declares now.
+      const pinnedSubscription =
+        options.subscription && options.subscription !== 'auto'
+          ? `${options.subscription}`
+          : undefined;
+      if (pinnedSubscription !== undefined) {
+        const declared = backend.descriptor.subscriptions || [];
+        if (!declared.some(entry => entry.id === pinnedSubscription)) {
+          throw Error(
+            `Unknown subscription "${pinnedSubscription}" for backend "${backendId}"`,
+          );
+        }
+      }
+      // The model must be one an account this session may be served from
+      // lists now: the pinned subscription's, or any not set aside. Missing
+      // discovery refuses and says so; it is not permission, and no other
+      // model is substituted.
+      const accounts = await readHostedCatalog(backendId, backend);
+      const eligible = accounts.filter(account =>
+        pinnedSubscription === undefined
+          ? account.pinnedOnly !== true
+          : account.subscriptionId === pinnedSubscription,
+      );
+      const usable = eligible.filter(
+        account => account.state === 'current' || account.state === 'stale',
+      );
+      if (usable.length === 0) {
+        throw Error(
+          `Model catalog unavailable for backend "${backendId}"; no model can be admitted now`,
+        );
+      }
+      const chosen = usable
+        .flatMap(account => account.models)
+        .find(candidate => candidate.id === modelId);
       if (!chosen) {
         throw Error(`Unknown model "${modelId}" for backend "${backendId}"`);
       }
-      const projected = normalizeHostedModelDescriptor(chosen);
-      const supportedEfforts = projected.reasoningEfforts;
+      const supportedEfforts = chosen.reasoningEfforts;
       if (
         options.reasoningEffort &&
         !supportedEfforts.includes(options.reasoningEffort)
@@ -4908,18 +5179,33 @@ export const make = async (hostPowers, context, { env } = {}) => {
           `Unsupported reasoning effort "${options.reasoningEffort}" for ${backendId}:${modelId}`,
         );
       }
-      // `auto`, the default, leaves the choice to the backend's pool; an id
-      // pins the session, and must be one the backend declares now.
-      if (options.subscription && options.subscription !== 'auto') {
-        const declared = backend.descriptor.subscriptions || [];
-        if (!declared.some(entry => entry.id === options.subscription)) {
-          throw Error(
-            `Unknown subscription "${options.subscription}" for backend "${backendId}"`,
-          );
-        }
-      }
     } else if (options.subscription && options.subscription !== 'auto') {
       throw Error('Only a hosted backend has subscriptions to choose from');
+    } else if (selectedModel) {
+      // The direct provider's pin must be one its account lists now, as a
+      // hosted backend's must; an unpinned session follows the configured
+      // default without being asked.
+      let snapshot;
+      try {
+        snapshot = await (await getProviderCatalog()).snapshot();
+      } catch (_error) {
+        snapshot = undefined;
+      }
+      if (snapshot === undefined || snapshot.state === 'unavailable') {
+        throw Error(
+          'Model catalog unavailable for the provider backend; no model can be admitted now',
+        );
+      }
+      if (snapshot.state === 'unsupported') {
+        throw Error(
+          'No model discovery for this provider kind; a session runs its configured model, unpinned',
+        );
+      }
+      if (!snapshot.models.some(candidate => candidate.id === selectedModel)) {
+        throw Error(
+          `Unknown model "${selectedModel}" for the provider backend`,
+        );
+      }
     }
     if (!backendId && options.networkPolicy !== undefined) {
       throw Error('Only a hosted backend has a sandbox network policy');
@@ -4982,12 +5268,7 @@ export const make = async (hostPowers, context, { env } = {}) => {
               ? { subscription: `${options.subscription}` }
               : {}),
           }
-        : (
-              openRouter
-                ? typeof selectedModel === 'string' &&
-                  selectedModel.includes('/')
-                : isKnownModel(selectedModel)
-            )
+        : selectedModel
           ? { model: selectedModel }
           : {}),
     });
@@ -5504,123 +5785,28 @@ export const make = async (hostPowers, context, { env } = {}) => {
     },
 
     /**
-     * The selectable models for a new session. `default` marks the model an
-     * unpinned session runs (the factory's configured model, or the conventional
-     * fallback when that is unset or not in the catalog).
+     * The selectable models for a new session: what each backend's accounts
+     * list now. `default` marks the model an unpinned session runs (the
+     * direct provider's configured model, when its account lists it); a
+     * backend-scoped listing keeps the provider's own default marker.
+     * `subscriptionIds` are the accounts of the model's backend that list it.
      *
      * @param {string} [backendId]
-     * @returns {Promise<Array<{ id: string, selectionId: string, backendId: string, modelId: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[] }>>}
+     * @returns {Promise<Array<{ id: string, selectionId: string, backendId: string, modelId: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[], subscriptionIds: string[] }>>}
      */
     async listModels(backendId) {
-      if (backendId && backendId !== 'provider') {
-        const backend = (await getHostedBackends()).get(backendId);
-        if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
-        const models = await E(backend.factory).listModels();
-        return harden(
-          models.map(candidate => {
-            const projected = normalizeHostedModelDescriptor(candidate);
-            return harden({
-              id: hostedModelId(backendId, projected.id),
-              selectionId: hostedModelId(backendId, projected.id),
-              backendId,
-              modelId: projected.id,
-              title: projected.title,
-              description: projected.description,
-              default: projected.default,
-              defaultReasoningEffort: projected.defaultReasoningEffort,
-              reasoningEfforts: projected.reasoningEfforts,
-            });
-          }),
-        );
-      }
-      let defaultModel = '';
-      let openRouter = false;
-      try {
-        const cfg = await getProviderConfig();
-        defaultModel = (cfg && cfg.model) || '';
-        openRouter = cfg?.provider === 'openrouter';
-      } catch {
-        // Provider config not resolvable yet — fall back to the conventional
-        // default so the picker still has a sensible pre-selection.
-      }
-      if (!openRouter && !isKnownModel(defaultModel))
-        defaultModel = DEFAULT_MODEL_ID;
-      const freeModels = [
-        {
-          id: 'openrouter/free',
-          title: 'Free models (automatic)',
-          description:
-            'OpenRouter selects an available free model supporting the request. Rate limits apply.',
-        },
-        {
-          id: 'google/gemma-4-31b-it:free',
-          title: 'Gemma 4 31B (free)',
-          description:
-            'Free OpenRouter model with tool support. Availability and rate limits vary.',
-        },
-        {
-          id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
-          title: 'Nemotron 3 Ultra (free)',
-          description:
-            'Free OpenRouter model with tool support. Availability and rate limits vary.',
-        },
-      ];
-      const catalog = openRouter
-        ? [
-            ...(defaultModel && !freeModels.some(m => m.id === defaultModel)
-              ? [
-                  {
-                    id: defaultModel,
-                    title: defaultModel,
-                    description: 'Configured OpenRouter model',
-                  },
-                ]
-              : []),
-            ...freeModels,
-          ]
-        : MODELS;
-      const providerModels = catalog.map(({ id, title, description }) => ({
-        id,
-        selectionId: id,
-        backendId: 'provider',
-        modelId: id,
-        title,
-        description,
-        default: id === defaultModel,
-        defaultReasoningEffort: null,
-        reasoningEfforts: [],
-      }));
-      if (backendId === 'provider') return harden(providerModels);
-      const hosted = await getHostedBackends();
-      const hostedModels = [];
-      for (const [id, backend] of hosted.entries()) {
-        try {
-          const models = await E(backend.factory).listModels();
-          hostedModels.push(
-            ...models.map(candidate => {
-              const projected = normalizeHostedModelDescriptor(candidate);
-              return harden({
-                id: hostedModelId(id, projected.id),
-                selectionId: hostedModelId(id, projected.id),
-                backendId: id,
-                modelId: projected.id,
-                title: projected.title,
-                description: projected.description,
-                default: false,
-                defaultReasoningEffort: projected.defaultReasoningEffort,
-                reasoningEfforts: projected.reasoningEfforts,
-              });
-            }),
-          );
-        } catch (error) {
-          console.error(
-            `[floot-factory] model catalog unavailable for backend ${id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-      }
-      return harden([...providerModels, ...hostedModels]);
+      return (await readCatalogs(backendId)).models;
+    },
+
+    /**
+     * How each backend's discovery stands: per account, whether its catalog
+     * is current, stale, unavailable or unsupported, when it was read, and
+     * how many models it lists. A picker shows this beside the models, so an
+     * empty list is never mistaken for a working backend with nothing to
+     * offer.
+     */
+    async listModelCatalogs() {
+      return (await readCatalogs()).catalogs;
     },
 
     /**
@@ -5692,6 +5878,11 @@ export const make = async (hostPowers, context, { env } = {}) => {
     async refreshCredentials() {
       providersByModel.clear();
       providerConfigP = undefined;
+      // The direct provider's catalog was read under that config too: let
+      // the owner go and read again under the next.
+      const catalog = providerCatalogP;
+      providerCatalogP = undefined;
+      if (catalog) void catalog.then(owner => owner.close()).catch(() => {});
       // An unpinned session's `effectiveModelId` is read from that config.
       touchSessionList();
       console.error(
@@ -5749,7 +5940,7 @@ export const make = async (hostPowers, context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -5761,7 +5952,9 @@ export const make = async (hostPowers, context, { env } = {}) => {
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:
-          'listModels(backendId?) — Return backend-scoped models with compound selection ids and supported reasoning efforts; no argument returns the flattened compatibility catalog.',
+          'listModels(backendId?) — Return the models each backend’s accounts list now, read from the provider, with compound selection ids, supported reasoning efforts and the accounts (`subscriptionIds`) listing each; no argument returns every backend’s models flattened.',
+        listModelCatalogs:
+          'listModelCatalogs() — Return each backend’s discovery state per account: current, stale, unavailable or unsupported, when it was read, and how many models it lists.',
         getSession: 'getSession(id) — Return the session facet for an id.',
         watchAccounts:
           'watchAccounts() — A disposable stream of { type: "accounts", accounts }: now, and whenever any account changes, coalesced to the newest. One account per backend that has an account oracle: { backendId, title, plan: { planId, title, state, source }, windows: [{ windowId ("primary" short, "secondary" long), title, usedPercent, resetsAt, windowSeconds, limit, used, remaining }], limitReached, credits: { balance, hasCredits, unlimited } | null, resetCredits: { availableCount, credits } | null, reset: { pending, last } | null (present where a banked reset can be redeemed; pending is a redeem whose answer is not known), source (observed | declared | remembered | unavailable), observedAt }. A window whose resetsAt has passed is empty again, whatever usedPercent says. Readings arrive with inference responses; subscribing asks no provider anything.',

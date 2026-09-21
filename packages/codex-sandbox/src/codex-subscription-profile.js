@@ -10,10 +10,10 @@ import { Fail } from '@endo/errors';
  * subscription endpoint and account headers.
  * No origin, path, or header override comes from operator JSON or the guest.
  *
- * @param {{accountRef: string, models: readonly string[]}} config
+ * @param {{accountRef: string}} config
  * @returns {{accountRef: string, policy: BrokerPolicy, adaptRequest: ProviderRequestAdapter}}
  */
-export const makeCodexSubscriptionProfile = ({ accountRef, models }) => {
+export const makeCodexSubscriptionProfile = ({ accountRef }) => {
   /^[A-Za-z0-9_-]{1,256}$/.test(accountRef) ||
     Fail`Invalid Codex subscription account`;
   return harden({
@@ -22,7 +22,6 @@ export const makeCodexSubscriptionProfile = ({ accountRef, models }) => {
       origin: 'https://chatgpt.com',
       authMode: 'oauth',
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: [...models],
       maxConcurrentRequests: 4,
       maxRequestBytes: 8n * 1024n ** 2n,
       maxResponseBytes: 16n * 1024n ** 2n,

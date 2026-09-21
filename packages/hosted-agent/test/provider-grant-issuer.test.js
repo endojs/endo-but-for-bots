@@ -5,6 +5,7 @@ import { Far } from '@endo/far';
 
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
+import { admitsModels } from './admits-models.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const spec = harden({
@@ -16,18 +17,50 @@ const spec = harden({
 const policy = harden({
   origin: spec.providerOrigin,
   routes: [{ method: 'POST', path: '/v1/responses' }],
-  models: ['allowed'],
   maxConcurrentRequests: 4,
   maxRequestBytes: 1024n,
   maxResponseBytes: 1024n,
 });
+// Every account here lists the one model, as its catalog owner would say.
+// The issuer keeps no list of its own; see model-catalog.js.
+const admits = admitsModels(['allowed']);
+/**
+ * Admission now asks the account's catalog, an asynchronous answer, before
+ * the listener is started: wait for the start rather than count turns.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {{ endpoint(): any }} f
+ */
+const untilStarted = async (t, f) => {
+  for (let turn = 0; turn < 64 && f.endpoint() === undefined; turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  if (f.endpoint() === undefined) t.fail('the listener was never started');
+};
+/** @param {any} options */
+const makeIssuer = options =>
+  makeProviderBrokerGrantIssuer(
+    options.pool === undefined
+      ? { admits, ...options }
+      : {
+          ...options,
+          pool: {
+            ...options.pool,
+            members: async () =>
+              (await options.pool.members()).map(
+                (/** @type {any} */ member) => ({ admits, ...member }),
+              ),
+          },
+        },
+  );
 
 test('retiring one pool member leaves an existing auto endpoint usable by its sibling', async t => {
   const work = makePoolMemberLifecycle();
   const home = makePoolMemberLifecycle();
   let selected = ['work', 'home'];
   const sent = [];
-  const issuer = makeProviderBrokerGrantIssuer({
+  const issuer = makeIssuer({
     runtime: {},
     secret: undefined,
     policy,
@@ -97,7 +130,7 @@ test('member retirement waits for a late wrapped endpoint and retains failed rev
       if (failures) throw Error('retry cleanup');
     },
   });
-  const issuer = makeProviderBrokerGrantIssuer({
+  const issuer = makeIssuer({
     runtime: {},
     secret: undefined,
     fetch: async () => new Response('unused'),
@@ -182,7 +215,7 @@ const fixture = ({
   const closed = new Promise(resolve => {
     disconnect = () => resolve(undefined);
   });
-  const issuer = makeProviderBrokerGrantIssuer({
+  const issuer = makeIssuer({
     runtime: {
       startKit(input) {
         const value = (async () => {
@@ -570,7 +603,7 @@ test('disposal during acquisition waits and cleans late worker', async t => {
   const f = fixture({ startBarrier });
   t.teardown(f.issuer.dispose);
   const starting = f.issuer(spec);
-  await Promise.resolve();
+  await untilStarted(t, f);
   const disposing = f.issuer.dispose();
   t.teardown(release);
   // Shutdown fences authority before a slow acquisition can finish.
@@ -667,7 +700,7 @@ test('retained issuance revokes authority during acquisition and drains its late
   });
   const kit = f.issuer.issueKit(spec);
   const rejected = t.throwsAsync(kit.value, { message: /admission failed/ });
-  await Promise.resolve();
+  await untilStarted(t, f);
   const closing = kit.revoke();
   t.is(kit.revoke(), closing);
   let finished = false;
@@ -728,7 +761,7 @@ test('failed issuance retains A-only cleanup while B remains usable', async t =>
       throw Error('Unexpected global runtime cleanup');
     },
   };
-  const issuer = makeProviderBrokerGrantIssuer({
+  const issuer = makeIssuer({
     runtime,
     secret: Far('secret', { readBase64: async () => btoa('secret') }),
     fetch: async () => new Response('ok'),
@@ -831,7 +864,7 @@ test('a pool issuer serves a session from its chosen subscription and reads each
     cacheLifetimeMs: 300_000,
   });
   let endpoint;
-  const issuer = makeProviderBrokerGrantIssuer({
+  const issuer = makeIssuer({
     runtime: listenerRuntime(value => {
       endpoint = value;
     }),
@@ -928,7 +961,8 @@ test('an endpoint without a listener serves the same credentialed core, and is t
     version: 'InferenceEndpointV1',
     sessionId: 'share-a-s1',
     providerOrigin: policy.origin,
-    modelAllowlist: [...policy.models],
+    models: null,
+    modelAdmission: 'account-catalog',
     subscription: 'auto',
     hops: 0,
   });
@@ -989,7 +1023,7 @@ test('an endpoint over a pool hands over, and says so only when every account is
         'x-codex-secondary-reset-at': '4000000000',
       },
     });
-  const issuer = makeProviderBrokerGrantIssuer({
+  const issuer = makeIssuer({
     runtime: listenerRuntime(() => {}),
     secret: undefined,
     fetch: /** @type {any} */ (
@@ -1054,7 +1088,7 @@ const wrappedPoolFixture = async (makeFar, options = {}) => {
   /** @type {any} */
   let issuer;
   const far = makeFar(() => issuer);
-  issuer = makeProviderBrokerGrantIssuer({
+  issuer = makeIssuer({
     runtime: listenerRuntime(value => {
       listenerEndpoint = value;
     }),
@@ -1243,4 +1277,99 @@ test('how far a request has come is not held against the member: past the hop li
   t.is((await E(deep).request(inference)).body, '{"served":"own"}');
   t.is(opens, 0, 'the far member was never asked');
   await E(deep).revoke();
+});
+
+test('a scope that pins a model is issued only if an account it may be served from lists it', async t => {
+  const { makeSubscriptionPool } = await import('../src/subscription-pool.js');
+  const members = [
+    { id: 'work', label: 'Work', weight: 1 },
+    { id: 'home', label: 'Home', weight: 1 },
+    { id: 'lane', label: 'Lane', weight: 1, pinnedOnly: true },
+  ];
+  /** @type {Record<string, string[]>} */
+  const listed = { work: ['allowed'], home: ['other'], lane: ['lane-only'] };
+  const chooser = makeSubscriptionPool({
+    members: () => members,
+    readingOf: () => undefined,
+    cacheLifetimeMs: 300_000,
+  });
+  const issuer = makeProviderBrokerGrantIssuer({
+    runtime: listenerRuntime(() => {}),
+    secret: undefined,
+    fetch: /** @type {any} */ (async () => new Response('{"ok":true}')),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    pool: {
+      members: () =>
+        members.map(({ id, pinnedOnly }) => ({
+          id,
+          ...(pinnedOnly ? { pinnedOnly } : {}),
+          admits: admitsModels(listed[id]),
+          secret: Far(`${id} secret`, {
+            readBase64: async () => btoa(`${id}-key`),
+          }),
+        })),
+      forSession: chooser.forSession,
+    },
+  });
+  t.teardown(() => issuer.dispose());
+  /** @param {string} model @param {string} [subscription] */
+  const issue = (model, subscription) =>
+    issuer({
+      ...spec,
+      sessionId: `s-${model}-${subscription ?? 'auto'}`,
+      model,
+      ...(subscription === undefined ? {} : { subscription }),
+    });
+  // `auto` asks the accounts not set aside: one of them lists each.
+  await t.notThrowsAsync(() => issue('allowed'));
+  await t.notThrowsAsync(() => issue('other'));
+  // A lane set aside lists what only a session pinned to it may have.
+  // Refused at admission: nothing was acquired, so nothing is cleaned up.
+  await t.throwsAsync(() => issue('lane-only'), {
+    message: /Provider grant request denied/,
+  });
+  await t.notThrowsAsync(() => issue('lane-only', 'lane'));
+  // A pinned session is asked of its subscription and no other.
+  await t.throwsAsync(() => issue('other', 'work'), {
+    message: /Provider grant request denied/,
+  });
+  await t.notThrowsAsync(() => issue('other', 'home'));
+  // A session that pins no model is issued; each request is admitted then.
+  await t.notThrowsAsync(() =>
+    issuer({ ...spec, sessionId: 's-unpinned', model: undefined }),
+  );
+  await t.throwsAsync(
+    () => issuer({ ...spec, sessionId: 's-empty', model: '' }),
+    { message: /Provider grant request denied/ },
+  );
+});
+
+test('a single-credential issuer asks its one account, and refuses without an admission source', async t => {
+  await t.throwsAsync(
+    () =>
+      makeIssuer({
+        runtime: listenerRuntime(() => {}),
+        secret: Far('secret', { readBase64: async () => btoa('key') }),
+        fetch: /** @type {any} */ (async () => new Response('ok')),
+        policy,
+        imageDigest: digest,
+        accountRef: 'account',
+        admits: admitsModels(['other']),
+      })({ ...spec, sessionId: 'refused' }),
+    { message: /Provider grant request denied/ },
+  );
+  t.throws(
+    () =>
+      makeProviderBrokerGrantIssuer({
+        runtime: listenerRuntime(() => {}),
+        secret: Far('secret', { readBase64: async () => btoa('key') }),
+        fetch: /** @type {any} */ (async () => new Response('ok')),
+        policy,
+        imageDigest: digest,
+        accountRef: 'account',
+      }),
+    { message: /Invalid provider grant issuer policy/ },
+  );
 });

@@ -3,7 +3,6 @@
 import { Fail } from '@endo/errors';
 import { makeCodexModelRead } from '@endo/hosted-agent/codex-model-read.js';
 import {
-  assertBrokerModels,
   makeOwnedProviderBrokerService,
   makeProviderBrokerServiceKit,
 } from '@endo/hosted-agent/provider-broker-service.js';
@@ -24,7 +23,6 @@ const ConfigShape = M.splitRecord(
     imageDigest: M.string(),
     listenerImageRef: M.string(),
     accountRef: M.string(),
-    models: M.arrayOf(M.string()),
   },
   {
     maxSessions: M.number(),
@@ -41,17 +39,23 @@ const ConfigShape = M.splitRecord(
 /**
  * Operator-only broker configuration. No guest-supplied origins, refresh
  * endpoints, credentials, or runtime constructors enter the saved record.
+ * No model list either: the account's catalog, read from the provider, is
+ * what admits models (`@endo/hosted-agent/model-catalog.js`).
  * @param {Record<string, string>} env
  */
 export const readCodexBrokerConfig = env => {
   const text = env.CODEX_BROKER_CONFIG;
   typeof text === 'string' || Fail`Missing CODEX_BROKER_CONFIG`;
   const config = harden(JSON.parse(text));
+  // A profile from before account catalogs admitted models carries an
+  // operator model list; it is refused with the way out, not as a shape
+  // error, since the broker it belongs to must be retired deliberately.
+  !(config && typeof config === 'object' && Object.hasOwn(config, 'models')) ||
+    Fail`Retained Codex broker configuration names models, which this release no longer reads (models are admitted by the account's own catalog): retire that broker and the sessions bound to it deliberately, then rerun setup`;
   if (!matches(config, ConfigShape))
     throw Fail`Invalid Codex broker configuration`;
   /^[A-Za-z0-9_-]{1,256}$/.test(config.accountRef) ||
     Fail`Invalid Codex subscription account`;
-  assertBrokerModels(config.models, 'Codex');
   return config;
 };
 harden(readCodexBrokerConfig);

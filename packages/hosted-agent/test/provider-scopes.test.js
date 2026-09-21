@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
+import { admitsModels } from './admits-models.js';
 import { makeProviderScopes } from '../src/provider-scopes.js';
 
 const spec = harden({
@@ -447,10 +448,10 @@ test('scope composes the real issuer and forwards its copy evidence', async t =>
     fetch: async () => {
       throw Error('Unexpected provider request');
     },
+    admits: admitsModels([spec.model]),
     policy: {
       origin: spec.providerOrigin,
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: [spec.model],
       maxConcurrentRequests: 1,
       maxRequestBytes: 1024n,
       maxResponseBytes: 1024n,
@@ -487,7 +488,8 @@ test('scope composes the real issuer and forwards its copy evidence', async t =>
     imageDigest,
     accountRef: spec.accountRef,
     endpoint: 'http://127.0.0.1:1234',
-    modelAllowlist: ['allowed'],
+    model: 'allowed',
+    modelAdmission: 'account-catalog',
   });
   t.like(evidence, {
     version: 'CodexBrokerSandboxEvidenceV1',

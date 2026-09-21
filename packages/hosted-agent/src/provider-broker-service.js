@@ -4,8 +4,10 @@
  * The retained provider broker owner the CLI adapters compose: an operator
  * secret read facet, a provider listener runtime, and a grant issuer under
  * one operator policy, exposed as inert per-session scopes. Each adapter
- * supplies its policy (origin, route, credential header, model admission),
- * its account binding, and its label; nothing here names a provider.
+ * supplies its policy (origin, route, credential header), its account
+ * binding, its model discovery and its label; nothing here names a provider.
+ * Models are admitted by what each account's provider lists for it
+ * (`model-catalog.js`), never by an operator list.
  *
  * The slice never holds the provider credential: it gets a loopback-only
  * network namespace shared with a listener container, the host performs the
@@ -31,8 +33,11 @@ import { makePoolMemberLifecycle } from './pool-member-lifecycle.js';
 
 import { makeAccountReadingSource } from './account-source.js';
 import { makeBrokerSubscription } from './broker-subscription.js';
-import { normalizeHostedModelDescriptor } from './hosted-backend.js';
-import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
+import { makeModelCatalogOwner } from './model-catalog.js';
+import {
+  makeProviderBrokerGrantIssuer,
+  withDeadline,
+} from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makeProviderScopes } from './provider-scopes.js';
 import { makeResetRedeemer } from './reset-redeemer.js';
@@ -43,6 +48,10 @@ import {
 import { makePublicEgress } from './public-egress.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
+
+/** How long a far share gets to say what it lists, for a wrapped member's catalog. */
+const WRAPPED_DESCRIBE_DEADLINE_MS = 15_000;
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$/;
 
 // Per-request buffers and simultaneous operations bound host allocations.
 export const DEFAULT_MAX_REQUEST_BYTES = 8n * 1024n ** 2n;
@@ -58,25 +67,6 @@ const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 // by exact label; keep the composition inside that bound.
 export const BROKER_OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 harden(BROKER_OWNER_PATTERN);
-
-/**
- * The operator's model admission list, as every adapter's policy builder
- * checks it: nonempty, provider-scoped ids without spaces.
- * @param {unknown} models
- * @param {string} label
- * @returns {string[]}
- */
-export const assertBrokerModels = (models, label) => {
-  (Array.isArray(models) &&
-    models.length > 0 &&
-    models.every(
-      model =>
-        typeof model === 'string' && model.length > 0 && !model.includes(' '),
-    )) ||
-    Fail`${b(label)} broker models must be a nonempty list of model ids`;
-  return [.../** @type {string[]} */ (models)];
-};
-harden(assertBrokerModels);
 
 /**
  * Construct an inert provider broker owner. Retain the kit before start().
@@ -95,6 +85,10 @@ harden(assertBrokerModels);
  *   Optional retained host-only renewing credential; never returned to scopes.
  * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['adaptRequest']} [options.adaptRequest]
  *   Trusted provider translation, never returned to scopes or read from config.
+ * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['admits']} [options.admits]
+ *   The one account's model admission, from its catalog owner; required
+ *   without a pool.
+ * @param {Parameters<typeof makeProviderBrokerGrantIssuer>[0]['catalogState']} [options.catalogState]
  * @param {string} options.ownerId - Stable operator-owned cleanup scope
  * @param {string} options.directory - Private host directory for listener state
  * @param {string} options.imageRef - Pinned slice image ref (used for digest checks)
@@ -128,6 +122,8 @@ export const makeProviderBrokerKit = ({
   secret,
   credential,
   adaptRequest,
+  admits,
+  catalogState,
   ownerId,
   directory,
   imageRef,
@@ -176,6 +172,10 @@ export const makeProviderBrokerKit = ({
     Object.hasOwn(secret, 'readBase64') &&
       !isPresence(secret.readBase64) &&
       Fail`${b(label)} broker requires a SecretBlob read facet`;
+    // Refused here, before the listener runtime is opened for an issuer
+    // that would refuse it anyway.
+    typeof admits === 'function' ||
+      Fail`${b(label)} broker requires model admission from its account's catalog`;
   }
   typeof fetchAuthority === 'function' ||
     Fail`${b(label)} broker requires an outbound fetch authority`;
@@ -232,6 +232,8 @@ export const makeProviderBrokerKit = ({
         secret,
         ...(credential === undefined ? {} : { credential }),
         ...(adaptRequest === undefined ? {} : { adaptRequest }),
+        ...(admits === undefined ? {} : { admits }),
+        ...(catalogState === undefined ? {} : { catalogState }),
         fetch: fetchAuthority,
         imageDigest,
         accountRef,
@@ -304,47 +306,32 @@ const lazyModelRead = makeRead => {
 };
 
 /**
- * Per-account metadata, never a pool-wide admission decision. Failure does not
- * masquerade as an empty successful catalog or fall back to configured models.
+ * One account's catalog as a picker or an operator sees it. Per-account
+ * metadata from the account's own catalog owner, which is also what admits
+ * its requests. Failure does not masquerade as an empty successful catalog
+ * or fall back to configured models: there are none.
+ *
+ * The answer says on its own whether the account is a lane set aside, so a
+ * backend that could not list the declared set still knows what an `auto`
+ * session may be offered.
+ *
  * @param {string} subscriptionId
- * @param {(() => Promise<any>) | undefined} read
+ * @param {ReturnType<typeof makeModelCatalogOwner>} catalog
+ * @param {boolean} [pinnedOnly]
  */
-const readCatalogAccount = async (subscriptionId, read) => {
-  if (read === undefined) {
-    return harden({
-      subscriptionId,
-      state: 'unsupported',
-      observedAt: null,
-      models: [],
-    });
-  }
-  try {
-    const snapshot = await read();
-    const observedAt = /** @type {unknown} */ (snapshot?.observedAt);
-    (typeof observedAt === 'number' &&
-      Number.isFinite(observedAt) &&
-      observedAt >= 0 &&
-      Array.isArray(snapshot.models) &&
-      Number(snapshot.models.length) <= 4096) ||
-      Fail`Invalid provider model catalog`;
-    const models = snapshot.models.map(normalizeHostedModelDescriptor);
-    new Set(models.map(model => model.id)).size === models.length ||
-      Fail`Duplicate provider model identity`;
-    return harden({
-      subscriptionId,
-      state: 'current',
-      observedAt: snapshot.observedAt,
-      models,
-    });
-  } catch (_error) {
-    return harden({
-      subscriptionId,
-      state: 'unavailable',
-      observedAt: null,
-      models: [],
-    });
-  }
-};
+const readCatalogAccount = async (subscriptionId, catalog, pinnedOnly = false) =>
+  harden({
+    subscriptionId,
+    ...(pinnedOnly ? { pinnedOnly: true } : {}),
+    ...(await catalog.snapshot()),
+  });
+
+/**
+ * @typedef {object} CatalogOptions
+ * @property {number} [lifetimeMs]
+ * @property {number} [maxAgeMs]
+ * @property {number} [retryMs]
+ */
 
 /**
  * What an adapter supplies for a broker over several subscriptions.
@@ -385,6 +372,7 @@ const readCatalogAccount = async (subscriptionId, read) => {
  * @param {PooledSubscriptions} powers.subscriptions
  * @param {any} powers.brokerOptions
  * @param {(error: unknown) => void} powers.reportAccountError
+ * @param {CatalogOptions} [powers.catalog]
  */
 const makePooledBrokerServiceKit = ({
   label,
@@ -392,6 +380,7 @@ const makePooledBrokerServiceKit = ({
   subscriptions,
   brokerOptions,
   reportAccountError,
+  catalog: catalogOptions = {},
 }) => {
   const {
     readSet,
@@ -414,7 +403,9 @@ const makePooledBrokerServiceKit = ({
    * @property {ReturnType<typeof makeAccountReadingSource>} account
    * @property {any} redeemer
    * @property {ReturnType<typeof makePoolMemberLifecycle>} lifecycle
-   * @property {(() => Promise<any>) | undefined} modelRead
+   * @property {ReturnType<typeof makeModelCatalogOwner>} catalog What the
+   *   member's account may be served, as last read from its provider; both
+   *   what a picker sees and what admits its requests.
    * @property {(() => any) | undefined} subscription For a wrapped member.
    */
   /** @type {Map<string, MemberKit>} */
@@ -522,13 +513,51 @@ const makePooledBrokerServiceKit = ({
       await account.close();
     };
     lifecycle.retain(closeAccount);
+    // What the share says it admits, as its catalog: ids only, since a
+    // share describes no more of what is beneath it than that. Another
+    // party's data, bounded and shaped before it is believed, and given a
+    // deadline: a far daemon that hangs costs a failed read, not a wedged
+    // retirement.
+    const catalog = makeModelCatalogOwner({
+      read: () =>
+        lifecycle.run(async () => {
+          const described = await withDeadline(
+            E(subscription()).describe(),
+            WRAPPED_DESCRIBE_DEADLINE_MS,
+          );
+          const ids = Array.isArray(described?.models) ? described.models : [];
+          return harden({
+            observedAt: now(),
+            models: [
+              ...new Set(
+                ids.filter(
+                  (/** @type {unknown} */ id) =>
+                    typeof id === 'string' && MODEL_ID.test(id),
+                ),
+              ),
+            ]
+              .slice(0, 4096)
+              .map((/** @type {string} */ id) => ({
+                id,
+                title: id,
+                description: '',
+                default: false,
+                defaultReasoningEffort: null,
+                reasoningEfforts: [],
+              })),
+          });
+        }),
+      now,
+      ...catalogOptions,
+    });
+    lifecycle.retain(() => catalog.close());
     return {
       lifecycle,
       secret: undefined,
       credential: undefined,
       adaptRequest: undefined,
       redeemer: undefined,
-      modelRead: undefined,
+      catalog,
       subscription,
       account: {
         ...account,
@@ -574,10 +603,37 @@ const makePooledBrokerServiceKit = ({
         onChange: () => asSubscription.changed(),
       });
       lifecycle.retain(() => account.close());
+      // A catalog read's credential is fenced but not sticky. What is
+      // sticky elsewhere is a failure inside `current()` itself (the token
+      // read or a renewal exchange), which the lifecycle treats as making
+      // retirement uncertain; the credential keeps its own single-flight and
+      // write-ahead renewal guards, and its durable intent remains the
+      // authority. A catalog read that hits such a failure must not disable
+      // the member for inference too, or a picker opening after a restart
+      // could retire every account on one transient refresh failure.
+      const readCredential =
+        rawCredential === undefined
+          ? undefined
+          : harden({
+              accountRef: rawCredential.accountRef,
+              current: (...args) =>
+                lifecycle.run(() => rawCredential.current(...args)),
+            });
       const readModel =
         modelReadOf === undefined
           ? undefined
-          : lazyModelRead(() => modelReadOf({ member, secret, credential }));
+          : lazyModelRead(() =>
+              modelReadOf({ member, secret, credential: readCredential }),
+            );
+      // Read through the member's lifecycle, so a retired member's credential
+      // is not used for a read, and retirement waits for a read in flight.
+      const catalog = makeModelCatalogOwner({
+        read:
+          readModel === undefined ? undefined : () => lifecycle.run(readModel),
+        now,
+        ...catalogOptions,
+      });
+      lifecycle.retain(() => catalog.close());
       const redeem = resetRedeemOf?.({ member, secret, credential });
       kit = {
         lifecycle,
@@ -586,8 +642,7 @@ const makePooledBrokerServiceKit = ({
         adaptRequest:
           adaptRequestOf === undefined ? undefined : adaptRequestOf(member),
         account,
-        modelRead:
-          readModel === undefined ? undefined : () => lifecycle.run(readModel),
+        catalog,
         redeemer:
           redeem === undefined
             ? undefined
@@ -706,11 +761,17 @@ const makePooledBrokerServiceKit = ({
               id: member.id,
               subscription: kit.subscription(),
               lifecycle: kit.lifecycle,
+              admits: kit.catalog.admits,
+              catalogState: () => kit.catalog.peek().state,
+              ...(member.pinnedOnly === true ? { pinnedOnly: true } : {}),
             });
           }
           return harden({
             id: member.id,
             lifecycle: kit.lifecycle,
+            admits: kit.catalog.admits,
+            catalogState: () => kit.catalog.peek().state,
+            ...(member.pinnedOnly === true ? { pinnedOnly: true } : {}),
             secret: kit.secret,
             ...(kit.credential === undefined
               ? {}
@@ -741,7 +802,20 @@ const makePooledBrokerServiceKit = ({
   const asSubscription = makeBrokerSubscription({
     providerId,
     label,
-    models: [...(brokerOptions.policy?.models ?? [])],
+    // What an `auto` endpoint may be served: the union of what the accounts
+    // not set aside list, from the catalogs held now.
+    readModels: async () => {
+      const { members } = await load();
+      const serving = members.filter(member => member.pinnedOnly !== true);
+      const ids = new Set();
+      await Promise.all(
+        serving.map(async member => {
+          const { models } = await kitOf(member).catalog.snapshot();
+          for (const model of models) ids.add(model.id);
+        }),
+      );
+      return harden([...ids]);
+    },
     openEndpoint: async spec =>
       /** @type {any} */ ((await broker.start()).issuer).openEndpoint(spec),
     readings: async () => {
@@ -800,18 +874,15 @@ const makePooledBrokerServiceKit = ({
         Fail`Unknown provider subscription`;
       const observedKits = new Map();
       const accounts = await Promise.all(
-        selected.map(member =>
-          readCatalogAccount(
+        selected.map(member => {
+          const kit = kitOf(member);
+          observedKits.set(member.id, kit);
+          return readCatalogAccount(
             member.id,
-            modelReadOf === undefined || member.subscriptionName !== undefined
-              ? undefined
-              : async () => {
-                  const kit = kitOf(member);
-                  observedKits.set(member.id, kit);
-                  return kit.modelRead?.();
-                },
-          ),
-        ),
+            kit.catalog,
+            member.pinnedOnly === true,
+          );
+        }),
       );
       // Validate the entire batch after its slowest account finishes. A fast
       // account may have been removed while a different account was pending.
@@ -819,12 +890,13 @@ const makePooledBrokerServiceKit = ({
       const currentIds = new Set(latest.members.map(member => member.id));
       return harden({
         accounts: accounts.map(account =>
-          account.state === 'current' &&
+          (account.state === 'current' || account.state === 'stale') &&
           (!currentIds.has(account.subscriptionId) ||
             kits.get(account.subscriptionId) !==
               observedKits.get(account.subscriptionId))
             ? {
                 subscriptionId: account.subscriptionId,
+                ...(account.pinnedOnly === true ? { pinnedOnly: true } : {}),
                 state: 'unavailable',
                 observedAt: null,
                 models: [],
@@ -971,7 +1043,7 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, modelRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions }} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, modelRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions, catalog?: CatalogOptions, now?: () => number }} options
  *   `activeAccountRead` is the adapter's one read of its provider's usage
  *   endpoint, host-only and only ever run on request. `resetRedeem` is its
  *   one call that spends a banked rate-limit reset, an operator's and never
@@ -985,6 +1057,8 @@ export const makeProviderBrokerServiceKit = options => {
     modelRead,
     resetRedeem,
     subscriptions,
+    catalog: catalogOptions = {},
+    now = Date.now,
     providerId = label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     ...brokerOptions
   } = options;
@@ -997,11 +1071,19 @@ export const makeProviderBrokerServiceKit = options => {
     return makePooledBrokerServiceKit({
       label,
       providerId,
-      subscriptions,
+      subscriptions: { now, ...subscriptions },
       brokerOptions,
       reportAccountError,
+      catalog: catalogOptions,
     });
   }
+  // The one account's catalog: what a picker sees, and what admits every
+  // request and every scope that pins a model.
+  const catalog = makeModelCatalogOwner({
+    read: modelRead,
+    now,
+    ...catalogOptions,
+  });
   // What the account behind this broker's credential has left, as the
   // transport reads it from each response. The source is a facet of the
   // service, so an account oracle can hold it without the scopes' authority,
@@ -1016,7 +1098,8 @@ export const makeProviderBrokerServiceKit = options => {
   const asSubscription = makeBrokerSubscription({
     providerId,
     label,
-    models: [...(brokerOptions.policy?.models ?? [])],
+    readModels: async () =>
+      harden((await catalog.snapshot()).models.map(model => model.id)),
     openEndpoint: async spec =>
       /** @type {any} */ ((await broker.start()).issuer).openEndpoint(spec),
     readings: async () => [
@@ -1026,6 +1109,8 @@ export const makeProviderBrokerServiceKit = options => {
   const broker = makeProviderBrokerKit({
     ...brokerOptions,
     label,
+    admits: catalog.admits,
+    catalogState: () => catalog.peek().state,
     onReading: reading => {
       account.accept(reading);
       brokerOptions.onReading?.(reading);
@@ -1039,7 +1124,7 @@ export const makeProviderBrokerServiceKit = options => {
         subscriptionId === 'default' ||
         Fail`Unknown provider subscription`;
       return harden({
-        accounts: [await readCatalogAccount('default', modelRead)],
+        accounts: [await readCatalogAccount('default', catalog)],
       });
     },
     subscription: asSubscription.subscription,
@@ -1055,7 +1140,7 @@ export const makeProviderBrokerServiceKit = options => {
       broker,
       closeAccounts: async () => {
         asSubscription.close();
-        await account.close();
+        await Promise.all([account.close(), catalog.close()]);
       },
     }),
   });

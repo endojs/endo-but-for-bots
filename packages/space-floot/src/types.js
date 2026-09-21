@@ -75,7 +75,26 @@ export {};
  *   reasoningEfforts?: string[],
  *   supportedNetworkPolicies?: string[],
  *   subscriptions?: Array<{ id: string, label: string, pinnedOnly?: boolean }>,
+ *   subscriptionIds?: string[],
  * }} FlootModel
+ */
+
+/**
+ * How a backend's discovery stands, per account: whether its catalog is
+ * current, stale, unavailable or unsupported, when it was read, and how many
+ * models it lists. Shown beside the picker so an empty list says why.
+ * @typedef {{
+ *   backendId: string,
+ *   backendTitle?: string,
+ *   accounts: Array<{
+ *     subscriptionId: string,
+ *     label?: string,
+ *     pinnedOnly?: boolean,
+ *     state: string,
+ *     observedAt: number | null,
+ *     modelCount: number,
+ *   }>,
+ * }} FlootCatalog
  */
 
 /**
@@ -127,6 +146,8 @@ export {};
  *   activeSessionId: string | null,
  *   presets: FlootPreset[],
  *   models: FlootModel[],
+ *   catalogs?: FlootCatalog[],
+ *   discoveryError?: string,
  *   messages: FlootMessage[],
  *   streamingText: string,
  *   phase: string,
@@ -160,6 +181,7 @@ export {};
  * @property {(pendingId: number | string) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
  * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string, networkPolicy?: string) => void} newSession
+ * @property {() => void} [refreshDiscovery] Read what the backends list now, for the picker.
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
  * @property {(key: string, confirm: string, action?: 'redeem' | 'replay' | 'abandon') => void} [redeemAccountReset] Spend one banked rate-limit reset of that account, ask again about an unconfirmed redeem, or give it up, after the person confirms.

@@ -7,8 +7,6 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { main } from '../setup-hosted.js';
-import { OPENCODE_MODELS } from '../src/opencode-backend-factory.js';
-import { parseModelRef } from '../src/opencode-agent-config.js';
 import {
   brokerServiceSpecifier,
   nativeSandboxSpecifier,
@@ -410,7 +408,6 @@ test.serial(
       'broker-service',
     ]);
     t.is(broker?.options.powersName, 'test-auth.broker-read');
-    /** @type {{ models: string[] }} */
     const config = JSON.parse(broker?.options.env.OPENCODE_BROKER_CONFIG ?? '');
     t.like(config, {
       ownerId: 'operator-broker',
@@ -422,11 +419,9 @@ test.serial(
       listenerImageRef,
       publicInternet: true,
     });
-    t.true(Array.isArray(config.models) && config.models.length > 0);
-    t.deepEqual(
-      config.models,
-      OPENCODE_MODELS.map(model => parseModelRef(model.id)),
-    );
+    // No operator model list is persisted: the account's OpenRouter catalog
+    // admits models, and a stale list would be refused by the broker.
+    t.false(Object.hasOwn(config, 'models'));
     // eslint-disable-next-line no-bitwise
     t.is((await stat(path.join(base, 'broker'))).mode & 0o777, 0o700);
     t.true(
@@ -477,7 +472,6 @@ test.serial(
         imageRef: `localhost/opencode@${digest}`,
         imageDigest: digest,
         listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
-        models: ['anthropic/claude-sonnet-4'],
       }),
     });
     fake.environments.set('broker-service-id', brokerEnv);
@@ -553,7 +547,6 @@ test.serial(
           imageRef: `localhost/opencode@${digest}`,
           imageDigest: digest,
           listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
-          models: ['anthropic/claude-sonnet-4'],
           ...overrides,
         }),
       });

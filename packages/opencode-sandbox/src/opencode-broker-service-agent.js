@@ -25,7 +25,6 @@ const ConfigShape = M.splitRecord(
     imageRef: M.string(),
     imageDigest: M.string(),
     listenerImageRef: M.string(),
-    models: M.arrayOf(M.string()),
   },
   {
     maxSessions: M.number(),
@@ -47,6 +46,11 @@ export const readOpencodeBrokerConfig = env => {
   typeof text === 'string' || Fail`Missing OPENCODE_BROKER_CONFIG`;
   /** @type {unknown} */
   const config = harden(JSON.parse(text));
+  // A profile from before account catalogs admitted models carries an
+  // operator model list; it is refused with the way out, not as a shape
+  // error, since the broker it belongs to must be retired deliberately.
+  !(config && typeof config === 'object' && Object.hasOwn(config, 'models')) ||
+    Fail`Retained OpenCode broker configuration names models, which this release no longer reads (models are admitted by the account's own catalog): retire that broker and the sessions bound to it deliberately, then rerun setup`;
   if (!matches(config, ConfigShape))
     throw Fail`Invalid OpenCode broker configuration`;
   return config;
@@ -71,8 +75,8 @@ export const makeOwnedOpencodeBrokerService = ({
   makeOwnedProviderBrokerService({
     label: 'OpenCode',
     readConfig: readOpencodeBrokerConfig,
-    makePolicy: config => ({
-      policy: buildOpencodeBrokerPolicy({ models: config.models }),
+    makePolicy: () => ({
+      policy: buildOpencodeBrokerPolicy({}),
       accountRef: OPENCODE_BROKER_ACCOUNT,
     }),
     // For an account oracle's refresh(): OpenRouter says nothing about the

@@ -675,14 +675,24 @@ export const flootComponent = (
    * @typedef {{ id: string, title: string, description: string,
    *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
    *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[],
-   *   supportedNetworkPolicies?: string[], subscriptions?: { id: string, label: string }[] }} FlootModel
+   *   supportedNetworkPolicies?: string[], subscriptions?: { id: string, label: string }[],
+   *   subscriptionIds?: string[] }} FlootModel
+   * How a backend's discovery stands, per account: what the factory's
+   * `listModelCatalogs()` says, so an empty picker can say why.
+   * @typedef {{ backendId: string, accounts: Array<{ subscriptionId: string,
+   *   label?: string, pinnedOnly?: boolean, state: string,
+   *   observedAt: number | null, modelCount: number }> }} FlootCatalog
    */
 
   /** @type {FlootPreset[]} */
   let presets = [];
   /** @type {FlootModel[]} */
   let models = [];
-  /** @type {Array<{ id: string, title?: string }>} */
+  /** @type {FlootCatalog[]} */
+  let catalogs = [];
+  /** Why the last discovery read failed, for the picker; `''` when it did not. */
+  let discoveryError = '';
+  /** @type {Array<{ id: string, title?: string, subscriptions: any[], supportedNetworkPolicies: string[] }>} */
   let backends = [];
   /** @type {FlootSession[]} */
   let sessions = [];
@@ -1062,11 +1072,27 @@ export const flootComponent = (
         default: m.default,
         backendId: m.backendId,
         backendTitle: m.backendTitle,
+        modelId: m.modelId,
         defaultReasoningEffort: m.defaultReasoningEffort,
         reasoningEfforts: m.reasoningEfforts,
         supportedNetworkPolicies: m.supportedNetworkPolicies || [],
         // What a session on this model's backend may be pinned to.
         subscriptions: m.subscriptions || [],
+        // Which of those accounts list this model.
+        subscriptionIds: m.subscriptionIds || [],
+      })),
+      discoveryError,
+      catalogs: catalogs.map(c => ({
+        backendId: c.backendId,
+        backendTitle: backends.find(b => b.id === c.backendId)?.title,
+        accounts: (c.accounts || []).map(a => ({
+          subscriptionId: a.subscriptionId,
+          label: a.label,
+          pinnedOnly: a.pinnedOnly === true,
+          state: a.state,
+          observedAt: a.observedAt,
+          modelCount: a.modelCount,
+        })),
       })),
       messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
@@ -2601,6 +2627,9 @@ export const flootComponent = (
   // ── Controller (the view's only handle on the host engine) ───────────────────
   const controller = harden({
     getState,
+    refreshDiscovery() {
+      void readDiscovery();
+    },
     emergencyStop() {
       // Queued prompts are not a request to resume a stopped session: the
       // daemon holds them until the user sends one (they are kept, not lost).
@@ -3076,20 +3105,64 @@ export const flootComponent = (
     }
   };
 
+  /** @type {Promise<void> | undefined} */
+  let discoveryP;
+  /**
+   * Read what each backend's accounts list now, and how their discovery
+   * stands. Read at load beside the session list, never ahead of it (a slow
+   * provider must not hold the sessions back), and again whenever the picker
+   * opens, so what an outage at load said is not left standing once the
+   * provider is back. One read at a time; a second ask joins it.
+   */
+  const readDiscovery = () => {
+    discoveryP ??= (async () => {
+      try {
+        const [modelList, catalogList] = await Promise.all([
+          E(factory).listModels(),
+          // How each backend's discovery stands; a factory from before it
+          // could say leaves the picker without the status line.
+          E(factory)
+            .listModelCatalogs()
+            .catch(() => []),
+        ]);
+        if (cancelled) return;
+        discoveryError = '';
+        catalogs = Array.isArray(catalogList) ? catalogList : [];
+        models = modelList.map(m => {
+          const backend = backends.find(b => b.id === m.backendId);
+          return {
+            ...m,
+            backendTitle: backend?.title,
+            subscriptions: backend?.subscriptions || [],
+            supportedNetworkPolicies: backend?.supportedNetworkPolicies || [],
+          };
+        });
+        notify();
+      } catch (err) {
+        // Said in the picker, where it matters, not over the status line
+        // the session load and turns write.
+        if (cancelled) return;
+        discoveryError = `${/** @type {Error} */ (err).message}`.slice(0, 200);
+        notify();
+      } finally {
+        discoveryP = undefined;
+      }
+    })();
+    return discoveryP;
+  };
+
   const loadInitialSessions = async () => {
     try {
       factory = await factory;
-      const [listReader, presetList, modelList, backendList] =
-        await Promise.all([
-          E(factory).watchSessions(),
-          E(factory)
-            .listPresets()
-            .catch(() => []),
-          E(factory).listModels(),
-          E(factory)
-            .listBackends()
-            .catch(() => []),
-        ]);
+      const [listReader, presetList, backendList] = await Promise.all([
+        E(factory).watchSessions(),
+        E(factory)
+          .listPresets()
+          .catch(() => []),
+        E(factory)
+          .listBackends()
+          .catch(() => []),
+      ]);
       const list = iterateReader(listReader, { buffer: 4 });
       sessionListStream = list;
       if (cancelled) {
@@ -3101,16 +3174,11 @@ export const flootComponent = (
         id: b.id,
         title: b.title,
         subscriptions: Array.isArray(b.subscriptions) ? b.subscriptions : [],
+        supportedNetworkPolicies: Array.isArray(b.supportedNetworkPolicies)
+          ? b.supportedNetworkPolicies
+          : [],
       }));
-      models = modelList.map(m => ({
-        ...m,
-        backendTitle: backendList.find(b => b.id === m.backendId)?.title,
-        subscriptions:
-          backendList.find(b => b.id === m.backendId)?.subscriptions || [],
-        supportedNetworkPolicies:
-          backendList.find(b => b.id === m.backendId)
-            ?.supportedNetworkPolicies || [],
-      }));
+      void readDiscovery();
       // The first event is the list as it stands. Unavailable sessions are
       // retained too: hiding them would hide recovery work.
       const first = /** @type {any} */ ((await list.next()).value);

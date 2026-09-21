@@ -190,15 +190,6 @@ const baseEnv = async t => {
     ENDO_CODEX_PROJECT_IDS: JSON.stringify({ first: 42_020, last: 43_019 }),
     ENDO_CODEX_MAX_SESSIONS: '2',
     ENDO_CODEX_STATE_BYTES: '268435456',
-    ENDO_CODEX_MODELS: JSON.stringify([
-      {
-        id: 'model-a',
-        displayName: 'Model A',
-        isDefault: true,
-        defaultReasoningEffort: null,
-        supportedReasoningEfforts: [],
-      },
-    ]),
     NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
     NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
     NINEP_SUDO: '1',

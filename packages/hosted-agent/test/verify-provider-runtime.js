@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 
 import { makePodmanProviderListenerRuntime } from '../src/provider-listener-runtime.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
+import { admitsModels } from './admits-models.js';
 
 // Opt-in real Linux namespace/pipe acceptance with a controlled host upstream.
 // This is not a vendor authentication or Codex runtime acceptance test.
@@ -55,10 +56,10 @@ try {
         headers: { 'content-type': 'text/event-stream' },
       });
     },
+    admits: admitsModels(['controlled']),
     policy: {
       origin: 'https://api.example.test',
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: ['controlled'],
       maxConcurrentRequests: 4,
       maxRequestBytes: 4096n,
       maxResponseBytes: 4096n,

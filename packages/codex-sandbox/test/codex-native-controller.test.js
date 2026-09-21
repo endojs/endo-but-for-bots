@@ -93,7 +93,8 @@ const fixture = async (
     accountRef: wrongAccount ? 'wrong' : 'account-a',
     authMode: 'oauth',
     endpoint: 'http://127.0.0.1:9000',
-    modelAllowlist: ['model-a'],
+    model: 'model-a',
+    modelAdmission: 'account-catalog',
   });
   const brokerScope = Far('BrokerScope', {
     async start() {

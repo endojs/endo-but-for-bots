@@ -145,7 +145,6 @@ test('the broker service is read by its verified entrypoint with its persisted p
     imageRef: `localhost/claude@${digest}`,
     imageDigest: digest,
     listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
-    models: ['claude-sonnet-4-6'],
     credentialKind: 'oauthToken',
   };
   const bindings = new Map([

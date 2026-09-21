@@ -24,8 +24,12 @@ endo run --UNCONFINED packages/floot/floot-factory-setup.js --powers @agent \
 Replace `vendor/model` with your chosen tool-capable OpenRouter model ID.
 Use a separate `FLOOT_DIR` to preserve an existing Anthropic-backed factory;
 each Floot factory currently has one API-provider configuration, alongside its hosted backends.
-The picker labels this API backend OpenRouter and lists its configured model.
-It does not fetch the full model catalog or advertise reasoning controls in this first pass.
+The picker labels this API backend Fae and offers what the configured
+OpenRouter account lists: the factory reads the account-filtered catalog under
+Floot's own credential, keeps it for a while, and marks the configured model as
+the default when the account lists it.
+A model the account does not list is not offered, and a pin must be listed; a
+failed read is shown as unavailable, never as a list typed here.
 Model variants with a colon suffix are treated as API model IDs, not hosted-backend IDs.
 Reusing a factory directory changes its API provider: do not do that for existing sessions
 unless you intend to send their history to the new provider.

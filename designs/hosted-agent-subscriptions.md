@@ -9,7 +9,45 @@
 
 ## Status
 
-### Latest increment — 2026-09-21
+### Latest increment — 2026-09-22
+
+Model admission is bound to each account's own provider catalog
+(`hosted-agent/src/model-catalog.js`), replacing the operator list
+`policy.models` that every adapter's broker configuration carried.
+Each pool member holds a catalog owner over its existing credential owner;
+a request is served only by a member whose account lists its model, in the
+pool's order, and a pinned session's one member refusing is a refusal.
+A scope that pins a model is issued only if an eligible account lists it, and
+attestations carry the model it was issued for (`model`) and
+`modelAdmission`, not a list; each request is still admitted by the serving
+account's catalog, so a runtime's side requests on other listed models serve.
+The catalog is deliberately ephemeral: reconstruction reads the provider again
+through the same fenced credential; a retired member's owner admits nothing.
+An observation is current for fifteen minutes, admits while stale for a day,
+and admits nothing past that or without discovery.
+Claude gains discovery through Anthropic's model list under the broker's
+credential; Codex and OpenRouter readers were already present.
+Retained broker configurations carrying `models` are refused, so the three
+brokers must be retired and re-minted at the next cutover.
+The static backend catalogs, Floot's lists and the NixOS model option are
+removed in the same increment: backends answer `modelCatalog()` per account
+through `hosted-agent/src/backend-catalog.js`, a new pin is admitted when the
+plan is recorded and a recorded pin is kept on reopen, Floot's direct provider
+reads its own account's catalog, and the picker offers what the chosen
+subscription lists and says how each account's discovery stands.
+A request that names no model gets only a default the catalog marks, never
+"the first listed": the Codex reader marks the account's top-priority visible
+model, OpenRouter and Anthropic mark none, so an OpenCode session must name
+its route and a Claude session without one runs the runtime's own default
+unpinned; an effort changed on its own keeps the recorded model.
+The broker's catalog answer says which accounts are lanes set aside, so a
+backend that could not list the declared set still offers an `auto` session
+nothing a lane alone lists.
+The picker reads discovery beside the session list and again each time it
+opens; the direct provider without discovery is offered unpinned.
+Not deployed.
+
+### Previous increment — 2026-09-21
 
 Claude and Codex pools were deployed to Tokyo at `58818cd57` on 2026-09-20.
 Codex primary, Claude secondary, and both Auto selections passed live Floot

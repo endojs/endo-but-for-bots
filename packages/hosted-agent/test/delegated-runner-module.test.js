@@ -39,7 +39,7 @@ const makeBackend = label => {
           continuity: 'opaque',
           toolOwnership: 'endo',
         }),
-      listModels: async () => harden([]),
+      modelCatalog: async () => harden({ accounts: [] }),
       create: async spec => {
         created.push(spec);
         return harden({
