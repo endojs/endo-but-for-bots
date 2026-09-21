@@ -70,7 +70,7 @@ No claim of complete retrospective coverage is made yet.
 | Formula disposal and replacement | Remote disposal hooks were invoked as local functions; explicit-cancellation bridge/fencing tests now pass in the working tree. GC drops controllers before asynchronous cleanup begins, exposing a separate revival window under review. | Fence every withdrawal path before controller removal; verify cross-worker retained facets, failed cleanup, mutual dependencies, and GC interleavings before relying on this for one writer. |
 | Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
 | Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
-| Native state creation | Rewritten with unique inode-bound allocations, atomic no-overwrite ownership publication, and external durable orphan-retirement intent. Twenty-seven focused tests pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Tests inject failures and reconstruct from disk, not physical power loss. |
+| Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
 | Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
@@ -169,6 +169,14 @@ Review caught and corrected five issues: publication retry flushing, absent
 deletion retry flushing, ancestry flushing, orphan proof loss during deletion,
 and allocation path incompatibility with sandbox mount policy.
 Seventeen shared, eight Codex, and two Claude tests pass independently.
+Four additional subprocess tests stop a separate Node process with SIGKILL at
+directory creation, record opening, complete record writing, and publication.
+Recovery runs only after the child has closed, with no child cleanup handlers.
+Unpublished allocations are not adopted; complete unreferenced ownership proof
+permits scoped cleanup, while incomplete proof is preserved.
+Published allocation identity survives reconstruction without directory reuse.
+These tests strengthen process-loss evidence but do not simulate power loss,
+filesystem write-cache loss, or native Podman lifecycle integration.
 The administrative owner must serialize per-session lifecycle work and keep
 the root quiescent during orphan cleanup; host paths must remain stable.
 These storage operations do not establish that native consumers have stopped.
@@ -1076,6 +1084,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Native-state durability: subprocess SIGKILL recovery at four creation boundaries | Four tests pass; exact child handles and temporary roots only; power-loss and Tokyo lifecycle verification remain pending |
 | 2026-09-21 | Remove obsolete Claude construction prompt dispatch; record disposal and account-admission prerequisites | 51 client/controller tests, independent source review and lint pass; explicit restoration unchanged; not deployed |
 | 2026-09-21 | Retrospective durability: uniquely allocated native state and durable ownership/retirement records | 27 focused tests and independent review pass; breaking storage layout approved; old-release retirement and Tokyo verification pending |
 | 2026-09-21 | FA-04: remove obsolete OpenCode construction prompt dispatch | 51 client/controller tests pass; independent source review and lint pass; no new durable state; not deployed |
