@@ -53,73 +53,26 @@ no retained formula referring to it.
 
 ## Findings register
 
-### Pre-merge design review: native recovery scope and proportionality
+### Native recovery — separate research follow-up
 
-**Implementation stopped for operator discussion on 2026-09-21.**
-Do not resume the native producer architecture, activate it, or treat the earlier
-conditional adapter approval as approval of its expanded design without this review.
-The operator requires implementation complexity, operational risk, and research
-to be weighed against the actual problem before PR merge.
+The dedicated [investigation and scope decision](../../designs/hosted-native-recovery-investigation.md)
+records discovery, evidence, alternatives, commit disposition, and research gates.
+Automatic per-session crash recovery and the proposed producer service are deferred
+from PR #1248; no producer architecture is selected or required to finish this PR.
+Retain the landed fail-closed ownership/disposal fixes, with their documented
+availability costs. Preserve Secrets, renewal owners, and workspaces.
 
-The demonstrated problem is narrower than automatic crash recovery: after a
-worker/daemon loss, an absent in-memory scope does not prove that its native
-resources stopped. Existing prefix/port-based cleanup also lacks exact ownership
-proof. The committed fail-closed fix preserves state instead of acknowledging
-unproven cleanup. It does not itself require a new privileged recovery service.
-
-The proposed solution expanded from a portable stop adapter into a root-managed
-per-incarnation producer service, durable admission/retirement records, new worker
-bootstrap and authentication, controller relocation over CapTP, per-session native
-runtime/listener composition, immutable release provisioning, and changes to
-cgroup and mount authority. This is a substantial architecture change, not a small
-adapter implementation. It has not had a comparative design review or Tokyo proof.
-
-Mandatory pre-merge review items:
-
-1. **Required outcome and acceptable failure mode.** Decide whether automatic
-   per-session crash recovery is required now. Compare fail-closed behavior plus
-   explicit operator retirement/reset, especially for this disposable test bed.
-   Preserve Secrets, renewal owners, and workspaces in every option.
-2. **Containment granularity and alternatives.** Compare using/verifying the
-   existing daemon or worker shutdown boundary, coordinated whole-service restart,
-   and a new per-session producer boundary. Research actual Podman/conmon/helper
-   process and cgroup placement before selecting an implementation. None is safe
-   merely because a process disappeared or a unit reports inactive.
-3. **Durable ownership protocol.** Review the new lifecycle/append-store format,
-   uncertain writes, operation-payload binding, restart semantics, orphan handling,
-   and full-history storage cost. Twenty tests in four SES configurations support
-   the draft core only; they do not prove native containment or crash recovery.
-4. **Privilege and authentication.** Review the proposed root service, fixed-unit
-   API, bearer/verifier handshake, private sockets, immutable profile/release
-   configuration, and cgroup escape prevention. Replacing unrestricted mount sudo
-   needs its own explicit design; do not silently expand privileged operations.
-5. **Endo integration and authority.** Review the new fixed-worker export and
-   producer wrapper, moving controllers into a separate process, per-incarnation
-   runtime composition, and separating native listeners from shared credential
-   brokers. Confirm formula durability, cancellation, replay, and capability
-   attenuation using actual daemon tests, not only injected local objects.
-6. **Merge/deployment decision.** Choose whether this belongs in PR #1248, should
-   be split into a separately reviewed project, or should be replaced with a
-   smaller operational policy. Set acceptance evidence and a rollback plan before
-   implementation resumes. No speculative native recovery code is merge-ready.
-
-Current checkpoint: the lifecycle/store and their tests are uncommitted drafts;
-the fixed-worker/producer wrapper and package export changes are incomplete and
-uncommitted. No host helper/Nix changes have landed, no old cleanup paths have
-been removed, and none of this architecture has been deployed. The draft is
-preserved for review, not adopted as the selected solution.
-
-Read-only Tokyo evidence collected after stopping implementation: the live daemon
-reports `KillMode=control-group`, `Delegate=yes`, and control group
-`/system.slice/endo-daemon.service`. The observed daemon workers, conmon
-processes, and active Codex/OpenCode container processes are under that group
-or its descendants, including conmon processes reparented to PID 1.
-One Podman pause process is outside it in an SSH session scope; its ownership
-and recovery significance were not established by this snapshot.
-This makes validating the existing whole-daemon boundary a concrete alternative
-to investigate before building a new per-session service. It is not a stop/crash
-test, proof of exhaustive containment, or proof that mounts/records are reclaimed.
-No process was stopped and no deployment or cleanup was performed for this check.
+Continue the bounded refactor and normal-operation acceptance; use an explicit,
+verified operator cutover for old native resources. If exact safe retirement cannot
+be established, stop deployment rather than clearing markers or pretending cleanup
+succeeded. A ready-to-run recovery procedure remains a bounded deployment gate,
+not an instruction to finish the new producer architecture.
+Keep process-loss recovery and cross-worker cleanup proof open in the audit and
+tracked follow-up; do not count them as completed by deferral.
+The uncommitted producer prototypes are being isolated on
+`codex/native-recovery-research` as a non-merge-ready draft tracking PR.
+Public declaration fixes and independently useful landed lifecycle corrections
+remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
 
@@ -137,7 +90,7 @@ No claim of complete retrospective coverage is made yet.
 | Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
 | Credential ownership and Secret rebinding | Owned pool bindings retain actual capabilities and reject mutable-name rebinding. Member retirement now fences and drains retained facets, renewals, transports, wrapped readers/endpoints, and observation writes; 179 focused and two real-daemon tests pass. | Cross-worker renewal exclusion, retirement epochs, and process-loss transaction recovery remain open. Module-local drain does not establish these. |
-| Native teardown after reconstruction | Corrected locally: absent/failed scope lookup now refuses stop acknowledgement, and mount reclamation waits for sandbox close. Six injected-reconstruction tests pass independently. Runtime lookup still reads only an in-memory map. | Durable exact-owner reconciliation and actual process-loss tests required before deployment; a missing scope cannot prove that native resources stopped. |
+| Native teardown after reconstruction | Corrected locally: absent/failed scope lookup now refuses stop acknowledgement, and mount reclamation waits for sandbox close. Six injected-reconstruction tests pass independently. Runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof deferred to the dedicated investigation. Current cutover requires verified operator retirement; a missing scope cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
@@ -263,31 +216,20 @@ actual process-loss or Podman reconciliation test.
 Automatic reconciliation still requires recorded scope/incarnation identity
 and proof that old producers can no longer create resources.
 Broad container sweeps are not such proof.
-Deployment of this cleanup behavior remains blocked on that reconciliation:
-after a real restart even a legitimately absent scope currently lacks proof.
-The operator approved a narrowly scoped privileged producer adapter, conditional
-on keeping the implementation portable rather than tied to Tokyo or its OS.
-The proposed owner is a host-private native-runtime resource; sessions receive
-only their own incarnation-scoped producer capability.
-The shared lifecycle contract must describe durable identity, command admission,
-shutdown proof, and cleanup receipts without systemd or Linux-specific fields.
-Tokyo's systemd adapter belongs in host wiring behind that contract; other hosts
-can provide another adapter, and unsupported hosts must fail closed.
-Before native effects, record the incarnation and its opaque adapter ownership
-reference. Fence it durably before stopping producers, then reconcile only its
-exact recorded resources and publish a durable receipt.
-Model containers gain no additional privileges; shared credential/renewal owners
-and retained workspaces stay outside per-session native cleanup.
-Current host startup owner-marker/name-prefix sweeps must be replaced with this
-exact ownership protocol before deployment. This is approved design direction,
-not an implemented or verified recovery capability.
-Independent host review also found port/UID-based process killing, recursive
-socket deletion, and mount-prefix lazy unmounts in `modules/endo-daemon.nix`.
-Daemon exit alone does not establish ownership or stop proof for these resources.
-The replacement must not retain these as fallback cleanup paths or inherit the
-existing unrestricted mount/umount sudo command surface.
-Verify pending launches and delegated descendants are stopped, and leave unknown
-resources untouched; unit inactivity alone is not a cleanup receipt.
+Automatic recovery remains blocked on that reconciliation: after a real restart
+even a legitimately absent scope currently lacks proof. For the current PR,
+use the bounded, verified operator-retirement cutover described in the separate
+investigation; do not require completion of the proposed producer architecture.
+If safe retirement cannot be established, retain the records and stop deployment.
+A privileged producer adapter was explored after conditional operator approval,
+but the expanded architecture was subsequently stopped for scope review.
+That proposed protocol is superseded as a current-PR direction by the separate
+native recovery investigation; it is not required before this PR can proceed.
+Existing broad host cleanup is not proven safe by this deferral. A bounded
+operator cutover must establish exact ownership and stopped producers before
+reclaiming recorded resources, preserving shared renewal owners and workspaces.
+Neither a particular new adapter nor replacement of all cleanup with its draft
+journal is prescribed. Unknown resources and uncertain stop outcomes stay intact.
 The runtime's exclusive owner symlink also lacked directory flushes.
 The local fix flushes directory ancestry before acquisition and the marker's
 directory before returning an effect-producing owner.
@@ -1366,6 +1308,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Separate native crash-recovery research from the current refactor | Dedicated investigation records evidence, retained-commit review, alternatives, and bounded continuation; prototypes isolated for draft tracking, not implementation approval; no deployment |
 | 2026-09-21 | Repair public native-controller/HTTP declarations and missing hosted-agent type dependency | Clean declarations and full docs pass (0 errors, 175 warnings); 7 HTTP and 44 asset-server tests pass; independently reviewed; incremental generation and native deployment remain pending |
 | 2026-09-21 | Correct OpenCode bridge and transcript declaration shapes | 26 focused tests and independent review pass; scoped lint has no errors and package docs convert; annotations only, no state or runtime behavior changes; not deployed |
 | 2026-09-21 | Scope API documentation checking to each package's production roots | Two regression tests and independent review pass; imported dependency errors remain visible; five missing entrypoints recovered; full docs still fails with 13 errors and 104 warnings |

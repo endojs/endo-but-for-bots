@@ -6,6 +6,10 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[hosted-native-recovery-investigation](hosted-native-recovery-investigation.md)
+(2026-09-21; Proposed M10 research follow-up, not a prerequisite architecture for
+PR #1248; one additional Proposed document, with no implementation estimate or
+change to milestone durations/critical path until the alternatives are reviewed),
 [Floot/backend architecture audit](../packages/floot/ARCHITECTURE-AUDIT.md)
 (2026-09-21; living FA-01–FA-13 remediation register within the existing hosted-agent
 sandbox unification scope; two reproduced context/history bugs, legacy retirement,
@@ -327,6 +331,7 @@ LLM-agent stack).*
 |--------|---------|---------|--------|
 | [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-21 | In Progress — phases 1 to 6 implemented; Claude and Codex pools deployed. Claude memory-only access tokens, direct usage and restart renewal passed two-account Tokyo acceptance at `00799f3f5`. Secondary Codex needs fresh login; live exhaustion handover and soak remain. |
 | [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-21 | In Progress — shared harness image deployment and broader conformance pending; [architecture audit/remediation register](../packages/floot/ARCHITECTURE-AUDIT.md) records open FA-01–FA-13 findings and compatibility-free retirement plan |
+| [hosted-native-recovery-investigation](hosted-native-recovery-investigation.md) | 2026-09-21 | 2026-09-21 | Proposed — separate research follow-up; producer architecture not selected |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
@@ -836,6 +841,8 @@ flowchart TD
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
         hsandbox[hosted-agent-sandbox-unification<br/><i>IN PROGRESS</i>]
+        hnrecovery[hosted-native-recovery-investigation<br/><i>PROPOSED FOLLOW-UP</i>]
+        hsandbox -. research follow-up .-> hnrecovery
         pfs[platform-fs<br/><i>COMPLETE</i>]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
@@ -1476,6 +1483,11 @@ inline cancel. Agent transcript memory is bounded.
 
 #### Milestone 10: Capability Confinement and Ecosystem
 
+Research follow-up: [hosted native recovery](hosted-native-recovery-investigation.md)
+is Proposed. Exit criterion: a reviewed, proportionate recovery policy/design with
+measured containment evidence. It is not an extra implementation prerequisite for
+the current hosted-agent PR; milestone duration and timeline are unchanged.
+
 (Was **Milestone 5** before the 2026-06-03 renumbering pass. Defers
 further behind the gateway substrate because process sandboxing,
 browser automation, and channel bridges are not on the critical path
@@ -1871,6 +1883,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
 | hosted-agent-sandbox-unification | L | 2-4 weeks (provisional, non-additive) | 10 | Refines the existing M10 sandbox envelope: compatibility, shared authority/lifecycle, three adapter migrations, and live conformance. Re-estimate after Phase 1; no additional critical-path duration assigned. |
+| hosted-native-recovery-investigation | Unestimated | Research decision first; no implementation duration assigned | 10 | Compare manual recovery, existing containment, and per-session services; separate follow-up, not added to M10 duration or timeline. |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
 | daemon-secret-manager | XL | 4-6 weeks | 10 | Endo-native singleton for arbitrary secret bytes, pluggable durable backend, `@secrets` management directory, ordinary `secrets` pet store, existing lookup/marshal formulas, audit, replacement, revocation, restart durability with a recorded crash-reconciliation gap, canary leak tests, and the Secret Blobs Space; capability possession is the only authorization; decomposes the secret-storage slice already included in daemon-capability-bank, so this estimate is not additive to that row |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
