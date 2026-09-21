@@ -10,6 +10,23 @@
 
 ## Implementation status
 
+### Shared harness development image — 2026-09-21
+
+Claude, Codex, and OpenCode now build separate CLI/bridge overlays on the shared
+`packages/hosted-agent/oci/dev` base: digest-pinned Node 22.23.2 on Bookworm slim,
+with the immutable 2026-09-20 Debian snapshot.
+The common tools include curl, Git, ripgrep, C/C++ build tools, Python, pip,
+venv, OpenSSL, and tar; Rust and Go are not added.
+CLI versions remain unchanged, and the credential-bearing provider worker stays
+separate from the development image.
+Builder regression tests cover Docker flags and reusable Podman image IDs.
+The base, Claude, and Codex images built on Tokyo; Claude passed an isolated
+tool inventory, Python virtualenv, and C compilation smoke test.
+OpenCode's build, Codex reproducibility verification, live restoration checks,
+and deployment remain pending disk-space cleanup approval.
+Tokyo still runs the previous image pins; the shared-image code is pushed to
+PR #1248 but is not a completed deployment.
+
 ### Session creation controls and public-network configuration — 2026-09-21
 
 The new-session dialog always exposes the available choices, including public
