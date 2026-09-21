@@ -5,6 +5,7 @@ import test from 'ava';
 import {
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -22,20 +23,25 @@ import { make as makeStateProviderModule } from '../src/codex-state-provider-mod
 const makeTmp = async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'codex-state-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
-  return dir;
+  return realpath(dir);
 };
 
 test('prepare creates an owned 0700 directory and is idempotent', async t => {
   const root = path.join(await makeTmp(t), 'state');
   const provider = makeCodexStateProvider({ stateRoot: root });
   const first = await provider.prepareSessionDirectory('codex-abc');
-  t.is(first.directory, path.join(root, 'codex-abc'));
+  t.is(
+    path.dirname(path.dirname(first.directory)),
+    path.join(root, 'native_allocations'),
+  );
+  t.is(path.basename(first.directory), 'data');
   // eslint-disable-next-line no-bitwise
   t.is((await stat(first.directory)).mode & 0o777, 0o700);
   // The marker lives beside the session directory, never inside it, so a guest
   // that gets the directory cannot delete or rewrite it.
   t.is(
-    (await readFile(path.join(root, '.owners', 'codex-abc'), 'utf8')).trim(),
+    JSON.parse(await readFile(path.join(root, '.owners', 'codex-abc'), 'utf8'))
+      .sessionId,
     'codex-abc',
   );
   const second = await provider.prepareSessionDirectory('codex-abc');
@@ -49,9 +55,9 @@ test('locate answers without creating anything', async t => {
   const provider = makeCodexStateProvider({ stateRoot: root });
   t.deepEqual(await provider.locateSessionDirectory('codex-abc'), {});
   await t.throwsAsync(stat(root));
-  await provider.prepareSessionDirectory('codex-abc');
+  const prepared = await provider.prepareSessionDirectory('codex-abc');
   t.deepEqual(await provider.locateSessionDirectory('codex-abc'), {
-    directory: path.join(root, 'codex-abc'),
+    directory: prepared.directory,
   });
 });
 
@@ -60,7 +66,10 @@ test('CLI home is separate from host records and both are removed together', asy
   const provider = makeCodexStateProvider({ stateRoot: root });
   const records = await provider.prepareSessionDirectory('codex-abc');
   const home = await provider.prepareCliDirectory('codex-abc');
-  t.is(home.directory, path.join(root, 'cli_homes', 'codex-abc'));
+  t.is(
+    path.dirname(path.dirname(home.directory)),
+    path.join(root, 'cli_homes', 'native_allocations'),
+  );
   await t.throwsAsync(provider.prepareSessionDirectory('cli_homes'), {
     message: /Invalid session id/,
   });
