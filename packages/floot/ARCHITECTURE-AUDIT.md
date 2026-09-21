@@ -69,7 +69,7 @@ No claim of complete retrospective coverage is made yet.
 | Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
 | Credential ownership and Secret rebinding | Owned pool bindings now retain actual capabilities and reject mutable-name rebinding. Surviving grants/facets and independent credential owners still need lifecycle enforcement. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
-| Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
+| Native teardown after reconstruction | Corrected locally: absent/failed scope lookup now refuses stop acknowledgement, and mount reclamation waits for sandbox close. Six injected-reconstruction tests pass independently. Runtime lookup still reads only an in-memory map. | Durable exact-owner reconciliation and actual process-loss tests required before deployment; a missing scope cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
@@ -95,6 +95,10 @@ calls that helper for incomplete creation and then reopens the existing schema.
 The factory currently ignores its context; it needs an explicit disposal hook,
 admission fence, and drain of creation, registry/submission writes, and journal
 queues before replacement can safely start.
+A production-factory test using a real daemon now reproduces early disposal
+acknowledgement while a voice-preferences persistence write is held open.
+The pending fix must cover all admitted factory/session work, not just that
+single write path.
 An incarnation-local registry does not establish cross-worker exclusion.
 The daemon barrier now rejects reconstruction while exact-formula disposal is
 pending or failed, including dependency cancellation.
@@ -114,6 +118,25 @@ during deletion, a late inspector read, and skipped cleanup after reclamation
 failure. The final tests cover these boundaries.
 The fences last only for the current daemon incarnation; native resources still
 require independent reconciliation after process loss.
+Native cleanup source review confirms that current Podman labels identify the
+runtime owner and a random operation, not a durably recorded session scope.
+Either missing reconstructed scope prevents native-stop acknowledgement.
+Missing sandbox closure proof also prevents mount reclamation; a missing broker
+scope does not prevent reclaiming the mount after the sandbox has closed.
+The native supervisor now fails closed when either original scope cannot be
+recovered, and awaits successful sandbox closure before recorded mount
+reclamation. Failed cleanup preserves the native record and storage for retry;
+already released owners are retained as such during a same-incarnation retry.
+Six new injected-reconstruction tests cover missing sandbox/broker scopes,
+null/rejected lookup, rejected close, storage retention, retry, and held-close
+ordering.
+These tests use the production session owner and supervisor, but are not an
+actual process-loss or Podman reconciliation test.
+Automatic reconciliation still requires recorded scope/incarnation identity
+and proof that old producers can no longer create resources.
+Broad container sweeps are not such proof.
+Deployment of this cleanup behavior remains blocked on that reconciliation:
+after a real restart even a legitimately absent scope currently lacks proof.
 Mount-inspection fix: the default recorded-cleanup socket check now treats only
 ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
 Ten focused tests pass, including vanished-entry success and both inspection

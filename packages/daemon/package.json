@@ -107,6 +107,7 @@
   },
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@endo/sha256": "workspace:^",
     "@types/ws": "^8.18.1",

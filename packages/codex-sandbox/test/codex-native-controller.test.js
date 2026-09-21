@@ -236,6 +236,9 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
     f.plan.sandboxSessionId,
   );
   const state = await makeCodexSessionState(records.directory);
+  const allocatedHome = await f.stateProvider.prepareCliDirectory(
+    f.plan.sandboxSessionId,
+  );
   await state.writeThread(
     harden({
       threadId: 'prior-thread',
@@ -259,10 +262,7 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
     mount => mount.role === 'codex-state',
   );
   t.is(home.kind, 'bind');
-  t.is(
-    home.source,
-    join(f.root, 'state', 'cli_homes', f.plan.sandboxSessionId),
-  );
+  t.is(home.source, allocatedHome.directory);
   t.false(
     options.policy.mounts.some(mount => mount.source === records.directory),
   );
