@@ -51,7 +51,7 @@ no retained formula referring to it.
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Open |
-| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Open |
+| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | OpenCode broker wrapper removed locally; credential shims pending |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
@@ -389,9 +389,15 @@ Current construction uses the shared hosted-agent entrypoint.
 Recreate retained formulas against that entrypoint before deleting the wrappers.
 Preserve the underlying Secrets blobs and single renewal ownership.
 
-The OpenCode `src/opencode-broker-service.js` wrapper is also a removal candidate:
-the current broker agent uses the shared service kit directly; the wrapper remains exported
-and tested independently.
+The OpenCode `src/opencode-broker-service.js` wrapper and its package export are removed.
+The current broker agent already uses the shared service kit directly.
+All seven lifecycle/authority regression tests now exercise that shared kit with
+the explicit OpenCode policy, account, and label; no replacement wrapper was added.
+Repository search found no remaining production callers of the removed export.
+Thirteen focused service/entrypoint tests and all 218 OpenCode package tests pass
+locally with Unix-socket permissions; restricted execution hit three `EPERM`
+socket failures before the unrestricted rerun passed.
+Package ESLint reports zero errors and 36 warnings; deployment is pending.
 Do not infer deadness for all wrappers: current controllers still use `parse-rootfs.js`.
 
 Completion: retained formulas and current callers reference current entrypoints, and removed
@@ -650,6 +656,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Gated old-session retirement (`9e062aa`) | Six helper tests and adversarial review; recovered failed old worker; six stops acknowledged, external resources absent, six records removed; archived roots and Secret identities unchanged; broker retirement/activation/acceptance pending |
 | 2026-09-21 | Broker and legacy retirement (`88c5114`, `e303296`) and coordinated generation 157 | Reviewed helpers: five/four tests; 22 broker bindings and four obsolete formulas retired; old daemon stopped; app `056310a75` plus host `e303296` activated; six Secrets/archive roots preserved; cross-backend acceptance in progress |
 | 2026-09-21 | Reject incomplete restoration coverage (`f502c87`) | Eight tests and adversarial review; fresh three-backend live acceptance started, results pending |
+| 2026-09-21 | FA-12: remove unused OpenCode broker-service wrapper/export | Seven authority/lifecycle tests retained against shared kit; 218 package tests pass with socket permissions; ESLint zero errors/36 warnings; no broker or credential identity changes; not yet deployed |
 
 ## Request
 

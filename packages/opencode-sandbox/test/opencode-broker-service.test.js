@@ -4,13 +4,14 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 
 import {
   OPENCODE_BROKER_ACCOUNT,
   OPENROUTER_INFERENCE_PATH,
   OPENROUTER_ORIGIN,
+  buildOpencodeBrokerPolicy,
 } from '../src/opencode-broker.js';
-import { makeOpencodeBrokerServiceKit } from '../src/opencode-broker-service.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const model = 'deepseek/deepseek-v4.1-flash';
@@ -98,7 +99,9 @@ const fixture = () => {
     imageRef: `localhost/opencode-sandbox@${digest}`,
     imageDigest: digest,
     listenerImageRef: `localhost/endo-provider@${digest}`,
-    models: [model],
+    label: 'OpenCode',
+    policy: buildOpencodeBrokerPolicy({ models: [model] }),
+    accountRef: OPENCODE_BROKER_ACCOUNT,
     fetch: async () => new Response('ok'),
     runtime,
   };
@@ -130,7 +133,7 @@ const request = endpoint =>
 
 test('operator service and returned scopes are inert until explicit startup', async t => {
   const f = fixture();
-  const kit = makeOpencodeBrokerServiceKit(f.options);
+  const kit = makeProviderBrokerServiceKit(f.options);
   t.teardown(kit.close);
   const a = await E(kit.service).provideScope('a', spec);
   t.is(await E(kit.service).lookupScope('a'), a);
@@ -150,7 +153,7 @@ test('operator service and returned scopes are inert until explicit startup', as
 
 test('session A revocation preserves B and uses the original shared credential', async t => {
   const f = fixture();
-  const kit = makeOpencodeBrokerServiceKit(f.options);
+  const kit = makeProviderBrokerServiceKit(f.options);
   t.teardown(kit.close);
   const a = await E(kit.service).provideScope('a', spec);
   const b = await E(kit.service).provideScope('b', spec);
@@ -181,7 +184,7 @@ test('operator close reaches cancellation-dependent shared opening', async t => 
   const opened = gate();
   const cancelled = gate();
   let closes = 0;
-  const kit = makeOpencodeBrokerServiceKit({
+  const kit = makeProviderBrokerServiceKit({
     ...f.options,
     runtime: undefined,
     runtimeKit: {
@@ -222,7 +225,7 @@ test('operator close retains late listener acquisition and immediately revokes a
     entered.release();
     await held.promise;
   });
-  const kit = makeOpencodeBrokerServiceKit(f.options);
+  const kit = makeProviderBrokerServiceKit(f.options);
   t.teardown(async () => {
     held.release();
     await kit.close();
@@ -254,7 +257,7 @@ test('failed scoped cleanup is recoverable without closing the operator or sessi
   f.onStop(async ordinal => {
     if (ordinal === 0 && failA) throw Error('A cleanup failed');
   });
-  const kit = makeOpencodeBrokerServiceKit(f.options);
+  const kit = makeProviderBrokerServiceKit(f.options);
   t.teardown(async () => {
     failA = false;
     await kit.close();
@@ -279,7 +282,7 @@ test('failed operator cleanup retries without repeating successful scope cleanup
   f.onClose(async () => {
     if (failClose) throw Error('Runtime cleanup failed');
   });
-  const kit = makeOpencodeBrokerServiceKit(f.options);
+  const kit = makeProviderBrokerServiceKit(f.options);
   t.teardown(async () => {
     failClose = false;
     await kit.close();
@@ -304,7 +307,7 @@ test('failed issuer construction and runtime cleanup retain the operator close h
   f.onClose(async () => {
     if (failClose) throw Error('Runtime cleanup failed');
   });
-  const kit = makeOpencodeBrokerServiceKit({
+  const kit = makeProviderBrokerServiceKit({
     ...f.options,
     makeIssuer: () => {
       throw Error('Issuer construction failed');
