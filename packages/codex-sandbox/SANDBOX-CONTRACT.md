@@ -38,15 +38,17 @@ Endo records remain outside that domain.
   `hostHome: "none"`, `credentialInjection: "broker-only"`, and
   `brokerTransport: "loopback-sidecar"`, and `descendantReaping: true`;
   unknown attestation fields are rejected.
-- The mount table has five fixed entries, all `nosuid,nodev`: a session
+- The mount table has four fixed entries, all `nosuid,nodev`: a session
   workspace `workspace:<sessionId>` at `/workspace`; a credential-free,
   session-durable `codex-state:<sessionId>` host bind of the session's own
   state directory at `/codex-home` (a directory the session storage owner
   holds; there is no Podman volume, quota or lease — see `DURABLE-VOLUMES.md`);
-  and bounded per-slice tmpfs mounts at `/tmp`, `/run`, and `/scratch`. A
+  and bounded per-slice tmpfs mounts at `/tmp` (1 GiB) and `/run` (256 MiB).
+  Like the Claude and OpenCode runners, Codex uses `/tmp` for temporary work;
+  there is no separate `/scratch` mount. A
   `public-internet` session adds one declared row, `resolver:public`, the
   generated read-only `/etc/resolv.conf` (see `NETWORK-POLICY.md`).
-- Beyond those five, the table carries exactly the **runtime attaches** the
+- Beyond those four, the table carries exactly the **runtime attaches** the
   session spec declares (`containerMounts`), each reported as `attach:<key>`
   at a destination under `/mnt/` in its declared `ro` or `rw` mode. An attach
   is a bind of a host mountpoint at which an operator-held bridge serves a
