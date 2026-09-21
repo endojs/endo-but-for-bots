@@ -81,7 +81,10 @@ import {
   recoverTurnTranscript,
   transcriptToProviderMessages,
 } from './src/transcript-projection.js';
-import { providePrivateTurnStorage } from './src/private-turn-storage.js';
+import {
+  createPrivateTurnStorage,
+  providePrivateTurnStorage,
+} from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
@@ -581,7 +584,6 @@ const provisionPresetObjects = async (
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
  * @param {any} [options.journalPowers] - Factory-private journal storage. Standalone callers that omit this retain cooperative guest storage.
- * @param {any} [options.journalMigration] - Private legacy-import acknowledgement capability.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
@@ -637,7 +639,6 @@ export const makeStreamingAgent = async (
     extraTools,
     hostedContinuity,
     journalPowers = powers,
-    journalMigration,
     onChange,
   } = {},
 ) => {
@@ -687,9 +688,7 @@ export const makeStreamingAgent = async (
   const effectivePrompt =
     systemPrompt || composePresetPrompt({ presetId: 'general' });
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
-  const turnJournal = makeTurnJournal(journalPowers, {
-    migration: journalMigration,
-  });
+  const turnJournal = makeTurnJournal(journalPowers);
   // Validate persisted evidence before installing a backend or starting inbox work.
   await turnJournal.list();
   let activeJournalTurn;
@@ -1686,20 +1685,13 @@ export const makeStreamingAgent = async (
   const inboxStopped = new Promise(resolve => {
     signalInboxStopped = resolve;
   });
-  let signalJournalRecovery;
-  let journalRecovery = new Promise(resolve => {
-    signalJournalRecovery = resolve;
-  });
-  const waitForJournalRecovery = async () => {
-    while (!stopped && !quarantineError) {
-      // Capture before the read so a concurrent acknowledgement cannot be lost.
-      const wake = journalRecovery;
-      try {
-        await turnJournal.assertReady();
-        return;
-      } catch {
-        await Promise.race([wake, inboxStopped]);
-      }
+  const waitForJournalReadiness = async () => {
+    try {
+      await turnJournal.assertReady();
+    } catch {
+      // An uncertain write poisons this incarnation. Operator resolution
+      // cannot repair it; leave mail pending until shutdown and revival.
+      await inboxStopped;
     }
   };
   /** Wakes the mail worker; rebound when a pump starts. */
@@ -1780,9 +1772,8 @@ export const makeStreamingAgent = async (
             pendingMail.shift()
           );
           try {
-            // Keep queued mail intact while an operator verifies recovery.
-            // Waiting outside turnChain leaves resolveTurn free to unblock us.
-            await waitForJournalRecovery();
+            // Keep queued mail intact if this journal incarnation is poisoned.
+            await waitForJournalReadiness();
             if (stopped || quarantineError) return;
             const { writer, done: turnDone } = makeBufferingWriter();
             // Route through converse so the turn joins turnChain and shares
@@ -2128,8 +2119,6 @@ export const makeStreamingAgent = async (
     );
     return [...byId.values()].sort((left, right) => {
       if (left.turnId === right.turnId) return 0;
-      if (left.turnId === 'legacy-import') return -1;
-      if (right.turnId === 'legacy-import') return 1;
       return BigInt(left.turnId) < BigInt(right.turnId) ? -1 : 1;
     });
   };
@@ -2374,10 +2363,6 @@ export const makeStreamingAgent = async (
       if (activeJournalTurn || executingTools.size)
         throw Error('Cannot resolve an active Floot turn or unsettled tool');
       await turnJournal.resolve(turnId, note);
-      signalJournalRecovery();
-      journalRecovery = new Promise(resolve => {
-        signalJournalRecovery = resolve;
-      });
       notifyChange('turn-resolved');
     });
 
@@ -2395,13 +2380,7 @@ export const makeStreamingAgent = async (
     let sum = projectUsage(undefined);
     let count = 0;
     for (const turn of turns) {
-      // The synthetic record of a journal imported from before journals is
-      // not a turn anybody ran.
-      if (
-        turn.terminal &&
-        turn.state !== 'completed' &&
-        turn.turnId !== 'legacy-import'
-      ) {
+      if (turn.terminal && turn.state !== 'completed') {
         count += 1;
         sum = addUsage(sum, turn.usage);
       }
@@ -3726,7 +3705,21 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const stopFences = new Set();
   const stopFlights = new Map();
   const resumeTokens = new Map();
+  const creatingIds = new Set();
+  // Synchronous allocation makes concurrent IDs distinct even if the clock
+  // and random prefix repeat. Durable namespaces still guard reincarnations.
+  let creationOrdinal = 0n;
+  // Retain this fence after an uncertain first registry write. Only revival
+  // from a durable snapshot may recover that creation in another incarnation.
+  const publicationFences = new Set();
+  const assertPublished = id => {
+    if (publicationFences.has(id))
+      throw Error(
+        'Session initial registry publication is pending or uncertain',
+      );
+  };
   const assertSessionAdmission = id => {
+    assertPublished(id);
     const entry = (registry || []).find(session => session.id === id);
     if (
       stopFences.has(id) ||
@@ -3918,6 +3911,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return result;
   };
   const getAgent = (id, { observeOnly = false } = {}) => {
+    assertPublished(id);
     if (!observeOnly) assertSessionAdmission(id);
     if (networkChanges.has(id))
       throw Error('Network policy change in progress');
@@ -3931,6 +3925,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       let runningTurn;
       agentP = (async () => {
         const host = getHost();
+        const journalPowers = await providePrivateTurnStorage(host, id);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
         const handleName = `session-${id}`;
@@ -3941,15 +3936,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // control methods. So we pass an explicit agentName and look the
         // controlling *agent* up by that name to get the full guest facet for
         // the session's powers (the same agent fae runs its driver against).
-        const legacyRequired = await E(host).has(agentName);
         await E(host).provideGuest(handleName, { agentName });
         const sessionGuest = await E(host).lookup(agentName);
-        const journalKit = await providePrivateTurnStorage(
-          host,
-          id,
-          sessionGuest,
-          { legacyRequired },
-        );
         // Introduce the user to the session under the petname "user" so the
         // agent can mail them directly (send/reply target "user"). The factory
         // host's own "@host" is the user — the @agent that provisioned the
@@ -4212,8 +4200,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sessionPrompt,
           harden({
             maxToolRounds,
-            journalPowers: journalKit.storage,
-            journalMigration: journalKit.migration,
+            journalPowers,
             backendId: entry?.backendId || 'provider',
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
@@ -4309,6 +4296,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const facets = new Map();
   const assertSessionReady = async id => {
     await loadRegistry();
+    assertPublished(id);
     const entry = (registry || []).find(session => session.id === id);
     if (!entry) throw Error(`Unknown session "${id}".`);
     if ((entry.lifecycle || 'ready') !== 'ready') {
@@ -4836,7 +4824,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const provisionSession = async options => {
     await loadRegistry();
     const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
-    const id = newSessionId();
+    const id = `${newSessionId()}-${creationOrdinal.toString(36)}`;
+    creationOrdinal += 1n;
     const { parentSessionId, subagentName, subagentDepth } = options;
     const delegationFields =
       parentSessionId === undefined
@@ -4984,8 +4973,26 @@ export const make = (hostPowers, _context, { env } = {}) => {
           ? { model: selectedModel }
           : {}),
     });
-    /** @type {any[]} */ (registry).push(entry);
-    await saveRegistry();
+    // Claim the ID before asynchronous namespace checks. Petstore writes are
+    // not compare-and-swap, so random IDs alone cannot serialize collisions.
+    if (creatingIds.has(id) || (registry || []).some(item => item.id === id))
+      throw Error('Session ID already exists');
+    creatingIds.add(id);
+    try {
+      const host = getHost();
+      if (
+        (await E(host).has(`session-${id}`)) ||
+        (await E(host).has(`session-agent-${id}`))
+      )
+        throw Error('Session guest bindings already exist');
+      await createPrivateTurnStorage(host, id);
+      publicationFences.add(id);
+      /** @type {any[]} */ (registry).push(entry);
+      await saveRegistry();
+      publicationFences.delete(id);
+    } finally {
+      creatingIds.delete(id);
+    }
     // Build the agent now so the new session immediately follows its inbox
     // (addressable by mail without waiting for a first UI turn) and its
     // preset objects are provisioned up front.
@@ -5065,6 +5072,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
    */
   const releaseSession = async id => {
     await loadRegistry();
+    assertPublished(id);
     const index = (registry || []).findIndex(session => session.id === id);
     if (index === -1) throw Error(`Unknown session "${id}".`);
     const children = (registry || []).filter(
@@ -5541,6 +5549,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     async renameSession(id, title) {
       await loadRegistry();
+      assertPublished(id);
       const reg = registry || [];
       const idx = reg.findIndex(s => s.id === id);
       if (idx === -1) throw new Error(`Unknown session "${id}".`);

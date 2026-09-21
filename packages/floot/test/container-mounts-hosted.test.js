@@ -185,6 +185,10 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
   hostStore.set(
+    'floot-private-turn-3-one-schema',
+    harden({ version: 1, sessionId: 'one' }),
+  );
+  hostStore.set(
     'floot-sessions-v1-00000000000000000000',
     harden({
       version: 1,
@@ -329,16 +333,6 @@ const runTurn = async (factory, world) => {
   await world.finishTools();
   world.setFactory(factory);
   const session = await E(factory).getSession('one');
-  // These mount fixtures predate private journals. Acknowledge their imported
-  // empty history explicitly; this suite exercises mounts, not migration UX.
-  const imported = (await E(session).getTurns()).find(
-    turn => turn.turnId === 'legacy-import' && !turn.resolution,
-  );
-  if (imported)
-    await E(session).resolveTurn(
-      'legacy-import',
-      'Fixture has no prior external effects',
-    );
   const turn = await E(session).startTurn('hello');
   /** @type {any[]} */
   const events = [];

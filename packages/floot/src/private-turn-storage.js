@@ -3,41 +3,67 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
-const EVENT_PREFIX = 'floot-turn-event-';
+/** @param {string} sessionId */
+const privatePrefix = sessionId => {
+  (typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) ||
+    Fail`Invalid journal session ID`;
+  // The length disambiguates IDs that are prefixes of other session IDs.
+  return `floot-private-turn-${sessionId.length}-${sessionId}-`;
+};
 
 /**
- * Factory-owned journal storage. Never introduce this facet into a guest.
+ * Create a new journal namespace, never adopt or overwrite an existing one.
+ * The factory must reserve this ID and check registry/guest aliases first.
+ * These checks require one factory writer, not concurrent independent factories.
+ * A rejected write may have committed: retain that namespace for inspection,
+ * and use a new ID for the next creation attempt.
+ *
+ * @param {any} host
+ * @param {string} sessionId
+ */
+export const createPrivateTurnStorage = async (host, sessionId) => {
+  const prefix = privatePrefix(sessionId);
+  const names = await E(host).list();
+  !names.some(name => name.startsWith(prefix)) ||
+    Fail`Private journal namespace already exists`;
+  await E(host).storeValue(
+    harden({ version: 1, sessionId }),
+    `${prefix}schema`,
+  );
+};
+harden(createPrivateTurnStorage);
+
+/**
+ * Open factory-owned journal storage. Never introduce this facet into a guest.
  * Full-control administrators holding the factory host remain trusted: this
  * separates ordinary guests, not principals deliberately granted that host.
- * Migration preserves already-copied values, but legacy provenance is untrusted;
- * a names-only manifest cannot freeze source edits across interrupted copies.
+ * Opening never imports guest history or creates missing schema.
  * One factory writer per session is required.
  *
  * @param {any} host
  * @param {string} sessionId
- * @param {any} legacyGuest
- * @param {{ legacyRequired?: boolean }} [options] - Set for every preexisting
- * guest, even if its model-writable journal has been erased completely.
  */
-export const providePrivateTurnStorage = async (
-  host,
-  sessionId,
-  legacyGuest,
-  { legacyRequired = false } = {},
-) => {
-  typeof legacyRequired === 'boolean' ||
-    Fail`Invalid legacy journal provenance`;
-  /^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || Fail`Invalid journal session ID`;
-  // The length disambiguates IDs that are prefixes of other session IDs.
-  const prefix = `floot-private-turn-${sessionId.length}-${sessionId}-`;
-  const manifestName = `${prefix}migration-manifest`;
-  const readyName = `${prefix}migration-ready`;
-  const resolutionName = `${prefix}migration-resolution`;
+export const providePrivateTurnStorage = async (host, sessionId) => {
+  const prefix = privatePrefix(sessionId);
   const names = new Set(await E(host).list());
+  ![...names].some(name => name.startsWith(`${prefix}migration-`)) ||
+    Fail`Legacy private journal requires session reset`;
+  const schemaName = `${prefix}schema`;
+  names.has(schemaName) ||
+    Fail`Private journal schema missing; session reset required`;
+  const schema = await E(host).lookup(schemaName);
+  (schema !== null &&
+    typeof schema === 'object' &&
+    !Array.isArray(schema) &&
+    Reflect.ownKeys(schema).length === 2 &&
+    Object.hasOwn(schema, 'version') &&
+    Object.hasOwn(schema, 'sessionId') &&
+    schema.version === 1 &&
+    schema.sessionId === sessionId) ||
+    Fail`Invalid private journal schema; session reset required`;
   /**
-   * The names the journal owns: events, the content values records refer to,
-   * snapshots, and archive chunks (see `turn-journal.js`). Nothing else
-   * reaches the factory host through this facet.
+   * Events, content values, snapshots, and archive chunks are the only names
+   * reaching the factory host through this facet (see `turn-journal.js`).
    *
    * @param {unknown} name
    */
@@ -49,72 +75,6 @@ export const providePrivateTurnStorage = async (
       Fail`Invalid private journal value name`;
     return /** @type {string} */ (name);
   };
-  /** @type {{ names: string[], required: boolean }} */
-  let anchor;
-  if (names.has(manifestName)) {
-    anchor = await E(host).lookup(manifestName);
-  } else {
-    // Orphaned private writes without a manifest cannot safely establish a new
-    // migration baseline. Fail closed instead of adopting them.
-    ![...names].some(name => name.startsWith(prefix)) ||
-      Fail`Private journal migration anchor missing`;
-    /** @type {string[]} */
-    const importedNames = (await E(legacyGuest).list())
-      .filter(name => typeof name === 'string' && name.startsWith(EVENT_PREFIX))
-      .sort();
-    anchor = {
-      names: importedNames,
-      required: legacyRequired || importedNames.length > 0,
-    };
-  }
-  (anchor && typeof anchor.required === 'boolean') ||
-    Fail`Invalid private journal migration provenance`;
-  const manifest = anchor.names;
-  (Array.isArray(manifest) && manifest.length <= 10_000) ||
-    Fail`Invalid private journal migration manifest`;
-  anchor.required ||
-    manifest.length === 0 ||
-    Fail`Legacy journal evidence requires migration acknowledgment`;
-  manifest.forEach((name, index) => {
-    name === `${EVENT_PREFIX}${`${index + 1}`.padStart(20, '0')}` ||
-      Fail`Legacy turn journal sequence is missing or malformed`;
-  });
-  if (!names.has(manifestName)) {
-    await E(host).storeValue(harden(anchor), manifestName);
-    names.add(manifestName);
-  }
-  if (!names.has(readyName)) {
-    for (const name of manifest) {
-      const target = `${prefix}${name}`;
-      if (!names.has(target)) {
-        // A lost acknowledgement is recovered by testing target presence on
-        // the next incarnation; never replace an immutable copied event.
-        // Sequential copying bounds memory and makes the durable prefix clear.
-        // eslint-disable-next-line no-await-in-loop
-        const value = await E(legacyGuest).lookup(name);
-        // eslint-disable-next-line no-await-in-loop
-        await E(host).storeValue(value, target);
-        names.add(target);
-      }
-    }
-    await E(host).storeValue(true, readyName);
-    names.add(readyName);
-  } else {
-    (await E(host).lookup(readyName)) === true ||
-      Fail`Invalid private journal migration anchor`;
-    manifest.every(name => names.has(`${prefix}${name}`)) ||
-      Fail`Private journal migration lost an imported event`;
-  }
-  let resolution = names.has(resolutionName)
-    ? await E(host).lookup(resolutionName)
-    : undefined;
-  const assertNote = note => {
-    (typeof note === 'string' &&
-      note.trim().length > 0 &&
-      note.length <= 8192) ||
-      Fail`Migration resolution requires a nonempty note of at most 8192 characters`;
-  };
-  if (resolution !== undefined) assertNote(resolution);
   let poisoned = false;
   let queue = Promise.resolve();
   /** @param {() => Promise<any>} operation */
@@ -129,20 +89,7 @@ export const providePrivateTurnStorage = async (
     );
     return result;
   };
-  /**
-   * @param {unknown} value
-   * @param {string} name
-   */
-  const store = async (value, name) => {
-    try {
-      await E(host).storeValue(value, name);
-      names.add(name);
-    } catch (error) {
-      poisoned = true;
-      throw error;
-    }
-  };
-  const storage = Far('FactoryPrivateTurnStorage', {
+  return Far('FactoryPrivateTurnStorage', {
     list: () =>
       serialized(async () =>
         harden(
@@ -159,11 +106,16 @@ export const providePrivateTurnStorage = async (
       serialized(async () => {
         const target = `${prefix}${assertJournalName(name)}`;
         !names.has(target) || Fail`Private journal values are immutable`;
-        await store(value, target);
+        try {
+          await E(host).storeValue(value, target);
+          names.add(target);
+        } catch (error) {
+          poisoned = true;
+          throw error;
+        }
       }),
-    // A removal is never ambiguous about the history: the journal removes
-    // only what a durable snapshot already covers, so a failure here costs a
-    // stray value and nothing else, and does not poison.
+    // The journal removes only what a durable snapshot already covers. A
+    // failure costs a stray value, not ambiguous history, and does not poison.
     remove: name =>
       serialized(async () => {
         const target = `${prefix}${assertJournalName(name)}`;
@@ -172,24 +124,5 @@ export const providePrivateTurnStorage = async (
         names.delete(target);
       }),
   });
-  const migration = harden({
-    status: () =>
-      serialized(async () =>
-        harden({
-          required: anchor.required,
-          ...(resolution === undefined ? {} : { resolution }),
-        }),
-      ),
-    resolve: note =>
-      serialized(async () => {
-        assertNote(note);
-        anchor.required || Fail`No legacy journal migration to resolve`;
-        resolution === undefined ||
-          Fail`Legacy journal migration already resolved`;
-        await store(note, resolutionName);
-        resolution = note;
-      }),
-  });
-  return harden({ storage, migration });
 };
 harden(providePrivateTurnStorage);

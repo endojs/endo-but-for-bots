@@ -60,6 +60,11 @@ const makeWorld = existingStore => {
   const hostStore = existingStore || new Map();
   if (!existingStore)
     hostStore.set(
+      'floot-private-turn-3-one-schema',
+      harden({ version: 1, sessionId: 'one' }),
+    );
+  if (!existingStore)
+    hostStore.set(
       'floot-sessions-v1-00000000000000000000',
       harden({
         version: 1,

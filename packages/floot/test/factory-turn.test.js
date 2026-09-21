@@ -81,6 +81,12 @@ test('factory facets retain disconnected turns, commit history, and provision de
   });
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
+  for (const sessionId of ['one', 'legacy']) {
+    hostStore.set(
+      `floot-private-turn-${sessionId.length}-${sessionId}-schema`,
+      harden({ version: 1, sessionId }),
+    );
+  }
   hostStore.set(
     'floot-sessions-v1-00000000000000000000',
     harden({

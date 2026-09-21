@@ -146,9 +146,8 @@ const assertContentRef = ref => {
  * and `floot-turn-archive-<n>` for settled turns beyond the retained window.
  *
  * @param {any} powers
- * @param {{ migration?: any }} [options]
  */
-export const makeTurnJournal = (powers, { migration } = {}) => {
+export const makeTurnJournal = powers => {
   /** @type {Map<string, any>} */
   const records = new Map();
   let next = 1n;
@@ -164,10 +163,6 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
   let initialized = false;
   let poisoned = false;
   let queue = Promise.resolve();
-  let migrationStatus = {
-    required: false,
-    resolution: /** @type {string | undefined} */ (undefined),
-  };
 
   /**
    * @param {any} event
@@ -347,7 +342,6 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
 
   const initialize = async () => {
     if (initialized) return;
-    if (migration) migrationStatus = await E(migration).status();
     names = new Set(
       (await E(powers).list()).filter(name => typeof name === 'string'),
     );
@@ -397,15 +391,6 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
       () => undefined,
     );
     return result;
-  };
-
-  const assertUnfenced = () => {
-    !migrationStatus.required ||
-      migrationStatus.resolution ||
-      Fail`Verify the imported legacy journal before dispatching another turn`;
-    // Unknown historical effects are evidence, not a session-wide admission
-    // lock. New work gets a new dispatch; nothing here retries the old one.
-    // Storage poison and live runtime containment are independent barriers.
   };
 
   /**
@@ -559,7 +544,8 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
     /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string }} options */
     begin: options =>
       serialized(async () => {
-        assertUnfenced();
+        // Unknown historical effects are evidence, not a session-wide
+        // admission lock. New work does not retry any recovered dispatch.
         ![...records.values()].some(record => record.state === 'pending') ||
           Fail`A turn is already active`;
         const turnId = `${next}`;
@@ -594,32 +580,7 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
      */
     list: () =>
       serialized(async () =>
-        harden(
-          JSON.parse(
-            JSON.stringify([
-              ...(migrationStatus.required
-                ? [
-                    {
-                      turnId: 'legacy-import',
-                      input: 'Verify imported legacy journal evidence',
-                      backendId: 'migration',
-                      modelId: '',
-                      state: 'outcome-unknown',
-                      terminal: true,
-                      tools: [],
-                      activity: [],
-                      error:
-                        'This journal was imported from model-writable storage. Independently verify external effects before acknowledging; imported records are not authenticated evidence.',
-                      ...(migrationStatus.resolution
-                        ? { resolution: migrationStatus.resolution }
-                        : {}),
-                    },
-                  ]
-                : []),
-              ...records.values(),
-            ]),
-          ),
-        ),
+        harden(JSON.parse(JSON.stringify([...records.values()]))),
       ),
     /**
      * Settled turns beyond the retained window, oldest first, read from
@@ -662,30 +623,14 @@ export const makeTurnJournal = (powers, { migration } = {}) => {
           archivedTurns,
         }),
       ),
-    assertReady: () =>
-      serialized(async () => {
-        assertUnfenced();
-      }),
+    // This barrier still initializes storage and observes any prior failure.
+    assertReady: () => serialized(async () => undefined),
     /**
      * @param {string} turnId
      * @param {string} note
      */
     resolve: (turnId, note) =>
       serialized(async () => {
-        if (turnId === 'legacy-import') {
-          (migrationStatus.required && !migrationStatus.resolution) ||
-            Fail`No unresolved legacy journal import`;
-          assertText(note, 8192);
-          note.trim().length > 0 || Fail`Resolution note must not be blank`;
-          try {
-            await E(migration).resolve(note);
-          } catch (error) {
-            poisoned = true;
-            throw error;
-          }
-          migrationStatus = { required: true, resolution: note };
-          return;
-        }
         assertText(note, 8192);
         note.trim().length > 0 || Fail`Resolution note must not be blank`;
         await write({ type: 'resolve', turnId, note });

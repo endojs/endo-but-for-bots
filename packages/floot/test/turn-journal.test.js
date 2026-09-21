@@ -112,12 +112,19 @@ test('prepared transitions wait for storage and serialize following reads', asyn
     readFinished = true;
     return record;
   });
+  let readyFinished = false;
+  const ready = journal.assertReady().then(() => {
+    readyFinished = true;
+  });
   await Promise.resolve();
   t.false(readFinished);
+  t.false(readyFinished);
   t.is(store.size, 1);
   release();
   await intent;
   t.is((await read).tools[0].callId, 'a');
+  await ready;
+  t.true(readyFinished);
   await journal.append(id, { type: 'tool-result', callId: 'a', result: 'ok' });
   t.is((await journal.get(id)).tools[0].result, 'ok');
 });
@@ -148,53 +155,44 @@ test('lost result acknowledgement poisons prepared writer and revival reads comm
   t.true(recovered.tools[0].settled);
 });
 
-test('legacy import acknowledgement is independent of event capacity and unknown turns', async t => {
+test('readiness preserves unresolved outcomes without synthesizing migration records', async t => {
   const { powers } = fixture();
   const pending = await makeTurnJournal(powers).begin(options);
-  let resolution;
-  const migration = Far('Migration', {
-    status: () =>
-      harden({ required: true, ...(resolution ? { resolution } : {}) }),
-    resolve: note => {
-      resolution = note;
-    },
-  });
-  const journal = makeTurnJournal(powers, { migration });
-  t.is((await journal.list())[0].turnId, 'legacy-import');
-  await t.throwsAsync(journal.begin(options), { message: /imported legacy/ });
-  await t.throwsAsync(journal.resolve('legacy-import', '   '));
-  const before = await journal.status();
-  await journal.resolve(
-    'legacy-import',
-    'Checked the external system independently',
-  );
-  t.deepEqual(await journal.status(), before);
+  const journal = makeTurnJournal(powers);
   await journal.assertReady();
+  t.deepEqual(
+    (await journal.list()).map(record => record.turnId),
+    [pending],
+  );
+  t.is((await journal.get(pending)).state, 'outcome-unknown');
+  const before = await journal.status();
+  await t.throwsAsync(journal.resolve('legacy-import', 'Checked'), {
+    message: /Unknown turn journal turn/,
+  });
+  await t.throwsAsync(journal.resolve(pending, '   '), {
+    message: /Resolution note must not be blank/,
+  });
+  t.deepEqual(await journal.status(), before);
   await journal.resolve(pending, 'No external effects occurred');
   await journal.assertReady();
-  const revived = makeTurnJournal(powers, { migration });
+  const revived = makeTurnJournal(powers);
   await revived.assertReady();
-  t.is((await revived.list())[0].resolution, resolution);
+  t.is((await revived.get(pending)).resolution, 'No external effects occurred');
+  t.not(await revived.begin(options), pending);
 });
 
-test('legacy acknowledgement loss poisons only the current incarnation', async t => {
-  const { powers } = fixture();
-  let resolution;
-  const migration = Far('Migration', {
-    status: () =>
-      harden({ required: true, ...(resolution ? { resolution } : {}) }),
-    resolve: note => {
-      resolution = note;
-      throw Error('Lost acknowledgement');
-    },
+test('resolution acknowledgement loss poisons readiness while revival keeps the resolution', async t => {
+  const f = fixture();
+  const pending = await makeTurnJournal(f.powers).begin(options);
+  const journal = makeTurnJournal(f.powers);
+  f.fail();
+  await t.throwsAsync(journal.resolve(pending, 'External effects checked'), {
+    message: /Lost acknowledgement/,
   });
-  const journal = makeTurnJournal(powers, { migration });
-  await t.throwsAsync(
-    journal.resolve('legacy-import', 'External effects checked'),
-  );
   await t.throwsAsync(journal.assertReady(), { message: /uncertain storage/ });
-  await makeTurnJournal(powers, { migration }).assertReady();
-  t.pass();
+  const revived = makeTurnJournal(f.powers);
+  await revived.assertReady();
+  t.is((await revived.get(pending)).resolution, 'External effects checked');
 });
 
 test('empty input and backend-default model are valid, optional usage is omitted', async t => {
@@ -423,8 +421,13 @@ test('missing journal events fail closed instead of loading a newer suffix', asy
     error: 'Unavailable',
   });
   f.store.delete([...f.store.keys()][0]);
-  await t.throwsAsync(makeTurnJournal(f.powers).list(), {
+  const recovered = makeTurnJournal(f.powers);
+  await t.throwsAsync(recovered.assertReady(), {
     message: /missing or malformed/,
+  });
+  await t.throwsAsync(recovered.list(), { message: /uncertain storage/ });
+  await t.throwsAsync(recovered.assertReady(), {
+    message: /uncertain storage/,
   });
 });
 

@@ -433,7 +433,8 @@ No live state was modified; deployment and post-deploy verification remain pendi
 
 ### Private journal removal: creation and revival boundary
 
-Implementation is pending; the current code still imports guest journals.
+Implemented and tested locally; deployment is pending.
+The code no longer imports guest journals.
 The replacement must distinguish a newly authorized session from revival of an
 existing registry entry, rather than inferring freshness from missing guest names.
 Guest handle and controlling-agent bindings can be published separately, so even
@@ -445,9 +446,11 @@ Validate its exact shape and identity, and reject old migration markers even if
 a new marker is also present.
 Creation requires an unused registry ID, both guest aliases absent, and an empty
 length-delimited private namespace; an existing marker is not a creation retry.
-Reserve the candidate ID synchronously within the factory before asynchronous
-admission checks, or serialize fresh identity admission: name checks followed by
-`storeValue` are not an atomic claim, even with randomly generated IDs.
+The factory reserves the candidate ID synchronously before asynchronous admission
+checks and appends a per-incarnation bigint ordinal to the time/random prefix.
+Concurrent IDs therefore remain distinct even if the clock/random prefix repeats;
+durable namespace checks still protect against collisions across incarnations.
+Name checks followed by `storeValue` are not an atomic cross-factory claim.
 After request validation, `provisionSession` publishes the schema before publishing
 the creating registry entry or provisioning the guest.
 `getAgent` only opens an existing valid schema, before guest provisioning or backend
@@ -461,14 +464,16 @@ A later new-session request uses a fresh ID.
 A crash after registry publication can reopen the valid schema under the existing
 interrupted-creation cleanup/recovery, without importing history or manufacturing
 a second schema; this does not promise retention of a partially provisioned guest.
-Initial registry publication also needs a dispatch fence: `saveRegistry` currently
-exposes its in-memory entry before acknowledgement, and admission allows `creating`.
+Initial registry publication now has a dispatch fence: `saveRegistry` exposes its
+in-memory entry before acknowledgement, so lifecycle alone is insufficient.
 Concurrent callers must not provision or dispatch through that entry while its
 initial save is pending or has failed; schema existence alone is not proof of
 durable registry publication.
 This includes observe-only paths that can call `getAgent`, inbox dispatch, and
 network changes that trigger provisioning; retain the fence after an uncertain
 save for that incarnation.
+Rename and delete also reject while publication is fenced, preventing overlap
+between deletion and creation rollback.
 Revival requires a loaded durable registry snapshot as well as a valid schema.
 This retains the existing single-factory-writer requirement; it does not provide
 cross-process compare-and-swap or authorize concurrent independent factories.
@@ -491,6 +496,15 @@ uncertain-effect resolution coverage.
 Before deploying this incompatible schema, retire remaining old sessions using
 the old release and preserve their workspace roots and all credential authority;
 the earlier cutover does not cover sessions created since then.
+
+The full Floot suite passes all 430 tests, including 14 private-storage tests,
+11 factory-boundary tests, and 11 inbox/delegation tests.
+Fault injection persists schema/registry/dispatch values before rejecting their
+acknowledgements; revival and same-incarnation refusal are checked separately.
+The obsolete mail migration wait is removed: a poisoned journal keeps mail
+undismissed until shutdown, and ordinary effect resolution cannot unpoison it.
+Independent reviewers approved both the storage and factory boundaries.
+Package ESLint reports zero errors; repository-wide docs/type success is not claimed.
 
 ## FA-12 — Retire compatibility-only entrypoints
 
@@ -782,6 +796,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-11: remove redundant usage-cache persistence | Conversation metadata and incomplete journal accounting retained; 39 focused tests pass; no legacy cache access/mutation; deployment pending |
 | 2026-09-21 | FA-11: remove legacy registry import and backup cleanup | Current snapshot crash recovery retained; legacy-only state rejected; 414 Floot tests pass; Tokyo already uses modern snapshots; deployment pending |
 | 2026-09-21 | FA-11: specify private-journal creation/revival boundary | Source analysis and adversarial design review identified ID-reservation and initial-publication races; implementation and fault-injection tests pending; no runtime changes |
+| 2026-09-21 | FA-11: remove private-journal imports and migration acknowledgements | Strict host schema creation/opening, creation fences, and poisoned-mail preservation; 430 Floot tests pass; adversarial review approved; old-release session retirement and coordinated deployment pending |
 
 ## Request
 
