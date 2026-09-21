@@ -82,26 +82,30 @@ test('factory facets retain disconnected turns, commit history, and provision de
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
   hostStore.set(
-    'floot-sessions',
-    harden([
-      {
-        id: 'one',
-        title: 'One',
-        createdAt: 1,
-        presetId: 'general',
-        lifecycle: 'ready',
-        backendId: 'test',
-        modelId: 'm',
-      },
-      {
-        id: 'legacy',
-        title: 'Legacy Claude',
-        createdAt: 0,
-        presetId: 'general',
-        lifecycle: 'ready',
-        model: 'claude-cli',
-      },
-    ]),
+    'floot-sessions-v1-00000000000000000000',
+    harden({
+      version: 1,
+      sequence: 0n,
+      sessions: [
+        {
+          id: 'one',
+          title: 'One',
+          createdAt: 1,
+          presetId: 'general',
+          lifecycle: 'ready',
+          backendId: 'test',
+          modelId: 'm',
+        },
+        {
+          id: 'legacy',
+          title: 'Legacy Claude',
+          createdAt: 0,
+          presetId: 'general',
+          lifecycle: 'ready',
+          model: 'claude-cli',
+        },
+      ],
+    }),
   );
   const lookups = [];
   hostStore.set('session-agent-legacy', guest);

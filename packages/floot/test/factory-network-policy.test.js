@@ -139,19 +139,23 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
       ['session-agent-one', guest],
       ['codex-backend', backend],
       [
-        'floot-sessions',
-        harden([
-          {
-            id: 'one',
-            title: 'One',
-            createdAt: 1,
-            presetId: 'general',
-            lifecycle,
-            ...(executionState ? { executionState } : {}),
-            backendId: 'test',
-            modelId: 'm',
-          },
-        ]),
+        'floot-sessions-v1-00000000000000000000',
+        harden({
+          version: 1,
+          sequence: 0n,
+          sessions: [
+            {
+              id: 'one',
+              title: 'One',
+              createdAt: 1,
+              presetId: 'general',
+              lifecycle,
+              ...(executionState ? { executionState } : {}),
+              backendId: 'test',
+              modelId: 'm',
+            },
+          ],
+        }),
       ],
     ]),
   );

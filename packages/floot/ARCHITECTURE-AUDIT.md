@@ -50,7 +50,7 @@ no retained formula referring to it.
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
-| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional session creation and redundant usage cache removed locally; migration branches pending |
+| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, and legacy registry import removed locally; private-journal migration pending |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed locally; deployment verification pending |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
@@ -413,6 +413,24 @@ All 39 focused journal, hosted, evidence, and continuity tests pass; independent
 review approved the change and changed-file lint has no errors.
 Deployment remains pending.
 
+### Legacy registry import removed
+
+Only the current versioned lifecycle snapshots are loaded.
+The canonical-array and backup-array import paths, and automatic backup removal,
+are removed; existing legacy roots remain inert beside a valid modern snapshot.
+Legacy-only state is rejected explicitly rather than exposed as an empty factory.
+A corrupt newest snapshot still fails closed instead of falling back to an older
+snapshot and resurrecting deleted sessions.
+Sequence reservation before writes, serialized saves after rejected acknowledgements,
+and bounded trimming after successful publication remain unchanged.
+Fixtures now use current snapshots, with fault-injection coverage retained for
+deletion recovery and uncertain writes.
+All 414 Floot tests pass, including 52 focused registry/factory tests; changed-file
+lint, formatting, and diff checks pass.
+Read-only Tokyo inspection found a valid version-1 snapshot at sequence 1085,
+four retained snapshots, one session, and neither legacy registry root.
+No live state was modified; deployment and post-deploy verification remain pending.
+
 ## FA-12 — Retire compatibility-only entrypoints
 
 Claude/OpenCode `src/managed-credentials-module.js` wrappers previously preserved
@@ -701,6 +719,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-11: require record-only session creation | Setup caller and help updated; voice/delegation/model/network/subscription behavior preserved; 403 package tests and independent review pass; repository docs gate remains failing; not yet deployed |
 | 2026-09-21 | FA-12: remove obsolete credential-entrypoint shims | Fresh inspected Tokyo graph uses shared entrypoints only; 27 credential/setup tests pass; no Secret/formula mutations; deployment pending |
 | 2026-09-21 | FA-11: remove redundant usage-cache persistence | Conversation metadata and incomplete journal accounting retained; 39 focused tests pass; no legacy cache access/mutation; deployment pending |
+| 2026-09-21 | FA-11: remove legacy registry import and backup cleanup | Current snapshot crash recovery retained; legacy-only state rejected; 414 Floot tests pass; Tokyo already uses modern snapshots; deployment pending |
 
 ## Request
 

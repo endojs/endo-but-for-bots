@@ -60,18 +60,22 @@ const makeWorld = existingStore => {
   const hostStore = existingStore || new Map();
   if (!existingStore)
     hostStore.set(
-      'floot-sessions',
-      harden([
-        {
-          id: 'one',
-          title: 'One',
-          createdAt: 1,
-          presetId: 'general',
-          lifecycle: 'ready',
-          backendId: 'test',
-          modelId: 'm',
-        },
-      ]),
+      'floot-sessions-v1-00000000000000000000',
+      harden({
+        version: 1,
+        sequence: 0n,
+        sessions: [
+          {
+            id: 'one',
+            title: 'One',
+            createdAt: 1,
+            presetId: 'general',
+            lifecycle: 'ready',
+            backendId: 'test',
+            modelId: 'm',
+          },
+        ],
+      }),
     );
   hostStore.set('codex-backend', backend);
   const host = Far('TestHost', {
@@ -295,14 +299,18 @@ test('a session being made or removed is working, not in error', async t => {
   t.timeout(10_000);
   const { factory, inbox, hostStore } = makeWorld();
   t.teardown(() => inbox.close());
-  const registry = /** @type {any[]} */ (hostStore.get('floot-sessions'));
+  const name = 'floot-sessions-v1-00000000000000000000';
+  const registry = /** @type {any} */ (hostStore.get(name));
   hostStore.set(
-    'floot-sessions',
-    harden([
+    name,
+    harden({
       ...registry,
-      { id: 'pinned', title: 'P', createdAt: 2, model: 'vendor/m' },
-      { id: 'unpinned', title: 'U', createdAt: 3 },
-    ]),
+      sessions: [
+        ...registry.sessions,
+        { id: 'pinned', title: 'P', createdAt: 2, model: 'vendor/m' },
+        { id: 'unpinned', title: 'U', createdAt: 3 },
+      ],
+    }),
   );
   hostStore.set(
     'llm-provider',

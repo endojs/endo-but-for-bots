@@ -185,18 +185,22 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
   hostStore.set(
-    'floot-sessions',
-    harden([
-      {
-        id: 'one',
-        title: 'One',
-        createdAt: 1,
-        presetId: 'general',
-        lifecycle: 'ready',
-        backendId: 'test',
-        modelId: 'm',
-      },
-    ]),
+    'floot-sessions-v1-00000000000000000000',
+    harden({
+      version: 1,
+      sequence: 0n,
+      sessions: [
+        {
+          id: 'one',
+          title: 'One',
+          createdAt: 1,
+          presetId: 'general',
+          lifecycle: 'ready',
+          backendId: 'test',
+          modelId: 'm',
+        },
+      ],
+    }),
   );
   hostStore.set('codex-backend', backend);
   hostStore.set('container-mount-bridge', bridgeProvider);
