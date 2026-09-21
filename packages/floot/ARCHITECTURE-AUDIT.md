@@ -432,6 +432,21 @@ Six running Claude containers and six 9P mounts were independently observed.
 The graph snapshot does not cover all directory members or Floot child-host roots:
 its lack of retired module matches does not override the earlier named-binding inventory.
 Workspace capability-root mapping is still required before deleting session bindings.
+The recursive follow-up (`endo-host` commit `e0233ec`, nine safety tests) traverses
+verified built-in directories independently of the incomplete static graph, with identity
+deduplication, an explicit completeness budget, and Secrets alias exclusions.
+Its live run found 438 bindings, 97 unconfined module formulas, and the three expected
+legacy modules: Claude credentials factory, Claude sandbox factory, and OpenCode state provider.
+Floot's `controller-profile` is a separate built-in host; its session guest bindings still
+need explicit inspection and preservation.
+
+The reviewed baseline was pushed to both existing GitHub PR branches and Forgejo mirrors
+(app `056310a75`, host `7402350`).
+Tokyo's existing prebuild service completed app `056310a75` successfully, with a matching
+nonce/status and `.deploy-complete` marker; the active release remains
+`21bcb3d0` and no resource retirement or activation has been performed.
+Host runbook `ops/hosted-cutover.md` (`9d8f4a7`) records the first-deployment lease-consumer
+gap, temporary stopped image holders, lock ordering, preservation gates, and explicit cleanup.
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
@@ -522,6 +537,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-03: remove the approved 16-file legacy Claude topology | Full Floot/Claude/hosted-agent suites: 402/180/541 passed, one skipped; daemon regressions: two passed; package ESLint: zero errors; source/docs reviewed; global lint/type/docs failures recorded above; runtime retirement and deployment still pending |
 | 2026-09-21 | Prioritize FA-13, preservation-safe old-release retirement, coordinated two-repo deployment, and cross-backend acceptance | User-requested cutover gates recorded; FA-13 implementation under review; no deployment claimed |
 | 2026-09-21 | FA-13 host pipeline (`2bfebce`) and safe expanded inventory (`7402350`) | 20 image/storage tests and five inventory tests passed; adversarial corrections included; live build/activation and resource retirement pending |
+| 2026-09-21 | Recursive retirement inventory (`e0233ec`) and coordinated cutover runbook (`9d8f4a7`) | Nine safety tests; independent review; three legacy modules confirmed on Tokyo; baseline pushed to both remotes; app prebuild completed, old release still active |
 
 ## Request
 
