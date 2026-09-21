@@ -3,12 +3,164 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 
-import { projectTranscript } from '../src/transcript-projection.js';
+import {
+  projectTranscript,
+  recoverTurnTranscript,
+} from '../src/transcript-projection.js';
 
 const call = (id, name, args) => ({
   id,
   type: 'function',
   function: { name, arguments: args },
+});
+
+test('failed transcript recovers full executor evidence and terminal error', async t => {
+  const args = JSON.stringify({ code: 'x'.repeat(14_934) });
+  const turn = {
+    turnId: '7',
+    state: 'failed',
+    input: 'draw a ship',
+    error: 'Bounded reader queue capacity exceeded',
+    activity: [],
+    tools: [
+      {
+        callId: 'floot-tool-1',
+        name: 'exec',
+        args: args.slice(0, 100),
+        argsRef: 'args',
+        result: 'Created pirate ship scene',
+        settled: true,
+      },
+    ],
+  };
+  const records = await recoverTurnTranscript(
+    [
+      { role: 'user', content: turn.input },
+      { role: 'assistant', content: 'Drawing it.' },
+    ],
+    turn,
+    async ref => {
+      t.is(ref, 'args');
+      return args;
+    },
+  );
+  const { pairs } = pairToolCalls(records);
+  t.is(pairs.length, 1);
+  t.is(pairs[0].call.args, args);
+  t.is(pairs[0].result?.content, 'Created pirate ship scene');
+  t.like(records.at(-1), {
+    kind: 'message',
+    content: '[Floot turn failed: Bounded reader queue capacity exceeded]',
+  });
+  t.true(
+    records.some(
+      record =>
+        record.kind === 'message' &&
+        record.content.includes('position relative'),
+    ),
+  );
+});
+
+test('recovery matches repeated observations and executions one to one', async t => {
+  const tool = { name: 'exec', args: '{}', result: 'ok', settled: true };
+  const turn = {
+    turnId: '1',
+    state: 'completed',
+    input: 'go',
+    activity: [
+      { ...tool, callId: 'a' },
+      { ...tool, callId: 'b' },
+    ],
+    tools: [
+      { ...tool, callId: 'x' },
+      { ...tool, callId: 'y' },
+    ],
+  };
+  const messages = [
+    { role: 'user', content: 'go' },
+    {
+      role: 'assistant',
+      tool_calls: [call('a', 'exec', '{}'), call('b', 'exec', '{}')],
+    },
+    { role: 'tool', tool_call_id: 'a', content: 'ok' },
+    { role: 'tool', tool_call_id: 'b', content: 'ok' },
+  ];
+  t.deepEqual(
+    await recoverTurnTranscript(messages, turn, async () => ''),
+    projectTranscript(messages),
+  );
+  const recovered = await recoverTurnTranscript([], turn, async () => '');
+  t.is(pairToolCalls(recovered).pairs.length, 2);
+});
+
+test('an interrupted call remains unanswered unless durable evidence settles it', async t => {
+  const tool = { callId: 'a', name: 'exec', args: '{}' };
+  const turn = {
+    turnId: '1',
+    state: 'outcome-unknown',
+    input: 'go',
+    activity: [tool],
+    tools: [],
+  };
+  const messages = [
+    { role: 'user', content: 'go' },
+    { role: 'assistant', tool_calls: [call('a', 'exec', '{}')] },
+  ];
+  t.is(
+    pairToolCalls(await recoverTurnTranscript(messages, turn, async () => ''))
+      .unanswered.length,
+    1,
+  );
+  const settled = await recoverTurnTranscript(
+    messages,
+    {
+      ...turn,
+      tools: [{ ...tool, callId: 'x', settled: true, result: 'done' }],
+    },
+    async () => '',
+  );
+  t.is(pairToolCalls(settled).pairs[0].result?.content, 'done');
+});
+
+test('reordered observations settle native identities, not identical arguments', async t => {
+  const messages = [
+    { role: 'user', content: 'go' },
+    {
+      role: 'assistant',
+      tool_calls: [
+        call('a', 'exec', '{}'),
+        call('b', 'exec', '{}'),
+        call('c', 'exec', '{}'),
+      ],
+    },
+  ];
+  const base = { name: 'exec', args: '{}', settled: true };
+  const turn = {
+    turnId: '1',
+    input: 'go',
+    state: 'outcome-unknown',
+    activity: [
+      { ...base, callId: 'b', result: 'second' },
+      { ...base, callId: 'a', result: 'first' },
+      { ...base, callId: 'c', settled: false },
+    ],
+    tools: [
+      { ...base, callId: 'x', result: 'second' },
+      { ...base, callId: 'y', result: 'first' },
+    ],
+  };
+  const { pairs, unanswered } = pairToolCalls(
+    await recoverTurnTranscript(messages, turn, async () => ''),
+  );
+  t.deepEqual(
+    pairs.map(pair => [pair.call.id, pair.result?.content]),
+    [
+      ['a', 'first'],
+      ['b', 'second'],
+      ['c', undefined],
+    ],
+  );
+  t.is(unanswered.length, 1);
 });
 
 test('a tool call survives as a tool call with its result', t => {

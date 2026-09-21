@@ -72,7 +72,10 @@ import {
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
 import { sameToolArgs, sameToolResult } from './src/tool-evidence.js';
-import { projectTranscript } from './src/transcript-projection.js';
+import {
+  projectTranscript,
+  recoverTurnTranscript,
+} from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
@@ -2127,14 +2130,52 @@ export const makeStreamingAgent = async (
    * This conversation as transcript records, for an adapter rebuilding its
    * CLI's native store (`@endo/hosted-agent/transcript-records.js`).
    *
-   * The committed tree path only. `getHistory` also synthesizes evidence the
-   * journal holds for turns that failed before reaching the tree, which is
-   * recovery narration this stack adds for the model's benefit — a CLI's own
-   * store never contained it, so restoring it would be adding to the
-   * conversation rather than reproducing it.
+   * Include durable execution evidence even when the backend stream failed
+   * before reporting it. Recovery is labeled, not silently presented as a
+   * faithful reconstruction of the backend's event ordering.
    */
-  const getTranscript = async () =>
-    projectTranscript(await tree.getPath(await getOrCreateLeaf()));
+  const getTranscript = async () => {
+    const turns = await turnJournal.list();
+    const ids = new Set(turns.map(turn => turn.turnId));
+    const nodes = [];
+    let id = await getOrCreateLeaf();
+    while (id) {
+      const node = await tree.getNode(id);
+      if (!node) break;
+      nodes.push(node);
+      id = node.parentId;
+    }
+    const legacy = [];
+    const byTurn = new Map();
+    for (const node of nodes.reverse()) {
+      const turnId = node.metadata?.turnId;
+      if (!ids.has(turnId)) legacy.push(...node.messages);
+      else {
+        const messages = byTurn.get(turnId) || [];
+        messages.push(...node.messages);
+        byTurn.set(turnId, messages);
+      }
+    }
+    const records = [...projectTranscript(legacy)];
+    const pathIds = new Set(nodes.map(node => node.id));
+    for (const turn of turns) {
+      // The current prompt is passed separately to send(). Do not replay it
+      // or incomplete live evidence into its own backend dispatch.
+      if (
+        turn.state !== 'pending' &&
+        (!turn.conversationNodeId || pathIds.has(turn.conversationNodeId))
+      ) {
+        records.push(
+          ...(await recoverTurnTranscript(
+            byTurn.get(turn.turnId) || [],
+            turn,
+            ref => turnJournal.readContent(ref),
+          )),
+        );
+      }
+    }
+    return harden(records);
+  };
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const leafId = await getOrCreateLeaf();

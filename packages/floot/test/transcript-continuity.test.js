@@ -266,6 +266,31 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
   t.is(prior.state, 'outcome-unknown');
   t.is(prior.resolution, undefined);
   t.is(next.state, 'completed');
+  const transcript = await agent.getTranscript();
+  t.is(transcript.filter(record => record.kind === 'tool-call').length, 2);
+  t.true(
+    transcript.some(
+      record =>
+        record.kind === 'tool-result' && record.content === 'wrote index.html',
+    ),
+  );
+  t.true(
+    transcript.some(
+      record =>
+        record.kind === 'message' &&
+        record.content.includes(
+          'Floot turn outcome-unknown: claude turn failed: error_max_turns',
+        ),
+    ),
+  );
+  const restored = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient: client },
+    'test prompt',
+    { hostedContinuity: 'transcript' },
+  );
+  t.deepEqual(await restored.getTranscript(), transcript);
 });
 
 test('a leading backend refusal remains a durable failed dispatch', async t => {

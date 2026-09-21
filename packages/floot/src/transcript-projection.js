@@ -24,6 +24,8 @@
  */
 
 import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
+import { sameToolArgs, sameToolResult } from './tool-evidence.js';
+import { UNSETTLED_TOOL_RESULT } from './hosted-turn.js';
 
 /** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
 
@@ -101,3 +103,175 @@ export const projectTranscript = path => {
   return harden(records);
 };
 harden(projectTranscript);
+
+/**
+ * Supplement a settled turn's mirrored transcript with durable execution
+ * evidence. The stream may fail before reporting an executed tool. Keep that
+ * evidence distinct from backend observations, and never claim it ran twice.
+ * Full journal content is required: a preview is not executable JSON.
+ *
+ * @param {Iterable<any>} messages
+ * @param {any} turn
+ * @param {(ref: any) => Promise<string>} readContent
+ */
+export const recoverTurnTranscript = async (messages, turn, readContent) => {
+  const records = [...projectTranscript(messages)];
+  const text = async (value, ref) =>
+    ref ? readContent(ref) : argumentText(value);
+  if (
+    !records.some(record => record.kind === 'message' && record.role === 'user')
+  ) {
+    records.unshift(
+      assertTranscriptRecord({
+        kind: 'message',
+        role: 'user',
+        content: await text(turn.input, turn.inputRef),
+      }),
+    );
+  }
+  /** @type {Array<{ id: string, name: string, args: string, result: string | undefined }>} */
+  const known = [];
+  for (const record of records) {
+    if (record.kind === 'tool-call')
+      known.push({ ...record, result: undefined });
+    if (record.kind === 'tool-result') {
+      const call = known.findLast(item => item.id === record.id);
+      if (call) call.result = record.content;
+    }
+  }
+  const ids = new Set(known.map(call => call.id));
+  let recoveryNotice = false;
+  const addEvidence = (tool, observed) => {
+    if (!recoveryNotice) {
+      records.push(
+        assertTranscriptRecord({
+          kind: 'message',
+          role: 'assistant',
+          content:
+            '[Recovered durable tool evidence. Its position relative to the streamed text is unknown; it does not imply another execution. Verify uncertain outcomes before retrying.]',
+        }),
+      );
+      recoveryNotice = true;
+    }
+    let id = observed ? tool.callId : `recovered:${turn.turnId}:${tool.callId}`;
+    while (ids.has(id)) id = `recovered:${id}`;
+    ids.add(id);
+    records.push(
+      assertTranscriptRecord({
+        kind: 'tool-call',
+        id,
+        name: tool.name,
+        args: tool.args,
+      }),
+    );
+    if (tool.settled)
+      records.push(
+        assertTranscriptRecord({
+          kind: 'tool-result',
+          id,
+          content: tool.result,
+        }),
+      );
+    return id;
+  };
+  // Observations and executor records are two views of the same operations.
+  // Match one-to-one so repeated identical executions remain visible.
+  for (const [source, observed] of [
+    [turn.activity || [], true],
+    [turn.tools || [], false],
+  ]) {
+    const unmatched = [...known];
+    for (const raw of source) {
+      const tool = {
+        ...raw,
+        // Journal reads are serialized; retain source order for matching.
+        // eslint-disable-next-line no-await-in-loop
+        args: await text(raw.args, raw.argsRef),
+        // eslint-disable-next-line no-await-in-loop
+        result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
+      };
+      const sameCall = call =>
+        call.name === tool.name &&
+        sameToolArgs({ text: call.args }, { text: tool.args });
+      // Backend observations share the tree's native ID. Never substitute a
+      // look-alike call with another ID, even when its arguments are identical.
+      // Executor IDs are independent: prefer an exact settled result before
+      // considering an unanswered call with the same arguments.
+      const exact = unmatched.findIndex(call =>
+        observed
+          ? call.id === tool.callId
+          : sameCall(call) &&
+            tool.settled &&
+            sameToolResult({ text: call.result }, { text: tool.result }),
+      );
+      const match =
+        exact >= 0 || observed
+          ? exact
+          : unmatched.findIndex(
+              call =>
+                sameCall(call) &&
+                (!tool.settled ||
+                  call.result === undefined ||
+                  call.result === UNSETTLED_TOOL_RESULT ||
+                  sameToolResult({ text: call.result }, { text: tool.result })),
+            );
+      if (match >= 0) {
+        const call = unmatched[match];
+        if (
+          tool.settled &&
+          (call.result === undefined || call.result === UNSETTLED_TOOL_RESULT)
+        ) {
+          const result = assertTranscriptRecord({
+            kind: 'tool-result',
+            id: call.id,
+            content: tool.result,
+          });
+          const index = records.findIndex(
+            record => record.kind === 'tool-result' && record.id === call.id,
+          );
+          if (index >= 0) records[index] = result;
+          else records.push(result);
+          call.result = tool.result;
+        }
+        unmatched.splice(match, 1);
+      } else {
+        const id = addEvidence(tool, observed);
+        known.push({
+          id,
+          name: tool.name,
+          args: tool.args,
+          result: tool.result,
+        });
+      }
+    }
+  }
+  if (
+    turn.output &&
+    !records.some(
+      record =>
+        record.kind === 'message' &&
+        record.role === 'assistant' &&
+        !record.content.startsWith('[Recovered durable tool evidence.'),
+    )
+  ) {
+    records.push(
+      assertTranscriptRecord({
+        kind: 'message',
+        role: 'assistant',
+        content: await text(turn.output, turn.outputRef),
+      }),
+    );
+  }
+  if (turn.state !== 'completed') {
+    const error = turn.errorRef ? await readContent(turn.errorRef) : turn.error;
+    records.push(
+      assertTranscriptRecord({
+        kind: 'message',
+        role: 'assistant',
+        content: `[Floot turn ${turn.state}${error ? `: ${error}` : '.'}]`,
+      }),
+    );
+  }
+  return harden(records);
+};
+harden(recoverTurnTranscript);

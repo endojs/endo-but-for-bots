@@ -3,14 +3,34 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-17 |
+| **Updated** | 2026-09-21 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
 
-### Current UA deployment — 2026-09-17
+### Queue-overflow recovery — 2026-09-21
+
+Tokyo's Claude Haiku session `muaj9ubf-zzabfi` failed while creating a Three.js
+scene with `Bounded reader queue capacity exceeded`.
+The durable turn retained a settled tool result, but the transcript projection
+omitted that journal-only evidence.
+The old error did not distinguish event count, queued weight, or one oversized
+event; it does not establish which bound this session exceeded.
+
+The follow-up implements cooperative, serial writes for Claude's raw and
+translated streams, retaining the 1,024-item / 16-MiB queue bounds.
+A waiting writer retains at most one additional bounded event; terminal capacity
+is separate, and cancellation wakes the writer and stops the raw producer.
+Overflow errors now identify the channel, reason, counts, and weights without
+including event contents.
+Transcript recovery supplements settled turns with durable tool evidence and
+explicit recovery/error narration, including full content behind journal refs.
+Local burst, cancellation, oversized-event, and transcript regression tests
+cover these paths; Tokyo deployment and reproduction remain pending.
+
+### Historical UA deployment — 2026-09-17
 
 Tokyo is deployed at `50d036bc7dbf3cea072ff587229141e66e3ed5dd` from PR #1248
 and available for user acceptance testing.
