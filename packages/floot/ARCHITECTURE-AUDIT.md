@@ -505,6 +505,12 @@ The obsolete mail migration wait is removed: a poisoned journal keeps mail
 undismissed until shutdown, and ordinary effect resolution cannot unpoison it.
 Independent reviewers approved both the storage and factory boundaries.
 Package ESLint reports zero errors; repository-wide docs/type success is not claimed.
+The documentation run reported 9,085 errors and 113 warnings, including five new
+fixture callback/barrier typing errors repeated across package conversions.
+Those fixture errors were corrected and the 11 factory-boundary tests rerun.
+The targeted Floot type check confirms those diagnostics are gone but still fails
+on missing `Far` declarations and other outstanding package errors.
+The full documentation gate has not been rerun after that typing correction.
 
 ## FA-12 — Retire compatibility-only entrypoints
 

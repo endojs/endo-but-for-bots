@@ -6,6 +6,13 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {{ existing?: boolean, schema?: boolean,
+ *   beforeStore?: (value: any, name: string) => Promise<void>,
+ *   afterStore?: (value: any, name: string) => Promise<void>,
+ *   extraHas?: (name: string) => boolean }} [options]
+ */
 const makeWorld = (
   t,
   {
@@ -191,9 +198,9 @@ test('schema publication failure creates neither a registry entry nor a guest', 
 
 for (const fail of [false, true]) {
   test(`initial registry publication fences access, rejected=${fail}`, async t => {
-    let release;
+    let release = () => {};
     const barrier = new Promise(resolve => {
-      release = resolve;
+      release = () => resolve(undefined);
     });
     let started;
     const waiting = new Promise(resolve => {
@@ -306,9 +313,9 @@ test('lost schema acknowledgement leaves evidence but cannot admit a session', a
 });
 
 test('concurrent creation has distinct identities before schema acknowledgement', async t => {
-  let release;
+  let release = () => {};
   const barrier = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
   let started;
   const waiting = new Promise(resolve => {
