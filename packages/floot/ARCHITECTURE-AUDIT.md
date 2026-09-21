@@ -52,7 +52,7 @@ no retained formula referring to it.
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Open |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Open |
-| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Host fix committed; live build/activation pending |
+| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built on Tokyo; coordinated activation/acceptance pending |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -461,8 +461,17 @@ permission check rejected Tokyo's existing `0770 endo:endo` layout.
 No live permissions were changed.
 The reviewed exclusive-group correction (`11ed01d`, eight holder tests) also refused the
 live layout before construction: `getent group endo` revealed `caddy` is a group member.
-The next correction separates private holder recovery records from the intentionally
-shared deployment spool, rather than relaxing the shared-group safety rule.
+The final correction (`e2e6f65`) separates private holder recovery records from the
+intentionally shared deployment spool. All 29 image/holder/storage tests passed.
+The shared base, three CLI overlays, and provider listener subsequently built successfully on Tokyo.
+The real startup image checker accepted the four immutable pins and rejected a
+deliberately missing digest; this was a checker test, not a failed systemd start.
+Five stopped image-holder containers retain these artifacts until the new consumer
+and cleanup configuration are active. They must be removed by exact ID afterward.
+
+Host `a180f0a` stages app `056310a757cf3724c7a12bde7b33b4a9835eddb8`
+with the candidate image pins. App prebuild and the full Nix system build completed;
+the system has not yet been activated. Later app commits only update this audit.
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
@@ -531,8 +540,24 @@ their remaining work is not implied complete by this deployment sequence.
 5. Resume FA-11/FA-12 legacy retirement/deletion, then FA-06/FA-10 extraction, FA-07/FA-08,
    FA-09 storage, and remaining bounded-context/compaction and resource-failure acceptance.
 
-FA-13 host changes and the expanded retirement helper are committed after adversarial review;
-no new retirement, coordinated deployment, or acceptance success is claimed.
+### Cutover progress — 2026-09-21
+
+Caddy ingress is temporarily stopped for exclusive maintenance. Six workspace guest
+roots were retained in `retired-floot-workspaces-20260921` before session deletion.
+This preserves capability reachability, not an independent content backup.
+
+The first stop attempt encountered an already-failed old main worker. A daemon-only
+restart on the old release recovered it after verifying old persistent test helpers
+were inert. The restart rebound the Floot controller to the same old module; a new
+exact snapshot was accepted only after checking all other preserved identities.
+
+The reviewed retirement helper (`9e062aa`, six tests) then stopped all six sessions
+with durable acknowledgements. Independent checks found no native containers, 9p
+mounts, or Claude MCP listeners remaining (only five stopped image holders).
+The helper subsequently removed all six disposable Floot/native records through
+supported APIs and verified the archived guest roots and six Secret identities were
+unchanged. Old broker dependencies and legacy aliases still require retirement;
+new release activation and cross-backend acceptance remain pending.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
@@ -555,6 +580,8 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-13 host pipeline (`2bfebce`) and safe expanded inventory (`7402350`) | 20 image/storage tests and five inventory tests passed; adversarial corrections included; live build/activation and resource retirement pending |
 | 2026-09-21 | Recursive retirement inventory (`e0233ec`) and coordinated cutover runbook (`9d8f4a7`) | Nine safety tests; independent review; three legacy modules confirmed on Tokyo; baseline pushed to both remotes; app prebuild completed, old release still active |
 | 2026-09-21 | Floot root mapping (`8d4e918`), capability archive (`0b0715f`), first-cutover holders (`f8b8589`) | Six workspace guest roots retained on Tokyo; four mapping/five archive/six initial holder tests; image build safely stopped on directory-permission mismatch before construction; no retirement or activation |
+| 2026-09-21 | Private holder recovery (`e2e6f65`) and coordinated pins (`a180f0a`) | 29 focused tests; actual Tokyo shared-base/overlay build and missing-digest rejection; app and full Nix system built, not activated |
+| 2026-09-21 | Gated old-session retirement (`9e062aa`) | Six helper tests and adversarial review; recovered failed old worker; six stops acknowledged, external resources absent, six records removed; archived roots and Secret identities unchanged; broker retirement/activation/acceptance pending |
 
 ## Request
 
