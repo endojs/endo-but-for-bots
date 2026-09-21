@@ -30,6 +30,12 @@
       "node": "./src/sha256-node.js",
       "default": "./src/sha256-browser.js"
     },
+    "./async": {
+      "xs": "./src/sha256-endor-async.js",
+      "browser": "./src/sha256-browser-async.js",
+      "node": "./src/sha256-node-async.js",
+      "default": "./src/sha256-browser-async.js"
+    },
     "./src/sha256-js.js": "./src/sha256-js.js",
     "./package.json": "./package.json"
   },
