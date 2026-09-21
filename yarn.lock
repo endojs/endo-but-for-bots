@@ -2638,6 +2638,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/netstring": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/sandbox": "workspace:^"
