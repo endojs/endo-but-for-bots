@@ -146,6 +146,21 @@ test('describe() and listModels() present OpenCode as a hosted backend', async t
   t.true(models.some(model => model.default));
 });
 
+test('free router is selectable without changing the default model', async t => {
+  const { factory, log } = makeHarness();
+  const models = await E(factory).listModels();
+  const free = models.find(model => model.id === 'openrouter/openrouter/free');
+  t.truthy(free);
+  t.is(free?.title, 'Free models (automatic)');
+  t.false(free?.default);
+  t.is(models.filter(model => model.default).length, 1);
+  await E(factory).create(
+    harden({ sessionId: 'free-session', model: free?.id }),
+    makeToolSet(),
+  );
+  t.is(log[0][2].model, 'openrouter/openrouter/free');
+});
+
 test('create() hands the validated request and the pinned tool set to the owner', async t => {
   const { factory, log } = makeHarness();
   const { run, admin } = await E(factory).create(
