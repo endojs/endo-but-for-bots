@@ -40,11 +40,11 @@ no retained formula referring to it.
 
 | ID | Priority | Finding | Evidence class | Status |
 |---|---|---|---|---|
-| FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Fixed locally; bounded selection pending |
-| FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fixed locally; compaction policy pending |
-| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed locally; runtime retirement pending |
-| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Removed locally; runtime retirement pending |
-| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed locally; coordinated cutover pending |
+| FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Fix deployed; bounded selection pending |
+| FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fix deployed; compaction policy pending |
+| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed and inventoried producers retired; acceptance pending |
+| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
+| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
 | FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
@@ -52,7 +52,7 @@ no retained formula referring to it.
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Open |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Open |
-| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built on Tokyo; coordinated activation/acceptance pending |
+| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built and activated on Tokyo; acceptance pending |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -109,7 +109,7 @@ All 47 focused tests pass, including that regression; the independent reviewer r
 The full Floot suite passes 407 tests; package ESLint has no errors; formatting passes.
 Explicit compaction/context selection remains open: this converter does not implement
 a compaction policy, and the full-history replay can grow without a context bound.
-The full-content bug is fixed locally, not deployed.
+The full-content fix is now deployed; bounded context remains open.
 
 ## FA-03 — Retire the live Claude form topology
 
@@ -146,7 +146,7 @@ retirement before deploying the remaining entrypoint removals or resetting deplo
 The setup-host and setup-hosted suites pass 16 tests, including fresh native-only setup,
 idempotent setup, distinct host ownership, and preservation of retained legacy bindings.
 Independent review caught two stale test expectations; both were corrected before commit.
-Not deployed; native conformance and resource retirement remain pending.
+This initial implementation was not deployed until the coordinated cutover below.
 
 Preparation for source deletion now preserves the generic daemon coverage in a
 test-only dependency-bundle fixture rather than the legacy `session-powers` module.
@@ -230,7 +230,7 @@ Review caught a daemon integration fixture still minting the deleted module; it 
 null-powered storage and retains the daemon-owner destroy assertions.
 That integration test passes after shortening its generated socket path for macOS;
 the fixture retains its unique suffix and does not alter production socket placement.
-Deployment and native conformance remain pending, as does the separate `opencodeSessionId` audit.
+Deployment is complete; native conformance and the separate `opencodeSessionId` audit remain open.
 
 ## FA-05 — Remove or wire the ignored native profile
 
@@ -266,7 +266,7 @@ The reviewer independently ran 80 focused tests and 33 updated parser tests.
 Changed-JavaScript lint has no errors; formatting passes.
 The daemon fixture uses a short unique name for macOS socket limits; native Linux execution
 has not been exercised by these macOS owner/storage lifecycle tests.
-This is implemented and tested locally, not deployed; runtime cutover/conformance remains open.
+This is now deployed after old-plan retirement; native conformance remains open.
 
 ## FA-06 — One session provisioner and execution envelope
 
@@ -416,8 +416,8 @@ Adversarial review caught and removed a residual Tokyo service dependency and te
 candidate protection against an old first-observed ledger.
 Seven image tests and thirteen storage tests pass; changed module syntax was checked
 with Tokyo's Nix parser.
-Actual OCI builds, full Nix evaluation, missing-image runtime behavior, and activation
-remain deployment gates, not completed tests.
+At this implementation stage, actual OCI builds, full Nix evaluation, missing-image
+runtime behavior, and activation remained deployment gates; later results follow.
 
 Host commit `7402350` adds an expanded one-shot retirement inventory with five passing
 safety tests and independent review.
@@ -431,20 +431,20 @@ The first live run observed six Claude native records in `ready`, each with the 
 Six running Claude containers and six 9P mounts were independently observed.
 The graph snapshot does not cover all directory members or Floot child-host roots:
 its lack of retired module matches does not override the earlier named-binding inventory.
-Workspace capability-root mapping is still required before deleting session bindings.
+This initial inventory still required workspace capability-root mapping before deletion.
 The recursive follow-up (`endo-host` commit `e0233ec`, nine safety tests) traverses
 verified built-in directories independently of the incomplete static graph, with identity
 deduplication, an explicit completeness budget, and Secrets alias exclusions.
 Its live run found 438 bindings, 97 unconfined module formulas, and the three expected
 legacy modules: Claude credentials factory, Claude sandbox factory, and OpenCode state provider.
-Floot's `controller-profile` is a separate built-in host; its session guest bindings still
-need explicit inspection and preservation.
+Floot's `controller-profile` is a separate built-in host; at this stage its session guest
+bindings still needed explicit inspection and preservation.
 
 The reviewed baseline was pushed to both existing GitHub PR branches and Forgejo mirrors
 (app `056310a75`, host `7402350`).
 Tokyo's existing prebuild service completed app `056310a75` successfully, with a matching
-nonce/status and `.deploy-complete` marker; the active release remains
-`21bcb3d0` and no resource retirement or activation has been performed.
+nonce/status and `.deploy-complete` marker; at that staging point the active release
+remained `21bcb3d0`, before resource retirement and activation.
 Host runbook `ops/hosted-cutover.md` (`9d8f4a7`) records the first-deployment lease-consumer
 gap, temporary stopped image holders, lock ordering, preservation gates, and explicit cleanup.
 The explicit Floot-host inspection (`8d4e918`, four tests) mapped all six native sessions
@@ -471,7 +471,7 @@ and cleanup configuration are active. They must be removed by exact ID afterward
 
 Host `a180f0a` stages app `056310a757cf3724c7a12bde7b33b4a9835eddb8`
 with the candidate image pins. App prebuild and the full Nix system build completed;
-the system has not yet been activated. Later app commits only update this audit.
+activation followed later as recorded below. Later app commits only update this audit.
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
@@ -492,9 +492,9 @@ Do not mechanically merge protocol-specific code:
 ### Tokyo inventory — 2026-09-21
 
 A one-shot, read-only `endo-host/ops/inspect-hosted-retirement.mjs` inspection
-confirmed Tokyo is still on release `21bcb3d04438ae313a172c9b691a7a8f4f5b17d5`.
-The `endo-daemon` unit is active, with six running sandbox containers observed.
-These are live inventory facts, not evidence that those containers belong to legacy clients.
+confirmed Tokyo was then on release `21bcb3d04438ae313a172c9b691a7a8f4f5b17d5`.
+The `endo-daemon` unit was active, with six running sandbox containers observed.
+These initial inventory facts did not establish ownership of those containers.
 No runtime was stopped or removed during this inspection, and no Secrets were read.
 
 Retained legacy names include:
@@ -508,9 +508,9 @@ Retained legacy names include:
 Current Claude/Codex state providers are also present and must be preserved: unlike
 OpenCode's retired allocation, they back active native CLI state.
 This named-binding inventory does not enumerate every formula, reference, grant, or listener.
-Complete resource/reference inventory and cleanup acknowledgement remain deployment gates.
-The currently deployed automatic setup hooks could recreate legacy producers after a restart;
-retirement must be coordinated with the release and host-hook changes, not performed blindly.
+Complete resource/reference inventory and cleanup acknowledgement were deployment gates.
+The old automatic setup hooks could recreate legacy producers after a restart;
+retirement was therefore coordinated with the release and host-hook changes.
 
 ### Sequence
 
@@ -542,7 +542,8 @@ their remaining work is not implied complete by this deployment sequence.
 
 ### Cutover progress — 2026-09-21
 
-Caddy ingress is temporarily stopped for exclusive maintenance. Six workspace guest
+Caddy ingress was stopped for exclusive maintenance and restored by activation.
+Six workspace guest
 roots were retained in `retired-floot-workspaces-20260921` before session deletion.
 This preserves capability reachability, not an independent content backup.
 
@@ -556,8 +557,36 @@ with durable acknowledgements. Independent checks found no native containers, 9p
 mounts, or Claude MCP listeners remaining (only five stopped image holders).
 The helper subsequently removed all six disposable Floot/native records through
 supported APIs and verified the archived guest roots and six Secret identities were
-unchanged. Old broker dependencies and legacy aliases still require retirement;
-new release activation and cross-backend acceptance remain pending.
+unchanged.
+
+Broker dependency inventory (`1fa90d9`, seven tests) traced scalar and marshaled
+references without resolving custom services or Secret values.
+The reviewed cleanup (`88c5114`, five tests) detached 22 exact broker-dependent
+bindings and requested cancellation of all three old brokers, preserving credential
+formulas, pool journals, account identities, Secrets, and archived roots.
+Independent checks again found no native containers, 9p mounts, or matching listeners.
+The two legacy guest namespaces contained only built-in bindings and `host-agent`.
+The reviewed four-formula cleanup (`e303296`, four tests) retired the two obsolete
+Claude producers and OpenCode's old storage/state-provider formulas.
+It did not remove profiles, generic factories, mounters, or filesystem data.
+The old daemon then stopped before new setup ran; cancellation alone was not treated
+as durable revocation or proof that renewal owners could not overlap.
+
+Coordinated activation completed at NixOS generation 157: host `e303296` and app
+`056310a757cf3724c7a12bde7b33b4a9835eddb8`.
+The daemon and Caddy are running, setup completed, three replacement brokers were
+minted, and OpenCode storage was recreated by the null-powered setup path.
+Post-start inventory confirmed all six Secret identities and all six archived guest
+roots unchanged, zero native sessions before testing, and no retired modules in the
+inventoried graph (not a claim of global capability revocation).
+
+Cross-backend acceptance is in progress; image evidence remains `candidate`.
+Restoration driver coverage (`f502c87`, eight tests) now rejects empty, partial, or
+mismatched backend results.
+Fresh Claude/Codex/OpenCode restoration tests use a dedicated manifest.
+Claude and OpenCode completed their seed turns; Codex session creation failed with
+`Codex runtime verification failed` and is under investigation.
+No full acceptance pass, cold-store restoration, or image-holder cleanup is claimed.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
@@ -582,6 +611,8 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Floot root mapping (`8d4e918`), capability archive (`0b0715f`), first-cutover holders (`f8b8589`) | Six workspace guest roots retained on Tokyo; four mapping/five archive/six initial holder tests; image build safely stopped on directory-permission mismatch before construction; no retirement or activation |
 | 2026-09-21 | Private holder recovery (`e2e6f65`) and coordinated pins (`a180f0a`) | 29 focused tests; actual Tokyo shared-base/overlay build and missing-digest rejection; app and full Nix system built, not activated |
 | 2026-09-21 | Gated old-session retirement (`9e062aa`) | Six helper tests and adversarial review; recovered failed old worker; six stops acknowledged, external resources absent, six records removed; archived roots and Secret identities unchanged; broker retirement/activation/acceptance pending |
+| 2026-09-21 | Broker and legacy retirement (`88c5114`, `e303296`) and coordinated generation 157 | Reviewed helpers: five/four tests; 22 broker bindings and four obsolete formulas retired; old daemon stopped; app `056310a75` plus host `e303296` activated; six Secrets/archive roots preserved; cross-backend acceptance in progress |
+| 2026-09-21 | Reject incomplete restoration coverage (`f502c87`) | Eight tests and adversarial review; fresh three-backend live acceptance started, results pending |
 
 ## Request
 
