@@ -366,6 +366,31 @@ Do not mechanically merge protocol-specific code:
 
 ## Execution order and retirement gate
 
+### Tokyo inventory — 2026-09-21
+
+A one-shot, read-only `endo-host/ops/inspect-hosted-retirement.mjs` inspection
+confirmed Tokyo is still on release `21bcb3d04438ae313a172c9b691a7a8f4f5b17d5`.
+The `endo-daemon` unit is active, with six running sandbox containers observed.
+These are live inventory facts, not evidence that those containers belong to legacy clients.
+No runtime was stopped or removed during this inspection, and no Secrets were read.
+
+Retained legacy names include:
+
+- `claude-sandbox/sandbox-factory`, `fs-mounter`, `service`, `profile`, and `handle`.
+  The service points at `claude-sandbox-factory.js` under the current release.
+- `claude-credentials/service`, `profile`, and `handle`.
+  The service points at `claude-credentials-factory.js`.
+- `opencode-sandbox/state-provider`, plus the old `session-storage` and backend formulas.
+
+Current Claude/Codex state providers are also present and must be preserved: unlike
+OpenCode's retired allocation, they back active native CLI state.
+This named-binding inventory does not enumerate every formula, reference, grant, or listener.
+Complete resource/reference inventory and cleanup acknowledgement remain deployment gates.
+The currently deployed automatic setup hooks could recreate legacy producers after a restart;
+retirement must be coordinated with the release and host-hook changes, not performed blindly.
+
+### Sequence
+
 1. Fix FA-01/FA-02 and add regression fixtures before changing transcript architecture.
 2. Disable legacy setup producers and inventory retained formula specifiers/native resources.
 3. Stop legacy clients; verify containers, mounts, listeners, and grants are retired.
