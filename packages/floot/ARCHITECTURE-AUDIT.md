@@ -50,7 +50,7 @@ no retained formula referring to it.
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
-| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional session creation removed locally; migration/cache branches pending |
+| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional session creation and redundant usage cache removed locally; migration branches pending |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed locally; deployment verification pending |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
@@ -399,6 +399,20 @@ The repository documentation gate was run and failed with 8,985 reported errors,
 including missing `Far` declarations and unresolved entrypoints in unrelated
 packages; this is not a claim of green repository-wide type/docs checks.
 
+### Redundant usage cache removed
+
+Completed usage now has one durable source: metadata committed with conversation
+nodes and recovered from the current leaf.
+The separate `floot-usage` fallback and serialized writes are removed.
+Incomplete and archived-turn accounting remain in the turn journal unchanged.
+Existing legacy cache blobs are left untouched but are never consulted;
+historical totals held only in that cache are deliberately not migrated.
+Provider and hosted restart tests seed a poisoned legacy cache, verify no cache
+access or mutation, and check recovered totals and subsequent accumulation.
+All 39 focused journal, hosted, evidence, and continuity tests pass; independent
+review approved the change and changed-file lint has no errors.
+Deployment remains pending.
+
 ## FA-12 — Retire compatibility-only entrypoints
 
 Claude/OpenCode `src/managed-credentials-module.js` wrappers previously preserved
@@ -686,6 +700,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-12: remove unused OpenCode broker-service wrapper/export | Seven authority/lifecycle tests retained against shared kit; 218 package tests pass with socket permissions; ESLint zero errors/36 warnings; no broker or credential identity changes; not yet deployed |
 | 2026-09-21 | FA-11: require record-only session creation | Setup caller and help updated; voice/delegation/model/network/subscription behavior preserved; 403 package tests and independent review pass; repository docs gate remains failing; not yet deployed |
 | 2026-09-21 | FA-12: remove obsolete credential-entrypoint shims | Fresh inspected Tokyo graph uses shared entrypoints only; 27 credential/setup tests pass; no Secret/formula mutations; deployment pending |
+| 2026-09-21 | FA-11: remove redundant usage-cache persistence | Conversation metadata and incomplete journal accounting retained; 39 focused tests pass; no legacy cache access/mutation; deployment pending |
 
 ## Request
 

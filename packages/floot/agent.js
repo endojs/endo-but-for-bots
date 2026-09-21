@@ -819,9 +819,8 @@ export const makeStreamingAgent = async (
       },
     });
 
-  // Cumulative token usage for this session, persisted to the guest petstore so
-  // it survives a daemon restart. Loaded lazily; updated after each turn.
-  const USAGE_NAME = 'floot-usage';
+  // Completed usage is committed with each conversation node and recovered
+  // from the durable leaf. Incomplete usage is counted from the turn journal.
   /**
    * The five disjoint counts and the last context reading of
    * `@endo/hosted-agent/token-usage.js`, and how many turns completed. Totals
@@ -862,35 +861,8 @@ export const makeStreamingAgent = async (
       : {};
   const loadUsage = async () => {
     if (usage) return usage;
-    const recorded = await findRecordedUsage();
-    if (recorded) {
-      usage = recorded;
-    } else if (await E(powers).has(USAGE_NAME)) {
-      usage = totalsFrom(await E(powers).lookup(USAGE_NAME));
-    } else {
-      usage = totalsFrom(undefined);
-    }
+    usage = (await findRecordedUsage()) ?? totalsFrom(undefined);
     return usage;
-  };
-  // Serialize writes to the legacy summary cache. The authoritative totals are
-  // also committed in conversation-node metadata, so a crash or cache write
-  // failure can be recovered by walking back from the durable leaf.
-  let usageWrite = Promise.resolve();
-  const saveUsage = () => {
-    const snapshot = harden({ ...usage });
-    usageWrite = usageWrite
-      .then(async () => {
-        await null;
-        if (await E(powers).has(USAGE_NAME)) await E(powers).remove(USAGE_NAME);
-        await E(powers).storeValue(snapshot, USAGE_NAME);
-      })
-      .catch(error => {
-        console.error(
-          '[floot] could not persist usage:',
-          error instanceof Error ? error.message : String(error),
-        );
-      });
-    return usageWrite;
   };
 
   // Delegation state is per session and lives beside the inbox loop that feeds
@@ -1101,7 +1073,6 @@ export const makeStreamingAgent = async (
       });
       cachedLeaf = finalNode.id;
       usage = nextUsage;
-      await saveUsage();
       await turnJournal.append(turnId, {
         type: 'finish',
         state: 'completed',
@@ -1491,7 +1462,6 @@ export const makeStreamingAgent = async (
     });
     cachedLeaf = committedNode.id;
     usage = { ...totals };
-    await saveUsage();
     await turnJournal.append(turnId, {
       type: 'finish',
       state: 'completed',

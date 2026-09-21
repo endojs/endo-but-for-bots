@@ -9,7 +9,12 @@ import { usageCounts } from './helpers/usage.js';
 const fixture = () => {
   const store = new Map();
   let refusedType;
-  const nameOf = name => (Array.isArray(name) ? name.join('.') : name);
+  const accessedNames = [];
+  const nameOf = name => {
+    const key = Array.isArray(name) ? name.join('.') : name;
+    accessedNames.push(key);
+    return key;
+  };
   const powers = harden({
     async list(prefix) {
       return harden(prefix === 'tools' ? [] : [...store.keys()]);
@@ -36,6 +41,8 @@ const fixture = () => {
   });
   return {
     powers,
+    store,
+    accessedNames,
     events: () =>
       [...store.entries()]
         .filter(([name]) => name.startsWith('floot-turn-event-'))
@@ -76,6 +83,65 @@ const callEffect = () =>
   });
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
+
+for (const backend of ['provider', 'hosted']) {
+  test(`${backend} usage survives revival from conversation metadata without the legacy cache`, async t => {
+    const f = fixture();
+    const obsolete = harden({ inputTokens: 999_999, turns: 999 });
+    f.store.set('floot-usage', obsolete);
+    const perTurn = usageCounts({ inputTokens: 11, outputTokens: 3 });
+    const config =
+      backend === 'provider'
+        ? {
+            provider: harden({
+              async chatStream() {
+                return harden({ ...completed(), usage: perTurn });
+              },
+            }),
+          }
+        : {
+            hostedClient: harden({
+              async send() {
+                const channel = makeBufferedReader();
+                channel.push({ type: 'usage', ...perTurn });
+                channel.push({ type: 'text-delta', text: 'Done' });
+                channel.push({ type: 'end' });
+                return channel.reader;
+              },
+            }),
+          };
+    const agent = await makeStreamingAgent(f.powers, undefined, config, 'Test');
+    t.teardown(() => agent.shutdown());
+    t.deepEqual(await agent.getUsage(), {
+      ...usageCounts({}),
+      turns: 0,
+      incompleteTurns: 0,
+    });
+    await agent.converse('First', makeReplyChannel().writer);
+    t.deepEqual(await agent.getUsage(), {
+      ...perTurn,
+      turns: 1,
+      incompleteTurns: 0,
+    });
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      config,
+      'Test',
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getUsage(), await agent.getUsage());
+    await revived.converse('Second', makeReplyChannel().writer);
+    t.deepEqual(await revived.getUsage(), {
+      ...usageCounts({ inputTokens: 22, outputTokens: 6 }),
+      turns: 2,
+      incompleteTurns: 0,
+    });
+    t.is(f.store.get('floot-usage'), obsolete);
+    t.false(f.accessedNames.includes('floot-usage'));
+  });
+}
 
 test('archived failures remain in UI history and direct-provider context', async t => {
   t.timeout(20_000);
