@@ -52,7 +52,7 @@ no retained formula referring to it.
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Open |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Open |
-| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Open |
+| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Host fix committed; live build/activation pending |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -403,7 +403,35 @@ In endo-host, `modules/endo-daemon.nix:309` builds the Claude image directly wit
 It does not pass the `ENDO_DEV_IMAGE` argument required by the new
 `packages/claude-sandbox/oci/Containerfile`.
 An existing `localhost/claude-code:latest` skips the command, hiding the incompatibility.
-This is a source-level integration finding, not a new observed Tokyo outage.
+This was a source-level integration finding, not a new observed Tokyo outage.
+
+Host commit `2bfebce` removes that builder and checks every enabled harness/listener digest
+on each daemon start, without pulling or building at startup.
+The explicit storage-admitted builder reuses one immutable shared base, builds all three
+overlays plus the listener, and publishes a complete candidate manifest atomically.
+A validated 24-hour candidate lease protects pending pins, including reused image IDs
+whose first-observed cleanup grace has already expired.
+Invalid lease evidence skips image pruning; expired valid leases do not retain images.
+Adversarial review caught and removed a residual Tokyo service dependency and tested
+candidate protection against an old first-observed ledger.
+Seven image tests and thirteen storage tests pass; changed module syntax was checked
+with Tokyo's Nix parser.
+Actual OCI builds, full Nix evaluation, missing-image runtime behavior, and activation
+remain deployment gates, not completed tests.
+
+Host commit `7402350` adds an expanded one-shot retirement inventory with five passing
+safety tests and independent review.
+It verifies immutable directory/blob identities before lookup, so inventory does not
+revive unexpected backend or credential services.
+It emits only formula metadata, reference IDs, whitelisted native paths/status, and
+Secrets names/IDs; no secret values, prompts, full plans, or environments.
+The graph is non-atomic and host-root-reachable, not proof that native cleanup occurred.
+The first live run observed six Claude native records in `ready`, each with the retired
+`nativeProfile` field and an operator-supplied `workspaceHostPath`, plus six Secret bindings.
+Six running Claude containers and six 9P mounts were independently observed.
+The graph snapshot does not cover all directory members or Floot child-host roots:
+its lack of retired module matches does not override the earlier named-binding inventory.
+Workspace capability-root mapping is still required before deleting session bindings.
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
@@ -472,8 +500,8 @@ their remaining work is not implied complete by this deployment sequence.
 5. Resume FA-11/FA-12 legacy retirement/deletion, then FA-06/FA-10 extraction, FA-07/FA-08,
    FA-09 storage, and remaining bounded-context/compaction and resource-failure acceptance.
 
-As of this priority update, FA-13 host changes are implemented locally and under adversarial
-review; no new retirement, coordinated deployment, or acceptance success is claimed.
+FA-13 host changes and the expanded retirement helper are committed after adversarial review;
+no new retirement, coordinated deployment, or acceptance success is claimed.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
@@ -493,6 +521,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-05: remove ignored hosted native profiles | 182 focused tests passed; explicit stale-plan rejection added after review; host Nix syntax passed; coordinated retirement/activation pending |
 | 2026-09-21 | FA-03: remove the approved 16-file legacy Claude topology | Full Floot/Claude/hosted-agent suites: 402/180/541 passed, one skipped; daemon regressions: two passed; package ESLint: zero errors; source/docs reviewed; global lint/type/docs failures recorded above; runtime retirement and deployment still pending |
 | 2026-09-21 | Prioritize FA-13, preservation-safe old-release retirement, coordinated two-repo deployment, and cross-backend acceptance | User-requested cutover gates recorded; FA-13 implementation under review; no deployment claimed |
+| 2026-09-21 | FA-13 host pipeline (`2bfebce`) and safe expanded inventory (`7402350`) | 20 image/storage tests and five inventory tests passed; adversarial corrections included; live build/activation and resource retirement pending |
 
 ## Request
 
