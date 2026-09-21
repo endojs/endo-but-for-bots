@@ -1,6 +1,7 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { makeCodexModelRead } from '@endo/hosted-agent/codex-model-read.js';
 import {
   assertBrokerModels,
   makeOwnedProviderBrokerService,
@@ -8,6 +9,7 @@ import {
 } from '@endo/hosted-agent/provider-broker-service.js';
 import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { M, matches } from '@endo/patterns';
+import { readFile } from 'node:fs/promises';
 
 import { makeCodexAccountRead } from './codex-account-read.js';
 import { makeCodexResetRedeem } from './codex-reset-credit.js';
@@ -60,11 +62,13 @@ harden(readCodexBrokerConfig);
  * @param {object} [powers]
  * @param {typeof makeProviderBrokerServiceKit} [powers.makeServiceKit]
  * @param {typeof makeCodexSubscriptionCredential} [powers.makeCredential]
+ * @param {typeof globalThis.fetch} [powers.fetch]
  * @param {(error: unknown) => void} [powers.reportError]
  */
 export const makeOwnedCodexBrokerService = ({
   makeServiceKit = makeProviderBrokerServiceKit,
   makeCredential = makeCodexSubscriptionCredential,
+  fetch = globalThis.fetch,
   reportError = error => console.error('Codex broker cleanup pending', error),
 } = {}) =>
   makeOwnedProviderBrokerService({
@@ -87,6 +91,24 @@ export const makeOwnedCodexBrokerService = ({
         accountRef,
         fetch: globalThis.fetch,
       }),
+    makeModelRead:
+      ({ credential, accountRef }) =>
+      async () => {
+        // The packaged runtime is the version authority, not a second pin in
+        // broker configuration. Read lazily: constructing an owner stays inert.
+        const manifest = JSON.parse(
+          await readFile(
+            new URL('../oci/package.json', import.meta.url),
+            'utf8',
+          ),
+        );
+        return makeCodexModelRead({
+          current: () => credential.current(),
+          accountRef,
+          clientVersion: manifest.dependencies['@openai/codex'],
+          fetch,
+        })();
+      },
     // For the operator's subscription admin: the one call that spends a
     // banked rate-limit reset. Nothing in the broker runs it.
     makeResetRedeem: ({ credential, accountRef }) =>

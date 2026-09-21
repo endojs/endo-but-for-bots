@@ -3,6 +3,7 @@
 import { Fail } from '@endo/errors';
 
 import { boundedJson } from './bounded-json.js';
+import { normalizeHostedModelDescriptor } from './hosted-backend.js';
 
 const MODELS_URL = 'https://openrouter.ai/api/v1/models/user';
 // Local resource bounds, not claims about the provider's model capacity.
@@ -152,3 +153,34 @@ export const makeOpenRouterModelRead = ({ readKey, fetch, now = Date.now }) => {
   });
 };
 harden(makeOpenRouterModelRead);
+
+/**
+ * Project a validated account catalog for text/tool agent backends. Routes
+ * remain provider-native; adapter prefixes belong at the session boundary.
+ * A generic reasoning capability does not advertise a list of effort choices.
+ * @param {Awaited<ReturnType<ReturnType<typeof makeOpenRouterModelRead>>>['models']} models
+ */
+export const modelsFromOpenRouterCatalog = models =>
+  harden(
+    models
+      .filter(
+        model =>
+          model.inputModalities.includes('text') &&
+          model.outputModalities.includes('text') &&
+          model.supportedParameters.includes('tools'),
+      )
+      .map(model => {
+        const efforts = model.reasoning?.supportedEfforts || [];
+        return normalizeHostedModelDescriptor({
+          id: model.id,
+          title: model.title,
+          description: model.description,
+          default: false,
+          reasoningEfforts: efforts,
+          defaultReasoningEffort: efforts.length
+            ? (model.reasoning?.defaultEffort ?? null)
+            : null,
+        });
+      }),
+  );
+harden(modelsFromOpenRouterCatalog);

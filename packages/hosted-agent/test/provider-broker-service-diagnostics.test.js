@@ -366,6 +366,173 @@ const pooledKit = (digestLetter, ownerId, subscriptions) => {
   });
 };
 
+test('catalog discovery retains account boundaries and isolates failed readings', async t => {
+  const owners = [];
+  const reads = [];
+  const kit = pooledKit('b', 'owner-models', {
+    readSet: async () => ({
+      members: [
+        { id: 'work', accountRef: 'acct_work' },
+        { id: 'home', accountRef: 'acct_home' },
+      ],
+    }),
+    secretOf: member => ({ member: member.id }),
+    credentialOf: member => {
+      const credential = { owner: member.id };
+      owners.push(credential);
+      return credential;
+    },
+    modelReadOf:
+      ({ member, secret, credential }) =>
+      async () => {
+        t.is(secret.member, member.id);
+        t.true(owners.includes(credential));
+        reads.push(member.id);
+        if (member.id === 'home') throw Error('SECRET must not escape');
+        return {
+          observedAt: 123,
+          models: [
+            {
+              id: 'model-a',
+              title: 'Model A',
+              description: '',
+              default: true,
+              defaultReasoningEffort: null,
+              reasoningEfforts: [],
+            },
+          ],
+        };
+      },
+  });
+  t.teardown(() => kit.close());
+  t.deepEqual(reads, []);
+  const catalog = await E(kit.service).modelCatalog();
+  t.is(owners.length, 2);
+  t.deepEqual(
+    catalog.accounts.map(account => [account.subscriptionId, account.state]),
+    [
+      ['work', 'current'],
+      ['home', 'unavailable'],
+    ],
+  );
+  t.is(catalog.accounts[0].models[0].id, 'model-a');
+  t.deepEqual(catalog.accounts[1].models, []);
+  t.false(JSON.stringify(catalog).includes('SECRET'));
+  await E(kit.service).modelCatalog('work');
+  t.is(owners.length, 2, 'discovery reuses existing credential owners');
+  t.deepEqual(reads, ['work', 'home', 'work']);
+  await t.throwsAsync(() => E(kit.service).modelCatalog('missing'), {
+    message: /Unknown provider subscription/,
+  });
+});
+
+test('discovery constructor failure does not discard the credential owner or leak its error', async t => {
+  let owners = 0;
+  const kit = pooledKit('b', 'owner-model-failure', {
+    readSet: async () => ({ members: [{ id: 'work' }] }),
+    secretOf: () => {
+      owners += 1;
+      return {};
+    },
+    modelReadOf: () => {
+      throw Error('SECRET constructor failure');
+    },
+  });
+  t.teardown(() => kit.close());
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    t.deepEqual(await E(kit.service).modelCatalog(), {
+      accounts: [
+        {
+          subscriptionId: 'work',
+          state: 'unavailable',
+          observedAt: null,
+          models: [],
+        },
+      ],
+    });
+  }
+  t.is(owners, 1);
+});
+
+test('a removed account cannot publish its pending catalog as current', async t => {
+  t.timeout(5000);
+  let stored = { members: [{ id: 'work' }] };
+  let finish;
+  let started;
+  const began = new Promise(resolve => {
+    started = resolve;
+  });
+  const pending = new Promise(resolve => {
+    finish = resolve;
+  });
+  const kit = pooledKit('b', 'owner-model-retired', {
+    readSet: async () => stored,
+    secretOf: () => ({}),
+    modelReadOf: () => async () => {
+      started();
+      return pending;
+    },
+  });
+  t.teardown(() => kit.close());
+  const reading = E(kit.service).modelCatalog('work');
+  await began;
+  stored = { members: [{ id: 'home' }] };
+  await E(kit.service).subscriptions();
+  finish({ observedAt: 123, models: [] });
+  t.deepEqual(await reading, {
+    accounts: [
+      {
+        subscriptionId: 'work',
+        state: 'unavailable',
+        observedAt: null,
+        models: [],
+      },
+    ],
+  });
+});
+
+test('catalog batch rechecks a fast account after a slower account finishes', async t => {
+  t.timeout(5000);
+  let stored = { members: [{ id: 'fast' }, { id: 'slow' }] };
+  let finishSlow;
+  let markFast;
+  const fastDone = new Promise(resolve => {
+    markFast = resolve;
+  });
+  const slow = new Promise(resolve => {
+    finishSlow = resolve;
+  });
+  const snapshot = { observedAt: 123, models: [] };
+  const kit = pooledKit('b', 'owner-model-batch', {
+    readSet: async () => stored,
+    secretOf: () => ({}),
+    modelReadOf:
+      ({ member }) =>
+      async () => {
+        if (member.id === 'slow') return slow;
+        markFast();
+        return snapshot;
+      },
+  });
+  t.teardown(() => kit.close());
+  const reading = E(kit.service).modelCatalog();
+  await fastDone;
+  // Let the fast account complete normalization before changing membership.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  stored = { members: [{ id: 'slow' }] };
+  await E(kit.service).subscriptions();
+  finishSlow(snapshot);
+  const result = await reading;
+  t.deepEqual(
+    result.accounts.map(account => [account.subscriptionId, account.state]),
+    [
+      ['fast', 'unavailable'],
+      ['slow', 'current'],
+    ],
+  );
+});
+
 test('a status reader and the first session arriving together share one pool', async t => {
   let stateReads = 0;
   const kit = pooledKit('c', 'owner-concurrent', {

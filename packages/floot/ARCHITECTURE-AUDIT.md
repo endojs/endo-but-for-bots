@@ -65,7 +65,7 @@ No claim of complete retrospective coverage is made yet.
 
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
-| Catalog reads and renewal owner | Uncommitted integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. |
+| Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
 | Pool member identity | `275710d5a` pins identity only in memory; chooser state is persisted. Same-ID rebinding after restart can inherit another account's state. | Persist and validate identity with chooser state; test restart, removed IDs, and failed writes. |
 | Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
 | Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
@@ -133,6 +133,15 @@ one real-daemon formula cancellation/reconstruction test.
 The latter verifies renewal completion precedes close acknowledgement and
 successor construction; the old in-worker facet remains fenced afterward.
 No durable catalog cache or model-admission policy is introduced in this slice.
+The host-only `modelCatalog(subscriptionId?)` result reports each account
+separately as current, unavailable, or unsupported; it is not a pool-wide
+permission to serve a model.
+Adapters use the existing credential owner and do not start a sandbox or
+inference turn for discovery.
+Codex derives its client version from the packaged OCI manifest; OpenRouter
+projection preserves raw provider routes and only advertised reasoning efforts.
+Static setup/factory/NixOS lists and Fae discovery wiring still need removal
+or replacement before FA-07 can be considered complete.
 Native state recovery now has operator approval for a breaking layout rewrite:
 uniquely allocated directories with atomically published ownership records.
 A marker-before-fixed-directory draft was rejected because crash recovery
@@ -999,6 +1008,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | FA-07: expose account-scoped broker model catalogs using existing credential owners | 45 shared, three Codex, seven OpenCode, and one real-daemon lifecycle test pass independently; static catalog removal/admission wiring pending; not deployed |
 | 2026-09-21 | Retrospective durability: checkpoint directory flushes (`c645f567f`) | 13 tests and independent review pass; Tokyo filesystem supports required flushes; pushed, not deployed |
 | 2026-09-21 | Retrospective durability: persist marshal formula before name publication and retain pending slot dependencies | Nine manager/persistence tests including concurrent-root removal, lost acknowledgement, and real daemon restart pass; independent review; not deployed |
 | 2026-09-21 | Initial audit and FA-01–FA-13 register | Source review plus two in-memory reproductions; no remediation or deployment claimed |

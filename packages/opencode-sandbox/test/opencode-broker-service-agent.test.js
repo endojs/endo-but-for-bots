@@ -31,6 +31,55 @@ const spec = harden({
 });
 const secret = Far('OriginalSecret', { readBase64: async () => btoa('key') });
 
+test('OpenCode catalog reads the same secret on every refresh without starting runtime', async t => {
+  let reads = 0;
+  let requests = 0;
+  const catalogSecret = Far('CatalogSecret', {
+    readBase64: async () => btoa(`key-${(reads += 1)}`),
+  });
+  const make = makeOwnedOpencodeBrokerService({
+    fetch: async (url, options) => {
+      requests += 1;
+      t.is(url, 'https://openrouter.ai/api/v1/models/user');
+      t.like(options?.headers, { authorization: `Bearer key-${reads}` });
+      return Response.json({
+        data: [
+          {
+            id: 'vendor/advertised',
+            name: 'Advertised',
+            architecture: {
+              input_modalities: ['text'],
+              output_modalities: ['text'],
+            },
+            supported_parameters: ['tools'],
+          },
+        ],
+      });
+    },
+  });
+  let cancel = () => {};
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = () => reject(Error('done'));
+  });
+  void cancelled.catch(() => {});
+  t.teardown(async () => {
+    cancel();
+    await setImmediate();
+  });
+  const service = await make(
+    catalogSecret,
+    Far('CatalogContext', { whenCancelled: () => cancelled }),
+    { env },
+  );
+  t.is(reads, 0);
+  t.is(requests, 0);
+  const first = await E(service).modelCatalog();
+  await E(service).modelCatalog();
+  t.is(reads, 2);
+  t.is(requests, 2);
+  t.is(first.accounts[0].models[0].id, 'vendor/advertised');
+});
+
 const gate = () => {
   let release = () => {};
   const promise = new Promise(resolve => {

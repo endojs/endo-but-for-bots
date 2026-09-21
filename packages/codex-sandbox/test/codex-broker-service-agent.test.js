@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 import { setImmediate } from 'node:timers/promises';
+import { readFile } from 'node:fs/promises';
 
 import {
   makeOwnedCodexBrokerService,
@@ -22,6 +23,78 @@ const config = harden({
   models: ['model-a'],
 });
 const env = harden({ CODEX_BROKER_CONFIG: JSON.stringify(config) });
+
+test('Codex catalog uses retained credential and the packaged CLI version without starting runtime', async t => {
+  let reads = 0;
+  let requests = 0;
+  let constructions = 0;
+  const manifest = JSON.parse(
+    await readFile(new URL('../oci/package.json', import.meta.url), 'utf8'),
+  );
+  const make = makeOwnedCodexBrokerService({
+    makeCredential: () => {
+      constructions += 1;
+      return harden({
+        accountRef: 'account-a',
+        current: async () => {
+          reads += 1;
+          return {
+            state: { accessToken: `token-${reads}`, accountId: 'account-a' },
+          };
+        },
+      });
+    },
+    fetch: async (url, options) => {
+      requests += 1;
+      t.is(
+        url,
+        `https://chatgpt.com/backend-api/codex/models?client_version=${manifest.dependencies['@openai/codex']}`,
+      );
+      t.like(options?.headers, {
+        authorization: `Bearer token-${reads}`,
+        'chatgpt-account-id': 'account-a',
+      });
+      return Response.json({
+        models: [
+          {
+            slug: 'advertised-model',
+            display_name: 'Advertised',
+            visibility: 'list',
+            priority: 0,
+            supported_reasoning_levels: [],
+            default_reasoning_level: null,
+          },
+        ],
+      });
+    },
+  });
+  let cancel = () => {};
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = () => reject(Error('done'));
+  });
+  void cancelled.catch(() => {});
+  t.teardown(async () => {
+    cancel();
+    await setImmediate();
+  });
+  const service = await make(
+    Far('UnusedSecret', {
+      readBase64: async () => {
+        throw Error('unexpected read');
+      },
+    }),
+    Far('CatalogContext', { whenCancelled: () => cancelled }),
+    { env },
+  );
+  t.is(reads, 0);
+  t.is(requests, 0);
+  const first = await E(service).modelCatalog();
+  await E(service).modelCatalog();
+  t.is(constructions, 1);
+  t.is(reads, 2);
+  t.is(requests, 2);
+  t.is(first.accounts[0].models[0].id, 'advertised-model');
+});
 
 test('Codex broker configuration refuses authority injection and unbound accounts', t => {
   t.deepEqual(readCodexBrokerConfig(env), config);

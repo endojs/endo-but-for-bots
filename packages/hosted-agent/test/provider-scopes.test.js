@@ -13,6 +13,44 @@ const spec = harden({
   model: 'allowed',
 });
 
+test('model discovery never opens an issuer and is fenced by service closure', async t => {
+  t.timeout(5000);
+  let opens = 0;
+  const requested = [];
+  let finish;
+  const pending = new Promise(resolve => {
+    finish = resolve;
+  });
+  const kit = makeProviderScopes({
+    openIssuer: async () => {
+      opens += 1;
+      throw Error('Unexpected issuer');
+    },
+    readModelCatalog: async id => {
+      requested.push(id);
+      return pending;
+    },
+  });
+  t.teardown(() => kit.close());
+  const reading = E(kit.service).modelCatalog('work');
+  const rejected = t.throwsAsync(reading, { message: /service is closed/ });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  let closed = false;
+  const closing = kit.close().then(() => {
+    closed = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.false(closed, 'retirement waits for admitted credential work');
+  finish(harden({ accounts: [] }));
+  await rejected;
+  await closing;
+  await t.throwsAsync(() => E(kit.service).modelCatalog(), {
+    message: /service is closed/,
+  });
+  t.deepEqual(requested, ['work']);
+  t.is(opens, 0);
+});
+
 const gate = () => {
   let release = () => {};
   const promise = new Promise(resolve => {
@@ -162,6 +200,7 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
     '__getMethodNames__',
     'accountSource',
     'lookupScope',
+    'modelCatalog',
     'provideScope',
     'resetRedeemer',
     'subscription',

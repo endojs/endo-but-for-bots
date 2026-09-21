@@ -64,6 +64,8 @@ const ScopeInterface = M.interface('ProviderScope', {
  * @param {(subscriptionId?: string) => any} [powers.accountSourceOf] For a
  *   broker over several subscriptions: each one's account source, by id.
  * @param {() => Promise<Array<{ id: string, label: string, weight: number }>>} [powers.listSubscriptions]
+ * @param {(subscriptionId?: string) => Promise<any>} [powers.readModelCatalog]
+ *   Host-only provider metadata discovery, without opening an issuer or scope.
  * @param {any} [powers.resetRedeemer] The broker's facet for spending a
  *   banked rate-limit reset (`reset-redeemer.js`), where the adapter has one.
  * @param {(subscriptionId?: string) => any} [powers.resetRedeemerOf] The same,
@@ -76,6 +78,7 @@ export const makeProviderScopes = ({
   accountSource,
   accountSourceOf,
   listSubscriptions,
+  readModelCatalog,
   resetRedeemer,
   resetRedeemerOf,
   subscription,
@@ -87,6 +90,8 @@ export const makeProviderScopes = ({
   /** @type {Promise<void> | undefined} */
   let closing;
   let stopped = false;
+  /** @type {Set<Promise<any>>} */
+  const modelReads = new Set();
 
   /**
    * @param {string} sessionId
@@ -208,7 +213,17 @@ export const makeProviderScopes = ({
     // revocation. Retain every failed owner for the next close attempt.
     const releases = [...scopes.values()].map(scope => scope.revoke());
     closing = (async () => {
-      const results = await Promise.allSettled(releases);
+      // Metadata may enter the shared renewing credential. Do not acknowledge
+      // owner retirement while an admitted read can still use that owner.
+      const results = await Promise.allSettled([
+        ...releases,
+        ...[...modelReads].map(read =>
+          read.then(
+            () => undefined,
+            () => undefined,
+          ),
+        ),
+      ]);
       const failures = results.flatMap(result =>
         result.status === 'rejected' ? [result.reason] : [],
       );
@@ -230,6 +245,7 @@ export const makeProviderScopes = ({
         .optional(M.string())
         .returns(M.or(M.remotable(), M.undefined(), M.promise())),
       subscriptions: M.call().returns(M.promise()),
+      modelCatalog: M.call().optional(M.string()).returns(M.promise()),
       resetRedeemer: M.call()
         .optional(M.string())
         .returns(M.or(M.remotable(), M.undefined(), M.promise())),
@@ -253,6 +269,23 @@ export const makeProviderScopes = ({
       // number or secret name is in it.
       subscriptions: async () =>
         listSubscriptions === undefined ? harden([]) : listSubscriptions(),
+      /** @param {string} [subscriptionId] */
+      modelCatalog: subscriptionId => {
+        !stopped || Fail`Provider scope service is closed`;
+        if (readModelCatalog === undefined) {
+          throw Fail`Provider model discovery unavailable`;
+        }
+        const read = readModelCatalog;
+        const operation = (async () => {
+          await null;
+          !stopped || Fail`Provider scope service is closed`;
+          const catalog = await read(subscriptionId);
+          !stopped || Fail`Provider scope service is closed`;
+          return catalog;
+        })();
+        modelReads.add(operation);
+        return operation.finally(() => modelReads.delete(operation));
+      },
       // An operator's: the one call that spends a banked rate-limit reset of
       // the account behind this broker, or of one of its subscriptions.
       // Undefined where the provider has no such thing. A session scope does

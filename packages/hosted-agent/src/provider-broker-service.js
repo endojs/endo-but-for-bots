@@ -27,6 +27,7 @@ import { makeAccountJournal } from './account-oracle.js';
 
 import { makeAccountReadingSource } from './account-source.js';
 import { makeBrokerSubscription } from './broker-subscription.js';
+import { normalizeHostedModelDescriptor } from './hosted-backend.js';
 import { makeProviderBrokerGrantIssuer } from './provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makeProviderScopes } from './provider-scopes.js';
@@ -288,6 +289,59 @@ export const makeProviderBrokerKit = ({
 };
 harden(makeProviderBrokerKit);
 
+/** @param {() => () => Promise<any>} makeRead */
+const lazyModelRead = makeRead => {
+  /** @type {(() => Promise<any>) | undefined} */
+  let read;
+  return async () => {
+    read ??= makeRead();
+    return read();
+  };
+};
+
+/**
+ * Per-account metadata, never a pool-wide admission decision. Failure does not
+ * masquerade as an empty successful catalog or fall back to configured models.
+ * @param {string} subscriptionId
+ * @param {(() => Promise<any>) | undefined} read
+ */
+const readCatalogAccount = async (subscriptionId, read) => {
+  if (read === undefined) {
+    return harden({
+      subscriptionId,
+      state: 'unsupported',
+      observedAt: null,
+      models: [],
+    });
+  }
+  try {
+    const snapshot = await read();
+    const observedAt = /** @type {unknown} */ (snapshot?.observedAt);
+    (typeof observedAt === 'number' &&
+      Number.isFinite(observedAt) &&
+      observedAt >= 0 &&
+      Array.isArray(snapshot.models) &&
+      Number(snapshot.models.length) <= 4096) ||
+      Fail`Invalid provider model catalog`;
+    const models = snapshot.models.map(normalizeHostedModelDescriptor);
+    new Set(models.map(model => model.id)).size === models.length ||
+      Fail`Duplicate provider model identity`;
+    return harden({
+      subscriptionId,
+      state: 'current',
+      observedAt: snapshot.observedAt,
+      models,
+    });
+  } catch (_error) {
+    return harden({
+      subscriptionId,
+      state: 'unavailable',
+      observedAt: null,
+      models: [],
+    });
+  }
+};
+
 /**
  * What an adapter supplies for a broker over several subscriptions.
  *
@@ -305,6 +359,7 @@ harden(makeProviderBrokerKit);
  *   shared refreshing credential. Asked once per member.
  * @property {(member: any) => any} [adaptRequestOf]
  * @property {(powers: { member: any, secret: any, credential: any }) => () => Promise<any>} [activeReadOf]
+ * @property {(powers: { member: any, secret: any, credential: any }) => () => Promise<any>} [modelReadOf]
  * @property {(powers: { member: any, secret: any, credential: any }) => (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>} [resetRedeemOf]
  *   The member's one call that spends a banked rate-limit reset.
  * @property {() => Promise<any>} [readState] What a previous incarnation kept
@@ -341,6 +396,7 @@ const makePooledBrokerServiceKit = ({
     credentialOf,
     adaptRequestOf,
     activeReadOf,
+    modelReadOf,
     resetRedeemOf,
     readState = async () => undefined,
     writeState = async () => {},
@@ -353,6 +409,7 @@ const makePooledBrokerServiceKit = ({
    * @property {any} adaptRequest
    * @property {ReturnType<typeof makeAccountReadingSource>} account
    * @property {any} redeemer
+   * @property {(() => Promise<any>) | undefined} modelRead
    * @property {(() => any) | undefined} subscription For a wrapped member.
    */
   /** @type {Map<string, MemberKit>} */
@@ -438,6 +495,7 @@ const makePooledBrokerServiceKit = ({
       credential: undefined,
       adaptRequest: undefined,
       redeemer: undefined,
+      modelRead: undefined,
       subscription,
       account: {
         ...account,
@@ -475,6 +533,10 @@ const makePooledBrokerServiceKit = ({
         adaptRequest:
           adaptRequestOf === undefined ? undefined : adaptRequestOf(member),
         account,
+        modelRead:
+          modelReadOf === undefined
+            ? undefined
+            : lazyModelRead(() => modelReadOf({ member, secret, credential })),
         redeemer:
           resetRedeemOf === undefined
             ? undefined
@@ -662,6 +724,50 @@ const makePooledBrokerServiceKit = ({
         })),
       );
     },
+    readModelCatalog: async subscriptionId => {
+      const { members } = await load();
+      const selected =
+        subscriptionId === undefined
+          ? members
+          : members.filter(member => member.id === subscriptionId);
+      subscriptionId === undefined ||
+        selected.length === 1 ||
+        Fail`Unknown provider subscription`;
+      const observedKits = new Map();
+      const accounts = await Promise.all(
+        selected.map(member =>
+          readCatalogAccount(
+            member.id,
+            modelReadOf === undefined || member.subscriptionName !== undefined
+              ? undefined
+              : async () => {
+                  const kit = kitOf(member);
+                  observedKits.set(member.id, kit);
+                  return kit.modelRead?.();
+                },
+          ),
+        ),
+      );
+      // Validate the entire batch after its slowest account finishes. A fast
+      // account may have been removed while a different account was pending.
+      const latest = await load();
+      const currentIds = new Set(latest.members.map(member => member.id));
+      return harden({
+        accounts: accounts.map(account =>
+          account.state === 'current' &&
+          (!currentIds.has(account.subscriptionId) ||
+            kits.get(account.subscriptionId) !==
+              observedKits.get(account.subscriptionId))
+            ? {
+                subscriptionId: account.subscriptionId,
+                state: 'unavailable',
+                observedAt: null,
+                models: [],
+              }
+            : account,
+        ),
+      });
+    },
   });
   return harden({
     service: scopes.service,
@@ -796,7 +902,7 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions }} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, modelRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions }} options
  *   `activeAccountRead` is the adapter's one read of its provider's usage
  *   endpoint, host-only and only ever run on request. `resetRedeem` is its
  *   one call that spends a banked rate-limit reset, an operator's and never
@@ -807,6 +913,7 @@ export const makeProviderBrokerServiceKit = options => {
   const {
     label,
     activeAccountRead,
+    modelRead,
     resetRedeem,
     subscriptions,
     providerId = label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
@@ -858,6 +965,14 @@ export const makeProviderBrokerServiceKit = options => {
   const scopes = makeProviderScopes({
     openIssuer: async () => (await broker.start()).issuer,
     accountSource: account.source,
+    readModelCatalog: async subscriptionId => {
+      subscriptionId === undefined ||
+        subscriptionId === 'default' ||
+        Fail`Unknown provider subscription`;
+      return harden({
+        accounts: [await readCatalogAccount('default', modelRead)],
+      });
+    },
     subscription: asSubscription.subscription,
     ...(resetRedeem === undefined
       ? {}
@@ -951,6 +1066,9 @@ const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
  *   Synchronous, inert construction of the adapter's one read of its
  *   provider's usage endpoint, for an account oracle's `refresh()`. Host-only:
  *   it holds the credential. Run only on request, never at start.
+ * @param {(powers: { config: Config, secret: any, credential: any, accountRef: string }) => () => Promise<any>} [options.makeModelRead]
+ *   Lazy, inert construction of host-only model discovery using the same
+ *   credential owner. Runs only on explicit catalog requests.
  * @param {(powers: { config: Config, secret: any, credential: any, accountRef: string }) => (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>} [options.makeResetRedeem]
  *   Synchronous, inert construction of the adapter's one call that spends a
  *   banked rate-limit reset. Host-only, and run only when an operator redeems.
@@ -965,6 +1083,7 @@ export const makeOwnedProviderBrokerService = ({
   makePolicy,
   makeCredential,
   makeActiveAccountRead,
+  makeModelRead,
   makeResetRedeem,
   makeServiceKit = makeProviderBrokerServiceKit,
   reportError = error =>
@@ -1059,6 +1178,21 @@ export const makeOwnedProviderBrokerService = ({
           // An adapter's translation can name the account (a ChatGPT account
           // header), so each member has its own.
           adaptRequestOf: member => makePolicy(forMember(member)).adaptRequest,
+          ...(makeModelRead === undefined
+            ? {}
+            : {
+                modelReadOf: ({
+                  member,
+                  secret: memberSecret,
+                  credential: memberCredential,
+                }) =>
+                  makeModelRead({
+                    config: forMember(member),
+                    secret: memberSecret,
+                    credential: memberCredential,
+                    accountRef: member.accountRef ?? accountRef,
+                  }),
+              }),
           ...(makeActiveAccountRead === undefined
             ? {}
             : {
@@ -1107,6 +1241,18 @@ export const makeOwnedProviderBrokerService = ({
       secret,
       adaptRequest,
       ...(credential === undefined ? {} : { credential }),
+      ...(makeModelRead === undefined
+        ? {}
+        : {
+            modelRead: lazyModelRead(() =>
+              makeModelRead({
+                config,
+                secret,
+                credential,
+                accountRef,
+              }),
+            ),
+          }),
       ...(makeActiveAccountRead === undefined
         ? {}
         : {

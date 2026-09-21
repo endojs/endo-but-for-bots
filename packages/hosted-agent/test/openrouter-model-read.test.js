@@ -2,7 +2,10 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { makeOpenRouterModelRead } from '../src/openrouter-model-read.js';
+import {
+  makeOpenRouterModelRead,
+  modelsFromOpenRouterCatalog,
+} from '../src/openrouter-model-read.js';
 
 const model = harden({
   id: 'openrouter/free',
@@ -11,6 +14,66 @@ const model = harden({
   context_length: null,
   architecture: { input_modalities: ['text'], output_modalities: ['text'] },
   supported_parameters: ['tools'],
+});
+
+test('agent projection filters text tools and never invents routes or reasoning choices', async t => {
+  const read = makeOpenRouterModelRead({
+    readKey: async () => 'key',
+    fetch: async () =>
+      Response.json({
+        data: [
+          model,
+          {
+            ...model,
+            id: 'vendor/concrete',
+            reasoning: {
+              mandatory: true,
+              supported_efforts: ['high', 'low'],
+              default_effort: 'low',
+            },
+          },
+          {
+            ...model,
+            id: 'vendor/generic',
+            supported_parameters: ['tools', 'reasoning'],
+            reasoning: {
+              mandatory: false,
+              default_effort: 'high',
+            },
+          },
+          { ...model, id: 'vendor/no-tools', supported_parameters: [] },
+          {
+            ...model,
+            id: 'vendor/image-output',
+            architecture: {
+              input_modalities: ['text'],
+              output_modalities: ['image'],
+            },
+          },
+          {
+            ...model,
+            id: 'vendor/audio-input',
+            architecture: {
+              input_modalities: ['audio'],
+              output_modalities: ['text'],
+            },
+          },
+        ],
+      }),
+  });
+  const projected = modelsFromOpenRouterCatalog((await read()).models);
+  t.deepEqual(
+    projected.map(row => row.id),
+    [model.id, 'vendor/concrete', 'vendor/generic'],
+  );
+  t.deepEqual(projected[0].reasoningEfforts, []);
+  t.is(projected[0].defaultReasoningEffort, null);
+  t.deepEqual(projected[1].reasoningEfforts, ['high', 'low']);
+  t.is(projected[1].defaultReasoningEffort, 'low');
+  t.deepEqual(projected[2].reasoningEfforts, []);
+  t.is(projected[2].defaultReasoningEffort, null);
+  t.true(projected.every(row => row.default === false));
+  t.true(Object.isFrozen(projected));
 });
 
 test('reads only the account-filtered catalog and refreshes credentials per call', async t => {
