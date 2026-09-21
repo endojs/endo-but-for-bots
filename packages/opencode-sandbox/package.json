@@ -21,7 +21,6 @@
     "./src/opencode-agent-config.js": "./src/opencode-agent-config.js",
     "./src/opencode-protocol.js": "./src/opencode-protocol.js",
     "./src/managed-credentials.js": "./src/managed-credentials.js",
-    "./src/managed-credentials-module.js": "./src/managed-credentials-module.js",
     "./src/opencode-client.js": "./src/opencode-client.js",
     "./src/opencode-broker.js": "./src/opencode-broker.js",
     "./src/opencode-broker-service-agent.js": "./src/opencode-broker-service-agent.js",

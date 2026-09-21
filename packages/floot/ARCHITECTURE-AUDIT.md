@@ -51,7 +51,7 @@ no retained formula referring to it.
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional session creation removed locally; migration/cache branches pending |
-| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | OpenCode broker wrapper removed locally; credential shims pending |
+| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed locally; deployment verification pending |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
@@ -401,10 +401,20 @@ packages; this is not a claim of green repository-wide type/docs checks.
 
 ## FA-12 — Retire compatibility-only entrypoints
 
-Claude/OpenCode `src/managed-credentials-module.js` wrappers preserve old formula specifiers.
-Current construction uses the shared hosted-agent entrypoint.
-Recreate retained formulas against that entrypoint before deleting the wrappers.
-Preserve the underlying Secrets blobs and single renewal ownership.
+Claude/OpenCode `src/managed-credentials-module.js` wrappers previously preserved
+old formula specifiers; both wrappers and the OpenCode package export are removed.
+Current construction already uses the shared hosted-agent entrypoint.
+A fresh read-only Tokyo inventory found two shared managed-credential and five
+shared renewable-credential formulas, with no wrapper specifiers in the inspected
+graph.
+This is a non-atomic, root-reachable/static dependency inventory, not proof about
+every stored formula or dynamic guest namespace.
+No credentials or formulas were replaced: Secret identities and single renewal
+ownership are untouched.
+The OpenCode credential tests now import the shared module and explicitly require
+newly minted URLs to select its shared entrypoint.
+All 27 focused OpenCode credential/setup tests pass; changed-file lint is clean.
+Deployment verification of the removal remains pending.
 
 The OpenCode `src/opencode-broker-service.js` wrapper and its package export are removed.
 The current broker agent already uses the shared service kit directly.
@@ -675,6 +685,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Reject incomplete restoration coverage (`f502c87`) | Eight tests and adversarial review; fresh three-backend live acceptance started, results pending |
 | 2026-09-21 | FA-12: remove unused OpenCode broker-service wrapper/export | Seven authority/lifecycle tests retained against shared kit; 218 package tests pass with socket permissions; ESLint zero errors/36 warnings; no broker or credential identity changes; not yet deployed |
 | 2026-09-21 | FA-11: require record-only session creation | Setup caller and help updated; voice/delegation/model/network/subscription behavior preserved; 403 package tests and independent review pass; repository docs gate remains failing; not yet deployed |
+| 2026-09-21 | FA-12: remove obsolete credential-entrypoint shims | Fresh inspected Tokyo graph uses shared entrypoints only; 27 credential/setup tests pass; no Secret/formula mutations; deployment pending |
 
 ## Request
 
