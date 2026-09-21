@@ -44,7 +44,7 @@ no retained formula referring to it.
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fixed locally; compaction policy pending |
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Removed locally; runtime retirement pending |
-| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Open |
+| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | In progress — removing ignored configuration |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
 | FA-07 | Medium | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
@@ -148,6 +148,18 @@ idempotent setup, distinct host ownership, and preservation of retained legacy b
 Independent review caught two stale test expectations; both were corrected before commit.
 Not deployed; native conformance and resource retirement remain pending.
 
+Preparation for source deletion now preserves the generic daemon coverage in a
+test-only dependency-bundle fixture rather than the legacy `session-powers` module.
+The two real-daemon regressions pass: exact dependency identity across rebinding,
+restart, and collection, plus remote send/adopt endowment versus a bare presence.
+Short per-test names avoid macOS's socket-path limit while retaining unique suffixes.
+The [coverage and retirement map](../claude-sandbox/docs/legacy-retirement.md) records
+what survives and what is intentionally obsolete.
+Successful arbitrary `/mnt` attachments belonged to the legacy path; the current Claude
+backend refuses them, and removing legacy tests must not imply otherwise.
+The permission check blocked the 16-file deletion and explicit approval has been requested.
+Those source files, exports, and legacy tests remain present; no workaround was attempted.
+
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
 The current native controller directly constructs `opencode-client.js`.
@@ -212,6 +224,17 @@ by both construction and verification, rather than preserving a nonfunctional se
 
 Completion: no accepted resource setting is silently ignored; tests assert effective
 limits and reject unsupported profile changes.
+
+Progress: the paired endo-host change `be0803e` removes the three profile options,
+their environment exports, and the shared host value.
+All three changed Nix files pass `nix-instantiate --parse` on Tokyo; no configuration
+was evaluated, built, or activated.
+The app removal must land with this host change: old setup scripts require the removed
+environment variables, while new plan parsers reject the obsolete `nativeProfile` field.
+Existing native session records therefore require retirement/recreation using the old release
+before activation; do not switch first and expect the new parser to clean up old plans.
+The effective hosted slice-resource policy and generic sandbox profiles are unchanged.
+App tests and adversarial review are in progress; this finding is not complete or deployed.
 
 ## FA-06 — One session provisioner and execution envelope
 
@@ -415,6 +438,8 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-04 A: delete obsolete OpenCode client formula | 60 focused tests passed, 53 independently rerun; legacy formula retirement pending; not deployed |
 | 2026-09-21 | FA-01/02: archive-aware history and hydrated direct-provider replay | 407 package tests passed, 27 independently rerun; tool-ID collision caught and fixed during review; bounded context/compaction pending; not deployed |
 | 2026-09-21 | FA-04 B: delete unused OpenCode CLI state service | OpenCode: 226 passed; shared runtime: 545 passed, one skipped; adversarial source review; runtime retirement and deployment pending |
+| 2026-09-21 | Tokyo retirement inventory (`575b45f68`, host helper `d68f72c`) | Read-only named-binding inspection on release `21bcb3d0`; legacy producers remain; no runtime retirement or deployment |
+| 2026-09-21 | FA-03: preserve generic daemon coverage before legacy deletion | Two real-daemon tests passed; lint/format passed; actual 16-file source removal awaits explicit permission; no deployment |
 
 ## Request
 

@@ -277,20 +277,22 @@ const makeHost = async (config, cancelled) => {
 
 /**
  * @param {ExecutionContext<any>} t
+ * @param {string} [configName]
  * @returns {Promise<ReturnType<prepareConfig> & ReturnType<makeHost>>}
  */
-const prepareHost = async t => {
+const prepareHost = async (t, configName = t.title) => {
   // eslint-disable-next-line no-use-before-define
-  const { cancel, cancelled, config } = await prepareConfig(t);
+  const { cancel, cancelled, config } = await prepareConfig(t, { configName });
   const { host } = await makeHost(config, cancelled);
   return { cancel, cancelled, config, host };
 };
 
 /**
  * @param {ExecutionContext<any>} t
+ * @param {string} [configName]
  */
-const prepareHostWithTestNetwork = async t => {
-  const { host } = await prepareHost(t);
+const prepareHostWithTestNetwork = async (t, configName = t.title) => {
+  const { host } = await prepareHost(t, configName);
 
   // Store the listen address before the network service starts.
   await E(host).storeValue('127.0.0.1:0', 'tcp-listen-addr');
@@ -1369,12 +1371,15 @@ testNeedsNodeWorker.serial(
 );
 
 testNeedsNodeWorker.serial(
-  'static session powers retain exact dependencies across rebinding and restart',
+  'static dependency bundles retain exact capabilities across rebinding and restart',
   async t => {
     t.timeout(30_000);
-    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { cancelled, config } = await prepareConfig(t, {
+      gcEnabled: true,
+      configName: 'dp',
+    });
     const modulePath = url.fileURLToPath(
-      new URL('../../hosted-agent/src/session-powers.js', import.meta.url),
+      new URL('./_dependency-bundle.js', import.meta.url),
     );
     let originalIds;
     let bundleId;
@@ -1410,13 +1415,10 @@ testNeedsNodeWorker.serial(
       ]);
       await E(host).storeValue(
         harden({
-          agent: await E(host).lookup('@agent'),
           sandboxFactory: factory,
           fsMounter: mounter,
           filesystem,
           stateProvider,
-          sessionId: 'session-a',
-          mounts: [],
         }),
         'powers-input',
       );
@@ -1464,19 +1466,18 @@ testNeedsNodeWorker.serial(
       const filesystem = await E(powers).filesystem();
       t.is(await E(filesystem).readText('identity'), 'original-filesystem');
       const provider = await E(powers).stateProvider();
-      t.is(await E(provider).provideSessionMount(), 'original-state');
-      await t.throwsAsync(() => E(provider).removeSession('session-b'), {
-        message: /restricted to its approved session/,
-      });
+      t.is(
+        await E(provider).provideSessionMount('session-a'),
+        'original-state',
+      );
       t.false(await E(filesystem).has('removed'));
-      await E(provider).removeSession();
+      await E(provider).removeSession('session-a');
       t.is(await E(filesystem).readText('removed'), 'session-a');
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(powers).__getMethodNames__();
       t.false(methods.includes('lookup'));
       t.false(methods.includes('lookupById'));
       t.false(methods.includes('agent'));
-      t.is(await E(powers).credentials(), null);
 
       await E(host).remove('session-powers');
       for (const id of [...originalIds, bundleId]) {
@@ -4694,6 +4695,40 @@ test('read unknown node id', async t => {
     message: /No peer found for node identifier /u,
   });
 });
+
+testNeedsNodeWorker.serial(
+  'an adopted remote capability is endowable by name, unlike a bare presence',
+  async t => {
+    t.timeout(120_000);
+    const host = await prepareHostWithTestNetwork(t, 'rc');
+    const peer = await prepareHostWithTestNetwork(t, 'rc');
+    await E(host).addPeerInfo(await E(peer).getPeerInfo());
+    await E(peer).addPeerInfo(await E(host).getPeerInfo());
+    const remote = await E(peer).makeDirectory('project');
+    await E(remote).writeText('identity', 'remote-project');
+    await t.throwsAsync(E(host).storeValue(remote, 'bare-presence'), {
+      message: /No corresponding formula/,
+    });
+    const invitation = await E(peer).invite('recipient');
+    await E(host).accept(await E(invitation).locate(), 'sender');
+    await E(peer).send('recipient', ['workspace'], ['filesystem'], ['project']);
+    const messages = await E(host).listMessages();
+    const pkg = messages.find(
+      message =>
+        message.type === 'package' && message.strings?.[0] === 'workspace',
+    );
+    t.truthy(pkg);
+    await E(host).adopt(pkg.number, 'filesystem', ['remote-project']);
+    const identity = await E(host).evaluate(
+      '@main',
+      "E(project).readText('identity')",
+      ['project'],
+      ['remote-project'],
+      'probe-result',
+    );
+    t.is(identity, 'remote-project');
+  },
+);
 
 testNeedsNodeWorker('read remote value', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
