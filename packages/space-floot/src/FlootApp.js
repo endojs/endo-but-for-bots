@@ -41,11 +41,23 @@ const useControllerState = controller => {
   return controller.getState();
 };
 
+/** @param {FlootModel | undefined} model */
+const maximumEffort = model => {
+  const supported = model?.reasoningEfforts || [];
+  return (
+    ['ultra', 'max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'].find(
+      effort => supported.includes(effort),
+    ) ||
+    supported.at(-1) ||
+    ''
+  );
+};
+
 /**
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
- *   onPick: (id: string, model: string, reasoningEffort?: string, subscription?: string) => void,
+ *   onPick: (id: string, model: string, reasoningEffort?: string, subscription?: string, networkPolicy?: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
@@ -61,10 +73,13 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   );
   const [model, setModel] = useState(preferred ? preferred.id : '');
   const [reasoningEffort, setReasoningEffort] = useState(
-    preferred?.defaultReasoningEffort || preferred?.reasoningEfforts?.[0] || '',
+    maximumEffort(preferred),
   );
   const selectedModel = models.find(candidate => candidate.id === model);
   const reasoningEfforts = selectedModel?.reasoningEfforts || [];
+  const [internet, setInternet] = useState(true);
+  const networkPolicies = selectedModel?.supportedNetworkPolicies || [];
+  const supportsInternet = networkPolicies.includes('public-internet');
   // Which of the backend's subscriptions the session uses. `auto` lets the
   // backend drain the one that resets soonest and move a turn when one runs
   // out; a choice here pins the session. Offered only when there is a choice.
@@ -107,11 +122,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   const next = candidates.find(m => m.default) || candidates[0];
                   setBackend(e.target.value);
                   setModel(next?.id || '');
-                  setReasoningEffort(
-                    next?.defaultReasoningEffort ||
-                      next?.reasoningEfforts?.[0] ||
-                      '',
-                  );
+                  setReasoningEffort(maximumEffort(next));
                 },
               },
               backends.map(id =>
@@ -141,11 +152,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                     candidate => candidate.id === e.target.value,
                   );
                   setModel(e.target.value);
-                  setReasoningEffort(
-                    next?.defaultReasoningEffort ||
-                      next?.reasoningEfforts?.[0] ||
-                      '',
-                  );
+                  setReasoningEffort(maximumEffort(next));
                 },
               },
               backendModels.map(m =>
@@ -162,11 +169,12 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
         ? h(
             'label',
             { class: 'floot-modal-field' },
-            h('span', { class: 'floot-modal-label' }, 'Reasoning'),
+            h('span', { class: 'floot-modal-label' }, 'Thinking level'),
             h(
               'select',
               {
                 class: 'floot-model-select',
+                'aria-label': 'Thinking level',
                 value: reasoningEffort,
                 onChange: (/** @type {FlootSafeEvent} */ e) =>
                   setReasoningEffort(e.target.value),
@@ -177,6 +185,34 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
             ),
           )
         : null,
+      h(
+        'div',
+        { class: 'floot-modal-field' },
+        h('span', { class: 'floot-modal-label' }, 'Internet access'),
+        h(
+          'button',
+          {
+            type: 'button',
+            role: 'switch',
+            'aria-label': 'Internet access',
+            'aria-checked': supportsInternet && internet,
+            disabled: !supportsInternet,
+            onClick: () => setInternet(value => !value),
+          },
+          supportsInternet && internet
+            ? 'On — public internet only'
+            : networkPolicies.length
+              ? 'Off'
+              : 'Not available',
+        ),
+        h(
+          'small',
+          null,
+          supportsInternet
+            ? 'Allows public HTTP/HTTPS uploads and downloads. Private networks remain blocked.'
+            : 'This backend does not offer configurable public-internet access.',
+        ),
+      ),
       subscriptions.length > 1
         ? h(
             'label',
@@ -204,7 +240,10 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
       h(
         'div',
         { class: 'floot-preset-list' },
-        presets.map(p =>
+        (presets.length
+          ? presets
+          : [{ id: '', title: 'Start session', description: '' }]
+        ).map(p =>
           h(
             'button',
             {
@@ -219,6 +258,11 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   chosenSubscription === 'auto'
                     ? undefined
                     : chosenSubscription,
+                  networkPolicies.length
+                    ? supportsInternet && internet
+                      ? 'public-internet'
+                      : 'off'
+                    : undefined,
                 ),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
@@ -254,32 +298,25 @@ export const FlootApp = ({ controller }) => {
   );
 
   const onNew = () => {
-    // Skip the modal only when there is nothing to choose — a single preset and
-    // no model alternatives. Multiple models alone still warrant the picker.
-    if (
-      presets.length <= 1 &&
-      models.length <= 1 &&
-      (models[0]?.reasoningEfforts?.length || 0) <= 1
-    ) {
-      controller.newSession(
-        presets[0] ? presets[0].id : undefined,
-        models[0] ? models[0].id : undefined,
-        models[0]?.reasoningEfforts?.[0],
-      );
-      setDrawerOpen(false);
-    } else {
-      setModalOpen(true);
-    }
+    // Always expose the network choice, even with one model and preset.
+    setModalOpen(true);
   };
   const pickPreset = (
     /** @type {string} */ id,
     /** @type {string} */ model,
     /** @type {string | undefined} */ reasoningEffort,
     /** @type {string | undefined} */ subscription,
+    /** @type {string | undefined} */ networkPolicy,
   ) => {
     setModalOpen(false);
     setDrawerOpen(false);
-    controller.newSession(id, model, reasoningEffort, subscription);
+    controller.newSession(
+      id,
+      model,
+      reasoningEffort,
+      subscription,
+      networkPolicy,
+    );
   };
 
   const commitTitle = () => {

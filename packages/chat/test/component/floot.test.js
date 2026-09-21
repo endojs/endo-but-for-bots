@@ -65,6 +65,7 @@ test.serial(
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const created = [];
+    let capacityRefreshes = 0;
     const facet = farSession('PickerSession', {
       getInfo: () => harden({ id: 'one', title: 'One' }),
       getHistory: () => harden([]),
@@ -72,12 +73,19 @@ test.serial(
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
     });
     const factory = farFactory('PickerFactory', {
+      refreshAccounts: () => {
+        capacityRefreshes += 1;
+      },
       listSessions: () => harden([{ id: 'one', title: 'One' }]),
       listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
       listBackends: () =>
         harden([
           { id: 'provider', title: 'Fae' },
-          { id: 'codex', title: 'Codex' },
+          {
+            id: 'codex',
+            title: 'Codex',
+            supportedNetworkPolicies: ['off', 'public-internet'],
+          },
         ]),
       listModels: () =>
         harden([
@@ -98,7 +106,7 @@ test.serial(
             title: 'Sol',
             backendId: 'codex',
             reasoningEfforts: ['low', 'high'],
-            defaultReasoningEffort: 'high',
+            defaultReasoningEffort: 'low',
           },
         ]),
       getSession: () => facet,
@@ -149,6 +157,7 @@ test.serial(
     t.is(created[0][0].model, 'vendor/model:free');
     t.is(created[0][0].backendId, 'provider');
     t.false('reasoningEffort' in created[0][0]);
+    t.false('networkPolicy' in created[0][0]);
     t.is(created[0][0].spoken, true);
     await tick();
     parent
@@ -164,8 +173,40 @@ test.serial(
       backendId: 'codex',
       modelId: 'sol',
       reasoningEffort: 'high',
+      networkPolicy: 'public-internet',
       spoken: true,
     });
+    await tick();
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('[aria-label="Backend"]'));
+    await change('Backend', 'codex');
+    const internet = parent.querySelector(
+      '[role="switch"][aria-label="Internet access"]',
+    );
+    t.is(internet?.getAttribute('aria-checked'), 'true');
+    internet?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await tick();
+    t.is(internet?.getAttribute('aria-checked'), 'false');
+    await change('Thinking level', 'low');
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 3);
+    t.like(created[2][0], { networkPolicy: 'off', reasoningEffort: 'low' });
+    const settings = parent.querySelector(
+      '[aria-label="Settings & transcription"]',
+    );
+    settings?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => capacityRefreshes === 1);
+    await tick();
+    t.is(capacityRefreshes, 1);
+    settings?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await tick();
+    t.is(capacityRefreshes, 1);
+    settings?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => capacityRefreshes === 2);
   },
 );
 
@@ -827,6 +868,10 @@ test.serial(
     parent
       .querySelector('button[aria-label="New session"]')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('.floot-preset-card'));
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(
       () => parent.querySelectorAll('.floot-session-item').length === 2,
     );
@@ -1408,6 +1453,10 @@ test.serial(
     parent
       .querySelector('button[aria-label="New session"]')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('.floot-preset-card'));
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(
       () => parent.querySelectorAll('.floot-session-item').length === 3,
     );
@@ -1662,6 +1711,10 @@ test.serial('a new session can be started while another is busy', async t => {
   await waitFor(() => turns.length === 1);
   parent
     .querySelector('button[aria-label="New session"]')
+    ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => parent.querySelector('.floot-preset-card'));
+  parent
+    .querySelector('.floot-preset-card')
     ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
   await waitFor(
     () => parent.querySelectorAll('.floot-session-item').length === 3,
@@ -2201,6 +2254,6 @@ test.serial(
     button('Give up')?.click();
     await waitFor(() => daemon.redeems().length === 3);
     t.deepEqual(daemon.redeems()[2], { key: 'codex:work', abandon: true });
-    t.is(daemon.accountRefreshes(), 0);
+    t.is(daemon.accountRefreshes(), 1);
   },
 );

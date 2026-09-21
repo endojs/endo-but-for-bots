@@ -304,6 +304,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   };
 
   return makeOpencodeBackendFactory({
+    publicInternetEnabled: broker.config.publicInternet === true,
     models: OPENCODE_MODELS,
     provisionSession,
     stopSession: sessionId => E(owner).stop(sessionId),

@@ -4931,6 +4931,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (backendId) {
       const backend = (await getHostedBackends()).get(backendId);
       if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
+      if (
+        options.networkPolicy !== undefined &&
+        !(backend.descriptor.supportedNetworkPolicies || []).includes(
+          options.networkPolicy,
+        )
+      ) {
+        throw Error('Backend does not enforce this sandbox network policy');
+      }
       promptEnvironment =
         backend.descriptor.promptEnvironment ||
         UNDECLARED_HOSTED_PROMPT_ENVIRONMENT;
@@ -4961,6 +4969,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
     } else if (options.subscription && options.subscription !== 'auto') {
       throw Error('Only a hosted backend has subscriptions to choose from');
+    }
+    if (!backendId && options.networkPolicy !== undefined) {
+      throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
     // a live session. The object set is re-read from the catalog by id in
@@ -5035,6 +5046,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // (addressable by mail without waiting for a first UI turn) and its
     // preset objects are provisioned up front.
     try {
+      if (options.networkPolicy !== undefined) {
+        // Record the operator's choice before any backend generation is built.
+        await networkController(id).set(options.networkPolicy);
+      }
       await getAgent(id);
       const index = /** @type {any[]} */ (registry).findIndex(
         session => session.id === id,
@@ -5709,7 +5724,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
       const docs = {
         createSession:
-          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:

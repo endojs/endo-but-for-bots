@@ -356,6 +356,7 @@ export const makeClaudeNativeController = ({
         backend: 'podman',
         rootfsLabel: rootfsLabel(rootfs),
         model: approved.model,
+        reasoningEffort: approved.reasoningEffort,
         systemPrompt: approved.systemPrompt,
         mcpConfigPath: mcp.innerConfigPath,
         // The OCI root is read-only. Claude Code and its Bash tool still need

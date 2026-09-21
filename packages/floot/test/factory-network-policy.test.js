@@ -78,7 +78,17 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
         toolOwnership: 'endo',
         supportedNetworkPolicies: ['off', 'public-internet'],
       }),
-    listModels: () => harden([{ id: 'm', title: 'Model' }]),
+    listModels: () =>
+      harden([
+        {
+          id: 'm',
+          title: 'Model',
+          description: '',
+          default: true,
+          defaultReasoningEffort: null,
+          reasoningEfforts: [],
+        },
+      ]),
     create: async (spec, toolSet) => {
       tools = toolSet;
       creates.push(spec);
@@ -155,7 +165,9 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
       hostStore.set(name, value);
     },
     remove: name => hostStore.delete(name),
-    provideGuest: () => undefined,
+    provideGuest: (_name, { agentName }) => {
+      hostStore.set(agentName, guest);
+    },
   });
   const factory = make(host);
   t.teardown(async () => {
@@ -351,6 +363,32 @@ test('emergency stop fences resume and reaps its late acquisition before complet
   t.is(world.creates.length, 1);
   t.is(world.sends.length, 0);
   t.true(world.events.filter(event => event === 'stop').length >= 2);
+});
+
+test('creation records explicit initial network policy before provisioning', async t => {
+  const world = await makeWorld(t);
+  const before = world.creates.length;
+  const session = await E(world.factory).createSession({
+    backendId: 'test',
+    modelId: 'm',
+    networkPolicy: 'public-internet',
+  });
+  t.is((await E(session).getNetworkPolicy()).policy, 'public-internet');
+  t.deepEqual(
+    world.creates.slice(before).map(spec => spec.networkPolicy),
+    ['public-internet'],
+  );
+  await E(session).emergencyStop();
+  const count = (await E(world.factory).listSessions()).length;
+  await t.throwsAsync(
+    E(world.factory).createSession({
+      backendId: 'test',
+      modelId: 'm',
+      networkPolicy: 'all',
+    }),
+    { message: /does not enforce/ },
+  );
+  t.is((await E(world.factory).listSessions()).length, count);
 });
 
 test('factory network request only asks; idle approval recreates policy and resumes mail', async t => {

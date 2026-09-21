@@ -674,7 +674,8 @@ export const flootComponent = (
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
    *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
-   *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[] }} FlootModel
+   *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[],
+   *   supportedNetworkPolicies?: string[] }} FlootModel
    */
 
   /** @type {FlootPreset[]} */
@@ -820,6 +821,7 @@ export const flootComponent = (
    * @param {string} [reasoningEffort]
    * @param {string} [subscription] one of the backend's subscriptions; absent
    *   or `auto` leaves the choice to the backend
+   * @param {string} [networkPolicy]
    */
   const createSession = async (
     title,
@@ -827,6 +829,7 @@ export const flootComponent = (
     model,
     reasoningEffort,
     subscription,
+    networkPolicy,
   ) => {
     const selected = models.find(candidate => candidate.id === model);
     // Always the record form: it is the only one that can say this session is
@@ -846,6 +849,7 @@ export const flootComponent = (
         : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(subscription && subscription !== 'auto' ? { subscription } : {}),
+      ...(networkPolicy ? { networkPolicy } : {}),
     });
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
@@ -1060,6 +1064,7 @@ export const flootComponent = (
         backendTitle: m.backendTitle,
         defaultReasoningEffort: m.defaultReasoningEffort,
         reasoningEfforts: m.reasoningEfforts,
+        supportedNetworkPolicies: m.supportedNetworkPolicies || [],
         // What a session on this model's backend may be pinned to.
         subscriptions: m.subscriptions || [],
       })),
@@ -1806,9 +1811,23 @@ export const flootComponent = (
    * @param {string} [model]
    * @param {string} [reasoningEffort]
    * @param {string} [subscription]
+   * @param {string} [networkPolicy]
    */
-  const newSession = (presetId, model, reasoningEffort, subscription) => {
-    createSession(undefined, presetId, model, reasoningEffort, subscription)
+  const newSession = (
+    presetId,
+    model,
+    reasoningEffort,
+    subscription,
+    networkPolicy,
+  ) => {
+    createSession(
+      undefined,
+      presetId,
+      model,
+      reasoningEffort,
+      subscription,
+      networkPolicy,
+    )
       .then(() => {
         stick = true;
         setStatus('Ready.');
@@ -2646,8 +2665,9 @@ export const flootComponent = (
       /** @type {string | undefined} */ model,
       /** @type {string | undefined} */ reasoningEffort,
       /** @type {string | undefined} */ subscription,
+      /** @type {string | undefined} */ networkPolicy,
     ) {
-      newSession(presetId, model, reasoningEffort, subscription);
+      newSession(presetId, model, reasoningEffort, subscription, networkPolicy);
     },
     /** Ask each account's provider for its figures now. */
     refreshAccounts() {
@@ -2736,6 +2756,13 @@ export const flootComponent = (
       settingsOpen = !settingsOpen;
       if (settingsOpen) void network.refresh();
       if (settingsOpen) void execution.refresh();
+      if (settingsOpen) {
+        void Promise.resolve(factory)
+          .then(resolved => E(resolved).refreshAccounts())
+          .catch(error =>
+            setStatus(`Capacity refresh failed: ${error.message}`),
+          );
+      }
       notify();
     },
     setInput(/** @type {string} */ text) {
@@ -3080,6 +3107,9 @@ export const flootComponent = (
         backendTitle: backendList.find(b => b.id === m.backendId)?.title,
         subscriptions:
           backendList.find(b => b.id === m.backendId)?.subscriptions || [],
+        supportedNetworkPolicies:
+          backendList.find(b => b.id === m.backendId)
+            ?.supportedNetworkPolicies || [],
       }));
       // The first event is the list as it stands. Unavailable sessions are
       // retained too: hiding them would hide recovery work.

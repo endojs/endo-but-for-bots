@@ -51,6 +51,8 @@ import {
   makeHostedTurnChannel,
 } from '@endo/hosted-agent/turn-channel.js';
 
+import { assertClaudeEffort } from './claude-effort.js';
+
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
 const ClaudeClientInterface = M.interface('ClaudeClient', {
@@ -211,6 +213,7 @@ const defaultStderrIterable = proc =>
  * @property {string} [rootfsLabel] - Human-readable rootfs label
  *   (diagnostic).
  * @property {string} [model] - Default `--model` for every send.
+ * @property {string} [reasoningEffort] - Default `--effort` for every send.
  * @property {string} [systemPrompt] - Default system prompt appended to
  *   every spawn via `--append-system-prompt`, so the CLI's own agent loop
  *   runs under the caller's persona/instructions in addition to Claude
@@ -289,6 +292,7 @@ export const makeClaudeClient = ({
   backend,
   rootfsLabel = '',
   model,
+  reasoningEffort,
   systemPrompt,
   mcpConfigPath,
   env = {},
@@ -483,7 +487,7 @@ export const makeClaudeClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
+   * @param {{ model?: string, reasoningEffort?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {
@@ -514,6 +518,8 @@ export const makeClaudeClient = ({
     if (useModel) {
       argv.push('--model', useModel);
     }
+    const effort = opts.reasoningEffort || reasoningEffort;
+    if (effort) argv.push('--effort', assertClaudeEffort(effort));
     // Append the caller's persona/instructions to Claude Code's built-in
     // system prompt so the CLI's own agent loop honors them (the CLI never
     // sees the conversation-tree system message the API path injects). Sent
@@ -614,7 +620,7 @@ export const makeClaudeClient = ({
    * queued when closed bails before it spawns.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, reasoningEffort?: string, systemPrompt?: string }} [opts]
    * @returns {object} reply reader
    */
   const runTurn = (prompt, opts = {}) => {
@@ -949,7 +955,7 @@ export const makeClaudeClient = ({
      * `{ type: 'abort', reason }`). Closing the reader aborts the turn.
      *
      * @param {string} prompt
-     * @param {{ model?: string, systemPrompt?: string }} [opts] - Per-turn
+     * @param {{ model?: string, reasoningEffort?: string, systemPrompt?: string }} [opts] - Per-turn
      *   overrides: `model` for `--model`, `systemPrompt` for
      *   `--append-system-prompt` (each falls back to the constructor
      *   default when omitted).

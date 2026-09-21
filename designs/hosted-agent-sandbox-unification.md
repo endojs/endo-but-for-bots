@@ -10,6 +10,25 @@
 
 ## Implementation status
 
+### Session creation controls and public-network configuration — 2026-09-21
+
+The new-session dialog always exposes the available choices, including public
+internet access (on by default when the backend advertises enforcement) and
+the highest supported thinking level.
+Explicit initial network selection is validated before session registration and
+recorded through the policy controller before building any backend generation.
+Claude effort selection is now wired through its recorded plan to the pinned
+CLI's `--effort`; model-specific catalogs omit unsupported choices.
+Opening Settings requests a capacity refresh without polling or redeeming credits.
+
+Claude and OpenCode previously advertised public internet even when their
+provider brokers lacked that authority, producing an unsupported-grant error.
+Their descriptors now derive support from the broker's recorded configuration;
+the host configuration exposes the missing public-internet options.
+Enabling those options does not mutate retained brokers: explicit operator
+migration is required, preserving session storage and retiring old renewal owners.
+Local regression tests pass; deployment and the approved Tokyo migration are pending.
+
 ### Queue-overflow recovery — 2026-09-21
 
 Tokyo's Claude Haiku session `muaj9ubf-zzabfi` failed while creating a Three.js

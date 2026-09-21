@@ -126,15 +126,20 @@ const isIdleInterrupt = error =>
  *   The owner's removal: native cleanup, then the recorded storage owner's
  *   deletion, retaining failure and refusing reuse until it succeeds.
  * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ * @param {boolean} [powers.publicInternetEnabled] Verified operator broker policy.
  */
 export const makeOpencodeBackendFactory = ({
   provisionSession,
   stopSession,
   removeSession,
   models = OPENCODE_MODELS,
+  publicInternetEnabled = false,
 }) => {
   const catalog = harden(models.map(normalizeHostedModelDescriptor));
   const listModels = async () => catalog;
+  const networkPolicies = harden(
+    publicInternetEnabled ? [...NETWORK_POLICIES] : ['off'],
+  );
 
   const sessions = makeSessionRegistry();
 
@@ -147,6 +152,8 @@ export const makeOpencodeBackendFactory = ({
     const networkPolicy = spec.networkPolicy ?? 'off';
     NETWORK_POLICIES.includes(networkPolicy) ||
       Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
+    networkPolicies.includes(networkPolicy) ||
+      Fail`OpenCode broker does not permit public internet access`;
     if (spec.model !== undefined && spec.model !== '') {
       (typeof spec.model === 'string' && spec.model.length <= 256) ||
         Fail`OpenCode model id must be a bounded string`;
@@ -290,7 +297,7 @@ export const makeOpencodeBackendFactory = ({
         kind: 'hosted',
         continuity: 'transcript',
         toolOwnership: 'endo',
-        supportedNetworkPolicies: NETWORK_POLICIES,
+        supportedNetworkPolicies: networkPolicies,
         // What a system prompt must know about this place. opencode lists an
         // MCP server's tools as `<server>_<tool>`; it has its own shell and
         // file tools; the hosted policy mounts the session workspace at

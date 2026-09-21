@@ -29,6 +29,7 @@ const plan = harden({
   mounterSocketDir: '/private/session-a-0123456789ab/9p',
   nativeProfile: profile,
   model: 'claude-sonnet-4',
+  reasoningEffort: 'max',
   systemPrompt: 'You are Floot.',
 });
 
@@ -107,6 +108,11 @@ test('the plan refuses every deviation from its recorded shape', t => {
       /must record an owned or an operator-supplied workspace/,
     ],
     ['a non-text model', { ...plan, model: 7 }, /"model" must be text/],
+    [
+      'an unsupported effort',
+      { ...plan, reasoningEffort: 'ultra' },
+      /Unsupported Claude reasoning effort/,
+    ],
     [
       'a missing profile',
       { ...plan, nativeProfile: undefined },

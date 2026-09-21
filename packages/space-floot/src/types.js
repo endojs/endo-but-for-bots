@@ -73,6 +73,7 @@ export {};
  *   modelId?: string,
  *   selectionId?: string,
  *   reasoningEfforts?: string[],
+ *   supportedNetworkPolicies?: string[],
  *   subscriptions?: Array<{ id: string, label: string, pinnedOnly?: boolean }>,
  * }} FlootModel
  */
@@ -158,7 +159,7 @@ export {};
  * @property {(pendingId: number | string, text: string) => void} [editPending]
  * @property {(pendingId: number | string) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, reasoningEffort?: string, subscription?: string, networkPolicy?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
  * @property {(key: string, confirm: string, action?: 'redeem' | 'replay' | 'abandon') => void} [redeemAccountReset] Spend one banked rate-limit reset of that account, ask again about an unconfirmed redeem, or give it up, after the person confirms.

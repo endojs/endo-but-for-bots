@@ -155,6 +155,7 @@ const fixture = async t => {
       imageDigest: digest,
       listenerImageRef: `localhost/listener@${digest}`,
       models: ['deepseek/deepseek-v4.1-flash'],
+      publicInternet: true,
     }),
   });
   seed('state-provider', 'state-id', stateProviderSpecifier, {
@@ -230,6 +231,20 @@ const fixture = async t => {
     exists,
   };
 };
+
+test('OpenCode advertises only the network authority recorded by its broker', async t => {
+  const f = await fixture(t);
+  const config = JSON.parse(
+    f.environments.get('broker-id').OPENCODE_BROKER_CONFIG,
+  );
+  delete config.publicInternet;
+  f.environments.set(
+    'broker-id',
+    harden({ OPENCODE_BROKER_CONFIG: JSON.stringify(config) }),
+  );
+  const factory = await make(f.host, undefined, { env: f.env });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+});
 
 test('resolveBackendConfig defaults nothing', t => {
   const env = {

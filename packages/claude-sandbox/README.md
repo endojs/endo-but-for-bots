@@ -123,15 +123,23 @@ factory discovers on its own; a Floot session then selects it as the model
 
 | method | behavior |
 |--------|----------|
-| `describe()` | `{ id: 'claude', title: 'Claude Code', kind: 'hosted', continuity: 'transcript', toolOwnership: 'endo', supportedNetworkPolicies: ['off', 'public-internet'] }` |
-| `listModels()` | the Anthropic models `claude --model` accepts, as hosted model descriptors (no reasoning efforts) |
+| `describe()` | `{ id: 'claude', title: 'Claude Code', kind: 'hosted', continuity: 'transcript', toolOwnership: 'endo', supportedNetworkPolicies }`; policies always include `off`, and include `public-internet` only when the recorded broker configuration permits it. |
+| `listModels()` | the Anthropic models `claude --model` accepts, with supported `--effort` levels (none for Haiku) |
 | `create(spec, toolSet)` | one recorded session with the daemon session owner: a plan naming the session's workspace (owned, or the guest's git worktree as `/workspace`), its private socket directories, the broker's pinned image and credential kind, and the requested `networkPolicy` (default `off`); the owner starts the native controller with `toolSet` pinned; returns `{ run, admin }` |
 | `destroy(spec)` | idempotently stop the session and remove its record, workspace, private directories, and persistent config directory through the recorded storage owner |
 
 `run.send(prompt, { systemPrompt })` returns a reader of provider-neutral
 hosted turn events ([`src/claude-hosted-events.js`](./src/claude-hosted-events.js)
 translates the CLI's stream-json wire), forwarding the session model and
-persona on every spawn. `run.interrupt()` kills the in-flight `claude -p`
+persona on every spawn.
+The session's `reasoningEffort` is validated against its model, recorded in the
+session plan, and passed as `--effort` on every spawn, including resumed turns.
+The default advertised effort is `max` for models that support effort.
+Haiku advertises no effort setting; Sonnet 4.6 omits `xhigh`.
+These levels follow the [Claude Code model table](https://code.claude.com/docs/en/model-config#adjust-effort-level).
+Tokyo's pinned Claude Code 2.1.233 was checked with `--version` and `--help`
+on 2026-09-21; no image upgrade or credential change is required.
+`run.interrupt()` kills the in-flight `claude -p`
 and tolerates an idle client; it returns once the process has ended, not
 merely once the reader is closed. `run.acknowledge()` is a no-op: the stack
 owns the transcript (`@endo/hosted-agent/transcript-records.js`), and on a

@@ -80,6 +80,7 @@ const makeHarness = () => {
   let failingStop;
   let provisionFails = false;
   const factory = makeClaudeBackendFactory({
+    publicInternetEnabled: true,
     provisionSession: async (sessionId, request, toolSet) => {
       log.push(['provision', sessionId, request, await E(toolSet).describe()]);
       if (provisionFails) throw Error('owner refused the plan');
@@ -110,6 +111,33 @@ const makeHarness = () => {
   };
 };
 
+test('broker-only Claude rejects public access before stopping an existing session', async t => {
+  const log = [];
+  const factory = makeClaudeBackendFactory({
+    provisionSession: async () => {
+      log.push('provision');
+      return makeFakeSession().facet;
+    },
+    stopSession: async () => {
+      log.push('stop');
+    },
+    removeSession: async () => {
+      log.push('remove');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+  await E(factory).create(harden({ sessionId: 'existing' }), makeToolSet());
+  log.length = 0;
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'existing', networkPolicy: 'public-internet' }),
+      makeToolSet(),
+    ),
+    { message: /broker does not permit public internet/ },
+  );
+  t.deepEqual(log, []);
+});
+
 test('describe() and listModels() present Claude Code as a hosted backend', async t => {
   const { factory } = makeHarness();
   t.deepEqual(await E(factory).describe(), {
@@ -131,7 +159,15 @@ test('describe() and listModels() present Claude Code as a hosted backend', asyn
   const models = await E(factory).listModels();
   t.deepEqual(models, CLAUDE_CLI_MODELS);
   t.is(models.filter(model => model.default).length, 1);
-  t.true(models.every(model => model.reasoningEfforts.length === 0));
+  t.deepEqual(models[0].reasoningEfforts, []);
+  t.deepEqual(
+    models.find(model => model.id === 'claude-sonnet-4-6').reasoningEfforts,
+    ['low', 'medium', 'high', 'max'],
+  );
+  t.deepEqual(
+    models.find(model => model.id === 'claude-opus-5').reasoningEfforts,
+    ['low', 'medium', 'high', 'xhigh', 'max'],
+  );
 });
 
 test('subscription selection is advertised, validated and forwarded without credentials', async t => {
@@ -191,6 +227,7 @@ test('create() hands the validated request and the pinned tool set to the owner'
     harden({
       sessionId: 'session-a',
       model: 'claude-sonnet-4-6',
+      reasoningEffort: 'max',
       systemPrompt: 'You are Floot.',
       workspaceHostPath: '/git/worktrees/session-a',
       networkPolicy: 'public-internet',
@@ -206,6 +243,7 @@ test('create() hands the validated request and the pinned tool set to the owner'
       {
         networkPolicy: 'public-internet',
         model: 'claude-sonnet-4-6',
+        reasoningEffort: 'max',
         systemPrompt: 'You are Floot.',
         workspaceHostPath: '/git/worktrees/session-a',
       },
@@ -232,12 +270,28 @@ test('create() refuses an unknown model, a network policy, a reasoning effort, d
   const refused = [
     [{ sessionId: 'session-a', model: 'gpt-9' }, /Unknown Claude model/],
     [
+      {
+        sessionId: 'session-a',
+        model: 'claude-sonnet-4-6',
+        reasoningEffort: 'xhigh',
+      },
+      /Unsupported Claude reasoning effort/,
+    ],
+    [
+      {
+        sessionId: 'session-a',
+        model: 'claude-opus-5',
+        reasoningEffort: 'ultra',
+      },
+      /Unsupported Claude reasoning effort/,
+    ],
+    [
       { sessionId: 'session-a', networkPolicy: 'host' },
       /Unknown network policy "host"/,
     ],
     [
       { sessionId: 'session-a', reasoningEffort: 'high' },
-      /no reasoning-effort setting/,
+      /Unsupported Claude reasoning effort/,
     ],
     [{ sessionId: '../x' }, /bounded lowercase path component/],
     [

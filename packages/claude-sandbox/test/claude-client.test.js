@@ -263,7 +263,10 @@ test('without an mcpConfigPath no MCP flags are passed', async t => {
 test('send() adds --continue after the first turn and forwards --model', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { model: 'claude-sonnet-4-6' }),
+    baseArgs(fake, makeFakeMount(), {
+      model: 'claude-sonnet-4-6',
+      reasoningEffort: 'max',
+    }),
   );
 
   await drain(await client.send('first'));
@@ -275,6 +278,7 @@ test('send() adds --continue after the first turn and forwards --model', async t
   for (const proc of fake.spawned) {
     t.true(proc.argv.includes('--model'));
     t.true(proc.argv.includes('claude-sonnet-4-6'));
+    t.is(proc.argv[proc.argv.indexOf('--effort') + 1], 'max');
   }
 });
 
