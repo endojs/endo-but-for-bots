@@ -42,7 +42,7 @@ no retained formula referring to it.
 |---|---|---|---|---|
 | FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Open |
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Open |
-| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Open |
+| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Open |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Open |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
@@ -117,6 +117,16 @@ caplet to the current native-controller/session-owner path.
 Completion: fresh setup creates only the current topology; retained legacy formulas,
 containers, mounts, listeners, and credential grants are deliberately retired; current
 Claude tool use, restart, and deletion pass without legacy entrypoints.
+
+Progress: `refactor(claude-sandbox): stop provisioning legacy form topology` removes
+the generic factory, shared mounter, and inbox-form producer from `setup-host.js`.
+The paired endo-host change removes the automatic `setup-peer.js` hook.
+Retained bindings are intentionally untouched; their resources still require explicit
+retirement before deleting the remaining entrypoints or resetting deployment state.
+The setup-host and setup-hosted suites pass 16 tests, including fresh native-only setup,
+idempotent setup, distinct host ownership, and preservation of retained legacy bindings.
+Independent review caught two stale test expectations; both were corrected before commit.
+Not deployed; native conformance and resource retirement remain pending.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
@@ -327,6 +337,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | Date | Change | Verification / deployment |
 |---|---|---|
 | 2026-09-21 | Initial audit and FA-01–FA-13 register | Source review plus two in-memory reproductions; no remediation or deployment claimed |
+| 2026-09-21 | FA-03: stop creating legacy Claude form topology | 16 setup tests passed; independent review; retained resources untouched; not deployed |
 
 ## Request
 
