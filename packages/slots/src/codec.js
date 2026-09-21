@@ -11,6 +11,12 @@ import {
   decodeDeliverPayload,
   encodeResolvePayload,
   decodeResolvePayload,
+  encodeGetPayload,
+  decodeGetPayload,
+  encodeIndexPayload,
+  decodeIndexPayload,
+  encodeUntagPayload,
+  decodeUntagPayload,
 } from './payload.js';
 
 /** @import { Descriptor } from './descriptor.js' */
@@ -242,11 +248,112 @@ export const makeSlotCodec = ({
   };
   harden(decodeResolve);
 
+  // ---- data lanes (get / index / untag) ----
+  //
+  // Unlike `deliver`, a data lane carries a scalar operand and no
+  // marshalled body: its `target` and `reply` are the only capability
+  // descriptors, so no in-band slots array is needed.  The supervisor
+  // can therefore validate and translate the whole operation without
+  // interpreting guest data.
+
+  /**
+   * @param {object} op
+   * @param {unknown} op.target
+   * @param {string} op.fieldName
+   * @param {unknown} op.reply
+   * @returns {Uint8Array}
+   */
+  const encodeGet = ({ target, fieldName, reply }) =>
+    encodeGetPayload({
+      target: describe(target),
+      fieldName,
+      reply: clist.exportLocal(reply, Kind.Promise),
+    });
+  harden(encodeGet);
+
+  /**
+   * @param {Uint8Array} bytes
+   * @returns {{ target: unknown, fieldName: string, reply: unknown }}
+   */
+  const decodeGet = bytes => {
+    const p = decodeGetPayload(bytes);
+    return {
+      target: clist.importRemote(p.target, () => makePresence(p.target)),
+      fieldName: p.fieldName,
+      reply: clist.importRemote(p.reply, () => makePresence(p.reply)),
+    };
+  };
+  harden(decodeGet);
+
+  /**
+   * @param {object} op
+   * @param {unknown} op.target
+   * @param {number} op.index
+   * @param {unknown} op.reply
+   * @returns {Uint8Array}
+   */
+  const encodeIndex = ({ target, index, reply }) =>
+    encodeIndexPayload({
+      target: describe(target),
+      index,
+      reply: clist.exportLocal(reply, Kind.Promise),
+    });
+  harden(encodeIndex);
+
+  /**
+   * @param {Uint8Array} bytes
+   * @returns {{ target: unknown, index: number, reply: unknown }}
+   */
+  const decodeIndex = bytes => {
+    const p = decodeIndexPayload(bytes);
+    return {
+      target: clist.importRemote(p.target, () => makePresence(p.target)),
+      index: p.index,
+      reply: clist.importRemote(p.reply, () => makePresence(p.reply)),
+    };
+  };
+  harden(decodeIndex);
+
+  /**
+   * @param {object} op
+   * @param {unknown} op.target
+   * @param {string} op.tag
+   * @param {unknown} op.reply
+   * @returns {Uint8Array}
+   */
+  const encodeUntag = ({ target, tag, reply }) =>
+    encodeUntagPayload({
+      target: describe(target),
+      tag,
+      reply: clist.exportLocal(reply, Kind.Promise),
+    });
+  harden(encodeUntag);
+
+  /**
+   * @param {Uint8Array} bytes
+   * @returns {{ target: unknown, tag: string, reply: unknown }}
+   */
+  const decodeUntag = bytes => {
+    const p = decodeUntagPayload(bytes);
+    return {
+      target: clist.importRemote(p.target, () => makePresence(p.target)),
+      tag: p.tag,
+      reply: clist.importRemote(p.reply, () => makePresence(p.reply)),
+    };
+  };
+  harden(decodeUntag);
+
   return harden({
     encodeDeliver,
     decodeDeliver,
     encodeResolve,
     decodeResolve,
+    encodeGet,
+    decodeGet,
+    encodeIndex,
+    decodeIndex,
+    encodeUntag,
+    decodeUntag,
     describe,
   });
 };

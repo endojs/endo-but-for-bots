@@ -28,8 +28,11 @@ pub mod payload;
 pub mod translate;
 
 pub use descriptor::{Descriptor, Direction, Kind};
-pub use payload::{AbortPayload, DeliverPayload, DropDelta, DropPayload, ResolvePayload};
-pub use translate::translate_deliver;
+pub use payload::{
+    AbortPayload, DeliverPayload, DropDelta, DropPayload, GetPayload, IndexPayload, ResolvePayload,
+    UntagPayload, INDEX_LIMIT,
+};
+pub use translate::{translate_deliver, translate_get, translate_index, translate_untag};
 
 pub const VERB_DELIVER: &str = "deliver";
 pub const VERB_GET: &str = "get";

@@ -17,6 +17,7 @@ export {
   VERB_DROP,
   VERB_ABORT,
   isSlotVerb,
+  INDEX_LIMIT,
   encodeDeliverPayload,
   decodeDeliverPayload,
   encodeResolvePayload,
@@ -25,6 +26,12 @@ export {
   decodeDropPayload,
   encodeAbortPayload,
   decodeAbortPayload,
+  encodeGetPayload,
+  decodeGetPayload,
+  encodeIndexPayload,
+  decodeIndexPayload,
+  encodeUntagPayload,
+  decodeUntagPayload,
 } from './src/payload.js';
 export { makeSelector, getSelectorName } from './src/selector.js';
 export { sessionIdFromLabel, sessionIdHex } from './src/session.js';

@@ -108,6 +108,28 @@ rejects a non-array target, and `untag` rejects a mismatched tag.  Keeping
 these lanes separate ensures that no method named `__get__`, `index`, or
 `untag` can intercept or impersonate a data operation.
 
+Each data lane has its own dedicated, compact canonical-CBOR payload
+rather than reusing the opaque `deliver` body:
+
+```text
+get    = [target: Descriptor, fieldName: UTF-8 bytes, reply: Descriptor]
+index  = [target: Descriptor, index: uint, reply: Descriptor]
+untag  = [target: Descriptor, tag: UTF-8 bytes, reply: Descriptor]
+```
+
+The operand is a scalar and carries no capabilities, so the supervisor
+validates and translates the whole operation — `target` and `reply`
+descriptors — without interpreting guest data.  `reply` is required and
+must be a `Promise` descriptor; `target` may be `Object`, `Promise`, or
+`Answer` (pipelining preserved) but not `Device`; `index` is bounded to
+the JavaScript array-index range `0 <= index < 2**32 - 1`.  A malformed
+payload for a claimed data verb is a protocol error: the supervisor fails
+closed and tears the session down rather than forwarding unvalidated
+bytes.  The protocol has no version negotiation, so all seven verbs
+(`deliver`, `get`, `index`, `untag`, `resolve`, `drop`, `abort`) deploy
+together; an older peer meeting an unknown verb fails closed and must not
+reinterpret it as `deliver`.
+
 ## Daemon integration
 
 The worker-side splice is in `packages/daemon/src/bus-worker-node-raw.js`,
@@ -135,7 +157,7 @@ If `makeMessageSlots` is too high-level, drop down to:
 ## Testing
 
 ```sh
-yarn test         # 82 unit tests
+yarn test         # unit tests (payload, codec, client, end-to-end)
 yarn lint         # eslint + tsc
 ```
 

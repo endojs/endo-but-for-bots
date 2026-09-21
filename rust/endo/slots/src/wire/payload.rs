@@ -5,10 +5,33 @@
 use crate::error::{Result, SlotError};
 use crate::wire::codec::{
     as_array, as_bytes, read_descriptor, read_descriptor_array, read_optional_descriptor,
-    read_top_level, read_uint_helper, write_array_header, write_byte_string, write_descriptor,
-    write_descriptor_array, write_null, write_uint,
+    read_top_level, read_top_level_exact, read_uint_helper, write_array_header, write_byte_string,
+    write_descriptor, write_descriptor_array, write_null, write_uint,
 };
-use crate::wire::descriptor::Descriptor;
+use crate::wire::descriptor::{Descriptor, Kind};
+
+/// A JavaScript array index is an integer in `0 <= index < 2**32 - 1`.
+/// This mirrors `packages/slots/src/payload.js`'s `INDEX_LIMIT`.
+pub const INDEX_LIMIT: u64 = (1u64 << 32) - 1;
+
+/// A data operation (`get` / `index` / `untag`) observes the shape of
+/// data at a target that carries no behavior selection.  Its target
+/// may be an `Object`, `Promise`, or `Answer` (pipelining preserved);
+/// a `Device` target is rejected.  Its reply is required and must have
+/// kind `Promise`.
+fn check_data_descriptors(target: &Descriptor, reply: &Descriptor) -> Result<()> {
+    if target.kind == Kind::Device {
+        return Err(SlotError::Invariant(
+            "data-operation target must not be a device".into(),
+        ));
+    }
+    if reply.kind != Kind::Promise {
+        return Err(SlotError::Invariant(
+            "data-operation reply must be a promise descriptor".into(),
+        ));
+    }
+    Ok(())
+}
 
 // ---- deliver ----
 
@@ -210,6 +233,143 @@ impl AbortPayload {
     }
 }
 
+// ---- data lanes: get / index / untag ----
+//
+// Each carries a scalar operand and exactly two capability
+// descriptors — `target` and `reply` — and no opaque marshalled body.
+// The supervisor can therefore validate and translate the whole
+// operation without interpreting guest data.
+
+/// `get` payload — string-named field access:
+///
+/// ```text
+/// [target: Descriptor, field_name: UTF-8 bytes, reply: Descriptor]
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct GetPayload {
+    pub target: Descriptor,
+    pub field_name: String,
+    pub reply: Descriptor,
+}
+
+impl GetPayload {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + self.field_name.len());
+        write_array_header(&mut out, 3);
+        write_descriptor(&mut out, &self.target);
+        write_byte_string(&mut out, self.field_name.as_bytes());
+        write_descriptor(&mut out, &self.reply);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let top = read_top_level_exact(bytes)?;
+        let arr = as_array(&top)?;
+        if arr.len() != 3 {
+            return Err(SlotError::Invariant(format!(
+                "get payload must be 3-element array, got {}",
+                arr.len()
+            )));
+        }
+        let target = read_descriptor(&arr[0])?;
+        let field_name = read_utf8(&arr[1], "get field name")?;
+        let reply = read_descriptor(&arr[2])?;
+        check_data_descriptors(&target, &reply)?;
+        Ok(GetPayload { target, field_name, reply })
+    }
+}
+
+/// `index` payload — positional list access:
+///
+/// ```text
+/// [target: Descriptor, index: uint, reply: Descriptor]
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexPayload {
+    pub target: Descriptor,
+    pub index: u64,
+    pub reply: Descriptor,
+}
+
+impl IndexPayload {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16);
+        write_array_header(&mut out, 3);
+        write_descriptor(&mut out, &self.target);
+        write_uint(&mut out, self.index);
+        write_descriptor(&mut out, &self.reply);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let top = read_top_level_exact(bytes)?;
+        let arr = as_array(&top)?;
+        if arr.len() != 3 {
+            return Err(SlotError::Invariant(format!(
+                "index payload must be 3-element array, got {}",
+                arr.len()
+            )));
+        }
+        let target = read_descriptor(&arr[0])?;
+        let index = read_uint_helper(&arr[1])?;
+        if index >= INDEX_LIMIT {
+            return Err(SlotError::Invariant(format!(
+                "slot index {index} out of array-index range"
+            )));
+        }
+        let reply = read_descriptor(&arr[2])?;
+        check_data_descriptors(&target, &reply)?;
+        Ok(IndexPayload { target, index, reply })
+    }
+}
+
+/// `untag` payload — tag-checked payload access:
+///
+/// ```text
+/// [target: Descriptor, tag: UTF-8 bytes, reply: Descriptor]
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct UntagPayload {
+    pub target: Descriptor,
+    pub tag: String,
+    pub reply: Descriptor,
+}
+
+impl UntagPayload {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + self.tag.len());
+        write_array_header(&mut out, 3);
+        write_descriptor(&mut out, &self.target);
+        write_byte_string(&mut out, self.tag.as_bytes());
+        write_descriptor(&mut out, &self.reply);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let top = read_top_level_exact(bytes)?;
+        let arr = as_array(&top)?;
+        if arr.len() != 3 {
+            return Err(SlotError::Invariant(format!(
+                "untag payload must be 3-element array, got {}",
+                arr.len()
+            )));
+        }
+        let target = read_descriptor(&arr[0])?;
+        let tag = read_utf8(&arr[1], "untag tag")?;
+        let reply = read_descriptor(&arr[2])?;
+        check_data_descriptors(&target, &reply)?;
+        Ok(UntagPayload { target, tag, reply })
+    }
+}
+
+/// Decode a CBOR byte string as a strictly-valid UTF-8 string.
+fn read_utf8(v: &ciborium::value::Value, what: &str) -> Result<String> {
+    let raw = as_bytes(v)?;
+    std::str::from_utf8(raw)
+        .map_err(|e| SlotError::Invariant(format!("slot {what} not valid utf-8: {e}")))
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +506,157 @@ mod tests {
     fn abort_pinned_hex_fixture() {
         let p = AbortPayload { reason: "bye".into() };
         assert_eq!(hex(&p.encode()), "43627965");
+    }
+
+    // ---- data lanes ----
+
+    #[test]
+    fn get_roundtrip() {
+        let p = GetPayload {
+            target: Descriptor::new(Direction::Remote, Kind::Object, 7),
+            field_name: "field".into(),
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 2),
+        };
+        assert_eq!(GetPayload::decode(&p.encode()).unwrap(), p);
+    }
+
+    #[test]
+    fn index_roundtrip_answer_target() {
+        // An Answer target preserves promise pipelining.
+        let p = IndexPayload {
+            target: Descriptor::new(Direction::Remote, Kind::Answer, 4),
+            index: 42,
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 1),
+        };
+        assert_eq!(IndexPayload::decode(&p.encode()).unwrap(), p);
+    }
+
+    #[test]
+    fn untag_roundtrip() {
+        let p = UntagPayload {
+            target: Descriptor::new(Direction::Remote, Kind::Object, 9),
+            tag: "example".into(),
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 6),
+        };
+        assert_eq!(UntagPayload::decode(&p.encode()).unwrap(), p);
+    }
+
+    #[test]
+    fn data_lane_rejects_device_target() {
+        // Hand-encode a get whose target is a Device; decode must reject.
+        let mut bytes = vec![0x83];
+        // target: Device/Remote => kind_byte = (3<<1)|1 = 7, position 1
+        bytes.extend([0x82, 0x07, 0x01]);
+        bytes.extend([0x41, 0x78]); // field "x"
+        bytes.extend([0x82, 0x02, 0x01]); // reply Promise/Local/1
+        let err = GetPayload::decode(&bytes).unwrap_err();
+        assert!(format!("{err}").contains("must not be a device"), "{err}");
+    }
+
+    #[test]
+    fn data_lane_rejects_non_promise_reply() {
+        // untag whose reply is an Object descriptor.
+        let mut bytes = vec![0x83];
+        bytes.extend([0x82, 0x00, 0x01]); // target Object/Local/1
+        bytes.extend([0x41, 0x74]); // tag "t"
+        bytes.extend([0x82, 0x00, 0x01]); // reply Object/Local/1 (wrong)
+        let err = UntagPayload::decode(&bytes).unwrap_err();
+        assert!(
+            format!("{err}").contains("reply must be a promise"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn index_rejects_out_of_range() {
+        // Hand-encode an index at exactly INDEX_LIMIT (invalid).
+        let mut bytes = vec![0x83];
+        bytes.extend([0x82, 0x00, 0x01]); // target Object/Local/1
+        // uint INDEX_LIMIT = 4294967295 = 0x1a ffffffff
+        bytes.push(0x1a);
+        bytes.extend((INDEX_LIMIT as u32).to_be_bytes());
+        bytes.extend([0x82, 0x02, 0x01]); // reply Promise/Local/1
+        let err = IndexPayload::decode(&bytes).unwrap_err();
+        assert!(format!("{err}").contains("out of array-index range"), "{err}");
+    }
+
+    #[test]
+    fn index_largest_valid_roundtrips() {
+        let p = IndexPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            index: INDEX_LIMIT - 1,
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 1),
+        };
+        assert_eq!(IndexPayload::decode(&p.encode()).unwrap(), p);
+    }
+
+    #[test]
+    fn get_rejects_invalid_utf8() {
+        let mut bytes = vec![0x83];
+        bytes.extend([0x82, 0x00, 0x01]); // target
+        bytes.extend([0x41, 0xff]); // 1-byte field name 0xff (illegal utf-8)
+        bytes.extend([0x82, 0x02, 0x01]); // reply
+        let err = GetPayload::decode(&bytes).unwrap_err();
+        assert!(format!("{err}").contains("not valid utf-8"), "{err}");
+    }
+
+    #[test]
+    fn data_lane_rejects_wrong_shape() {
+        // A 5-element deliver payload is not a 3-element get payload.
+        let deliver = DeliverPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            body: vec![],
+            targets: vec![],
+            promises: vec![],
+            reply: Some(Descriptor::new(Direction::Local, Kind::Promise, 1)),
+        }
+        .encode();
+        assert!(GetPayload::decode(&deliver).is_err());
+    }
+
+    #[test]
+    fn data_lane_rejects_trailing_bytes() {
+        let mut bytes = IndexPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            index: 1,
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 1),
+        }
+        .encode();
+        bytes.push(0x00);
+        let err = IndexPayload::decode(&bytes).unwrap_err();
+        assert!(format!("{err}").contains("trailing CBOR bytes"), "{err}");
+    }
+
+    // Pinned hex fixtures shared with
+    // packages/slots/test/payload.test.js.  Target Local/Object/1,
+    // reply Local/Promise/1 in each.
+    #[test]
+    fn get_pinned_hex_fixture() {
+        let p = GetPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            field_name: "x".into(),
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 1),
+        };
+        assert_eq!(hex(&p.encode()), "838200014178820201");
+    }
+
+    #[test]
+    fn index_pinned_hex_fixture() {
+        let p = IndexPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            index: 5,
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 1),
+        };
+        assert_eq!(hex(&p.encode()), "8382000105820201");
+    }
+
+    #[test]
+    fn untag_pinned_hex_fixture() {
+        let p = UntagPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            tag: "t".into(),
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 1),
+        };
+        assert_eq!(hex(&p.encode()), "838200014174820201");
     }
 }

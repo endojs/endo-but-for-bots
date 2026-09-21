@@ -14,6 +14,12 @@ import {
   decodeResolvePayload,
   encodeDropPayload,
   decodeDropPayload,
+  encodeGetPayload,
+  decodeGetPayload,
+  encodeIndexPayload,
+  decodeIndexPayload,
+  encodeUntagPayload,
+  decodeUntagPayload,
 } from './payload.js';
 
 /** @import { Descriptor } from './descriptor.js' */
@@ -37,20 +43,15 @@ const flipArr = arr => arr.map(flipDesc);
  *
  * Apply once per hop — either on send or on receive, but not both.
  *
- * Verbs other than `deliver`/`resolve`/`drop` pass through
- * unchanged (`abort` carries no descriptors).
+ * Verbs other than `deliver`/`get`/`index`/`untag`/`resolve`/`drop`
+ * pass through unchanged (`abort` carries no descriptors).
  *
  * @param {string} verb
  * @param {Uint8Array} payload
  * @returns {Uint8Array}
  */
 export const flipEnvelopePayload = (verb, payload) => {
-  if (
-    verb === VERB_DELIVER ||
-    verb === VERB_GET ||
-    verb === VERB_INDEX ||
-    verb === VERB_UNTAG
-  ) {
+  if (verb === VERB_DELIVER) {
     const p = decodeDeliverPayload(payload);
     return encodeDeliverPayload({
       target: flipDesc(p.target),
@@ -58,6 +59,30 @@ export const flipEnvelopePayload = (verb, payload) => {
       targets: flipArr(p.targets),
       promises: flipArr(p.promises),
       reply: p.reply ? flipDesc(p.reply) : null,
+    });
+  }
+  if (verb === VERB_GET) {
+    const p = decodeGetPayload(payload);
+    return encodeGetPayload({
+      target: flipDesc(p.target),
+      fieldName: p.fieldName,
+      reply: flipDesc(p.reply),
+    });
+  }
+  if (verb === VERB_INDEX) {
+    const p = decodeIndexPayload(payload);
+    return encodeIndexPayload({
+      target: flipDesc(p.target),
+      index: p.index,
+      reply: flipDesc(p.reply),
+    });
+  }
+  if (verb === VERB_UNTAG) {
+    const p = decodeUntagPayload(payload);
+    return encodeUntagPayload({
+      target: flipDesc(p.target),
+      tag: p.tag,
+      reply: flipDesc(p.reply),
     });
   }
   if (verb === VERB_RESOLVE) {
