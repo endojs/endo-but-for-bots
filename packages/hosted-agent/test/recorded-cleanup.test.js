@@ -111,6 +111,43 @@ test('an empty or missing socket directory is still reclaimed', async t => {
   t.is(second.calls.length, 1);
 });
 
+for (const code of ['EACCES', 'EIO']) {
+  test(`socket inspection ${code} retains the mount without attempting unmount`, async t => {
+    const recorded = await makeRecorded(t);
+    const runner = makeRunner();
+    const failure = Object.assign(Error('Cannot inspect recorded endpoint'), {
+      code,
+    });
+    await t.throwsAsync(
+      reclaimRecordedMount(recorded, {
+        readDirectory: async () => ['bridge.sock'],
+        inspect: async target => {
+          t.is(target, path.join(recorded.mounterSocketDir, 'bridge.sock'));
+          throw failure;
+        },
+        runProgram: runner.runProgram,
+      }),
+      { is: failure },
+    );
+    t.deepEqual(runner.calls, []);
+    t.true(await exists(recorded.workspaceMountPoint));
+  });
+}
+
+test('an endpoint removed between enumeration and inspection permits reclamation', async t => {
+  const recorded = await makeRecorded(t);
+  const runner = makeRunner();
+  await reclaimRecordedMount(recorded, {
+    readDirectory: async () => ['vanished.sock'],
+    inspect: async () => {
+      throw Object.assign(Error('Endpoint disappeared'), { code: 'ENOENT' });
+    },
+    runProgram: runner.runProgram,
+  });
+  t.deepEqual(runner.calls, [['umount', '--', recorded.workspaceMountPoint]]);
+  t.false(await exists(recorded.workspaceMountPoint));
+});
+
 test('a live 9P bridge refuses the reclamation, and nothing is unmounted', async t => {
   // The safety property: a reconstructed controller must never take down a
   // mount whose bridge is still serving it. This is a check, not an inference

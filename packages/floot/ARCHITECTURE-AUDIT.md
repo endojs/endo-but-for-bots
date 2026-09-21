@@ -32,11 +32,67 @@ For every remediation commit, update the affected finding here:
 - Mark resolved only when its completion criteria are met; explain intentional deferrals.
 - Update the change log and the design index when the overall status changes.
 
+Every new implementation also requires a durability audit against the Endo
+daemon's formula patterns before deployment approval.
+This requirement is retrospective: audit all implementation changes already
+landed as part of this refactor, not merely future changes or open findings.
+Existing deployed status and passing local tests do not waive this check.
+Inventory each implemented change and its durable boundary, record authoritative
+replay/restart evidence, and reopen findings where that evidence is missing or
+contradicts correct ownership and recovery.
+Review durable owners and dependencies, reconstruction and replay, cancellation
+and retirement, failed-write recovery, and previously issued capabilities.
+Identify deliberately ephemeral state and prove that reconstructing it cannot
+duplicate side effects or revive retired authority.
+Tests of local objects alone do not establish daemon restart/replay correctness;
+record and test the relevant durable formula boundary.
+
 Source locations below describe the baseline and may move as code is removed.
 Repository reachability does not prove that an exported or dynamically minted module has
 no retained formula referring to it.
 
 ## Findings register
+
+### Retrospective durability audit — required, in progress
+
+The inventory starts at the unified-sandbox design commit `3332f1928` and
+includes the current branch plus associated endo-host implementation changes.
+Earlier infrastructure still used by the refactor remains in scope; this seed
+is not an exclusion boundary.
+The ancestry range through `65e939889` contains 345 commits, including upstream
+changes that still need classification rather than an assumption of relevance.
+No claim of complete retrospective coverage is made yet.
+
+| Boundary | Current evidence / defect | Required follow-up |
+|---|---|---|
+| Catalog reads and renewal owner | Standalone readers are inert; integration initially let metadata work outlive service close. Uncommitted working-tree integration now drains admitted reads in local tests. | Real formula cancellation/reconstruction with reads paused before and during renewal; restart evidence still missing. |
+| Pool member identity | `275710d5a` pins identity only in memory; chooser state is persisted. Same-ID rebinding after restart can inherit another account's state. | Persist and validate identity with chooser state; test restart, removed IDs, and failed writes. |
+| Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
+| Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
+| Native state creation | `session-state-storage.js` creates a directory before publishing its ownership marker. A crash between them leaves a path that prepare and removal both refuse. | Recoverable, journaled or atomic creation; inject failure between directory creation and marker publication. |
+| Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
+| Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
+| Daemon value publication | `host.storeValue` defers name publication through `formulateMarshalValue`, whose deferred tasks run before the marshal formula is written. A crash can leave a durable name pointing to a missing formula. | Verify and fix publication ordering at the actual daemon boundary, including transient pins/dependencies and crash/failure injection; absent-or-complete Map mocks do not cover dangling durable names. |
+| Codex checkpoint commit | `codex-session-store.js` syncs the temporary file, then renames without syncing its containing directory. | Align acknowledged persistence with the turn-ledger durability contract; distinguish host/power-loss testing from ordinary daemon restart. |
+| Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
+
+All rows above remain open except the classification of deliberately transient
+picker state; that classification does not waive session-creation verification.
+Full supervisor/storage, journal/restoration, broker/credential, publication,
+network/image, and host deployment coverage is being inventoried separately.
+Existing Tokyo evidence is retained: generation 159 / app `81f3428e3` passed
+four-backend seed, actual daemon restart, and recall with the new private schema
+and OpenCode fresh-session path.
+That happy path does not prove archive-boundary recovery, unsettled effects,
+torn formula/name publication, deletion/GC, or native cleanup after worker loss.
+Formula-level cancellation/revival tests must also prove exactly one active
+private-journal writer, rather than assuming object reconstruction over shared
+Maps establishes that invariant.
+Mount-inspection fix: the default recorded-cleanup socket check now treats only
+ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
+Ten focused tests pass, including vanished-entry success and both inspection
+failures; this adds no durable state or replayed effect and does not close the
+separate missing-native-cleanup-proof finding.
 
 | ID | Priority | Finding | Evidence class | Status |
 |---|---|---|---|---|
@@ -328,6 +384,16 @@ Completion: one implementation owns each common invariant; conformance tests run
 three adapters through partial acquisition failure, stop/retry, restart, and deletion.
 
 ## FA-07 — Separate runtime, provider, account, and route
+
+Implementation review gate: every new implementation must be audited against
+the Endo daemon's durable formula patterns, not only its in-memory behavior.
+Identify the durable formula owner and dependencies, what is replayed on daemon
+restart, which state is intentionally reconstructible, and how cancellation,
+retirement, and failed writes affect previously issued capabilities.
+For model discovery, catalog snapshots may be reconstructed, but account/member
+identity and renewal ownership must not silently change or duplicate on replay.
+Add restart/replay coverage for durable claims and explicitly record any missing
+evidence before treating an implementation as ready for deployment.
 
 Floot owns the direct-provider inference loop in `agent.js`, while hosted runtimes implement
 a separate backend interface.

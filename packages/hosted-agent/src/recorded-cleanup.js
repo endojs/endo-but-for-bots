@@ -96,6 +96,7 @@ const meansNotMounted = error => {
  * @param {object} [powers]
  * @param {(file: string, args: string[]) => Promise<unknown>} [powers.runProgram]
  * @param {(dir: string) => Promise<string[]>} [powers.readDirectory]
+ * @param {(target: string) => Promise<{isSocket(): boolean}>} [powers.inspect]
  * @param {(target: string) => Promise<boolean>} [powers.isSocket]
  * @param {(dir: string) => Promise<void>} [powers.removeDirectory]
  * @param {typeof net} [powers.netModule]
@@ -105,10 +106,17 @@ export const reclaimRecordedMount = async (
   {
     runProgram = promisify(execFile),
     readDirectory = dir => readdir(dir),
+    inspect = target => lstat(target),
     isSocket = async target =>
-      lstat(target).then(
+      inspect(target).then(
         stats => stats.isSocket(),
-        () => false,
+        error => {
+          // A vanished entry cannot host a bridge. Failed observation is not
+          // absence: retain the mount if permissions or I/O prevent proof.
+          if (/** @type {{ code?: string }} */ (error).code === 'ENOENT')
+            return false;
+          throw error;
+        },
       ),
     removeDirectory = dir => rmdir(dir),
     netModule = net,
