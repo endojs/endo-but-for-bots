@@ -42,7 +42,7 @@ no retained formula referring to it.
 |---|---|---|---|---|
 | FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Fixed locally; bounded selection pending |
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fixed locally; compaction policy pending |
-| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
+| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed locally; runtime retirement pending |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Removed locally; runtime retirement pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed locally; coordinated cutover pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
@@ -113,13 +113,13 @@ The full-content bug is fixed locally, not deployed.
 
 ## FA-03 — Retire the live Claude form topology
 
-The host's `modules/endo-daemon.nix` still runs `setup-host.js`, `setup-peer.js`, and
+At the baseline, the host's `modules/endo-daemon.nix` ran `setup-host.js`, `setup-peer.js`, and
 `setup-hosted.js` (baseline lines 88–91).
-[setup-host.js](../claude-sandbox/setup-host.js) still provisions the old sandbox-form
-factory; [setup-peer.js](../claude-sandbox/setup-peer.js) provisions credential forms.
-The old factory dynamically mints `claude-client-module.js`, which materializes credentials
+[setup-host.js](../claude-sandbox/setup-host.js) provisioned the old sandbox-form
+factory; `setup-peer.js` provisioned credential forms.
+The old factory dynamically minted `claude-client-module.js`, which materialized credentials
 into the guest environment.
-This is a second, live topology alongside the brokered hosted path, not dead code.
+This was a second, live topology alongside the brokered hosted path, not dead code.
 
 Removal cluster in `packages/claude-sandbox`:
 
@@ -142,7 +142,7 @@ Progress: `refactor(claude-sandbox): stop provisioning legacy form topology` rem
 the generic factory, shared mounter, and inbox-form producer from `setup-host.js`.
 The paired endo-host change removes the automatic `setup-peer.js` hook.
 Retained bindings are intentionally untouched; their resources still require explicit
-retirement before deleting the remaining entrypoints or resetting deployment state.
+retirement before deploying the remaining entrypoint removals or resetting deployment state.
 The setup-host and setup-hosted suites pass 16 tests, including fresh native-only setup,
 idempotent setup, distinct host ownership, and preservation of retained legacy bindings.
 Independent review caught two stale test expectations; both were corrected before commit.
@@ -157,8 +157,30 @@ The [coverage and retirement map](../claude-sandbox/docs/legacy-retirement.md) r
 what survives and what is intentionally obsolete.
 Successful arbitrary `/mnt` attachments belonged to the legacy path; the current Claude
 backend refuses them, and removing legacy tests must not imply otherwise.
-The permission check blocked the 16-file deletion and explicit approval has been requested.
-Those source files, exports, and legacy tests remain present; no workaround was attempted.
+The permission check initially blocked the 16-file deletion; the operator explicitly
+approved that exact source/test/document set before removal proceeded.
+Approval does not cover deleting Tokyo data, Secrets, or workspaces.
+
+Source removal: `refactor(claude-sandbox): remove legacy form and client topology`
+deletes the approved 16 files, their dangling exports/scripts, and the shared legacy
+`session-powers` entrypoint after its last production caller disappears.
+The native controller, current state provider, protocol client, mount bridge, and generic
+sandbox/9P infrastructure remain.
+Documentation describes the current brokered topology and the required retirement gate.
+Independent repository/CI/host reference searches found no current caller outside the
+deleted cluster and its removed export/script entries.
+The full suites pass: Floot 402 tests after removing its five legacy-path tests,
+Claude 180 tests, and hosted-agent 541 tests with one skipped.
+The hosted-agent typecheck still fails with 179 declaration errors (for example missing
+`E`/`Passable` in exo-stream declarations); no deleted-module reference appears in that log.
+Repository-wide lint stops at formatting issues in ten untouched files (asset-server,
+Anthropic streaming, provider-listener runtime, OpenRouter, and usage-label tests).
+The documentation build fails with 8,985 errors and 113 warnings across repository declarations
+and entry-point conversion; it is not a passing gate.
+The independent review approved the source/export removal and corrected documentation.
+Both preserved real-daemon regressions pass after deletion.
+Claude and hosted-agent ESLint pass with zero errors and 276 warnings.
+This source removal is recoverable from Git and has not been deployed to Tokyo.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
@@ -451,6 +473,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Tokyo retirement inventory (`575b45f68`, host helper `d68f72c`) | Read-only named-binding inspection on release `21bcb3d0`; legacy producers remain; no runtime retirement or deployment |
 | 2026-09-21 | FA-03: preserve generic daemon coverage before legacy deletion | Two real-daemon tests passed; lint/format passed; actual 16-file source removal awaits explicit permission; no deployment |
 | 2026-09-21 | FA-05: remove ignored hosted native profiles | 182 focused tests passed; explicit stale-plan rejection added after review; host Nix syntax passed; coordinated retirement/activation pending |
+| 2026-09-21 | FA-03: remove the approved 16-file legacy Claude topology | Full Floot/Claude/hosted-agent suites: 402/180/541 passed, one skipped; daemon regressions: two passed; package ESLint: zero errors; source/docs reviewed; global lint/type/docs failures recorded above; runtime retirement and deployment still pending |
 
 ## Request
 

@@ -43,7 +43,6 @@
     "./provider-scopes.js": "./src/provider-scopes.js",
     "./session-supervisor.js": "./src/session-supervisor.js",
     "./session-registry.js": "./src/session-registry.js",
-    "./session-powers.js": "./src/session-powers.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",
     "./recorded-cleanup.js": "./src/recorded-cleanup.js",
     "./workspace-projection.js": "./src/workspace-projection.js",

@@ -1,9 +1,9 @@
 # Legacy Claude topology retirement
 
 The inbox-form factory, sidecar-file credential factory, and client formula are
-planned removal candidates, not the topology used by current hosted sessions.
+removed source paths, not alternate ways to create current hosted sessions.
 The current entrypoints are `setup-host.js` and `setup-hosted.js`.
-Source deletion is pending explicit approval; the files and their old tests remain.
+The approved legacy files, obsolete exports, and old form-specific tests have been removed.
 
 ## Deployment gate
 
@@ -13,9 +13,9 @@ is still available; verify container, 9P mount, listener, and credential-grant c
 Retire legacy formula bindings only after cleanup, or stop native work before resetting
 disposable daemon state.
 Preserve Secrets blobs, current subscription renewal owners, and retained workspaces.
-No runtime retirement, source deletion, or disk deletion is performed by this preparation.
+No runtime retirement or disk deletion is performed by this source change.
 
-## Coverage to retain when removing the old entrypoints
+## Coverage retained when removing the old entrypoints
 
 | Removed coverage | Current coverage or explicit retirement |
 | --- | --- |
@@ -29,8 +29,8 @@ No runtime retirement, source deletion, or disk deletion is performed by this pr
 | Successful arbitrary `/mnt` binds through the old client formula | Not a current Claude backend capability; current backend refuses `containerMounts`, covered in `test/claude-backend-factory.test.js` |
 | Inbox forms, credential sidecar creation/materialization, old client formula reincarnation | Intentionally retired; these are not APIs the current native controller implements |
 
-The legacy Floot `container-mounts-sandbox` test exercises successful attachments through
+The removed Floot `container-mounts-sandbox` test exercised successful attachments through
 the old client formula, not through today's hosted backend.
-Do not interpret a future removal as claiming that native Claude arbitrary attachments work.
+Do not interpret its removal as claiming that native Claude arbitrary attachments work.
 Adding those requires a recorded plan, authorized mount rows, and attestation coverage
 before the current backend's refusal can be removed.

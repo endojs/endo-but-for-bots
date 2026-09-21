@@ -315,8 +315,8 @@ export const makeClaudeNativeController = ({
       });
       assertCopyData(options);
       // `make`, not `makeResolved`: the runtime returns a slice only once its
-      // mount table verifies against the anchor's own, which is also what
-      // lets this adapter take runtime attaches it previously had to refuse.
+      // mount table verifies against the anchor's own. Arbitrary runtime
+      // container attaches remain refused by the current backend factory.
       const slice = await E(sandboxScope).make(options);
       // Checked twice. The runtime proved the slice's confinement to itself;
       // this proves the slice it returned is the one this session was

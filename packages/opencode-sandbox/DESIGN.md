@@ -128,24 +128,23 @@ keep the settings they were recorded with until their record is revised on a lat
 Live replacement and reconfiguration require a separate lifecycle operation.
 
 Provisioning for one host must be serialized.
-Session construction resolves dependency capabilities once, stores them in a host-only
-execution bundle, and uses the shared static `@endo/hosted-agent/session-powers.js` module.
-The client formula retains the powers formula, bundle, and original dependencies;
-revival no longer resolves nested factory/provider names against current bindings.
-Daemon acceptance covers rebinding, GC, restart, and session-scoped state access.
-This active bundle excludes the client and does not replace passive session records.
-Backend defaults and cleanup backstops still use mutable names and current paths, so
-factory/state-provider bindings must remain stable until durable-record adoption lands.
+Historically, session construction used an active capability bundle through
+`@endo/hosted-agent/session-powers.js`; that module has now been removed with the
+legacy Claude client-formula topology.
+Current native controllers use the daemon session owner's recorded dependencies and
+resolver, with cleanup owned by the shared supervisor.
+Generic exact-dependency retention across rebinding, GC and restart remains covered by
+daemon fixtures independently of the removed module.
 
 (Historical: resolver integration and broker-only policy have since landed in
 `src/opencode-native-controller.js`; the volume/quota subsystem was retired
 rather than completed; live acceptance ran on Tokyo.)
 
-**Lineage dependencies that must land first.** The OpenCode backend needs the
+**Historical lineage notes (not current setup instructions).** The original OpenCode backend needed the
 hosted-backend seam (`@endo/hosted-agent`, present in PR #1248) **and** a
 credential cap backed by the Endo secrets manager. The latter is the Tokyo
 commit `f13c7cbd9` (`packages/claude-sandbox/src/managed-credentials*.js`,
-`provideManagedCredentials`), which is **not** in PR #1248; the PR branch's own
+`provideManagedCredentials`), which was then **not** in PR #1248; the PR branch's old
 `claude-credentials-factory.js` is a sidecar-file cap with no SecretBlob and no
 `@secrets`. The OpenRouter secret convention is also Tokyo-side: `be6c5ceb4`
 defaults the name to `${FLOOT_DIR}-openrouter-auth`, and `openrouter-auth`
