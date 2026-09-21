@@ -65,7 +65,7 @@ hideAndHardenFunction(isObject);
  * `DataView`. `passStyleOf` uses this only to sharpen a diagnostic — the
  * "Cannot pass mutable typed arrays" message — for genuine TypedArrays; the
  * DataView-inclusive `isView` would mislabel a `DataView` (never a
- * `byteArray`) as a mutable typed array. (`byteArray.js` commits to `isView`
+ * `byteArray`) as a mutable typed array. (`byte-array.js` commits to `isView`
  * for a different question — emulated-vs-native shape on an already-known
  * `Uint8Array` — where DataViews are already excluded.)
  *

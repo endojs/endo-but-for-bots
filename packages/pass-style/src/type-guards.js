@@ -1,5 +1,5 @@
 import { Fail, q, hideAndHardenFunction } from '@endo/errors';
-import { passStyleOf } from './passStyleOf.js';
+import { passStyleOf } from './pass-style-of.js';
 
 /**
  * @import {Rejector} from '@endo/errors/rejector.js';

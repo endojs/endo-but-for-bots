@@ -2,8 +2,8 @@
 import { ONE_N } from '@endo/nat';
 import { expectTypeOf } from 'expect-type';
 import { Far } from './make-far.js';
-import { passStyleOf } from './passStyleOf.js';
-import { makeTagged } from './makeTagged.js';
+import { passStyleOf } from './pass-style-of.js';
+import { makeTagged } from './make-tagged.js';
 import type {
   Checker,
   CopyArrayInterface,
@@ -14,7 +14,7 @@ import type {
   PassableCap,
   PassStyle,
 } from './types.js';
-import { PASS_STYLE } from './passStyle-helpers.js';
+import { PASS_STYLE } from './pass-style-helpers.js';
 import { passableSymbolForName } from './symbol.js';
 
 const remotable = Far('foo', {});

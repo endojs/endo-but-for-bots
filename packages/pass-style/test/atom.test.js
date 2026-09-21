@@ -3,7 +3,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import hardenIsNoop from '@endo/harden/is-noop.js';
 import { Far } from '../src/make-far.js';
-import { isAtom, assertAtom } from '../src/typeGuards.js';
+import { isAtom, assertAtom } from '../src/type-guards.js';
 
 test('isAtom test', t => {
   const alice = Far('Alice', {});

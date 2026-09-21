@@ -6,7 +6,7 @@ export {
   assertChecker,
   getTag,
   hasOwnPropertyOf,
-} from './src/passStyle-helpers.js';
+} from './src/pass-style-helpers.js';
 
 export { getErrorConstructor, isErrorLike } from './src/error.js';
 
@@ -32,9 +32,9 @@ export {
   assertPassable,
   toPassableError,
   toThrowable,
-} from './src/passStyleOf.js';
+} from './src/pass-style-of.js';
 
-export { makeTagged } from './src/makeTagged.js';
+export { makeTagged } from './src/make-tagged.js';
 export {
   Remotable,
   Far,
@@ -51,9 +51,9 @@ export {
   isCopyArray,
   isAtom,
   assertAtom,
-} from './src/typeGuards.js';
+} from './src/type-guards.js';
 
-export * from './src/deeplyFulfilled.js';
+export * from './src/deeply-fulfilled.js';
 
 // eslint-disable-next-line import/export -- ESLint not aware of type exports in types.d.ts
 export * from './src/types.js';

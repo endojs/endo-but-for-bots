@@ -1,6 +1,6 @@
 import harden from '@endo/harden';
 import { Fail, X } from '@endo/errors';
-import { confirmOwnDataDescriptor } from './passStyle-helpers.js';
+import { confirmOwnDataDescriptor } from './pass-style-helpers.js';
 
 const { getPrototypeOf } = Object;
 const { ownKeys } = Reflect;

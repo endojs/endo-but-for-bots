@@ -9,10 +9,10 @@ import {
   passableSymbolForName,
   unpassableSymbolForName,
 } from '../src/symbol.js';
-import { passStyleOf } from '../src/passStyleOf.js';
+import { passStyleOf } from '../src/pass-style-of.js';
 import { Far, ToFarFunction } from '../src/make-far.js';
-import { makeTagged } from '../src/makeTagged.js';
-import { PASS_STYLE } from '../src/passStyle-helpers.js';
+import { makeTagged } from '../src/make-tagged.js';
+import { PASS_STYLE } from '../src/pass-style-helpers.js';
 
 const { getPrototypeOf, defineProperty, freeze } = Object;
 

@@ -10,9 +10,9 @@ import {
   isPassable,
   toPassableError,
   toThrowable,
-} from '../src/passStyleOf.js';
+} from '../src/pass-style-of.js';
 import { Far } from '../src/make-far.js';
-import { makeTagged } from '../src/makeTagged.js';
+import { makeTagged } from '../src/make-tagged.js';
 
 const { defineProperty } = Object;
 

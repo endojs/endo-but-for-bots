@@ -8,11 +8,11 @@ import {
   makeError,
   hideAndHardenFunction,
 } from '@endo/errors';
-import { isPrimitive, isTypedArray, PASS_STYLE } from './passStyle-helpers.js';
+import { isPrimitive, isTypedArray, PASS_STYLE } from './pass-style-helpers.js';
 
-import { CopyArrayHelper } from './copyArray.js';
-import { ByteArrayHelper } from './byteArray.js';
-import { CopyRecordHelper } from './copyRecord.js';
+import { CopyArrayHelper } from './copy-array.js';
+import { ByteArrayHelper } from './byte-array.js';
+import { CopyRecordHelper } from './copy-record.js';
 import { TaggedHelper } from './tagged.js';
 import {
   ErrorHelper,

@@ -1,7 +1,7 @@
 import harden from '@endo/harden';
 import { getMethodNames } from '@endo/eventual-send/utils.js';
 import { q, Fail } from '@endo/errors';
-import { PASS_STYLE } from './passStyle-helpers.js';
+import { PASS_STYLE } from './pass-style-helpers.js';
 import { assertIface, getInterfaceOf, RemotableHelper } from './remotable.js';
 
 /** @import {RemotableBrand} from '@endo/eventual-send' */

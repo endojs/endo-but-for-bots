@@ -3,7 +3,7 @@ import './_prepare-only-well-formed-strings-passable.js';
 import test from '@endo/ses-ava/test.js';
 
 import { isWellFormedString, assertWellFormedString } from '../src/string.js';
-import { passStyleOf } from '../src/passStyleOf.js';
+import { passStyleOf } from '../src/pass-style-of.js';
 
 test('test string well formedness behaviors', t => {
   const gcleff1 = '\u{1D11E}';

@@ -1,1 +1,1 @@
-export { PassStyleOfEndowmentSymbol } from './src/passStyleOf.js';
+export { PassStyleOfEndowmentSymbol } from './src/pass-style-of.js';

@@ -2,10 +2,10 @@ import harden from '@endo/harden';
 import { X, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { isPromise } from '@endo/promise-kit';
-import { getTag } from './passStyle-helpers.js';
-import { passStyleOf } from './passStyleOf.js';
-import { makeTagged } from './makeTagged.js';
-import { isAtom } from './typeGuards.js';
+import { getTag } from './pass-style-helpers.js';
+import { passStyleOf } from './pass-style-of.js';
+import { makeTagged } from './make-tagged.js';
+import { isAtom } from './type-guards.js';
 
 /**
  * @import {RemotableBrand} from '@endo/eventual-send';
