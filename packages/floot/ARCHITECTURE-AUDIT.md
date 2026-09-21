@@ -52,7 +52,7 @@ no retained formula referring to it.
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Open |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Open |
-| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built and activated on Tokyo; acceptance pending |
+| FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -599,21 +599,31 @@ After correcting the driver's nonexistent tool request and exact Codex shell
 wrapper normalization, all three hosted backends passed native shell write/read,
 Endo tool calls, and off → public internet → off network-policy checks.
 Public HTTPS succeeded and a private-address request was rejected.
-Claude repeated previous commands during the final off-policy turn, so this was
-not flawless instruction following despite the successful policy assertion.
+Claude's final off-policy turn recorded activity with earlier check labels but
+new IDs and changed output, favoring fresh native activity over plain replay.
+Exact arguments and raw events were not retained, so this remains a follow-up:
+trace imported call IDs, fresh CLI events, and native execution across a harmless
+policy-change fixture rather than assuming flawless instruction following.
 Direct Fae also passed a real capability-description tool call.
 Hosted cancellation reached idle with `reportedState: cancelled`, while the
 journal correctly retained `outcome-unknown` for unsettled native calls.
-The driver must distinguish cancellation from certainty about tool effects.
+Read-only revalidation passed without resolving or erasing that uncertainty.
 Fae's configured OpenRouter adapter buffers responses, so its first test's
-streaming prerequisite timed out without sending cancellation; a separately
-labelled pending-turn cancellation check remains required.
-The initial three diagnostic tool sessions were removed; restoration and rerun
-sessions remain pending final cleanup.
+streaming prerequisite timed out without sending cancellation.
+A separately labelled exact pending-turn cancellation check then passed.
+All disposable diagnostic, rerun, and restoration sessions have been removed.
+Final checks found zero containers, hosted native records, or Endo mounts and no
+processes retaining their recorded network namespaces.
+All six Secret identities and six archived original workspace guest identities
+remain unchanged; externally owned workspace backing directories remain.
+Temporary image holders and the build-input binary were removed, while evidence
+and one-shot helpers were archived privately outside deployment staging.
 Detailed evidence and remaining gates are in endo-host's
 `ops/hosted-cutover-acceptance-20260921.md`.
-No full acceptance pass, forced cold-store restoration, external process
-termination proof, or image-holder cleanup is claimed.
+The requested cutover matrix passed within those evidence limits.
+Forced native-store corruption recovery, immediate process termination at cancel,
+and remote provider computation/billing cancellation are not established.
+The broader audit remains open; resume deletion before abstraction next.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
