@@ -446,16 +446,34 @@ retirement must be coordinated with the release and host-hook changes, not perfo
 
 ### Sequence
 
-1. Fix FA-01/FA-02 and add regression fixtures before changing transcript architecture.
-2. Disable legacy setup producers and inventory retained formula specifiers/native resources.
-3. Stop legacy clients; verify containers, mounts, listeners, and grants are retired.
-4. Remove retained legacy formulas/aliases, recreate credential formulas against shared entrypoints,
-   and deliberately reset disposable state without deleting Secrets or retained workspaces.
-5. Delete FA-03/FA-04/FA-05/FA-11/FA-12 source, exports, tests, and stale documentation together.
-6. Repair FA-13 before relying on a fresh shared-image deployment.
-7. Extract FA-06/FA-10, then address FA-07/FA-08 and the explicit storage contract FA-09.
-8. Run common conformance on Tokyo: create, tool use, cancel, restart, restore, policy change,
-   resource failure, and delete; record deployed revisions and evidence here.
+The following cutover gates take priority over further abstraction or deletion work.
+FA-01/FA-02 regression fixes and local legacy source removals above are already committed;
+their remaining work is not implied complete by this deployment sequence.
+
+1. **Fix FA-13 image provisioning.** Replace the incompatible host builder with the shared
+   base/overlay pipeline, require storage admission and immutable pins, and test a missing-image
+   start explicitly: cached images must not hide an incomplete provisioning path.
+2. **Prepare retirement/reset using the old release.** Inventory retained formula specifiers,
+   native records, containers, mounts, listeners, grants, and workspace capability roots.
+   Stop old resources and verify cleanup acknowledgements before removing retained formulas
+   or disposable session records.
+   Preserve Secrets, renewal credentials and their single-owner identities, workspace data,
+   and the capability references needed to reach that data.
+   Preserve original plans before any workspace-preserving revision; deleting a Floot session
+   also drops guest/publication bindings and is not by itself a safe workspace archive.
+3. **Push and deploy both repositories as one coordinated cutover.** Record the app revision,
+   host revision, and image pins together.
+   Retire incompatible old session plans before activating the new parsers; never activate
+   only one half and rely on backward compatibility.
+4. **Run cross-backend acceptance on Tokyo.** For each configured backend, record create,
+   actual tool use, cancel, restart/restore, network-policy change, and delete results.
+   Verify cleanup and preserved workspace/credential identity, not just UI success.
+   Record failures and unavailable accounts explicitly rather than counting them as passes.
+5. Resume FA-11/FA-12 legacy retirement/deletion, then FA-06/FA-10 extraction, FA-07/FA-08,
+   FA-09 storage, and remaining bounded-context/compaction and resource-failure acceptance.
+
+As of this priority update, FA-13 host changes are implemented locally and under adversarial
+review; no new retirement, coordinated deployment, or acceptance success is claimed.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
@@ -474,6 +492,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-03: preserve generic daemon coverage before legacy deletion | Two real-daemon tests passed; lint/format passed; actual 16-file source removal awaits explicit permission; no deployment |
 | 2026-09-21 | FA-05: remove ignored hosted native profiles | 182 focused tests passed; explicit stale-plan rejection added after review; host Nix syntax passed; coordinated retirement/activation pending |
 | 2026-09-21 | FA-03: remove the approved 16-file legacy Claude topology | Full Floot/Claude/hosted-agent suites: 402/180/541 passed, one skipped; daemon regressions: two passed; package ESLint: zero errors; source/docs reviewed; global lint/type/docs failures recorded above; runtime retirement and deployment still pending |
+| 2026-09-21 | Prioritize FA-13, preservation-safe old-release retirement, coordinated two-repo deployment, and cross-backend acceptance | User-requested cutover gates recorded; FA-13 implementation under review; no deployment claimed |
 
 ## Request
 
