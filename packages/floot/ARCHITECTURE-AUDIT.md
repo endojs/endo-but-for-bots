@@ -109,6 +109,18 @@ uncommitted. No host helper/Nix changes have landed, no old cleanup paths have
 been removed, and none of this architecture has been deployed. The draft is
 preserved for review, not adopted as the selected solution.
 
+Read-only Tokyo evidence collected after stopping implementation: the live daemon
+reports `KillMode=control-group`, `Delegate=yes`, and control group
+`/system.slice/endo-daemon.service`. The observed daemon workers, conmon
+processes, and active Codex/OpenCode container processes are under that group
+or its descendants, including conmon processes reparented to PID 1.
+One Podman pause process is outside it in an SSH session scope; its ownership
+and recovery significance were not established by this snapshot.
+This makes validating the existing whole-daemon boundary a concrete alternative
+to investigate before building a new per-session service. It is not a stop/crash
+test, proof of exhaustive containment, or proof that mounts/records are reclaimed.
+No process was stopped and no deployment or cleanup was performed for this check.
+
 ### Retrospective durability audit — required, in progress
 
 The inventory starts at the unified-sandbox design commit `3332f1928` and
