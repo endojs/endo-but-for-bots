@@ -26,7 +26,17 @@ replay after an ambiguous result.
 Per-member managed holders have read/conditional-replace authority over one
 pinned record; the sandbox and sessions have neither credential authority.
 Direct usage reads use the same credential and need `user:profile` permission.
-The live deployment and acceptance of this increment remain pending.
+Tokyo runs this increment at `00799f3f5`, with endo-host `6304fd2`, generation 146.
+Both accounts passed direct usage reads, renewal from persisted refresh tokens
+after restart, and pinned Floot inference; all disposable sessions were removed.
+The restart test exposed route-dependent locator comparisons in pool setup.
+The fix compares stable formula IDs and publishes the validated IDs without
+re-resolving mutable names.
+Both normalized Secrets records contain no access token or expiry and no pending
+renewal intent; the old plain-token secret remains unchanged and unselected.
+The final Claude suite passes 222 tests and the focused shared suites pass 121.
+Lint has no errors, but repository-wide declaration/type and docs gates remain
+failing; live exhaustion handover and long-duration soak are not claimed.
 The older phase notes below describe their implementation-time deployment status.
 
 **Phase 1, usage and context, is implemented.** Not deployed; the OpenCode

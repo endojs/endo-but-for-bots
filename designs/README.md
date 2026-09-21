@@ -321,7 +321,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-21 | In Progress — phases 1 to 6 implemented; Claude and Codex pools deployed. Claude renewable-login imports, memory-only access tokens and direct usage reads implemented; renewable live acceptance pending. Secondary Codex needs fresh login. |
+| [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-21 | In Progress — phases 1 to 6 implemented; Claude and Codex pools deployed. Claude memory-only access tokens, direct usage and restart renewal passed two-account Tokyo acceptance at `00799f3f5`. Secondary Codex needs fresh login; live exhaustion handover and soak remain. |
 | [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-17 | In Progress — Tokyo UA at `50d036bc7`; shared queues/emergency stop deployed; bounded history/storage and final conformance pending |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |

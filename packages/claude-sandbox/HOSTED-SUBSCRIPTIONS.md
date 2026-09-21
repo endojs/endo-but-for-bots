@@ -72,4 +72,8 @@ silently invalidate an otherwise working inference credential.
 Local tests cover exhaustion handover, pinned refusal, setup identity guards and
 session pin persistence.
 The plain-token pool passed live Tokyo acceptance on 2026-09-20.
-Renewable-credential live acceptance is pending deployment of this increment.
+Renewable credentials passed two-account live Tokyo acceptance on 2026-09-21 at
+`00799f3f5`: direct usage, renewal after restart, and pinned Floot inference.
+The restart check exposed and fixed route-dependent locator comparisons;
+setup now compares stable formula IDs and publishes the exact validated IDs.
+No access token or expiry was present in either normalized Secrets record.
