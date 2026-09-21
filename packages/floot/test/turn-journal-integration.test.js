@@ -17,6 +17,9 @@ const fixture = () => {
     async has(name) {
       return store.has(nameOf(name));
     },
+    async remove(name) {
+      store.delete(nameOf(name));
+    },
     async lookup(name) {
       if (!store.has(nameOf(name))) throw Error('Not found');
       return store.get(nameOf(name));
@@ -74,6 +77,135 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
+test('archived failures remain in UI history and direct-provider context', async t => {
+  t.timeout(20_000);
+  const f = fixture();
+  let requests = 0;
+  let lastContext;
+  const provider = harden({
+    async chatStream(context) {
+      requests += 1;
+      lastContext = context;
+      if (requests === 1) throw Error('Archived failure');
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(
+    agent.converse('Preserve this failed request', makeReplyChannel().writer),
+  );
+  for (let index = 0; index < 290; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await agent.converse(`Later request ${index}`, makeReplyChannel().writer);
+  }
+  t.true(
+    (await agent.getArchivedTurns()).some(
+      turn => turn.input === 'Preserve this failed request',
+    ),
+  );
+  t.true(
+    (await agent.getHistory()).some(
+      message => message.content === 'Preserve this failed request',
+    ),
+  );
+  t.true(
+    lastContext.some(
+      message => message.content === 'Preserve this failed request',
+    ),
+  );
+  await agent.shutdown();
+  let restoredTranscript;
+  const hostedClient = harden({
+    async send(input, options) {
+      t.is(input, 'New hosted request');
+      restoredTranscript = options.transcript;
+      const channel = makeBufferedReader();
+      channel.push({ type: 'text-delta', text: 'Restored' });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  await revived.converse('New hosted request', makeReplyChannel().writer);
+  t.true(
+    restoredTranscript.some(
+      record => record.content === 'Preserve this failed request',
+    ),
+  );
+  t.false(
+    restoredTranscript.some(record => record.content === 'New hosted request'),
+  );
+});
+
+test('direct-provider recovery hydrates full input and tool evidence, not UI previews', async t => {
+  const f = fixture();
+  const input = `${'i'.repeat(9000)}INPUT-TAIL`;
+  const args = { text: `${'a'.repeat(9000)}ARGS-TAIL` };
+  const result = `${'r'.repeat(9000)}RESULT-TAIL`;
+  const contexts = [];
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      if (contexts.length === 1)
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'long-call',
+                type: 'function',
+                function: { name: 'effect', arguments: JSON.stringify(args) },
+              },
+            ],
+          },
+        });
+      if (contexts.length === 2) throw Error('Failed after long effect');
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+    {
+      extraTools: new Map([['effect', effectTool(async () => result)]]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse(input, makeReplyChannel().writer));
+  await agent.converse('Continue without repeating', makeReplyChannel().writer);
+  const restored = contexts[2];
+  t.true(restored.some(message => message.content === input));
+  t.true(
+    restored.some(
+      message => message.role === 'tool' && message.content === result,
+    ),
+  );
+  const call = restored
+    .flatMap(message => message.tool_calls || [])
+    .find(item => item.function.name === 'effect');
+  t.deepEqual(JSON.parse(call.function.arguments), args);
+  t.is(
+    restored.filter(message => message.content === 'Continue without repeating')
+      .length,
+    1,
+  );
+});
+
 test('direct tools persist intent before effects and failed effects remain in later model context', async t => {
   t.timeout(5000);
   const f = fixture();
@@ -124,7 +256,8 @@ test('direct tools persist intent before effects and failed effects remain in la
   t.true(
     contexts[2].some(
       message =>
-        message.content === 'Turn failed: Provider disconnected after effect',
+        message.content ===
+        '[Floot turn failed: Provider disconnected after effect]',
     ),
   );
   t.deepEqual(

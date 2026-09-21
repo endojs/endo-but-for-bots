@@ -40,8 +40,8 @@ no retained formula referring to it.
 
 | ID | Priority | Finding | Evidence class | Status |
 |---|---|---|---|---|
-| FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Open |
-| FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Open |
+| FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Fixed locally; bounded selection pending |
+| FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fixed locally; compaction policy pending |
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | In progress — fresh setup disabled |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | In progress — obsolete controller removed |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Open |
@@ -73,6 +73,15 @@ membership in history and restoration; regression tests cross archive boundaries
 Do not fix this by loading an unbounded lifetime history into memory without a paging or
 explicit context-selection policy.
 
+Progress: `fix(floot): restore archived turns and full provider context` merges
+archived and retained records per request, deduplicates by turn ID, orders them,
+and filters successful turns to the selected branch.
+Reading retained records first avoids losing a turn during concurrent archival.
+Tests cross the archive boundary with 290 turns and cover hosted revival.
+This does not add a lifetime resident cache, but full-history requests still materialize
+all records: archive pagination and explicit bounded context selection remain open.
+Not deployed or tested against a long-lived Tokyo session.
+
 ## FA-02 — Model context must not be built from UI previews
 
 The direct-provider loop reconstructs input from `getHistory()` (baseline `agent.js:1321`).
@@ -90,6 +99,17 @@ This is accidental loss, not deliberate compaction.
 Completion: every runtime consumes a canonical full-content transcript/context projection;
 UI previews remain presentation-only.
 Tests cover long failed input, tool arguments/results, archives, and explicit compaction.
+
+Progress: the direct-provider loop now hydrates the canonical transcript instead of
+replaying UI previews; regression tests preserve long failed inputs and tool evidence.
+Provider replay gives each call a fresh ID and labels unanswered outcomes as unknown.
+Adversarial review found cross-turn native-ID reuse could misattach a later result;
+the fix clears pending correlation at user boundaries while preserving same-turn parallel calls.
+All 47 focused tests pass, including that regression; the independent reviewer reran 27.
+The full Floot suite passes 407 tests; package ESLint has no errors; formatting passes.
+Explicit compaction/context selection remains open: this converter does not implement
+a compaction policy, and the full-history replay can grow without a context bound.
+The full-content bug is fixed locally, not deployed.
 
 ## FA-03 — Retire the live Claude form topology
 
@@ -350,6 +370,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Initial audit and FA-01–FA-13 register | Source review plus two in-memory reproductions; no remediation or deployment claimed |
 | 2026-09-21 | FA-03: stop creating legacy Claude form topology | 16 setup tests passed; independent review; retained resources untouched; not deployed |
 | 2026-09-21 | FA-04 A: delete obsolete OpenCode client formula | 60 focused tests passed, 53 independently rerun; legacy formula retirement pending; not deployed |
+| 2026-09-21 | FA-01/02: archive-aware history and hydrated direct-provider replay | 407 package tests passed, 27 independently rerun; tool-ID collision caught and fixed during review; bounded context/compaction pending; not deployed |
 
 ## Request
 

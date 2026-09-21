@@ -79,6 +79,7 @@ import {
 import {
   projectTranscript,
   recoverTurnTranscript,
+  transcriptToProviderMessages,
 } from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
@@ -1317,37 +1318,10 @@ export const makeStreamingAgent = async (
       getContext: async () => {
         // Include prior failed/cancelled turns and their known effects, not just
         // successful tree nodes. The active turn's staging stays separate.
-        const history = await getHistory(turnId);
-        const path = [];
-        for (const [index, message] of history.entries()) {
-          // Public reasoning is display-only, never replayed as instructions.
-          if (message.role === 'thinking') {
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          if (message.role === 'tool') {
-            const callId = `floot-history-${index}`;
-            path.push({
-              role: 'assistant',
-              content: '',
-              tool_calls: [
-                {
-                  id: callId,
-                  type: 'function',
-                  function: {
-                    name: message.name,
-                    arguments: message.args,
-                  },
-                },
-              ],
-            });
-            path.push({
-              role: 'tool',
-              tool_call_id: callId,
-              content: message.result ?? UNSETTLED_TOOL_RESULT,
-            });
-          } else path.push({ role: message.role, content: message.content });
-        }
+        // Model context is not a UI history projection: the latter deliberately
+        // carries previews. Hydrate the same full transcript hosted runners use.
+        const transcript = await getTranscript(turnId);
+        const path = transcriptToProviderMessages(transcript);
         return [
           { role: 'system', content: effectivePrompt },
           ...path.filter(message => message.role !== 'system'),
@@ -2172,8 +2146,28 @@ export const makeStreamingAgent = async (
    * before reporting it. Recovery is labeled, not silently presented as a
    * faithful reconstruction of the backend's event ordering.
    */
-  const getTranscript = async () => {
-    const turns = await turnJournal.list();
+  // A full-history API necessarily reads the archive, but keep it local to the
+  // request rather than growing the journal's bounded resident record map.
+  // Unresolved old turns may remain retained after newer turns are archived.
+  const readAllTurns = async () => {
+    // Capture retained records first: a concurrent snapshot may archive one
+    // before the second read. Deduplicate that overlap rather than losing it
+    // between an archive-first read and a retained read.
+    const retained = await turnJournal.list();
+    const archived = await turnJournal.listArchived();
+    const byId = new Map(
+      [...archived, ...retained].map(turn => [turn.turnId, turn]),
+    );
+    return [...byId.values()].sort((left, right) => {
+      if (left.turnId === right.turnId) return 0;
+      if (left.turnId === 'legacy-import') return -1;
+      if (right.turnId === 'legacy-import') return 1;
+      return BigInt(left.turnId) < BigInt(right.turnId) ? -1 : 1;
+    });
+  };
+
+  const getTranscript = async (excludeTurnId = undefined) => {
+    const turns = await readAllTurns();
     const ids = new Set(turns.map(turn => turn.turnId));
     const nodes = [];
     let id = await getOrCreateLeaf();
@@ -2200,6 +2194,7 @@ export const makeStreamingAgent = async (
       // The current prompt is passed separately to send(). Do not replay it
       // or incomplete live evidence into its own backend dispatch.
       if (
+        turn.turnId !== excludeTurnId &&
         turn.state !== 'pending' &&
         (!turn.conversationNodeId || pathIds.has(turn.conversationNodeId))
       ) {
@@ -2217,7 +2212,7 @@ export const makeStreamingAgent = async (
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const leafId = await getOrCreateLeaf();
-    const turns = await turnJournal.list();
+    const turns = await readAllTurns();
     if (!turns.length) return projectHistory(await tree.getPath(leafId));
     const ids = new Set(turns.map(turn => turn.turnId));
     const nodes = [];
@@ -2240,7 +2235,11 @@ export const makeStreamingAgent = async (
       }
     }
     const out = [...projectHistory(legacy)];
+    const pathIds = new Set(nodes.map(node => node.id));
     for (const turn of turns) {
+      if (turn.conversationNodeId && !pathIds.has(turn.conversationNodeId))
+        // eslint-disable-next-line no-continue
+        continue;
       // eslint-disable-next-line no-continue
       if (turn.turnId === excludeTurnId) continue;
       // A settled view leaves out the turn that is running: by its journal
