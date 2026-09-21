@@ -6,6 +6,70 @@ import { iterateReader } from '../iterate-reader.js';
 
 const options = harden({ maxItems: 2, maxWeight: 20, weigh: () => 10 });
 
+test('writes apply backpressure and preserve a long stream without increasing bounds', async t => {
+  t.timeout(10_000);
+  const channel = makeBoundedReader(options);
+  await channel.write('a');
+  await channel.write('b');
+  let accepted = false;
+  const waiting = channel.write('c').then(ok => {
+    accepted = ok;
+  });
+  await null;
+  t.false(accepted);
+  t.is(channel.buffered(), 2);
+  await t.throwsAsync(channel.write('concurrent'), {
+    message: /one pending write/,
+  });
+  const iterator = iterateReader(channel.reader, { buffer: 0 });
+  t.is((await iterator.next()).value, 'a');
+  await waiting;
+  t.true(accepted);
+  const producer = (async () => {
+    for (let i = 0; i < 5000; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await channel.write(i))) throw Error('Unexpected close');
+    }
+    channel.push(harden({ type: 'end' }));
+  })();
+  const remaining = [];
+  for await (const item of iterator) remaining.push(item);
+  await producer;
+  t.deepEqual(remaining.slice(0, 2), ['b', 'c']);
+  t.deepEqual(
+    remaining.slice(2, -1),
+    Array.from({ length: 5000 }, (_, i) => i),
+  );
+});
+
+test('closing a full queue releases its waiting writer', async t => {
+  t.timeout(5000);
+  const channel = makeBoundedReader(options);
+  channel.push('a');
+  channel.push('b');
+  const waiting = channel.write('c');
+  channel.close();
+  t.false(await waiting);
+});
+
+test('overflow diagnostics identify the bound and accounting without event contents', async t => {
+  const channel = makeBoundedReader({ ...options, name: 'test-raw' });
+  channel.push('SECRET a');
+  channel.push('SECRET b');
+  channel.push('SECRET c');
+  const error = await t.throwsAsync(iterateReader(channel.reader).next());
+  t.regex(
+    error.message,
+    /channel=test-raw, reason=item-limit, queuedItems=2, maxItems=2, queuedWeight=20, incomingWeight=10, maxWeight=20/,
+  );
+  t.false(error.message.includes('SECRET'));
+  const oversized = makeBoundedReader({ ...options, weigh: () => 21 });
+  t.false(await oversized.write('SECRET'));
+  await t.throwsAsync(iterateReader(oversized.reader).next(), {
+    message: /reason=oversized-event/,
+  });
+});
+
 test('terminal delivery has reserved capacity and preserves queued data', async t => {
   let closed = 0;
   const channel = makeBoundedReader({

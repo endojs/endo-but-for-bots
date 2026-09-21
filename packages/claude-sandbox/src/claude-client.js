@@ -622,6 +622,7 @@ export const makeClaudeClient = ({
     let proc = null;
     let closed = false;
     const channel = makeHostedTurnChannel({
+      name: `claude-raw:${sessionId}`,
       onConsumerClosed: () => {
         closed = true;
         if (proc) {
@@ -701,7 +702,9 @@ export const makeClaudeClient = ({
               }),
             );
           }
-          push(event);
+          // Stop pulling stdout while delivery is full. In particular, a
+          // large streamed tool argument can emit thousands of tiny events.
+          if (!(await channel.write(event))) break;
         }
         if (describeTranscripts) {
           // Ground truth for the turn: whether the prompt Claude just persisted

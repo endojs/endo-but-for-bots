@@ -15,12 +15,9 @@
 // other hosted backend, and the CLI's own event vocabulary stays behind this
 // package's capability boundary.
 
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import {
-  projectContext,
-  tokenCount,
-} from '@endo/hosted-agent/token-usage.js';
+import { makeHostedTurnChannel } from '@endo/hosted-agent/turn-channel.js';
+import { projectContext, tokenCount } from '@endo/hosted-agent/token-usage.js';
 
 /**
  * @typedef {(
@@ -71,7 +68,8 @@ const windowUse = usage =>
  * A model id without a variant suffix such as `[1m]`.
  * @param name
  */
-const baseModel = (/** @type {string} */ name) => name.replace(/\[[^\]]*\]$/, '');
+const baseModel = (/** @type {string} */ name) =>
+  name.replace(/\[[^\]]*\]$/, '');
 
 /**
  * The context window of the model that ran the main conversation, from the
@@ -170,7 +168,10 @@ export const makeClaudeHostedTranslator = () => {
       : [
           /** @type {HostedTurnEvent} */ ({
             type: 'usage',
-            context: { usedTokens: lastRequest.input + lastRequest.output, windowTokens: 0 },
+            context: {
+              usedTokens: lastRequest.input + lastRequest.output,
+              windowTokens: 0,
+            },
           }),
         ];
 
@@ -399,19 +400,24 @@ harden(makeClaudeHostedTranslator);
  */
 export const translateClaudeTurn = rawReader => {
   const translator = makeClaudeHostedTranslator();
-  const { push, reader, setOnClose } = makeBufferedReader();
   const rawIterator = iterateReader(/** @type {any} */ (rawReader), {
     buffer: 8,
   });
-  setOnClose(() => {
-    rawIterator.return().catch(() => {});
+  const { push, write, reader } = makeHostedTurnChannel({
+    name: 'claude-translated',
+    onConsumerClosed: () => {
+      rawIterator.return().catch(() => {});
+    },
   });
   (async () => {
     try {
       for await (const raw of rawIterator) {
         const event = /** @type {any} */ (raw);
         if (event?.type === 'end') {
-          for (const translated of translator.finish()) push(translated);
+          for (const translated of translator.finish()) {
+            // eslint-disable-next-line no-await-in-loop
+            if (!(await write(translated))) return;
+          }
           return;
         }
         if (event?.type === 'abort') {
@@ -421,7 +427,10 @@ export const translateClaudeTurn = rawReader => {
           });
           return;
         }
-        for (const translated of translator.handle(event)) push(translated);
+        for (const translated of translator.handle(event)) {
+          // eslint-disable-next-line no-await-in-loop
+          if (!(await write(translated))) return;
+        }
       }
       // The raw reader ended without an in-band terminal: its producer closed
       // it (the client's interrupt() or terminate() killed the process), so

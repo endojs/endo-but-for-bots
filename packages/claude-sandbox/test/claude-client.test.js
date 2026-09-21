@@ -108,6 +108,47 @@ const drain = async reader => {
   return events;
 };
 
+test('raw stream backpressures a burst larger than the delivery queue', async t => {
+  t.timeout(10_000);
+  const rows = Array.from({ length: 3000 }, (_, index) => ({
+    type: 'stream_event',
+    index,
+    event: {
+      type: 'content_block_delta',
+      delta: { type: 'input_json_delta', partial_json: 'x' },
+    },
+  }));
+  const fake = makeFakeSlice([
+    [enc.encode(`${rows.map(row => JSON.stringify(row)).join('\n')}\n`)],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const reader = await client.send('work');
+  // Give the producer a turn with no consumer: it must park, not overflow.
+  await new Promise(resolve => setTimeout(resolve, 20));
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+  const events = await drain(reader);
+  t.deepEqual(events.slice(0, rows.length), rows);
+  t.is(events.at(-1).type, 'end');
+});
+
+test('interrupt releases a producer waiting behind a full raw queue', async t => {
+  t.timeout(5000);
+  const fake = makeFakeSlice([
+    [
+      enc.encode(
+        Array.from({ length: 3000 }, () => '{"type":"system"}\n').join(''),
+      ),
+    ],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  await client.send('work');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await client.interrupt();
+  t.true(procKilled.get(fake.spawned[0]));
+});
+
 test('parseStreamJsonLines parses newline-delimited JSON across chunk boundaries', async t => {
   const chunks = [
     enc.encode('{"type":"system"}\n{"type":"assi'),
@@ -179,16 +220,22 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
-test('an undrained event queue fails explicitly and kills its producer', async t => {
+test('an oversized event fails with channel diagnostics and kills its producer', async t => {
   t.timeout(5000);
   const fake = makeFakeSlice([
-    [enc.encode('{"type":"system"}\n'.repeat(1025))],
+    [
+      enc.encode(
+        `${JSON.stringify({ type: 'system', text: 'x'.repeat(8 * 1024 * 1024) })}\n`,
+      ),
+    ],
   ]);
   const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
   t.teardown(() => client.terminate());
   const reader = await client.send('work');
   await new Promise(resolve => setTimeout(resolve, 0));
-  await t.throwsAsync(drain(reader), { message: /queue capacity exceeded/ });
+  await t.throwsAsync(drain(reader), {
+    message: /channel=claude-raw:sess-0001, reason=oversized-event/,
+  });
   t.true(procKilled.get(fake.spawned[0]));
 });
 
