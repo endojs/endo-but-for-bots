@@ -13,6 +13,7 @@ export const BRIDGE_EVENT_TYPES = harden([
   'phase',
   'text-delta',
   'commentary-delta',
+  'thinking-delta',
   'tool-call',
   'tool-result',
   'usage',
@@ -177,7 +178,11 @@ export const assertBridgeEvent = candidate => {
       ...(candidate.error === undefined ? {} : { error: `${candidate.error}` }),
     });
   }
-  if (type === 'text-delta' || type === 'commentary-delta') {
+  if (
+    type === 'text-delta' ||
+    type === 'commentary-delta' ||
+    type === 'thinking-delta'
+  ) {
     typeof candidate.text === 'string' || Fail`${q(type)} needs text`;
     return harden({ type, text: candidate.text });
   }

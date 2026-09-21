@@ -185,6 +185,9 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       nativeProfile,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...(request.model ? { model: request.model } : {}),
+      ...(request.reasoningEffort
+        ? { reasoningEffort: request.reasoningEffort }
+        : {}),
       ...(request.subscription ? { subscription: request.subscription } : {}),
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     });
@@ -300,6 +303,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   };
 
   return makeClaudeBackendFactory({
+    publicInternetEnabled: broker.config.publicInternet === true,
     listSubscriptions: async () => {
       await null;
       let timer;

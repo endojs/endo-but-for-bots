@@ -71,8 +71,15 @@ import {
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
-import { sameToolArgs, sameToolResult } from './src/tool-evidence.js';
-import { projectTranscript } from './src/transcript-projection.js';
+import {
+  sameExecutedToolName,
+  sameToolArgs,
+  sameToolResult,
+} from './src/tool-evidence.js';
+import {
+  projectTranscript,
+  recoverTurnTranscript,
+} from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
@@ -1015,7 +1022,7 @@ export const makeStreamingAgent = async (
      * @param {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} turnUsage
      * @param {string | undefined} backendCheckpoint
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
+     * @param {import('./src/hosted-turn.js').HostedTurnSegment[]} [segments]
      */
     const commitExternalTurn = async (
       replyText,
@@ -1057,6 +1064,16 @@ export const makeStreamingAgent = async (
             if (segment.text) {
               messages.push({ role: 'assistant', content: segment.text });
             }
+          } else if (segment.type === 'thinking') {
+            messages.push({
+              role: 'thinking',
+              content: segment.text,
+              thinking: {
+                startedAt: segment.startedAt,
+                endedAt: segment.endedAt,
+                truncated: segment.truncated,
+              },
+            });
           } else if (segment.type === 'compaction') {
             // The boundary the backend drew, kept in place. `projectTranscript`
             // carries it into the record stream, where its position is what
@@ -1129,7 +1146,7 @@ export const makeStreamingAgent = async (
     /**
      * @param {string} replyText
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
+     * @param {import('./src/hosted-turn.js').HostedTurnSegment[]} [segments]
      */
     const commitDeliveredTurn = async (
       replyText,
@@ -1163,6 +1180,16 @@ export const makeStreamingAgent = async (
             if (segment.text) {
               messages.push({ role: 'assistant', content: segment.text });
             }
+          } else if (segment.type === 'thinking') {
+            messages.push({
+              role: 'thinking',
+              content: segment.text,
+              thinking: {
+                startedAt: segment.startedAt,
+                endedAt: segment.endedAt,
+                truncated: segment.truncated,
+              },
+            });
           } else if (segment.type === 'compaction') {
             // The boundary the backend drew, kept in place. `projectTranscript`
             // carries it into the record stream, where its position is what
@@ -1293,6 +1320,11 @@ export const makeStreamingAgent = async (
         const history = await getHistory(turnId);
         const path = [];
         for (const [index, message] of history.entries()) {
+          // Public reasoning is display-only, never replayed as instructions.
+          if (message.role === 'thinking') {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
           if (message.role === 'tool') {
             const callId = `floot-history-${index}`;
             path.push({
@@ -2086,6 +2118,15 @@ export const makeStreamingAgent = async (
     // earlier turn's result.
     const pendingById = new Map();
     for (const m of path) {
+      if (m.role === 'thinking') {
+        out.push({
+          role: 'thinking',
+          content: m.content,
+          thinking: m.thinking,
+        });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       if (m.role === 'tool' && m.tool_call_id != null) {
         const pending = pendingById.get(m.tool_call_id);
         const index = pending?.shift();
@@ -2127,14 +2168,52 @@ export const makeStreamingAgent = async (
    * This conversation as transcript records, for an adapter rebuilding its
    * CLI's native store (`@endo/hosted-agent/transcript-records.js`).
    *
-   * The committed tree path only. `getHistory` also synthesizes evidence the
-   * journal holds for turns that failed before reaching the tree, which is
-   * recovery narration this stack adds for the model's benefit — a CLI's own
-   * store never contained it, so restoring it would be adding to the
-   * conversation rather than reproducing it.
+   * Include durable execution evidence even when the backend stream failed
+   * before reporting it. Recovery is labeled, not silently presented as a
+   * faithful reconstruction of the backend's event ordering.
    */
-  const getTranscript = async () =>
-    projectTranscript(await tree.getPath(await getOrCreateLeaf()));
+  const getTranscript = async () => {
+    const turns = await turnJournal.list();
+    const ids = new Set(turns.map(turn => turn.turnId));
+    const nodes = [];
+    let id = await getOrCreateLeaf();
+    while (id) {
+      const node = await tree.getNode(id);
+      if (!node) break;
+      nodes.push(node);
+      id = node.parentId;
+    }
+    const legacy = [];
+    const byTurn = new Map();
+    for (const node of nodes.reverse()) {
+      const turnId = node.metadata?.turnId;
+      if (!ids.has(turnId)) legacy.push(...node.messages);
+      else {
+        const messages = byTurn.get(turnId) || [];
+        messages.push(...node.messages);
+        byTurn.set(turnId, messages);
+      }
+    }
+    const records = [...projectTranscript(legacy)];
+    const pathIds = new Set(nodes.map(node => node.id));
+    for (const turn of turns) {
+      // The current prompt is passed separately to send(). Do not replay it
+      // or incomplete live evidence into its own backend dispatch.
+      if (
+        turn.state !== 'pending' &&
+        (!turn.conversationNodeId || pathIds.has(turn.conversationNodeId))
+      ) {
+        records.push(
+          ...(await recoverTurnTranscript(
+            byTurn.get(turn.turnId) || [],
+            turn,
+            ref => turnJournal.readContent(ref),
+          )),
+        );
+      }
+    }
+    return harden(records);
+  };
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const leafId = await getOrCreateLeaf();
@@ -2189,7 +2268,7 @@ export const makeStreamingAgent = async (
       for (const tool of turn.tools) {
         const match = unmatched.findIndex(
           other =>
-            other.name === tool.name &&
+            sameExecutedToolName(other.name, tool.name) &&
             sameToolArgs(
               { text: other.args, cut: other.argsRef !== undefined },
               { text: tool.args, cut: tool.argsRef !== undefined },
@@ -2264,7 +2343,7 @@ export const makeStreamingAgent = async (
           // of either. The same call, compared as strings, showed up twice.
           const match = unmatchedTools.findIndex(
             other =>
-              other.name === tool.name &&
+              sameExecutedToolName(other.name, tool.name) &&
               sameToolArgs(
                 { text: other.args },
                 { text: tool.args, cut: journalCuts[index].args },
@@ -4852,6 +4931,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (backendId) {
       const backend = (await getHostedBackends()).get(backendId);
       if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
+      if (
+        options.networkPolicy !== undefined &&
+        !(backend.descriptor.supportedNetworkPolicies || []).includes(
+          options.networkPolicy,
+        )
+      ) {
+        throw Error('Backend does not enforce this sandbox network policy');
+      }
       promptEnvironment =
         backend.descriptor.promptEnvironment ||
         UNDECLARED_HOSTED_PROMPT_ENVIRONMENT;
@@ -4882,6 +4969,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
     } else if (options.subscription && options.subscription !== 'auto') {
       throw Error('Only a hosted backend has subscriptions to choose from');
+    }
+    if (!backendId && options.networkPolicy !== undefined) {
+      throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
     // a live session. The object set is re-read from the catalog by id in
@@ -4956,6 +5046,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // (addressable by mail without waiting for a first UI turn) and its
     // preset objects are provisioned up front.
     try {
+      if (options.networkPolicy !== undefined) {
+        // Record the operator's choice before any backend generation is built.
+        await networkController(id).set(options.networkPolicy);
+      }
       await getAgent(id);
       const index = /** @type {any[]} */ (registry).findIndex(
         session => session.id === id,
@@ -5630,7 +5724,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
       const docs = {
         createSession:
-          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:

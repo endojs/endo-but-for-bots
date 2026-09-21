@@ -23,6 +23,7 @@ import {
 } from '@endo/hosted-agent/session-plan.js';
 
 import { assertCredentialKind } from './claude-credential-kinds.js';
+import { assertClaudeEffort } from './claude-effort.js';
 
 /** @import { assertNativePodmanProfile } from '@endo/sandbox/native-podman-profile.js' */
 /** @typedef {import('@endo/hosted-agent/session-plan.js').PlanNativeProfile} PlanNativeProfile */
@@ -61,6 +62,7 @@ export {
  * @property {ReturnType<typeof assertNativePodmanProfile>} nativeProfile
  * @property {MounterEnv} [mounterEnv] Absent means the host's `mount`/`umount`.
  * @property {string} [model]
+ * @property {string} [reasoningEffort]
  * @property {string} [systemPrompt]
  * @property {string} [subscription]
  */
@@ -111,6 +113,8 @@ export const readClaudeSessionPlan = text => {
       typeof recorded[name] === 'string' ||
       Fail`Session plan field ${q(name)} must be text`;
   }
+  if (recorded.reasoningEffort !== undefined)
+    assertClaudeEffort(recorded.reasoningEffort);
   /** @type {[string, string][]} */
   const paths = [];
   for (const name of [...RECORDED_PATHS, ...OPTIONAL_PATHS]) {

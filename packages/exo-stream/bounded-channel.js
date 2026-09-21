@@ -20,9 +20,10 @@ import { BufferedReaderInterface } from './type-guards.js';
  *
  * @template {Passable} [T=Passable]
  * @param {MakeBufferedReaderOptions<T> & {
- *   maxItems: number, maxWeight: number, weigh: (value: T) => number
+ *   maxItems: number, maxWeight: number, weigh: (value: T) => number,
+ *   name?: string
  * }} options
- * @returns {BufferedReaderKit<T>}
+ * @returns {BufferedReaderKit<T> & { write: (value: T) => Promise<boolean> }}
  */
 export const makeBoundedReader = options => {
   const {
@@ -30,6 +31,7 @@ export const makeBoundedReader = options => {
     maxWeight,
     weigh,
     readPattern,
+    name = 'bounded-reader',
     isTerminal = value =>
       value !== null &&
       typeof value === 'object' &&
@@ -70,8 +72,15 @@ export const makeBoundedReader = options => {
       onClose?.();
     }
   };
-  const fail = () => {
-    failure = Error('Bounded reader queue capacity exceeded');
+  /**
+   * @param {string} reason
+   * @param {number} incomingWeight
+   */
+  const fail = (reason, incomingWeight) => {
+    // Metadata only: never include a value, tool argument, or token here.
+    failure = Error(
+      `Bounded reader queue capacity exceeded: channel=${name}, reason=${reason}, queuedItems=${queue.length}, maxItems=${maxItems}, queuedWeight=${weight}, incomingWeight=${incomingWeight}, maxWeight=${maxWeight}`,
+    );
     close();
   };
   /** @param {T} value */
@@ -81,7 +90,12 @@ export const makeBoundedReader = options => {
     if (readPattern !== undefined) mustMatch(value, readPattern);
     const size = weigh(value);
     if (!Number.isInteger(size) || size < 1 || size > maxWeight) {
-      fail();
+      fail(
+        Number.isInteger(size) && size > maxWeight
+          ? 'oversized-event'
+          : 'invalid-weight',
+        size,
+      );
       return;
     }
     if (isTerminal(value)) {
@@ -89,13 +103,54 @@ export const makeBoundedReader = options => {
       finished = true;
     } else {
       if (queue.length >= maxItems || size > maxWeight - weight) {
-        fail();
+        fail(queue.length >= maxItems ? 'item-limit' : 'weight-limit', size);
         return;
       }
       queue.push({ value, weight: size });
       weight += size;
     }
     notify();
+  };
+  let writing = false;
+  /**
+   * A cooperative producer awaits each write before reading its next value.
+   * Keep at most one waiting value; concurrent writes are rejected rather
+   * than hiding an unbounded queue of promises outside the accounting limit.
+   * False means delivery closed; cancellation wakes a blocked producer.
+   * @param {T} value
+   */
+  const write = async value => {
+    if (finished) return false;
+    if (writing)
+      throw TypeError('Bounded reader permits only one pending write');
+    writing = true;
+    try {
+      harden(value);
+      if (readPattern !== undefined) mustMatch(value, readPattern);
+      const size = weigh(value);
+      if (!Number.isInteger(size) || size < 1 || size > maxWeight) {
+        fail(
+          Number.isInteger(size) && size > maxWeight
+            ? 'oversized-event'
+            : 'invalid-weight',
+          size,
+        );
+        return false;
+      }
+      while (
+        !finished &&
+        !isTerminal(value) &&
+        (queue.length >= maxItems || size > maxWeight - weight)
+      ) {
+        // eslint-disable-next-line no-await-in-loop
+        await wake.promise;
+      }
+      if (finished) return false;
+      push(value);
+      return true;
+    } finally {
+      writing = false;
+    }
   };
   // Annotated rather than inferred: TypeScript cannot discriminate `value` on
   // `done` across a hand-written `next()`, so it collapses the yield and the
@@ -112,6 +167,7 @@ export const makeBoundedReader = options => {
         const entry = queue.shift();
         if (entry) {
           weight -= entry.weight;
+          notify();
           return harden({ done: false, value: entry.value });
         }
         if (terminal) {
@@ -158,6 +214,7 @@ export const makeBoundedReader = options => {
   });
   return harden({
     push,
+    write,
     reader,
     close,
     isClosed: () => finished,

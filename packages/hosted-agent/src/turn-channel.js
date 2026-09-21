@@ -30,6 +30,9 @@ import { makeBoundedReader } from '@endo/exo-stream/bounded-channel.js';
  * plus twice its JSON length. This bounds what is queued for delivery — a
  * consumer that stops pulling — not the turn: consumed events release their
  * charges, and overflow fails delivery explicitly rather than growing.
+ * Cooperative `write` additionally holds at most one pending event (up to
+ * maxWeight); the terminal has its own reserved slot. These are queue bounds,
+ * not a bound on all parser or transcript memory retained by the adapter.
  */
 export const HOSTED_TURN_CHANNEL_BOUNDS = harden({
   maxItems: 1024,
@@ -45,6 +48,8 @@ harden(weighHostedEvent);
  * @property {any} reader The reader handed to the consumer.
  * @property {(event: any) => void} push Deliver one event; a no-op once the
  *   reader is closed.
+ * @property {(event: any) => Promise<boolean>} write Backpressured delivery;
+ *   await before producing another event. False means the reader closed.
  * @property {() => void} close End the reader from the producer side,
  *   discarding what it had not delivered: how an adapter with nothing else
  *   to signal cuts a consumer loose. A delivered `end`/`abort` ends the
@@ -59,16 +64,21 @@ harden(weighHostedEvent);
 
 /**
  * @param {object} [options]
+ * @param {string} [options.name] Diagnostic channel identity, never event data.
  * @param {() => void} [options.onConsumerClosed] Called once if the consumer
  *   closes the reader before the terminal: the adapter's cue to stop its
  *   producer. Reader closure is not the producer's exit; `terminal` still
  *   settles when the producer actually ends.
  * @returns {HostedTurnChannel}
  */
-export const makeHostedTurnChannel = ({ onConsumerClosed } = {}) => {
-  const { push, reader, close, setOnClose } = makeBoundedReader({
+export const makeHostedTurnChannel = ({
+  onConsumerClosed,
+  name = 'hosted-turn',
+} = {}) => {
+  const { push, write, reader, close, setOnClose } = makeBoundedReader({
     ...HOSTED_TURN_CHANNEL_BOUNDS,
     weigh: weighHostedEvent,
+    name,
   });
   let settled = false;
   let closed = false;
@@ -89,6 +99,7 @@ export const makeHostedTurnChannel = ({ onConsumerClosed } = {}) => {
   return harden({
     reader,
     push,
+    write,
     close,
     terminal,
     settle: () => settle(),

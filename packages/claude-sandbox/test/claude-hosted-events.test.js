@@ -17,6 +17,57 @@ const drain = async reader => {
   return events;
 };
 
+test('translated delivery backpressures bursts and drains in order', async t => {
+  t.timeout(10_000);
+  const raw = makeBufferedReader();
+  for (let i = 0; i < 3000; i += 1) {
+    raw.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `${i},` }] },
+    });
+  }
+  raw.push({ type: 'end' });
+  const reader = translateClaudeTurn(raw.reader);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const events = await drain(reader);
+  t.is(
+    events
+      .filter(e => e.type === 'text-delta')
+      .map(e => e.text)
+      .join(''),
+    Array.from({ length: 3000 }, (_, i) => `${i},`).join(''),
+  );
+  t.is(events.at(-1).type, 'end');
+});
+
+test('closing a backpressured translated reader closes its raw producer', async t => {
+  t.timeout(5000);
+  let closed = false;
+  const raw = makeBufferedReader({
+    onClose: () => {
+      closed = true;
+    },
+  });
+  for (let i = 0; i < 3000; i += 1) {
+    raw.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `${i},` }] },
+    });
+  }
+  const iterator = iterateReader(translateClaudeTurn(raw.reader), {
+    buffer: 0,
+  });
+  await iterator.next();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await iterator.return();
+  // Closure crosses two credit readers; yield until both have observed it.
+  for (let i = 0; i < 100 && !closed; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  t.true(closed);
+});
+
 test('translator maps stream-json events onto hosted turn events', t => {
   const translator = makeClaudeHostedTranslator();
   const log = [
@@ -423,7 +474,11 @@ test('usage counts the cache reads and writes, and reports the last request as c
         id: 'msg_1',
         model: 'claude-main',
         content: [{ type: 'tool_use', id: 'toolu_9', name: 'Bash', input: {} }],
-        usage: { input_tokens: 4, cache_read_input_tokens: 30_000, output_tokens: 1 },
+        usage: {
+          input_tokens: 4,
+          cache_read_input_tokens: 30_000,
+          output_tokens: 1,
+        },
       },
     },
     // A subagent's request is another window and is ignored.
@@ -498,14 +553,22 @@ test('without partial messages the assistant event is the per-request usage', t 
       message: {
         id: 'msg_1',
         content: [{ type: 'text', text: 'hi' }],
-        usage: { input_tokens: 5, cache_read_input_tokens: 95, output_tokens: 10 },
+        usage: {
+          input_tokens: 5,
+          cache_read_input_tokens: 95,
+          output_tokens: 10,
+        },
       },
     },
     {
       type: 'result',
       subtype: 'success',
       result: 'hi',
-      usage: { input_tokens: 5, cache_read_input_tokens: 95, output_tokens: 10 },
+      usage: {
+        input_tokens: 5,
+        cache_read_input_tokens: 95,
+        output_tokens: 10,
+      },
       // One unnamed entry: it is the window.
       modelUsage: { 'claude-x': { contextWindow: 1000 } },
     },
@@ -612,7 +675,10 @@ test('a message is read once, however many content blocks repeat it', t => {
     usage: { input_tokens: 5, cache_read_input_tokens: 95, output_tokens: 10 },
   };
   const usageEvents = [
-    { type: 'assistant', message: { ...message, content: [{ type: 'text', text: 'a' }] } },
+    {
+      type: 'assistant',
+      message: { ...message, content: [{ type: 'text', text: 'a' }] },
+    },
     {
       type: 'assistant',
       message: {
@@ -633,14 +699,27 @@ test('a request that does not say its usage is not completed with the last oneâ€
       type: 'stream_event',
       event: {
         type: 'message_start',
-        message: { id: 'msg_1', model: 'claude-main', usage: { input_tokens: 1000, output_tokens: 1 } },
+        message: {
+          id: 'msg_1',
+          model: 'claude-main',
+          usage: { input_tokens: 1000, output_tokens: 1 },
+        },
       },
     },
-    { type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 50 } } },
+    {
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { output_tokens: 50 } },
+    },
     // The next request starts without usage; its delta must not be spliced
     // onto the first request's input.
-    { type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_2' } } },
-    { type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 7 } } },
+    {
+      type: 'stream_event',
+      event: { type: 'message_start', message: { id: 'msg_2' } },
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { output_tokens: 7 } },
+    },
   ]
     .flatMap(event => translator.handle(event))
     .filter(event => event.type === 'usage');

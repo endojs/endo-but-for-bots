@@ -44,6 +44,7 @@ const brokerConfig = (overrides = {}) =>
     imageDigest: digest,
     listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
     models: ['claude-sonnet-4-6'],
+    publicInternet: true,
     credentialKind: 'oauthToken',
     ...overrides,
   });
@@ -248,6 +249,16 @@ const fixture = async t => {
   };
 };
 
+test('Claude advertises only the network authority recorded by its broker', async t => {
+  const f = await fixture(t);
+  f.environments.set(
+    'broker-id',
+    harden({ CLAUDE_BROKER_CONFIG: brokerConfig({ publicInternet: false }) }),
+  );
+  const factory = await make(f.host, undefined, { env: f.env });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+});
+
 test('a recorded Claude subscription pin cannot change on reopen', async t => {
   const f = await fixture(t);
   const factory = await make(f.host, undefined, { env: f.env });
@@ -357,6 +368,7 @@ test('create() records the plan under the sandbox id with exact dependencies, th
     harden({
       sessionId: 'session-a',
       model: 'claude-sonnet-4-6',
+      reasoningEffort: 'max',
       systemPrompt: 'You are Floot.',
     }),
     toolSet,
@@ -377,6 +389,7 @@ test('create() records the plan under the sandbox id with exact dependencies, th
     mounterSocketDir: path.join(f.roots.mcpDir, sid, '9p'),
     nativeProfile: profile,
     model: 'claude-sonnet-4-6',
+    reasoningEffort: 'max',
     systemPrompt: 'You are Floot.',
   });
   t.deepEqual(references, {

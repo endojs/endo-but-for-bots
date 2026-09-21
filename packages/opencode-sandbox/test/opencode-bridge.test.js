@@ -167,7 +167,7 @@ test('suppresses the compaction summary and user-message content', t => {
   );
 });
 
-test('maps reasoning deltas to commentary', t => {
+test('maps explicit reasoning deltas to thinking, not ordinary commentary', t => {
   const registry = registryWithParts();
   t.deepEqual(
     mapSseEvent(
@@ -175,7 +175,7 @@ test('maps reasoning deltas to commentary', t => {
       registry,
       SESSION,
     ),
-    { type: 'commentary-delta', text: 'think' },
+    { type: 'thinking-delta', text: 'think' },
   );
   t.is(
     mapSseEvent(

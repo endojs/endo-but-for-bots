@@ -10589,8 +10589,7 @@ button.btn-spinner::after {
   width: 100%;
 }
 
-.secrets-header,
-.secret-summary {
+.secrets-header {
   align-items: flex-start;
   display: flex;
   flex-wrap: wrap;
@@ -10664,29 +10663,50 @@ button.btn-spinner::after {
   overflow-wrap: anywhere;
 }
 
-.secret-pet-names {
-  margin-block: 12px;
-}
-
-.secret-pet-names > span:first-child {
-  display: block;
-  font-size: 0.875rem;
-  font-weight: 600;
-  margin-block-end: 4px;
-}
-
-.secret-pet-names ul {
+.secret-name {
   margin: 0;
-  padding-inline-start: 20px;
-}
-
-.secret-pet-names code {
   overflow-wrap: anywhere;
 }
 
-.secret-path-missing {
-  color: var(--muted-color, #555);
-  font-style: italic;
+.secret-aliases {
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+}
+
+.secret-card .secret-description-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.secret-description-form input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  width: auto;
+}
+
+.secrets-space button {
+  width: auto;
+  justify-self: start;
+  flex: 0 0 auto;
+}
+
+.secret-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  font-size: 0.875rem;
+}
+
+.secret-details dt {
+  opacity: 0.7;
+}
+
+.secret-details dd {
+  margin: 0;
+  padding: 0;
+  overflow-wrap: anywhere;
 }
 
 .secret-state {

@@ -5,7 +5,21 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
-import { sameToolArgs, sameToolResult } from '../src/tool-evidence.js';
+import {
+  sameExecutedToolName,
+  sameToolArgs,
+  sameToolResult,
+} from '../src/tool-evidence.js';
+
+test('only the named Endo MCP bridge aliases executor tool names', t => {
+  t.true(sameExecutedToolName('mcp__endo__exec', 'exec'));
+  t.true(sameExecutedToolName('exec', 'exec'));
+  t.false(sameExecutedToolName('mcp__other__exec', 'exec'));
+  t.false(sameExecutedToolName('mcp__endo__other__exec', 'exec'));
+  t.false(sameExecutedToolName('mcp__endo__other__exec', 'other__exec'));
+  t.false(sameExecutedToolName('mcp__endo__exec', 'Exec'));
+  t.false(sameExecutedToolName('exec', 'mcp__endo__exec'));
+});
 
 test('the same arguments are the same however they were written down', t => {
   // The tree keeps the provider's string; the journal re-serializes it.

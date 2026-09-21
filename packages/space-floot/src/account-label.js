@@ -1,5 +1,7 @@
 // @ts-check
 
+import harden from '@endo/harden';
+
 /**
  * How a backend's account is worded for a person: what its plan is, how full
  * each rate-limit window is and when it resets, credits, banked resets, and
@@ -184,6 +186,57 @@ export const accountChip = (account, nowMs) => {
 /** How long a "limit reached" with no window to say when it lifts is believed. */
 const UNDATED_BLOCK_MS = 3_600_000;
 
+// Observations are stamped by the daemon, but displayed against the browser's
+// clock. Allow a small difference, not an arbitrarily future-dated reading.
+const DISPLAY_CLOCK_SKEW_MS = 5000;
+
+/**
+ * Capacity is a recent observation, not a prediction that a reset refilled it.
+ * An hour is the display freshness bound; it does not alter pool scheduling.
+ * @param {Account} account
+ * @param {number} nowMs
+ */
+export const accountCapacity = (account, nowMs) =>
+  account.windows.map(window => {
+    const observed = Date.parse(account.observedAt);
+    const reset = Date.parse(window.resetsAt);
+    const lastRedeem = [
+      'reset',
+      'redeemed',
+      'alreadyRedeemed',
+      'abandoned',
+    ].includes(account.reset?.last?.outcome || '')
+      ? Date.parse(account.reset?.last?.at || '')
+      : NaN;
+    let note = '';
+    if (account.reset?.pending) note = 'reset unconfirmed';
+    else if (
+      (Number.isFinite(reset) && reset <= nowMs) ||
+      lastRedeem > observed
+    )
+      note = 'refresh after reset';
+    else if (account.source === 'remembered')
+      note = 'saved reading; no live reading available';
+    else if (account.source !== 'observed')
+      note = 'no live usage reading available';
+    else if (!Number.isFinite(observed))
+      note = 'reading has no valid timestamp';
+    else if (observed - nowMs > DISPLAY_CLOCK_SKEW_MS)
+      note = 'reading is ahead of this device’s clock';
+    else if (nowMs - observed >= UNDATED_BLOCK_MS)
+      note = `last reading ${formatSpan(nowMs - observed)} ago; refresh needed`;
+    else if (
+      typeof window.usedPercent !== 'number' ||
+      !Number.isFinite(window.usedPercent)
+    )
+      note = 'usage not published';
+    const remaining = note
+      ? null
+      : Math.max(0, Math.min(100, 100 - Number(window.usedPercent)));
+    return { title: window.title || window.windowId, remaining, note };
+  });
+harden(accountCapacity);
+
 /**
  * Whether the account cannot spend right now, as far as is known.
  *
@@ -237,15 +290,19 @@ export const accountSections = (accounts, nowMs) =>
       rows.push(['Plan', account.plan.title || account.plan.planId]);
     }
     for (const window of account.windows) {
-      const { usedPercent, expired, resetsInMs } = windowNow(window, nowMs);
+      const { expired, resetsInMs } = windowNow(window, nowMs);
+      const usedPercent = window.usedPercent;
       const used =
-        usedPercent === null ? 'usage not published' : `${usedPercent}% used`;
+        typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)
+          ? 'usage not published'
+          : `${expired ? 'last observed ' : ''}${usedPercent}% used`;
       const counts =
         window.remaining !== null && window.limit !== null
           ? `, ${window.remaining} of ${window.limit} left`
           : '';
       let reset = '';
-      if (expired) reset = ' — has reset since this reading';
+      if (expired)
+        reset = ' — has reset since this reading; refresh after reset';
       else if (resetsInMs !== null)
         reset = ` — resets in ${formatSpan(resetsInMs)}`;
       rows.push([window.title || window.windowId, `${used}${counts}${reset}`]);

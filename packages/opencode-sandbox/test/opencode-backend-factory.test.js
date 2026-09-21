@@ -70,14 +70,16 @@ const makeToolSet = (execute = async () => 'ok') =>
 /**
  * Wire a factory over recording owner powers. The owner is the daemon's; here
  * every lifecycle call is logged and a stop can be made to fail.
+ * @param {boolean} [publicInternetEnabled]
  */
-const makeHarness = () => {
+const makeHarness = (publicInternetEnabled = true) => {
   const log = [];
   const { facet, turns, interrupts } = makeFakeSession();
   /** @type {string | undefined} */
   let failingStop;
   let provisionFails = false;
   const factory = makeOpencodeBackendFactory({
+    publicInternetEnabled,
     provisionSession: async (sessionId, request, toolSet) => {
       log.push(['provision', sessionId, request, await E(toolSet).describe()]);
       if (provisionFails) throw Error('owner refused the plan');
@@ -106,6 +108,21 @@ const makeHarness = () => {
     },
   };
 };
+
+test('broker-only OpenCode rejects public access before stopping an existing session', async t => {
+  const { factory, log } = makeHarness(false);
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+  await E(factory).create(harden({ sessionId: 'existing' }), makeToolSet());
+  log.length = 0;
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'existing', networkPolicy: 'public-internet' }),
+      makeToolSet(),
+    ),
+    { message: /broker does not permit public internet/ },
+  );
+  t.deepEqual(log, []);
+});
 
 test('describe() and listModels() present OpenCode as a hosted backend', async t => {
   const { factory } = makeHarness();

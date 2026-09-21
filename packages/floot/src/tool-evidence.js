@@ -1,6 +1,20 @@
 // @ts-check
 
 /**
+ * Claude's named Endo MCP bridge qualifies the tool name; the executor journals
+ * the catalog name. Only this exact server prefix is an alias, not arbitrary
+ * MCP servers, suffix matches, or native tools with similar names.
+ * @param {string} observed
+ * @param {string} executed
+ */
+export const sameExecutedToolName = (observed, executed) =>
+  observed === executed ||
+  (/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(executed) &&
+    !executed.includes('__') &&
+    observed === `mcp__endo__${executed}`);
+harden(sameExecutedToolName);
+
+/**
  * Deciding whether two records describe the same tool call.
  *
  * A turn's tool calls are recorded twice: mirrored into the conversation tree

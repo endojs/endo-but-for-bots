@@ -105,6 +105,7 @@ const planFor = (id, overrides = {}) =>
     mounterSocketDir: `/private/${id}/9p`,
     nativeProfile,
     model: 'claude-sonnet-4',
+    reasoningEffort: 'max',
     systemPrompt: 'You are Floot.',
     ...overrides,
   });
@@ -505,6 +506,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   t.is(client.env.IS_SANDBOX, '1');
   t.is(client.model, plan.model);
   t.is(client.systemPrompt, plan.systemPrompt);
+  t.is(client.reasoningEffort, plan.reasoningEffort);
   t.is(
     client.resumePriorConversation,
     undefined,

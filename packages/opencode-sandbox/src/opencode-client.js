@@ -10,7 +10,7 @@
  * writes `{op:'send',text}` and returns a **buffered reply reader**
  * immediately (consume it with `makeRefIterator`): it yields the hosted
  * events the bridge emits for that turn (`phase`, `text-delta`,
- * `commentary-delta`, `tool-call`, `tool-result`, `usage`), then exactly
+ * `commentary-delta`, `thinking-delta`, `tool-call`, `tool-result`, `usage`), then exactly
  * one terminal `{type:'end'}` or `{type:'abort',reason}`.  Turns **queue**
  * on an internal chain so the bridge never sees two `send` commands at
  * once; the next prompt is written only after the previous turn's terminal.
@@ -438,7 +438,16 @@ export const makeOpencodeClient = ({
     // requests cancellation); what the host keeps of a turn is bounded where
     // it is kept (Floot's hosted turn). A cumulative cap on top of those
     // ended long healthy turns for nothing.
-    turn.push(event);
+    // Wire compatibility with the baked OpenCode bridge at 12c637a73: its
+    // only commentary-delta producers were visible assistant reasoning parts
+    // (both incremental and completed-part fallback). New bridges name these
+    // thinking-delta explicitly. Normalize only at this OpenCode boundary;
+    // other backends' ordinary progress commentary must remain commentary.
+    turn.push(
+      event.type === 'commentary-delta'
+        ? harden({ ...event, type: 'thinking-delta' })
+        : event,
+    );
     if (event.type === 'end' || event.type === 'abort') {
       active = null;
       turn.settle();

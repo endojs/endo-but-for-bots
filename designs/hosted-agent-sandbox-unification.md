@@ -3,14 +3,110 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-17 |
+| **Updated** | 2026-09-21 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
 
-### Current UA deployment — 2026-09-17
+### Session creation controls and public-network configuration — 2026-09-21
+
+The new-session dialog always exposes the available choices, including public
+internet access (on by default when the backend advertises enforcement) and
+the highest supported thinking level.
+Explicit initial network selection is validated before session registration and
+recorded through the policy controller before building any backend generation.
+Claude effort selection is now wired through its recorded plan to the pinned
+CLI's `--effort`; model-specific catalogs omit unsupported choices.
+Opening Settings requests a capacity refresh without polling or redeeming credits.
+
+Claude and OpenCode previously advertised public internet even when their
+provider brokers lacked that authority, producing an unsupported-grant error.
+Their descriptors now derive support from the broker's recorded configuration;
+the host configuration exposes the missing public-internet options.
+Enabling those options does not mutate retained brokers: explicit operator
+migration is required, preserving session storage and retiring old renewal owners.
+Tokyo generation 152 runs `21bcb3d04`, including a follow-up to admit the fixed
+read-only generated resolver mount through the native scope's interface guard.
+Source-path and observed-content attestation remain unchanged.
+The approved migration retired old Claude/OpenCode brokers before their
+replacements started and recreated only the pirate-cat session's native record.
+Its transcript is unchanged, its published page retains the same SHA-256, and
+the session now accepts public internet.
+A disposable Claude Sonnet 4.6 session with max effort completed a shell HTTPS
+request with HTTP 200; its test session was removed.
+A disposable OpenCode/DeepSeek session also obtained HTTP 200 using OpenSSL
+through the managed proxy, then was removed.
+Its image lacks curl, and its first direct-connection fallback was blocked;
+proxy-aware tooling and clearer agent guidance remain usability follow-ups.
+
+Provider-capacity display now tolerates five seconds of daemon/browser clock
+skew and distinguishes missing, remembered, future-dated, and stale readings.
+The reported intermittent unknown refresh was not reproduced: a live refresh
+returned fresh observations for all five configured accounts.
+This display correction does not change scheduling or redeem any reset credits.
+
+### Queue-overflow recovery — 2026-09-21
+
+Tokyo's Claude Haiku session `muaj9ubf-zzabfi` failed while creating a Three.js
+scene with `Bounded reader queue capacity exceeded`.
+The durable turn retained a settled tool result, but the transcript projection
+omitted that journal-only evidence.
+The old error did not distinguish event count, queued weight, or one oversized
+event; it does not establish which bound this session exceeded.
+
+The follow-up implements cooperative, serial writes for Claude's raw and
+translated streams, retaining the 1,024-item / 16-MiB queue bounds.
+A waiting writer retains at most one additional bounded event; terminal capacity
+is separate, and cancellation wakes the writer and stops the raw producer.
+Overflow errors now identify the channel, reason, counts, and weights without
+including event contents.
+Transcript recovery supplements settled turns with durable tool evidence and
+explicit recovery/error narration, including full content behind journal refs.
+Local burst, cancellation, oversized-event, and transcript regression tests
+cover these paths.
+Tokyo generation 147 deployed `be3390398` and completed a Claude Haiku scene
+trial with 13,440- and 467-character tool calls without a queue overflow.
+This trial exposed duplicate Endo MCP/executor evidence; follow-up `86066250a`
+deduplicates only that known alias and passes 27 focused regression tests.
+Tokyo generation 148 activated that follow-up; Forgejo applied state matches
+the host checkout and machine-admin Apply is a no-op.
+
+The restart also exposed persistent one-shot test modules from earlier trials:
+their constructors created sessions, deleted sessions, and removed a broker.
+The operator approved retirement of twenty verified module paths; inert stubs
+now replace them and root-only copies preserve the originals.
+Current sessions and secrets were not removed by this retirement.
+The original failed session was already absent after replay, so recovery of
+that exact live transcript could not be verified; local restart recovery passes.
+After restart, all seventeen baseline sessions remained and no new sessions
+appeared.
+Host acceptance evidence is recorded in
+`endo-host/ops/floot-queue-acceptance-20260921.md`.
+
+### Inline public reasoning — 2026-09-21
+
+OpenCode's explicitly typed public reasoning now has a separate display-only
+stream and collapsed conversation item, with a live observed-duration timer
+and a persisted completion time.
+Previews are bounded per turn and visibly truncated without failing inference.
+Ordinary commentary remains separate, and reasoning is excluded from answer
+speech and backend context restoration.
+This increment does not add reasoning extraction to the Codex, Claude, or
+direct-provider adapters; their ordinary progress is not relabeled as reasoning.
+Local regression tests and the production UI build pass.
+Tokyo generation 150 runs `254cecea6`, including OpenCode-only normalization
+of the pinned bridge's legacy reasoning event name.
+The existing bridge uses `commentary-delta` exclusively for public reasoning;
+this normalization does not affect other backends' ordinary commentary.
+A live OpenCode/DeepSeek Floot turn completed and saved two reasoning items
+(396 and 43 characters), both with completion timestamps.
+The disposable test session was removed.
+UI regression tests verify default-collapsed content, escaping, completed
+duration, and session-isolated expansion state.
+
+### Historical UA deployment — 2026-09-17
 
 Tokyo is deployed at `50d036bc7dbf3cea072ff587229141e66e3ed5dd` from PR #1248
 and available for user acceptance testing.

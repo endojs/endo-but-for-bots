@@ -3,6 +3,7 @@ import test from 'ava';
 
 import {
   accountBlocked,
+  accountCapacity,
   accountRedeem,
   accountChip,
   accountSections,
@@ -61,6 +62,93 @@ const codex = {
   source: 'observed',
   observedAt: '2026-09-20T11:57:00.000Z',
 };
+
+test('capacity shows clamped finite remaining percentages from fresh observations', t => {
+  t.deepEqual(
+    accountCapacity(codex, NOW).map(window => window.remaining),
+    [88, 37.5],
+  );
+  const account = usedPercent => ({
+    ...codex,
+    windows: [{ ...codex.windows[0], usedPercent }],
+  });
+  t.is(accountCapacity(account(-4), NOW)[0].remaining, 100);
+  t.is(accountCapacity(account(105), NOW)[0].remaining, 0);
+  for (const value of [null, NaN, Infinity, undefined]) {
+    t.is(accountCapacity(account(value), NOW)[0].remaining, null);
+  }
+});
+
+test('capacity does not predict a refill or paint old or unconfirmed readings as available', t => {
+  for (const changes of [
+    { source: 'unavailable' },
+    { source: 'remembered' },
+    { observedAt: '' },
+    { observedAt: new Date(NOW + 5001).toISOString() },
+    { observedAt: new Date(NOW - 3_600_000).toISOString() },
+    {
+      windows: [{ ...codex.windows[0], resetsAt: new Date(NOW).toISOString() }],
+    },
+    {
+      reset: {
+        pending: {
+          creditId: null,
+          startedAt: '',
+          lastAttemptAt: '',
+          attempts: 1,
+        },
+        last: null,
+      },
+    },
+    {
+      reset: {
+        pending: null,
+        last: {
+          outcome: 'redeemed',
+          creditId: null,
+          at: new Date(NOW).toISOString(),
+        },
+      },
+    },
+  ]) {
+    t.true(
+      accountCapacity({ ...codex, ...changes }, NOW).every(
+        window => window.remaining === null && window.note !== '',
+      ),
+    );
+  }
+});
+
+test('capacity tolerates small daemon/browser clock skew after refresh', t => {
+  for (const ahead of [1, 1000, 5000]) {
+    t.deepEqual(
+      accountCapacity(
+        { ...codex, observedAt: new Date(NOW + ahead).toISOString() },
+        NOW,
+      ).map(window => window.remaining),
+      [88, 37.5],
+    );
+  }
+});
+
+test('unknown capacity explains which freshness check failed', t => {
+  const note = changes =>
+    accountCapacity({ ...codex, ...changes }, NOW)[0].note;
+  t.is(
+    note({ source: 'remembered' }),
+    'saved reading; no live reading available',
+  );
+  t.is(note({ source: 'unavailable' }), 'no live usage reading available');
+  t.is(note({ observedAt: '' }), 'reading has no valid timestamp');
+  t.is(
+    note({ observedAt: new Date(NOW + 5001).toISOString() }),
+    'reading is ahead of this device’s clock',
+  );
+  t.is(
+    note({ observedAt: new Date(NOW - 3_600_000).toISOString() }),
+    'last reading 1h ago; refresh needed',
+  );
+});
 
 test('spans read in their two largest units', t => {
   t.is(formatSpan(3 * 86_400_000 + 4 * 3_600_000 + 5 * 60_000), '3d 4h');
@@ -123,6 +211,10 @@ test('a drained window says when it is back, and a reading ages past its reset',
     accountSections([drained], later)[0].rows[1][1].includes(
       'has reset since this reading',
     ),
+  );
+  t.regex(
+    accountSections([drained], later)[0].rows[1][1],
+    /^last observed 100% used.*refresh after reset/,
   );
 });
 

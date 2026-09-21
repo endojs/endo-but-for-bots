@@ -40,6 +40,7 @@ import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 import path from 'node:path';
 
 import { translateClaudeTurn } from './claude-hosted-events.js';
+import { CLAUDE_EFFORTS, assertClaudeEffort } from './claude-effort.js';
 import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
 
 /** The backend id Floot pins sessions to (`claude:<model>`). */
@@ -49,7 +50,8 @@ harden(CLAUDE_BACKEND_ID);
 /**
  * The Anthropic models the CLI runtime offers, ordered faster/lighter to
  * stronger. Ids are passed verbatim to `claude --model`, so they must be valid
- * Anthropic model ids. The CLI has no reasoning-effort knob.
+ * Anthropic model ids. Effort support follows Claude Code's model table:
+ * https://code.claude.com/docs/en/model-config#adjust-effort-level
  */
 export const CLAUDE_CLI_MODELS = harden(
   [
@@ -86,8 +88,14 @@ export const CLAUDE_CLI_MODELS = harden(
   ].map(model =>
     normalizeHostedModelDescriptor({
       ...model,
-      defaultReasoningEffort: null,
-      reasoningEfforts: [],
+      defaultReasoningEffort: model.id.startsWith('claude-haiku-')
+        ? null
+        : 'max',
+      reasoningEfforts: model.id.startsWith('claude-haiku-')
+        ? []
+        : model.id === 'claude-sonnet-4-6'
+          ? CLAUDE_EFFORTS.filter(effort => effort !== 'xhigh')
+          : CLAUDE_EFFORTS,
     }),
   ),
 );
@@ -128,6 +136,7 @@ const isIdleInterrupt = error =>
  * @typedef {object} SessionRequest
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {string} [model]
+ * @property {string} [reasoningEffort]
  * @property {string} [systemPrompt]
  * @property {string} [subscription] A pinned pool member; absent means auto.
  * @property {string} [workspaceHostPath] Operator-supplied worktree; never
@@ -150,6 +159,7 @@ const isIdleInterrupt = error =>
  *   The owner's removal: native cleanup, then the recorded storage owner's
  *   deletion, retaining failure and refusing reuse until it succeeds.
  * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ * @param {boolean} [powers.publicInternetEnabled] Verified operator broker policy.
  * @param {() => Promise<Array<{ id: string, label: string }>>} [powers.listSubscriptions]
  */
 export const makeClaudeBackendFactory = ({
@@ -157,10 +167,14 @@ export const makeClaudeBackendFactory = ({
   stopSession,
   removeSession,
   models = CLAUDE_CLI_MODELS,
+  publicInternetEnabled = false,
   listSubscriptions = async () => [],
 }) => {
   const catalog = harden(models.map(normalizeHostedModelDescriptor));
   const listModels = async () => catalog;
+  const networkPolicies = harden(
+    publicInternetEnabled ? [...NETWORK_POLICIES] : ['off'],
+  );
 
   const sessions = makeSessionRegistry();
 
@@ -173,15 +187,22 @@ export const makeClaudeBackendFactory = ({
     const networkPolicy = spec.networkPolicy ?? 'off';
     NETWORK_POLICIES.includes(networkPolicy) ||
       Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
+    networkPolicies.includes(networkPolicy) ||
+      Fail`Claude broker does not permit public internet access`;
     if (spec.model !== undefined && spec.model !== '') {
       (typeof spec.model === 'string' && spec.model.length <= 256) ||
         Fail`Claude model id must be a bounded string`;
       catalog.some(model => model.id === spec.model) ||
         Fail`Unknown Claude model ${q(spec.model.slice(0, 64))}`;
     }
-    spec.reasoningEffort === undefined ||
-      spec.reasoningEffort === '' ||
-      Fail`The Claude CLI runtime has no reasoning-effort setting`;
+    if (spec.reasoningEffort !== undefined && spec.reasoningEffort !== '') {
+      assertClaudeEffort(spec.reasoningEffort);
+      const model =
+        catalog.find(item => item.id === spec.model) ||
+        catalog.find(item => item.default);
+      model?.reasoningEfforts.includes(spec.reasoningEffort) ||
+        Fail`Unsupported Claude reasoning effort for selected model`;
+    }
     const declaredMounts = spec.containerMounts ?? [];
     (Array.isArray(declaredMounts) && declaredMounts.length === 0) ||
       Fail`The Claude backend has no slice attestation for container mounts; refusing the session instead of claiming binds it does not have`;
@@ -215,6 +236,9 @@ export const makeClaudeBackendFactory = ({
         networkPolicy,
         ...(subscription === undefined ? {} : { subscription }),
         ...(spec.model ? { model: spec.model } : {}),
+        ...(spec.reasoningEffort
+          ? { reasoningEffort: spec.reasoningEffort }
+          : {}),
         ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
         ...(workspaceHostPath ? { workspaceHostPath } : {}),
       }),
@@ -264,6 +288,9 @@ export const makeClaudeBackendFactory = ({
           harden({
             ...options,
             ...(spec.model ? { model: spec.model } : {}),
+            ...(spec.reasoningEffort
+              ? { reasoningEffort: spec.reasoningEffort }
+              : {}),
             ...(systemPrompt ? { systemPrompt } : {}),
           }),
         );
@@ -339,7 +366,7 @@ export const makeClaudeBackendFactory = ({
         toolOwnership: 'endo',
         providerId: 'anthropic',
         ...(subscriptions.length ? { subscriptions } : {}),
-        supportedNetworkPolicies: NETWORK_POLICIES,
+        supportedNetworkPolicies: networkPolicies,
         // What a system prompt must know about this place. Claude Code lists
         // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its
         // own shell and file tools; the hosted policy mounts the session

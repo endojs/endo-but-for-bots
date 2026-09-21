@@ -3,7 +3,7 @@
 import harden from '@endo/harden';
 import { h } from 'preact';
 import { NetworkPolicyPanel } from './NetworkPolicyPanel.js';
-import { accountSections } from './account-label.js';
+import { accountCapacity, accountSections } from './account-label.js';
 import { usageRows } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
@@ -150,7 +150,52 @@ export const SettingsPanel = ({ state, controller }) => {
   // Every backend's subscription: what is left, when it resets, and how old
   // the figures are. Readings arrive with requests; the button asks the
   // providers once, because a person pressed it.
-  const sections = accountSections(state.accounts, Date.now());
+  const nowMs = Date.now();
+  const sections = accountSections(state.accounts, nowMs);
+  const capacityRows = section => {
+    const account = state.accounts?.find(
+      item => (item.key || item.backendId) === section.id,
+    );
+    if (!account) return [];
+    return accountCapacity(account, nowMs).map(({ title, remaining, note }) =>
+      h(
+        'div',
+        { class: 'floot-settings-capacity' },
+        h('span', { class: 'floot-settings-label' }, `${title} remaining`),
+        h(
+          'div',
+          null,
+          remaining === null
+            ? h('span', {
+                class: 'floot-capacity-unknown',
+                'aria-hidden': 'true',
+              })
+            : h(
+                'meter',
+                {
+                  min: 0,
+                  max: 100,
+                  low: 20,
+                  high: 50,
+                  optimum: 100,
+                  value: remaining,
+                  'aria-label': `${section.title}: ${title} remaining`,
+                  'aria-valuetext': `${remaining}% remaining`,
+                  class: 'floot-capacity-meter',
+                },
+                `${remaining}%`,
+              ),
+          h(
+            'span',
+            { class: 'floot-capacity-text' },
+            remaining === null
+              ? `Unknown — ${note}`
+              : `${remaining}% remaining`,
+          ),
+        ),
+      ),
+    );
+  };
   const subscriptions = sections.length
     ? [
         h(
@@ -173,6 +218,7 @@ export const SettingsPanel = ({ state, controller }) => {
             { class: 'floot-settings-subheading', key: `t:${section.id}` },
             section.title,
           ),
+          ...capacityRows(section),
           ...section.rows.map(([label, value]) => Row(label, value)),
           // Spending a banked reset is a person's decision: the host asks
           // them to confirm, and nothing else ever presses this.
