@@ -1928,6 +1928,7 @@ __metadata:
     "@endo/helpdown": "workspace:^"
     "@endo/hex": "workspace:^"
     "@endo/host-spawner": "workspace:^"
+    "@endo/hosted-agent": "workspace:^"
     "@endo/import-bundle": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
