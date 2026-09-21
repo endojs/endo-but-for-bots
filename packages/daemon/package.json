@@ -41,7 +41,7 @@
     "build": "exit 0",
     "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
     "postpack": "git clean -fX -e node_modules/",
-    "cover": "c8 ava --config test/_ava-ses.config.js",
+    "cover": "c8 ava",
     "generate:help": "node scripts/generate-help-text-data.mjs",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
@@ -133,7 +133,10 @@
     ],
     "serial": true,
     "concurrency": 1,
-    "timeout": "5m"
+    "timeout": "5m",
+    "environmentVariables": {
+      "ENDO_EXIT_WHEN_ORPHANED": "1"
+    }
   },
   "typeCoverage": {
     "atLeast": 97.21

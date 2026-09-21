@@ -27,6 +27,7 @@ import {
   readFrameFromStream,
   writeFrameToStream,
 } from './envelope.js';
+import { installShutdownSignals } from './shutdown-signals.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { Config } from './types.js' */
@@ -205,7 +206,15 @@ const main = async () => {
   cancelGracePeriod(new Error('Terminated normally'));
 };
 
-process.once('SIGINT', () => cancel(new Error('SIGINT')));
+// Graceful SIGTERM/SIGINT with a bounded force-exit backstop, and orphan-exit
+// under ENDO_EXIT_WHEN_ORPHANED, matching the node-supervised manager. The
+// bus supervisor owns its XS workers over its own channel, so cancellation
+// (not a pid-file sweep) is what tears them down.
+installShutdownSignals({
+  cancel,
+  graceMs: Number(process.env.ENDO_SHUTDOWN_GRACE_MS) || 5000,
+  exitWhenOrphaned: process.env.ENDO_EXIT_WHEN_ORPHANED === '1',
+});
 
 // @ts-ignore Yes, we can assign to exitCode, typedoc.
 process.exitCode = 1;
