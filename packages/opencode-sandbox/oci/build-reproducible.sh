@@ -38,6 +38,11 @@ IMAGE=${IMAGE:-localhost/opencode-sandbox:$(echo "$OPENCODE_COMMIT" | cut -c1-12
 PLATFORM=${PLATFORM:-linux/amd64}
 ENGINE=${ENGINE:-podman}
 LAYERS=${LAYERS:-false}
+DEV_IMAGE=$(ENGINE="$ENGINE" sh "$HERE/../../hosted-agent/oci/dev/build.sh" "$PLATFORM")
+case "${ENGINE##*/}" in
+  docker) LAYER_OPTION=--no-cache ;;
+  *) LAYER_OPTION="--layers=$LAYERS" ;;
+esac
 
 digest() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -60,7 +65,8 @@ if [ "$SOURCE" = 1 ]; then
   trap 'exit 130' INT TERM
   cp "$HERE/Containerfile.source" "$CONTEXT/Containerfile.source"
   cp "$HERE/../src/opencode-bridge.mjs" "$CONTEXT/opencode-bridge.mjs"
-  "$ENGINE" build --platform "$PLATFORM" --layers="$LAYERS" \
+  "$ENGINE" build --platform "$PLATFORM" "$LAYER_OPTION" \
+    --build-arg "ENDO_DEV_IMAGE=$DEV_IMAGE" \
     --build-arg "OPENCODE_REPO=$OPENCODE_REPO" \
     --build-arg "OPENCODE_REF=$OPENCODE_REF" \
     --build-arg "OPENCODE_COMMIT=$OPENCODE_COMMIT" \
@@ -95,7 +101,8 @@ else
   cp "$HERE/../src/opencode-bridge.mjs" "$CONTEXT/opencode-bridge.mjs"
   chmod 0755 "$CONTEXT/opencode"
 
-  "$ENGINE" build --platform "$PLATFORM" --layers="$LAYERS" -t "$IMAGE" "$CONTEXT"
+  "$ENGINE" build --platform "$PLATFORM" "$LAYER_OPTION" \
+    --build-arg "ENDO_DEV_IMAGE=$DEV_IMAGE" -t "$IMAGE" "$CONTEXT"
 fi
 
 echo "image: $IMAGE"

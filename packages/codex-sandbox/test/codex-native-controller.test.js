@@ -254,6 +254,16 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
   );
   await f.controller.activate(f.text, f.resolver);
   const options = f.sliceOptions();
+  t.deepEqual(
+    options.policy.mounts
+      .filter(mount => mount.kind === 'tmpfs')
+      .map(({ destination, sizeBytes }) => ({ destination, sizeBytes })),
+    [
+      { destination: '/tmp', sizeBytes: 1024n ** 3n },
+      { destination: '/run', sizeBytes: 256n * 1024n ** 2n },
+    ],
+    'temporary mounts match the other hosted runners; no extra scratch mount',
+  );
   const home = options.policy.mounts.find(
     mount => mount.role === 'codex-state',
   );

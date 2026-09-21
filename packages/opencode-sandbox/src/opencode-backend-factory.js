@@ -58,6 +58,13 @@ export const OPENCODE_MODELS = harden(
       description: 'Fast and inexpensive — best for quick, simple turns.',
       default: true,
     },
+    {
+      id: 'openrouter/openrouter/free',
+      title: 'Free models (automatic)',
+      description:
+        'OpenRouter selects an available free model compatible with the request. Capacity and capabilities vary.',
+      default: false,
+    },
   ].map(model =>
     normalizeHostedModelDescriptor({
       ...model,

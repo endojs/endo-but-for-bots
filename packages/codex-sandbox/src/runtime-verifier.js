@@ -61,9 +61,8 @@ if p.get("network"):
     assert all(int(status[key].strip(),16)==0 for key in ('CapEff','CapPrm','CapBnd'))
 created=[]
 try:
-    for root in ("/workspace","/codex-home","/tmp","/run","/scratch"):
+    for root in ("/workspace","/codex-home","/tmp","/run"):
         created.append(tempfile.mkdtemp(prefix=".endo-runtime-probe-",dir=root))
-    workspace,home,tmp,run_dir,scratch=created
     # All granted writable state belongs to the guest, including its native
     # conversation state. A child inherits the same outer container boundary.
     for directory in created:

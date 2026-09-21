@@ -266,7 +266,7 @@ with tempfile.TemporaryDirectory(prefix="endo-probe-control-") as root:
     tempfile.mkdtemp=lambda **kwargs: mkdtemp(prefix=kwargs["prefix"],dir=root)
     sys.argv=["probe",json.dumps(payload)]
     exec(compile(source,"runtime-probe","exec"),{})
-    assert len(children)==6
+    assert len(children)==5
     assert os.listdir(root)==[], "probe did not clean up"
 `;
   const output = execFileSync('python3', ['-I', '-c', harness], {

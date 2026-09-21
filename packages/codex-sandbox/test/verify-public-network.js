@@ -184,9 +184,10 @@ print('OUTER_EGRESS_AND_GUEST_LISTENERS_OK')
     '--cpus=1',
     '--mount',
     `type=bind,source=${evidence.network.resolverConfigPath},destination=/etc/resolv.conf,ro,nosuid,nodev,bind-propagation=rprivate`,
-    ...['/workspace', '/codex-home', '/tmp', '/run', '/scratch'].flatMap(
-      path => ['--tmpfs', `${path}:rw,size=32m,mode=1777,nosuid,nodev`],
-    ),
+    ...['/workspace', '/codex-home', '/tmp', '/run'].flatMap(path => [
+      '--tmpfs',
+      `${path}:rw,size=32m,mode=1777,nosuid,nodev`,
+    ]),
     ...Object.entries(env).flatMap(([key, value]) => [
       '--env',
       `${key}=${value}`,

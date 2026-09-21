@@ -200,12 +200,6 @@ export const makeCodexNativeController = ({
           destination: '/run',
           sizeBytes: 256n * 1024n ** 2n,
         },
-        {
-          role: 'scratch',
-          kind: 'tmpfs',
-          destination: '/scratch',
-          sizeBytes: 704n * 1024n ** 2n,
-        },
         ...plan.containerMounts.map(attach => ({
           role: `attach-${attach.key}`,
           kind: /** @type {const} */ ('attach'),

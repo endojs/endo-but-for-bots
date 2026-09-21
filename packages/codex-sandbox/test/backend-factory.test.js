@@ -52,13 +52,6 @@ const validPolicy = () =>
         source: 'tmpfs',
         options: harden(['nosuid', 'nodev']),
       }),
-      harden({
-        role: 'scratch',
-        destination: '/scratch',
-        mode: 'rw',
-        source: 'tmpfs',
-        options: harden(['nosuid', 'nodev']),
-      }),
     ]),
   });
 
@@ -364,7 +357,7 @@ test('assertContainerMounts admits a bounded declaration and nothing else', t =>
   );
 });
 
-test('the attested table is the five roles plus exactly the declared attaches', t => {
+test('the attested table is the four roles plus exactly the declared attaches', t => {
   const withAttach = harden({
     ...validPolicy(),
     mounts: harden([...validPolicy().mounts, attachRow()]),
@@ -373,7 +366,7 @@ test('the attested table is the five roles plus exactly the declared attaches', 
   const policy = assertHostedAgentPolicyV1(withAttach, {
     containerMounts: [ATTACH_DECLARED],
   });
-  t.is(policy.mounts.length, 6);
+  t.is(policy.mounts.length, 5);
   const ro = assertHostedAgentPolicyV1(
     harden({
       ...validPolicy(),

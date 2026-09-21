@@ -13,7 +13,6 @@ export const CODEX_FIXED_MOUNTS = harden([
   },
   { role: 'tmp', kind: 'tmpfs', destination: '/tmp', mode: 'rw' },
   { role: 'run', kind: 'tmpfs', destination: '/run', mode: 'rw' },
-  { role: 'scratch', kind: 'tmpfs', destination: '/scratch', mode: 'rw' },
 ]);
 
 const codexPolicy = makeHostedAgentPolicyVerifier({

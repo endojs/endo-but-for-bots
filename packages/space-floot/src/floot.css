@@ -790,6 +790,8 @@
   color: #7c6fbf;
 }
 .floot-action-preview {
+  min-width: 0;
+  flex: 1;
   color: #6b6b8c;
 }
 .floot-actions-body {
@@ -1173,16 +1175,12 @@
     max-width: 92%;
   }
 
-  /* An action header is name + preview + state on one line; on a phone the
-     preview has nowhere to go, so let the row wrap instead of clipping the
-     part that says what the action did. */
-  .floot-actions-head,
-  .floot-action-head {
+  /* Group details may wrap; individual command previews stay on one line. */
+  .floot-actions-head {
     flex-wrap: wrap;
   }
 
-  .floot-actions-detail,
-  .floot-action-preview {
+  .floot-actions-detail {
     flex-basis: 100%;
     white-space: normal;
   }

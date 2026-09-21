@@ -226,16 +226,23 @@ export const summarizeActions = actions => {
 };
 harden(summarizeActions);
 
-// One line of context for a collapsed action, so a closed entry still says what
-// it did.
-const PREVIEW_MAX = 80;
-const previewOf = (/** @type {string} */ text) => {
-  const line = `${text || ''}`.split('\n').find(l => l.trim()) || '';
-  const trimmed = line.trim();
-  return trimmed.length > PREVIEW_MAX
-    ? `${trimmed.slice(0, PREVIEW_MAX - 1)}…`
-    : trimmed;
+// Display only: never use the whitespace-condensed preview as executable input.
+// CSS truncates to the available width; expanded arguments remain unchanged.
+/** @param {string} text */
+export const actionPreview = text => {
+  let preview = text;
+  try {
+    const value = JSON.parse(text);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const command = value.command ?? value.cmd;
+      if (typeof command === 'string') preview = command;
+    }
+  } catch {
+    // Raw code and incomplete JSON still get a useful single-line preview.
+  }
+  return preview.replace(/\s+/g, ' ').trim();
 };
+harden(actionPreview);
 
 /**
  * A `<pre>` of source, colourised when it is JavaScript. Token spans are built
@@ -289,7 +296,7 @@ const ActionEntry = ({ msg }) => {
     () => (js ? extractExecCode(msg.args) : formatPayload(msg.args)),
     [js, msg.args],
   );
-  const preview = useMemo(() => previewOf(argsText), [argsText]);
+  const preview = useMemo(() => actionPreview(argsText), [argsText]);
   const hasResult = msg.result != null;
   return h(
     'div',

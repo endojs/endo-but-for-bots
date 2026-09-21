@@ -84,7 +84,6 @@ const sizes = harden([
   ['codex-state', '/codex-home', 128n],
   ['tmp', '/tmp', 128n],
   ['run', '/run', 32n],
-  ['scratch', '/scratch', 64n],
 ]);
 /** @type {any} */
 let slice;

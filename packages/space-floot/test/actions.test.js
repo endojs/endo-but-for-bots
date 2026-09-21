@@ -2,6 +2,7 @@
 import test from 'ava';
 
 import {
+  actionPreview,
   extractExecCode,
   formatPayload,
   isJsTool,
@@ -9,6 +10,29 @@ import {
   summarizeActions,
 } from '../src/MessageList.js';
 import { tokenizeJs } from '../src/highlight.js';
+
+test('action previews show the shell command instead of a JSON bracket', t => {
+  for (const key of ['command', 'cmd']) {
+    const args = JSON.stringify(
+      { description: 'Run tests', [key]: 'cd /workspace\n  yarn\t test' },
+      null,
+      2,
+    );
+    t.is(actionPreview(formatPayload(args)), 'cd /workspace yarn test');
+  }
+});
+
+test('action previews condense all lines and leave width truncation to CSS', t => {
+  const command = `echo ${'long argument '.repeat(100)}done`;
+  t.is(actionPreview(JSON.stringify({ command })), command);
+  t.is(actionPreview('const x = 1;\n  return x;'), 'const x = 1; return x;');
+  t.is(actionPreview('{\n  "path": "x"\n}'), '{ "path": "x" }');
+  t.is(actionPreview('{\n  "command":'), '{ "command":');
+  t.is(actionPreview('null'), 'null');
+  t.is(actionPreview('[\n 1,\n 2\n]'), '[ 1, 2 ]');
+  t.is(actionPreview('{"command":42}'), '{"command":42}');
+  t.is(actionPreview(' \n\t'), '');
+});
 
 test('exec and its MCP aliases are recognised as JavaScript tools', t => {
   t.true(isJsTool('exec'));

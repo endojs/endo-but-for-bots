@@ -40,6 +40,18 @@ test('builds the default OpenRouter config with a fixed provider list', t => {
   t.true(Object.isFrozen(config.provider.openrouter.models));
 });
 
+test('free router preserves the provider prefix and uses no paid small model', t => {
+  const model = 'openrouter/openrouter/free';
+  const config = makeOpencodeConfig({ model });
+  t.is(parseModelRef(model), 'openrouter/free');
+  t.is(config.model, model);
+  t.is(config.small_model, model);
+  t.deepEqual(config.provider.openrouter.whitelist, ['openrouter/free']);
+  t.deepEqual(Object.keys(config.provider.openrouter.models), [
+    'openrouter/free',
+  ]);
+});
+
 test('whitelists both models when the small model differs', t => {
   const config = makeOpencodeConfig({
     model: 'openrouter/deepseek/deepseek-v4.1-flash',
