@@ -66,9 +66,9 @@ No claim of complete retrospective coverage is made yet.
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
-| Pool member identity | `275710d5a` pins identity only in memory; chooser state is persisted. Same-ID rebinding after restart can inherit another account's state. | Persist and validate identity with chooser state; test restart, removed IDs, and failed writes. |
+| Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
-| Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
+| Credential ownership and Secret rebinding | Owned pool bindings now retain actual capabilities and reject mutable-name rebinding. Surviving grants/facets and independent credential owners still need lifecycle enforcement. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
 | Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
@@ -159,6 +159,22 @@ one real-daemon formula cancellation/reconstruction test.
 The latter verifies renewal completion precedes close acknowledgement and
 successor construction; the old in-worker facet remains fenced afterward.
 No durable catalog cache or model-admission policy is introduced in this slice.
+Pool identity now uses a separate authoritative `pool-identities-v1-*` journal,
+not the chooser's best-effort capacity/cache state.
+The broker resolves a declared Secret/share name to its actual capability and
+persists that binding before constructing a credential handler.
+Consumers retain that capability instead of repeatedly resolving a mutable name.
+Read, schema, lookup, and write uncertainty fence the journal instance; it never
+silently starts with empty authority history.
+The real-daemon test persists formula-backed capabilities across restart and
+checks identity, tombstones, and pet-name rebinding refusal.
+An injected durable-write failure constructs zero credential handlers.
+This is a prerequisite, not complete pooling: retired IDs cannot be reactivated,
+and historically bound capabilities cannot be assigned another ID.
+The journal retains those capability references.
+Full owner draining/retirement, safe retirement epochs, and cross-formula/worker
+exclusion remain open. Distinct Secrets containing copied credentials are not
+detected as the same provider renewal authority.
 The host-only `modelCatalog(subscriptionId?)` result reports each account
 separately as current, unavailable, or unsupported; it is not a pool-wide
 permission to serve a model.
@@ -1102,6 +1118,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Durable pool identity prerequisite: bind actual capabilities before credential activation | 23 shared and one real-daemon restart test pass independently; read/write uncertainty fenced; full retirement/exclusion and deployment pending |
 | 2026-09-21 | Daemon durability: disposal/collection fences and stale-read invalidation | 32 tests and independent review pass; disposal precedes reclamation; module-specific drains and Tokyo deployment pending |
 | 2026-09-21 | Native-state durability: subprocess SIGKILL recovery at four creation boundaries | Four tests pass; exact child handles and temporary roots only; power-loss and Tokyo lifecycle verification remain pending |
 | 2026-09-21 | Remove obsolete Claude construction prompt dispatch; record disposal and account-admission prerequisites | 51 client/controller tests, independent source review and lint pass; explicit restoration unchanged; not deployed |

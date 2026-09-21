@@ -24,6 +24,7 @@ import { E } from '@endo/eventual-send';
 
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeAccountJournal } from './account-oracle.js';
+import { makePoolIdentityJournal } from './pool-identity-journal.js';
 
 import { makeAccountReadingSource } from './account-source.js';
 import { makeBrokerSubscription } from './broker-subscription.js';
@@ -1132,6 +1133,14 @@ export const makeOwnedProviderBrokerService = ({
         powers: namespace,
         prefix: 'pool-state-v1-',
       });
+      const identities = makePoolIdentityJournal({
+        namespace,
+        providerId: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        origin: policy.origin,
+        accountRef,
+      });
+      /** @type {Map<string, any>} */
+      let authorities = new Map();
       const forMember = (/** @type {any} */ member) =>
         /** @type {Config} */ ({
           ...config,
@@ -1146,29 +1155,27 @@ export const makeOwnedProviderBrokerService = ({
         accountRef,
         secret: undefined,
         subscriptions: {
-          readSet: () => E(namespace).lookup('subscriptions'),
-          // The name is resolved on every use, never captured: a lookup that
-          // failed once (a credential caplet that was not up yet) must not be
-          // the member's secret for the life of the broker. The three verbs
-          // are all a credential's consumers use.
-          secretOf: member => {
-            const current = () => E(namespace).lookup(member.secretName);
-            return harden({
-              readBase64: () => E(current()).readBase64(),
-              readBase64WithGeneration: () =>
-                E(current()).readBase64WithGeneration(),
-              /**
-               * @param {string} base64
-               * @param {any} [options]
-               */
-              replaceBase64: (base64, options) =>
-                E(current()).replaceBase64(base64, options),
-            });
+          readSet: async () => {
+            const declared = normalizeSubscriptionSet(
+              await E(namespace).lookup('subscriptions'),
+              {
+                requireAccountRef: makeCredential !== undefined,
+              },
+            );
+            const bound = await identities.bind(declared.members);
+            authorities = new Map(
+              bound.map(binding => [binding.id, binding.authority]),
+            );
+            return declared;
           },
-          // Somebody else's subscription, held in the same namespace under
-          // the name the set gives it. Resolved on every use, like a secret.
+          // Identity was durably bound before this callback can construct a
+          // credential. Consumers retain the actual capability, never a late
+          // mutable pet-name lookup. A failed binding fences the journal.
+          secretOf: member =>
+            authorities.get(member.id) ?? Fail`Unbound pool secret`,
+          // Wrapped subscriptions obey the same durable capability binding.
           subscriptionOf: member =>
-            E(namespace).lookup(member.subscriptionName),
+            authorities.get(member.id) ?? Fail`Unbound pool subscription`,
           ...(makeCredential === undefined
             ? {}
             : {

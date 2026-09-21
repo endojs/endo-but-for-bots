@@ -641,7 +641,7 @@ test('pool member IDs cannot be rebound to another authority within an incarnati
   t.is((await E(kit.service).subscriptions())[0].id, 'work');
 });
 
-test('an owned service in pool mode takes a namespace, and a secret that was missing once is found later', async t => {
+test('an owned pool binds actual secret capabilities before activation and refuses name rebinding', async t => {
   const digest = `sha256:${'e'.repeat(64)}`;
   /** @type {Map<string, any>} */
   const names = new Map();
@@ -654,6 +654,10 @@ test('an owned service in pool mode takes a namespace, and a secret that was mis
   names.set(
     'secret-work',
     Far('work secret', { readBase64: async () => btoa('work-key') }),
+  );
+  names.set(
+    'secret-home',
+    Far('home secret', { readBase64: async () => btoa('home-key') }),
   );
   const namespace = Far('namespace', {
     has: async name => names.has(name),
@@ -686,7 +690,7 @@ test('an owned service in pool mode takes a namespace, and a secret that was mis
       }),
     makePolicy: config =>
       /** @type {any} */ ({
-        policy: {},
+        policy: { origin: 'https://provider.test' },
         accountRef: config.accountRef,
         adaptRequest: () => ({
           path: '/x',
@@ -719,24 +723,89 @@ test('an owned service in pool mode takes a namespace, and a secret that was mis
     secretName: 'secret-work',
   });
   t.is(atob(await work.readBase64()), 'work-key');
-  // One that is not yet: the failure is this call's, not the member's for
-  // the life of the broker.
+  // Capture the actual capability, not a wrapper that follows the pet name.
   const home = subscriptions.secretOf({
     id: 'home',
     secretName: 'secret-home',
   });
-  await t.throwsAsync(() => home.readBase64(), { message: /Unknown pet name/ });
+  t.is(atob(await home.readBase64()), 'home-key');
   names.set(
     'secret-home',
-    Far('home secret', { readBase64: async () => btoa('home-key') }),
+    Far('replacement secret', {
+      readBase64: async () => btoa('replacement-key'),
+    }),
   );
   t.is(atob(await home.readBase64()), 'home-key');
+  await t.throwsAsync(subscriptions.readSet(), {
+    message: /journal is fenced/,
+  });
   // What the pool keeps goes to a journal in the same namespace, which prunes
   // only its own names.
   await subscriptions.writeState({ refusals: {}, sessions: {} });
   t.deepEqual(await subscriptions.readState(), { refusals: {}, sessions: {} });
   t.true(names.has('subscriptions'));
   t.true(names.has('secret-work'));
+});
+
+test('failed authoritative identity write prevents owned-pool credential construction', async t => {
+  const digest = `sha256:${'f'.repeat(64)}`;
+  const secret = Far('UnactivatedSecret', {
+    readBase64: async () => {
+      throw Error('must not read');
+    },
+  });
+  const namespace = Far('FailedIdentityStorage', {
+    list: () => ['subscriptions', 'key'],
+    has: () => false,
+    lookup: name =>
+      name === 'subscriptions'
+        ? harden({
+            members: [
+              { id: 'member', secretName: 'key', accountRef: 'account' },
+            ],
+          })
+        : secret,
+    storeValue: () => {
+      throw Error('Cannot commit authoritative binding');
+    },
+  });
+  let constructed = 0;
+  const make = makeOwnedProviderBrokerService({
+    label: 'IdentityWriteFailure',
+    readConfig: () =>
+      /** @type {any} */ ({
+        ownerId: 'identity-failed-write',
+        pool: true,
+        directory: '/tmp/unused',
+        imageRef: `localhost/fixture@${digest}`,
+        imageDigest: digest,
+        listenerImageRef: `localhost/fixture@${digest}`,
+      }),
+    makePolicy: () =>
+      /** @type {any} */ ({
+        policy: { origin: 'https://provider.test', models: ['model'] },
+        accountRef: 'pool',
+      }),
+    makeCredential: () => {
+      constructed += 1;
+      return {};
+    },
+  });
+  let cancel = () => {};
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = () => reject(Error('done'));
+  });
+  void cancelled.catch(() => {});
+  t.teardown(() => cancel());
+  const service = await make(
+    namespace,
+    Far('IdentityContext', { whenCancelled: () => cancelled }),
+    { env: {} },
+  );
+  await t.throwsAsync(E(service).subscriptions(), {
+    message: /journal is fenced/,
+  });
+  t.is(constructed, 0);
 });
 
 test('a pool member that is somebody else’s share is served through its endpoint, ranked by its budget, and handed over from', async t => {

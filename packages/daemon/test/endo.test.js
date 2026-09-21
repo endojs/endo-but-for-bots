@@ -4196,6 +4196,76 @@ testNeedsNodeWorker('cancel because of requested capability', async t => {
 });
 
 testNeedsNodeWorker.serial(
+  'pool identity capability journal survives real daemon reconstruction',
+  async t => {
+    t.timeout(30_000);
+    const base = await fsp.mkdtemp('/tmp/endo-pool-identity-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    let { host } = await makeHost(config, cancelled);
+    await E(host).evaluate(
+      '@node',
+      "makeExo('SecretA', M.interface('SecretA', { tag: M.call().returns(M.string()) }), { tag: () => 'a' })",
+      [],
+      [],
+      'key-a',
+    );
+    await E(host).evaluate(
+      '@node',
+      "makeExo('SecretB', M.interface('SecretB', { tag: M.call().returns(M.string()) }), { tag: () => 'b' })",
+      [],
+      [],
+      'key-b',
+    );
+    const specifier = new URL(
+      '../../hosted-agent/test/_pool-identity-probe.js',
+      import.meta.url,
+    ).href;
+    const probe = await E(host).makeUnconfined('@node', specifier, {
+      powersName: '@agent',
+      resultName: 'identity-probe',
+    });
+    const a = harden({ id: 'a', secretName: 'key-a', accountRef: 'account-a' });
+    const b = harden({ id: 'b', secretName: 'key-b', accountRef: 'account-b' });
+    const first = await E(probe).bind(harden([a]));
+    t.is(first[0].authority, await E(host).lookup('key-a'));
+    await E(probe).bind(harden([a, b]));
+    await E(probe).bind(harden([b]));
+    await restart(config);
+    ({ host } = await makeHost(config, cancelled));
+    const revived = await E(host).lookup('identity-probe');
+    const restored = await E(revived).bind(harden([b]));
+    t.is(restored[0].authority, await E(host).lookup('key-b'));
+    t.is(await E(restored[0].authority).tag(), 'b');
+    await t.throwsAsync(E(revived).bind(harden([a, b])), {
+      message: /journal is fenced/,
+    });
+    // Recreate only the probe journal, then rebound the same pet name to a
+    // different real formula. Persisted capability identity must detect it.
+    const fresh = await E(host).makeUnconfined('@node', specifier, {
+      powersName: '@agent',
+      resultName: 'identity-probe-2',
+    });
+    await E(host).storeValue(await E(host).lookup('key-a'), 'key-b');
+    await t.throwsAsync(E(fresh).bind(harden([b])), {
+      message: /journal is fenced/,
+    });
+  },
+);
+
+testNeedsNodeWorker.serial(
   'catalog formula reconstruction drains admitted renewal before replacement',
   async t => {
     t.timeout(30_000);
