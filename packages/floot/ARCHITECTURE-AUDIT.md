@@ -105,8 +105,9 @@ retain the daemon's failed-disposal barrier.
 Independent unit/adjacent coverage passes 110 tests, with separate watcher tests
 below. This does not establish full archived-turn/inbox process-loss recovery.
 The final combined change passes all 446 Floot tests and the three real-daemon
-factory lifecycle cases; scoped lint has no errors. Global type checking still
-fails on the existing declaration baseline; no new relevant diagnostics remain.
+factory lifecycle cases; scoped lint has no errors.
+The clean type-build results below supersede the earlier declaration-baseline
+failure reported during that slice.
 Account observers now fence reconciliation after awaits, cancel retry timers,
 explicitly close acquired oracle readers, and drain admitted refresh/reset calls.
 Seven new watcher lifecycle tests plus eight existing projection/observation
@@ -118,11 +119,23 @@ remains open; no claim that every remote reader is reclaimed is made.
 It does not grant the closed factory a new reader or revive its canonical writer.
 Closed private-journal facades remain retained until factory disposal; terminal
 journal namespace retirement and earlier facade reclamation remain open.
-The separately minted account oracle still ignores formula disposal and can
-retain its own upstream observer and journal writer after Floot closes its
-reader. Source review found `ensureWatching` continues `applyObserved` journal
-writes without an oracle-module disposal hook. A separate lifecycle fix and
-real-daemon regression are in progress; the factory fix does not close this gap.
+Source review found the separately minted account oracle ignored formula
+disposal: `ensureWatching` could continue `applyObserved` journal writes after
+Floot closed its own reader.
+The oracle now exposes a private lifecycle kit and registers/awaits its formula
+disposal hook before exposing the public account facet.
+Disposal fences retained public calls and source pushes, cancels retry timers,
+closes the acquired upstream reader through its explicit cleanup facet, and
+drains admitted builds and journal writes before replacement.
+Uncertain journal writes refuse handoff; ordinary observation/read failures
+remain eligible for remembered-data fallback.
+The unused facet-only constructor was removed rather than retained as a
+compatibility wrapper; tests now retain and close their oracle kits.
+Thirty-six oracle tests and fifteen Floot watcher tests pass, plus two
+real-daemon held-journal-write tests, including write-then-reject uncertainty
+and retained old-facet/source checks. Scoped lint has no errors.
+This proves the tested formula-incarnation boundary, not cross-formula
+same-namespace exclusion or process-loss observer reclamation.
 An incarnation-local registry does not establish cross-worker exclusion.
 Pooled member retirement now has a module-local admission/drain owner.
 Removal fences retained account/model/reset/credential access, closes only that
@@ -184,6 +197,22 @@ and proof that old producers can no longer create resources.
 Broad container sweeps are not such proof.
 Deployment of this cleanup behavior remains blocked on that reconciliation:
 after a real restart even a legitimately absent scope currently lacks proof.
+The operator approved a narrowly scoped privileged producer adapter, conditional
+on keeping the implementation portable rather than tied to Tokyo or its OS.
+The proposed owner is a host-private native-runtime resource; sessions receive
+only their own incarnation-scoped producer capability.
+The shared lifecycle contract must describe durable identity, command admission,
+shutdown proof, and cleanup receipts without systemd or Linux-specific fields.
+Tokyo's systemd adapter belongs in host wiring behind that contract; other hosts
+can provide another adapter, and unsupported hosts must fail closed.
+Before native effects, record the incarnation and its opaque adapter ownership
+reference. Fence it durably before stopping producers, then reconcile only its
+exact recorded resources and publish a durable receipt.
+Model containers gain no additional privileges; shared credential/renewal owners
+and retained workspaces stay outside per-session native cleanup.
+Current host startup owner-marker/name-prefix sweeps must be replaced with this
+exact ownership protocol before deployment. This is approved design direction,
+not an implemented or verified recovery capability.
 The runtime's exclusive owner symlink also lacked directory flushes.
 The local fix flushes directory ancestry before acquisition and the marker's
 directory before returning an effect-producing owner.
@@ -209,8 +238,21 @@ Tokyo's endo user successfully opened and synced `/var/lib/endo/codex-state`
 and every ancestor through `/` using the production flags; `/var/lib/endo`
 is on `/dev/vdb`, ext4.
 This proves filesystem/permission support, not deployment or a power-loss test.
-Repository type generation remains blocked by widespread TS5055 stale-output
-errors; no global typecheck success is claimed.
+Verified ignored generated declarations, source maps, and build-info files were
+moved to recoverable temporary quarantine; checked-in declarations, source,
+dependencies, and unrelated files were not moved.
+The clean rebuild exposed source contract errors previously hidden by stale
+declarations: subscription fields, iterator signatures, credential validation
+narrowing, issuer optional authority, usage shapes, and a setup `pool` boolean
+leaking into the runtime pool-capability option.
+Explicit guards preserve validation behavior; missing usage remains distinct
+from known-zero usage. The setup flag is now removed before runtime assembly.
+With the local contract corrections and oracle lifecycle changes, the clean
+repository `yarn build:types` passes. Incremental generation still reproduced
+TS5055 output/input collisions and remains a separate build-system issue.
+Tests for the UI/Claude/Codex contract corrections pass (59, 11, and 19 cases);
+scoped lint has no errors. API documentation generation is being rerun against
+the corrected declarations; no documentation-gate success is claimed yet.
 Daemon publication fix: nine tests exercise pending/failed persistence with
 absent and existing names, successful publication, failed-publication collection,
 and an actual daemon process restart.

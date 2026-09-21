@@ -1,8 +1,9 @@
 // @ts-check
 
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 
-import { makeAccountJournal, makeAccountOracle } from './account-oracle.js';
+import { makeAccountJournal, makeAccountOracleKit } from './account-oracle.js';
 
 /**
  * Account-oracle caplet: the retained `make-unconfined` entrypoint.
@@ -34,10 +35,10 @@ import { makeAccountJournal, makeAccountOracle } from './account-oracle.js';
  * explicit `refresh()` asks the source for an active read.
  *
  * @param {import('@endo/eventual-send').ERef<object>} powers
- * @param {Promise<object> | object | undefined} _context
+ * @param {any} context
  * @param {{ env?: Record<string, string> }} [options]
  */
-export const make = async (powers, _context, { env } = {}) => {
+export const make = async (powers, context, { env } = {}) => {
   const providerId = env?.ACCOUNT_PROVIDER_ID || 'anthropic';
 
   const provideDeclared = async () => {
@@ -83,7 +84,7 @@ export const make = async (powers, _context, { env } = {}) => {
     }
   };
 
-  return makeAccountOracle({
+  const kit = makeAccountOracleKit({
     providerId,
     provideDeclared,
     provideObserved: async () => {
@@ -105,5 +106,12 @@ export const make = async (powers, _context, { env } = {}) => {
     },
     journal: makeAccountJournal({ powers }),
   });
+  if (context !== undefined) {
+    await E(context).addDisposalHook(
+      Far('Dispose account oracle', () => kit.close()),
+    );
+    kit.assertOpen();
+  }
+  return kit.account;
 };
 harden(make);

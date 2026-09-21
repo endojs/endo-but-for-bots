@@ -85,6 +85,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
+    "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/netstring": "workspace:^",
     "@endo/patterns": "workspace:^",
@@ -93,7 +94,6 @@
     "@endo/stream-node": "workspace:^"
   },
   "devDependencies": {
-    "@endo/far": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "esbuild": "0.28.2",
