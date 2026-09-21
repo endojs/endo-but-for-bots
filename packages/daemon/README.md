@@ -28,6 +28,60 @@ ENDO_FORMULA_GRAPH=1 endo start # dump dependency graph at startup
 endo log --all -f               # follow daemon + worker logs
 ```
 
+## systemd socket activation
+
+On Linux, systemd can create the daemon's Unix socket before the daemon starts,
+start the daemon lazily when the first client connects, and preserve the
+listening socket across clean service restarts so clients do not see a
+connection-refused window.
+The daemon implements the conventional `LISTEN_PID` / `LISTEN_FDS` protocol and
+accepts the first inherited listener on file descriptor 3.
+
+The default socket path is `$XDG_RUNTIME_DIR/endo/captp0.sock`, so the following
+user units use systemd's `%t` runtime-directory specifier for the same path.
+Install them as `~/.config/systemd/user/endo.socket` and
+`~/.config/systemd/user/endo.service`.
+
+```systemd
+# endo.socket
+[Unit]
+Description=Endo daemon socket
+
+[Socket]
+ListenStream=%t/endo/captp0.sock
+SocketMode=0600
+DirectoryMode=0700
+Accept=no
+
+[Install]
+WantedBy=sockets.target
+```
+
+```systemd
+# endo.service
+[Unit]
+Description=Endo daemon
+Requires=endo.socket
+After=endo.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env endo run-daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Ensure that `endo` is on the user service manager's `PATH`, then load and enable
+the units with `systemctl --user daemon-reload` and
+`systemctl --user enable --now endo.socket`.
+No `ExecStartPre` socket setup is necessary: the socket unit owns the socket
+path's lifecycle.
+With `Accept=no`, systemd passes one file descriptor for the whole listening
+socket, using the file-descriptor-3 contract above rather than starting one
+process per connection.
+
 ## Gateway
 
 The daemon runs a unified HTTP/WebSocket gateway server.

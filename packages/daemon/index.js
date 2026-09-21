@@ -266,10 +266,36 @@ export const main = async _args => {
 
   // TODO implement option parsing for final env toggle like GC, LOCKDOWN_ERROR_TAMING, etc
 
+  const inheritedFileDescriptorCount = Number(process.env.LISTEN_FDS);
+  if (
+    process.env.LISTEN_PID !== undefined &&
+    process.env.LISTEN_FDS !== undefined &&
+    Number(process.env.LISTEN_PID) === process.pid &&
+    Number.isInteger(inheritedFileDescriptorCount) &&
+    inheritedFileDescriptorCount > 0 &&
+    !process.env.ENDO_BIN
+  ) {
+    // A service manager handed the listening descriptor to this process, so
+    // run the Node manager in place. Forking would change LISTEN_PID and would
+    // occupy fd 3 with the manager's IPC channel instead of the socket.
+    const daemonPath =
+      process.env.ENDO_DAEMON_PATH ||
+      url.fileURLToPath(new URL('src/manager-node.js', import.meta.url));
+    process.argv = [
+      process.execPath,
+      daemonPath,
+      config.sockPath,
+      config.statePath,
+      config.ephemeralStatePath,
+      config.cachePath,
+    ];
+    return import(url.pathToFileURL(daemonPath).href).then(() => undefined);
+  }
+
   const child = process.env.ENDO_BIN
     ? await runEngo(false, config)
     : await runEndo(false, config);
-  process.exit(await waitForExit(child));
+  return process.exit(await waitForExit(child));
 };
 
 /**

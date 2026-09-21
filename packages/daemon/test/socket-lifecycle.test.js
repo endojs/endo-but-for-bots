@@ -8,6 +8,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { makeCancelKit } from '@endo/cancel';
 
@@ -16,6 +17,14 @@ import { servePrivatePath } from '../src/serve-private-path.js';
 import { socketLockPath } from '../src/socket-lock.js';
 
 const unixTest = process.platform === 'win32' ? test.skip : test;
+const systemdTest = process.platform === 'linux' ? test : test.skip;
+
+const systemdSocketActivationFixturePath = fileURLToPath(
+  new URL('./_systemd-socket-activation.js', import.meta.url),
+);
+const endoCliPath = fileURLToPath(
+  new URL('../../cli/bin/endo.cjs', import.meta.url),
+);
 
 const makeSocketPath = async t => {
   const dir = await mkdtemp(path.join(tmpdir(), 'endo-socket-'));
@@ -56,6 +65,129 @@ const untilAbsent = async (t, target) => {
   }
   t.fail(`${target} was still present after ${deadlineMs}ms`);
 };
+
+const untilPresent = async (t, target) => {
+  const deadlineMs = 5000;
+  const step = 50;
+  await null;
+  for (let waited = 0; waited < deadlineMs; waited += step) {
+    // eslint-disable-next-line no-await-in-loop
+    const present = await access(target).then(
+      () => true,
+      () => false,
+    );
+    if (present) {
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, step));
+  }
+  t.fail(`${target} was still absent after ${deadlineMs}ms`);
+};
+
+const waitForOutput = (stream, expected) =>
+  new Promise((resolve, reject) => {
+    let output = '';
+    const onData = chunk => {
+      output += chunk;
+      if (output.includes(expected)) {
+        cleanup();
+        resolve(undefined);
+      }
+    };
+    const onEnd = () => {
+      cleanup();
+      reject(new Error(`Stream ended before producing ${expected}`));
+    };
+    const cleanup = () => {
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+    };
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+  });
+
+systemdTest.serial(
+  'systemd socket activation accepts a connection through inherited fd 3',
+  async t => {
+    t.timeout(15_000);
+    const socketPath = await makeSocketPath(t);
+    const unboundPath = `${socketPath}.unbound`;
+    const child = spawn(
+      'systemd-socket-activate',
+      [
+        `--setenv=ENDO_DAEMON_PATH=${systemdSocketActivationFixturePath}`,
+        `--setenv=ENDO_SOCK=${socketPath}`,
+        `--listen=${socketPath}`,
+        process.execPath,
+        endoCliPath,
+        'run-daemon',
+      ],
+      {
+        stdio: ['ignore', 'pipe', 'inherit'],
+      },
+    );
+    const childExited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    });
+    t.teardown(async () => {
+      if (child.exitCode === null) {
+        child.kill('SIGKILL');
+      }
+      await childExited;
+    });
+
+    await untilPresent(t, socketPath);
+    const ready = waitForOutput(child.stdout, 'ready\n');
+    const client = net.createConnection({ path: socketPath });
+    t.teardown(() => client.destroy());
+    client.setEncoding('utf8');
+    await ready;
+    await waitForOutput(client, 'accepted\n');
+
+    t.deepEqual(await childExited, { code: 0, signal: null });
+    await access(socketPath);
+    await t.throwsAsync(() => access(unboundPath), { code: 'ENOENT' });
+  },
+);
+
+unixTest.serial(
+  'socket activation ignores descriptors intended for a different process',
+  async t => {
+    const originalListenPid = process.env.LISTEN_PID;
+    const originalListenFds = process.env.LISTEN_FDS;
+    t.teardown(() => {
+      if (originalListenPid === undefined) {
+        delete process.env.LISTEN_PID;
+      } else {
+        process.env.LISTEN_PID = originalListenPid;
+      }
+      if (originalListenFds === undefined) {
+        delete process.env.LISTEN_FDS;
+      } else {
+        process.env.LISTEN_FDS = originalListenFds;
+      }
+    });
+    process.env.LISTEN_PID = `${process.pid + 1}`;
+    process.env.LISTEN_FDS = '1';
+
+    const socketPath = await makeSocketPath(t);
+    const powers = makePowers();
+    const { cancelled, cancel } = makeQuietCancelKit();
+    const connections = await powers.servePath({
+      path: socketPath,
+      cancelled,
+    });
+
+    await access(socketPath);
+    t.is(process.env.LISTEN_PID, `${process.pid + 1}`);
+    t.is(process.env.LISTEN_FDS, '1');
+
+    cancel(new Error('test cleanup'));
+    await t.throwsAsync(connections.next(), { message: 'test cleanup' });
+  },
+);
 
 unixTest.serial(
   'private listener cancellation removes its pathname before stopped settles',
