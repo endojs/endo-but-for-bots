@@ -163,6 +163,55 @@ test('reordered observations settle native identities, not identical arguments',
   t.is(unanswered.length, 1);
 });
 
+test('Claude Endo MCP observations do not duplicate executor evidence', async t => {
+  const args = [
+    JSON.stringify({ code: 'x'.repeat(13_429) }),
+    JSON.stringify({ code: 'y'.repeat(456) }),
+  ];
+  const results = ['Created pirate ship scene!!', 'a'.repeat(278)];
+  const activity = args.map((text, index) => ({
+    callId: `native-${index}`,
+    name: 'mcp__endo__exec',
+    args: text,
+    result: results[index],
+    settled: true,
+  }));
+  const messages = [
+    { role: 'user', content: 'draw a scene' },
+    ...activity.flatMap(tool => [
+      {
+        role: 'assistant',
+        tool_calls: [call(tool.callId, tool.name, tool.args)],
+      },
+      { role: 'tool', tool_call_id: tool.callId, content: tool.result },
+    ]),
+  ];
+  const turn = {
+    turnId: '1',
+    input: 'draw a scene',
+    state: 'completed',
+    activity,
+    tools: activity.map((tool, index) => ({
+      ...tool,
+      callId: `executor-${index}`,
+      name: 'exec',
+    })),
+  };
+  const records = await recoverTurnTranscript(messages, turn, async () => '');
+  t.deepEqual(records, projectTranscript(messages));
+  t.is(pairToolCalls(records).pairs.length, 2);
+  const unrelated = {
+    ...turn,
+    tools: [{ ...turn.tools[0], name: 'other_exec' }],
+  };
+  t.is(
+    pairToolCalls(
+      await recoverTurnTranscript(messages, unrelated, async () => ''),
+    ).pairs.length,
+    3,
+  );
+});
+
 test('a tool call survives as a tool call with its result', t => {
   const records = projectTranscript([
     { role: 'system', content: 'you are an agent' },

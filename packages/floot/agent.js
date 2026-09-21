@@ -71,7 +71,11 @@ import {
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
-import { sameToolArgs, sameToolResult } from './src/tool-evidence.js';
+import {
+  sameExecutedToolName,
+  sameToolArgs,
+  sameToolResult,
+} from './src/tool-evidence.js';
 import {
   projectTranscript,
   recoverTurnTranscript,
@@ -2230,7 +2234,7 @@ export const makeStreamingAgent = async (
       for (const tool of turn.tools) {
         const match = unmatched.findIndex(
           other =>
-            other.name === tool.name &&
+            sameExecutedToolName(other.name, tool.name) &&
             sameToolArgs(
               { text: other.args, cut: other.argsRef !== undefined },
               { text: tool.args, cut: tool.argsRef !== undefined },
@@ -2305,7 +2309,7 @@ export const makeStreamingAgent = async (
           // of either. The same call, compared as strings, showed up twice.
           const match = unmatchedTools.findIndex(
             other =>
-              other.name === tool.name &&
+              sameExecutedToolName(other.name, tool.name) &&
               sameToolArgs(
                 { text: other.args },
                 { text: tool.args, cut: journalCuts[index].args },

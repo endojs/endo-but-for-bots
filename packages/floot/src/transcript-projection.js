@@ -24,7 +24,11 @@
  */
 
 import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
-import { sameToolArgs, sameToolResult } from './tool-evidence.js';
+import {
+  sameExecutedToolName,
+  sameToolArgs,
+  sameToolResult,
+} from './tool-evidence.js';
 import { UNSETTLED_TOOL_RESULT } from './hosted-turn.js';
 
 /** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
@@ -191,7 +195,7 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
         result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
       };
       const sameCall = call =>
-        call.name === tool.name &&
+        sameExecutedToolName(call.name, tool.name) &&
         sameToolArgs({ text: call.args }, { text: tool.args });
       // Backend observations share the tree's native ID. Never substitute a
       // look-alike call with another ID, even when its arguments are identical.
