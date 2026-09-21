@@ -186,6 +186,10 @@ export const accountChip = (account, nowMs) => {
 /** How long a "limit reached" with no window to say when it lifts is believed. */
 const UNDATED_BLOCK_MS = 3_600_000;
 
+// Observations are stamped by the daemon, but displayed against the browser's
+// clock. Allow a small difference, not an arbitrarily future-dated reading.
+const DISPLAY_CLOCK_SKEW_MS = 5000;
+
 /**
  * Capacity is a recent observation, not a prediction that a reset refilled it.
  * An hour is the display freshness bound; it does not alter pool scheduling.
@@ -211,13 +215,16 @@ export const accountCapacity = (account, nowMs) =>
       lastRedeem > observed
     )
       note = 'refresh after reset';
-    else if (
-      account.source !== 'observed' ||
-      !Number.isFinite(observed) ||
-      observed > nowMs ||
-      nowMs - observed >= UNDATED_BLOCK_MS
-    )
-      note = 'refresh stale or unknown reading';
+    else if (account.source === 'remembered')
+      note = 'saved reading; no live reading available';
+    else if (account.source !== 'observed')
+      note = 'no live usage reading available';
+    else if (!Number.isFinite(observed))
+      note = 'reading has no valid timestamp';
+    else if (observed - nowMs > DISPLAY_CLOCK_SKEW_MS)
+      note = 'reading is ahead of this device’s clock';
+    else if (nowMs - observed >= UNDATED_BLOCK_MS)
+      note = `last reading ${formatSpan(nowMs - observed)} ago; refresh needed`;
     else if (
       typeof window.usedPercent !== 'number' ||
       !Number.isFinite(window.usedPercent)

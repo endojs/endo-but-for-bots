@@ -84,7 +84,7 @@ test('capacity does not predict a refill or paint old or unconfirmed readings as
     { source: 'unavailable' },
     { source: 'remembered' },
     { observedAt: '' },
-    { observedAt: new Date(NOW + 1000).toISOString() },
+    { observedAt: new Date(NOW + 5001).toISOString() },
     { observedAt: new Date(NOW - 3_600_000).toISOString() },
     {
       windows: [{ ...codex.windows[0], resetsAt: new Date(NOW).toISOString() }],
@@ -117,6 +117,37 @@ test('capacity does not predict a refill or paint old or unconfirmed readings as
       ),
     );
   }
+});
+
+test('capacity tolerates small daemon/browser clock skew after refresh', t => {
+  for (const ahead of [1, 1000, 5000]) {
+    t.deepEqual(
+      accountCapacity(
+        { ...codex, observedAt: new Date(NOW + ahead).toISOString() },
+        NOW,
+      ).map(window => window.remaining),
+      [88, 37.5],
+    );
+  }
+});
+
+test('unknown capacity explains which freshness check failed', t => {
+  const note = changes =>
+    accountCapacity({ ...codex, ...changes }, NOW)[0].note;
+  t.is(
+    note({ source: 'remembered' }),
+    'saved reading; no live reading available',
+  );
+  t.is(note({ source: 'unavailable' }), 'no live usage reading available');
+  t.is(note({ observedAt: '' }), 'reading has no valid timestamp');
+  t.is(
+    note({ observedAt: new Date(NOW + 5001).toISOString() }),
+    'reading is ahead of this device’s clock',
+  );
+  t.is(
+    note({ observedAt: new Date(NOW - 3_600_000).toISOString() }),
+    'last reading 1h ago; refresh needed',
+  );
 });
 
 test('spans read in their two largest units', t => {
