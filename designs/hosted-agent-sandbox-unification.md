@@ -27,7 +27,25 @@ Their descriptors now derive support from the broker's recorded configuration;
 the host configuration exposes the missing public-internet options.
 Enabling those options does not mutate retained brokers: explicit operator
 migration is required, preserving session storage and retiring old renewal owners.
-Local regression tests pass; deployment and the approved Tokyo migration are pending.
+Tokyo generation 152 runs `21bcb3d04`, including a follow-up to admit the fixed
+read-only generated resolver mount through the native scope's interface guard.
+Source-path and observed-content attestation remain unchanged.
+The approved migration retired old Claude/OpenCode brokers before their
+replacements started and recreated only the pirate-cat session's native record.
+Its transcript is unchanged, its published page retains the same SHA-256, and
+the session now accepts public internet.
+A disposable Claude Sonnet 4.6 session with max effort completed a shell HTTPS
+request with HTTP 200; its test session was removed.
+A disposable OpenCode/DeepSeek session also obtained HTTP 200 using OpenSSL
+through the managed proxy, then was removed.
+Its image lacks curl, and its first direct-connection fallback was blocked;
+proxy-aware tooling and clearer agent guidance remain usability follow-ups.
+
+Provider-capacity display now tolerates five seconds of daemon/browser clock
+skew and distinguishes missing, remembered, future-dated, and stale readings.
+The reported intermittent unknown refresh was not reproduced: a live refresh
+returned fresh observations for all five configured accounts.
+This display correction does not change scheduling or redeem any reset credits.
 
 ### Queue-overflow recovery — 2026-09-21
 
