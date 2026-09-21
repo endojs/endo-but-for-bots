@@ -31,7 +31,13 @@ const fixture = () => {
   );
   const namespace = harden({
     has: async name => entries.has(name),
-    locate: async name => entries.get(name),
+    identify: async name => entries.get(name)?.replace(/^host-route:/, ''),
+    locate: async name =>
+      `guest-route:${entries.get(name)?.replace(/^host-route:/, '')}`,
+    storeIdentifier: async (name, identifier) => {
+      writes.push(name);
+      entries.set(name, `host-route:${identifier}`);
+    },
     storeLocator: async (name, locator) => {
       writes.push(name);
       entries.set(name, locator);
@@ -48,15 +54,17 @@ const fixture = () => {
         ? secrets.has(parts[1])
         : parts[1] === 'broker-powers' && present,
     lookup: async () => namespace,
-    locate: async (dir, name) =>
+    identify: async (dir, name) =>
       dir === 'secrets' ? secrets.get(name) : `holder:${name}`,
+    locate: async (dir, name) =>
+      dir === 'secrets' ? `host-route:${secrets.get(name)}` : `holder:${name}`,
     provideGuest: async () => {
       writes.push('guest');
       present = true;
     },
     move: async () => {},
   });
-  return { host, entries, writes, secrets };
+  return { host, namespace, entries, writes, secrets };
 };
 
 test('pool declarations contain only secret references and validate the whole set', t => {
@@ -91,13 +99,28 @@ test('pool publication retains namespace, secrets and pool journal across setup'
   const prepared = await prepare(host, read());
   t.deepEqual(writes, []);
   await prepared.publish();
-  t.is(entries.get('secret-second'), 'secret:second');
+  t.is(entries.get('secret-second'), 'host-route:secret:second');
   t.deepEqual(entries.get('subscriptions'), read().set);
   entries.set('pool-state-v1-test', 'kept');
   t.is(entries.get('credential-second'), 'holder:credential-second');
   await (await prepare(host, read())).publish();
   t.is(writes.filter(name => name === 'guest').length, 1);
   t.is(entries.get('pool-state-v1-test'), 'kept');
+});
+
+test('restart compares formula identities, not host and guest locator routes', async t => {
+  const { host, namespace, writes } = fixture();
+  await (await prepare(host, read())).publish();
+  t.not(
+    await host.locate('secrets', 'claude-subscription-2'),
+    await namespace.locate('secret-second'),
+  );
+  t.is(
+    await host.identify('secrets', 'claude-subscription-2'),
+    await namespace.identify('secret-second'),
+  );
+  await (await prepare(host, read())).publish();
+  t.is(writes.filter(name => name === 'guest').length, 1);
 });
 
 test('missing, aliased and rebound secrets fail before any write', async t => {
@@ -142,4 +165,23 @@ test('retained renewal holder cannot silently move to another Secrets record', a
     { message: /pinned to another secret/ },
   );
   t.deepEqual(writes, []);
+});
+
+test('missing formula identity fails before writes', async t => {
+  const { host, writes } = fixture();
+  await t.throwsAsync(
+    () => prepare(harden({ ...host, identify: async () => undefined }), read()),
+    {
+      message: /no formula identity/,
+    },
+  );
+  t.deepEqual(writes, []);
+});
+
+test('publication retains the raw formula identity captured during preflight', async t => {
+  const { host, secrets, namespace } = fixture();
+  const prepared = await prepare(host, read());
+  secrets.set('claude-subscription-2', 'secret:replacement');
+  await prepared.publish();
+  t.is(await namespace.identify('secret-second'), 'secret:second');
 });

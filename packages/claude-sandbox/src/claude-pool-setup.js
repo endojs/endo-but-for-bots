@@ -76,14 +76,17 @@ export const prepareClaudePool = async (
   const powersPath = ['claude-sandbox', 'broker-powers'];
   const existing = await E(host).has(...powersPath);
   const powers = existing ? await E(host).lookup(powersPath) : undefined;
-  const locators = await Promise.all(
+  const identities = await Promise.all(
     pool.secrets.map(async name => {
       (await E(host).has('secrets', name)) ||
         Fail`A declared Claude subscription is missing from Secrets`;
-      return E(host).locate('secrets', name);
+      const identifier = await E(host).identify('secrets', name);
+      (typeof identifier === 'string' && identifier.length > 0) ||
+        Fail`A declared Claude subscription has no formula identity`;
+      return identifier;
     }),
   );
-  new Set(locators).size === locators.length ||
+  new Set(identities).size === identities.length ||
     Fail`Claude subscriptions must use distinct SecretBlobs`;
   for (const [index, member] of pool.set.members.entries()) {
     const identityName = `secret-${member.id}`;
@@ -91,7 +94,7 @@ export const prepareClaudePool = async (
     // eslint-disable-next-line no-await-in-loop
     if (powers && (await E(powers).has(identityName))) {
       // eslint-disable-next-line no-await-in-loop
-      (await E(powers).locate(identityName)) === locators[index] ||
+      (await E(powers).identify(identityName)) === identities[index] ||
         Fail`Claude subscription ${member.id} is bound to another secret; use a new id`;
     }
     const namePath = ['claude-sandbox', `credential-${member.id}`];
@@ -136,7 +139,12 @@ export const prepareClaudePool = async (
         });
         // Retain the original blob identity independently of its renewing holder.
         // eslint-disable-next-line no-await-in-loop
-        await E(namespace).storeLocator(`secret-${member.id}`, locators[index]);
+        await E(namespace).storeIdentifier(
+          `secret-${member.id}`,
+          // This guest belongs to the same daemon. Retain the exact formula
+          // identity preflight checked, not a freshly resolved mutable name.
+          identities[index],
+        );
         // eslint-disable-next-line no-await-in-loop
         await E(namespace).storeLocator(
           member.secretName,

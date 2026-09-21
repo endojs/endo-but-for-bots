@@ -330,7 +330,11 @@ test.serial(
     const entries = new Map();
     const namespace = harden({
       has: async name => entries.has(name),
+      identify: async name => entries.get(name)?.replace(/^test:/, ''),
       locate: async name => entries.get(name),
+      storeIdentifier: async (name, identifier) => {
+        entries.set(name, `test:${identifier}`);
+      },
       storeLocator: async (name, locator) => {
         entries.set(name, locator);
       },
@@ -344,6 +348,10 @@ test.serial(
     const host = /** @type {EndoHost} */ (
       /** @type {unknown} */ ({
         ...f.host,
+        identify: async (...parts) =>
+          parts[0] === 'secrets'
+            ? f.bindings.get(key(...parts))
+            : E(f.host).identify(...parts),
         lookup: async (...parts) => {
           if (key(...parts) === key('claude-sandbox', 'broker-powers'))
             return namespace;
