@@ -73,7 +73,7 @@ No claim of complete retrospective coverage is made yet.
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
 | Daemon value publication | `host.storeValue` defers name publication through `formulateMarshalValue`, whose deferred tasks run before the marshal formula is written. A crash can leave a durable name pointing to a missing formula. | Verify and fix publication ordering at the actual daemon boundary, including transient pins/dependencies and crash/failure injection; absent-or-complete Map mocks do not cover dangling durable names. |
-| Codex checkpoint commit | `codex-session-store.js` syncs the temporary file, then renames without syncing its containing directory. | Align acknowledged persistence with the turn-ledger durability contract; distinguish host/power-loss testing from ordinary daemon restart. |
+| Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
 
 All rows above remain open except the classification of deliberately transient
@@ -93,6 +93,17 @@ ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
 Ten focused tests pass, including vanished-entry success and both inspection
 failures; this adds no durable state or replayed effect and does not close the
 separate missing-native-cleanup-proof finding.
+Codex checkpoint fix: acknowledgement waits for the post-rename directory flush;
+flush failures reject even when the new value is already visible.
+Reopening retries ancestry flushes after incomplete preparation, and an absent
+deletion retry still flushes a potentially unacknowledged unlink.
+Thirteen focused tests cover these boundaries, with independent adversarial review.
+Tokyo's endo user successfully opened and synced `/var/lib/endo/codex-state`
+and every ancestor through `/` using the production flags; `/var/lib/endo`
+is on `/dev/vdb`, ext4.
+This proves filesystem/permission support, not deployment or a power-loss test.
+Repository type generation remains blocked by widespread TS5055 stale-output
+errors; no global typecheck success is claimed.
 
 | ID | Priority | Finding | Evidence class | Status |
 |---|---|---|---|---|

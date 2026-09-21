@@ -36,7 +36,7 @@ import {
   rename,
   rm,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   canonicalAuditJson,
@@ -63,6 +63,22 @@ const VALUE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/;
 const SUFFIX = '.json';
 const MAX_VALUE_BYTES = 16 * 1024 * 1024;
 
+/** @param {string} directory */
+const syncDirectory = async directory => {
+  // Never acknowledge a durable update on filesystems that refuse this flush.
+  /* eslint-disable no-bitwise */
+  const handle = await open(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  /* eslint-enable no-bitwise */
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+};
+
 /** @param {string} name */
 const assertValueName = name => {
   (typeof name === 'string' &&
@@ -77,8 +93,9 @@ const assertValueName = name => {
  * symlink at its path or anywhere above it in the part we created.
  * @param {string} directory
  * @param {string} label
+ * @param {(directory: string) => Promise<void>} sync
  */
-const providePrivateSubdirectory = async (directory, label) => {
+const providePrivateSubdirectory = async (directory, label, sync) => {
   const info = await lstat(directory).catch(error => {
     if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
       return undefined;
@@ -91,7 +108,16 @@ const providePrivateSubdirectory = async (directory, label) => {
   }
   if (!info) await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
-  return realpath(directory);
+  const root = await realpath(directory);
+  // Flush the path on reopening too: a prior attempt may have created several
+  // directories and failed before syncing their links. Existence alone is not
+  // evidence that those links have been made durable.
+  for (let current = root; ; current = dirname(current)) {
+    // eslint-disable-next-line no-await-in-loop
+    await sync(current);
+    if (current === dirname(current)) break;
+  }
+  return root;
 };
 
 /**
@@ -104,9 +130,15 @@ const providePrivateSubdirectory = async (directory, label) => {
  *
  * @param {string} directory
  * @param {string} [label]
+ * @param {object} [powers]
+ * @param {(directory: string) => Promise<void>} [powers.syncDirectory]
  */
-export const makeDirectoryValueStore = async (directory, label = 'store') => {
-  const root = await providePrivateSubdirectory(directory, label);
+export const makeDirectoryValueStore = async (
+  directory,
+  label = 'store',
+  { syncDirectory: sync = syncDirectory } = {},
+) => {
+  const root = await providePrivateSubdirectory(directory, label, sync);
   /** @param {string} name */
   const pathFor = name => join(root, `${assertValueName(name)}${SUFFIX}`);
 
@@ -181,6 +213,9 @@ export const makeDirectoryValueStore = async (directory, label = 'store') => {
       await rm(temporary, { force: true });
       throw error;
     }
+    // Rename visibility is not durability. A rejected directory sync means
+    // the write may have landed, never that it is safe to acknowledge.
+    await sync(root);
   };
 
   /** @param {string} name */
@@ -193,9 +228,14 @@ export const makeDirectoryValueStore = async (directory, label = 'store') => {
         return undefined;
       throw error;
     });
-    if (info === undefined) return;
+    if (info === undefined) {
+      // A retry may follow an unlink whose directory flush failed.
+      await sync(root);
+      return;
+    }
     info.isFile() || Fail`Codex value ${q(name)} is not a stored value`;
     await rm(path, { force: true });
+    await sync(root);
   };
 
   return makeExo('CodexValueStore', ValueStoreInterface, {
