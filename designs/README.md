@@ -6,6 +6,10 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[Floot/backend architecture audit](../packages/floot/ARCHITECTURE-AUDIT.md)
+(2026-09-21; living FA-01–FA-13 remediation register within the existing hosted-agent
+sandbox unification scope; two reproduced context/history bugs, legacy retirement,
+and ownership/deduplication findings; no additional milestone or estimate),
 [hosted-agent-subscriptions](hosted-agent-subscriptions.md) (added 2026-09-20;
 subscription status for hosted agents read from the rate-limit headers the
 broker drops today and published for views to subscribe to; several
@@ -322,7 +326,7 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-21 | In Progress — phases 1 to 6 implemented; Claude and Codex pools deployed. Claude memory-only access tokens, direct usage and restart renewal passed two-account Tokyo acceptance at `00799f3f5`. Secondary Codex needs fresh login; live exhaustion handover and soak remain. |
-| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-21 | In Progress — Tokyo generation 154 runs `21bcb3d04` with host storage admission; session controls and public HTTPS trials passed; shared harness image code pushed, deployment awaits build capacity and remaining conformance checks; broader conformance pending |
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-21 | In Progress — shared harness image deployment and broader conformance pending; [architecture audit/remediation register](../packages/floot/ARCHITECTURE-AUDIT.md) records open FA-01–FA-13 findings and compatibility-free retirement plan |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |

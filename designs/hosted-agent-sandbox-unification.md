@@ -10,6 +10,16 @@
 
 ## Implementation status
 
+### Architecture audit and remediation tracking — 2026-09-21
+
+The [Floot/backend architecture audit](../packages/floot/ARCHITECTURE-AUDIT.md)
+records the source review at `cdccdbb88`, two reproduced history/context bugs,
+legacy removal clusters, and deduplication/ownership work as findings FA-01–FA-13.
+Backward compatibility is not required; retirement must still preserve Secrets and
+explicitly retained workspaces and stop native resources before removing their owners.
+Update that register as remediation lands, distinguishing source changes from Tokyo acceptance.
+The audit is complete; its remediation findings are open.
+
 ### Shared harness development image — 2026-09-21
 
 Claude, Codex, and OpenCode now build separate CLI/bridge overlays on the shared
