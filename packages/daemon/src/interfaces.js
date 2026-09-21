@@ -343,6 +343,8 @@ export const GuestInterface = M.interface('EndoGuest', {
   evaluate: EvaluateMethodGuard,
   // Mint a guest-owned invitation (network mediation stays internal)
   invite: M.call(NameOrPathShape).returns(M.promise()),
+  // Redeem an invitation into this guest (accepts as itself; no minted guest)
+  accept: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {

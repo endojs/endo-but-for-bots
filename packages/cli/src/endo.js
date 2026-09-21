@@ -769,21 +769,21 @@ export const main = async rawArgs => {
     });
 
   program
-    .command('invite <guest-name>')
+    .command('invite <correspondent-name>')
     .option(...commonOptions.as)
-    .action(async (guestName, options) => {
+    .action(async (correspondentName, options) => {
       const { as: agentNames } = options;
       const { invite } = await import('./commands/invite.js');
-      return invite({ agentNames, guestName });
+      return invite({ agentNames, correspondentName });
     });
 
   program
-    .command('accept <guest-name>')
+    .command('accept <correspondent-name>')
     .option(...commonOptions.as)
-    .action(async (guestName, options) => {
+    .action(async (correspondentName, options) => {
       const { as: agentNames } = options;
       const { accept } = await import('./commands/accept.js');
-      return accept({ agentNames, guestName });
+      return accept({ agentNames, correspondentName });
     });
 
   program

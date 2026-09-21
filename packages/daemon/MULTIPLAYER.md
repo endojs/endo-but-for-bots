@@ -438,10 +438,12 @@ the bytes-and-handshake layer differs.
    multiaddrs). The inviter is either a host (`EndoHost.invite`) or a
    guest (`EndoGuest.invite`); the locator's `from` names that inviting
    agent's handle, not necessarily a host handle.
-3. **Accept**: The acceptor parses the locator, registers the inviter's
-   peer info, iterates installed networks for one that `supports` the
-   hint's protocol, dials it, and runs the `hello` handshake to
-   exchange handle ids.
+3. **Accept**: The acceptor is either a host (`EndoHost.accept`) or a
+   guest (`EndoGuest.accept`) — symmetric with the invite step above,
+   since a guest can now redeem an invitation as itself. The acceptor
+   parses the locator, registers the inviter's peer info, iterates
+   installed networks for one that `supports` the hint's protocol, dials
+   it, and runs the `hello` handshake to exchange handle ids.
 4. **Session**: A persistent session carries all subsequent `E()` calls
    between the daemons. Under `tcp-netstring` and `libp2p` this is a
    CapTP session over the dialled transport; under `ocapn` it is a

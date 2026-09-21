@@ -6,6 +6,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import url from 'url';
+import os from 'os';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -250,10 +251,22 @@ const makeConfig = (...root) => {
     statePath: path.join(dirname, ...root, 'state'),
     ephemeralStatePath: path.join(dirname, ...root, 'run'),
     cachePath: path.join(dirname, ...root, 'cache'),
+    // Use a short socket path under the OS temp dir to stay within the ~104
+    // char Unix socket path limit; a long CI (or worktree) checkout path can
+    // otherwise push `<dirname>/tmp/<config>/endo.sock` over the limit. The
+    // last root segment carries a unique per-test/config id suffix, and the
+    // base-36 process id keeps two concurrent runs (two worktrees, two CI
+    // containers sharing `/tmp`) from deriving the SAME absolute socket path —
+    // a collision where one run's `purge`/`clean` unlinks the other's live
+    // socket. The slice is trimmed to leave the pid room within the length
+    // budget. (This mirrors `_multiplayer-suite.js`'s makeConfig.)
     sockPath:
       process.platform === 'win32'
-        ? raw`\\?\pipe\endo-${root.join('-')}-test.sock`
-        : path.join(dirname, ...root, 'endo.sock'),
+        ? raw`\\?\pipe\endo-${process.pid.toString(36)}-${root.join('-')}-test.sock`
+        : path.join(
+            os.tmpdir(),
+            `endo-${process.pid.toString(36)}-${root.join('-').slice(-32)}.sock`,
+          ),
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
@@ -520,6 +533,18 @@ test('failure to start', async t => {
     await cleanup();
     const configSubDirectory = `failure-to-start~${'0'.repeat(200)}`;
     const config = makeConfig('tmp', configSubDirectory);
+    // makeConfig now parks sockPath under the OS temp dir to dodge the ~104
+    // char Unix socket limit, but this test's whole point is a start that
+    // fails, which it induces precisely by that over-long socket path. Restore
+    // the long in-state-dir sockPath here so `start` still fails to bind.
+    if (process.platform !== 'win32') {
+      config.sockPath = path.join(
+        dirname,
+        'tmp',
+        configSubDirectory,
+        'endo.sock',
+      );
+    }
     await purge(config);
     await t.throwsAsync(() => start(config));
   } finally {
@@ -3996,6 +4021,287 @@ test('EndoGuest.invite nests the invitation at a directory path', async t => {
   t.true(await E(guest).has('peers', 'bob'));
   t.false(await E(guest).has('bob'));
 });
+
+testNeedsNodeWorker(
+  'EndoGuest.accept binds into the calling guest (same daemon)',
+  async t => {
+    // Both the inviting and accepting guest live in ONE daemon — the
+    // minion.town shape, where the app's inviter and invitee guests are
+    // siblings under a single daemon. No network is required.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+    // The invitee redeems into ITSELF via the guest facet, not through a host.
+    await E(guestB).accept(invitationLocator, 'to-a');
+
+    // Reciprocal binding, each under its own independently chosen pet name.
+    t.truthy(await E(guestA).identify('to-b'));
+    t.truthy(await E(guestB).identify('to-a'));
+
+    // Accepting as itself mints no replacement guest on either side.
+    t.is(await E(guestA).identify('@pins', 'guest-to-b'), undefined);
+    t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
+
+    // Same-daemon acceptance registers NO peer: the inviter's daemon is this
+    // daemon, so writing a self-peer (or a self-referential remote-agent-key
+    // row) would be spurious. NOTE: this end-to-end check does NOT by itself pin
+    // the same-daemon skips — both agents here have empty `@nets`, so the
+    // orthogonal `hints.length > 0` / `addresses.length > 0` guards keep the peer
+    // store empty even if a same-daemon skip were removed (prover round 4). The
+    // skips are pinned load-bearingly by the multiplayer-suite test "same-daemon
+    // accept writes no peer route with reachable @nets on both sides", which
+    // gives both sides non-empty addresses so only the skips prevent the write.
+    t.deepEqual(
+      await E(host).listKnownPeers(),
+      [],
+      'same-daemon accept writes no known-peer entry',
+    );
+
+    // The bound handles are each guest's OWN handle — the acceptor bound the
+    // inviter's handle (not the top host's), and vice versa.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const guestBHandleId = await E(host).identify('guest-b-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('to-a')).number,
+      parseId(guestAHandleId).number,
+      "acceptor's 'to-a' is the inviting guest's own handle",
+    );
+    t.is(
+      parseLocator(await E(guestA).locate('to-b')).number,
+      parseId(guestBHandleId).number,
+      "inviter's 'to-b' is the accepting guest's own handle",
+    );
+
+    // Mail flows both directions over the shared daemon's mailbox substrate.
+    await E(guestA).send('to-b', ['Hello from A'], [], []);
+    await E(guestB).send('to-a', ['Hello from B'], [], []);
+
+    const messagesForB = await E(guestB).listMessages();
+    t.true(
+      messagesForB.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from A',
+      ),
+      "B received A's message",
+    );
+    const messagesForA = await E(guestA).listMessages();
+    t.true(
+      messagesForA.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from B',
+      ),
+      "A received B's message",
+    );
+
+    // Single-use: a replay of the spent invitation is rejected.
+    await t.throwsAsync(
+      () => E(guestB).accept(invitationLocator, 'to-a-again'),
+      undefined,
+      'replayed invitation is rejected',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept rolls back its speculative bind when the invitation is rejected (same daemon)',
+  async t => {
+    // The acceptor-side pet-name bind is written from the caller-supplied
+    // locator BEFORE the invitation is proven (so a bad name path cannot strand
+    // a spent invitation). A rejected accept — forged, unspent, or replayed —
+    // must therefore roll that bind back rather than leave the chosen name
+    // pointing at the unverified handle; least of all may it silently clobber a
+    // pre-existing correspondent already bound under that name.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // B binds a genuine correspondent (A's handle) under 'contact'.
+    const invAB = await E(guestA).invite('to-b');
+    await E(guestB).accept(await E(invAB).locate(), 'contact');
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' initially names A's handle",
+    );
+
+    // Produce a spent invitation from a DIFFERENT correspondent (C), so a
+    // successful clobber would be observable as C's handle replacing A's.
+    const invCB = await E(guestC).invite('to-b-2');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // Redeeming the now-spent invitation from C, reusing the name that already
+    // holds A, must reject AND leave 'contact' bound to A (not C, not stray).
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the rejected accept",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept rollback removes a FRESH name it speculatively bound (same daemon)',
+  async t => {
+    // The rollback restores "whatever the pet name held before". The existing
+    // rollback test only covers the branch where a prior binding existed (so
+    // rollback re-stores it); this covers the OTHER branch — a name that held
+    // nothing before the speculative bind — where rollback must `remove()` the
+    // phantom binding, not leave it pointing at the unverified handle. Deleting
+    // the `priorLocator === undefined ? remove() : storeLocator()` split's
+    // remove() arm reddens here.
+    const { host } = await prepareHost(t);
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // Produce a spent invitation from C.
+    const invCB = await E(guestC).invite('to-b');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // 'fresh-contact' has never been bound. Redeeming the now-spent invitation
+    // under it must reject AND leave 'fresh-contact' unbound — the speculative
+    // bind removed, not left as a phantom pointing at C's unverified handle.
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound before the rejected accept',
+    );
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'fresh-contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound again after the rejected accept (phantom removed)',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
+  async t => {
+    // A client that naively retries its own accept(sameLocator, sameName) —
+    // no attacker required — starts two accepts of the SAME single-use
+    // invitation under the SAME correspondent name. The required outcome:
+    // exactly one wins, and the loser's `E(invitation).accept()` rejection
+    // (single-use) and its correspondent-bind rollback do NOT strand the
+    // winner's binding — 'contact' still names A's handle afterward.
+    //
+    // NOTE: this test asserts the OUTCOME, not the serialization mechanism.
+    // prover round 4 showed that removing the `acceptInvitationJobs.enqueue`
+    // wrapper leaves this same-daemon case green, because same-process
+    // eventual-send delivery ordering already serializes these two calls (the
+    // acceptor's writes here touch no network, so no interleaving await opens
+    // the check-then-act window the queue closes). The daemon-wide queue is
+    // load-bearing for the CROSS-daemon race — a forged locator racing a genuine
+    // one for the same not-yet-known peer, where real network awaits interleave
+    // — which this same-daemon shape cannot exercise. This test remains a useful
+    // guard on the duplicate-accept outcome; it does not claim to pin the queue.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+
+    const results = await Promise.allSettled([
+      E(guestB).accept(invitationLocator, 'contact'),
+      E(guestB).accept(invitationLocator, 'contact'),
+    ]);
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    t.is(fulfilled.length, 1, 'exactly one duplicate accept succeeds');
+
+    // The winner's bind survives the loser's rollback: 'contact' still names
+    // A's handle rather than having been un-named.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const contactLocator = await E(guestB).locate('contact');
+    t.truthy(
+      contactLocator,
+      "'contact' remains bound after the duplicate race",
+    );
+    t.is(
+      parseLocator(contactLocator).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the losing duplicate rolled back",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'EndoGuest transitive invite chain I -> J -> K (same daemon)',
+  async t => {
+    // A guest that has accepted an invitation can itself invite and accept
+    // further guests: "a guest may invite more guests, transitively."
+    const { host } = await prepareHost(t);
+    const guestI = await E(host).provideGuest('i-handle', { agentName: 'i' });
+    const guestJ = await E(host).provideGuest('j-handle', { agentName: 'j' });
+    const guestK = await E(host).provideGuest('k-handle', { agentName: 'k' });
+
+    const invIJ = await E(guestI).invite('j');
+    await E(guestJ).accept(await E(invIJ).locate(), 'i');
+
+    // J, an accepted guest, now extends its OWN invitation to K.
+    const invJK = await E(guestJ).invite('k');
+    await E(guestK).accept(await E(invJK).locate(), 'j');
+
+    t.truthy(await E(guestI).identify('j'));
+    t.truthy(await E(guestJ).identify('i'));
+    t.truthy(await E(guestJ).identify('k'));
+    t.truthy(await E(guestK).identify('j'));
+
+    // Mail flows along each hop of the chain.
+    await E(guestI).send('j', ['I to J'], [], []);
+    await E(guestJ).send('k', ['J to K'], [], []);
+
+    const messagesForJ = await E(guestJ).listMessages();
+    t.true(
+      messagesForJ.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'I to J',
+      ),
+      "J received I's message",
+    );
+    const messagesForK = await E(guestK).listMessages();
+    t.true(
+      messagesForK.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'J to K',
+      ),
+      "K received J's message",
+    );
+  },
+);
 
 testNeedsNodeWorker(
   'accept keeps distinct result names for paths that a naive join would collide',

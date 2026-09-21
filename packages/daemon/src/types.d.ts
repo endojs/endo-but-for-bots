@@ -667,6 +667,13 @@ export type InvitationFormula = {
    * `invitingHandle ?? hostHandle`.
    */
   invitingHandle?: FormulaIdentifier;
+  /**
+   * The pet-name path in the inviting agent's own store that retains this
+   * pending invitation. Deliberately NOT renamed to `correspondentName`
+   * alongside the `EndoHost.accept`/`EndoGuest.accept` and CLI rename: this is a
+   * persisted on-disk field, so renaming it would be a stored-record schema
+   * change. The concept it names is the correspondent's pet name.
+   */
   guestName: NameOrPath;
   /**
    * @deprecated Legacy field name for {@link invitingAgent}, persisted by
@@ -1736,12 +1743,30 @@ export interface EndoGuest extends EndoAgent {
    * Mint a single-use invitation whose locator's `from` names this guest's
    * handle, so an acceptor binds this guest (not the top host) under its chosen
    * pet name. Acceptance stores the acceptor's handle in this guest's pet store
-   * under `guestName`. Network mediation runs through an internal daemon broker;
-   * this call confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
-   * enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * under `correspondentName`. Network mediation runs through an internal
+   * daemon broker; this call confers no `getPeerInfo`/`addPeerInfo`, host facet,
+   * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
    * implementation.
    */
-  invite(guestName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string | string[]): Promise<Invitation>;
+  /**
+   * Redeem an invitation locator into THIS guest, binding the relationship to
+   * the calling guest — no replacement guest is minted on the acceptor side.
+   * The guest accepts *as itself*: its `@self` handle is the identity presented
+   * to the inviter, and the inviter's handle is bound reciprocally under
+   * `correspondentName` (a pet name this guest chooses; the inviter chooses its
+   * own independently, so the two may differ). A path nests the binding under a
+   * directory that must already exist. Shares `EndoHost.accept`'s
+   * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface. Redeeming a genuine invitation
+   * registers the inviter's daemon and agent key additively only (never
+   * redirecting an existing route), with the agent-key write deferred until the
+   * invitation is proven.
+   */
+  accept(
+    invitationLocator: string,
+    correspondentName: string | string[],
+  ): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -2111,10 +2136,10 @@ export interface EndoHost extends EndoAgent {
     locator: string,
     petNameOrPath: string | string[],
   ): Promise<void>;
-  invite(guestName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string | string[]): Promise<Invitation>;
   accept(
     invitationLocator: string,
-    guestName: string | string[],
+    correspondentName: string | string[],
   ): Promise<void>;
   endow(
     messageNumber: bigint,
@@ -3059,6 +3084,23 @@ export interface DaemonCore {
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
+
+  /**
+   * Acceptor-side invitation redemption shared by `EndoHost.accept` and
+   * `EndoGuest.accept`. Binds the relationship into the calling agent (accepts
+   * as itself; mints no replacement guest), sourcing the accepting agent's
+   * handle addresses from its own `@nets`. Peer registration and remote
+   * agent-key routing stay behind this daemon-core capability, so a guest
+   * acceptor is handed no dialing or peer-registration authority.
+   */
+  acceptInvitation: (args: {
+    invitationLocator: string;
+    acceptingHandleId: FormulaIdentifier;
+    acceptingNetworksDirectoryId: FormulaIdentifier;
+    bindCorrespondent: (
+      remoteHandleLocator: string,
+    ) => Promise<(() => Promise<void>) | undefined>;
+  }) => Promise<void>;
 
   formulateUnconfined: (
     hostAgentId: FormulaIdentifier,
