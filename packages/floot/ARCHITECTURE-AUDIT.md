@@ -595,15 +595,25 @@ The corrected release `b8a785561` is active at generation 158 with host `f48d95d
 Codex now passes runtime verification and inference.
 All four configured backends (Claude, Codex, OpenCode, direct Fae) passed explicit
 daemon-restart recall with exactly two completed turns and four transcript records.
-Native shell write/read evidence succeeded on all three hosted backends; the
-separate Endo-tool check needs a driver correction because it requested a tool
-not present in the current catalog, and Codex's literal shell wrapper needs exact
-normalization rather than substring acceptance.
-The three diagnostic tool sessions were removed; restoration sessions remain.
+After correcting the driver's nonexistent tool request and exact Codex shell
+wrapper normalization, all three hosted backends passed native shell write/read,
+Endo tool calls, and off → public internet → off network-policy checks.
+Public HTTPS succeeded and a private-address request was rejected.
+Claude repeated previous commands during the final off-policy turn, so this was
+not flawless instruction following despite the successful policy assertion.
+Direct Fae also passed a real capability-description tool call.
+Hosted cancellation reached idle with `reportedState: cancelled`, while the
+journal correctly retained `outcome-unknown` for unsettled native calls.
+The driver must distinguish cancellation from certainty about tool effects.
+Fae's configured OpenRouter adapter buffers responses, so its first test's
+streaming prerequisite timed out without sending cancellation; a separately
+labelled pending-turn cancellation check remains required.
+The initial three diagnostic tool sessions were removed; restoration and rerun
+sessions remain pending final cleanup.
 Detailed evidence and remaining gates are in endo-host's
 `ops/hosted-cutover-acceptance-20260921.md`.
-No full acceptance pass, forced cold-store restoration, cancellation/network-policy
-pass, or image-holder cleanup is claimed.
+No full acceptance pass, forced cold-store restoration, external process
+termination proof, or image-holder cleanup is claimed.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
