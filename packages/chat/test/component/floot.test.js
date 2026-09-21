@@ -1729,6 +1729,86 @@ test.serial(
 
 // ── Agent actions ────────────────────────────────────────────────────────────
 
+test.serial(
+  'public thinking is collapsed inline, escaped, and keeps its completed duration',
+  async t => {
+    const { parent, turns, send } = await setup(t);
+    await send('think');
+    await waitFor(() => turns.length === 1);
+    const startedAt = Date.now() - 205_000;
+    turns[0].channel.push(
+      harden({
+        type: 'thinking',
+        id: 'thought-1',
+        text: '<script>public reasoning</script>',
+        startedAt,
+        truncated: false,
+      }),
+    );
+    await waitFor(() => parent.querySelector('.floot-thought'));
+    const block = must(
+      parent.querySelector('.floot-thought'),
+      'thinking block',
+    );
+    t.false(block.hasAttribute('open'));
+    t.regex(
+      block.querySelector('summary')?.textContent || '',
+      /Thinking… \(3m\d+s\)/,
+    );
+    t.is(block.querySelector('script'), null);
+    turns[0].channel.push(
+      harden({
+        type: 'thinking',
+        id: 'thought-1',
+        text: '',
+        startedAt,
+        endedAt: startedAt + 205_000,
+        truncated: false,
+      }),
+    );
+    await waitFor(
+      () => block.querySelector('summary')?.textContent === 'Thought for 3m25s',
+    );
+    t.true(block.textContent.includes('<script>public reasoning</script>'));
+    turns[0].channel.push(harden({ type: 'end' }));
+  },
+);
+
+test.serial(
+  'expanded thinking does not open another session’s thinking',
+  async t => {
+    const { parent, turns, send } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    const thought = harden({
+      type: 'thinking',
+      id: 'thinking-1',
+      text: 'public thought',
+      startedAt: Date.now(),
+      truncated: false,
+    });
+    turns[0].channel.push(thought);
+    await waitFor(() => parent.querySelector('.floot-thought'));
+    const first = must(parent.querySelector('.floot-thought'), 'first thought');
+    first.setAttribute('open', '');
+    turns[0].channel.push(harden({ ...thought, text: ' continued' }));
+    await waitFor(() => first.textContent.includes('continued'));
+    t.true(first.hasAttribute('open'), 'streaming preserves expansion');
+    selectSessionRow(parent, 'Session 1');
+    await tick(50);
+    await send('second');
+    await waitFor(() => turns.length === 2);
+    turns[1].channel.push(thought);
+    await waitFor(() => parent.querySelector('.floot-thought'));
+    t.false(
+      must(
+        parent.querySelector('.floot-thought'),
+        'second thought',
+      ).hasAttribute('open'),
+    );
+  },
+);
+
 test.serial("a turn's tool calls collapse into one group", async t => {
   const { parent, turns, send } = await setup(t);
   await send('run some tools');

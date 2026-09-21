@@ -22,6 +22,7 @@ import { projectUsage } from '@endo/hosted-agent/token-usage.js';
  *   | { type: 'phase', phase: string }
  *   | { type: 'delta', text: string }
  *   | { type: 'final', text: string }
+ *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
  *   | { type: 'tool_call', id: string, name: string, args: string }
  *   | { type: 'tool_result', id: string, name: string, result: string }
  *   | ({ type: 'usage', turns: number, incompleteTurns: number } & import('@endo/hosted-agent/token-usage.js').TokenUsage)
@@ -52,6 +53,8 @@ export const makeReplyChannel = (onClose = null) => {
     delta: text => push({ type: 'delta', text: `${text}` }),
     /** @param {string} text */
     final: text => push({ type: 'final', text: `${text}` }),
+    /** @param {{ id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }} event */
+    thinking: event => push({ type: 'thinking', ...event }),
     /** @param {{ id: string, name: string, args: string }} call */
     toolCall: ({ id, name, args }) =>
       push({

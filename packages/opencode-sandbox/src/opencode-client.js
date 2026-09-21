@@ -10,7 +10,7 @@
  * writes `{op:'send',text}` and returns a **buffered reply reader**
  * immediately (consume it with `makeRefIterator`): it yields the hosted
  * events the bridge emits for that turn (`phase`, `text-delta`,
- * `commentary-delta`, `tool-call`, `tool-result`, `usage`), then exactly
+ * `commentary-delta`, `thinking-delta`, `tool-call`, `tool-result`, `usage`), then exactly
  * one terminal `{type:'end'}` or `{type:'abort',reason}`.  Turns **queue**
  * on an internal chain so the bridge never sees two `send` commands at
  * once; the next prompt is written only after the previous turn's terminal.

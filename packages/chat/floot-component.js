@@ -94,7 +94,8 @@ export const contextPercent = usage => {
 };
 
 /**
- * @typedef {{ role: 'assistant' | 'tool', text?: string, id?: string,
+ * @typedef {{ role: 'assistant' | 'tool' | 'thinking', text?: string, id?: string,
+ *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
  *   name?: string, args?: string, result?: string | null }} TurnMessage
  * @typedef {{
  *   sessionId: string,
@@ -245,6 +246,27 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
         } else if (value.type === 'final') {
           turn.streamingText = value.text;
           emit({ type: 'final' });
+        } else if (value.type === 'thinking') {
+          if (turn.streamingText.trim())
+            messages.push({
+              role: 'assistant',
+              text: turn.streamingText.trim(),
+            });
+          turn.streamingText = '';
+          let message = messages.find(
+            item => item.role === 'thinking' && item.id === value.id,
+          );
+          if (!message) {
+            message = { role: 'thinking', id: value.id, text: '' };
+            messages.push(message);
+          }
+          message.text = `${message.text || ''}${value.text}`;
+          message.thinking = {
+            startedAt: value.startedAt,
+            endedAt: value.endedAt,
+            truncated: value.truncated,
+          };
+          emit({ type: 'thinking' });
         } else if (value.type === 'tool_call') {
           if (turn.streamingText.trim()) {
             messages.push({
@@ -626,7 +648,8 @@ export const flootComponent = (
 
   // ── View-model state (read by getState, mutated by the host engine) ─────────
   /**
-   * @typedef {{ role: 'user' | 'assistant' | 'tool', text?: string,
+   * @typedef {{ role: 'user' | 'assistant' | 'tool' | 'thinking', text?: string,
+   *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
@@ -776,8 +799,14 @@ export const flootComponent = (
       m.role === 'tool'
         ? { role: 'tool', name: m.name, args: m.args, result: m.result }
         : {
-            role: m.role === 'user' ? 'user' : 'assistant',
+            role:
+              m.role === 'user'
+                ? 'user'
+                : m.role === 'thinking'
+                  ? 'thinking'
+                  : 'assistant',
             text: m.content,
+            ...(m.thinking ? { thinking: m.thinking } : {}),
             ...(m.meta ? { meta: m.meta } : {}),
           },
     );
@@ -869,8 +898,9 @@ export const flootComponent = (
           result: m.result == null ? null : m.result,
         }
       : {
-          role: /** @type {'user' | 'assistant'} */ (m.role),
+          role: /** @type {'user' | 'assistant' | 'thinking'} */ (m.role),
           text: m.text || '',
+          ...(m.thinking ? { thinking: m.thinking } : {}),
           .../** @type {any} */ (
             /** @type {{ meta?: unknown }} */ (m).meta
               ? { meta: /** @type {{ meta?: unknown }} */ (m).meta }

@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 
 import { tokenizeJs } from './highlight.js';
 
@@ -101,6 +101,46 @@ export const linkify = text => {
   return parts.length ? parts : [source];
 };
 harden(linkify);
+
+/** @param {{ msg: FlootMessage }} props */
+const ThoughtBlock = ({ msg }) => {
+  const [now, setNow] = useState(Date.now());
+  const startedAt = msg.thinking?.startedAt;
+  const endedAt = msg.thinking?.endedAt;
+  const running = endedAt === undefined && typeof startedAt === 'number';
+  useEffect(() => {
+    if (!running) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  const seconds = Math.max(
+    0,
+    Math.floor(((endedAt ?? now) - (startedAt ?? now)) / 1000),
+  );
+  const duration = `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+  return h(
+    'details',
+    { class: 'floot-thought' },
+    h(
+      'summary',
+      null,
+      running ? `Thinking… (${duration})` : `Thought for ${duration}`,
+    ),
+    h(
+      'div',
+      { class: 'floot-thought-note' },
+      'Public reasoning from the backend. Duration measures the observed streaming interval.',
+    ),
+    h('pre', null, msg.text || ''),
+    msg.thinking?.truncated
+      ? h(
+          'div',
+          { class: 'floot-thought-note' },
+          'Reasoning preview truncated.',
+        )
+      : null,
+  );
+};
 
 // ── Agent actions ────────────────────────────────────────────────────────────
 
@@ -781,13 +821,18 @@ export const MessageList = ({ state, controller, debug = false }) => {
   const rows = projected.map(row =>
     row.kind === 'actions'
       ? h(ActionGroup, { key: `actions-${row.index}`, actions: row.actions })
-      : h(Bubble, {
-          key: `msg-${row.index}`,
-          msg: row.msg,
-          canReplay,
-          replaying: canReplay && replayingText === (row.msg.text || ''),
-          onReplay: text => controller.replayMessage(text),
-        }),
+      : row.msg.role === 'thinking'
+        ? h(ThoughtBlock, {
+            key: `${state.activeSessionId || ''}:thought-${row.index}`,
+            msg: row.msg,
+          })
+        : h(Bubble, {
+            key: `msg-${row.index}`,
+            msg: row.msg,
+            canReplay,
+            replaying: canReplay && replayingText === (row.msg.text || ''),
+            onReplay: text => controller.replayMessage(text),
+          }),
   );
   // The in-progress assistant bubble, or a thinking indicator before any text.
   if (streamingText) {
@@ -798,7 +843,13 @@ export const MessageList = ({ state, controller, debug = false }) => {
         h('div', { class: 'floot-msg streaming' }, ...linkify(streamingText)),
       ),
     );
-  } else if (thinking) {
+  } else if (
+    thinking &&
+    !messages.some(
+      message =>
+        message.role === 'thinking' && message.thinking?.endedAt === undefined,
+    )
+  ) {
     rows.push(h(ThinkingRow, { key: 'thinking' }));
   }
   // Queued submissions come after the live turn's output, in the order they

@@ -30,7 +30,8 @@ import { speakTurn } from './turn-speech.js';
 
 /**
  * @typedef {{
- *   role: 'assistant' | 'tool',
+ *   role: 'assistant' | 'tool' | 'thinking',
+ *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
  *   text?: string,
  *   id?: string,
  *   name?: string,
@@ -129,6 +130,21 @@ const drainReplyReader = async (reader, status, emit) => {
       status.streamingText += event.text;
     } else if (event.type === 'final') {
       status.streamingText = event.text;
+    } else if (event.type === 'thinking') {
+      flushStreamingText();
+      let message = status.messages.find(
+        item => item.role === 'thinking' && item.id === event.id,
+      );
+      if (!message) {
+        message = { role: 'thinking', id: event.id, text: '' };
+        status.messages.push(message);
+      }
+      message.text = `${message.text || ''}${event.text}`;
+      message.thinking = {
+        startedAt: event.startedAt,
+        ...(event.endedAt === undefined ? {} : { endedAt: event.endedAt }),
+        truncated: event.truncated,
+      };
     } else if (event.type === 'tool_call') {
       // The assistant text that preceded the call is a finished message: a tool
       // round follows it, and more text after that is a separate message.
@@ -154,7 +170,10 @@ const drainReplyReader = async (reader, status, emit) => {
       status.phase = event.phase;
     } else if (event.type === 'usage') {
       const { type: _type, ...reported } = event;
-      status.usage = { ...reported, incompleteTurns: event.incompleteTurns || 0 };
+      status.usage = {
+        ...reported,
+        incompleteTurns: event.incompleteTurns || 0,
+      };
     } else if (event.type === 'end') {
       terminal = event;
       break;

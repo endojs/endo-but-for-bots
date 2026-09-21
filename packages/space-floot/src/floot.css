@@ -1022,6 +1022,26 @@
   flex-direction: column;
   gap: 0.6rem;
 }
+.floot-thought {
+  margin: 0.35rem 0;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 0.4rem;
+  color: var(--fl-text-muted);
+  font-size: 0.85rem;
+}
+.floot-thought summary {
+  cursor: pointer;
+}
+.floot-thought pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.floot-thought-note {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+}
 .floot-settings-row {
   display: flex;
   flex-direction: column;

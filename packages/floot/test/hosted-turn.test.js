@@ -11,6 +11,64 @@ import {
 } from '../src/hosted-turn.js';
 import { usageCounts } from './helpers/usage.js';
 
+test('public thinking is bounded display-only data with settled timing', async t => {
+  const thinking = [];
+  const deltas = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'thinking-delta', text: 'x'.repeat(70_000) };
+          yield { type: 'text-delta', text: 'Answer' };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({
+      thinking: event => thinking.push(event),
+      setPhase: () => {},
+      delta: text => deltas.push(text),
+    }),
+  });
+  t.deepEqual(deltas, ['Answer']);
+  t.is(result.finalContent, 'Answer');
+  const segment = result.segments[0];
+  t.is(segment.type, 'thinking');
+  if (segment.type !== 'thinking') return;
+  t.is(segment.text.length, 65_536);
+  t.true(segment.truncated);
+  t.true(
+    typeof segment.endedAt === 'number' && segment.endedAt >= segment.startedAt,
+  );
+  t.is(thinking.at(-1).text, '');
+  t.is(thinking.at(-1).endedAt, segment.endedAt);
+});
+
+test('reasoning preview bounds block metadata without failing the turn', async t => {
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          for (let i = 0; i < 100; i += 1) {
+            yield { type: 'thinking-delta', text: 'x' };
+            yield { type: 'text-delta', text: '' };
+          }
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({ thinking: () => {}, delta: () => {}, setPhase: () => {} }),
+  });
+  t.is(result.segments.length, 64);
+  t.like(result.segments.at(-1), { type: 'thinking', truncated: true });
+});
+
 test('send response loss still confirms producer stop and records uncertainty', async t => {
   t.timeout(5000);
   let stopped = false;
@@ -152,7 +210,7 @@ test('hosted turns translate normalized lifecycle events', async t => {
   t.false(output.some(([, value]) => value === 'Checking…'));
   t.true(
     output.some(
-      ([kind, value]) => kind === 'phase' && value.startsWith('thinking: '),
+      ([kind, value]) => kind === 'phase' && value.startsWith('progress: '),
     ),
     'commentary surfaces as a bounded live phase, not answer text',
   );

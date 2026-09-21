@@ -28,7 +28,37 @@ including event contents.
 Transcript recovery supplements settled turns with durable tool evidence and
 explicit recovery/error narration, including full content behind journal refs.
 Local burst, cancellation, oversized-event, and transcript regression tests
-cover these paths; Tokyo deployment and reproduction remain pending.
+cover these paths.
+Tokyo generation 147 deployed `be3390398` and completed a Claude Haiku scene
+trial with 13,440- and 467-character tool calls without a queue overflow.
+This trial exposed duplicate Endo MCP/executor evidence; follow-up `86066250a`
+deduplicates only that known alias and passes 27 focused regression tests.
+Tokyo generation 148 activated that follow-up; Forgejo applied state matches
+the host checkout and machine-admin Apply is a no-op.
+
+The restart also exposed persistent one-shot test modules from earlier trials:
+their constructors created sessions, deleted sessions, and removed a broker.
+The operator approved retirement of twenty verified module paths; inert stubs
+now replace them and root-only copies preserve the originals.
+Current sessions and secrets were not removed by this retirement.
+The original failed session was already absent after replay, so recovery of
+that exact live transcript could not be verified; local restart recovery passes.
+After restart, all seventeen baseline sessions remained and no new sessions
+appeared.
+Host acceptance evidence is recorded in
+`endo-host/ops/floot-queue-acceptance-20260921.md`.
+
+### Inline public reasoning — 2026-09-21
+
+OpenCode's explicitly typed public reasoning now has a separate display-only
+stream and collapsed conversation item, with a live observed-duration timer
+and a persisted completion time.
+Previews are bounded per turn and visibly truncated without failing inference.
+Ordinary commentary remains separate, and reasoning is excluded from answer
+speech and backend context restoration.
+This increment does not add reasoning extraction to the Codex, Claude, or
+direct-provider adapters; their ordinary progress is not relabeled as reasoning.
+Local regression tests pass; deployment of this increment remains pending.
 
 ### Historical UA deployment — 2026-09-17
 

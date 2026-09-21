@@ -360,6 +360,41 @@ test('a checkpoint-reconciled backend retains a cancelled turn in the journal', 
   );
 });
 
+test('public thinking persists after failure and restart but is absent from model transcript', async t => {
+  t.timeout(5000);
+  const powers = makeFakePowers();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient: client },
+    'prompt',
+    { hostedContinuity: 'transcript' },
+  );
+  const run = agent.converse('go', makeReplyChannel().writer);
+  await waitForTurn(1);
+  turns[0].push({ type: 'thinking-delta', text: 'public reasoning' });
+  turns[0].push({ type: 'abort', reason: 'failure' });
+  await t.throwsAsync(run, { message: /failure/ });
+  const history = await agent.getHistory();
+  const thought = history.find(message => message.role === 'thinking');
+  t.is(thought?.content, 'public reasoning');
+  t.is(typeof thought?.thinking.endedAt, 'number');
+  t.false(
+    (await agent.getTranscript()).some(record =>
+      record.content?.includes('public reasoning'),
+    ),
+  );
+  const restored = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient: client },
+    'prompt',
+    { hostedContinuity: 'transcript' },
+  );
+  t.deepEqual(await restored.getHistory(), history);
+});
+
 test('extra tools join the session catalog beside the built-ins', async t => {
   const powers = Far('SessionPowers', {
     list: async () => harden([]),

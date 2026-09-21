@@ -16,7 +16,8 @@ export {};
  * daemon restarted while sending it, so it may or may not have arrived).
  *
  * @typedef {{
- *   role: 'user' | 'assistant' | 'tool',
+ *   role: 'user' | 'assistant' | 'tool' | 'thinking',
+ *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
  *   text?: string,
  *   id?: string,
  *   name?: string,

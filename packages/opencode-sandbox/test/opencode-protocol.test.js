@@ -72,6 +72,13 @@ test('validates and projects bridge events by type', t => {
     text: 'hm',
   });
   t.deepEqual(
+    assertBridgeEvent({ type: 'thinking-delta', text: 'public thought' }),
+    {
+      type: 'thinking-delta',
+      text: 'public thought',
+    },
+  );
+  t.deepEqual(
     assertBridgeEvent({ type: 'tool-call', id: 'c1', name: 'bash' }),
     {
       type: 'tool-call',

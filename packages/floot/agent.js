@@ -1022,7 +1022,7 @@ export const makeStreamingAgent = async (
      * @param {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} turnUsage
      * @param {string | undefined} backendCheckpoint
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
+     * @param {import('./src/hosted-turn.js').HostedTurnSegment[]} [segments]
      */
     const commitExternalTurn = async (
       replyText,
@@ -1064,6 +1064,16 @@ export const makeStreamingAgent = async (
             if (segment.text) {
               messages.push({ role: 'assistant', content: segment.text });
             }
+          } else if (segment.type === 'thinking') {
+            messages.push({
+              role: 'thinking',
+              content: segment.text,
+              thinking: {
+                startedAt: segment.startedAt,
+                endedAt: segment.endedAt,
+                truncated: segment.truncated,
+              },
+            });
           } else if (segment.type === 'compaction') {
             // The boundary the backend drew, kept in place. `projectTranscript`
             // carries it into the record stream, where its position is what
@@ -1136,7 +1146,7 @@ export const makeStreamingAgent = async (
     /**
      * @param {string} replyText
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
+     * @param {import('./src/hosted-turn.js').HostedTurnSegment[]} [segments]
      */
     const commitDeliveredTurn = async (
       replyText,
@@ -1170,6 +1180,16 @@ export const makeStreamingAgent = async (
             if (segment.text) {
               messages.push({ role: 'assistant', content: segment.text });
             }
+          } else if (segment.type === 'thinking') {
+            messages.push({
+              role: 'thinking',
+              content: segment.text,
+              thinking: {
+                startedAt: segment.startedAt,
+                endedAt: segment.endedAt,
+                truncated: segment.truncated,
+              },
+            });
           } else if (segment.type === 'compaction') {
             // The boundary the backend drew, kept in place. `projectTranscript`
             // carries it into the record stream, where its position is what
@@ -1300,6 +1320,11 @@ export const makeStreamingAgent = async (
         const history = await getHistory(turnId);
         const path = [];
         for (const [index, message] of history.entries()) {
+          // Public reasoning is display-only, never replayed as instructions.
+          if (message.role === 'thinking') {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
           if (message.role === 'tool') {
             const callId = `floot-history-${index}`;
             path.push({
@@ -2093,6 +2118,15 @@ export const makeStreamingAgent = async (
     // earlier turn's result.
     const pendingById = new Map();
     for (const m of path) {
+      if (m.role === 'thinking') {
+        out.push({
+          role: 'thinking',
+          content: m.content,
+          thinking: m.thinking,
+        });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       if (m.role === 'tool' && m.tool_call_id != null) {
         const pending = pendingById.get(m.tool_call_id);
         const index = pending?.shift();

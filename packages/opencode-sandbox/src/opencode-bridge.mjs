@@ -7,7 +7,7 @@
 // the process entry point.
 //
 // Bridge -> host events (see opencode-protocol.js):
-//   ready | phase | text-delta | commentary-delta | tool-call | tool-result |
+//   ready | phase | text-delta | thinking-delta | tool-call | tool-result |
 //   usage | end | abort
 // Host -> bridge commands:
 //   { op: "send", text } | { op: "interrupt" } | { op: "shutdown" }
@@ -360,7 +360,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
     ) {
       if (part.text === '') return undefined;
       return Object.freeze({
-        type: part.type === 'text' ? 'text-delta' : 'commentary-delta',
+        type: part.type === 'text' ? 'text-delta' : 'thinking-delta',
         text: part.text,
       });
     }
@@ -377,7 +377,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
       return Object.freeze({ type: 'text-delta', text: delta });
     }
     if (partType === 'reasoning') {
-      return Object.freeze({ type: 'commentary-delta', text: delta });
+      return Object.freeze({ type: 'thinking-delta', text: delta });
     }
     return undefined;
   }

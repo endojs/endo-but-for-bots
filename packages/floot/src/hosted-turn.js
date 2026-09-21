@@ -38,6 +38,7 @@ harden(UNSETTLED_TOOL_RESULT);
  * revival.
  *
  * @typedef {{ type: 'text', text: string }
+ *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
  *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }
  *   | { type: 'compaction', summary: string }} HostedTurnSegment
  */
@@ -100,6 +101,7 @@ const failTurn = (reason, partial, error = Error(reason)) => {
  * @returns {HostedTurnSegment}
  */
 const freezeSegment = segment => {
+  if (segment.type === 'thinking') return harden({ ...segment });
   if (segment.type === 'text')
     return harden({ type: 'text', text: segment.text });
   if (segment.type === 'compaction')
@@ -175,6 +177,7 @@ export const runHostedTurn = async ({
     rejectAbort = reject;
   });
   const onAbort = () => {
+    finishThinking();
     cancellationP = (async () => {
       await null;
       // Reader close initiates cancellation, but its local return can settle
@@ -211,15 +214,28 @@ export const runHostedTurn = async ({
   /** @type {HostedTurnSegment[]} */
   const segments = [];
   let pendingText = '';
+  /** @type {Extract<HostedTurnSegment, {type: 'thinking'}> | undefined} */
+  let thinking;
+  /** @type {Extract<HostedTurnSegment, {type: 'thinking'}> | undefined} */
+  let lastThinking;
+  let thinkingCount = 0;
+  // Display-only public reasoning preview, bounded across this whole turn.
+  // Truncation is visible and never fails an otherwise successful turn.
+  let thinkingRoom = 65_536;
+  const finishThinking = () => {
+    if (!thinking) return;
+    thinking.endedAt = Math.max(thinking.startedAt, Date.now());
+    writer.thinking({ ...thinking, text: '' });
+    thinking = undefined;
+  };
   const flushText = () => {
+    finishThinking();
     if (pendingText.length === 0) return;
     segments.push({ type: 'text', text: pendingText });
     pendingText = '';
   };
-  // Live progress: opencode (and Codex) stream long model reasoning as
-  // commentary, which is deliberately kept out of the answer channel and the
-  // transcript. Surface a throttled, bounded tail as a phase instead, so a
-  // multi-minute turn is not silent in the UI.
+  // Ordinary progress commentary is not model reasoning. Keep its bounded
+  // live tail out of both the answer channel and the thinking display.
   let lastCommentaryAt = 0;
   let commentaryTail = '';
   /** @type {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} */
@@ -290,10 +306,50 @@ export const runHostedTurn = async ({
       // a spawn refusal or a stop before dispatch arrives as a leading abort.
       if (event?.type !== 'abort') delivered = true;
       switch (event?.type) {
+        case 'thinking-delta': {
+          const incoming = `${event.text || ''}`;
+          if (incoming === '') break;
+          if (!thinking) {
+            // Bound metadata too: empty answer/idle boundaries must not turn
+            // a text preview bound into an unbounded list of tiny blocks.
+            if (thinkingCount >= 64) {
+              if (lastThinking && !lastThinking.truncated) {
+                lastThinking.truncated = true;
+                writer.thinking({ ...lastThinking, text: '' });
+              }
+              break;
+            }
+            flushText();
+            thinkingCount += 1;
+            thinking = {
+              type: 'thinking',
+              id: `thinking-${thinkingCount}`,
+              text: '',
+              startedAt: Date.now(),
+              truncated: false,
+            };
+            segments.push(thinking);
+            lastThinking = thinking;
+          }
+          const chunk = incoming.slice(0, thinkingRoom);
+          thinkingRoom -= chunk.length;
+          thinking.text += chunk;
+          thinking.truncated ||= chunk.length < incoming.length;
+          writer.thinking({
+            id: thinking.id,
+            text: chunk,
+            startedAt: thinking.startedAt,
+            truncated: thinking.truncated,
+          });
+          writer.setPhase('thinking');
+          break;
+        }
         case 'phase':
+          if (event.phase === 'idle') finishThinking();
           writer.setPhase(`${event.phase || 'thinking'}`);
           break;
         case 'text-delta': {
+          finishThinking();
           const textDelta = `${event.text || ''}`;
           retain(textDelta);
           finalContent += textDelta;
@@ -302,6 +358,7 @@ export const runHostedTurn = async ({
           break;
         }
         case 'commentary-delta': {
+          finishThinking();
           // Floot's delta channel is spoken and persisted as answer text. Keep
           // Codex progress out of that channel until Floot has a distinct,
           // non-TTS commentary event; a bounded phase tail is live-only.
@@ -310,7 +367,7 @@ export const runHostedTurn = async ({
           if (now - lastCommentaryAt >= 1000) {
             lastCommentaryAt = now;
             const tail = commentaryTail.replace(/\s+/g, ' ').trim();
-            if (tail) writer.setPhase(`thinking: ${tail}`);
+            if (tail) writer.setPhase(`progress: ${tail}`);
           }
           break;
         }
@@ -432,6 +489,7 @@ export const runHostedTurn = async ({
       throw Error('hosted turn ended without a terminal event');
     }
   } catch (error) {
+    finishThinking();
     // EOF, broken readers, and failed durable recording are not producer stop
     // barriers. Keep the turn occupied until interruption is confirmed.
     if (!terminal && !cancellationP) {
