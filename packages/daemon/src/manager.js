@@ -337,7 +337,11 @@ const makeFarContext = context =>
     cancel: context.cancel,
     whenCancelled: () => context.cancelled,
     whenDisposed: () => context.disposed,
-    addDisposalHook: context.onCancel,
+    addDisposalHook: hook => {
+      context.assertActive();
+      // Worker hooks are remote callables, not local JavaScript functions.
+      context.onCancel(() => E(hook)());
+    },
   });
 
 /**
@@ -574,6 +578,11 @@ const makeDaemonCore = async (
    * @type {Array<() => Promise<void>>}
    */
   const pendingCollectionCleanup = [];
+
+  /** @type {Map<FormulaIdentifier, { state: 'pending' | 'failed' }>} */
+  const collections = new Map();
+  /** @type {Map<FormulaIdentifier, Set<{ collected: boolean }>>} */
+  const formulaReads = new Map();
   /**
    * @param {() => Promise<any>} [asyncFn]
    * @returns {Promise<any>}
@@ -921,6 +930,9 @@ const makeDaemonCore = async (
     /** @type {Map<FormulaIdentifier, Formula>} */
     const collectedFormulas = new Map();
     for (const id of collectedIds) {
+      for (const read of formulaReads.get(id) || []) {
+        read.collected = true;
+      }
       const formula = formulaForId.get(id);
       if (formula !== undefined) {
         collectedFormulas.set(id, formula);
@@ -952,7 +964,19 @@ const makeDaemonCore = async (
     // synchronously so no stale controllers are accessible.
     /** @type {Array<{id: FormulaIdentifier, controller: Controller}>} */
     const controllersToCancel = [];
+    /** @type {Map<FormulaIdentifier, { state: 'pending' | 'failed' }>} */
+    const collectionRecords = new Map();
     for (const id of collectedIds) {
+      // Fence even unevaluated formulas before withdrawing live controllers:
+      // durable deletion is asynchronous and may fail, leaving a readable
+      // formula on disk. Never replace a prior failed collection barrier.
+      if (!collections.has(id)) {
+        const record = {
+          state: /** @type {'pending' | 'failed'} */ ('pending'),
+        };
+        collections.set(id, record);
+        collectionRecords.set(id, record);
+      }
       const controller = controllerForId.get(id);
       if (controller) {
         controllersToCancel.push({ id, controller });
@@ -968,51 +992,74 @@ const makeDaemonCore = async (
       [...collectedFormulas.entries()].map(([id, f]) => [id, f.type]),
     );
     pendingCollectionCleanup.push(async () => {
-      // Delete from durable storage.
-      await Promise.allSettled(
-        collectedIds.map(id =>
-          persistencePowers.deleteFormula(parseId(id).number),
-        ),
-      );
-      await Promise.allSettled(
-        [...collectedFormulas.entries()].map(async ([id, formula]) => {
-          if (
-            formula.type === 'pet-store' ||
-            formula.type === 'mailbox-store' ||
-            formula.type === 'known-peers-store'
-          ) {
-            await petStorePowers.deletePetStore(
-              parseId(id).number,
-              formula.type,
-            );
+      let cleanupSucceeded = false;
+      try {
+        // Stop admitted work before deleting any storage beneath it. If a
+        // controller cannot prove disposal, retain both its storage and fence.
+        const cancelReason = new Error(
+          'became unreachable by any pet name path and was collected',
+        );
+        const cancellations = await Promise.allSettled(
+          controllersToCancel.map(async ({ controller }) => {
+            await null;
+            await controller.context.cancel(cancelReason, '!');
+          }),
+        );
+        if (cancellations.some(result => result.status === 'rejected')) return;
+
+        // Delete from durable storage.
+        const formulaDeletions = await Promise.allSettled(
+          collectedIds.map(id =>
+            persistencePowers.deleteFormula(parseId(id).number),
+          ),
+        );
+        const storeDeletions = await Promise.allSettled(
+          [...collectedFormulas.entries()].map(async ([id, formula]) => {
+            if (
+              formula.type === 'pet-store' ||
+              formula.type === 'mailbox-store' ||
+              formula.type === 'known-peers-store'
+            ) {
+              await petStorePowers.deletePetStore(
+                parseId(id).number,
+                formula.type,
+              );
+            }
+          }),
+        );
+
+        // Reclaim daemon-local storage owned by collected formulas.
+        // Content-store blobs use sweep-time reference counting because
+        // multiple readable-blob and readable-tree formulas can dedupe
+        // on the same sha256.  Scratch-mount directories have a 1:1
+        // relationship with their formula and need no reference count.
+        // eslint-disable-next-line no-use-before-define
+        await reclaimCollectedStorage(collectedFormulas);
+
+        cleanupSucceeded = [...formulaDeletions, ...storeDeletions].every(
+          result => result.status === 'fulfilled',
+        );
+      } finally {
+        // Even failed storage reclamation must not leave worker routes live.
+        try {
+          // eslint-disable-next-line no-use-before-define
+          residenceTracker.disconnectRetainersHolding(
+            collectedIds,
+            collectedFormulaTypes,
+          );
+        } catch (error) {
+          cleanupSucceeded = false;
+          console.error('Collected worker disconnection failed', error);
+        } finally {
+          for (const [id, record] of collectionRecords) {
+            if (cleanupSucceeded) {
+              if (collections.get(id) === record) collections.delete(id);
+            } else {
+              record.state = 'failed';
+            }
           }
-        }),
-      );
-
-      // Reclaim daemon-local storage owned by collected formulas.
-      // Content-store blobs use sweep-time reference counting because
-      // multiple readable-blob and readable-tree formulas can dedupe
-      // on the same sha256.  Scratch-mount directories have a 1:1
-      // relationship with their formula and need no reference count.
-      // eslint-disable-next-line no-use-before-define
-      await reclaimCollectedStorage(collectedFormulas);
-
-      // Cancel controllers and disconnect workers.
-      const cancelReason = new Error(
-        'became unreachable by any pet name path and was collected',
-      );
-      await Promise.allSettled(
-        controllersToCancel.map(async ({ controller }) => {
-          await null;
-          await controller.context.cancel(cancelReason, '!');
-        }),
-      );
-
-      // eslint-disable-next-line no-use-before-define
-      residenceTracker.disconnectRetainersHolding(
-        collectedIds,
-        collectedFormulaTypes,
-      );
+        }
+      }
     });
   };
 
@@ -1112,6 +1159,8 @@ const makeDaemonCore = async (
    * @returns {Promise<void>}
    */
   const reclaimCollectedStorage = async collectedFormulasByid => {
+    /** @type {unknown[]} */
+    const failures = [];
     /** @type {Set<string>} */
     const candidateHashes = new Set();
     for (const formula of collectedFormulasByid.values()) {
@@ -1135,9 +1184,12 @@ const makeDaemonCore = async (
       for (const hash of survivingHashes) {
         candidateHashes.delete(hash);
       }
-      await Promise.allSettled(
+      const removals = await Promise.allSettled(
         [...candidateHashes].map(hash => contentStore.remove(hash)),
       );
+      for (const result of removals) {
+        if (result.status === 'rejected') failures.push(result.reason);
+      }
     }
 
     // Scratch-mount backing dirs are 1:1 with their formula; no
@@ -1148,7 +1200,7 @@ const makeDaemonCore = async (
         scratchMountNumbers.push(parseId(id).number);
       }
     }
-    await Promise.allSettled(
+    const removals = await Promise.allSettled(
       scratchMountNumbers.map(formulaNumber => {
         const mountPath = filePowers.joinPath(
           persistencePowers.statePath,
@@ -1158,6 +1210,12 @@ const makeDaemonCore = async (
         return filePowers.removeDirectory(mountPath);
       }),
     );
+    for (const result of removals) {
+      if (result.status === 'rejected') failures.push(result.reason);
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Collected storage cleanup failed');
+    }
   };
 
   const formulaGraph = makeFormulaGraph({
@@ -1264,18 +1322,41 @@ const makeDaemonCore = async (
     // No synchronous preamble.
     await null;
 
-    let formula = formulaForId.get(id);
+    if (collections.has(id)) {
+      throw makeError(X`Formula collection pending or failed for ${q(id)}`);
+    }
+
+    const formula = formulaForId.get(id);
     if (formula !== undefined) {
       return formula;
     }
 
     const { number: fNum } = parseId(id);
-    ({ formula } = await persistencePowers.readFormula(fNum));
-    await withFormulaGraphLock(async () => {
-      formulaForId.set(id, formula);
-      formulaGraph.onFormulaAdded(id, formula);
-    });
-    return formula;
+    const read = { collected: false };
+    let reads = formulaReads.get(id);
+    if (reads === undefined) {
+      reads = new Set();
+      formulaReads.set(id, reads);
+    }
+    reads.add(read);
+    try {
+      const { formula: loadedFormula } =
+        await persistencePowers.readFormula(fNum);
+      await withFormulaGraphLock(async () => {
+        // A read started before collection can finish after durable deletion
+        // and after the collection fence clears. Never reinsert its stale
+        // bytes into the graph. No cleanup waits on these readers.
+        if (read.collected || collections.has(id)) {
+          throw makeError(X`Formula was collected during read for ${q(id)}`);
+        }
+        formulaForId.set(id, loadedFormula);
+        formulaGraph.onFormulaAdded(id, loadedFormula);
+      });
+      return loadedFormula;
+    } finally {
+      reads.delete(read);
+      if (reads.size === 0) formulaReads.delete(id);
+    }
   };
 
   /** @param {FormulaIdentifier} inputId */
@@ -4477,9 +4558,19 @@ const makeDaemonCore = async (
     });
   };
 
+  /** @type {Map<FormulaIdentifier, { state: 'pending' | 'failed' }>} */
+  const disposals = new Map();
+
   /** @type {DaemonCore['provideController']} */
   const provideController = inputId => {
     const id = inputId;
+    const disposal = disposals.get(id) || collections.get(id);
+    if (disposal) {
+      // Do not await disposal here: mutually dependent cleanup hooks may
+      // look up each other's formulas. Rejection permits those hooks to fail
+      // rather than deadlock, and never starts a competing incarnation.
+      throw makeError(X`Formula disposal ${q(disposal.state)} for ${q(id)}`);
+    }
     const existingController = controllerForId.get(id);
     if (existingController !== undefined) {
       return existingController;
@@ -6895,11 +6986,37 @@ const makeDaemonCore = async (
     return makeExo('Invitation', InvitationInterface, { accept, locate });
   };
 
-  const makeContext = makeContextMaker({
+  const makeUnfencedContext = makeContextMaker({
     controllerForId,
     provideController,
     getFormulaType: id => formulaForId.get(id)?.type,
   });
+  /** @param {FormulaIdentifier} id */
+  const makeContext = id => {
+    const context = makeUnfencedContext(id);
+    let cancellationStarted = false;
+    /** @type {Context['cancel']} */
+    const cancelContext = (reason, prefix) => {
+      // Never let a subsequent failed attempt replace the original barrier.
+      if (!cancellationStarted && !disposals.has(id)) {
+        cancellationStarted = true;
+        const record = {
+          state: /** @type {'pending' | 'failed'} */ ('pending'),
+        };
+        disposals.set(id, record);
+        void context.disposed.then(
+          () => {
+            if (disposals.get(id) === record) disposals.delete(id);
+          },
+          () => {
+            record.state = 'failed';
+          },
+        );
+      }
+      return context.cancel(reason, prefix);
+    };
+    return { ...context, cancel: cancelContext };
+  };
 
   const { makeIdentifiedDirectory, makeDirectoryNode } = makeDirectoryMaker({
     provide,

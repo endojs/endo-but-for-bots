@@ -67,7 +67,7 @@ No claim of complete retrospective coverage is made yet.
 |---|---|---|
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
 | Pool member identity | `275710d5a` pins identity only in memory; chooser state is persisted. Same-ID rebinding after restart can inherit another account's state. | Persist and validate identity with chooser state; test restart, removed IDs, and failed writes. |
-| Formula disposal and replacement | Remote disposal hooks were invoked as local functions; explicit-cancellation bridge/fencing tests now pass in the working tree. GC drops controllers before asynchronous cleanup begins, exposing a separate revival window under review. | Fence every withdrawal path before controller removal; verify cross-worker retained facets, failed cleanup, mutual dependencies, and GC interleavings before relying on this for one writer. |
+| Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
 | Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
 | Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
@@ -96,6 +96,24 @@ The factory currently ignores its context; it needs an explicit disposal hook,
 admission fence, and drain of creation, registry/submission writes, and journal
 queues before replacement can safely start.
 An incarnation-local registry does not establish cross-worker exclusion.
+The daemon barrier now rejects reconstruction while exact-formula disposal is
+pending or failed, including dependency cancellation.
+It rejects rather than waits, so mutually dependent cleanup lookups cannot
+deadlock on each other's reconstruction.
+Collection sets its fence before controller withdrawal and invalidates in-flight
+formula reads; stale disk bytes cannot re-enter the cache after deletion.
+Controller disposal precedes storage deletion, and worker disconnection is
+attempted even if reclamation fails.
+Failed disposal preserves storage; failed deletion/reclamation retains a fence.
+Successful collection removes its fence and in-flight read tracking is bounded
+by outstanding reads, not an ever-growing successful-collection tombstone set.
+Four actual cross-worker disposal tests and four manager/persistence GC fault
+tests pass, alongside context, construction, and marshal tests (32 total).
+Failure boundaries identified during review included remote-hook invocation, revival
+during deletion, a late inspector read, and skipped cleanup after reclamation
+failure. The final tests cover these boundaries.
+The fences last only for the current daemon incarnation; native resources still
+require independent reconciliation after process loss.
 Mount-inspection fix: the default recorded-cleanup socket check now treats only
 ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
 Ten focused tests pass, including vanished-entry success and both inspection
@@ -1084,6 +1102,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Daemon durability: disposal/collection fences and stale-read invalidation | 32 tests and independent review pass; disposal precedes reclamation; module-specific drains and Tokyo deployment pending |
 | 2026-09-21 | Native-state durability: subprocess SIGKILL recovery at four creation boundaries | Four tests pass; exact child handles and temporary roots only; power-loss and Tokyo lifecycle verification remain pending |
 | 2026-09-21 | Remove obsolete Claude construction prompt dispatch; record disposal and account-admission prerequisites | 51 client/controller tests, independent source review and lint pass; explicit restoration unchanged; not deployed |
 | 2026-09-21 | Retrospective durability: uniquely allocated native state and durable ownership/retirement records | 27 focused tests and independent review pass; breaking storage layout approved; old-release retirement and Tokyo verification pending |
