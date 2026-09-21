@@ -431,6 +431,67 @@ Read-only Tokyo inspection found a valid version-1 snapshot at sequence 1085,
 four retained snapshots, one session, and neither legacy registry root.
 No live state was modified; deployment and post-deploy verification remain pending.
 
+### Private journal removal: creation and revival boundary
+
+Implementation is pending; the current code still imports guest journals.
+The replacement must distinguish a newly authorized session from revival of an
+existing registry entry, rather than inferring freshness from missing guest names.
+Guest handle and controlling-agent bindings can be published separately, so even
+checking only the controlling-agent name misclassifies interrupted provisioning.
+
+Use separate strict creation and read-only opening operations for the private
+storage schema, with a host-owned marker containing `{ version: 1, sessionId }`.
+Validate its exact shape and identity, and reject old migration markers even if
+a new marker is also present.
+Creation requires an unused registry ID, both guest aliases absent, and an empty
+length-delimited private namespace; an existing marker is not a creation retry.
+Reserve the candidate ID synchronously within the factory before asynchronous
+admission checks, or serialize fresh identity admission: name checks followed by
+`storeValue` are not an atomic claim, even with randomly generated IDs.
+After request validation, `provisionSession` publishes the schema before publishing
+the creating registry entry or provisioning the guest.
+`getAgent` only opens an existing valid schema, before guest provisioning or backend
+execution; missing schema on revival is an explicit reset-required error.
+It must never read guest journal values to establish trusted history.
+
+A lost schema-write acknowledgement fails that creation attempt.
+It may leave an orphan marker, but must not create a guest, run a backend, overwrite
+the marker, or automatically remove uncertain state.
+A later new-session request uses a fresh ID.
+A crash after registry publication can reopen the valid schema under the existing
+interrupted-creation cleanup/recovery, without importing history or manufacturing
+a second schema; this does not promise retention of a partially provisioned guest.
+Initial registry publication also needs a dispatch fence: `saveRegistry` currently
+exposes its in-memory entry before acknowledgement, and admission allows `creating`.
+Concurrent callers must not provision or dispatch through that entry while its
+initial save is pending or has failed; schema existence alone is not proof of
+durable registry publication.
+This includes observe-only paths that can call `getAgent`, inbox dispatch, and
+network changes that trigger provisioning; retain the fence after an uncertain
+save for that incarnation.
+Revival requires a loaded durable registry snapshot as well as a valid schema.
+This retains the existing single-factory-writer requirement; it does not provide
+cross-process compare-and-swap or authorize concurrent independent factories.
+
+Delete migration manifests, copy/acknowledgement/resolution logic, synthetic
+`legacy-import` records, and migration-specific factory/journal plumbing together.
+Keep the narrow host-only storage facet, immutable values, serialized operations,
+uncertain-write poisoning, snapshot-covered removal behavior, and ordinary
+unresolved-effect recovery.
+Keep standalone cooperative agents' explicit storage behavior separate from
+factory-owned private storage.
+
+Required tests cover strict creation, missing/malformed/wrong-session schema,
+old markers, orphan values, handle-only interrupted provisioning, marker-write
+acknowledgement loss, registry-publication failure, revival after guest failure,
+concurrent ID collisions and access during initial publication, and guest journal
+tampering that cannot alter authoritative history.
+Retain event-gap, archive, snapshot, immutable-write, poisoning, and normal
+uncertain-effect resolution coverage.
+Before deploying this incompatible schema, retire remaining old sessions using
+the old release and preserve their workspace roots and all credential authority;
+the earlier cutover does not cover sessions created since then.
+
 ## FA-12 — Retire compatibility-only entrypoints
 
 Claude/OpenCode `src/managed-credentials-module.js` wrappers previously preserved
@@ -720,6 +781,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | FA-12: remove obsolete credential-entrypoint shims | Fresh inspected Tokyo graph uses shared entrypoints only; 27 credential/setup tests pass; no Secret/formula mutations; deployment pending |
 | 2026-09-21 | FA-11: remove redundant usage-cache persistence | Conversation metadata and incomplete journal accounting retained; 39 focused tests pass; no legacy cache access/mutation; deployment pending |
 | 2026-09-21 | FA-11: remove legacy registry import and backup cleanup | Current snapshot crash recovery retained; legacy-only state rejected; 414 Floot tests pass; Tokyo already uses modern snapshots; deployment pending |
+| 2026-09-21 | FA-11: specify private-journal creation/revival boundary | Source analysis and adversarial design review identified ID-reservation and initial-publication races; implementation and fault-injection tests pending; no runtime changes |
 
 ## Request
 
