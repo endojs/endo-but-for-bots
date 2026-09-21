@@ -52,6 +52,7 @@ const withDeadline = (promise, ms, late) =>
   });
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from './provider-broker.js' */
+/** @import { makePoolMemberLifecycle } from './pool-member-lifecycle.js' */
 
 /**
  * Host-side credential assembly. The worker receives only the bounded inference
@@ -103,6 +104,7 @@ const withDeadline = (promise, ms, late) =>
  *   opens an endpoint of its own on it, and revokes it with the grant.
  * @property {any} [secret] SecretBlob read facet.
  * @property {any} [credential] The member's shared refreshing credential.
+ * @property {ReturnType<typeof makePoolMemberLifecycle>} [lifecycle]
  * @property {ProviderRequestAdapter} [adaptRequest]
  * @property {string} [accountRef]
  * @property {(reading: any) => void} [onReading] What this member's responses
@@ -232,6 +234,8 @@ export const makeProviderBrokerGrantIssuer = ({
     const memberTransports = [];
     const declared = [...(await memberPool.members())];
     const members = declared.flatMap(member => {
+      const { lifecycle } = member;
+      lifecycle?.check();
       if (
         member.subscription !== undefined &&
         (spec.hops ?? 0) + 2 > MAX_ENDPOINT_HOPS
@@ -259,24 +263,61 @@ export const makeProviderBrokerGrantIssuer = ({
         // past that the oldest is given back.
         /** @type {any[]} */
         const retired = [];
+        const held = new Set();
+        const rawOpenings = new Set();
         let gone = false;
         /** @param {any} endpoint */
         const giveBack = endpoint => {
+          held.add(endpoint);
           void E(endpoint)
             .revoke()
+            .then(() => held.delete(endpoint))
             .catch(() => {});
         };
         const provide = () => {
+          lifecycle?.check();
           !gone || Fail`Provider grant inactive`;
           if (opening === undefined) {
+            const open = () => {
+              const acquisition = E(member.subscription)
+                .openEndpoint(
+                  harden({
+                    sessionId: spec.sessionId,
+                    subscription: 'auto',
+                    hops: (spec.hops ?? 0) + 1,
+                  }),
+                )
+                .then(raw => {
+                  const endpoint =
+                    lifecycle === undefined
+                      ? raw
+                      : makeExo(
+                          'PoolMemberEndpoint',
+                          InferenceEndpointInterface,
+                          {
+                            request: message =>
+                              lifecycle.run(
+                                () => E(raw).request(message),
+                                true,
+                              ),
+                            requestByteStream: message =>
+                              lifecycle.run(
+                                () => E(raw).requestByteStream(message),
+                                true,
+                              ),
+                            attestation: () =>
+                              lifecycle.run(() => E(raw).attestation()),
+                            revoke: () => E(raw).revoke(),
+                          },
+                        );
+                  held.add(endpoint);
+                  return endpoint;
+                });
+              rawOpenings.add(acquisition);
+              return acquisition.finally(() => rawOpenings.delete(acquisition));
+            };
             const attempt = withDeadline(
-              E(member.subscription).openEndpoint(
-                harden({
-                  sessionId: spec.sessionId,
-                  subscription: 'auto',
-                  hops: (spec.hops ?? 0) + 1,
-                }),
-              ),
+              lifecycle === undefined ? open() : lifecycle.run(open, true),
               wrappedOpenDeadlineMs,
               giveBack,
             ).then(endpoint => {
@@ -306,7 +347,7 @@ export const makeProviderBrokerGrantIssuer = ({
           retired.push(endpoint);
           while (retired.length > 8) giveBack(retired.shift());
         };
-        memberTransports.push({
+        const dependent = {
           dispose: () => {
             gone = true;
             const last = opening;
@@ -315,18 +356,54 @@ export const makeProviderBrokerGrantIssuer = ({
             if (last !== undefined) void last.then(giveBack, () => {});
             for (const endpoint of retired.splice(0)) giveBack(endpoint);
           },
+        };
+        const cleanup = async () => {
+          dependent.dispose();
+          // The owner also drains admitted late openings before acknowledgement.
+          // A late result is returned by giveBack, retained here on failure.
+          await Promise.allSettled([...rawOpenings]);
+          for (const endpoint of held) {
+            // eslint-disable-next-line no-await-in-loop
+            await E(endpoint).revoke();
+            held.delete(endpoint);
+          }
+        };
+        const release = lifecycle?.retain(cleanup);
+        memberTransports.push({
+          dispose: () => {
+            dependent.dispose();
+            void cleanup().then(
+              () => {
+                release?.();
+              },
+              () => {},
+            );
+          },
         });
         return [harden({ id: member.id, wrapped: { provide, reset } })];
       }
       const memberTransport = makeProviderFetchTransport({
-        fetch,
+        fetch:
+          lifecycle === undefined
+            ? fetch
+            : (...args) => lifecycle.run(() => fetch(...args), true),
         timeoutMs,
         maxRequestBytes: configuredPolicy.maxRequestBytes,
         maxResponseBytes: configuredPolicy.maxResponseBytes,
         onDiagnostic,
         onReading: member.onReading,
       });
-      memberTransports.push(memberTransport);
+      const release = lifecycle?.retain(() => memberTransport.close());
+      const dispose = () => {
+        memberTransport.dispose();
+        void memberTransport.close().then(
+          () => {
+            release?.();
+          },
+          () => {},
+        );
+      };
+      memberTransports.push({ dispose });
       return [
         harden({
           id: member.id,

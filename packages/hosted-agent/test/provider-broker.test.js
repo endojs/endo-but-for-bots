@@ -11,6 +11,7 @@ import {
   makeProviderBrokerGrant,
 } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
+import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from '../src/provider-broker.js' */
 
@@ -1968,6 +1969,67 @@ test('an undo that cannot land leaves the mark and the original failure', async 
   });
   t.is(record.rotations.length, 1);
   t.like(record.stored().pendingRefresh, { startedAt: 0 });
+});
+
+test('retirement never acknowledges a renewal result CAS that writes then rejects', async t => {
+  let entered;
+  let release;
+  const started = new Promise(resolve => {
+    entered = resolve;
+  });
+  const paused = new Promise(resolve => {
+    release = resolve;
+  });
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      entered();
+      await paused;
+      return oauthState({
+        accessToken: 'fresh-access',
+        refreshToken: 'fresh-refresh',
+      });
+    },
+  });
+  const raw = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('LostAckRotate', {
+      replaceBase64: async (base64, options) => {
+        const result = await E(record.rotate).replaceBase64(base64, options);
+        if (record.rotations.length === 2)
+          throw Error('lost result write acknowledgement');
+        return result;
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  const owner = makePoolMemberLifecycle();
+  const current = owner.runCredential(() => raw.current());
+  const failedCurrent = t.throwsAsync(current, { message: /rotation failed/ });
+  await started;
+  let successors = 0;
+  const replacement = owner.close().then(() => {
+    successors += 1;
+  });
+  const failedReplacement = t.throwsAsync(replacement, {
+    message: /cleanup pending/,
+  });
+  release();
+  await failedCurrent;
+  await failedReplacement;
+  t.is(
+    record.stored().accessToken,
+    'fresh-access',
+    'internal rotation persistence was not fenced',
+  );
+  await t.throwsAsync(owner.close(), { message: /cleanup pending/ });
+  t.throws(() => owner.runCredential(() => raw.current()), {
+    message: /uncertain/,
+  });
+  t.is(successors, 0);
+  t.is(record.exchanges.length, 1);
 });
 
 test('a result that cannot be stored fences the record for every later owner', async t => {

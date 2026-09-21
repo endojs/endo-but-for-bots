@@ -95,6 +95,26 @@ export const makeProviderFetchTransport = ({
   let disposed = false;
   /** @type {Set<() => void>} */
   const pending = new Set();
+  /** @type {Set<Promise<any>>} */
+  const fetchingBodies = new Set();
+  /** @type {Set<Promise<void>>} Response acquisition through reader publication. */
+  const acquisitions = new Set();
+  /** @type {Set<Promise<void>>} Failures remain as uncertain cleanup proof. */
+  const bodyCancellations = new Set();
+  /** @param {() => Promise<void>} cancel */
+  const retainCancellation = cancel => {
+    let result;
+    try {
+      result = Promise.resolve(cancel());
+    } catch (error) {
+      result = Promise.reject(error);
+    }
+    bodyCancellations.add(result);
+    void result.then(
+      () => bodyCancellations.delete(result),
+      () => {},
+    );
+  };
   // Match the broker's bounded admission envelope, not M.string's implicit
   // 100,000-character default. The request's UTF-8 byte limit is still checked
   // before fetch; 8MiB is the private provider pipe's maximum frame size.
@@ -165,6 +185,8 @@ export const makeProviderFetchTransport = ({
         const controller = new AbortController();
         /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
         let reader;
+        /** @type {ReadableStream<Uint8Array> | null | undefined} */
+        let responseBody;
         let finished = false;
         let credentialRejected = false;
         let subscriptionExhausted = false;
@@ -195,10 +217,13 @@ export const makeProviderFetchTransport = ({
             // Diagnostics are best effort and silent by default.
           }
         };
+        let cancellationStarted = false;
         const cancelBody = () => {
-          if (reader) {
+          const active = reader ?? responseBody;
+          if (active && !cancellationStarted) {
+            cancellationStarted = true;
             // Cancellation is best effort and cannot extend the request deadline.
-            void reader.cancel().catch(() => {});
+            retainCancellation(() => active.cancel());
           }
         };
         /** @type {(error: Error) => void} */
@@ -242,6 +267,12 @@ export const makeProviderFetchTransport = ({
           reportFailure();
           stop();
         }, timeoutMs);
+        let releaseAcquisition = () => {};
+        /** @type {Promise<void>} */
+        const acquisition = new Promise(resolve => {
+          releaseAcquisition = () => resolve(undefined);
+        });
+        acquisitions.add(acquisition);
         try {
           const url = new URL(request.url);
           detail = 'request shape';
@@ -301,13 +332,25 @@ export const makeProviderFetchTransport = ({
               referrerPolicy: 'no-referrer',
             }),
           ).then(response => {
+            responseBody = response.body;
             if (finished || controller.signal.aborted) {
-              void response.body?.cancel().catch(() => {});
+              cancelBody();
               Fail`Provider transport stopped`;
             }
             return response;
           });
+          fetchingBodies.add(fetching);
+          void fetching.then(
+            () => fetchingBodies.delete(fetching),
+            () => fetchingBodies.delete(fetching),
+          );
           const response = await Promise.race([fetching, stopped]);
+          // Disposal can interleave after fetch resolved but before this
+          // continuation owns its reader. Never publish that late response.
+          if (finished || controller.signal.aborted) {
+            cancelBody();
+            Fail`Provider transport stopped`;
+          }
           stage = 'response';
           if (
             Number.isInteger(response.status) &&
@@ -465,15 +508,33 @@ export const makeProviderFetchTransport = ({
           // request out.
           if (stage === 'timeout') return Fail`Provider response lost`;
           return Fail`Provider transport failed`;
+        } finally {
+          acquisitions.delete(acquisition);
+          releaseAcquisition();
         }
       },
     },
   );
+  const dispose = () => {
+    disposed = true;
+    for (const stop of pending) stop();
+  };
   return harden({
     transport,
-    dispose: () => {
-      disposed = true;
-      for (const stop of pending) stop();
+    dispose,
+    // Unlike the synchronous fence, an owner's acknowledgement waits for
+    // late fetch bodies and cancellation. A rejected cancellation is sticky:
+    // it is not proof that the upstream resource has stopped.
+    close: async () => {
+      dispose();
+      await Promise.all([...acquisitions]);
+      await Promise.allSettled([...fetchingBodies]);
+      const results = await Promise.allSettled([...bodyCancellations]);
+      const failures = results.flatMap(result =>
+        result.status === 'rejected' ? [result.reason] : [],
+      );
+      if (failures.length)
+        throw AggregateError(failures, 'Provider transport cleanup uncertain');
     },
   });
 };

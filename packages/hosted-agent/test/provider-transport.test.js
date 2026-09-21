@@ -418,6 +418,100 @@ test('dispose aborts a pending body read and refuses subsequent dispatch', async
   t.is(lease.timers.size, 0);
 });
 
+test('owner close waits for late response body cancellation and retains uncertainty', async t => {
+  let returnFetch;
+  let releaseCancel;
+  let entered;
+  const began = new Promise(resolve => {
+    entered = resolve;
+  });
+  const fetching = new Promise(resolve => {
+    returnFetch = resolve;
+  });
+  const cancelling = new Promise(resolve => {
+    releaseCancel = resolve;
+  });
+  const lease = setup(async () => {
+    entered();
+    return fetching;
+  });
+  const response = E(lease.transport).request(request);
+  const failedRequest = t.throwsAsync(response);
+  await began;
+  let closed = false;
+  const closing = lease.close().then(() => {
+    closed = true;
+  });
+  returnFetch(new Response(new ReadableStream({ cancel: () => cancelling })));
+  await failedRequest;
+  await null;
+  t.false(closed);
+  releaseCancel();
+  await closing;
+  t.true(closed);
+  const uncertain = setup(
+    async () =>
+      new Response(
+        new ReadableStream({
+          cancel: async () => {
+            throw Error('lost cancel ack');
+          },
+        }),
+      ),
+  );
+  await E(uncertain.transport).requestStream(request);
+  await t.throwsAsync(uncertain.close(), { message: /cleanup uncertain/ });
+  await t.throwsAsync(uncertain.close(), { message: /cleanup uncertain/ });
+});
+
+for (let delay = 0; delay <= 8; delay += 1) {
+  test(`close drains the fetch-to-reader handoff at microtask ${delay}`, async t => {
+    let cancellations = 0;
+    let release;
+    const paused = new Promise(resolve => {
+      release = resolve;
+    });
+    const response = new Response(
+      new ReadableStream({
+        cancel: () => {
+          cancellations += 1;
+          return paused;
+        },
+      }),
+    );
+    let closing;
+    let acknowledged = false;
+    const lease = setup(() => {
+      closing = (async () => {
+        for (let index = 0; index < delay; index += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await null;
+        }
+        await lease.close();
+        acknowledged = true;
+      })();
+      return Promise.resolve(response);
+    });
+    const pending = E(lease.transport).requestStream(request);
+    const settled = pending.then(
+      () => 'stream',
+      () => 'refused',
+    );
+    // Advance beyond the tested handoff without wall-clock assumptions.
+    for (let index = 0; index < 30; index += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await null;
+    }
+    t.is(cancellations, 1);
+    t.false(acknowledged, 'body cleanup must finish before acknowledgement');
+    release();
+    await closing;
+    await settled;
+    t.false(response.body.locked);
+    t.true(acknowledged);
+  });
+}
+
 test('request bounds, header smuggling and redirects are rejected', async t => {
   const lease = setup(async () => {
     t.fail('must not fetch');

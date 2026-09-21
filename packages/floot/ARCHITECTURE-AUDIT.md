@@ -68,7 +68,7 @@ No claim of complete retrospective coverage is made yet.
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
 | Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
-| Credential ownership and Secret rebinding | Owned pool bindings now retain actual capabilities and reject mutable-name rebinding. Surviving grants/facets and independent credential owners still need lifecycle enforcement. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
+| Credential ownership and Secret rebinding | Owned pool bindings retain actual capabilities and reject mutable-name rebinding. Member retirement now fences and drains retained facets, renewals, transports, wrapped readers/endpoints, and observation writes; 179 focused and two real-daemon tests pass. | Cross-worker renewal exclusion, retirement epochs, and process-loss transaction recovery remain open. Module-local drain does not establish these. |
 | Native teardown after reconstruction | Corrected locally: absent/failed scope lookup now refuses stop acknowledgement, and mount reclamation waits for sandbox close. Six injected-reconstruction tests pass independently. Runtime lookup still reads only an in-memory map. | Durable exact-owner reconciliation and actual process-loss tests required before deployment; a missing scope cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
@@ -118,7 +118,35 @@ remains open; no claim that every remote reader is reclaimed is made.
 It does not grant the closed factory a new reader or revive its canonical writer.
 Closed private-journal facades remain retained until factory disposal; terminal
 journal namespace retirement and earlier facade reclamation remain open.
+The separately minted account oracle still ignores formula disposal and can
+retain its own upstream observer and journal writer after Floot closes its
+reader. Source review found `ensureWatching` continues `applyObserved` journal
+writes without an oracle-module disposal hook. A separate lifecycle fix and
+real-daemon regression are in progress; the factory fix does not close this gap.
 An incarnation-local registry does not establish cross-worker exclusion.
+Pooled member retirement now has a module-local admission/drain owner.
+Removal fences retained account/model/reset/credential access, closes only that
+member's inference transports and wrapped endpoints/status reader, drains
+admitted renewals and reset outcomes, and retains failed cleanup owners.
+Renewal CAS persistence already in progress remains unfenced; raw credential
+failures conservatively prevent clean retirement, even for transient reads.
+Provider transport close drains fetch-to-reader acquisition and body
+cancellation. Independent review reproduced a response acquired after close
+acknowledgement; nine deterministic microtask regressions cover the corrected
+handoff. Independent status-reader close separates resource release from
+historical stream errors.
+Chooser observations use capability-bound v2 snapshots, never adopt v1 or
+pre-identity history, and are fenced/drained on shutdown.
+The final slice passes 179 focused tests and two real-daemon lifecycle tests;
+independent adversarial review approved the corrected transport handoff.
+These are not cross-worker exclusion or process-loss cleanup guarantees.
+Durable `pendingRefresh` and identity journals remain authoritative on revival.
+Failed credential/current calls, body cancellation acknowledgements, or remote
+release can require operator recovery. Removed IDs/authorities remain tombstoned;
+safe re-add and retirement epochs are not implemented.
+Failed observation writes may lose cache hints but cannot grant authority.
+An unpublished partial pool core can retain never-used transports until member
+retirement; this remains a cleanup follow-up.
 The daemon barrier now rejects reconstruction while exact-formula disposal is
 pending or failed, including dependency cancellation.
 It rejects rather than waits, so mutually dependent cleanup lookups cannot

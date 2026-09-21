@@ -21,10 +21,13 @@ import { Fail, b, q } from '@endo/errors';
 
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
 import { E } from '@endo/eventual-send';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeAccountJournal } from './account-oracle.js';
 import { makePoolIdentityJournal } from './pool-identity-journal.js';
+import { makePoolMemberLifecycle } from './pool-member-lifecycle.js';
 
 import { makeAccountReadingSource } from './account-source.js';
 import { makeBrokerSubscription } from './broker-subscription.js';
@@ -410,6 +413,7 @@ const makePooledBrokerServiceKit = ({
    * @property {any} adaptRequest
    * @property {ReturnType<typeof makeAccountReadingSource>} account
    * @property {any} redeemer
+   * @property {ReturnType<typeof makePoolMemberLifecycle>} lifecycle
    * @property {(() => Promise<any>) | undefined} modelRead
    * @property {(() => any) | undefined} subscription For a wrapped member.
    */
@@ -427,6 +431,7 @@ const makePooledBrokerServiceKit = ({
   let chooser;
   /** @type {Promise<void>} */
   let writing = Promise.resolve();
+  let stopped = false;
 
   /**
    * A member that is somebody else's subscription: no secret, credential or
@@ -437,6 +442,7 @@ const makePooledBrokerServiceKit = ({
    * @param {{ id: string, subscriptionName: string }} member
    */
   const wrappedKitOf = member => {
+    const lifecycle = makePoolMemberLifecycle();
     subscriptionOf !== undefined ||
       Fail`${b(label)} cannot hold another party's subscription`;
     const subscription = () =>
@@ -444,13 +450,16 @@ const makePooledBrokerServiceKit = ({
         member,
       );
     const account = makeAccountReadingSource({
-      activeRead: async () =>
-        readingFromShareStatus(await E(subscription()).getStatus()),
+      activeRead: () =>
+        lifecycle.run(async () =>
+          readingFromShareStatus(await E(subscription()).getStatus()),
+        ),
       reportError: reportAccountError,
       onChange: () => asSubscription.changed(),
     });
     let live = true;
-    let stopFollowing = () => {};
+    let stopFollowing = async () => {};
+    let wakeFollowing = () => {};
     const follow = async () => {
       await null;
       for (let pause = 5000; live; pause = Math.min(pause * 2, 60_000)) {
@@ -458,10 +467,16 @@ const makePooledBrokerServiceKit = ({
         let events;
         try {
           // eslint-disable-next-line no-await-in-loop
-          const reader = await E(subscription()).watchStatus();
+          const reader = await lifecycle.run(
+            () => E(subscription()).watchStatus(),
+            true,
+          );
           events = iterateReader(reader);
-          stopFollowing = () => {
-            void Promise.resolve(events?.return?.(undefined)).catch(() => {});
+          stopFollowing = async () => {
+            // Stream history may already contain an unrelated read failure.
+            // Independent close retries actual resource release instead of
+            // re-observing iterateReader.return()'s cached terminal error.
+            await E(reader).close();
           };
           // Closed while the reader was being had: `close` found nothing to
           // stop, and a quiet share would keep this one parked.
@@ -478,20 +493,37 @@ const makePooledBrokerServiceKit = ({
           // Its daemon is away, or it was revoked. Looked for again.
         } finally {
           // Ended, or no longer wanted: the far side is told either way.
-          stopFollowing();
-          stopFollowing = () => {};
+          // eslint-disable-next-line no-await-in-loop
+          await stopFollowing();
+          stopFollowing = async () => {};
         }
         if (!live) return;
         // A pause that does not keep the worker alive on its own.
         // eslint-disable-next-line no-await-in-loop
         await new Promise(resolve => {
           const timer = globalThis.setTimeout(resolve, pause);
+          wakeFollowing = () => {
+            globalThis.clearTimeout(timer);
+            resolve(undefined);
+          };
           /** @type {any} */ (timer).unref?.();
         });
       }
     };
-    void follow();
+    const following = follow();
+    void following.catch(() => {});
+    const closeAccount = async () => {
+      live = false;
+      wakeFollowing();
+      await stopFollowing();
+      await following.catch(() => {});
+      // Retry any failed reader disposal retained by the follower.
+      await stopFollowing();
+      await account.close();
+    };
+    lifecycle.retain(closeAccount);
     return {
+      lifecycle,
       secret: undefined,
       credential: undefined,
       adaptRequest: undefined,
@@ -500,48 +532,68 @@ const makePooledBrokerServiceKit = ({
       subscription,
       account: {
         ...account,
-        close: () => {
-          live = false;
-          // A reader parked on a quiet share would otherwise stay open there.
-          stopFollowing();
-          account.close();
-        },
+        close: closeAccount,
       },
     };
   };
 
   /** @param {any} member */
   const kitOf = member => {
+    !stopped || Fail`Provider pool is closed`;
     let kit = kits.get(member.id);
     if (kit === undefined && member.subscriptionName !== undefined) {
       kit = wrappedKitOf(member);
       kits.set(member.id, kit);
     }
     if (kit === undefined) {
-      const secret = secretOf(member);
+      const lifecycle = makePoolMemberLifecycle();
+      const authority = secretOf(member);
+      // Never fence the internal CAS writes of a rotation already sent.
+      const rawCredential = credentialOf?.(member, authority);
       const credential =
-        credentialOf === undefined ? undefined : credentialOf(member, secret);
+        rawCredential === undefined
+          ? undefined
+          : harden({
+              accountRef: rawCredential.accountRef,
+              current: (...args) =>
+                lifecycle.runCredential(() => rawCredential.current(...args)),
+            });
+      const secret = makeExo(
+        'PoolMemberSecretRead',
+        M.interface('PoolMemberSecretRead', {
+          readBase64: M.call().returns(M.promise()),
+        }),
+        { readBase64: () => lifecycle.run(() => E(authority).readBase64()) },
+      );
+      const activeRead = activeReadOf?.({ member, secret, credential });
       const account = makeAccountReadingSource({
-        ...(activeReadOf === undefined
+        ...(activeRead === undefined
           ? {}
-          : { activeRead: activeReadOf({ member, secret, credential }) }),
+          : { activeRead: () => lifecycle.run(activeRead) }),
         reportError: reportAccountError,
         onChange: () => asSubscription.changed(),
       });
+      lifecycle.retain(() => account.close());
+      const readModel =
+        modelReadOf === undefined
+          ? undefined
+          : lazyModelRead(() => modelReadOf({ member, secret, credential }));
+      const redeem = resetRedeemOf?.({ member, secret, credential });
       kit = {
+        lifecycle,
         secret,
         credential,
         adaptRequest:
           adaptRequestOf === undefined ? undefined : adaptRequestOf(member),
         account,
         modelRead:
-          modelReadOf === undefined
-            ? undefined
-            : lazyModelRead(() => modelReadOf({ member, secret, credential })),
+          readModel === undefined ? undefined : () => lifecycle.run(readModel),
         redeemer:
-          resetRedeemOf === undefined
+          redeem === undefined
             ? undefined
-            : makeResetRedeemer(resetRedeemOf({ member, secret, credential })),
+            : makeResetRedeemer(request =>
+                lifecycle.run(() => redeem(request), true),
+              ),
         subscription: undefined,
       };
       kits.set(member.id, kit);
@@ -565,9 +617,11 @@ const makePooledBrokerServiceKit = ({
    */
   const load = () => {
     const result = loading.then(async () => {
+      !stopped || Fail`Provider pool is closed`;
       const next = normalizeSubscriptionSet(await readSet(), {
         requireAccountRef,
       });
+      !stopped || Fail`Provider pool is closed`;
       const bindings = next.members.map(member => [
         member.id,
         JSON.stringify([
@@ -584,12 +638,16 @@ const makePooledBrokerServiceKit = ({
           Fail`Subscription member authority changed; use a new member ID`;
       }
       for (const [id, binding] of bindings) memberBindings.set(id, binding);
-      for (const [id, kit] of kits) {
-        if (!next.members.some(member => member.id === id)) {
-          kit.account.close();
+      const retiring = [...kits].filter(
+        ([id]) => !next.members.some(member => member.id === id),
+      );
+      for (const [, kit] of retiring) kit.lifecycle.fence();
+      await Promise.all(
+        retiring.map(async ([id, kit]) => {
+          await kit.lifecycle.close();
           kits.delete(id);
-        }
-      }
+        }),
+      );
       set = next;
       if (chooser === undefined) {
         const initial = await readState().catch(error => {
@@ -615,6 +673,7 @@ const makePooledBrokerServiceKit = ({
           now,
           ...(initial === undefined ? {} : { initial }),
           onChange: state => {
+            if (stopped) return;
             // One write at a time, in order; a failed write is reported and
             // the next change writes the whole state again.
             writing = writing
@@ -643,10 +702,15 @@ const makePooledBrokerServiceKit = ({
         return members.map(member => {
           const kit = kitOf(member);
           if (kit.subscription !== undefined) {
-            return harden({ id: member.id, subscription: kit.subscription() });
+            return harden({
+              id: member.id,
+              subscription: kit.subscription(),
+              lifecycle: kit.lifecycle,
+            });
           }
           return harden({
             id: member.id,
+            lifecycle: kit.lifecycle,
             secret: kit.secret,
             ...(kit.credential === undefined
               ? {}
@@ -776,9 +840,13 @@ const makePooledBrokerServiceKit = ({
       label,
       scopes,
       broker,
-      closeAccounts: () => {
-        for (const kit of kits.values()) kit.account.close();
+      closeAccounts: async () => {
+        stopped = true;
+        for (const kit of kits.values()) kit.lifecycle.fence();
         asSubscription.close();
+        await Promise.all([...kits.values()].map(kit => kit.lifecycle.close()));
+        await loading;
+        await writing;
       },
     }),
   });
@@ -985,9 +1053,9 @@ export const makeProviderBrokerServiceKit = options => {
       label,
       scopes,
       broker,
-      closeAccounts: () => {
-        account.close();
+      closeAccounts: async () => {
         asSubscription.close();
+        await account.close();
       },
     }),
   });
@@ -999,7 +1067,7 @@ harden(makeProviderBrokerServiceKit);
  * @param {string} owners.label
  * @param {{ close(): Promise<void> }} owners.scopes
  * @param {{ close(): Promise<void> }} owners.broker
- * @param {() => void} owners.closeAccounts
+ * @param {() => void | Promise<void>} owners.closeAccounts
  */
 const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
   let scopesReleased = false;
@@ -1020,9 +1088,13 @@ const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
         brokerReleased = true;
       }
     })();
-    closeAccounts();
+    const closingAccounts = closeAccounts();
     closing = (async () => {
-      const results = await Promise.allSettled([closingScopes, closingBroker]);
+      const results = await Promise.allSettled([
+        closingScopes,
+        closingBroker,
+        closingAccounts,
+      ]);
       const failures = results.flatMap(result =>
         result.status === 'rejected' ? [result.reason] : [],
       );
@@ -1131,7 +1203,7 @@ export const makeOwnedProviderBrokerService = ({
       const namespace = /** @type {any} */ (secret);
       const state = makeAccountJournal({
         powers: namespace,
-        prefix: 'pool-state-v1-',
+        prefix: 'pool-state-v2-',
       });
       const identities = makePoolIdentityJournal({
         namespace,
@@ -1230,8 +1302,44 @@ export const makeOwnedProviderBrokerService = ({
                     accountRef: member.accountRef ?? accountRef,
                   }),
               }),
-          readState: () => state.read(),
-          writeState: kept => state.write(kept),
+          readState: async () => {
+            // Legacy observations never identify a credential. Nor may v2
+            // observations survive a missing authoritative identity journal.
+            if (!identities.wasEstablished()) return undefined;
+            const saved = await state.read();
+            if (saved?.version !== 2 || !Array.isArray(saved.bindings))
+              return undefined;
+            const matching = new Set(
+              saved.bindings
+                .filter(
+                  binding => authorities.get(binding.id) === binding.authority,
+                )
+                .map(binding => binding.id),
+            );
+            return {
+              refusals: Object.fromEntries(
+                Object.entries(saved.state?.refusals ?? {}).filter(([id]) =>
+                  matching.has(id),
+                ),
+              ),
+              sessions: Object.fromEntries(
+                Object.entries(saved.state?.sessions ?? {}).filter(
+                  ([, entry]) => matching.has(entry.memberId),
+                ),
+              ),
+            };
+          },
+          writeState: kept =>
+            state.write(
+              harden({
+                version: 2,
+                bindings: [...authorities].map(([id, authority]) => ({
+                  id,
+                  authority,
+                })),
+                state: kept,
+              }),
+            ),
         },
         env,
         ...hooks,

@@ -4,6 +4,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
+import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const spec = harden({
@@ -19,6 +20,138 @@ const policy = harden({
   maxConcurrentRequests: 4,
   maxRequestBytes: 1024n,
   maxResponseBytes: 1024n,
+});
+
+test('retiring one pool member leaves an existing auto endpoint usable by its sibling', async t => {
+  const work = makePoolMemberLifecycle();
+  const home = makePoolMemberLifecycle();
+  let selected = ['work', 'home'];
+  const sent = [];
+  const issuer = makeProviderBrokerGrantIssuer({
+    runtime: {},
+    secret: undefined,
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    fetch: async (_url, init) => {
+      sent.push(init.headers.authorization);
+      return new Response('ok');
+    },
+    pool: {
+      members: () =>
+        [
+          { id: 'work', lifecycle: work },
+          { id: 'home', lifecycle: home },
+        ].map(member => ({
+          ...member,
+          secret: Far('MemberSecret', {
+            readBase64: async () => btoa(`${member.id}-key`),
+          }),
+        })),
+      forSession: () => ({
+        select: () => selected,
+        served: () => {},
+        exhausted: () => {},
+      }),
+    },
+  });
+  t.teardown(() => issuer.dispose());
+  const endpoint = await issuer.openEndpoint({
+    sessionId: 'retirement',
+    subscription: 'auto',
+  });
+  const request = harden({
+    method: 'POST',
+    path: '/v1/responses',
+    body: '{"model":"allowed"}',
+  });
+  await E(endpoint).request(request);
+  await work.close();
+  // Even a candidate order captured before retirement cannot reach fetch.
+  await t.throwsAsync(E(endpoint).request(request));
+  selected = ['home'];
+  t.is((await E(endpoint).request(request)).body, 'ok');
+  t.deepEqual(sent, ['Bearer work-key', 'Bearer home-key']);
+});
+
+test('member retirement waits for a late wrapped endpoint and retains failed revocation', async t => {
+  const owner = makePoolMemberLifecycle();
+  let finish;
+  let entered;
+  const started = new Promise(resolve => {
+    entered = resolve;
+  });
+  const opening = new Promise(resolve => {
+    finish = resolve;
+  });
+  let failures = true;
+  let revoked = 0;
+  let requests = 0;
+  const far = Far('LateEndpoint', {
+    request: async () => {
+      requests += 1;
+      return { status: 200, body: 'ok' };
+    },
+    revoke: async () => {
+      revoked += 1;
+      if (failures) throw Error('retry cleanup');
+    },
+  });
+  const issuer = makeProviderBrokerGrantIssuer({
+    runtime: {},
+    secret: undefined,
+    fetch: async () => new Response('unused'),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    pool: {
+      members: () => [
+        {
+          id: 'shared',
+          lifecycle: owner,
+          subscription: Far('Share', {
+            openEndpoint: () => {
+              entered();
+              return opening;
+            },
+          }),
+        },
+      ],
+      forSession: () => ({
+        select: () => ['shared'],
+        served: () => {},
+        exhausted: () => {},
+      }),
+    },
+  });
+  t.teardown(() => issuer.dispose());
+  const endpoint = await issuer.openEndpoint({
+    sessionId: 'wrapped-retirement',
+    subscription: 'auto',
+  });
+  const request = E(endpoint).request(
+    harden({
+      method: 'POST',
+      path: '/v1/responses',
+      body: '{"model":"allowed"}',
+    }),
+  );
+  const failedRequest = t.throwsAsync(request);
+  await started;
+  let closed = false;
+  const closing = owner.close().then(() => {
+    closed = true;
+  });
+  const failedClose = t.throwsAsync(closing, { message: /cleanup pending/ });
+  await null;
+  t.false(closed);
+  finish(far);
+  await failedRequest;
+  await failedClose;
+  failures = false;
+  await owner.close();
+  t.true(revoked >= 2);
+  t.is(requests, 0);
 });
 
 const networkEvidence = harden({

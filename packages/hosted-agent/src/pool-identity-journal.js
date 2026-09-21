@@ -36,6 +36,8 @@ export const makePoolIdentityJournal = ({
   /** @type {Promise<unknown>} */
   let chain = Promise.resolve();
   let failed = false;
+  /** Whether this incarnation started with an authoritative snapshot. */
+  let established;
 
   /** @param {any} value */
   const validate = value => {
@@ -85,6 +87,7 @@ export const makePoolIdentityJournal = ({
         names.every(name => NAME.test(name)) ||
           Fail`Malformed pool identity journal entry`;
         const last = names.at(-1);
+        established ??= last !== undefined;
         const previous =
           last === undefined
             ? { version: 1, providerId, origin, bindings: [] }
@@ -177,6 +180,6 @@ export const makePoolIdentityJournal = ({
     chain = result.catch(() => {});
     return result;
   };
-  return harden({ bind });
+  return harden({ bind, wasEstablished: () => established === true });
 };
 harden(makePoolIdentityJournal);

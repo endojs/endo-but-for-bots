@@ -4266,6 +4266,119 @@ testNeedsNodeWorker.serial(
 );
 
 testNeedsNodeWorker.serial(
+  'pooled retirement drains renewal before real formula replacement',
+  async t => {
+    t.timeout(30_000);
+    const base = await fsp.mkdtemp('/tmp/endo-pool-drain-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    const { host } = await makeHost(config, cancelled);
+    const control = await E(host).makeUnconfined(
+      '@node',
+      new URL(
+        '../../hosted-agent/test/_catalog-lifecycle-control.js',
+        import.meta.url,
+      ).href,
+      { powersName: '@none', resultName: 'pool-control' },
+    );
+    await E(host).evaluate(
+      '@node',
+      "makeExo('Spare', M.interface('Spare', { renew: M.call().returns(M.promise()) }), { renew: async () => undefined })",
+      [],
+      [],
+      'pool-spare',
+    );
+    await E(host).storeValue(
+      harden({
+        members: [
+          { id: 'work', secretName: 'pool-control', accountRef: 'work' },
+        ],
+      }),
+      'subscriptions',
+    );
+    const owner = await E(host).makeUnconfined(
+      '@node',
+      new URL(
+        '../../hosted-agent/test/_pool-retirement-owner.js',
+        import.meta.url,
+      ).href,
+      { powersName: '@agent', resultName: 'pool-owner' },
+    );
+    const identity = await E(host).identify('pool-owner');
+    await E(host).storeIdentifier(['@pins', 'pool-owner'], identity);
+    const keeper = await E(host).evaluate(
+      '@node',
+      "E(owner).accountSource('work').then(account => makeExo('PoolAccountKeeper', M.interface('PoolAccountKeeper', { refresh: M.call().returns(M.promise()), observe: M.call().returns(M.promise()) }), { refresh: () => E(account).refresh(), observe: () => E(account).observe() }))",
+      ['owner'],
+      ['pool-owner'],
+      'pool-account-keeper',
+    );
+    const reading = E(keeper).refresh();
+    const readResult = reading.catch(() => undefined);
+    await E(control).entered();
+    await E(host).storeValue(
+      harden({
+        members: [{ id: 'home', secretName: 'pool-spare', accountRef: 'home' }],
+      }),
+      'subscriptions',
+    );
+    const retirement = E(owner).subscriptions();
+    void retirement.catch(() => {});
+    await waitForCondition(async () => {
+      try {
+        await E(keeper).observe();
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    await E(host).cancel('pool-owner');
+    await waitForCondition(async () =>
+      (await E(control).events()).includes('close-start'),
+    );
+    let replaced = false;
+    const replacement = E(host)
+      .lookup(['@pins', 'pool-owner'])
+      .then(value => {
+        replaced = true;
+        return value;
+      });
+    void replacement.catch(() => {});
+    t.false(replaced);
+    t.false((await E(control).events()).includes('close-ack'));
+    await E(control).release();
+    const next = await replacement;
+    await readResult;
+    t.deepEqual(await E(control).events(), [
+      'construct',
+      'renew-start',
+      'close-start',
+      'renew-finish',
+      'close-ack',
+    ]);
+    await t.throwsAsync(E(keeper).refresh(), {
+      message: /closed|cancel|revok/i,
+    });
+    t.deepEqual(
+      (await E(next).subscriptions()).map(member => member.id),
+      ['home'],
+    );
+  },
+);
+
+testNeedsNodeWorker.serial(
   'catalog formula reconstruction drains admitted renewal before replacement',
   async t => {
     t.timeout(30_000);

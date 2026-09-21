@@ -1,6 +1,7 @@
 // @ts-check
 
 import { makeExo } from '@endo/exo';
+import { Fail } from '@endo/errors';
 import { M } from '@endo/patterns';
 
 import { makeLatestTopic } from './latest-topic.js';
@@ -56,6 +57,10 @@ export const makeAccountReadingSource = ({
   const topic = makeLatestTopic();
   /** @type {Promise<void> | undefined} */
   let refreshing;
+  let closed = false;
+  const checkLive = () => {
+    !closed || Fail`Provider account source is closed`;
+  };
 
   /**
    * Merge a reading over the last. Headers carry the windows and the credit
@@ -66,6 +71,7 @@ export const makeAccountReadingSource = ({
    * @param {any} reading
    */
   const accept = reading => {
+    if (closed) return;
     if (reading === null || typeof reading !== 'object') return;
     const observedAt = now();
     /** @type {{ plan?: any, rateLimits?: any }} */
@@ -117,6 +123,7 @@ export const makeAccountReadingSource = ({
   };
 
   const refresh = () => {
+    checkLive();
     if (activeRead === undefined) return Promise.resolve();
     refreshing ??= (async () => {
       try {
@@ -136,9 +143,11 @@ export const makeAccountReadingSource = ({
     ProviderAccountSourceInterface,
     {
       async observe() {
+        checkLive();
         return last;
       },
       watch() {
+        checkLive();
         return topic.watch();
       },
       async refresh() {
@@ -170,7 +179,11 @@ export const makeAccountReadingSource = ({
     source,
     /** The last reading, synchronously, for a pool that ranks on it. */
     peek: () => last,
-    close: () => topic.close(),
+    close: async () => {
+      closed = true;
+      topic.close();
+      await refreshing;
+    },
   });
 };
 harden(makeAccountReadingSource);
