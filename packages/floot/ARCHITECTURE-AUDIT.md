@@ -591,8 +591,19 @@ the old source epoch, whereas the new shared image carries Node `22.23.2`, the
 updated epoch, and locale/time-zone metadata.
 The correction retains exact environment admission and adds an image-contract
 regression plus fixed diagnostic categories without exposing raw probe output.
-Live confirmation on the corrected release is still required.
-No full acceptance pass, cold-store restoration, or image-holder cleanup is claimed.
+The corrected release `b8a785561` is active at generation 158 with host `f48d95d`.
+Codex now passes runtime verification and inference.
+All four configured backends (Claude, Codex, OpenCode, direct Fae) passed explicit
+daemon-restart recall with exactly two completed turns and four transcript records.
+Native shell write/read evidence succeeded on all three hosted backends; the
+separate Endo-tool check needs a driver correction because it requested a tool
+not present in the current catalog, and Codex's literal shell wrapper needs exact
+normalization rather than substring acceptance.
+The three diagnostic tool sessions were removed; restoration sessions remain.
+Detailed evidence and remaining gates are in endo-host's
+`ops/hosted-cutover-acceptance-20260921.md`.
+No full acceptance pass, forced cold-store restoration, cancellation/network-policy
+pass, or image-holder cleanup is claimed.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
