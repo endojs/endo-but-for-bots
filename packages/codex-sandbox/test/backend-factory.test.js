@@ -65,6 +65,7 @@ const validLeaseRequirements = () => ({
   networkNamespaceId: 'netns-session-1',
   providerOrigin,
   accountRef,
+  model: 'gpt-test',
 });
 
 const validLease = () =>
@@ -78,7 +79,10 @@ const validLease = () =>
     endpoint: 'http://127.0.0.1:4317/',
     accountRef,
     authMode: 'api-key',
-    modelAllowlist: harden(['gpt-test']),
+    // The exact pin the grant was issued for, admitted by the account's
+    // catalog; there is no operator allowlist to attest.
+    model: 'gpt-test',
+    modelAdmission: 'account-catalog',
   });
 
 const makeToolSet = () =>
@@ -241,11 +245,40 @@ test('Codex model schema is translated at the backend boundary', t => {
 
 test('broker lease is bound to session, namespace, and model', t => {
   t.deepEqual(
-    assertProviderGrantV1(validLease(), {
-      ...validLeaseRequirements(),
-      model: 'gpt-test',
-    }),
+    assertProviderGrantV1(validLease(), validLeaseRequirements()),
     validLease(),
+  );
+  // The pin is exact: another model, a session that pins none, a missing
+  // admission marker or an old-style allowlist is not this session's grant.
+  for (const replacement of [
+    { model: 'other-model' },
+    { model: null },
+    { modelAdmission: 'operator-list' },
+  ]) {
+    t.throws(
+      () =>
+        assertProviderGrantV1(
+          harden({ ...validLease(), ...replacement }),
+          validLeaseRequirements(),
+        ),
+      { message: /model binding is invalid/ },
+    );
+  }
+  t.throws(
+    () =>
+      assertProviderGrantV1(validLease(), {
+        ...validLeaseRequirements(),
+        model: undefined,
+      }),
+    { message: /model binding is invalid/ },
+  );
+  t.throws(
+    () =>
+      assertProviderGrantV1(
+        harden({ ...validLease(), modelAllowlist: ['gpt-test'] }),
+        validLeaseRequirements(),
+      ),
+    { message: /not exact/ },
   );
   t.throws(
     () =>

@@ -27,10 +27,10 @@ const WRAPPED_OPEN_DEADLINE_MS = 15_000;
  * @template T
  * @param {Promise<T>} promise
  * @param {number} ms
- * @param {(value: T) => void} late
+ * @param {(value: T) => void} [late]
  * @returns {Promise<T>}
  */
-const withDeadline = (promise, ms, late) =>
+export const withDeadline = (promise, ms, late = () => {}) =>
   new Promise((resolve, reject) => {
     let over = false;
     const timer = globalThis.setTimeout(() => {
@@ -50,8 +50,37 @@ const withDeadline = (promise, ms, late) =>
       },
     );
   });
+harden(withDeadline);
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from './provider-broker.js' */
+/** @import { makePoolMemberLifecycle } from './pool-member-lifecycle.js' */
+/** @import { BrokerGrantMember } from './provider-broker.js' */
+
+/**
+ * @typedef {object} IssuerPoolMember
+ * @property {string} id
+ * @property {any} [subscription] In place of `secret`: this member is
+ *   somebody else's `Subscription` (a share they handed over). Each grant
+ *   opens an endpoint of its own on it, and revokes it with the grant.
+ * @property {any} [secret] SecretBlob read facet.
+ * @property {any} [credential] The member's shared refreshing credential.
+ * @property {ReturnType<typeof makePoolMemberLifecycle>} [lifecycle]
+ * @property {ProviderRequestAdapter} [adaptRequest]
+ * @property {string} [accountRef]
+ * @property {(reading: any) => void} [onReading] What this member's responses
+ *   say of its account.
+ * @property {(model: string) => Promise<boolean> | boolean} admits Whether
+ *   this member's account lists the model now, from its catalog owner.
+ * @property {() => string} [catalogState] How that catalog stands, for the
+ *   grant's audit trail.
+ * @property {boolean} [pinnedOnly] Served only to a session pinned to it.
+ */
+
+/**
+ * @typedef {object} IssuerPool
+ * @property {() => Promise<readonly IssuerPoolMember[]> | readonly IssuerPoolMember[]} members
+ * @property {(sessionId: string, preference: string) => { select(): string[], served(id: string): void, exhausted(id: string): void }} forSession
+ */
 
 /**
  * Host-side credential assembly. The worker receives only the bounded inference
@@ -83,6 +112,14 @@ const withDeadline = (promise, ms, late) =>
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and grant over it.
  * @param {ProviderRequestAdapter} [options.adaptRequest] Trusted provider translation.
+ * @param {(model: string) => Promise<boolean> | boolean} [options.admits]
+ * Whether the one account lists a model now, from its catalog owner
+ * (`model-catalog.js`); required without a pool, whose members each carry
+ * their own. A scope that names a model is admitted only if an account it
+ * may be served from lists it, and every request is admitted the same way
+ * by the grant. There is no operator model allowlist.
+ * @param {() => string} [options.catalogState] How that account's catalog
+ * stands, for the grant's audit trail.
  * @param {(spec:any)=>{endpoint:any,dispose:()=>void}} [options.makePublicNetwork]
  * Host-only factory for a separately revocable public-egress capability.
  * @param {IssuerPool} [options.pool] Several subscriptions of this provider,
@@ -95,26 +132,6 @@ const withDeadline = (promise, ms, late) =>
  * @param {number} [options.wrappedOpenDeadlineMs] How long a member that is
  * somebody else's subscription gets to open an endpoint for a session.
  */
-/**
- * @typedef {object} IssuerPoolMember
- * @property {string} id
- * @property {any} [subscription] In place of `secret`: this member is
- *   somebody else's `Subscription` (a share they handed over). Each grant
- *   opens an endpoint of its own on it, and revokes it with the grant.
- * @property {any} [secret] SecretBlob read facet.
- * @property {any} [credential] The member's shared refreshing credential.
- * @property {ProviderRequestAdapter} [adaptRequest]
- * @property {string} [accountRef]
- * @property {(reading: any) => void} [onReading] What this member's responses
- *   say of its account.
- */
-
-/**
- * @typedef {object} IssuerPool
- * @property {() => Promise<readonly IssuerPoolMember[]> | readonly IssuerPoolMember[]} members
- * @property {(sessionId: string, preference: string) => { select(): string[], served(id: string): void, exhausted(id: string): void }} forSession
- */
-
 export const makeProviderBrokerGrantIssuer = ({
   runtime,
   secret,
@@ -128,6 +145,8 @@ export const makeProviderBrokerGrantIssuer = ({
   onReading,
   credential,
   adaptRequest,
+  admits,
+  catalogState,
   makePublicNetwork,
   pool,
   wrappedOpenDeadlineMs = WRAPPED_OPEN_DEADLINE_MS,
@@ -161,12 +180,52 @@ export const makeProviderBrokerGrantIssuer = ({
     typeof credential.current === 'function' ||
       Fail`Unprovisioned broker OAuth mode`;
   }
+  pool !== undefined ||
+    typeof admits === 'function' ||
+    Fail`Invalid provider grant issuer policy`;
+  /** @type {any} */ (policy).models === undefined ||
+    Fail`Invalid provider grant issuer policy`;
   const configuredPolicy = harden({
     ...policy,
     accountRef,
     routes: policy.routes.map(route => ({ ...route })),
-    models: [...policy.models],
   });
+  /**
+   * Whether a session pinned to a model may be issued a scope: some account
+   * it may be served from lists the model now. `auto` asks the accounts not
+   * set aside; an id asks that one and no other.
+   *
+   * @param {string} model
+   * @param {string} subscription
+   */
+  const admitsModel = async (model, subscription) => {
+    if (pool === undefined) {
+      return (
+        (await /** @type {NonNullable<typeof admits>} */ (admits)(model)) ===
+        true
+      );
+    }
+    const declared = [...(await pool.members())];
+    const eligible = declared.filter(member =>
+      subscription === 'auto'
+        ? member.pinnedOnly !== true
+        : member.id === subscription,
+    );
+    // Asked of all at once: this runs inside the issuer's queue, and a
+    // provider's catalog endpoint timing out must cost one wait, not one
+    // per account.
+    const answers = await Promise.all(
+      eligible.map(async member => {
+        try {
+          return (await member.admits(model)) === true;
+        } catch (_error) {
+          // An account that cannot answer does not admit.
+          return false;
+        }
+      }),
+    );
+    return answers.some(Boolean);
+  };
   const grants = new Set();
   const fences = new Set();
   const pending = new Set();
@@ -212,6 +271,8 @@ export const makeProviderBrokerGrantIssuer = ({
         audit,
         credential,
         adaptRequest,
+        admits,
+        ...(catalogState === undefined ? {} : { catalogState }),
         revealExhaustion,
       });
       return { core, transport, memberTransports: [] };
@@ -231,7 +292,11 @@ export const makeProviderBrokerGrantIssuer = ({
     /** @type {Array<{ dispose(): void }>} */
     const memberTransports = [];
     const declared = [...(await memberPool.members())];
-    const members = declared.flatMap(member => {
+    /** @param {IssuerPoolMember} member
+     * @returns {BrokerGrantMember[]} */
+    const makeMember = member => {
+      const { lifecycle } = member;
+      lifecycle?.check();
       if (
         member.subscription !== undefined &&
         (spec.hops ?? 0) + 2 > MAX_ENDPOINT_HOPS
@@ -259,24 +324,61 @@ export const makeProviderBrokerGrantIssuer = ({
         // past that the oldest is given back.
         /** @type {any[]} */
         const retired = [];
+        const held = new Set();
+        const rawOpenings = new Set();
         let gone = false;
         /** @param {any} endpoint */
         const giveBack = endpoint => {
+          held.add(endpoint);
           void E(endpoint)
             .revoke()
+            .then(() => held.delete(endpoint))
             .catch(() => {});
         };
         const provide = () => {
+          lifecycle?.check();
           !gone || Fail`Provider grant inactive`;
           if (opening === undefined) {
+            const open = () => {
+              const acquisition = E(member.subscription)
+                .openEndpoint(
+                  harden({
+                    sessionId: spec.sessionId,
+                    subscription: 'auto',
+                    hops: (spec.hops ?? 0) + 1,
+                  }),
+                )
+                .then(raw => {
+                  const endpoint =
+                    lifecycle === undefined
+                      ? raw
+                      : makeExo(
+                          'PoolMemberEndpoint',
+                          InferenceEndpointInterface,
+                          {
+                            request: message =>
+                              lifecycle.run(
+                                () => E(raw).request(message),
+                                true,
+                              ),
+                            requestByteStream: message =>
+                              lifecycle.run(
+                                () => E(raw).requestByteStream(message),
+                                true,
+                              ),
+                            attestation: () =>
+                              lifecycle.run(() => E(raw).attestation()),
+                            revoke: () => E(raw).revoke(),
+                          },
+                        );
+                  held.add(endpoint);
+                  return endpoint;
+                });
+              rawOpenings.add(acquisition);
+              return acquisition.finally(() => rawOpenings.delete(acquisition));
+            };
             const attempt = withDeadline(
-              E(member.subscription).openEndpoint(
-                harden({
-                  sessionId: spec.sessionId,
-                  subscription: 'auto',
-                  hops: (spec.hops ?? 0) + 1,
-                }),
-              ),
+              lifecycle === undefined ? open() : lifecycle.run(open, true),
               wrappedOpenDeadlineMs,
               giveBack,
             ).then(endpoint => {
@@ -306,7 +408,7 @@ export const makeProviderBrokerGrantIssuer = ({
           retired.push(endpoint);
           while (retired.length > 8) giveBack(retired.shift());
         };
-        memberTransports.push({
+        const dependent = {
           dispose: () => {
             gone = true;
             const last = opening;
@@ -315,21 +417,70 @@ export const makeProviderBrokerGrantIssuer = ({
             if (last !== undefined) void last.then(giveBack, () => {});
             for (const endpoint of retired.splice(0)) giveBack(endpoint);
           },
+        };
+        const cleanup = async () => {
+          dependent.dispose();
+          // The owner also drains admitted late openings before acknowledgement.
+          // A late result is returned by giveBack, retained here on failure.
+          await Promise.allSettled([...rawOpenings]);
+          for (const endpoint of held) {
+            // eslint-disable-next-line no-await-in-loop
+            await E(endpoint).revoke();
+            held.delete(endpoint);
+          }
+        };
+        const release = lifecycle?.retain(cleanup);
+        memberTransports.push({
+          dispose: () => {
+            dependent.dispose();
+            void cleanup().then(
+              () => {
+                release?.();
+              },
+              () => {},
+            );
+          },
         });
-        return [harden({ id: member.id, wrapped: { provide, reset } })];
+        return [
+          harden({
+            id: member.id,
+            admits: member.admits,
+            ...(member.catalogState === undefined
+              ? {}
+              : { catalogState: member.catalogState }),
+            wrapped: { provide, reset },
+          }),
+        ];
       }
       const memberTransport = makeProviderFetchTransport({
-        fetch,
+        fetch:
+          lifecycle === undefined
+            ? fetch
+            : (input, init) => lifecycle.run(() => fetch(input, init), true),
         timeoutMs,
         maxRequestBytes: configuredPolicy.maxRequestBytes,
         maxResponseBytes: configuredPolicy.maxResponseBytes,
         onDiagnostic,
         onReading: member.onReading,
       });
-      memberTransports.push(memberTransport);
+      const release = lifecycle?.retain(() => memberTransport.close());
+      const dispose = () => {
+        memberTransport.dispose();
+        void memberTransport.close().then(
+          () => {
+            release?.();
+          },
+          () => {},
+        );
+      };
+      memberTransports.push({ dispose });
       return [
         harden({
           id: member.id,
+          admits: member.admits,
+          ...(member.catalogState === undefined
+            ? {}
+            : { catalogState: member.catalogState }),
           secret: member.secret,
           transport: memberTransport.transport,
           ...(member.credential === undefined
@@ -343,7 +494,8 @@ export const makeProviderBrokerGrantIssuer = ({
             : { accountRef: member.accountRef }),
         }),
       ];
-    });
+    };
+    const members = declared.flatMap(makeMember);
     try {
       const core = makeProviderBrokerGrant(configuredPolicy, {
         audit,
@@ -426,11 +578,14 @@ export const makeProviderBrokerGrantIssuer = ({
         },
         async attestation() {
           live();
+          // No operator allowlist to attest: each request is admitted by
+          // the serving account's own catalog.
           return harden({
             version: 'InferenceEndpointV1',
             sessionId: spec.sessionId,
             providerOrigin: configuredPolicy.origin,
-            modelAllowlist: [...configuredPolicy.models],
+            models: null,
+            modelAdmission: 'account-catalog',
             subscription: spec.subscription,
             hops: spec.hops,
           });
@@ -526,8 +681,17 @@ export const makeProviderBrokerGrantIssuer = ({
         typeof spec.subscription === 'string' &&
         /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(spec.subscription) &&
         (pool !== undefined || spec.subscription === 'auto') &&
-        (!spec.model || configuredPolicy.models.includes(spec.model))) ||
+        (spec.model === undefined ||
+          (typeof spec.model === 'string' &&
+            spec.model !== '' &&
+            spec.model.length <= 256))) ||
         Fail`Provider grant request denied`;
+      // The session's pinned model must be one an account it may be served
+      // from lists now. Missing discovery is a refusal, not permission.
+      spec.model === undefined ||
+        (await admitsModel(spec.model, spec.subscription)) ||
+        Fail`Provider grant request denied`;
+      (!disposed && !inactive) || Fail`Provider grant request denied`;
       spec.networkPolicy === 'off' ||
         (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
         Fail`Unsupported provider grant network policy`;
@@ -624,7 +788,15 @@ export const makeProviderBrokerGrantIssuer = ({
               ...(current.network ? { network: current.network } : {}),
               endpoint: current.endpoint,
               providerOrigin: configuredPolicy.origin,
-              modelAllowlist: [...configuredPolicy.models],
+              // The model this grant was issued for, admitted at issuance
+              // against the accounts the session may be served from; null
+              // for a session that pins none. Not what every request is
+              // held to: each is admitted the same way by the serving
+              // account's catalog, so a runtime's side requests on other
+              // models the account lists (Claude Code's Haiku calls beside
+              // a session on Opus) are served too.
+              model: spec.model ?? null,
+              modelAdmission: 'account-catalog',
             });
           },
           async sandboxEvidence() {

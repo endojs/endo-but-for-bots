@@ -108,10 +108,11 @@ export const sameToolArgs = (left, right) => {
   // them (the journal's own) or as they arrived (activity a backend
   // reported), so both sides are reduced to the same spacing and compared as
   // far as the shorter goes. A whole must be at least as long as a preview.
+  /** @param {{text: string, cut?: boolean}} value */
   const form = ({ text, cut }) =>
     withoutJsonSpacing((cut ? undefined : normalizedJson(text)) ?? text);
-  const a = form(/** @type {{ text: string, cut?: boolean }} */ (left));
-  const b = form(/** @type {{ text: string, cut?: boolean }} */ (right));
+  const a = form({ text: left.text, cut: left.cut });
+  const b = form({ text: right.text, cut: right.cut });
   const shared = Math.min(a.length, b.length);
   return (
     shared > 0 &&

@@ -165,7 +165,9 @@ test.serial(
     t.deepEqual(options(), [], 'search remains inside the selected backend');
     t.true(select('Model').disabled);
     t.true(parent.textContent.includes('No models match your search'));
-    t.true(parent.querySelector('.floot-preset-card')?.hasAttribute('disabled'));
+    t.true(
+      parent.querySelector('.floot-preset-card')?.hasAttribute('disabled'),
+    );
     t.true(select('Backend').textContent.includes('Fae'));
     await change('Backend', 'codex');
     t.deepEqual(options(), ['codex:sol']);
@@ -2350,5 +2352,515 @@ test.serial(
     await waitFor(() => daemon.redeems().length === 3);
     t.deepEqual(daemon.redeems()[2], { key: 'codex:work', abandon: true });
     t.is(daemon.accountRefreshes(), 1);
+  },
+);
+
+test.serial(
+  'new session says how each backend’s discovery stands, and offers only what the chosen subscription lists',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const facet = farSession('DiscoverySession', {
+      getInfo: () => harden({ id: 'one', title: 'One' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const created = [];
+    const factory = farFactory('DiscoveryFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'One' }]),
+      listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+      listBackends: () =>
+        harden([
+          { id: 'provider', title: 'Fae' },
+          {
+            id: 'codex',
+            title: 'Codex',
+            providerId: 'codex',
+            subscriptions: [
+              { id: 'work', label: 'Work' },
+              { id: 'home', label: 'Home' },
+            ],
+          },
+          { id: 'claude', title: 'Claude Code' },
+        ]),
+      // Fae's account lists one model; Codex's `work` account lists Luna
+      // and Sol, its `home` account only Sol; Claude lists nothing.
+      listModels: () =>
+        harden([
+          {
+            id: 'openrouter/free',
+            title: 'Auto free',
+            backendId: 'provider',
+            default: true,
+            subscriptionIds: ['default'],
+          },
+          {
+            id: 'codex:gpt-5.6-luna',
+            modelId: 'gpt-5.6-luna',
+            title: 'Luna',
+            backendId: 'codex',
+            subscriptionIds: ['work'],
+          },
+          {
+            id: 'codex:gpt-5.6-sol',
+            modelId: 'gpt-5.6-sol',
+            title: 'Sol',
+            backendId: 'codex',
+            subscriptionIds: ['work', 'home'],
+          },
+        ]),
+      listModelCatalogs: () =>
+        harden([
+          {
+            backendId: 'provider',
+            accounts: [
+              {
+                subscriptionId: 'default',
+                state: 'current',
+                observedAt: 1000,
+                modelCount: 1,
+              },
+            ],
+          },
+          {
+            backendId: 'codex',
+            accounts: [
+              {
+                subscriptionId: 'work',
+                label: 'Work',
+                state: 'current',
+                observedAt: 1000,
+                modelCount: 2,
+              },
+              {
+                subscriptionId: 'home',
+                label: 'Home',
+                state: 'stale',
+                observedAt: 1000,
+                modelCount: 1,
+              },
+            ],
+          },
+          {
+            backendId: 'claude',
+            accounts: [
+              {
+                subscriptionId: 'default',
+                state: 'unavailable',
+                observedAt: null,
+                modelCount: 0,
+              },
+            ],
+          },
+        ]),
+      getSession: () => facet,
+      createSession: options => {
+        created.push(options);
+        return facet;
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() => parent.querySelector('.floot-session-item'));
+    await tick(50);
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('[aria-label="Backend"]'));
+    const select = label => {
+      const element = parent.querySelector(`select[aria-label="${label}"]`);
+      if (!(element instanceof testWindow.HTMLSelectElement)) {
+        throw Error(`Missing select: ${label}`);
+      }
+      return element;
+    };
+    const change = async (label, value) => {
+      select(label).value = value;
+      select(label).dispatchEvent(
+        new testWindow.Event('change', { bubbles: true }),
+      );
+      await tick();
+    };
+    const options = () => [...select('Model').options].map(o => o.value);
+    const note = () =>
+      parent.querySelector('.floot-discovery-note')?.textContent ?? '';
+    // Fae: every account current, nothing to say.
+    t.is(note(), '');
+    // A backend with nothing to offer is still a choice, and says why.
+    t.deepEqual(
+      [...select('Backend').options].map(o => o.value),
+      ['provider', 'codex', 'claude'],
+    );
+    await change('Backend', 'claude');
+    t.deepEqual(options(), []);
+    t.regex(
+      note(),
+      /Discovery for Claude Code — default: model discovery unavailable\./,
+    );
+    t.true(
+      parent.textContent.includes(
+        'No models are listed for this backend right now.',
+      ),
+    );
+    t.true(
+      parent.querySelector('.floot-preset-card')?.hasAttribute('disabled'),
+    );
+    // Codex: `auto` offers what any account lists; the stale account is
+    // said so, with when it was last read.
+    await change('Backend', 'codex');
+    t.deepEqual(options(), ['codex:gpt-5.6-luna', 'codex:gpt-5.6-sol']);
+    t.regex(
+      note(),
+      /Discovery for Codex — Home: provider unreachable, showing an earlier catalog \(last read /,
+    );
+    // Pinned to `home`: only what that account lists, and the selection
+    // moves off a model it does not list.
+    t.is(select('Model').value, 'codex:gpt-5.6-luna');
+    await change('Subscription', 'home');
+    t.deepEqual(options(), ['codex:gpt-5.6-sol']);
+    t.is(select('Model').value, 'codex:gpt-5.6-sol');
+    await change('Subscription', 'work');
+    t.deepEqual(options(), ['codex:gpt-5.6-luna', 'codex:gpt-5.6-sol']);
+    await change('Model', 'codex:gpt-5.6-luna');
+    parent
+      .querySelector('.floot-preset-card')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length === 1);
+    t.like(created[0], {
+      backendId: 'codex',
+      modelId: 'gpt-5.6-luna',
+      subscription: 'work',
+    });
+  },
+);
+
+/**
+ * A picker over a fake factory: the sessions it lists, the models and
+ * catalogs it answers, and what it was asked to create.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {{ listModels: () => any, listModelCatalogs: () => any, listBackends: () => any }} answers
+ */
+const openPicker = async (t, answers) => {
+  const parent = testDocument.createElement('div');
+  testDocument.body.appendChild(parent);
+  const facet = farSession('PickerSession', {
+    getInfo: () => harden({ id: 'one', title: 'One' }),
+    getHistory: () => harden([]),
+    getCurrentTurn: () => null,
+    getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+  });
+  const created = [];
+  const factory = farFactory('PickerFactory', {
+    listSessions: () => harden([{ id: 'one', title: 'One' }]),
+    listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+    ...answers,
+    getSession: () => facet,
+    createSession: options => {
+      created.push(options);
+      return facet;
+    },
+  });
+  const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+  t.teardown(() => {
+    dispose();
+    parent.remove();
+  });
+  await waitFor(() => parent.querySelector('.floot-session-item'));
+  await tick(50);
+  const open = async () => {
+    parent
+      .querySelector('[aria-label="New session"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('.floot-modal'));
+  };
+  await open();
+  const select = label => {
+    const element = parent.querySelector(`select[aria-label="${label}"]`);
+    if (!(element instanceof testWindow.HTMLSelectElement)) {
+      throw Error(`Missing select: ${label}`);
+    }
+    return element;
+  };
+  const change = async (label, value) => {
+    select(label).value = value;
+    select(label).dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    await tick();
+  };
+  const options = () => [...select('Model').options].map(o => o.value);
+  const card = () => parent.querySelector('.floot-preset-card');
+  const pick = async () => {
+    card()?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => created.length > 0);
+  };
+  return { parent, created, open, select, change, options, card, pick };
+};
+
+test.serial(
+  'new session preselects a model the chosen subscription can use, never one only a lane lists',
+  async t => {
+    t.timeout(5000);
+    const { select, options, change } = await openPicker(t, {
+      listBackends: () =>
+        harden([
+          {
+            id: 'codex',
+            title: 'Codex',
+            providerId: 'codex',
+            subscriptions: [
+              { id: 'work', label: 'Work' },
+              { id: 'lane', label: 'Lane', pinnedOnly: true },
+            ],
+          },
+        ]),
+      // The provider's default is listed only by the lane set aside; the
+      // rows come in the broker's member order, the lane's first.
+      listModels: () =>
+        harden([
+          {
+            id: 'codex:gpt-5.6-luna',
+            modelId: 'gpt-5.6-luna',
+            title: 'Luna',
+            backendId: 'codex',
+            default: true,
+            subscriptionIds: ['lane'],
+          },
+          {
+            id: 'codex:gpt-5.6-sol',
+            modelId: 'gpt-5.6-sol',
+            title: 'Sol',
+            backendId: 'codex',
+            subscriptionIds: ['work', 'lane'],
+          },
+        ]),
+      listModelCatalogs: () => harden([]),
+    });
+    // Under `auto` only Sol is offered, and it is what is selected: the
+    // state never points at a row the select does not show.
+    t.deepEqual(options(), ['codex:gpt-5.6-sol']);
+    t.is(select('Model').value, 'codex:gpt-5.6-sol');
+    // One subscription to choose from is no choice: the field is not shown.
+    t.is(select('Backend').value, 'codex');
+    await change('Backend', 'codex');
+    t.is(select('Model').value, 'codex:gpt-5.6-sol');
+  },
+);
+
+test.serial(
+  'with nothing listed, a hosted backend cannot be started and the direct provider runs its configured model unpinned',
+  async t => {
+    t.timeout(5000);
+    const { parent, created, select, options, change, card, pick } =
+      await openPicker(t, {
+        listBackends: () =>
+          harden([
+            { id: 'provider', title: 'Fae' },
+            { id: 'codex', title: 'Codex', providerId: 'codex' },
+          ]),
+        listModels: () => harden([]),
+        listModelCatalogs: () =>
+          harden([
+            {
+              backendId: 'provider',
+              accounts: [
+                {
+                  subscriptionId: 'default',
+                  state: 'unsupported',
+                  observedAt: null,
+                  modelCount: 0,
+                },
+              ],
+            },
+            {
+              backendId: 'codex',
+              accounts: [
+                {
+                  subscriptionId: 'default',
+                  state: 'unavailable',
+                  observedAt: null,
+                  modelCount: 0,
+                },
+              ],
+            },
+          ]),
+      });
+    t.deepEqual(
+      [...select('Backend').options].map(o => o.value),
+      ['provider', 'codex'],
+    );
+    // A hosted backend with nothing listed: no model to pin, no session.
+    await change('Backend', 'codex');
+    t.deepEqual(options(), []);
+    t.true(card()?.hasAttribute('disabled'));
+    t.true(
+      parent.textContent.includes(
+        'No models are listed for this backend right now.',
+      ),
+    );
+    // The direct provider without discovery: the one choice is unpinned.
+    await change('Backend', 'provider');
+    t.deepEqual(options(), ['']);
+    t.false(card()?.hasAttribute('disabled'));
+    t.true(
+      parent.textContent.includes(
+        'No model discovery for this provider kind; the configured model runs unpinned.',
+      ),
+    );
+    await pick();
+    t.false('model' in created[0]);
+    t.false('backendId' in created[0]);
+  },
+);
+
+test.serial(
+  'opening the picker reads discovery again, so what an outage at load said does not stand once the provider is back',
+  async t => {
+    t.timeout(5000);
+    let reads = 0;
+    const { options, open, parent, pick, created } = await openPicker(t, {
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      // Nothing at load; the provider is back by the time the picker opens.
+      listModels: () => {
+        reads += 1;
+        return harden(
+          reads === 1
+            ? []
+            : [
+                {
+                  id: 'openrouter/free',
+                  title: 'Auto free',
+                  backendId: 'provider',
+                  subscriptionIds: ['default'],
+                },
+              ],
+        );
+      },
+      listModelCatalogs: () =>
+        harden([
+          {
+            backendId: 'provider',
+            accounts: [
+              {
+                subscriptionId: 'default',
+                state: reads === 1 ? 'unavailable' : 'current',
+                observedAt: reads === 1 ? null : 1000,
+                modelCount: reads === 1 ? 0 : 1,
+              },
+            ],
+          },
+        ]),
+    });
+    await waitFor(() => options().length === 1 && options()[0] !== '');
+    t.is(reads, 2);
+    t.deepEqual(options(), ['openrouter/free']);
+    t.is(parent.querySelector('.floot-discovery-note')?.textContent ?? '', '');
+    // The selection follows the refreshed list: what is picked is what the
+    // select shows, not the empty choice the picker opened with.
+    await pick();
+    t.like(created[0], { model: 'openrouter/free' });
+    // Closing and opening again is another read.
+    parent
+      .querySelector('.floot-modal-backdrop')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => !parent.querySelector('.floot-modal'));
+    await open();
+    await waitFor(() => reads === 3);
+    t.pass();
+  },
+);
+
+test.serial(
+  'a discovery read that fails is said in the picker, and the status line is left to the sessions',
+  async t => {
+    t.timeout(5000);
+    const { parent } = await openPicker(t, {
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listModels: () => {
+        throw Error('factory listing broke');
+      },
+      listModelCatalogs: () => harden([]),
+    });
+    await waitFor(() =>
+      (parent.querySelector('.floot-discovery-note')?.textContent ?? '').includes(
+        'factory listing broke',
+      ),
+    );
+    t.regex(
+      parent.querySelector('.floot-discovery-note')?.textContent ?? '',
+      /^Model discovery could not be read: factory listing broke$/,
+    );
+    t.false(
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'error',
+      ),
+    );
+  },
+);
+
+test.serial(
+  'a subscription change under a search keeps the selection among what the search shows, and the pick sends it',
+  async t => {
+    t.timeout(5000);
+    const { select, options, change, pick, created, parent } =
+      await openPicker(t, {
+        listBackends: () =>
+          harden([
+            {
+              id: 'codex',
+              title: 'Codex',
+              providerId: 'codex',
+              subscriptions: [
+                { id: 'sub1', label: 'One' },
+                { id: 'sub2', label: 'Two' },
+              ],
+            },
+          ]),
+        listModels: () =>
+          harden([
+            {
+              id: 'codex:alpha',
+              modelId: 'alpha',
+              title: 'Alpha',
+              backendId: 'codex',
+              subscriptionIds: ['sub1'],
+            },
+            {
+              id: 'codex:beta-zz',
+              modelId: 'beta-zz',
+              title: 'Beta zz',
+              backendId: 'codex',
+              subscriptionIds: ['sub2'],
+            },
+            {
+              id: 'codex:czz',
+              modelId: 'czz',
+              title: 'Czz',
+              backendId: 'codex',
+              subscriptionIds: ['sub1'],
+            },
+          ]),
+        listModelCatalogs: () => harden([]),
+      });
+    const search = parent.querySelector('input[aria-label="Search models"]');
+    if (!(search instanceof testWindow.HTMLInputElement)) {
+      throw Error('Missing search');
+    }
+    search.value = 'zz';
+    search.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await tick();
+    t.deepEqual(options(), ['codex:beta-zz', 'codex:czz']);
+    await change('Model', 'codex:beta-zz');
+    // `sub1` does not list Beta zz: the selection moves to what the search
+    // still shows from that account, never to Alpha, which it hides.
+    await change('Subscription', 'sub1');
+    t.deepEqual(options(), ['codex:czz']);
+    t.is(select('Model').value, 'codex:czz');
+    await pick();
+    t.like(created[0], { modelId: 'czz', subscription: 'sub1' });
   },
 );

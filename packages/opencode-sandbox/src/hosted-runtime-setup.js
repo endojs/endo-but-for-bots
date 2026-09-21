@@ -50,6 +50,10 @@ harden(sessionStorageSpecifier);
 
 const LABEL = 'OpenCode';
 
+/** The host directory the OpenCode setup provisions its services under. */
+export const SANDBOX_DIR = 'opencode-sandbox';
+harden(SANDBOX_DIR);
+
 /**
  * Read one immutable formula under `opencode-sandbox/` by its verified
  * entrypoint; see `@endo/hosted-agent/hosted-setup.js`.
@@ -60,7 +64,7 @@ const LABEL = 'OpenCode';
 const readProvisionedEnvironment = (host, name, expectedSpecifier) =>
   readHostedProvisionedEnvironment(host, {
     label: LABEL,
-    namePath: ['opencode-sandbox', name],
+    namePath: [SANDBOX_DIR, name],
     expectedSpecifier,
   });
 

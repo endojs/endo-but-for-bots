@@ -2,7 +2,7 @@
 // OpenCode as a Floot hosted backend.
 //
 // Floot discovers hosted backends through `HostedBackendFactoryInterface`
-// (@endo/hosted-agent): `describe()` names the backend, `listModels()` offers
+// (@endo/hosted-agent): `describe()` names the backend, `modelCatalog()` offers
 // its catalog, and `create(spec, toolSet)` hands back one session's `run`
 // facet (the turn protocol Floot's hosted-turn consumer drives) and its
 // factory-only `admin` facet. This module is that seam for the opencode CLI
@@ -31,52 +31,16 @@ import {
   HostedBackendFactoryInterface,
   HostedTurnBackendAdminInterface,
   HostedTurnBackendInterface,
-  normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
 import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
-import { DEFAULT_MODEL } from './opencode-agent-config.js';
 import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
+
+/** @import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
 
 /** The backend id Floot pins sessions to (`opencode:<model>`). */
 export const OPENCODE_BACKEND_ID = 'opencode';
 harden(OPENCODE_BACKEND_ID);
-
-/**
- * The OpenRouter-routed models this backend offers, ordered faster/lighter to
- * stronger. Ids are full opencode refs (`openrouter/<vendor>/<model>`) passed
- * verbatim into the session config, whose host-generated provider block pins
- * the same endpoint (src/opencode-agent-config.js). opencode has no
- * reasoning-effort knob here — `--variant` mapping is unproven — so no model
- * declares efforts.
- */
-export const OPENCODE_MODELS = harden(
-  [
-    {
-      id: DEFAULT_MODEL,
-      title: 'DeepSeek V4.1 Flash',
-      description: 'Fast and inexpensive — best for quick, simple turns.',
-      default: true,
-    },
-    {
-      id: 'openrouter/openrouter/free',
-      title: 'Free models (automatic)',
-      description:
-        'OpenRouter selects an available free model compatible with the request. Capacity and capabilities vary.',
-      default: false,
-    },
-  ].map(model =>
-    normalizeHostedModelDescriptor({
-      ...model,
-      defaultReasoningEffort: null,
-      reasoningEfforts: [],
-    }),
-  ),
-);
-
-/** The catalog under the `*-CLI-MODELS` name the sibling backends use. */
-export const OPENCODE_CLI_MODELS = OPENCODE_MODELS;
-harden(OPENCODE_CLI_MODELS);
 
 const NETWORK_POLICIES = harden(['off', 'public-internet']);
 
@@ -132,18 +96,18 @@ const isIdleInterrupt = error =>
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
  *   The owner's removal: native cleanup, then the recorded storage owner's
  *   deletion, retaining failure and refusing reuse until it succeeds.
- * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ * @param {ReturnType<typeof makeBackendCatalog>} powers.catalog What the
+ *   broker's OpenRouter account lists, as opencode routes it; a new
+ *   session's pin is admitted by it in the provisioner.
  * @param {boolean} [powers.publicInternetEnabled] Verified operator broker policy.
  */
 export const makeOpencodeBackendFactory = ({
   provisionSession,
   stopSession,
   removeSession,
-  models = OPENCODE_MODELS,
+  catalog,
   publicInternetEnabled = false,
 }) => {
-  const catalog = harden(models.map(normalizeHostedModelDescriptor));
-  const listModels = async () => catalog;
   const networkPolicies = harden(
     publicInternetEnabled ? [...NETWORK_POLICIES] : ['off'],
   );
@@ -161,11 +125,12 @@ export const makeOpencodeBackendFactory = ({
       Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
     networkPolicies.includes(networkPolicy) ||
       Fail`OpenCode broker does not permit public internet access`;
+    // Shape only: whether the account lists the model is the provisioner's
+    // to admit for a new pin, against the catalog; a reopen keeps its
+    // recorded pin.
     if (spec.model !== undefined && spec.model !== '') {
       (typeof spec.model === 'string' && spec.model.length <= 256) ||
         Fail`OpenCode model id must be a bounded string`;
-      catalog.some(model => model.id === spec.model) ||
-        Fail`Unknown OpenCode model ${q(spec.model.slice(0, 64))}`;
     }
     spec.reasoningEffort === undefined ||
       spec.reasoningEffort === '' ||
@@ -238,7 +203,7 @@ export const makeOpencodeBackendFactory = ({
           harden({ ...options, ...(systemPrompt ? { systemPrompt } : {}) }),
         );
       },
-      models: listModels,
+      models: () => catalog.offered(),
       /**
        * Abort the in-flight turn through the client's terminal barrier. The
        * client serializes turns behind the aborted turn's terminal, so a
@@ -317,7 +282,7 @@ export const makeOpencodeBackendFactory = ({
         },
       });
     },
-    listModels,
+    modelCatalog: subscriptionId => catalog.catalog(subscriptionId),
     create,
     async stop(spec) {
       const sessionId = assertSessionId(spec?.sessionId);
@@ -328,7 +293,7 @@ export const makeOpencodeBackendFactory = ({
     },
     destroy,
     help() {
-      return 'OpenCode backend factory: describe, listModels, create, stop (keeps state), and idempotent destroy.';
+      return 'OpenCode backend factory: describe, modelCatalog(subscriptionId?), create, stop (keeps state), and idempotent destroy.';
     },
   });
 };

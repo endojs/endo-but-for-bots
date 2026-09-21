@@ -24,7 +24,9 @@ import { SubscriptionInterface } from './subscription-share.js';
  * @param {object} powers
  * @param {string} powers.providerId
  * @param {string} powers.label
- * @param {string[]} powers.models
+ * @param {() => Promise<readonly string[]>} powers.readModels The ids every
+ *   account an `auto` endpoint may be served from lists now, from the
+ *   catalogs already held; for `describe()`.
  * @param {(spec: any) => Promise<any>} powers.openEndpoint The issuer's.
  * @param {() => Promise<Array<{ id: string, rateLimits: any }>>} powers.readings
  *   Each account's last raw reading, from memory. Calls no provider.
@@ -33,7 +35,7 @@ import { SubscriptionInterface } from './subscription-share.js';
 export const makeBrokerSubscription = ({
   providerId,
   label,
-  models,
+  readModels,
   openEndpoint,
   readings,
   now = Date.now,
@@ -86,7 +88,7 @@ export const makeBrokerSubscription = ({
         id: providerId,
         label,
         kind: 'broker',
-        models: [...models],
+        models: [...(await readModels())],
       }),
     /** @param {any} spec */
     openEndpoint: async spec => openEndpoint(spec),
@@ -107,7 +109,7 @@ export const makeBrokerSubscription = ({
     help(methodName) {
       const docs = {
         describe:
-          'describe() — { providerId, id, label, kind: "broker", models }.',
+          'describe() — { providerId, id, label, kind: "broker", models }: the models the accounts behind this broker list, read from the provider again when what is held is past its lifetime.',
         openEndpoint:
           'openEndpoint({ sessionId, subscription?: "auto" | id, hops? }) — An inference endpoint for one session, with no listener: request(message), requestByteStream(message), attestation(), revoke(). Unmetered: make a share before handing anything out.',
         getStatus:

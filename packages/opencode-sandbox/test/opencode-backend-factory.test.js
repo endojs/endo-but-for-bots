@@ -6,11 +6,9 @@ import { makeExo } from '@endo/exo';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
+import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 
-import {
-  OPENCODE_MODELS,
-  makeOpencodeBackendFactory,
-} from '../src/opencode-backend-factory.js';
+import { makeOpencodeBackendFactory } from '../src/opencode-backend-factory.js';
 
 const drain = async reader => {
   const events = [];
@@ -79,6 +77,7 @@ const makeHarness = (publicInternetEnabled = true) => {
   let failingStop;
   let provisionFails = false;
   const factory = makeOpencodeBackendFactory({
+    catalog: testCatalog,
     publicInternetEnabled,
     provisionSession: async (sessionId, request, toolSet) => {
       log.push(['provision', sessionId, request, await E(toolSet).describe()]);
@@ -109,6 +108,45 @@ const makeHarness = (publicInternetEnabled = true) => {
   };
 };
 
+/**
+ * What the broker's OpenRouter account lists, as opencode routes it: under
+ * the `openrouter/` prefix, with no effort.
+ * @param {string[]} ids provider-native ids
+ */
+const catalogOf = ids =>
+  makeBackendCatalog({
+    label: 'OpenCode',
+    readCatalog: async () =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: ids.map(id => ({
+              id,
+              title: id,
+              description: '',
+              default: false,
+              defaultReasoningEffort: null,
+              reasoningEfforts: [],
+            })),
+          },
+        ],
+      }),
+    project: model => ({
+      ...model,
+      id: `openrouter/${model.id}`,
+      reasoningEfforts: [],
+      defaultReasoningEffort: null,
+    }),
+  });
+const DEFAULT_MODEL = 'openrouter/deepseek/deepseek-v4.1-flash';
+const testCatalog = catalogOf([
+  'deepseek/deepseek-v4.1-flash',
+  'openrouter/free',
+]);
+
 test('broker-only OpenCode rejects public access before stopping an existing session', async t => {
   const { factory, log } = makeHarness(false);
   t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
@@ -124,7 +162,7 @@ test('broker-only OpenCode rejects public access before stopping an existing ses
   t.deepEqual(log, []);
 });
 
-test('describe() and listModels() present OpenCode as a hosted backend', async t => {
+test('describe() and modelCatalog() present OpenCode as a hosted backend', async t => {
   const { factory } = makeHarness();
   t.deepEqual(await E(factory).describe(), {
     id: 'opencode',
@@ -141,19 +179,27 @@ test('describe() and listModels() present OpenCode as a hosted backend', async t
       workspacePath: '/workspace',
     },
   });
-  const models = await E(factory).listModels();
-  t.deepEqual(models, OPENCODE_MODELS);
-  t.true(models.some(model => model.default));
+  // What the account lists, routed under opencode's provider prefix, with
+  // no effort: the runtime has no setting for one.
+  const { accounts } = await E(factory).modelCatalog();
+  t.like(accounts[0], { subscriptionId: 'default', state: 'current' });
+  t.deepEqual(
+    accounts[0].models.map(model => [model.id, model.reasoningEfforts]),
+    [
+      [DEFAULT_MODEL, []],
+      ['openrouter/openrouter/free', []],
+    ],
+  );
+  t.false(accounts[0].models.some(model => model.default));
 });
 
-test('free router is selectable without changing the default model', async t => {
+test('the free router reaches the owner under opencode’s route spelling', async t => {
   const { factory, log } = makeHarness();
-  const models = await E(factory).listModels();
-  const free = models.find(model => model.id === 'openrouter/openrouter/free');
+  const { accounts } = await E(factory).modelCatalog();
+  const free = accounts[0].models.find(
+    model => model.id === 'openrouter/openrouter/free',
+  );
   t.truthy(free);
-  t.is(free?.title, 'Free models (automatic)');
-  t.false(free?.default);
-  t.is(models.filter(model => model.default).length, 1);
   await E(factory).create(
     harden({ sessionId: 'free-session', model: free?.id }),
     makeToolSet(),
@@ -166,7 +212,7 @@ test('create() hands the validated request and the pinned tool set to the owner'
   const { run, admin } = await E(factory).create(
     harden({
       sessionId: 'session-a',
-      model: OPENCODE_MODELS[0].id,
+      model: DEFAULT_MODEL,
       systemPrompt: 'You are Floot.',
       workspaceHostPath: '/srv/worktrees/a',
       networkPolicy: 'public-internet',
@@ -179,7 +225,7 @@ test('create() hands the validated request and the pinned tool set to the owner'
       'session-a',
       {
         networkPolicy: 'public-internet',
-        model: OPENCODE_MODELS[0].id,
+        model: DEFAULT_MODEL,
         systemPrompt: 'You are Floot.',
         workspaceHostPath: '/srv/worktrees/a',
       },
@@ -202,11 +248,6 @@ test('create() hands the validated request and the pinned tool set to the owner'
 
 /** @type {readonly [string, Record<string, unknown>, RegExp][]} */
 const refused = harden([
-  [
-    'an unknown model',
-    { model: 'openrouter/nobody/none' },
-    /Unknown OpenCode model/,
-  ],
   [
     'a reasoning effort',
     { reasoningEffort: 'high' },
@@ -307,7 +348,10 @@ test('interrupt() tolerates an idle session; acknowledge() is a no-op', async t 
   await E(run).interrupt();
   t.is(interrupts(), 1);
   await E(run).acknowledge('checkpoint');
-  t.deepEqual(await E(run).models(), OPENCODE_MODELS);
+  t.deepEqual(
+    (await E(run).models()).map(model => model.id),
+    [DEFAULT_MODEL, 'openrouter/openrouter/free'],
+  );
 });
 
 test('terminate() stops once through the owner and a second create stops the first', async t => {

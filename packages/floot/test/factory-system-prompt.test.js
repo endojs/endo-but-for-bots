@@ -62,17 +62,26 @@ const makeWorld = ({ promptEnvironment } = {}) => {
         toolOwnership: 'endo',
         ...(promptEnvironment ? { promptEnvironment } : {}),
       }),
-    listModels: () =>
-      harden([
-        {
-          id: 'm',
-          title: 'Model',
-          description: '',
-          default: true,
-          defaultReasoningEffort: null,
-          reasoningEfforts: [],
-        },
-      ]),
+    modelCatalog: () =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: [
+              {
+                id: 'm',
+                title: 'Model',
+                description: '',
+                default: true,
+                defaultReasoningEffort: null,
+                reasoningEfforts: [],
+              },
+            ],
+          },
+        ],
+      }),
     create: async (spec, toolSet) => {
       specs.push(spec);
       return harden({
@@ -338,7 +347,7 @@ test('a session keeps the prompt it started with when the backend changes its st
           ...(await E(original).describe()),
           promptEnvironment: environment,
         }),
-      listModels: () => E(original).listModels(),
+      modelCatalog: () => E(original).modelCatalog(),
       create: (spec, toolSet) => E(original).create(spec, toolSet),
       destroy: spec => E(original).destroy(spec),
       stop: spec => E(original).stop(spec),

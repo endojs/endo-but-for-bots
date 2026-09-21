@@ -86,7 +86,6 @@ import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
-import { CLAUDE_CLI_MODELS } from './src/claude-backend-factory.js';
 import { ANTHROPIC_BETA_PATTERN } from './src/claude-broker.js';
 import { readClaudeBrokerConfig } from './src/claude-broker-service-agent.js';
 import { assertCredentialKind } from './src/claude-credential-kinds.js';
@@ -336,9 +335,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       imageRef,
       imageDigest,
       listenerImageRef,
-      // The broker admits the catalog's Anthropic model ids, which the CLI
-      // sends verbatim in its request bodies.
-      models: CLAUDE_CLI_MODELS.map(model => model.id),
       credentialKind: credsKind,
       ...(pool ? { pool: true } : {}),
       ...(anthropicBeta ? { anthropicBeta } : {}),

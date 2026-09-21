@@ -633,12 +633,10 @@ export const makeSubscriptionShare = ({
       attestation: () =>
         bare('an attestation', async () => {
           const beneath = await E(inner).attestation();
-          // The origin and the models, and the share in place of whatever
-          // set of accounts is beneath it.
+          // The origin, the share's own narrowing of models (null where it
+          // has none: what is beneath admits by its accounts' catalogs), and
+          // the share in place of whatever set of accounts is beneath it.
           const origin = `${beneath?.providerOrigin ?? ''}`;
-          const allowed = Array.isArray(beneath?.modelAllowlist)
-            ? beneath.modelAllowlist
-            : [];
           return harden({
             version: 'InferenceEndpointV1',
             sessionId: spec.sessionId,
@@ -647,12 +645,16 @@ export const makeSubscriptionShare = ({
             )
               ? origin
               : '',
-            modelAllowlist: (limitsNow?.models ?? allowed)
-              .filter(
-                (/** @type {unknown} */ model) =>
-                  typeof model === 'string' && MODEL_ID.test(model),
-              )
-              .slice(0, 256),
+            models:
+              limitsNow?.models === undefined
+                ? null
+                : limitsNow.models
+                    .filter(
+                      (/** @type {unknown} */ model) =>
+                        typeof model === 'string' && MODEL_ID.test(model),
+                    )
+                    .slice(0, 256),
+            modelAdmission: 'account-catalog',
             subscription: shareId,
             hops: spec.hops,
           });

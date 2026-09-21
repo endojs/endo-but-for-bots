@@ -17,7 +17,7 @@ import {
 import { usageLabel } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
-/** @import { FlootController, FlootPreset, FlootModel, FlootSafeEvent } from './types.js' */
+/** @import { FlootController, FlootPreset, FlootModel, FlootCatalog, FlootSafeEvent } from './types.js' */
 
 // Floot voice-assistant space as a PURE confined Preact component. The host
 // (packages/chat/floot-component.js) owns the imperative engine — mic capture,
@@ -54,23 +54,114 @@ const maximumEffort = model => {
 };
 
 /**
+ * One line on how a backend's discovery stands, for a picker with nothing
+ * (or not everything) to show: which accounts could not be read, and when
+ * the rest were.
+ *
+ * @param {FlootCatalog | undefined} catalog
+ */
+const discoveryNote = catalog => {
+  if (!catalog) return '';
+  const accounts = catalog.accounts || [];
+  const troubled = accounts.filter(account => account.state !== 'current');
+  if (troubled.length === 0) return '';
+  const when = (/** @type {number | null} */ at) =>
+    typeof at === 'number'
+      ? ` (last read ${new Date(at).toLocaleTimeString()})`
+      : '';
+  const said = troubled.map(account => {
+    const who = account.label || account.subscriptionId;
+    if (account.state === 'stale')
+      return `${who}: provider unreachable, showing an earlier catalog${when(account.observedAt)}`;
+    if (account.state === 'unsupported') return `${who}: no model discovery`;
+    return `${who}: model discovery unavailable`;
+  });
+  return `Discovery for ${catalog.backendTitle || catalog.backendId} — ${said.join('; ')}.`;
+};
+
+/**
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
+ *   catalogs?: FlootCatalog[],
+ *   discoveryError?: string,
  *   onPick: (id: string, model: string, reasoningEffort?: string, subscription?: string, networkPolicy?: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
  */
-const PresetModal = ({ presets, models, onPick, onClose }) => {
-  // Pre-select the factory's default model (falling back to the first listed),
-  // so picking a preset alone still creates a session with a sensible model.
-  const preferred = models.find(m => m.default) || models[0];
-  const [backend, setBackend] = useState(preferred?.backendId || 'provider');
-  const backends = [...new Set(models.map(m => m.backendId || 'provider'))];
-  const backendModels = models.filter(
-    m => (m.backendId || 'provider') === backend,
-  );
+const PresetModal = ({
+  presets,
+  models,
+  catalogs = [],
+  discoveryError = '',
+  onPick,
+  onClose,
+}) => {
+  /** @param {string} id */
+  const modelsOf = id => models.filter(m => (m.backendId || 'provider') === id);
+  /**
+   * What a backend offers a session on a subscription: the models an account
+   * the session may be served from lists — the chosen one's, or, under
+   * `auto`, any not set aside. A model with no account information (a
+   * factory from before discovery) is offered.
+   *
+   * @param {string} id
+   * @param {string} chosen
+   */
+  const offeredOf = (id, chosen) => {
+    const candidates = modelsOf(id);
+    const lanes = new Set(
+      (candidates[0]?.subscriptions || [])
+        .filter(entry => entry.pinnedOnly === true)
+        .map(entry => entry.id),
+    );
+    return candidates.filter(candidate => {
+      const ids = candidate.subscriptionIds;
+      if (!Array.isArray(ids) || ids.length === 0) return true;
+      return chosen === 'auto'
+        ? ids.some(account => !lanes.has(account))
+        : ids.includes(chosen);
+    });
+  };
+  /** @param {FlootModel[]} candidates */
+  const firstChoice = candidates =>
+    candidates.find(m => m.default) || candidates[0];
+  // Pre-select the default model's backend and, on it, the first model an
+  // `auto` session may be offered, so picking a preset alone still creates a
+  // session with a model its account lists.
+  const preferredBackend =
+    (models.find(m => m.default) || models[0])?.backendId || 'provider';
+  const preferred = firstChoice(offeredOf(preferredBackend, 'auto'));
+  const [backend, setBackend] = useState(preferredBackend);
+  // Backends are those with models and those whose discovery said something,
+  // so a backend with nothing to offer is still shown, with why.
+  const backends = [
+    ...new Set([
+      ...models.map(m => m.backendId || 'provider'),
+      ...catalogs.map(c => c.backendId),
+    ]),
+  ];
+  const backendCatalog = catalogs.find(c => c.backendId === backend);
+  const backendModels = modelsOf(backend);
+  // Which of the backend's subscriptions the session uses. `auto` lets the
+  // backend drain the one that resets soonest and move a turn when one runs
+  // out; a choice here pins the session. Offered only when there is a choice.
+  const [subscription, setSubscription] = useState('auto');
+  const declared = backendModels[0]?.subscriptions || [];
+  // A lane set aside for somebody else's sessions is not offered.
+  const subscriptions = declared.filter(entry => entry.pinnedOnly !== true);
+  const chosenSubscription = subscriptions.some(
+    entry => entry.id === subscription,
+  )
+    ? subscription
+    : 'auto';
+  const offeredModels = offeredOf(backend, chosenSubscription);
+  // The direct provider runs its configured model, unpinned, when its account
+  // lists nothing to choose from: no discovery for that provider kind, or
+  // none right now. A hosted backend needs a listed model.
+  const unpinnedOffered = backend === 'provider' && offeredModels.length === 0;
+  const providerState = backendCatalog?.accounts?.[0]?.state;
   const [modelQuery, setModelQuery] = useState('');
   /**
    * @param {FlootModel} candidate
@@ -82,31 +173,40 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
       value => value.toLowerCase().includes(needle),
     );
   };
-  const visibleModels = backendModels.filter(candidate =>
+  const visibleModels = offeredModels.filter(candidate =>
     matchesModel(candidate, modelQuery),
   );
   const [model, setModel] = useState(preferred ? preferred.id : '');
   const [reasoningEffort, setReasoningEffort] = useState(
     maximumEffort(preferred),
   );
-  const selectedModel = models.find(candidate => candidate.id === model);
+  // The list can change under an open picker: discovery is read again when
+  // it opens. What is selected is the chosen model while the select still
+  // shows it, else the first it shows; the state follows, so a pick never
+  // sends a model the select does not show, nor a thinking level the model
+  // no longer offers.
+  const selectedModel =
+    visibleModels.find(candidate => candidate.id === model) ||
+    (unpinnedOffered ? undefined : firstChoice(visibleModels));
+  const selection = selectedModel?.id || '';
   const reasoningEfforts = selectedModel?.reasoningEfforts || [];
+  const effortListed = reasoningEfforts.length
+    ? reasoningEfforts.includes(reasoningEffort)
+    : reasoningEffort === '';
+  useEffect(() => {
+    if (selection !== model) {
+      setModel(selection);
+      setReasoningEffort(maximumEffort(selectedModel));
+    } else if (!effortListed) {
+      setReasoningEffort(maximumEffort(selectedModel));
+    }
+  }, [selection, model, effortListed]);
   const [internet, setInternet] = useState(true);
   const networkPolicies = selectedModel?.supportedNetworkPolicies || [];
   const supportsInternet = networkPolicies.includes('public-internet');
-  // Which of the backend's subscriptions the session uses. `auto` lets the
-  // backend drain the one that resets soonest and move a turn when one runs
-  // out; a choice here pins the session. Offered only when there is a choice.
-  const [subscription, setSubscription] = useState('auto');
-  // A lane set aside for somebody else's sessions is not offered.
-  const subscriptions = (selectedModel?.subscriptions || []).filter(
-    entry => entry.pinnedOnly !== true,
-  );
-  const chosenSubscription = subscriptions.some(
-    entry => entry.id === subscription,
-  )
-    ? subscription
-    : 'auto';
+  const note =
+    discoveryNote(backendCatalog) ||
+    (discoveryError ? `Model discovery could not be read: ${discoveryError}` : '');
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -118,7 +218,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
         onClick: (/** @type {FlootSafeEvent} */ e) => e.stopPropagation(),
       },
       h('div', { class: 'floot-modal-title' }, 'Start a new session'),
-      models.length
+      models.length || catalogs.length
         ? h(
             'label',
             { class: 'floot-modal-field' },
@@ -130,12 +230,12 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                 'aria-label': 'Backend',
                 value: backend,
                 onChange: (/** @type {FlootSafeEvent} */ e) => {
-                  const candidates = models.filter(
-                    m => (m.backendId || 'provider') === e.target.value,
-                  );
-                  const next = candidates.find(m => m.default) || candidates[0];
+                  // From what an `auto` session may be offered there, not
+                  // from a lane's list.
+                  const next = firstChoice(offeredOf(e.target.value, 'auto'));
                   setBackend(e.target.value);
                   setModelQuery('');
+                  setSubscription('auto');
                   setModel(next?.id || '');
                   setReasoningEffort(maximumEffort(next));
                 },
@@ -145,11 +245,16 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   'option',
                   { key: id, value: id },
                   models.find(m => (m.backendId || 'provider') === id)
-                    ?.backendTitle || (id === 'provider' ? 'Fae' : id),
+                    ?.backendTitle ||
+                    catalogs.find(c => c.backendId === id)?.backendTitle ||
+                    (id === 'provider' ? 'Fae' : id),
                 ),
               ),
             ),
           )
+        : null,
+      note
+        ? h('small', { class: 'floot-discovery-note', role: 'status' }, note)
         : null,
       models.length
         ? h(
@@ -165,7 +270,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               onInput: (/** @type {FlootSafeEvent} */ e) => {
                 const query = e.target.value;
                 setModelQuery(query);
-                const matches = backendModels.filter(candidate =>
+                const matches = offeredModels.filter(candidate =>
                   matchesModel(candidate, query),
                 );
                 const next =
@@ -179,7 +284,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
             }),
           )
         : null,
-      models.length
+      models.length || catalogs.length
         ? h(
             'label',
             { class: 'floot-modal-field' },
@@ -189,8 +294,8 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               {
                 class: 'floot-model-select',
                 'aria-label': 'Model',
-                value: model,
-                disabled: visibleModels.length === 0,
+                value: selection,
+                disabled: visibleModels.length === 0 && !unpinnedOffered,
                 onChange: (/** @type {FlootSafeEvent} */ e) => {
                   const next = models.find(
                     candidate => candidate.id === e.target.value,
@@ -199,20 +304,43 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   setReasoningEffort(maximumEffort(next));
                 },
               },
-              visibleModels.map(m =>
-                h(
-                  'option',
-                  { key: m.id, value: m.id },
-                  `${m.title} — ${m.modelId || m.id}${m.default ? ' (default)' : ''}`,
-                ),
-              ),
+              unpinnedOffered
+                ? h(
+                    'option',
+                    { key: '', value: '' },
+                    `Configured model — ${
+                      providerState === 'unsupported'
+                        ? 'no discovery'
+                        : providerState === 'current' ||
+                            providerState === 'stale'
+                          ? 'none listed'
+                          : 'discovery unavailable'
+                    }`,
+                  )
+                : visibleModels.map(m =>
+                    h(
+                      'option',
+                      { key: m.id, value: m.id },
+                      `${m.title} — ${m.modelId || m.id}${m.default ? ' (default)' : ''}`,
+                    ),
+                  ),
             ),
             h(
               'small',
               { role: 'status', 'aria-live': 'polite' },
-              visibleModels.length
-                ? `${visibleModels.length} models available`
-                : 'No models match your search. Try a different name or model ID.',
+              unpinnedOffered
+                ? providerState === 'unsupported'
+                  ? 'No model discovery for this provider kind; the configured model runs unpinned.'
+                  : providerState === 'current' || providerState === 'stale'
+                    ? 'The account lists no models; the configured model runs unpinned.'
+                    : 'Model discovery is unavailable; the configured model runs unpinned.'
+                : visibleModels.length
+                  ? `${visibleModels.length} models available`
+                  : offeredModels.length
+                    ? 'No models match your search. Try a different name or model ID.'
+                    : backendModels.length
+                      ? 'No models are listed for the chosen subscription.'
+                      : 'No models are listed for this backend right now.',
             ),
           )
         : null,
@@ -273,9 +401,22 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               'select',
               {
                 class: 'floot-model-select floot-subscription-select',
+                'aria-label': 'Subscription',
                 value: chosenSubscription,
-                onChange: (/** @type {FlootSafeEvent} */ e) =>
-                  setSubscription(e.target.value),
+                onChange: (/** @type {FlootSafeEvent} */ e) => {
+                  const chosen = e.target.value;
+                  setSubscription(chosen);
+                  // The model must be one the chosen account lists, and
+                  // one the search still shows.
+                  const listed = offeredOf(backend, chosen).filter(
+                    candidate => matchesModel(candidate, modelQuery),
+                  );
+                  if (!listed.some(candidate => candidate.id === model)) {
+                    const next = firstChoice(listed);
+                    setModel(next?.id || '');
+                    setReasoningEffort(maximumEffort(next));
+                  }
+                },
               },
               h(
                 'option',
@@ -301,11 +442,11 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              disabled: models.length > 0 && visibleModels.length === 0,
+              disabled: visibleModels.length === 0 && !unpinnedOffered,
               onClick: () =>
                 onPick(
                   p.id,
-                  model,
+                  selection,
                   reasoningEffort || undefined,
                   chosenSubscription === 'auto'
                     ? undefined
@@ -343,13 +484,24 @@ export const FlootApp = ({ controller }) => {
   const [debug, setDebug] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
 
-  const { sessions, activeSessionId, presets, models, usage, status } = state;
+  const {
+    sessions,
+    activeSessionId,
+    presets,
+    models,
+    catalogs = [],
+    discoveryError = '',
+    usage,
+    status,
+  } = state;
   const active = sessions.find(s => s.id === activeSessionId);
   const needsRecovery = state.recovery?.turns.some(
     turn => turn.state === 'outcome-unknown' && !turn.resolution,
   );
 
   const onNew = () => {
+    // What the backends list now, not what they listed at load.
+    controller.refreshDiscovery?.();
     // Always expose the network choice, even with one model and preset.
     setModalOpen(true);
   };
@@ -580,6 +732,8 @@ export const FlootApp = ({ controller }) => {
       ? h(PresetModal, {
           presets,
           models,
+          catalogs,
+          discoveryError,
           onPick: pickPreset,
           onClose: () => setModalOpen(false),
         })

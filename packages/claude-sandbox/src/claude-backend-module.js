@@ -42,7 +42,14 @@ import { assertPetNames } from '@endo/daemon/pet-name.js';
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 
+import {
+  makeBackendCatalog,
+  recordedPinAnswers,
+  revisedPin,
+} from '@endo/hosted-agent/backend-catalog.js';
+
 import { makeClaudeBackendFactory } from './claude-backend-factory.js';
+import { assertClaudeEffort, claudeEffortsFor } from './claude-effort.js';
 import {
   containsPath,
   isNormalizedAbsolutePath,
@@ -230,8 +237,46 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
    * @param {any} toolSet
    */
   const provisionSession = async (sessionId, request, toolSet) => {
-    const { plan, text, privateDir } = makePlan(sessionId, request);
     const record = await E(owner).inspect(sessionId);
+    // The recorded pin is authoritative for a reopen that names it, or
+    // nothing; a new session's pin, or a changed one, is admitted by the
+    // account's catalog now, and missing discovery refuses rather than
+    // substituting. An effort changed on its own keeps the recorded model.
+    const recordedPlan =
+      record?.plan === undefined
+        ? undefined
+        : readClaudeSessionPlan(record.plan);
+    /** @type {{ model?: string, reasoningEffort?: string }} */
+    let pin;
+    if (
+      recordedPlan !== undefined &&
+      recordedPinAnswers(recordedPlan, request)
+    ) {
+      pin = {
+        ...(recordedPlan.model === undefined
+          ? {}
+          : { model: recordedPlan.model }),
+        ...(recordedPlan.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: recordedPlan.reasoningEffort }),
+      };
+    } else {
+      const asked = revisedPin(recordedPlan, request);
+      if (asked.model) {
+        pin = await catalog.resolve(asked);
+      } else {
+        // No model named and none recorded: the runtime's own default runs,
+        // unpinned, as it did before discovery; nobody picks a model from
+        // the list for it. An effort is the runtime's axis, checked as such.
+        pin = asked.reasoningEffort
+          ? { reasoningEffort: assertClaudeEffort(asked.reasoningEffort) }
+          : {};
+      }
+    }
+    const { plan, text, privateDir } = makePlan(
+      sessionId,
+      harden({ ...request, ...pin }),
+    );
     if (record === undefined) {
       await assertForeignWorkspace(plan);
       await E(owner).create(
@@ -291,29 +336,45 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
     return E(owner).start(sessionId, toolSet);
   };
 
+  const listSubscriptions = async () => {
+    await null;
+    let timer;
+    try {
+      return await Promise.race([
+        E(
+          /** @type {Promise<{ subscriptions(): Promise<Array<{ id: string, label: string, pinnedOnly?: boolean }>> }>} */ (
+            E(hostAgent).lookup([SANDBOX_DIR, 'broker-service'])
+          ),
+        ).subscriptions(),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(Error('Claude broker did not answer in time')),
+            5000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  // What each account lists, from Anthropic's model list under the broker's
+  // credential, as the pinned Claude Code runtime offers it: with the
+  // efforts it can drive each model at.
+  const catalog = makeBackendCatalog({
+    label: 'Claude',
+    readCatalog: subscriptionId =>
+      E(
+        /** @type {Promise<{ modelCatalog(subscriptionId?: string): Promise<any> }>} */ (
+          E(hostAgent).lookup([SANDBOX_DIR, 'broker-service'])
+        ),
+      ).modelCatalog(subscriptionId),
+    listSubscriptions,
+    project: model => ({ ...model, ...claudeEffortsFor(model.id) }),
+  });
   return makeClaudeBackendFactory({
     publicInternetEnabled: broker.config.publicInternet === true,
-    listSubscriptions: async () => {
-      await null;
-      let timer;
-      try {
-        return await Promise.race([
-          E(
-            /** @type {Promise<{ subscriptions(): Promise<Array<{ id: string, label: string }>> }>} */ (
-              E(hostAgent).lookup([SANDBOX_DIR, 'broker-service'])
-            ),
-          ).subscriptions(),
-          new Promise((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(Error('Claude broker did not answer in time')),
-              5000,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
+    catalog,
+    listSubscriptions,
     provisionSession,
     stopSession: sessionId => E(owner).stop(sessionId),
     removeSession: sessionId => E(owner).remove(sessionId),

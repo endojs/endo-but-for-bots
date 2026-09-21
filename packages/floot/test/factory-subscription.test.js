@@ -11,11 +11,17 @@ import { make } from '../agent.js';
  * spec of every session it is asked to create: `spec.systemPrompt` is the
  * prompt a hosted model actually runs under.
  *
- * @param {{ promptEnvironment?: object, subscriptions?: object[] }} [options]
+ * @param {{
+ *   promptEnvironment?: object,
+ *   subscriptions?: object[],
+ *   listing?: (subscriptionId: string) => string[],
+ * }} [options]
  */
-const makeWorld = ({ promptEnvironment, subscriptions } = {}) => {
+const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
   // What the backend declares now; an operator can change it under a session.
   let declared = subscriptions;
+  // Whether the backend's accounts can be read now.
+  const knobs = { catalogDown: false };
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const inboxes = [];
   /** @type {Array<Record<string, any>>} */
@@ -58,17 +64,31 @@ const makeWorld = ({ promptEnvironment, subscriptions } = {}) => {
         ...(promptEnvironment ? { promptEnvironment } : {}),
         ...(declared ? { providerId: 'test', subscriptions: declared } : {}),
       }),
-    listModels: () =>
-      harden([
-        {
-          id: 'm',
-          title: 'Model',
-          description: '',
-          default: true,
-          defaultReasoningEffort: null,
-          reasoningEfforts: [],
-        },
-      ]),
+    // Each declared subscription is an account that lists the one model,
+    // or what `listing` says it lists.
+    modelCatalog: subscriptionId => {
+      if (knobs.catalogDown) throw Error('provider catalog down');
+      return harden({
+        accounts: (declared ?? [{ id: 'default' }])
+          .filter(
+            entry =>
+              subscriptionId === undefined || entry.id === subscriptionId,
+          )
+          .map(entry => ({
+            subscriptionId: entry.id,
+            state: 'current',
+            observedAt: 1,
+            models: (listing ? listing(entry.id) : ['m']).map(id => ({
+              id,
+              title: `Model ${id}`,
+              description: '',
+              default: id === 'm',
+              defaultReasoningEffort: null,
+              reasoningEfforts: [],
+            })),
+          })),
+      });
+    },
     create: async (spec, toolSet) => {
       specs.push(spec);
       return harden({
@@ -133,6 +153,7 @@ const makeWorld = ({ promptEnvironment, subscriptions } = {}) => {
   };
   return {
     factory,
+    knobs,
     declare: next => {
       declared = next;
     },
@@ -236,4 +257,68 @@ test('a session pinned to a subscription that was since removed still runs, on t
   // never run again; it is sent nothing, and still says what it was pinned to.
   t.true(rebuilt.every(spec => !('subscription' in spec)));
   t.is((await E(revived).getInfo()).subscription, 'home');
+});
+
+test('a hosted pin is admitted by what the session’s account lists now; missing discovery refuses and says so', async t => {
+  t.timeout(10_000);
+  // `work` lists a model of its own beside the shared one; `home` does not.
+  const world = makeWorld({
+    subscriptions,
+    listing: id => (id === 'work' ? ['m', 'w'] : ['m']),
+  });
+  t.teardown(world.close);
+  const rows = await E(world.factory).listModels('test');
+  t.deepEqual(
+    rows.map(row => [row.modelId, row.subscriptionIds]),
+    [
+      ['m', ['work', 'home']],
+      ['w', ['work']],
+    ],
+  );
+  // Under `auto`, what any account lists; pinned, only that account's.
+  const onWork = await E(world.factory).createSession({
+    ...hosted,
+    modelId: 'w',
+    subscription: 'work',
+  });
+  t.is((await E(onWork).getInfo()).modelId, 'w');
+  const onAny = await E(world.factory).createSession({ ...hosted, modelId: 'w' });
+  t.is((await E(onAny).getInfo()).modelId, 'w');
+  await t.throwsAsync(
+    E(world.factory).createSession({
+      ...hosted,
+      modelId: 'w',
+      subscription: 'home',
+    }),
+    { message: /Unknown model "w" for backend "test"/ },
+  );
+  await t.throwsAsync(
+    E(world.factory).createSession({ ...hosted, modelId: 'zzz' }),
+    { message: /Unknown model "zzz" for backend "test"/ },
+  );
+  // The backend cannot be read: every account is said to be unavailable,
+  // nothing is offered from it, and no pin is admitted — nor any other
+  // model put in its place.
+  world.knobs.catalogDown = true;
+  t.deepEqual(
+    (await E(world.factory).listModelCatalogs())
+      .filter(catalog => catalog.backendId === 'test')
+      .map(catalog =>
+        catalog.accounts.map(account => [
+          account.subscriptionId,
+          account.state,
+        ]),
+      ),
+    [
+      [
+        ['work', 'unavailable'],
+        ['home', 'unavailable'],
+      ],
+    ],
+  );
+  t.deepEqual(await E(world.factory).listModels('test'), []);
+  await t.throwsAsync(E(world.factory).createSession(hosted), {
+    message: /Model catalog unavailable for backend "test"; no model can be admitted now/,
+  });
+  t.is((await E(world.factory).listSessions()).length, 2);
 });

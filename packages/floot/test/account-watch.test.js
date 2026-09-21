@@ -3,23 +3,24 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { makeAccountOracle } from '@endo/hosted-agent/account-oracle.js';
+import { makeAccountOracleKit } from '@endo/hosted-agent/account-oracle.js';
 import { makeAccountReadingSource } from '@endo/hosted-agent/account-source.js';
 
 import { makeAccountsWatch, projectAccount } from '../src/account-watch.js';
 
 const T0 = '2026-09-20T12:00:00.000Z';
 
-const pushedOracle = providerId => {
+const pushedOracle = (t, providerId) => {
   const account = makeAccountReadingSource({ now: () => T0 });
-  const oracle = makeAccountOracle({
+  const kit = makeAccountOracleKit({
     providerId,
     now: () => T0,
     provideObserved: () => E(account.source).observe(),
     watchObserved: async () => E(account.source).watch(),
     refreshObserved: () => E(account.source).refresh(),
   });
-  return { account, oracle };
+  t.teardown(() => kit.close());
+  return { account, oracle: kit.account };
 };
 
 const weekly = usedPercent =>
@@ -39,8 +40,8 @@ const weekly = usedPercent =>
   });
 
 test('a view is told every account now and when any of them changes', async t => {
-  const codex = pushedOracle('codex');
-  const claude = pushedOracle('anthropic');
+  const codex = pushedOracle(t, 'codex');
+  const claude = pushedOracle(t, 'anthropic');
   const watch = makeAccountsWatch({
     listOracles: async () => ({
       entries: [
@@ -90,11 +91,11 @@ test('a view is told every account now and when any of them changes', async t =>
   ]);
   t.is(account.title, 'Codex');
   await reader.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('an oracle bound after the first view subscribed is found by the next', async t => {
-  const codex = pushedOracle('codex');
+  const codex = pushedOracle(t, 'codex');
   let bound = false;
   const watch = makeAccountsWatch({
     listOracles: async () => ({
@@ -121,7 +122,7 @@ test('an oracle bound after the first view subscribed is found by the next', asy
     heard = (await early.next()).value;
   }
   t.is(heard.accounts[0].backendId, 'codex');
-  watch.close();
+  await watch.close();
 });
 
 test('counts become text and nothing but data reaches a view', t => {
@@ -179,6 +180,7 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
       unknown: [],
     }),
     setTimer: (callback, ms) => timers.push({ callback, ms }),
+    clearTimer: () => {},
     log: (...args) => lines.push(args.join(' ')),
   });
   const reader = iterateReader(watch.watch());
@@ -207,11 +209,11 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
   );
   await reader.return(undefined);
   await second.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('a backend that could not be looked up keeps the account it had', async t => {
-  const codex = pushedOracle('codex');
+  const codex = pushedOracle(t, 'codex');
   let failing = false;
   const watch = makeAccountsWatch({
     listOracles: async () =>
@@ -242,12 +244,12 @@ test('a backend that could not be looked up keeps the account it had', async t =
     heard = (await reader.next()).value;
   }
   t.pass();
-  watch.close();
+  await watch.close();
 });
 
 test('a backend with several subscriptions is one account each, told apart by key', async t => {
-  const work = pushedOracle('codex');
-  const home = pushedOracle('codex');
+  const work = pushedOracle(t, 'codex');
+  const home = pushedOracle(t, 'codex');
   const watch = makeAccountsWatch({
     listOracles: async () => ({
       entries: [
@@ -304,12 +306,12 @@ test('a backend with several subscriptions is one account each, told apart by ke
     [],
   );
   await reader.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('an account with an admin shows where its redeems stand, and a redeem goes through that admin only', async t => {
-  const codex = pushedOracle('codex');
-  const claude = pushedOracle('anthropic');
+  const codex = pushedOracle(t, 'codex');
+  const claude = pushedOracle(t, 'anthropic');
   /** @type {any} */
   let state = { pending: null, last: null };
   /** @type {any[]} */
@@ -391,7 +393,7 @@ test('an account with an admin shows where its redeems stand, and a redeem goes 
   t.is(of(settled, 'codex').reset.pending, null);
   t.is(of(settled, 'codex').reset.last.outcome, 'reset');
   await reader.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('a reset state is plain data whatever the admin answered', t => {

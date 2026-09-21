@@ -180,6 +180,9 @@ export const modelsFromOpenRouterCatalog = models =>
           defaultReasoningEffort: efforts.length
             ? (model.reasoning?.defaultEffort ?? null)
             : null,
+          ...(model.contextLength === null
+            ? {}
+            : { contextLength: model.contextLength }),
         });
       }),
   );

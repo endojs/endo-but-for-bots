@@ -11,17 +11,21 @@ import {
   makeProviderBrokerGrant,
 } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
+import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
+import { admitsModels } from './admits-models.js';
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from '../src/provider-broker.js' */
 
 const policy = harden({
   origin: 'https://api.example.test',
   routes: [{ method: 'POST', path: '/v1/responses' }],
-  models: ['allowed'],
   maxConcurrentRequests: 4,
   maxRequestBytes: 1000n,
   maxResponseBytes: 100n,
 });
+// What the one account's catalog lists, as a grant is told it. The grant
+// itself keeps no list; see model-catalog.js.
+const admits = admitsModels(['allowed']);
 const request = harden({
   method: 'POST',
   path: '/v1/responses',
@@ -60,6 +64,7 @@ for (const streaming of [false, true]) {
     const broker = makeProviderBrokerGrant(
       { ...policy, maxRequestBytes: 200_000n },
       {
+        admits,
         transport: transport.transport,
         secret: Far('secret', {
           async readBase64() {
@@ -273,6 +278,7 @@ const setup = ({
     },
   });
   const powers = {
+    admits,
     secret: record
       ? record.secret
       : Far('secret', {
@@ -529,6 +535,7 @@ test('transport deadline releases an abandoned stream without another pull', asy
   const grant = makeProviderBrokerGrant(
     { ...policy, maxConcurrentRequests: 1 },
     {
+      admits,
       secret: Far('secret', { readBase64: async () => btoa(credential) }),
       transport: transport.transport,
     },
@@ -641,11 +648,11 @@ test('caller headers are forwarded, but never the ones the broker owns', async t
 });
 
 test('operator policy mutation does not widen a lease', async t => {
-  const models = ['allowed'];
   const routes = [{ method: 'POST', path: '/v1/responses' }];
-  const { endpoint } = setup({ limits: { models, routes } });
-  models.push('denied');
+  const { endpoint } = setup({ limits: { routes } });
   routes[0].path = '/admin';
+  // There is no model list to widen: a model the account does not list is
+  // refused whatever the operator's values do afterwards.
   await t.throwsAsync(
     () =>
       E(endpoint).request(harden({ ...request, body: '{"model":"denied"}' })),
@@ -779,6 +786,7 @@ const streamingSetup = (chunks, limits = {}) => {
     },
   });
   const lease = makeProviderBrokerGrant(harden({ ...policy, ...limits }), {
+    admits,
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -862,6 +870,7 @@ test('cancel suppresses a pending delivery even if upstream ignores cancellation
     deliver = resolve;
   });
   const lease = makeProviderBrokerGrant(policy, {
+    admits,
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -907,6 +916,7 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
       },
     });
     const lease = makeProviderBrokerGrant(policy, {
+      admits,
       secret: Far('secret', {
         async readBase64() {
           return btoa(credential);
@@ -1288,6 +1298,7 @@ test('the guard re-reads, so a credential refreshed elsewhere is not re-exchange
   const lease = makeProviderBrokerGrant(
     { ...policy, ...oauthLimits },
     {
+      admits,
       secret: record.secret,
       transport: Far('transport', {
         async request(r) {
@@ -1970,6 +1981,67 @@ test('an undo that cannot land leaves the mark and the original failure', async 
   t.like(record.stored().pendingRefresh, { startedAt: 0 });
 });
 
+test('retirement never acknowledges a renewal result CAS that writes then rejects', async t => {
+  let entered;
+  let release;
+  const started = new Promise(resolve => {
+    entered = resolve;
+  });
+  const paused = new Promise(resolve => {
+    release = resolve;
+  });
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      entered();
+      await paused;
+      return oauthState({
+        accessToken: 'fresh-access',
+        refreshToken: 'fresh-refresh',
+      });
+    },
+  });
+  const raw = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('LostAckRotate', {
+      replaceBase64: async (base64, options) => {
+        const result = await E(record.rotate).replaceBase64(base64, options);
+        if (record.rotations.length === 2)
+          throw Error('lost result write acknowledgement');
+        return result;
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  const owner = makePoolMemberLifecycle();
+  const current = owner.runCredential(() => raw.current());
+  const failedCurrent = t.throwsAsync(current, { message: /rotation failed/ });
+  await started;
+  let successors = 0;
+  const replacement = owner.close().then(() => {
+    successors += 1;
+  });
+  const failedReplacement = t.throwsAsync(replacement, {
+    message: /cleanup pending/,
+  });
+  release();
+  await failedCurrent;
+  await failedReplacement;
+  t.is(
+    record.stored().accessToken,
+    'fresh-access',
+    'internal rotation persistence was not fenced',
+  );
+  await t.throwsAsync(owner.close(), { message: /cleanup pending/ });
+  t.throws(() => owner.runCredential(() => raw.current()), {
+    message: /uncertain/,
+  });
+  t.is(successors, 0);
+  t.is(record.exchanges.length, 1);
+});
+
 test('a result that cannot be stored fences the record for every later owner', async t => {
   const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
   // Healthy for the intent, broken for the commit: the exact shape of a
@@ -2184,6 +2256,7 @@ test('a bytes chunk has a ceiling, whatever the upstream sent at once', async t 
   const lease = makeProviderBrokerGrant(
     harden({ ...policy, maxResponseBytes: 1_000_000n }),
     {
+      admits,
       secret: Far('secret', { readBase64: async () => btoa(credential) }),
       transport: Far('transport', {
         request: async () => harden({ status: 200, body: '' }),
@@ -2225,6 +2298,7 @@ test('closing the bytes stream while the upstream is quiet cancels the upstream'
   /** @type {(value: any) => void} */
   let release = () => {};
   const lease = makeProviderBrokerGrant(policy, {
+    admits,
     secret: Far('secret', { readBase64: async () => btoa(credential) }),
     transport: Far('transport', {
       request: async () => harden({ status: 200, body: '' }),
@@ -2266,6 +2340,7 @@ test('a revoked grant delivers nothing more over the bytes stream, not even what
   const lease = makeProviderBrokerGrant(
     harden({ ...policy, maxResponseBytes: 1_000_000n }),
     {
+      admits,
       secret: Far('secret', { readBase64: async () => btoa(credential) }),
       transport: Far('transport', {
         request: async () => harden({ status: 200, body: '' }),
@@ -2335,6 +2410,7 @@ const poolSetup = ({
   const member = id =>
     harden({
       id,
+      admits,
       secret: Far(`${id} secret`, {
         readBase64: async () => btoa(`${id}-credential`),
       }),
@@ -2484,7 +2560,7 @@ test('a credential the first subscription was sent is still screened from the se
 
 test('a pool’s set must be well formed', t => {
   const member = id =>
-    harden({ id, secret: Far('s', {}), transport: Far('t', {}) });
+    harden({ id, admits, secret: Far('s', {}), transport: Far('t', {}) });
   const make = members =>
     makeProviderBrokerGrant(policy, {
       pool: { members, select: () => [], served() {}, exhausted() {} },
@@ -2515,6 +2591,7 @@ test('the pool’s bookkeeping cannot change how a request settles', async t => 
       members: [
         harden({
           id: 'only',
+          admits,
           secret: Far('secret', { readBase64: async () => btoa('only-key') }),
           transport: Far('transport', {
             request: async () => harden({ status: 200, body: 'fine' }),
@@ -2543,6 +2620,7 @@ test('a member whose credential cannot be used is reported, and the request is n
   const member = (id, secret, transportRequest) =>
     harden({
       id,
+      admits,
       secret,
       transport: Far(`${id} transport`, {
         request: transportRequest,
@@ -2722,6 +2800,7 @@ test('a request the provider was given the whole deadline for is not free, thoug
   // An endpoint a share sits on is told, since a failed call has no usage
   // to await.
   const told = makeProviderBrokerGrant(policy, {
+    admits,
     secret: Far('secret', { readBase64: async () => btoa(credential) }),
     transport: Far('transport', {
       request: async () => {
@@ -2740,4 +2819,278 @@ test('a request the provider was given the whole deadline for is not free, thoug
     },
   });
   await t.throwsAsync(() => E(broken.endpoint).requestByteStream(request));
+});
+
+/**
+ * A grant over two subscriptions whose accounts list different models, each
+ * answering admission for itself; what is sent to each is recorded.
+ *
+ * @param {{ first?: string[] | 'throws', second?: string[], select?: () => string[] }} [options]
+ */
+const catalogPoolSetup = ({
+  first = ['allowed'],
+  second = ['allowed'],
+  select = () => ['first', 'second'],
+} = {}) => {
+  /** @type {Record<string, any[]>} */
+  const sent = { first: [], second: [] };
+  /** @type {string[]} */
+  const events = [];
+  /** @type {string[]} */
+  const secretReads = [];
+  /** @param {string} id @param {string[] | 'throws'} lists */
+  const member = (id, lists) =>
+    harden({
+      id,
+      admits:
+        lists === 'throws'
+          ? async () => {
+              throw Error('catalog owner unavailable');
+            }
+          : admitsModels(lists),
+      secret: Far(`${id} secret`, {
+        readBase64: async () => {
+          secretReads.push(id);
+          return btoa(`${id}-credential`);
+        },
+      }),
+      transport: Far(`${id} transport`, {
+        async request(upstream) {
+          sent[id].push(upstream);
+          return harden({ status: 200, body: `served by ${id}` });
+        },
+        async requestStream() {
+          throw Error('unused');
+        },
+      }),
+    });
+  const lease = makeProviderBrokerGrant(policy, {
+    audit: event => events.push(event.event),
+    pool: {
+      members: [member('first', first), member('second', second)],
+      select,
+      served: id => events.push(`served:${id}`),
+      exhausted: id => events.push(`exhausted:${id}`),
+    },
+  });
+  return { ...lease, sent, events, secretReads };
+};
+
+test('a request is served only by a subscription whose account lists its model', async t => {
+  const pool = catalogPoolSetup({ first: ['other'], second: ['allowed'] });
+  const response = await E(pool.endpoint).request(request);
+  t.is(response.body, 'served by second');
+  // The first member's account does not list the model: it is not tried,
+  // and its credential is not read. The pool is told who served.
+  t.deepEqual(pool.sent.first, []);
+  t.is(pool.sent.second.length, 1);
+  t.deepEqual(pool.secretReads, ['second']);
+  t.deepEqual(pool.events, ['admitted', 'completed', 'served:second']);
+  // What the account lists is asked per request, of the model requested:
+  // the next request names what only the first account lists.
+  const other = await E(pool.endpoint).request(
+    harden({ ...request, body: '{"model":"other"}' }),
+  );
+  t.is(other.body, 'served by first');
+  t.is(pool.sent.first.length, 1);
+  t.is(pool.sent.second.length, 1);
+  t.deepEqual(pool.secretReads, ['second', 'first']);
+  await t.throwsAsync(
+    () =>
+      E(pool.endpoint).request(
+        harden({ ...request, body: '{"model":"nobody"}' }),
+      ),
+    { message: /Model denied/ },
+  );
+  t.deepEqual(pool.secretReads, ['second', 'first']);
+});
+
+test('a session pinned to a subscription that does not list the model is refused, not moved', async t => {
+  // The pool names only the pinned member, as it does for a pinned session.
+  const pool = catalogPoolSetup({
+    first: ['other'],
+    second: ['allowed'],
+    select: () => ['first'],
+  });
+  await t.throwsAsync(() => E(pool.endpoint).request(request), {
+    message: /Model denied/,
+  });
+  t.deepEqual(pool.sent.second, []);
+  t.deepEqual(pool.secretReads, []);
+  t.deepEqual(pool.events, ['model-denied']);
+  t.is((await E(pool.admin).getStatus()).activeRequests, 0);
+});
+
+test('an account whose catalog cannot answer admits nothing, and no account admitting is a refusal before any spend', async t => {
+  const pool = catalogPoolSetup({ first: 'throws', second: ['allowed'] });
+  t.is((await E(pool.endpoint).request(request)).body, 'served by second');
+  const none = catalogPoolSetup({ first: 'throws', second: [] });
+  await t.throwsAsync(() => E(none.endpoint).request(request), {
+    message: /Model denied/,
+  });
+  t.deepEqual(none.secretReads, []);
+  t.deepEqual(none.events, ['model-denied']);
+});
+
+test('a grant with no account admission is refused at construction: there is no operator list to fall back on', t => {
+  t.throws(
+    () =>
+      makeProviderBrokerGrant(policy, {
+        secret: Far('secret', { readBase64: async () => btoa(credential) }),
+        transport: Far('transport', {
+          request: async () => harden({ status: 200, body: '' }),
+        }),
+      }),
+    { message: /Invalid broker subscription set/ },
+  );
+  // A policy from before account catalogs, carrying a list, is refused
+  // rather than having its list silently ignored.
+  t.throws(
+    () =>
+      makeProviderBrokerGrant(
+        /** @type {any} */ ({ ...policy, models: ['allowed'] }),
+        {
+          admits,
+          secret: Far('secret', { readBase64: async () => btoa(credential) }),
+          transport: Far('transport', {
+            request: async () => harden({ status: 200, body: '' }),
+          }),
+        },
+      ),
+    { message: /Broker policy must not name models/ },
+  );
+});
+
+test('a far subscription is asked only when its holder’s answer lists the model, and its own refusal hands the request on', async t => {
+  /** @type {any[]} */
+  const farCalls = [];
+  let opened = 0;
+  /** @param {string} id @param {string[]} lists @param {boolean} refuses */
+  const wrappedMember = (id, lists, refuses) =>
+    harden({
+      id,
+      admits: admitsModels(lists),
+      wrapped: {
+        provide: async () => {
+          opened += 1;
+          return Far(`${id} far`, {
+            request: async message => {
+              farCalls.push(message);
+              if (refuses) throw Error('Model denied');
+              return harden({ status: 200, body: `served far by ${id}` });
+            },
+            requestByteStream: async () => {
+              throw Error('unused');
+            },
+            attestation: async () => harden({}),
+            revoke: async () => {},
+          });
+        },
+        reset: () => {},
+      },
+    });
+  /** @param {string} id @param {string[]} lists */
+  const ownMember = (id, lists) =>
+    harden({
+      id,
+      admits: admitsModels(lists),
+      secret: Far(`${id} secret`, {
+        readBase64: async () => btoa(`${id}-credential`),
+      }),
+      transport: Far(`${id} transport`, {
+        async request() {
+          return harden({ status: 200, body: `served by ${id}` });
+        },
+        async requestStream() {
+          throw Error('unused');
+        },
+      }),
+    });
+  /** @param {any[]} members */
+  const grant = members => {
+    /** @type {string[]} */
+    const events = [];
+    const lease = makeProviderBrokerGrant(policy, {
+      audit: event => events.push(event.event),
+      pool: {
+        members,
+        select: () => members.map(member => member.id),
+        served: id => events.push(`served:${id}`),
+        exhausted: id => events.push(`exhausted:${id}`),
+        unusable: id => events.push(`unusable:${id}`),
+      },
+    });
+    return { ...lease, events };
+  };
+  // The far share's holder lists nothing of ours: it is not even opened.
+  const skipped = grant([
+    wrappedMember('far', ['other'], false),
+    ownMember('own', ['allowed']),
+  ]);
+  t.is((await E(skipped.endpoint).request(request)).body, 'served by own');
+  t.is(opened, 0);
+  t.deepEqual(skipped.events, ['admitted', 'completed', 'served:own']);
+  // The holder's answer was the union of its accounts; the one that serves
+  // just now refuses the model, and our own account that lists it serves.
+  const refused = grant([
+    wrappedMember('far', ['allowed'], true),
+    ownMember('own', ['allowed']),
+  ]);
+  t.is((await E(refused.endpoint).request(request)).body, 'served by own');
+  t.is(opened, 1);
+  t.is(farCalls.length, 1);
+  t.deepEqual(refused.events, [
+    'admitted',
+    'model-denied',
+    'completed',
+    'served:own',
+  ]);
+  // With nobody left to hand it to, the far refusal is the request's.
+  const alone = grant([wrappedMember('far', ['allowed'], true)]);
+  await t.throwsAsync(() => E(alone.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  // A far share that lists the model serves it.
+  const served = grant([wrappedMember('far', ['allowed'], false)]);
+  t.is((await E(served.endpoint).request(request)).body, 'served far by far');
+});
+
+test('a refusal says in its audit trail whether anybody could answer', async t => {
+  /** @param {string} state */
+  const member = state =>
+    harden({
+      id: `m-${state}`,
+      admits: async () => false,
+      catalogState: () => state,
+      secret: Far('secret', { readBase64: async () => btoa('x') }),
+      transport: Far('transport', {
+        request: async () => harden({ status: 200, body: '' }),
+      }),
+    });
+  /** @param {any[]} members */
+  const refusal = async members => {
+    /** @type {string[]} */
+    const events = [];
+    const lease = makeProviderBrokerGrant(policy, {
+      audit: event => events.push(event.event),
+      pool: {
+        members,
+        select: () => members.map(entry => entry.id),
+        served() {},
+        exhausted() {},
+      },
+    });
+    await t.throwsAsync(() => E(lease.endpoint).request(request), {
+      message: /Model denied/,
+    });
+    return events;
+  };
+  t.deepEqual(await refusal([member('current')]), ['model-denied']);
+  t.deepEqual(await refusal([member('stale')]), ['model-denied']);
+  t.deepEqual(await refusal([member('unavailable'), member('unsupported')]), [
+    'catalog-unavailable',
+  ]);
+  t.deepEqual(await refusal([member('unavailable'), member('current')]), [
+    'model-denied',
+  ]);
 });

@@ -435,8 +435,8 @@ export const makeAuditJournal = ({
       return bytes > inlineBytes ? [{ field, value, bytes }] : [];
     });
     for (const { field, value, bytes } of large) {
-      storeContent ||
-        Fail`audit payload ${q(field)} of ${q(bytes)} bytes exceeds ${q(inlineBytes)} inline bytes and this journal stores no content`;
+      if (!storeContent)
+        throw Fail`audit payload ${q(field)} of ${q(bytes)} bytes exceeds ${q(inlineBytes)} inline bytes and this journal stores no content`;
       bytes <= MAX_VALUE_BYTES ||
         Fail`audit payload ${q(field)} of ${q(bytes)} bytes exceeds the ${q(MAX_VALUE_BYTES)}-byte storage value bound`;
       const ref = `sha256:${createHash('sha256').update(value).digest('hex')}`;
@@ -530,7 +530,7 @@ export const makeAuditJournal = ({
     async content(ref) {
       /^sha256:[0-9a-f]{64}$/.test(ref) ||
         Fail`invalid audit content reference`;
-      readContent || Fail`this journal stores no content`;
+      if (!readContent) throw Fail`this journal stores no content`;
       const text = await readContent(ref);
       (typeof text === 'string' &&
         `sha256:${createHash('sha256').update(text).digest('hex')}` === ref) ||

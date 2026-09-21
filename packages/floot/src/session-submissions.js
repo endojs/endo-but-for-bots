@@ -56,6 +56,12 @@ export const makeSessionSubmissions = ({
   let hold = null;
   let initialised = false;
   let chain = Promise.resolve();
+  let closed = false;
+  const followups = new Set();
+  const closeFailures = [];
+  const assertOpen = () => {
+    if (closed) throw Error('Floot submissions incarnation is closed');
+  };
 
   const changed = () => {
     try {
@@ -75,13 +81,17 @@ export const makeSessionSubmissions = ({
   /**
    * @template T
    * @param {() => Promise<T>} step
+   * @param {boolean} [finishing] permit an already admitted turn's final write
    * @returns {Promise<T>}
    */
-  const serial = step => {
+  const serial = (step, finishing = false) => {
+    if (!finishing) assertOpen();
     const result = chain.then(step);
     chain = result.then(
       () => undefined,
-      () => undefined,
+      error => {
+        if (closed) closeFailures.push(error);
+      },
     );
     return result;
   };
@@ -144,7 +154,7 @@ export const makeSessionSubmissions = ({
       });
       return;
     }
-    void E(turn)
+    const followup = E(turn)
       .whenFinished()
       .then(async () => {
         if (begun) return;
@@ -157,16 +167,20 @@ export const makeSessionSubmissions = ({
             reason: 'refused',
             message: `Not sent: ${status?.error || 'the turn ended before it started'}`,
           });
-        });
+        }, true);
       })
       .catch(error => {
+        if (closed) closeFailures.push(error);
         console.error('[floot-submissions] dispatch follow-up failed:', error);
       });
+    followups.add(followup);
+    void followup.finally(() => followups.delete(followup));
   };
 
   const pumpStep = async () => {
+    if (closed) return;
     await initialise();
-    if (hold || getCurrentTurn() || refusal()) return;
+    if (closed || hold || getCurrentTurn() || refusal()) return;
     const [head] = queue.list();
     if (!head) return;
     if (head.state === 'interrupted') {
@@ -181,7 +195,7 @@ export const makeSessionSubmissions = ({
     const entry = await queue.claim();
     if (!entry) return;
     // Re-check: the claim was a durable write, and the slot may have filled.
-    if (getCurrentTurn() || refusal()) {
+    if (closed || getCurrentTurn() || refusal()) {
       await queue.release(entry.id);
       return;
     }
@@ -189,11 +203,30 @@ export const makeSessionSubmissions = ({
   };
   /** Try to start the head. Safe to call at any time, from anywhere. */
   const pump = () =>
-    serial(pumpStep).catch(error => {
-      console.error('[floot-submissions] pump failed:', error);
-    });
+    closed
+      ? Promise.resolve()
+      : serial(pumpStep).catch(error => {
+          console.error('[floot-submissions] pump failed:', error);
+        });
 
   return harden({
+    close: async () => {
+      closed = true;
+      for (;;) {
+        const current = chain;
+        // Drain follow-ups admitted by the preceding queue entry as well.
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.allSettled([current, ...followups]);
+        if (current === chain && followups.size === 0) {
+          if (closeFailures.length)
+            throw new AggregateError(
+              closeFailures,
+              'Floot submissions disposal failed',
+            );
+          return;
+        }
+      }
+    },
     /**
      * Load the queue (and hold it if it came back non-empty). Never rejects:
      * a queue that cannot be read is reported through `read().hold`.
@@ -217,7 +250,7 @@ export const makeSessionSubmissions = ({
         const entry = await queue.enqueue(text, { claim: idle });
         if (entry.state !== 'dispatching') {
           await pumpStep();
-        } else if (getCurrentTurn() || refusal()) {
+        } else if (closed || getCurrentTurn() || refusal()) {
           // The write took a moment, and something else took the slot (a
           // direct `startTurn`). Not a refusal: the message simply waits.
           await queue.release(entry.id);

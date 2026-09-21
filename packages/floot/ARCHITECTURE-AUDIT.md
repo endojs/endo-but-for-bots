@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-09-21 |
-| **Updated** | 2026-09-21 |
+| **Updated** | 2026-09-22 |
 | **Author** | kumavis (prompted) |
-| **Status** | Active — audit complete; remediation open |
+| **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
 | **Scope** | PR #1248 and the associated endo-host deployment wiring |
 
@@ -53,6 +53,28 @@ no retained formula referring to it.
 
 ## Findings register
 
+### Native recovery — separate research follow-up
+
+The dedicated [investigation and scope decision](../../designs/hosted-native-recovery-investigation.md)
+records discovery, evidence, alternatives, commit disposition, and research gates.
+Automatic per-session crash recovery and the proposed producer service are deferred
+from PR #1248; no producer architecture is selected or required to finish this PR.
+Retain the landed fail-closed ownership/disposal fixes, with their documented
+availability costs. Preserve Secrets, renewal owners, and workspaces.
+
+Continue the bounded refactor and normal-operation acceptance; use an explicit,
+verified operator cutover for old native resources. If exact safe retirement cannot
+be established, stop deployment rather than clearing markers or pretending cleanup
+succeeded. A ready-to-run recovery procedure remains a bounded deployment gate,
+not an instruction to finish the new producer architecture.
+Keep process-loss recovery and cross-worker cleanup proof open in the audit and
+tracked follow-up; do not count them as completed by deferral.
+The producer prototypes are isolated on `codex/native-recovery-research` in
+[draft tracking PR #1323](https://github.com/endojs/endo-but-for-bots/pull/1323),
+not in the current refactor branch and not ready to merge.
+Public declaration fixes and independently useful landed lifecycle corrections
+remain on the main working branch. No runtime changes accompany this scope decision.
+
 ### Retrospective durability audit — required, in progress
 
 The inventory starts at the unified-sandbox design commit `3332f1928` and
@@ -68,14 +90,16 @@ No claim of complete retrospective coverage is made yet.
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
 | Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
-| Credential ownership and Secret rebinding | Owned pool bindings now retain actual capabilities and reject mutable-name rebinding. Surviving grants/facets and independent credential owners still need lifecycle enforcement. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
-| Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
+| Credential ownership and Secret rebinding | Owned pool bindings retain actual capabilities and reject mutable-name rebinding. Member retirement now fences and drains retained facets, renewals, transports, wrapped readers/endpoints, and observation writes; 179 focused and two real-daemon tests pass. | Cross-worker renewal exclusion, retirement epochs, and process-loss transaction recovery remain open. Module-local drain does not establish these. |
+| Native teardown after reconstruction | The fail-closed teardown (`0d66bd945`: absent/failed scope lookup refuses stop acknowledgement; mount reclamation waits for sandbox close) was deployed on 2026-09-22 in generation 160 and observed: after a graceful `endo-daemon` restart every ready hosted session failed to reopen and to delete with `Original native cleanup proof is unavailable`, and six records were stranded with their listener containers and 9p mounts. **Reverted from this branch the same day and moved to #1323**: `session-supervisor.js` again treats absent/failed scope lookup as diagnostic and reclaims the recorded mount, as the release that passed the second pass's restart/restore did; runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof stays with the dedicated investigation (#1323), where the fail-closed teardown now lives with its six injected-reconstruction tests. A missing scope still cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
 | Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
 | Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
+| Model admission and account catalogs | Implemented locally: each pool member's catalog owner is per incarnation and deliberately ephemeral (`model-catalog.js`); admission and `modelCatalog()` read it through the member's fenced lifecycle with a non-sticky credential facet; retirement closes it after draining a read in flight, and a far share's read has a deadline; a retained broker configuration carrying an operator `models` list is refused with the retirement instruction. Twenty-four new focused tests, 656 hosted-agent tests and the real-daemon catalog reconstruction test pass. | Reconstruction re-reads the provider under the same credential owner and cannot revive retired authority or spend; the durable pin stays in the session plan. Retire and re-mint the three brokers at cutover; observe live Codex, Claude and OpenRouter catalog reads on Tokyo. Not deployed. |
+| Backend catalogs and pin admission | Implemented locally: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Not deployed. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -92,10 +116,74 @@ Maps establishes that invariant.
 Private journal retirement must occur only during terminal deletion, after the
 writer and backend drain, not in generic `cleanupSessionResources`: startup also
 calls that helper for incomplete creation and then reopens the existing schema.
-The factory currently ignores its context; it needs an explicit disposal hook,
-admission fence, and drain of creation, registry/submission writes, and journal
-queues before replacement can safely start.
+The factory now registers and awaits its formula disposal hook before startup.
+It fences retained factory/session/spawner facets, drains admitted work and
+private journal/submission queues, and terminates backend admins without deleting
+established sessions or persisting an operator emergency-stop flag.
+Interrupted creation can still roll back its provisional session resources.
+A second resource sweep and a post-acquisition fence stop late native admins.
+Three real-daemon tests cover a held voice-preferences write, write-then-reject
+uncertainty, and a held native creation that returns its admin during disposal.
+Successful disposal permits reconstruction; failed admitted writes/creation
+retain the daemon's failed-disposal barrier.
+Independent unit/adjacent coverage passes 110 tests, with separate watcher tests
+below. This does not establish full archived-turn/inbox process-loss recovery.
+The final combined change passes all 446 Floot tests and the three real-daemon
+factory lifecycle cases; scoped lint has no errors.
+The clean type-build results below supersede the earlier declaration-baseline
+failure reported during that slice.
+Account observers now fence reconciliation after awaits, cancel retry timers,
+explicitly close acquired oracle readers, and drain admitted refresh/reset calls.
+Seven new watcher lifecycle tests plus eight existing projection/observation
+tests pass; historical stream failure is distinguished from an independent
+reader-close acknowledgement, and failed reader closure remains retryable.
+A rejected watch-acquisition reply can still hide a remote reader allocation
+whose capability was never received. This observer-protocol reclamation gap
+remains open; no claim that every remote reader is reclaimed is made.
+It does not grant the closed factory a new reader or revive its canonical writer.
+Closed private-journal facades remain retained until factory disposal; terminal
+journal namespace retirement and earlier facade reclamation remain open.
+Source review found the separately minted account oracle ignored formula
+disposal: `ensureWatching` could continue `applyObserved` journal writes after
+Floot closed its own reader.
+The oracle now exposes a private lifecycle kit and registers/awaits its formula
+disposal hook before exposing the public account facet.
+Disposal fences retained public calls and source pushes, cancels retry timers,
+closes the acquired upstream reader through its explicit cleanup facet, and
+drains admitted builds and journal writes before replacement.
+Uncertain journal writes refuse handoff; ordinary observation/read failures
+remain eligible for remembered-data fallback.
+The unused facet-only constructor was removed rather than retained as a
+compatibility wrapper; tests now retain and close their oracle kits.
+Thirty-six oracle tests and fifteen Floot watcher tests pass, plus two
+real-daemon held-journal-write tests, including write-then-reject uncertainty
+and retained old-facet/source checks. Scoped lint has no errors.
+This proves the tested formula-incarnation boundary, not cross-formula
+same-namespace exclusion or process-loss observer reclamation.
 An incarnation-local registry does not establish cross-worker exclusion.
+Pooled member retirement now has a module-local admission/drain owner.
+Removal fences retained account/model/reset/credential access, closes only that
+member's inference transports and wrapped endpoints/status reader, drains
+admitted renewals and reset outcomes, and retains failed cleanup owners.
+Renewal CAS persistence already in progress remains unfenced; raw credential
+failures conservatively prevent clean retirement, even for transient reads.
+Provider transport close drains fetch-to-reader acquisition and body
+cancellation. Independent review reproduced a response acquired after close
+acknowledgement; nine deterministic microtask regressions cover the corrected
+handoff. Independent status-reader close separates resource release from
+historical stream errors.
+Chooser observations use capability-bound v2 snapshots, never adopt v1 or
+pre-identity history, and are fenced/drained on shutdown.
+The final slice passes 179 focused tests and two real-daemon lifecycle tests;
+independent adversarial review approved the corrected transport handoff.
+These are not cross-worker exclusion or process-loss cleanup guarantees.
+Durable `pendingRefresh` and identity journals remain authoritative on revival.
+Failed credential/current calls, body cancellation acknowledgements, or remote
+release can require operator recovery. Removed IDs/authorities remain tombstoned;
+safe re-add and retirement epochs are not implemented.
+Failed observation writes may lose cache hints but cannot grant authority.
+An unpublished partial pool core can retain never-used transports until member
+retirement; this remains a cleanup follow-up.
 The daemon barrier now rejects reconstruction while exact-formula disposal is
 pending or failed, including dependency cancellation.
 It rejects rather than waits, so mutually dependent cleanup lookups cannot
@@ -114,6 +202,48 @@ during deletion, a late inspector read, and skipped cleanup after reclamation
 failure. The final tests cover these boundaries.
 The fences last only for the current daemon incarnation; native resources still
 require independent reconciliation after process loss.
+Native cleanup source review confirms that current Podman labels identify the
+runtime owner and a random operation, not a durably recorded session scope.
+Either missing reconstructed scope prevents native-stop acknowledgement.
+Missing sandbox closure proof also prevents mount reclamation; a missing broker
+scope does not prevent reclaiming the mount after the sandbox has closed.
+The native supervisor now fails closed when either original scope cannot be
+recovered, and awaits successful sandbox closure before recorded mount
+reclamation. Failed cleanup preserves the native record and storage for retry;
+already released owners are retained as such during a same-incarnation retry.
+Six new injected-reconstruction tests cover missing sandbox/broker scopes,
+null/rejected lookup, rejected close, storage retention, retry, and held-close
+ordering.
+These tests use the production session owner and supervisor, but are not an
+actual process-loss or Podman reconciliation test.
+Automatic reconciliation still requires recorded scope/incarnation identity
+and proof that old producers can no longer create resources.
+Broad container sweeps are not such proof.
+Automatic recovery remains blocked on that reconciliation: after a real restart
+even a legitimately absent scope currently lacks proof. For the current PR,
+use the bounded, verified operator-retirement cutover described in the separate
+investigation; do not require completion of the proposed producer architecture.
+If safe retirement cannot be established, retain the records and stop deployment.
+A privileged producer adapter was explored after conditional operator approval,
+but the expanded architecture was subsequently stopped for scope review.
+That proposed protocol is superseded as a current-PR direction by the separate
+native recovery investigation; it is not required before this PR can proceed.
+Existing broad host cleanup is not proven safe by this deferral. A bounded
+operator cutover must establish exact ownership and stopped producers before
+reclaiming recorded resources, preserving shared renewal owners and workspaces.
+Neither a particular new adapter nor replacement of all cleanup with its draft
+journal is prescribed. Unknown resources and uncertain stop outcomes stay intact.
+The runtime's exclusive owner symlink also lacked directory flushes.
+The local fix flushes directory ancestry before acquisition and the marker's
+directory before returning an effect-producing owner.
+Release now flushes its unlink and retries failed flushes without deleting a
+successor's marker. A failed publication flush leaves exclusion in place and
+requires explicit recovery; it does not silently treat the marker as stale.
+Four new tests cover pending/failed publication flush, ancestry failure, and
+release retry with a successor present; the adjacent runtime and owner suites
+also pass (39 cases through the package's test configurations).
+This verifies flush ordering and fail-closed behavior on supported filesystems,
+not physical power-loss durability or automatic orphan reconciliation.
 Mount-inspection fix: the default recorded-cleanup socket check now treats only
 ENOENT as absence and propagates EACCES/EIO before unmount or directory removal.
 Ten focused tests pass, including vanished-entry success and both inspection
@@ -128,8 +258,74 @@ Tokyo's endo user successfully opened and synced `/var/lib/endo/codex-state`
 and every ancestor through `/` using the production flags; `/var/lib/endo`
 is on `/dev/vdb`, ext4.
 This proves filesystem/permission support, not deployment or a power-loss test.
-Repository type generation remains blocked by widespread TS5055 stale-output
-errors; no global typecheck success is claimed.
+Verified ignored generated declarations, source maps, and build-info files were
+moved to recoverable temporary quarantine; checked-in declarations, source,
+dependencies, and unrelated files were not moved.
+The clean rebuild exposed source contract errors previously hidden by stale
+declarations: subscription fields, iterator signatures, credential validation
+narrowing, issuer optional authority, usage shapes, and a setup `pool` boolean
+leaking into the runtime pool-capability option.
+Explicit guards preserve validation behavior; missing usage remains distinct
+from known-zero usage. The setup flag is now removed before runtime assembly.
+With the local contract corrections and oracle lifecycle changes, the clean
+repository `yarn build:types` passes. Incremental generation still reproduced
+TS5055 output/input collisions and remains a separate build-system issue.
+Tests for the UI/Claude/Codex contract corrections pass (59, 11, and 19 cases);
+scoped lint has no errors. Independent review also passes 170 hosted-agent tests.
+The root `yarn test:types` also passes all 14 opted-in package tasks.
+API documentation generation against the corrected declarations completed with
+3,148 errors and 152 warnings; this gate remains failing, separately from the
+passing clean declaration build. Incremental generation and documentation need
+further diagnosis; no repository-wide green-build claim is made.
+The documentation run repeatedly compiles root-project diagnostics in several
+package conversions; its error total is not a count of distinct defects.
+The package-mode docs reader now selects each package's production roots using
+TypeDoc's public options API, retaining explicit entrypoints and normal imported
+dependency checking. Generated declarations no longer hide JavaScript roots.
+Two regression tests and independent review pass; five previously missing
+entrypoints now convert. The full documentation run completes with 13 errors
+and 104 warnings: 12 distinct source/declaration diagnostics plus the failed
+conversion summary. This supersedes the earlier repeated-root error count, but
+does not establish a passing docs gate. Remaining diagnostics concern asset
+server method types, OpenCode bridge/transcript annotations, exported native
+controller/setup declarations, and hosted-agent pass-style dependency resolution.
+The OpenCode subset is corrected: bridge option JSDoc now names the actual
+options object, and transcript input has an explicit record type supported by
+its existing JSON object/non-array check. Six input shapes are covered without
+changing normalization behavior. Twenty-six focused tests pass independently,
+scoped lint has no errors, and actual OpenCode documentation conversion passes.
+Other packages' documentation diagnostics remain open.
+The subsequent declaration correction clears those remaining errors: native
+controllers explicitly import types referenced by their emitted signatures,
+the platform HTTP factory exposes its actual exo methods instead of `object`,
+asset-server introspection types its existing optional capability probe, and
+hosted-agent directly declares its pass-style dependency.
+The ignored declaration/map pair for deleted `setup-peer.js` was quarantined,
+not restored as compatibility code; it remains recoverable outside the checkout.
+Verified generated outputs were quarantined before rebuilding, without moving
+checked-in declarations. The clean root declaration build and full documentation
+run now pass; documentation reports zero errors and 175 warnings.
+Seven HTTP and 44 asset-server tests pass, including the package's daemon tests.
+All 14 opted-in root type-contract tasks also pass.
+These changes alter type surfaces, not native cleanup or credential behavior;
+incremental generation and the package test-fixture diagnostics remain separate
+open checks. No Tokyo deployment is implied by local documentation success.
+This declaration correction is committed separately from the deferred producer
+research. Its one-line dependency lock update follows in a dedicated lockfile
+commit; no producer prototype or deployment change is included.
+Three Floot source contract corrections cover optional cached-input usage,
+snapshot wire validation, and optional tool-preview truncation flags.
+Independent review rejected an unchecked snapshot cast: local callbacks can
+return non-passable values, and the buffer does not validate without a pattern.
+Snapshots and updates now share an explicit passability check before allocation
+or delivery. Validation precedes cache mutation and JSON equality checks so
+invalid local data cannot poison later snapshots; detached read failures remain
+retryable. The 36 focused account-tool/session-watch/tool-evidence tests pass,
+including invalid initial/update data and same-JSON corrected-data recovery.
+The full Floot suite passes all 449 tests; scoped ESLint has no errors.
+Package TypeScript checking no longer reports Floot `src` diagnostics, but still
+fails on test fixtures; this is not a passing package type gate.
+The changes add no stored state, formula lifecycle, or provider effects.
 Daemon publication fix: nine tests exercise pending/failed persistence with
 absent and existing names, successful publication, failed-publication collection,
 and an actual daemon process restart.
@@ -640,6 +836,176 @@ and safe renewal ownership complete.
 The root documentation gate failed with 9035 errors and 113 warnings in the
 project graph; no passing documentation/type gate is claimed.
 
+Implementation progress (2026-09-22, admission): the broker's operator model
+list `policy.models` is removed from the grant, the issuer, the three adapter
+broker configurations, their policy builders and setup scripts.
+Admission is bound to each account's own catalog: a new per-account owner
+(`hosted-agent/src/model-catalog.js`) reads the provider through the member's
+existing credential owner and lifecycle, holds one observation per incarnation,
+and answers `admits(model)` for every request and every scope that pins a model.
+The grant asks each member the pool orders, serves only members whose account
+lists the model, and refuses (`Model denied`) before any slot or secret read
+when none does; a pinned session's one member refusing is not a fall-through.
+The issuer refuses a scope whose pinned model no eligible account lists, with
+`auto` excluding lanes set aside and an id asking only that member.
+Attestations replace `modelAllowlist` with the model the scope was issued for
+(`model`) and `modelAdmission: 'account-catalog'`; Codex's grant verifier
+requires that pin.
+The grant does not hold every request to that pin: each request is admitted by
+the serving account's catalog, so a runtime's side requests on other listed
+models (Claude Code's Haiku calls beside a session on Opus) are served.
+Catalog states are honest: current within a fifteen-minute lifetime, stale after
+a failed or overdue read (still admitting for a day), unavailable past that,
+unsupported without discovery; failed reads retry after a minute, not per request.
+Admission answers from the held observation and refreshes behind it, so a turn
+is not held behind the provider's catalog endpoint once one observation exists.
+Claude gains discovery through Anthropic's model list under the broker's own
+credential (`anthropic-model-read.js`, bearer with the OAuth beta or `x-api-key`).
+Wrapped pool members list what their share describes.
+Twenty-four new focused tests cover disjoint account catalogs, pinned refusal
+without fall-through, an account that cannot answer, all-unavailable catalogs,
+removed accounts, share attestation, the owner's lifetimes, close draining and
+the Anthropic reader's sanitization; the full hosted-agent suite passes 647,
+Claude 180, Codex 287 and OpenCode 229 tests.
+Two Claude pool tests were found already failing at the branch head because
+their fake namespace predates the identity journal's `has`/`list` use; the
+fixtures were corrected rather than the journal.
+Independent adversarial review found fifteen issues; all were addressed.
+The substantive ones: a far share's catalog read had no deadline and could
+wedge member retirement and service close, so it has one and its answer is
+bounded and shaped before it is believed; admission asked accounts one after
+another, multiplying a provider's catalog timeout across the issuer's queue,
+so all are asked at once; catalog reads went through the sticky credential
+wrapper, so a picker opening after a restart could have retired every account
+on one transient refresh failure, so they now use a fenced but non-sticky
+credential facet; a far share's holder answered the union of its accounts and
+its own refusal ended the request, so that refusal now hands the request to
+the next member; the recheck for a member removed mid-read covered only
+current snapshots, not stale ones; a policy carrying a model list is refused
+rather than ignored; the audit trail distinguishes `catalog-unavailable` from
+`model-denied`; and a retained broker configuration that names models is
+refused with the retirement instruction rather than as a shape error.
+Missing regressions were added: a far member skipped when its holder lists
+nothing, served when it does, and handed on when it refuses; a retired
+member's catalog admitting nothing to a grant that still holds it; and a
+share's narrowing reflected in its wrapped catalog.
+Retained broker configurations carrying `models` are now refused, so the three
+brokers must be retired and re-minted at the next cutover.
+Static backend catalogs, Floot's lists, NixOS enumeration and the picker
+remain for the next slice; nothing is deployed.
+
+Implementation progress (2026-09-22, discovery end to end): every static or
+deployment-owned model list is gone.
+`CLAUDE_CLI_MODELS`, `OPENCODE_MODELS`, Floot's Anthropic and OpenRouter
+lists, `ENDO_CODEX_MODELS`, `CODEX_MODELS` and the NixOS
+`services.endo.codexSandbox.models` option are removed; the OpenCode config
+builder names no fallback model either.
+A shared backend-side helper (`hosted-agent/src/backend-catalog.js`) projects
+the broker's per-account catalog through each runtime's own rules and admits a
+new session's pin: Codex passes the provider's reasoning levels through, Claude
+attaches the efforts the pinned Claude Code runtime drives each model at
+(`claudeEffortsFor`, a runtime axis the provider does not publish), and
+OpenCode spells routes under its `openrouter/` provider prefix with no effort.
+The factory interface's `listModels()` is replaced by `modelCatalog(id?)`,
+answering per account with label, lane marking, state, read time and models.
+A new pin is admitted in the provisioner when the plan is recorded, against
+the accounts the session may be served from; a reopen that names the recorded
+pin, or nothing, keeps it without asking the provider, so a catalog outage
+does not stop recorded sessions and no other model is put in their place.
+Floot's direct provider reads its own account's catalog under Floot's
+credential with the same OpenRouter and Anthropic readers a broker uses; a
+provider kind without discovery is reported unsupported and offers nothing.
+Floot's `listModels(backendId?)` rows carry the accounts listing each model,
+and `listModelCatalogs()` reports each account's discovery state; creation
+refuses a pin no eligible account lists, or one whose discovery is unavailable,
+with distinct messages.
+The picker offers, per chosen subscription, only what that account lists,
+shows a backend with nothing to offer together with why, and says when an
+account's catalog is stale or unavailable; the searchable selection is kept.
+The delegated runner answers its lane's account under a name of its own.
+Tests: 450 Floot, 53 chat, 49 space-floot, 181 Claude, 287 Codex, 229 OpenCode
+and 656 hosted-agent tests pass; new cases cover the backend catalog helper,
+the OpenRouter-backed direct provider listing and its refusals, the picker's
+discovery note and subscription scoping, Codex provisioning that admits a new
+pin and keeps a recorded one through a catalog outage, and the runner's view.
+Live verification of the Codex and Anthropic catalog reads, of Luna appearing
+in the Codex menu, and of the free OpenRouter routes remains a deployment gate;
+nothing is deployed.
+
+Independent adversarial review of that slice found eighteen issues; the
+substantive ones were that an effort changed on its own replaced the recorded
+model with the catalog's default (`revisedPin` now keeps the recorded model
+unless another is named), that a request naming no model was pinned to "the
+first listed" (only a default the catalog marks is taken now: the Codex
+reader marks the account's top-priority visible model, OpenRouter and
+Anthropic mark none, so an OpenCode session must name its route
+and a Claude session without one runs the runtime's own default unpinned, as
+before discovery), that an OpenCode record from before pins were required
+would have started without a model (it is a new pin, refused clearly), that
+one provider id opencode could not spell took the whole catalog down (it is
+left out), that the picker could preselect a model only a lane set aside
+lists and left the preset cards enabled with nothing listed, that a direct
+provider without discovery could not be started from the UI (it is offered
+unpinned), that discovery was read once, ahead of the session list, and never
+again (it is read beside the list and each time the picker opens), that hosted
+catalog failures were swallowed without a diagnostic (logged once per change),
+that a pin to an undeclared account was reported as an outage (refused as
+unknown), and that a pinned session's `models()` listed the `auto` union.
+Regressions were added for each, and for the runner's answer crossing the
+holder's validation, Floot's hosted admission and the picker's behaviour.
+A second review of those fixes found that the picker's selection did not
+follow a list refreshed under it (it does now, and a pick sends what the
+select shows), that lane marking came only from the declared set so a
+backend that could not list it would have offered an `auto` session a
+lane's model (the broker's answer now says which accounts are lanes), and
+that both listings each asked every backend again (one in-flight read serves
+both); discovery trouble is said in the picker rather than over the status
+line; a lint error and four type errors in added test lines were fixed.
+Its verification passed and left three small items, fixed in the same
+commit: the selection is derived from what the select shows (the search's
+matches), not from all the account offers; a thinking level the refreshed
+model no longer offers is replaced by its highest; the shared read keys the
+"every backend" ask apart from an empty backend name.
+Committed as `64176d7d5` and published; the host pin `84a6b90` removes the
+NixOS model option. With the operator's approval the cutover ran on
+2026-09-22 (endo-host `ops/hosted-cutover3-20260922.md`): the three
+pre-catalog brokers were retired on the old release after the second pass's
+acceptance sessions and one empty auto-created chat were archived and
+removed, generation 160 activated app `64176d7d5`, and the discovery gate
+passed live: every account current, Luna listed by both Codex accounts, the
+free routes by Fae and OpenCode, eleven Claude models per account, with no
+inference. Create, native tool use, network-policy transitions, cancellation
+and deletion passed on Luna, Haiku 4.5 and the free routes. Two findings
+from the run: Anthropic lists `claude-fable-5-1` first and the pinned Claude
+Code runtime exits on it, so a picker or driver that takes "the first
+listed" for Claude pins a model the runtime cannot drive (the acceptance
+policy now pins Haiku 4.5; whether the Claude projection should leave out
+models the runtime cannot run is open); and Luna's `/bin/bash -c` wrapper
+and a free-route model's URL quoting defeated the driver's exact-string
+command check, which now also accepts a command that reads the same once
+quoting is taken out.
+Restart/restore first passed for Fae and failed for every hosted backend on
+generation 160: commit `0d66bd945` (fail-closed native teardown) shipped on
+the branch tip, not discovery. The operator chose to evict it: `2cfcfeb02`
+reverts it on this branch and `b3f7bb1e0` re-applies it on the #1323
+research branch; generation 161 activated the reverted release, the three
+stranded sessions reopened and were deleted, a fresh restoration run passed
+on all four backends after a graceful daemon restart, and Tokyo ended with
+zero native records, containers and mounts.
+Recorded, not changed: a backend may answer up to sixteen accounts of 4096
+descriptors each; a subagent delegated during a catalog outage is a new pin
+and is refused then; the direct provider's `lal` OpenRouter adapter still reads
+the public model list itself for context windows; retired-catalog subscription
+ids reach `resolve` only through a factory's own thirty-second listing cache.
+Follow-up outside this slice: Floot reopens a session pinned to a subscription
+the backend no longer declares by dropping the pin, but the Claude module's
+subscription-immutability check refuses that reopen, so such a Claude session
+never runs again until it is recreated (pre-existing; Codex has no such
+check).
+The root type build passed after quarantining stale generated declarations
+(which had also produced the earlier documentation-gate errors); the
+documentation gate's result is recorded in the change log.
+
 Model these independently:
 
 | Concept | Responsibility |
@@ -1118,6 +1484,16 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
+| 2026-09-22 | FA-07 cutover, second activation: `0d66bd945` evicted to #1323 (`2cfcfeb02` reverts; `b3f7bb1e0` re-applies on `codex/native-recovery-research`); generation 161 activates `2cfcfeb02` without broker retirement | Discovery gate passed again; restart/restore passed on all four backends after a graceful restart; all acceptance sessions deleted; zero native records, containers and 9p mounts; Secrets and archives unchanged |
+| 2026-09-22 | FA-07 cutover: generation 160 activates `64176d7d5` on Tokyo after retiring the three pre-catalog brokers; live discovery gate passed (Luna, free routes, every account current); create, tools, network policy, cancel and delete passed on Luna, Haiku 4.5 and the free routes | Restart/restore passed for Fae, failed for all hosted backends (`0d66bd945` fail-closed teardown, #1323); six acceptance sessions stranded; Claude acceptance pinned to Haiku 4.5 after Anthropic's first-listed `claude-fable-5-1` failed in the runtime; rollback-or-keep decision with the operator |
+| 2026-09-22 | FA-07: provider-backed model discovery end to end; static, Floot and NixOS model lists removed; per-account catalogs reach the picker; new pins admitted at plan recording, recorded pins kept; no "first listed" default; discovery re-read when the picker opens | Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231, hosted-agent 663 pass; host NixOS option and environment removed; independent adversarial review found eighteen issues, all addressed and re-reviewed; root type build clean and documentation gate at 0 errors (177 warnings) after quarantining stale generated declarations; live catalog reads, Luna and free routes are deployment gates; not deployed |
+| 2026-09-21 | Separate native crash-recovery research from the current refactor | Dedicated investigation records evidence, retained-commit review, alternatives, and bounded continuation; prototypes isolated for draft tracking, not implementation approval; no deployment |
+| 2026-09-21 | Repair public native-controller/HTTP declarations and missing hosted-agent type dependency | Clean declarations and full docs pass (0 errors, 175 warnings); 7 HTTP and 44 asset-server tests pass; independently reviewed; incremental generation and native deployment remain pending |
+| 2026-09-21 | Correct OpenCode bridge and transcript declaration shapes | 26 focused tests and independent review pass; scoped lint has no errors and package docs convert; annotations only, no state or runtime behavior changes; not deployed |
+| 2026-09-21 | Scope API documentation checking to each package's production roots | Two regression tests and independent review pass; imported dependency errors remain visible; five missing entrypoints recovered; full docs still fails with 13 errors and 104 warnings |
+| 2026-09-21 | Correct Floot source contracts and validate watch events before caching; expand host cleanup audit | 36 focused tests pass; review found unchecked snapshot typing and invalid-data cache poisoning, both corrected; test fixture type errors remain; native recovery integration and deployment pending |
+| 2026-09-21 | Correct cross-package type contracts and separate the setup pool flag from runtime authority | Clean root declaration build passes; 170 hosted-agent tests independently pass plus 59 UI, 11 Claude, and 19 Codex tests; scoped lint and independent source review pass; docs and incremental declaration generation remain failing; not deployed |
 | 2026-09-21 | Durable pool identity prerequisite: bind actual capabilities before credential activation | 23 shared and one real-daemon restart test pass independently; read/write uncertainty fenced; full retirement/exclusion and deployment pending |
 | 2026-09-21 | Daemon durability: disposal/collection fences and stale-read invalidation | 32 tests and independent review pass; disposal precedes reclamation; module-specific drains and Tokyo deployment pending |
 | 2026-09-21 | Native-state durability: subprocess SIGKILL recovery at four creation boundaries | Four tests pass; exact child handles and temporary roots only; power-loss and Tokyo lifecycle verification remain pending |

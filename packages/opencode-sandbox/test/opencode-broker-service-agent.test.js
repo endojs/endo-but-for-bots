@@ -21,7 +21,6 @@ const config = harden({
   imageRef: `localhost/opencode@${digest}`,
   imageDigest: digest,
   listenerImageRef: `localhost/provider@${digest}`,
-  models: ['vendor/model'],
 });
 const env = harden({ OPENCODE_BROKER_CONFIG: JSON.stringify(config) });
 const spec = harden({
@@ -37,7 +36,17 @@ test('OpenCode catalog reads the same secret on every refresh without starting r
   const catalogSecret = Far('CatalogSecret', {
     readBase64: async () => btoa(`key-${(reads += 1)}`),
   });
+  // The catalog's own clock: a second request within an observation's
+  // lifetime is answered from what is held; past it, the secret is read again.
+  let clock = 1_000_000;
+  const lifetimeMs = 60_000;
   const make = makeOwnedOpencodeBrokerService({
+    makeServiceKit: options =>
+      makeProviderBrokerServiceKit({
+        ...options,
+        now: () => clock,
+        catalog: { lifetimeMs },
+      }),
     fetch: async (url, options) => {
       requests += 1;
       t.is(url, 'https://openrouter.ai/api/v1/models/user');
@@ -74,6 +83,12 @@ test('OpenCode catalog reads the same secret on every refresh without starting r
   t.is(reads, 0);
   t.is(requests, 0);
   const first = await E(service).modelCatalog();
+  t.is(first.accounts[0].state, 'current');
+  t.is(typeof first.accounts[0].observedAt, 'number');
+  await E(service).modelCatalog();
+  t.is(reads, 1);
+  t.is(requests, 1);
+  clock += lifetimeMs;
   await E(service).modelCatalog();
   t.is(reads, 2);
   t.is(requests, 2);
@@ -115,7 +130,7 @@ const fixture = t => {
       t.is(options.secret, secret);
       // The owned service hands the shared kit the OpenCode policy already
       // built from the persisted profile.
-      t.deepEqual(options.policy.models, config.models);
+      t.false(Object.hasOwn(options.policy, 'models'));
       t.is(options.label, 'OpenCode');
       environments.push(options.env);
       const state = prepared;
@@ -177,6 +192,19 @@ const fixture = t => {
 
 test('broker configuration is explicit copy data and excludes injected authority', t => {
   t.deepEqual(readOpencodeBrokerConfig(env), config);
+  // An operator model list is not configuration any more: the account's own
+  // catalog admits models, so a retained profile carrying one says how to
+  // retire it rather than failing as a shape error.
+  t.throws(
+    () =>
+      readOpencodeBrokerConfig({
+        OPENCODE_BROKER_CONFIG: JSON.stringify({
+          ...config,
+          models: ['vendor/model'],
+        }),
+      }),
+    { message: /names models.*retire that broker/ },
+  );
   t.throws(() => readOpencodeBrokerConfig({}), {
     message: /Missing OPENCODE_BROKER_CONFIG/,
   });
@@ -187,7 +215,6 @@ test('broker configuration is explicit copy data and excludes injected authority
     null,
     {},
     { ...config, ownerId: undefined },
-    { ...config, models: 'vendor/model' },
     { ...config, secret: 'namespace-name' },
     { ...config, runtime: {} },
     { ...config, fetch: 'ambient' },

@@ -5,8 +5,8 @@
  * Codex operator setup after setup-host.js. Retained services own native
  * resources and subscription renewal; the replaceable backend records plans.
  * Required: ENDO_CODEX_ENABLE=1, ENDO_CODEX_HOST_DIR,
- * ENDO_CODEX_SANDBOX_IMAGE, ENDO_CODEX_BROKER_LISTENER_IMAGE,
- * ENDO_CODEX_MODELS (JSON).
+ * ENDO_CODEX_SANDBOX_IMAGE, ENDO_CODEX_BROKER_LISTENER_IMAGE. No model
+ * list: the account's own catalog is the menu and admits each request.
  * Optional workspace/private roots, Secrets name/account, session concurrency,
  * public-internet/diagnostics switches and rootless NINEP settings remain.
  * No volume registry, storage lease, project-id range or quota helper.
@@ -36,7 +36,6 @@ import {
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
 import { deriveCodexOwnerId } from './setup-host.js';
-import { normalizeCodexModelDescriptor } from './src/codex-models.js';
 import { readCodexBrokerConfig } from './src/codex-broker-service-agent.js';
 import {
   SANDBOX_DIR,
@@ -143,10 +142,6 @@ export const main = async (host, { exec } = {}) => {
         ),
     ),
   );
-  const models = JSON.parse(required(env, 'ENDO_CODEX_MODELS'));
-  (Array.isArray(models) && models.length > 0) ||
-    Fail`Codex models must be nonempty`;
-  models.map(normalizeCodexModelDescriptor);
   const { imageRef, imageDigest } = await resolvePinnedImageRef(
     required(env, 'ENDO_CODEX_SANDBOX_IMAGE'),
     exec,
@@ -371,7 +366,6 @@ export const main = async (host, { exec } = {}) => {
       imageDigest,
       listenerImageRef,
       accountRef,
-      models: models.map(model => model.id),
       ...(env.ENDO_CODEX_MAX_SESSIONS
         ? { maxSessions: Number(env.ENDO_CODEX_MAX_SESSIONS) }
         : {}),
@@ -433,7 +427,6 @@ export const main = async (host, { exec } = {}) => {
     env: harden({
       ...storageEnv,
       CODEX_MOUNTER_ENV: JSON.stringify(mounterEnv),
-      CODEX_MODELS: JSON.stringify(models),
     }),
   });
   await E(host).copy(next, backend);

@@ -164,14 +164,37 @@ harden(projectAccount);
  *   whenever a view subscribes: an adapter binds its oracle after Floot has
  *   started.
  * @param {(callback: () => void, ms: number) => unknown} [powers.setTimer]
+ * @param {(handle: any) => void} [powers.clearTimer]
  * @param {(...args: unknown[]) => void} [powers.log]
  */
 export const makeAccountsWatch = ({
   listOracles,
   setTimer = (callback, ms) => globalThis.setTimeout(callback, ms),
+  clearTimer = handle => globalThis.clearTimeout(handle),
   log = (...args) => console.error(...args),
 }) => {
   const topic = makeLatestTopic();
+  let closed = false;
+  const pending = new Set();
+  const retryTimers = new Set();
+  const readers = new Set();
+  const assertOpen = () => {
+    if (closed) throw Error('Floot accounts watch is closed');
+  };
+  const track = promise => {
+    pending.add(promise);
+    void promise.then(
+      () => pending.delete(promise),
+      () => pending.delete(promise),
+    );
+    return promise;
+  };
+  const admit =
+    operation =>
+    (...args) => {
+      assertOpen();
+      return track(operation(...args));
+    };
   /** @type {Map<string, AccountView>} */
   const accounts = new Map();
   /** @type {Map<string, any>} account key to the oracle being followed */
@@ -190,7 +213,8 @@ export const makeAccountsWatch = ({
   /** @type {Map<string, any>} account key to the admin's last reset state */
   const resets = new Map();
 
-  const publish = () =>
+  const publish = () => {
+    if (closed) return;
     topic.publish(
       harden({
         type: 'accounts',
@@ -199,6 +223,7 @@ export const makeAccountsWatch = ({
         ),
       }),
     );
+  };
 
   /**
    * Ask an account's admin where its redeems stand, and tell the views if
@@ -206,39 +231,66 @@ export const makeAccountsWatch = ({
    *
    * @param {string} key
    */
-  const readReset = async key => {
-    const admin = admins.get(key);
-    if (admin === undefined) return;
-    /** @type {any} */
-    let state;
-    try {
-      state = await E(admin).getResetState();
-    } catch (_error) {
-      // An admin that cannot answer leaves what was known standing.
-      return;
-    }
-    if (admins.get(key) !== admin) return;
-    const before = JSON.stringify(resets.get(key) ?? null);
-    resets.set(key, state);
-    const last = held.get(key);
-    if (last !== undefined && JSON.stringify(state) !== before) {
-      accounts.set(key, projectAccount(last.entry, last.snapshot, state));
-      publish();
-    }
-  };
+  const readReset = key =>
+    track(
+      (async () => {
+        if (closed) return;
+        const admin = admins.get(key);
+        if (admin === undefined) return;
+        /** @type {any} */
+        let state;
+        try {
+          state = await E(admin).getResetState();
+        } catch (_error) {
+          // An admin that cannot answer leaves what was known standing.
+          return;
+        }
+        if (closed || admins.get(key) !== admin) return;
+        const before = JSON.stringify(resets.get(key) ?? null);
+        resets.set(key, state);
+        const last = held.get(key);
+        if (last !== undefined && JSON.stringify(state) !== before) {
+          accounts.set(key, projectAccount(last.entry, last.snapshot, state));
+          publish();
+        }
+      })(),
+    );
 
   /** @param {OracleEntry} entry */
   const follow = entry => {
+    if (closed) return;
     const key = entry.key ?? entry.backendId;
     following.set(key, entry.oracle);
     const run = async () => {
+      let reader;
       try {
-        const snapshots = iterateReader(E(entry.oracle).watch());
+        const remote = await E(entry.oracle).watch();
+        const snapshots = iterateReader(remote);
+        let closingReader;
+        reader = {
+          key,
+          oracle: entry.oracle,
+          close: () => {
+            // A stream's terminal rejection is historical, not cleanup proof.
+            // Oracle readers expose an independent close acknowledgement.
+            closingReader ??= E(remote)
+              .close()
+              .then(() => {
+                readers.delete(reader);
+              })
+              .catch(error => {
+                closingReader = undefined;
+                throw error;
+              });
+            return closingReader;
+          },
+        };
+        readers.add(reader);
+        if (closed || following.get(key) !== entry.oracle) return;
         for await (const snapshot of snapshots) {
-          if (following.get(key) !== entry.oracle) {
+          if (closed || following.get(key) !== entry.oracle) {
             // Replaced by a newer binding; let that one speak.
 
-            await snapshots.return?.(undefined);
             return;
           }
           outages.delete(key);
@@ -250,14 +302,16 @@ export const makeAccountsWatch = ({
         }
       } catch (error) {
         const outage = outages.get(key);
-        if (!outage?.logged) {
+        if (!closed && !outage?.logged) {
           log(
             `[floot-factory] account watch for ${key} failed:`,
             error instanceof Error ? error.message : String(error),
           );
         }
+      } finally {
+        await reader?.close();
       }
-      if (following.get(key) !== entry.oracle) return;
+      if (closed || following.get(key) !== entry.oracle) return;
       // The oracle's stream ended: it was re-minted, it closed this reader, or
       // it cannot stream at all. Look for it again while somebody is watching.
       following.delete(key);
@@ -270,21 +324,27 @@ export const makeAccountsWatch = ({
       outages.set(key, outage);
       if (topic.watcherCount() > 0 && !outage.pending) {
         outage.pending = true;
-        setTimer(() => {
+        const timer = setTimer(() => {
+          retryTimers.delete(timer);
           outage.pending = false;
-
+          if (closed) return;
           void reconcile();
         }, outage.retryMs);
+        retryTimers.add(timer);
         outage.retryMs = Math.min(outage.retryMs * 2, 60_000);
       }
     };
-    void run();
+    void track(run()).catch(error => {
+      if (!closed) log('[floot-factory] account reader cleanup failed:', error);
+    });
   };
 
   const reconcile = () => {
     reconciling = reconciling
       .then(async () => {
+        if (closed) return;
         const { entries, unknown } = await listOracles();
+        if (closed) return;
         const keyOf = (/** @type {OracleEntry} */ entry) =>
           entry.key ?? entry.backendId;
         const present = new Set(entries.map(keyOf));
@@ -324,6 +384,16 @@ export const makeAccountsWatch = ({
             follow(entry);
           }
         }
+        for (const reader of readers) {
+          if (following.get(reader.key) !== reader.oracle) {
+            void track(reader.close()).catch(error => {
+              log(
+                '[floot-factory] retired account reader cleanup failed:',
+                error,
+              );
+            });
+          }
+        }
         publish();
       })
       .catch(error => {
@@ -332,18 +402,20 @@ export const makeAccountsWatch = ({
           error instanceof Error ? error.message : String(error),
         );
       });
-    return reconciling;
+    return track(reconciling);
   };
 
   return harden({
     /** A disposable stream: `{ type: 'accounts', accounts }`, now and on change. */
     watch: () => {
+      assertOpen();
       void reconcile();
       return topic.watch();
     },
     /** Ask every account's provider once. A person asked. */
-    refresh: async () => {
+    refresh: admit(async () => {
       await reconcile();
+      assertOpen();
       await Promise.all(
         [...following.values()].map(oracle =>
           E(oracle)
@@ -357,7 +429,7 @@ export const makeAccountsWatch = ({
         ),
       );
       await Promise.all([...admins.keys()].map(readReset));
-    },
+    }),
     /**
      * Spend one banked rate-limit reset of an account. A person asked: this
      * is the only path here that can, and nothing calls it on its own.
@@ -365,8 +437,9 @@ export const makeAccountsWatch = ({
      * @param {string} key
      * @param {{ creditId?: string, replay?: boolean }} [options]
      */
-    redeemReset: async (key, options = {}) => {
+    redeemReset: admit(async (key, options = {}) => {
       await reconcile();
+      assertOpen();
       const admin = admins.get(key);
       if (admin === undefined) {
         throw Error(`No banked reset can be redeemed for ${key}`);
@@ -377,14 +450,15 @@ export const makeAccountsWatch = ({
         // Settled, refused or unconfirmed: the views are told which.
         await readReset(key);
       }
-    },
+    }),
     /**
      * Give an account's unconfirmed redeem up. A person asked.
      *
      * @param {string} key
      */
-    abandonReset: async key => {
+    abandonReset: admit(async key => {
       await reconcile();
+      assertOpen();
       const admin = admins.get(key);
       if (admin === undefined) {
         throw Error(`No banked reset can be redeemed for ${key}`);
@@ -394,10 +468,36 @@ export const makeAccountsWatch = ({
       } finally {
         await readReset(key);
       }
-    },
-    close: () => {
+    }),
+    close: async () => {
+      closed = true;
       following.clear();
       topic.close();
+      for (const timer of retryTimers) clearTimer(timer);
+      retryTimers.clear();
+      const outcomes = await Promise.allSettled(
+        [...readers].map(reader => reader.close()),
+      );
+      const failures = outcomes.flatMap(result =>
+        result.status === 'rejected' ? [result.reason] : [],
+      );
+      // A failed close may leave the follower waiting forever. Retain it for
+      // retry and refuse acknowledgement instead of hiding that error.
+      if (failures.length)
+        throw AggregateError(failures, 'Floot account readers remain open');
+      while (pending.size > 0) {
+        // Admitted reset operations must settle with their real outcome.
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.allSettled([...pending]);
+      }
+      if (readers.size > 0)
+        failures.push(Error('Account reader closure is unconfirmed'));
+      if (failures.length)
+        throw AggregateError(failures, 'Floot account readers remain open');
+      admins.clear();
+      resets.clear();
+      held.clear();
+      accounts.clear();
     },
   });
 };

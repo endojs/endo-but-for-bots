@@ -8,6 +8,7 @@ import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { makeSubscriptionShare } from '../src/subscription-share.js';
 import { makeLatestTopic } from '../src/latest-topic.js';
 
@@ -19,6 +20,22 @@ import {
 } from '../src/provider-broker-service.js';
 
 const encode = text => new TextEncoder().encode(text);
+
+/** What an account's catalog read says when it lists these models. */
+const listing =
+  (...ids) =>
+  async () =>
+    harden({
+      observedAt: 1,
+      models: ids.map(id => ({
+        id,
+        title: id,
+        description: '',
+        default: false,
+        defaultReasoningEffort: null,
+        reasoningEfforts: [],
+      })),
+    });
 
 test('listener diagnostics are the worker lines and nothing else on the stream', t => {
   t.deepEqual(
@@ -54,7 +71,11 @@ const kitOptionsFor = async (diagnostics, log) => {
     label: 'Test',
     log,
     readConfig: () =>
-      /** @type {any} */ ({ ownerId: `owner-${diagnostics}`, diagnostics }),
+      /** @type {any} */ ({
+        ownerId: `owner-${diagnostics}`,
+        diagnostics,
+        pool: false,
+      }),
     makePolicy: () => /** @type {any} */ ({ policy: {}, accountRef: 'a' }),
     makeServiceKit: /** @type {any} */ (
       options => {
@@ -79,6 +100,10 @@ test('failure hooks do not depend on the diagnostics flag; the admission trail d
   for (const flag of [undefined, false, true]) {
     // eslint-disable-next-line no-await-in-loop
     const options = await kitOptionsFor(flag, log);
+    t.false(
+      Object.hasOwn(options, 'pool'),
+      'setup flag is not a runtime pool capability',
+    );
     t.is(typeof options.onDiagnostic, 'function', `${flag}`);
     t.is(typeof options.onListenerDiagnostic, 'function', `${flag}`);
     t.is(typeof options.audit, flag === true ? 'function' : 'undefined');
@@ -187,7 +212,6 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
     policy: /** @type {any} */ ({
       origin: 'https://api.example.test',
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: ['allowed'],
       maxConcurrentRequests: 4,
       maxRequestBytes: 1024n,
       maxResponseBytes: 1024n,
@@ -242,6 +266,7 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
         Far(`${member.id} secret`, {
           readBase64: async () => btoa(`${member.secretName}-key`),
         }),
+      modelReadOf: () => listing('allowed'),
       resetRedeemOf:
         ({ member }) =>
         async request => {
@@ -349,7 +374,7 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
   await t.throwsAsync(() => E(held).request(request));
 });
 
-const pooledKit = (digestLetter, ownerId, subscriptions) => {
+const pooledKit = (digestLetter, ownerId, subscriptions, overrides = {}) => {
   const digest = `sha256:${digestLetter.repeat(64)}`;
   return makeProviderBrokerServiceKit({
     label: 'Test',
@@ -363,8 +388,224 @@ const pooledKit = (digestLetter, ownerId, subscriptions) => {
     listenerImageRef: `localhost/listener@${digest}`,
     runtime: /** @type {any} */ ({ dispose: async () => {} }),
     subscriptions,
+    ...overrides,
   });
 };
+
+test('pool close drains an admitted observation write and fences later chooser updates', async t => {
+  let entered;
+  let release;
+  const began = new Promise(resolve => {
+    entered = resolve;
+  });
+  const paused = new Promise(resolve => {
+    release = resolve;
+  });
+  let pool;
+  let writes = 0;
+  const kit = pooledKit(
+    'b',
+    'owner-observation-drain',
+    {
+      readSet: async () => ({ members: [{ id: 'work' }] }),
+      secretOf: () => Far('Unused', { readBase64: async () => '' }),
+      writeState: async () => {
+        writes += 1;
+        entered();
+        await paused;
+      },
+    },
+    {
+      makeIssuer: options => {
+        pool = options.pool;
+        return {
+          openEndpoint: async () => {
+            await pool.members();
+            pool.forSession('write-test', 'auto').served('work');
+            return Far('UnusedEndpoint', {});
+          },
+          dispose: async () => {},
+        };
+      },
+    },
+  );
+  const subscription = await E(kit.service).subscription();
+  await E(subscription).openEndpoint({ sessionId: 'write-test' });
+  await began;
+  let closed = false;
+  const closing = kit.close().then(() => {
+    closed = true;
+  });
+  await null;
+  t.false(closed);
+  release();
+  await closing;
+  pool.forSession('late-request', 'auto').served('work');
+  await null;
+  t.is(writes, 1);
+});
+
+for (const fail of [false, true])
+  test(`wrapped quiet reader retirement retries independent close: ${fail}`, async t => {
+    let members = [{ id: 'shared', subscriptionName: 'share' }];
+    let entered;
+    const began = new Promise(resolve => {
+      entered = resolve;
+    });
+    let attempts = 0;
+    let refusing = fail;
+    let wake;
+    const next = new Promise(resolve => {
+      wake = resolve;
+    });
+    const reader = readerFromIterator(
+      harden({
+        next: () => {
+          entered();
+          return next;
+        },
+        return: async () => {
+          attempts += 1;
+          wake(harden({ done: true, value: undefined }));
+          if (refusing) throw Error('reader return failed');
+          return harden({ done: true, value: undefined });
+        },
+      }),
+      { cancelPending: () => wake(harden({ done: true, value: undefined })) },
+    );
+    const share = Far('QuietShare', {
+      watchStatus: async () => reader,
+      getStatus: async () => ({}),
+    });
+    const kit = pooledKit('b', 'owner-quiet-retirement', {
+      readSet: async () => ({ members }),
+      secretOf: () => Far('unused', {}),
+      subscriptionOf: () => share,
+    });
+    await E(kit.service).accountSource('shared');
+    await began;
+    members = [{ id: 'home', subscriptionName: 'other' }];
+    if (fail) {
+      await t.throwsAsync(E(kit.service).subscriptions(), {
+        message: /cleanup pending/,
+      });
+      refusing = false;
+      t.deepEqual(
+        (await E(kit.service).subscriptions()).map(member => member.id),
+        ['home'],
+      );
+      await kit.close();
+    } else {
+      t.deepEqual(
+        (await E(kit.service).subscriptions()).map(member => member.id),
+        ['home'],
+      );
+      await kit.close();
+    }
+    if (fail) t.true(attempts >= 2);
+    else t.is(attempts, 1);
+  });
+
+test('wrapped follower read errors do not poison acknowledged resource closure', async t => {
+  let members = [{ id: 'shared', subscriptionName: 'share' }];
+  let acknowledge;
+  const returned = new Promise(resolve => {
+    acknowledge = resolve;
+  });
+  let returns = 0;
+  const reader = readerFromIterator(
+    harden({
+      next: async () => {
+        throw Error('historical read failure');
+      },
+      return: async () => {
+        returns += 1;
+        acknowledge();
+        return harden({ done: true, value: undefined });
+      },
+    }),
+  );
+  const share = Far('FailedStatusHistory', {
+    watchStatus: async () => reader,
+    getStatus: async () => ({}),
+  });
+  const kit = pooledKit('b', 'owner-historical-status', {
+    readSet: async () => ({ members }),
+    secretOf: () => Far('unused', {}),
+    subscriptionOf: () => share,
+  });
+  await E(kit.service).accountSource('shared');
+  await returned;
+  members = [{ id: 'home', subscriptionName: 'other' }];
+  t.deepEqual(
+    (await E(kit.service).subscriptions()).map(member => member.id),
+    ['home'],
+  );
+  await kit.close();
+  t.is(returns, 1);
+});
+
+test('removed member drains renewal and fences retained account and reset facets', async t => {
+  let members = [{ id: 'work', accountRef: 'acct_work' }];
+  let release;
+  let entered;
+  const began = new Promise(resolve => {
+    entered = resolve;
+  });
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  let persisted = false;
+  let resets = 0;
+  const kit = pooledKit('b', 'owner-retirement', {
+    readSet: async () => ({ members }),
+    secretOf: () => Far('RenewalAuthority', { readBase64: async () => '' }),
+    credentialOf: member => ({
+      accountRef: member.accountRef,
+      current: async () => {
+        entered();
+        await gate;
+        persisted = true;
+        return {};
+      },
+    }),
+    activeReadOf:
+      ({ credential }) =>
+      async () => {
+        await credential.current();
+        return {};
+      },
+    resetRedeemOf: () => async () => {
+      resets += 1;
+      return { outcome: 'reset' };
+    },
+  });
+  t.teardown(() => kit.close());
+  const account = await E(kit.service).accountSource('work');
+  const reset = await E(kit.service).resetRedeemer('work');
+  const refresh = E(account).refresh();
+  await began;
+  members = [{ id: 'home', accountRef: 'acct_home' }];
+  let retired = false;
+  const retirement = E(kit.service)
+    .subscriptions()
+    .then(() => {
+      retired = true;
+    });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.false(retired);
+  await t.throwsAsync(E(account).observe(), { message: /closed/ });
+  await t.throwsAsync(E(reset).redeem({ idempotencyKey: '1234567890123456' }), {
+    message: /retired/,
+  });
+  release();
+  await refresh;
+  await retirement;
+  t.true(persisted);
+  t.is(resets, 0);
+  await t.throwsAsync(E(account).refresh(), { message: /closed/ });
+  t.truthy(await E(kit.service).accountSource('home'));
+});
 
 test('catalog discovery retains account boundaries and isolates failed readings', async t => {
   const owners = [];
@@ -376,17 +617,21 @@ test('catalog discovery retains account boundaries and isolates failed readings'
         { id: 'home', accountRef: 'acct_home' },
       ],
     }),
-    secretOf: member => ({ member: member.id }),
+    secretOf: member =>
+      Far('ModelSecret', { readBase64: async () => member.id }),
     credentialOf: member => {
-      const credential = { owner: member.id };
+      const credential = {
+        accountRef: member.accountRef,
+        current: async () => member.id,
+      };
       owners.push(credential);
       return credential;
     },
     modelReadOf:
       ({ member, secret, credential }) =>
       async () => {
-        t.is(secret.member, member.id);
-        t.true(owners.includes(credential));
+        t.is(await E(secret).readBase64(), member.id);
+        t.is(await credential.current(), member.id);
         reads.push(member.id);
         if (member.id === 'home') throw Error('SECRET must not escape');
         return {
@@ -420,7 +665,9 @@ test('catalog discovery retains account boundaries and isolates failed readings'
   t.false(JSON.stringify(catalog).includes('SECRET'));
   await E(kit.service).modelCatalog('work');
   t.is(owners.length, 2, 'discovery reuses existing credential owners');
-  t.deepEqual(reads, ['work', 'home', 'work']);
+  // A catalog read within its lifetime is answered from what is held; the
+  // account that could not be read is not asked again at once either.
+  t.deepEqual(reads, ['work', 'home']);
   await t.throwsAsync(() => E(kit.service).modelCatalog('missing'), {
     message: /Unknown provider subscription/,
   });
@@ -478,8 +725,15 @@ test('a removed account cannot publish its pending catalog as current', async t 
   const reading = E(kit.service).modelCatalog('work');
   await began;
   stored = { members: [{ id: 'home' }] };
-  await E(kit.service).subscriptions();
+  const retirement = E(kit.service).subscriptions();
+  let retired = false;
+  void retirement.then(() => {
+    retired = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.false(retired, 'removal waits for the admitted model reader');
   finish({ observedAt: 123, models: [] });
+  await retirement;
   t.deepEqual(await reading, {
     accounts: [
       {
@@ -742,9 +996,100 @@ test('an owned pool binds actual secret capabilities before activation and refus
   // What the pool keeps goes to a journal in the same namespace, which prunes
   // only its own names.
   await subscriptions.writeState({ refusals: {}, sessions: {} });
-  t.deepEqual(await subscriptions.readState(), { refusals: {}, sessions: {} });
+  t.is(
+    await subscriptions.readState(),
+    undefined,
+    'first binding never adopts historical chooser state',
+  );
   t.true(names.has('subscriptions'));
   t.true(names.has('secret-work'));
+});
+
+test('chooser observations require an established matching capability binding and never import v1', async t => {
+  const authority = Far('BoundChooserSecret', { readBase64: async () => '' });
+  const other = Far('OtherChooserSecret', { readBase64: async () => '' });
+  const observations = {
+    refusals: { work: { untilMs: 123, strikes: 1 } },
+    sessions: { s: { memberId: 'work', atMs: 1 } },
+  };
+  const names = new Map([
+    ['subscriptions', harden({ members: [{ id: 'work', secretName: 'key' }] })],
+    ['key', authority],
+    ['pool-state-v1-00000000000000000000', observations],
+    [
+      'pool-state-v2-00000000000000000000',
+      harden({
+        version: 2,
+        bindings: [{ id: 'work', authority }],
+        state: observations,
+      }),
+    ],
+  ]);
+  const namespace = Far('ChooserNamespace', {
+    list: async () => harden([...names.keys()]),
+    has: async name => names.has(name),
+    lookup: async name => names.get(name),
+    storeValue: async (value, name) => {
+      names.set(name, value);
+    },
+    remove: async name => {
+      names.delete(name);
+    },
+  });
+  let options;
+  const make = makeOwnedProviderBrokerService({
+    label: 'Chooser',
+    readConfig: () => ({ ownerId: 'chooser-bound-state', pool: true }),
+    makePolicy: () => ({
+      policy: { origin: 'https://provider.test' },
+      accountRef: 'pool',
+    }),
+    makeServiceKit: value => {
+      options = value;
+      return { service: Far('Inert', {}), close: async () => {} };
+    },
+  });
+  let cancel;
+  let cancelled = new Promise(resolve => {
+    cancel = resolve;
+  });
+  const context = Far('ChooserContext', { whenCancelled: () => cancelled });
+  await make(namespace, context, { env: {} });
+  await options.subscriptions.readSet();
+  t.is(
+    await options.subscriptions.readState(),
+    undefined,
+    'even v2 cannot precede authoritative identity',
+  );
+  await options.subscriptions.writeState(observations);
+  cancel();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  cancelled = new Promise(resolve => {
+    cancel = resolve;
+  });
+  t.teardown(() => cancel());
+  await make(namespace, context, { env: {} });
+  await options.subscriptions.readSet();
+  t.deepEqual(await options.subscriptions.readState(), observations);
+  // A syntactically current observation for a different authority is not useful.
+  for (const [name, value] of names) {
+    if (name.startsWith('pool-state-v2-'))
+      names.set(
+        name,
+        harden({ ...value, bindings: [{ id: 'work', authority: other }] }),
+      );
+  }
+  t.deepEqual(await options.subscriptions.readState(), {
+    refusals: {},
+    sessions: {},
+  });
+  for (const name of names.keys())
+    if (name.startsWith('pool-state-v2-')) names.delete(name);
+  t.is(
+    await options.subscriptions.readState(),
+    undefined,
+    'v1 is never a fallback',
+  );
 });
 
 test('failed authoritative identity write prevents owned-pool credential construction', async t => {
@@ -783,7 +1128,7 @@ test('failed authoritative identity write prevents owned-pool credential constru
       }),
     makePolicy: () =>
       /** @type {any} */ ({
-        policy: { origin: 'https://provider.test', models: ['model'] },
+        policy: { origin: 'https://provider.test' },
         accountRef: 'pool',
       }),
     makeCredential: () => {
@@ -883,7 +1228,6 @@ test('a pool member that is somebody else’s share is served through its endpoi
     policy: /** @type {any} */ ({
       origin: 'https://api.example.test',
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: ['allowed'],
       maxConcurrentRequests: 4,
       maxRequestBytes: 1024n,
       maxResponseBytes: 1024n,
@@ -936,6 +1280,7 @@ test('a pool member that is somebody else’s share is served through its endpoi
         Far(`${member.id} secret`, {
           readBase64: async () => btoa(`${member.secretName}-key`),
         }),
+      modelReadOf: () => listing('allowed'),
       subscriptionOf: member => {
         t.is(member.subscriptionName, 'share-friend');
         return share;
@@ -1106,7 +1451,6 @@ for (const pinnedOnly of [true, false]) {
       policy: /** @type {any} */ ({
         origin: 'https://api.example.test',
         routes: [{ method: 'POST', path: '/v1/responses' }],
-        models: ['allowed'],
         maxConcurrentRequests: 4,
         maxRequestBytes: 1024n,
         maxResponseBytes: 1024n,
@@ -1162,3 +1506,270 @@ for (const pinnedOnly of [true, false]) {
     await kit.close();
   });
 }
+
+test('a catalog is current, then stale when the provider stops answering, then unavailable, and unsupported without discovery', async t => {
+  let clock = 1_000_000;
+  const LIFETIME = 60_000;
+  const MAX_AGE = 600_000;
+  let answer = true;
+  const kit = pooledKit(
+    'd',
+    'owner-catalog-states',
+    {
+      readSet: async () => ({
+        members: [{ id: 'work' }, { id: 'quiet', subscriptionName: 'share' }],
+      }),
+      secretOf: () => Far('secret', { readBase64: async () => '' }),
+      subscriptionOf: () =>
+        Far('share', {
+          describe: async () => harden({ providerId: 'test', models: ['x'] }),
+          getStatus: async () => harden({ available: true }),
+          watchStatus: async () => makeLatestTopic().watch(),
+        }),
+      modelReadOf: () => async () => {
+        if (!answer) throw Error('provider catalog down');
+        return listing('allowed')();
+      },
+    },
+    { now: () => clock, catalog: { lifetimeMs: LIFETIME, maxAgeMs: MAX_AGE } },
+  );
+  t.teardown(() => kit.close());
+  const states = async () =>
+    (await E(kit.service).modelCatalog()).accounts.map(account => [
+      account.subscriptionId,
+      account.state,
+      account.models.map(model => model.id),
+    ]);
+  t.deepEqual(await states(), [
+    ['work', 'current', ['allowed']],
+    // A share in the pool lists what its grantor says of it.
+    ['quiet', 'current', ['x']],
+  ]);
+  answer = false;
+  clock += LIFETIME;
+  t.deepEqual(await states(), [
+    ['work', 'stale', ['allowed']],
+    ['quiet', 'current', ['x']],
+  ]);
+  clock += MAX_AGE;
+  t.deepEqual(await states(), [
+    ['work', 'unavailable', []],
+    ['quiet', 'current', ['x']],
+  ]);
+  answer = true;
+  clock += LIFETIME;
+  t.deepEqual((await states())[0], ['work', 'current', ['allowed']]);
+  const bare = pooledKit('e', 'owner-catalog-unsupported', {
+    readSet: async () => ({ members: [{ id: 'work' }] }),
+    secretOf: () => Far('secret', { readBase64: async () => '' }),
+  });
+  t.teardown(() => bare.close());
+  t.deepEqual(await E(bare.service).modelCatalog(), {
+    accounts: [
+      {
+        subscriptionId: 'work',
+        state: 'unsupported',
+        observedAt: null,
+        models: [],
+      },
+    ],
+  });
+});
+
+test('a request goes to the subscription whose account lists its model, and a retired account admits nothing', async t => {
+  const digest = `sha256:${'f'.repeat(64)}`;
+  /** @type {any} */
+  let storedSet = { members: [{ id: 'work' }, { id: 'home' }] };
+  /** @type {string[]} */
+  const used = [];
+  /** @type {any} */
+  let endpoint;
+  const kit = makeProviderBrokerServiceKit({
+    label: 'Test',
+    policy: /** @type {any} */ ({
+      origin: 'https://api.example.test',
+      routes: [{ method: 'POST', path: '/v1/responses' }],
+      maxConcurrentRequests: 4,
+      maxRequestBytes: 1024n,
+      maxResponseBytes: 1024n,
+    }),
+    accountRef: 'pool',
+    secret: undefined,
+    ownerId: 'owner-disjoint',
+    directory: '/tmp/unused',
+    imageRef: `localhost/slice@${digest}`,
+    imageDigest: digest,
+    listenerImageRef: `localhost/listener@${digest}`,
+    runtime: /** @type {any} */ ({
+      dispose: async () => {},
+      startKit(input) {
+        endpoint = input.endpoint;
+        const value = Promise.resolve({
+          observe: async () =>
+            harden({
+              endpoint: 'http://127.0.0.1:1',
+              containerName: 'listener',
+              networkNamespaceId: 'net',
+              listenerImageDigest: digest,
+            }),
+          stop: async () => {},
+          closed: new Promise(() => {}),
+        });
+        return { value, stop: async () => {} };
+      },
+    }),
+    fetch: /** @type {any} */ (
+      async (_url, init) => {
+        used.push(init.headers.authorization);
+        return new Response('{"ok":true}');
+      }
+    ),
+    subscriptions: {
+      readSet: async () => storedSet,
+      secretOf: member =>
+        Far(`${member.id} secret`, {
+          readBase64: async () => btoa(`${member.secretName}-key`),
+        }),
+      // Disjoint catalogs: each account lists a model of its own.
+      modelReadOf: ({ member }) =>
+        listing(member.id === 'work' ? 'model-w' : 'model-h'),
+    },
+  });
+  t.teardown(() => kit.close());
+  const scope = await E(kit.service).provideScope(
+    'disjoint',
+    harden({ providerOrigin: 'https://api.example.test', accountRef: 'pool' }),
+  );
+  await E(scope).start();
+  /** @param {string} model */
+  const ask = model =>
+    E(endpoint).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: JSON.stringify({ model }),
+      }),
+    );
+  t.is((await ask('model-h')).body, '{"ok":true}');
+  t.is((await ask('model-w')).body, '{"ok":true}');
+  // Declared order would try `work` first; only the account that lists the
+  // model is asked.
+  t.deepEqual(used, ['Bearer home-key', 'Bearer work-key']);
+  await t.throwsAsync(() => ask('model-x'), { message: /Model denied/ });
+  // The broker as a Subscription describes the union of what its accounts
+  // list.
+  const subscription = await E(kit.service).subscription();
+  t.deepEqual((await E(subscription).describe()).models, [
+    'model-w',
+    'model-h',
+  ]);
+  // `home` leaves the set: its catalog is closed with it, and the grant
+  // that took the set as it was cannot be served from it any more.
+  storedSet = { members: [{ id: 'work' }] };
+  await E(kit.service).subscriptions();
+  await t.throwsAsync(() => ask('model-h'), { message: /Model denied/ });
+  t.deepEqual(used, ['Bearer home-key', 'Bearer work-key']);
+  t.deepEqual(
+    (await E(kit.service).modelCatalog()).accounts.map(account => [
+      account.subscriptionId,
+      account.state,
+    ]),
+    [['work', 'current']],
+  );
+});
+
+test('a retired member’s catalog admits nothing, even to a grant that still holds it', async t => {
+  /** @type {any} */
+  let storedSet = { members: [{ id: 'work' }, { id: 'home' }] };
+  /** @type {any} */
+  let pool;
+  const kit = pooledKit(
+    '1',
+    'owner-retired-admission',
+    {
+      readSet: async () => storedSet,
+      secretOf: () => Far('secret', { readBase64: async () => '' }),
+      modelReadOf: ({ member }) =>
+        listing(member.id === 'work' ? 'model-w' : 'model-h'),
+    },
+    {
+      makeIssuer: options => {
+        pool = options.pool;
+        return {
+          openEndpoint: async () => Far('UnusedEndpoint', {}),
+          dispose: async () => {},
+        };
+      },
+    },
+  );
+  t.teardown(() => kit.close());
+  // Issuance holds the set as it was: the grant made now keeps `home`.
+  const subscription = await E(kit.service).subscription();
+  await E(subscription).openEndpoint({ sessionId: 'retire-test' });
+  const members = await pool.members();
+  const home = members.find(
+    (/** @type {any} */ member) => member.id === 'home',
+  );
+  t.true(await home.admits('model-h'));
+  t.is(home.catalogState(), 'current');
+  storedSet = { members: [{ id: 'work' }] };
+  await E(kit.service).subscriptions();
+  // The grant took the set as it was; the member it holds is retired, and
+  // its catalog closed with it.
+  t.false(await home.admits('model-h'));
+  t.is(home.catalogState(), 'unavailable');
+});
+
+test('a share in the pool lists only what its grantor’s limits allow', async t => {
+  const carol = Far('carol subscription', {
+    describe: async () =>
+      harden({ providerId: 'test', models: ['allowed', 'other'] }),
+    getStatus: async () =>
+      harden({ available: true, blockedUntil: '', remainingFraction: 0.9 }),
+    watchStatus: async () => makeLatestTopic().watch(),
+    openEndpoint: async () => {
+      throw Error('unused');
+    },
+  });
+  /** @type {any[]} */
+  const shareStore = [];
+  const { share } = makeSubscriptionShare({
+    shareId: 'narrow',
+    provideUnderlying: async () => carol,
+    provideLimits: async () => ({
+      createdAt: new Date(Date.now() - 1000).toISOString(),
+      budget: { tokens: 50_000, periodSeconds: 86_400 },
+      models: ['allowed', 'not-beneath'],
+    }),
+    journal: {
+      read: async () => shareStore.at(-1),
+      write: async record => {
+        shareStore.push(record);
+      },
+    },
+  });
+  const kit = pooledKit('2', 'owner-share-catalog', {
+    readSet: async () => ({
+      members: [
+        { id: 'own', label: 'Ours' },
+        { id: 'friend', label: 'Carol’s', subscriptionName: 'share-narrow' },
+      ],
+    }),
+    secretOf: () => Far('secret', { readBase64: async () => '' }),
+    subscriptionOf: () => share,
+    modelReadOf: () => listing('allowed', 'own-only'),
+  });
+  t.teardown(() => kit.close());
+  t.deepEqual(
+    (await E(kit.service).modelCatalog()).accounts.map(account => [
+      account.subscriptionId,
+      account.state,
+      account.models.map(model => model.id),
+    ]),
+    [
+      ['own', 'current', ['allowed', 'own-only']],
+      // The share's narrowing, intersected with what is beneath it.
+      ['friend', 'current', ['allowed']],
+    ],
+  );
+});

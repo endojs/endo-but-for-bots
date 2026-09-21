@@ -35,7 +35,7 @@ const renderCount = count => (count === null ? 'unpublished' : `${count}`);
  * the number.
  *
  * @param {{ plan: any, rateLimits: any, rateCard: any }} snapshot
- * @param {{ inputTokens: bigint, outputTokens: bigint } | undefined} [usage]
+ * @param {{ inputTokens: bigint, outputTokens: bigint, cachedInputTokens?: bigint } | undefined} [usage]
  * @param {any} [cost]
  * @param {string} [modelId] - Named in the "cannot be priced" explanation.
  */

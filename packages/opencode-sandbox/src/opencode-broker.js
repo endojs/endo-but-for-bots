@@ -13,7 +13,6 @@
 // forwards it (`clientAuthorization: 'strip'`); the broker injects the real
 // OpenRouter key upstream.
 
-import { Fail } from '@endo/errors';
 import {
   BROKER_OWNER_PATTERN,
   DEFAULT_MAX_REQUEST_BYTES,
@@ -42,26 +41,20 @@ export {
  * deployment can assert the exact origin, route, and credential handling it
  * configured without reproducing the literal.
  *
- * @param {object} options
- * @param {readonly string[]} options.models - provider-scoped model ids the lease admits
+ * Models are not part of the policy: the account's own OpenRouter catalog
+ * admits them (`@endo/hosted-agent/model-catalog.js`).
+ *
+ * @param {object} [options]
  * @param {number} [options.maxConcurrentRequests]
  * @param {bigint} [options.maxRequestBytes]
  * @param {bigint} [options.maxResponseBytes]
  * @returns {BrokerPolicy}
  */
 export const buildOpencodeBrokerPolicy = ({
-  models,
   maxConcurrentRequests = 4,
   maxRequestBytes = DEFAULT_MAX_REQUEST_BYTES,
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
-}) => {
-  (Array.isArray(models) &&
-    models.length > 0 &&
-    models.every(
-      model =>
-        typeof model === 'string' && model.length > 0 && !model.includes(' '),
-    )) ||
-    Fail`OpenCode broker models must be a nonempty list of model ids`;
+} = {}) => {
   return harden({
     origin: OPENROUTER_ORIGIN,
     authMode: /** @type {const} */ ('api-key'),
@@ -72,7 +65,6 @@ export const buildOpencodeBrokerPolicy = ({
       },
     ],
     clientAuthorization: /** @type {const} */ ('strip'),
-    models: [...models],
     maxConcurrentRequests,
     maxRequestBytes,
     maxResponseBytes,
@@ -84,13 +76,13 @@ export const buildOpencodeBrokerPolicy = ({
  * kit (`@endo/hosted-agent/provider-broker-service.js`), bound to the
  * OpenRouter policy and account. Retain the kit before start().
  *
- * @param {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { models: readonly string[] }} options
+ * @param {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'>} options
  */
-export const makeOpencodeBrokerKit = ({ models, ...options }) =>
+export const makeOpencodeBrokerKit = options =>
   makeProviderBrokerKit({
     ...options,
     label: 'OpenCode',
-    policy: buildOpencodeBrokerPolicy({ models }),
+    policy: buildOpencodeBrokerPolicy(),
     accountRef: OPENCODE_BROKER_ACCOUNT,
   });
 harden(makeOpencodeBrokerKit);

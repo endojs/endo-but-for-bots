@@ -6,7 +6,6 @@ export const OPENROUTER_PROVIDER_ID = 'openrouter';
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_ENV_VAR = 'OPENROUTER_API_KEY';
 export const OPENROUTER_NPM = '@openrouter/ai-sdk-provider';
-export const DEFAULT_MODEL = 'openrouter/deepseek/deepseek-v4.1-flash';
 export const DEFAULT_LIMITS = harden({ context: 128_000, output: 8192 });
 
 // The whole config travels in an environment variable, so keep it well under
@@ -356,7 +355,7 @@ const normalizeMcpServers = (servers, label) => {
  * @param {Record<string, unknown>} [options.mcpServers]
  */
 export const makeOpencodeConfig = ({
-  model = DEFAULT_MODEL,
+  model,
   smallModel = model,
   agentName = 'floot',
   systemPrompt,

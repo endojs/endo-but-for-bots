@@ -15,7 +15,6 @@
 
 import { Fail, q } from '@endo/errors';
 import {
-  assertBrokerModels,
   DEFAULT_MAX_REQUEST_BYTES,
   DEFAULT_MAX_RESPONSE_BYTES,
   makeProviderBrokerKit,
@@ -66,8 +65,10 @@ harden(ANTHROPIC_BETA_PATTERN);
  * deployment can assert the exact origin, route, and credential handling it
  * configured without reproducing the literal.
  *
+ * Models are not part of the policy: the account's own Anthropic catalog
+ * admits them (`@endo/hosted-agent/model-catalog.js`).
+ *
  * @param {object} options
- * @param {readonly string[]} options.models - model ids the lease admits
  * @param {string} options.credentialKind - `apiKey` (sent as `x-api-key`) or
  *   `oauthToken` (sent as a Bearer token with the OAuth beta capability)
  * @param {string} [options.anthropicBeta] - beta capabilities to send; the
@@ -78,7 +79,6 @@ harden(ANTHROPIC_BETA_PATTERN);
  * @returns {BrokerPolicy}
  */
 export const buildClaudeBrokerPolicy = ({
-  models,
   credentialKind,
   anthropicBeta,
   maxConcurrentRequests = 4,
@@ -115,7 +115,6 @@ export const buildClaudeBrokerPolicy = ({
     credentialHeader,
     anthropicVersion: ANTHROPIC_VERSION,
     ...(beta === undefined ? {} : { anthropicBeta: beta }),
-    models: assertBrokerModels(models, 'Claude'),
     maxConcurrentRequests,
     maxRequestBytes,
     maxResponseBytes,
@@ -124,7 +123,7 @@ export const buildClaudeBrokerPolicy = ({
 harden(buildClaudeBrokerPolicy);
 
 /**
- * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { models: readonly string[], credentialKind: string, anthropicBeta?: string }} ClaudeBrokerOptions
+ * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { credentialKind: string, anthropicBeta?: string }} ClaudeBrokerOptions
  */
 
 /**
@@ -132,7 +131,6 @@ harden(buildClaudeBrokerPolicy);
  * @param {ClaudeBrokerOptions} options
  */
 export const makeClaudeBrokerKit = ({
-  models,
   credentialKind,
   anthropicBeta,
   ...options
@@ -140,7 +138,7 @@ export const makeClaudeBrokerKit = ({
   makeProviderBrokerKit({
     ...options,
     label: 'Claude',
-    policy: buildClaudeBrokerPolicy({ models, credentialKind, anthropicBeta }),
+    policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
     accountRef: CLAUDE_BROKER_ACCOUNT,
   });
 harden(makeClaudeBrokerKit);
@@ -151,7 +149,6 @@ harden(makeClaudeBrokerKit);
  * @param {ClaudeBrokerOptions} options
  */
 export const makeClaudeBrokerServiceKit = ({
-  models,
   credentialKind,
   anthropicBeta,
   ...options
@@ -159,7 +156,7 @@ export const makeClaudeBrokerServiceKit = ({
   makeProviderBrokerServiceKit({
     ...options,
     label: 'Claude',
-    policy: buildClaudeBrokerPolicy({ models, credentialKind, anthropicBeta }),
+    policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
     accountRef: CLAUDE_BROKER_ACCOUNT,
   });
 harden(makeClaudeBrokerServiceKit);

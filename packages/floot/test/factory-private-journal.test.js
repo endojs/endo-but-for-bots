@@ -52,17 +52,26 @@ const makeWorld = (
         toolOwnership: 'endo',
         supportedNetworkPolicies: ['off', 'public-internet'],
       }),
-    listModels: () =>
-      harden([
-        {
-          id: 'm',
-          title: 'Test',
-          description: '',
-          default: true,
-          defaultReasoningEffort: null,
-          reasoningEfforts: [],
-        },
-      ]),
+    modelCatalog: () =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: [
+              {
+                id: 'm',
+                title: 'Test',
+                description: '',
+                default: true,
+                defaultReasoningEffort: null,
+                reasoningEfforts: [],
+              },
+            ],
+          },
+        ],
+      }),
     create: () => {
       creates += 1;
       return harden({

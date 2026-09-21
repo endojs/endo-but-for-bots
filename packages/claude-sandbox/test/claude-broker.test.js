@@ -3,6 +3,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
 import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 
 import {
@@ -14,12 +15,43 @@ import {
   buildClaudeBrokerPolicy,
   makeClaudeBrokerKit,
 } from '../src/claude-broker.js';
-import { makeOwnedClaudeBrokerService } from '../src/claude-broker-service-agent.js';
+import {
+  makeOwnedClaudeBrokerService,
+  readClaudeBrokerConfig,
+} from '../src/claude-broker-service-agent.js';
 import { makeClaudeSubscriptionCredential } from '../src/subscription-auth.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const listenerImageRef = `localhost/endo-provider@${digest}`;
 const models = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'];
+
+/**
+ * Anthropic's model list as the broker's discovery reads it, for the owned
+ * service under test: one page, under the account's own credential. The
+ * inference fetch is the broker kit's and sees none of these reads.
+ *
+ * @param {string[]} reads Where each read's authorization header lands.
+ */
+const makeCatalogFetch = reads =>
+  /** @type {typeof globalThis.fetch} */ (
+    async (url, init) => {
+      if (!`${url}`.startsWith('https://api.anthropic.com/v1/models?')) {
+        throw Error(`Unexpected catalog request ${url}`);
+      }
+      const headers = new Headers(init?.headers);
+      reads.push(
+        `${headers.get('authorization')} ${headers.get('anthropic-beta')}`,
+      );
+      return new Response(
+        JSON.stringify({
+          data: models.map(id => ({ type: 'model', id, display_name: id })),
+          has_more: false,
+          first_id: models[0],
+          last_id: models.at(-1),
+        }),
+      );
+    }
+  );
 
 test('owned Claude pool injects refreshed access token, never login JSON', async t => {
   const runtime = makeFakeRuntime();
@@ -57,7 +89,9 @@ test('owned Claude pool injects refreshed access token, never login JSON', async
   const used = [];
   let exchanges = 0;
   let kit;
+  const catalogReads = [];
   const make = makeOwnedClaudeBrokerService({
+    fetch: makeCatalogFetch(catalogReads),
     makeCredential: powers =>
       makeClaudeSubscriptionCredential({
         ...powers,
@@ -88,7 +122,8 @@ test('owned Claude pool injects refreshed access token, never login JSON', async
   const service = await make(
     Far('renewable pool namespace', {
       lookup: async name => entries.get(name),
-      list: async () => [],
+      has: async name => entries.has(name),
+      list: async () => [...entries.keys()],
       storeValue: async (value, name) => entries.set(name, value),
     }),
     Far('context', { whenCancelled: () => new Promise(() => {}) }),
@@ -100,7 +135,6 @@ test('owned Claude pool injects refreshed access token, never login JSON', async
           imageRef: `localhost/claude@${digest}`,
           imageDigest: digest,
           listenerImageRef,
-          models,
           credentialKind: 'oauthToken',
           pool: true,
         }),
@@ -160,7 +194,9 @@ test('Claude pool hands recognized exhaustion to a second secret but never moves
     ]),
   ]);
   let kit;
+  const catalogReads = [];
   const make = makeOwnedClaudeBrokerService({
+    fetch: makeCatalogFetch(catalogReads),
     makeServiceKit: options => {
       kit = makeProviderBrokerServiceKit({
         ...options,
@@ -185,7 +221,8 @@ test('Claude pool hands recognized exhaustion to a second secret but never moves
   });
   const namespace = Far('pool namespace', {
     lookup: async name => entries.get(name),
-    list: async () => [],
+    has: async name => entries.has(name),
+    list: async () => [...entries.keys()],
     storeValue: async (value, name) => entries.set(name, value),
   });
   const service = await make(
@@ -199,7 +236,6 @@ test('Claude pool hands recognized exhaustion to a second secret but never moves
           imageRef: `localhost/claude@${digest}`,
           imageDigest: digest,
           listenerImageRef,
-          models,
           credentialKind: 'oauthToken',
           pool: true,
         }),
@@ -287,7 +323,7 @@ const brokerOptions = (runtime, overrides = {}) => ({
   imageRef: `localhost/claude-sandbox@${digest}`,
   imageDigest: digest,
   listenerImageRef,
-  models,
+  admits: admitsModels(models),
   credentialKind: 'apiKey',
   fetch: async () => new Response('ok'),
   runtime,
@@ -302,8 +338,26 @@ const startBroker = async (t, runtime, overrides = {}) => {
   return broker;
 };
 
+test('a retained broker configuration naming models is refused with the way out', t => {
+  t.throws(
+    () =>
+      readClaudeBrokerConfig({
+        CLAUDE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'claude-owner',
+          directory: '/var/lib/endo/claude-broker',
+          imageRef: `localhost/claude-sandbox@${digest}`,
+          imageDigest: digest,
+          listenerImageRef,
+          credentialKind: 'apiKey',
+          models,
+        }),
+      }),
+    { message: /names models.*retire that broker/ },
+  );
+});
+
 test('the policy pins the Anthropic Messages route and selects the header by credential kind', t => {
-  const apiKey = buildClaudeBrokerPolicy({ models, credentialKind: 'apiKey' });
+  const apiKey = buildClaudeBrokerPolicy({ credentialKind: 'apiKey' });
   t.is(apiKey.origin, ANTHROPIC_ORIGIN);
   t.deepEqual(apiKey.routes, [
     { method: 'POST', path: ANTHROPIC_MESSAGES_PATH },
@@ -313,45 +367,32 @@ test('the policy pins the Anthropic Messages route and selects the header by cre
   t.is(apiKey.credentialHeader, 'x-api-key');
   t.is(apiKey.anthropicVersion, ANTHROPIC_VERSION);
   t.false(Object.hasOwn(apiKey, 'anthropicBeta'));
-  t.deepEqual(apiKey.models, models);
+  // No operator model list: the account's Anthropic catalog admits models.
+  t.false(Object.hasOwn(apiKey, 'models'));
   t.is(apiKey.maxConcurrentRequests, 4);
   // A subscription token rides as a Bearer token under the OAuth beta.
-  const oauth = buildClaudeBrokerPolicy({
-    models,
-    credentialKind: 'oauthToken',
-  });
+  const oauth = buildClaudeBrokerPolicy({ credentialKind: 'oauthToken' });
   t.is(oauth.credentialHeader, 'bearer');
   t.is(oauth.anthropicBeta, DEFAULT_OAUTH_BETA);
   t.is(
     buildClaudeBrokerPolicy({
-      models,
       credentialKind: 'oauthToken',
       anthropicBeta: 'oauth-2025-04-20,interleaved-thinking',
     }).anthropicBeta,
     'oauth-2025-04-20,interleaved-thinking',
   );
-  t.throws(
-    () => buildClaudeBrokerPolicy({ models: [], credentialKind: 'apiKey' }),
-    {
-      message: /nonempty list/,
-    },
-  );
   // A beta list the broker would refuse at every grant is refused here.
   t.throws(
     () =>
       buildClaudeBrokerPolicy({
-        models,
         credentialKind: 'oauthToken',
         anthropicBeta: 'oauth-2025-04-20, interleaved-thinking',
       }),
     { message: /Invalid Anthropic beta capabilities/ },
   );
-  t.throws(
-    () => buildClaudeBrokerPolicy({ models, credentialKind: 'password' }),
-    {
-      message: /Claude credential kind must be one of/,
-    },
-  );
+  t.throws(() => buildClaudeBrokerPolicy({ credentialKind: 'password' }), {
+    message: /Claude credential kind must be one of/,
+  });
 });
 
 test('leases attest the Anthropic account and broker-only credential injection', async t => {
@@ -378,7 +419,9 @@ test('leases attest the Anthropic account and broker-only credential injection',
     networkNamespaceId: 'net-1',
     imageDigest: digest,
   });
-  t.deepEqual(attestation.modelAllowlist, models);
+  t.is(attestation.model, models[0]);
+  t.is(attestation.modelAdmission, 'account-catalog');
+  t.false(Object.hasOwn(attestation, 'modelAllowlist'));
   const evidence = await E(lease).sandboxEvidence();
   t.like(evidence, {
     brokerSidecar: { container: 'listener' },

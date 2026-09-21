@@ -3,22 +3,21 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
 import { makeProviderBrokerGrant } from '@endo/hosted-agent/provider-broker.js';
 
 import { makeCodexSubscriptionProfile } from '../src/codex-subscription-profile.js';
 import { readCodexBrokerConfig } from '../src/codex-broker-service-agent.js';
 
 const setup = t => {
-  const profile = makeCodexSubscriptionProfile({
-    accountRef: 'account-1',
-    models: ['allowed'],
-  });
+  const profile = makeCodexSubscriptionProfile({ accountRef: 'account-1' });
   const calls = [];
   let reads = 0;
   const grant = makeProviderBrokerGrant(
     { ...profile.policy, accountRef: profile.accountRef },
     {
       adaptRequest: profile.adaptRequest,
+      admits: admitsModels(['allowed']),
       secret: Far('UnusedSecret', {
         async readBase64() {
           throw Error('unused');
@@ -104,7 +103,6 @@ test('Codex subscription rejects storage, nonstreaming, model and account routes
 test('Codex subscription requires shared renewing OAuth authority', t => {
   const { policy, accountRef, adaptRequest } = makeCodexSubscriptionProfile({
     accountRef: 'account-1',
-    models: ['allowed'],
   });
   t.throws(
     () =>
@@ -118,16 +116,13 @@ test('Codex subscription requires shared renewing OAuth authority', t => {
           }),
           transport: /** @type {any} */ ({}),
           adaptRequest,
+          admits: admitsModels(['allowed']),
         },
       ),
     { message: /Unprovisioned broker OAuth mode/ },
   );
   t.throws(
-    () =>
-      makeCodexSubscriptionProfile({
-        accountRef: 'account\r\nheader',
-        models: ['allowed'],
-      }),
+    () => makeCodexSubscriptionProfile({ accountRef: 'account\r\nheader' }),
     { message: /Invalid Codex subscription account/ },
   );
 });
@@ -140,7 +135,6 @@ test('operator JSON cannot replace the fixed provider adapter or origin', t => {
     imageDigest: `sha256:${'a'.repeat(64)}`,
     listenerImageRef: `listener@sha256:${'b'.repeat(64)}`,
     accountRef: 'account-1',
-    models: ['allowed'],
   };
   for (const extra of [
     { origin: 'https://other.test' },

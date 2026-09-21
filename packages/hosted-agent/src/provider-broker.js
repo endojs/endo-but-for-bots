@@ -23,7 +23,7 @@ export {
 
 /**
  * @typedef {{ method: string, path: string }} Route
- * @typedef {{ origin: string, routes: Route[], models: string[],
+ * @typedef {{ origin: string, routes: Route[],
  * clientAuthorization?: 'reject' | 'strip',
  * maxConcurrentRequests: number, maxRequestBytes: bigint, maxResponseBytes: bigint,
  * credentialHeader?: 'bearer' | 'x-api-key',
@@ -78,6 +78,13 @@ harden(isSubscriptionExhaustion);
 
 const MEMBER_UNAVAILABLE = 'Provider subscription unavailable';
 const makeMemberUnavailable = () => Error(MEMBER_UNAVAILABLE);
+/**
+ * @typedef {object} UsageSettlement
+ * @property {ReturnType<typeof emptyCounts> | null} usage
+ * @property {boolean} began Whether the provider may have done the work.
+ * @property {boolean} complete Whether the producer reached the end.
+ * @property {number} responseBytes Bytes read by the producer.
+ */
 /** @param {unknown} error */
 const isMemberUnavailable = error =>
   error instanceof Error && error.message === MEMBER_UNAVAILABLE;
@@ -554,13 +561,22 @@ harden(makeBrokerOAuthCredential);
  *
  * @typedef {object} BrokerGrantMember
  * @property {string} id
- * @property {{ readBase64(): Promise<string> }} secret
- * @property {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} transport
+ * @property {{ readBase64(): Promise<string> }} [secret]
+ * @property {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} [transport]
  *   This member's own transport, so that what its responses say of the
  *   account is read as this member's.
  * @property {ReturnType<typeof makeBrokerOAuthCredential>} [credential]
  * @property {ProviderRequestAdapter} [adaptRequest]
  * @property {string} [accountRef] The account an OAuth credential must name.
+ * @property {(model: string) => Promise<boolean> | boolean} [admits] Whether
+ *   this member's account may be served the named model, as its catalog
+ *   owner answers now (`model-catalog.js`). Required of every member: a
+ *   member with no discovery admits nothing. The request is tried on the
+ *   members that admit its model, in the pool's order.
+ * @property {() => string} [catalogState] How the member's catalog stands
+ *   (`current`, `stale`, `unavailable`, `unsupported`), for the audit trail
+ *   of a refusal: a model nobody lists reads differently from nobody able
+ *   to say.
  * @property {{ provide(): Promise<any>, reset(endpoint: any): void }} [wrapped]
  *   In place of `secret` and `transport`: this member is somebody else's
  *   subscription. `provide` answers an inference endpoint opened on it for
@@ -699,8 +715,8 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  *
  * @param {BrokerPolicy} policy
  * @param {object} powers
- * @param {{ readBase64(): Promise<string> }} powers.secret - SecretBlob read facet
- * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} powers.transport
+ * @param {{ readBase64(): Promise<string> }} [powers.secret] - SecretBlob read facet; required without a pool.
+ * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} [powers.transport] Required without a pool.
  * @param {(event: {event: string, requests: bigint}) => void} [powers.audit]
  * @param {ReturnType<typeof makeBrokerOAuthCredential>} [powers.credential]
  * - The shared refreshing credential for this secret record, required by
@@ -711,6 +727,14 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  * Runs after route/model/body admission and before reading credentials.
  * May translate the path within the pinned origin and add non-credential
  * headers; cannot change the method, body, credential, or response bounds.
+ * @param {(model: string) => Promise<boolean> | boolean} [powers.admits]
+ * Whether the one account may be served the named model, from its catalog
+ * owner; required without a pool. There is no operator list of models: what
+ * an account is admitted is what its provider lists for it, and a request
+ * for a model no eligible account lists is refused (`Model denied`) before
+ * a slot is taken or a credential read.
+ * @param {() => string} [powers.catalogState] How the one account's catalog
+ * stands, for the audit trail of a refusal.
  * @param {BrokerGrantPool} [powers.pool]
  * Several subscriptions of one provider behind this grant, in place of
  * `secret`, `transport`, `credential` and `adaptRequest`, which describe one.
@@ -740,6 +764,8 @@ export const makeProviderBrokerGrant = (
     audit = () => {},
     credential,
     adaptRequest,
+    admits,
+    catalogState,
     pool,
     revealExhaustion = false,
   },
@@ -751,6 +777,11 @@ export const makeProviderBrokerGrant = (
   authMode === 'api-key' ||
     authMode === 'oauth' ||
     Fail`Unsupported broker authentication mode`;
+  // There is no operator model list: a policy that carries one is from
+  // before account catalogs admitted models, and is refused rather than
+  // silently ignored.
+  /** @type {any} */ (policy).models === undefined ||
+    Fail`Broker policy must not name models`;
   const credentialHeader = policy.credentialHeader ?? 'bearer';
   credentialHeader === 'bearer' ||
     credentialHeader === 'x-api-key' ||
@@ -787,7 +818,17 @@ export const makeProviderBrokerGrant = (
   /** @type {readonly BrokerGrantMember[]} */
   const members = harden(
     pool === undefined
-      ? [{ id: 'default', secret, transport, credential, adaptRequest }]
+      ? [
+          {
+            id: 'default',
+            secret,
+            transport,
+            credential,
+            adaptRequest,
+            admits,
+            ...(catalogState === undefined ? {} : { catalogState }),
+          },
+        ]
       : pool.members.map(member => ({ ...member })),
   );
   (members.length > 0 &&
@@ -796,6 +837,7 @@ export const makeProviderBrokerGrant = (
       member =>
         typeof member.id === 'string' &&
         member.id !== '' &&
+        typeof member.admits === 'function' &&
         (member.wrapped !== undefined ||
           (member.secret !== undefined && member.transport !== undefined)),
     )) ||
@@ -859,10 +901,6 @@ export const makeProviderBrokerGrant = (
     return `${method} ${path}`;
   });
   routes.length > 0 || Fail`Inference routes required`;
-  const models = [...policy.models];
-  (models.length > 0 &&
-    models.every(model => typeof model === 'string' && model.length > 0)) ||
-    Fail`Models required`;
   // Simultaneous request slots are a deployment allocation, not a usage budget.
   (Number.isInteger(maxConcurrentRequests) &&
     maxConcurrentRequests > 0 &&
@@ -978,7 +1016,12 @@ export const makeProviderBrokerGrant = (
         return harden({
           status,
           contentType,
-          reader: bytesReader ?? makeScreenedBytesReader(reader, checkLive),
+          reader:
+            bytesReader ??
+            makeScreenedBytesReader(
+              reader ?? Fail`Missing provider stream reader`,
+              checkLive,
+            ),
           // What the response cost, once the producer has read its end:
           // `{ usage, began }` (`provider-usage.js`). It always fulfils.
           usage,
@@ -1031,7 +1074,8 @@ export const makeProviderBrokerGrant = (
   const resolveCredential = async (member, rejected) => {
     const oauth = oauthMode ? member.credential : undefined;
     if (!oauth) {
-      const encoded = await E(member.secret).readBase64();
+      const selectedSecret = member.secret ?? Fail`Missing provider secret`;
+      const encoded = await E(selectedSecret).readBase64();
       const decoded = decodeSecret(encoded);
       /^[\x21-\x7e]+$/.test(decoded) || Fail`Invalid credential`;
       return harden({ credential: decoded, screens: [decoded, encoded] });
@@ -1058,18 +1102,27 @@ export const makeProviderBrokerGrant = (
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {false} streaming
+   * @param {boolean} [bytesOk]
    * @returns {Promise<{status: number, body: string}>}
    */
   /**
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {true} streaming
-   * @returns {Promise<ProviderStream & {contentType: string}>}
+   * @param {false} bytesOk
+   * @returns {Promise<ProviderStream & {contentType: string, usage: Promise<UsageSettlement>}>}
+   */
+  /**
+   * @overload
+   * @param {{method: string, path: string, body: string}} request
+   * @param {true} streaming
+   * @param {boolean} [bytesOk]
+   * @returns {Promise<{status: number, contentType: string, reader?: ProviderStream['reader'], bytesReader?: ReturnType<typeof makeScreenedBytesReader>, usage: Promise<UsageSettlement>}>}
    */
   /**
    * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
-   * @param bytesOk
+   * @param {boolean} bytesOk
    */
   const perform = async (
     { method, path, body, headers },
@@ -1089,12 +1142,14 @@ export const makeProviderBrokerGrant = (
     } catch (_error) {
       Fail`Invalid inference JSON`;
     }
-    (data &&
-      typeof data === 'object' &&
-      !Array.isArray(data) &&
-      typeof data.model === 'string' &&
-      models.includes(data.model)) ||
+    const model = /** @type {unknown} */ (
+      data && typeof data === 'object' && !Array.isArray(data)
+        ? data.model
+        : undefined
+    );
+    (typeof model === 'string' && model !== '' && model.length <= 256) ||
       Fail`Model denied`;
+    const modelId = /** @type {string} */ (model);
     const canonicalBody = JSON.stringify(data);
     const canonicalBytes = BigInt(
       new TextEncoder().encode(canonicalBody).length,
@@ -1133,19 +1188,60 @@ export const makeProviderBrokerGrant = (
     // any other of the request's: what the pool says, a pinned id included,
     // is the operator's and not for whoever holds the endpoint.
     /** @type {BrokerGrantMember[]} */
-    let candidates;
-    let firstAdapted;
+    let selected;
     try {
-      candidates = selectOrder()
+      selected = selectOrder()
         .map(id => membersById.get(id) ?? Fail`Unknown broker subscription`)
         // Somebody else's subscription streams bytes only. A listener from
         // before the bytes stream is served by the operator's own accounts,
         // rather than have a far response started that nobody could read.
         .filter(member => bytesOk || member.wrapped === undefined);
-      if (candidates.length === 0) {
+      if (selected.length === 0) {
         record('subscriptions-exhausted');
         throw Fail`Provider subscriptions exhausted`;
       }
+    } catch (error) {
+      if (pool === undefined) throw error;
+      if (
+        revealExhaustion &&
+        error instanceof Error &&
+        error.message === 'Provider subscriptions exhausted'
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
+      return Fail`Provider request failed`;
+    }
+    // Of those, the ones whose account lists the model. Asked of all at
+    // once, kept in the pool's order, so a pinned session's one member
+    // refusing is a refusal and not a fall-through; an answer that fails is
+    // no. Nothing is reserved or read yet, and the grant may be revoked
+    // meanwhile.
+    const answers = await Promise.all(
+      selected.map(async member => {
+        try {
+          const answer =
+            await /** @type {NonNullable<typeof member.admits>} */ (
+              member.admits
+            )(modelId);
+          return answer === true;
+        } catch (_error) {
+          return false;
+        }
+      }),
+    );
+    const candidates = selected.filter((_member, index) => answers[index]);
+    if (candidates.length === 0) {
+      // A model nobody lists, or nobody able to say: the audit trail tells
+      // them apart, the slice is told neither.
+      const anyCatalog = selected.some(member => {
+        const state = member.catalogState?.();
+        return state === undefined || state === 'current' || state === 'stale';
+      });
+      record(anyCatalog ? 'model-denied' : 'catalog-unavailable');
+      throw Fail`Model denied`;
+    }
+    let firstAdapted;
+    try {
       firstAdapted = adaptFor(candidates[0]);
     } catch (error) {
       if (pool === undefined) throw error;
@@ -1174,15 +1270,6 @@ export const makeProviderBrokerGrant = (
     // What this request cost, for whoever charges for it. Settled once, by
     // whichever comes first: the end of the response, its failure or
     // cancellation, or a refusal before any response. It never rejects.
-    /**
-     * @typedef {object} UsageSettlement
-     * @property {any} usage The five counts, or null when the response never
-     *   said.
-     * @property {boolean} began Whether the provider may have done the work.
-     * @property {boolean} complete Whether the producer read the response to
-     *   its end. One cut short is charged no less than it was reserved at.
-     * @property {number} responseBytes What the producer read of it.
-     */
     /** @type {(settlement: UsageSettlement) => void} */
     let settleUsage = () => {};
     /** @type {Promise<UsageSettlement>} */
@@ -1220,7 +1307,8 @@ export const makeProviderBrokerGrant = (
     ) => {
       await null;
       checkLive();
-      const { transport: memberTransport } = member;
+      const memberTransport =
+        member.transport ?? Fail`Missing provider transport`;
       for (const screen of screens) {
         if (!exposed.includes(screen)) exposed.push(screen);
       }
@@ -1255,7 +1343,8 @@ export const makeProviderBrokerGrant = (
       /** @param {string} text */
       const echoes = text => exposed.some(screen => text.includes(screen));
       if (streaming) {
-        const response = await E(memberTransport).requestStream(upstream);
+        const response = await (E(memberTransport).requestStream?.(upstream) ??
+          Fail`Provider streaming transport unavailable`);
         const tap = makeUsageTap();
         let bytes = 0n;
         const cancel = () => {
@@ -1667,6 +1756,22 @@ export const makeProviderBrokerGrant = (
           tellPool('served', member.id);
           return result;
         } catch (error) {
+          // A far subscription admits by its own accounts' catalogs, of
+          // which its holder's answer was the union: one of them refusing
+          // the model is not this request's failure, and the next member,
+          // an account of the operator's own that lists it, may serve.
+          if (
+            pool !== undefined &&
+            member.wrapped !== undefined &&
+            error instanceof Error &&
+            error.message === 'Model denied'
+          ) {
+            checkLive();
+            refusal = error;
+            record('model-denied');
+            // eslint-disable-next-line no-continue
+            continue;
+          }
           // A subscription that is used up refuses at admission, before any
           // response byte, so the same request can go to the next one. Any
           // other failure is the request's, and is not tried elsewhere.

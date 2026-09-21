@@ -6,6 +6,7 @@ import { Far } from '@endo/far';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import { makeProviderBrokerGrant } from '../src/provider-broker.js';
+import { admitsModels } from './admits-models.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
 /**
@@ -17,7 +18,6 @@ import { makeProviderFetchTransport } from '../src/provider-transport.js';
 const policy = harden({
   origin: 'https://api.example.test',
   routes: [{ method: 'POST', path: '/v1/messages' }],
-  models: ['allowed'],
   maxConcurrentRequests: 4,
   maxRequestBytes: 1000n,
   maxResponseBytes: 100_000n,
@@ -68,6 +68,7 @@ const run = async (t, how) => {
   });
   t.teardown(transport.dispose);
   const grant = makeProviderBrokerGrant(policy, {
+    admits: admitsModels(['allowed']),
     secret: Far('secret', { readBase64: async () => btoa('canary-secret') }),
     transport: transport.transport,
   });

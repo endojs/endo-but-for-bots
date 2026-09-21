@@ -215,8 +215,9 @@ subscriptions"), so a lane needs a pooled broker to begin with.
 ## Operator settings
 
 Required hosted settings are `ENDO_CODEX_ENABLE=1`, `ENDO_CODEX_HOST_DIR`,
-`ENDO_CODEX_SANDBOX_IMAGE`, `ENDO_CODEX_BROKER_LISTENER_IMAGE`,
-and `ENDO_CODEX_MODELS` (nonempty JSON array).
+`ENDO_CODEX_SANDBOX_IMAGE` and `ENDO_CODEX_BROKER_LISTENER_IMAGE`.
+There is no model setting: the menu is what the ChatGPT account lists, read
+by the broker under its credential, and the same catalog admits each request.
 Hosted resource settings come from the shared hosted policy, not a per-backend
 native profile environment variable.
 The runtime image is resolved to a digest; the listener reference must be immutable.

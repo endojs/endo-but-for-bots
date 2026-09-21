@@ -28,14 +28,14 @@ This package has no form-driven replacement API; select the Claude backend throu
 | Operation | Behavior |
 | --- | --- |
 | `describe()` | Backend identity, continuity, tool ownership, and supported network policies |
-| `listModels()` | Model IDs and supported thinking efforts |
+| `modelCatalog(subscriptionId?)` | What each account of the broker lists, read from Anthropic's model list, with the thinking efforts the pinned runtime drives each model at |
 | `create(spec, toolSet)` | Record or reopen a session and return its run/admin facets |
 | `run.send(prompt, options)` | Stream provider-neutral events while retaining full transcript restoration options |
 | `run.interrupt()` | Stop the in-flight CLI turn; tolerate an idle session |
 | `admin.terminate()` | Stop native work through its owner, preserving the logical session |
 | `destroy(spec)` | Stop and remove the session through the owner |
 
-The backend validates the selected model and reasoning effort.
+A new session's model is admitted by the catalog of an account the session may be served from, with an effort that model takes; a reopen keeps its recorded pin without asking the provider, and an effort changed on its own keeps the recorded model. A session that names no model runs the runtime's own default, unpinned; nobody picks one from the list for it.
 The system prompt is pinned for the session and forwarded on every CLI spawn.
 Network defaults to `off`; `public-internet` is offered only if the broker's recorded
 configuration supports it.

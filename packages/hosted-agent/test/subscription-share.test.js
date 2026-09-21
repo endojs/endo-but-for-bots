@@ -73,7 +73,8 @@ const makeBeneath = () => {
         attestation: async () =>
           harden({
             providerOrigin: 'https://chatgpt.com',
-            modelAllowlist: ['allowed', 'other'],
+            models: null,
+            modelAdmission: 'account-catalog',
             subscriptions: ['work', 'home'],
           }),
         revoke: async () => {
@@ -233,7 +234,8 @@ test('what a holder sees of what is beneath is whether, and until when', async t
     version: 'InferenceEndpointV1',
     sessionId: 's',
     providerOrigin: 'https://chatgpt.com',
-    modelAllowlist: ['allowed'],
+    models: ['allowed'],
+    modelAdmission: 'account-catalog',
     subscription: 'alice',
     hops: 1,
   });

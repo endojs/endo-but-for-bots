@@ -6,8 +6,14 @@ import { Far } from '@endo/far';
 
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { makeAccountOracle } from '../src/account-oracle.js';
+import { makeAccountOracleKit } from '../src/account-oracle.js';
 import { makeAccountReadingSource } from '../src/account-source.js';
+
+const makeTestOracle = (t, options) => {
+  const kit = makeAccountOracleKit(options);
+  t.teardown(() => kit.close());
+  return kit.account;
+};
 
 const T0 = '2026-09-04T12:00:00.000Z';
 const T1 = '2026-09-04T13:00:00.000Z';
@@ -52,7 +58,7 @@ const makeMemoryJournal = () => {
 };
 
 test('with no source at all every section is unavailable, not invented', async t => {
-  const oracle = makeAccountOracle({ providerId: 'anthropic', now: () => T0 });
+  const oracle = makeTestOracle(t, { providerId: 'anthropic', now: () => T0 });
   const plan = await E(oracle).getPlan();
   t.is(plan.source, 'unavailable');
   t.is(plan.state, 'unknown');
@@ -62,7 +68,7 @@ test('with no source at all every section is unavailable, not invented', async t
 });
 
 test('a declared profile answers, marked as declared rather than measured', async t => {
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () => declaredProfile,
     now: () => T0,
@@ -77,7 +83,7 @@ test('a declared profile answers, marked as declared rather than measured', asyn
 
 test('a live reading wins over the declared profile and is journalled', async t => {
   const { journal, peek } = makeMemoryJournal();
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () => declaredProfile,
     provideObserved: async () => ({
@@ -99,7 +105,7 @@ test('a live reading wins over the declared profile and is journalled', async t 
 
 test('a declared-only answer is not written back as if it were observed', async t => {
   const { journal, peek } = makeMemoryJournal();
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () => declaredProfile,
     journal,
@@ -111,7 +117,7 @@ test('a declared-only answer is not written back as if it were observed', async 
 
 test('a failed live read falls back to the last reading, marked remembered', async t => {
   const { journal, seed } = makeMemoryJournal();
-  const remembered = makeAccountOracle({
+  const remembered = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () => ({
       rateLimits: {
@@ -125,7 +131,7 @@ test('a failed live read falls back to the last reading, marked remembered', asy
 
   const stored = await journal.read();
   seed(stored);
-  const afterRestart = makeAccountOracle({
+  const afterRestart = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () => {
       throw Error('provider unreachable');
@@ -143,7 +149,7 @@ test('a failed live read falls back to the last reading, marked remembered', asy
 });
 
 test('an unreadable declared profile does not take the whole answer down', async t => {
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () => {
       throw Error('profile is corrupt');
@@ -158,7 +164,7 @@ test('an unreadable declared profile does not take the whole answer down', async
 });
 
 test('estimateCost prices a session against the current card', async t => {
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () => declaredProfile,
     now: () => T0,
@@ -188,7 +194,7 @@ test('estimateCost prices a session against the current card', async t => {
 
 test('concurrent first reads share one live read', async t => {
   let reads = 0;
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () => {
       reads += 1;
@@ -211,7 +217,7 @@ test('concurrent first reads share one live read', async t => {
 });
 
 test('the oracle exposes only read methods', async t => {
-  const oracle = makeAccountOracle({ providerId: 'anthropic', now: () => T0 });
+  const oracle = makeTestOracle(t, { providerId: 'anthropic', now: () => T0 });
   // CapTP introspection is not on the exo's declared interface, so the guarded
   // type does not carry it; the cast is at the call, not on the oracle.
   // eslint-disable-next-line no-underscore-dangle
@@ -232,14 +238,14 @@ test('the oracle exposes only read methods', async t => {
 });
 
 test('a provider id is required', t => {
-  t.throws(() => makeAccountOracle({ providerId: '' }), {
+  t.throws(() => makeTestOracle(t, { providerId: '' }), {
     message: /requires a providerId/,
   });
 });
 
 test('a source that returns junk is rejected, not stored', async t => {
   const { journal, peek } = makeMemoryJournal();
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () => ({
       rateLimits: { windows: [{ windowId: 'w', limit: 5 }] },
@@ -258,7 +264,7 @@ test('a source may be an eventual-send capability', async t => {
     observe: async () =>
       harden({ plan: { planId: 'team', title: 'Team', state: 'active' } }),
   });
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: () => E(source).observe(),
     now: () => T0,
@@ -270,7 +276,7 @@ test('a source may be an eventual-send capability', async t => {
 
 test('a declared section is never journalled beside an observed one', async t => {
   const memory = makeMemoryJournal();
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () => declaredProfile,
     // The provider publishes rate limits but neither a plan nor a price list —
@@ -296,7 +302,7 @@ test('a declared section is never journalled beside an observed one', async t =>
   // Revived without the declared profile — an operator who removed it — the
   // plan must read as unavailable. Journalling the merged answer would have
   // replayed their old assertion as a measurement nobody ever took.
-  const revived = makeAccountOracle({
+  const revived = makeTestOracle(t, {
     providerId: 'anthropic',
     journal: memory.journal,
     now: () => T1,
@@ -315,7 +321,7 @@ test('a partial live read does not erase an earlier reading of another section',
       windows: [{ windowId: 'weekly', limit: 1000n, used: 100n }],
     },
   });
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () => payload,
     journal: memory.journal,
@@ -359,7 +365,7 @@ test('an unreadable journal is not overwritten from a partial view', async t => 
     }),
   );
   let failReads = true;
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () =>
       harden({
@@ -387,7 +393,7 @@ test('an unreadable journal is not overwritten from a partial view', async t => 
 });
 
 test('a source cannot stamp its own provenance', async t => {
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     // A declared profile claiming to be a live reading, of an account it does
     // not describe.
@@ -417,7 +423,7 @@ test('a source cannot stamp its own provenance', async t => {
 test('a stamp that would make a stale figure look fresh is refused', async t => {
   /** @param {any} reported */
   const planWith = reported =>
-    makeAccountOracle({
+    makeTestOracle(t, {
       providerId: 'anthropic',
       provideObserved: async () =>
         harden({
@@ -447,7 +453,7 @@ test('a stamp that would make a stale figure look fresh is refused', async t => 
 
 test('one unusable section does not discard the reading beside it', async t => {
   const memory = makeMemoryJournal();
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     // `seats` must be a count; the plan cannot be projected. The rate limits
     // beside it are perfectly good, and all-or-nothing projection threw them
@@ -469,7 +475,7 @@ test('one unusable section does not discard the reading beside it', async t => {
 });
 
 test('the oracle clock supplies observedAt only when the source does not', async t => {
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideDeclared: async () =>
       harden({
@@ -485,7 +491,7 @@ test('a stored section no normalizer can read is replaced, not wedged', async t 
   // A plan written before the normalizer required `state`: it passes the raw
   // `source === 'observed'` filter and then fails normalization.
   memory.seed(harden({ plan: { planId: 'max', source: 'observed' } }));
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'anthropic',
     provideObserved: async () =>
       harden({
@@ -522,12 +528,13 @@ const weekly = (usedPercent, extra = {}) =>
 
 /**
  * An oracle fed by a broker's account source, as the adapters wire it.
- * @param memory
+ * @param {any} t
+ * @param {ReturnType<typeof makeMemoryJournal>} memory
  */
-const pushedOracle = memory => {
+const pushedOracle = (t, memory) => {
   const account = makeAccountReadingSource({ now: () => T0 });
   let reads = 0;
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'codex',
     now: () => T0,
     journal: memory.journal,
@@ -543,7 +550,7 @@ const pushedOracle = memory => {
 
 test('a pushed reading reaches watchers without anyone asking again', async t => {
   const journal = makeMemoryJournal();
-  const { account, oracle, reads } = pushedOracle(journal);
+  const { account, oracle, reads } = pushedOracle(t, journal);
   const reader = iterateReader(E(oracle).watch());
   // Nothing served yet: the first answer is honest about knowing nothing.
   const first = (await reader.next()).value;
@@ -562,7 +569,7 @@ test('a pushed reading reaches watchers without anyone asking again', async t =>
 
 test('a reading is journalled when it changes materially, not on every response', async t => {
   const journal = makeMemoryJournal();
-  const { account, oracle } = pushedOracle(journal);
+  const { account, oracle } = pushedOracle(t, journal);
   const reader = iterateReader(E(oracle).watch());
   await reader.next();
   const settle = async usedPercent => {
@@ -603,7 +610,7 @@ test('a reading is journalled when it changes materially, not on every response'
 
 test('after a restart the last reading is remembered, with a blocked window still blocked', async t => {
   const journal = makeMemoryJournal();
-  const before = pushedOracle(journal);
+  const before = pushedOracle(t, journal);
   const reader = iterateReader(E(before.oracle).watch());
   await reader.next();
   before.account.accept(weekly(100, { limitReached: true }));
@@ -612,7 +619,7 @@ test('after a restart the last reading is remembered, with a blocked window stil
   await reader.return(undefined);
 
   // A new incarnation: a fresh source that has served nothing, same journal.
-  const after = pushedOracle(journal);
+  const after = pushedOracle(t, journal);
   const limits = await E(after.oracle).getRateLimits();
   t.is(limits.source, 'remembered');
   t.true(limits.limitReached);
@@ -623,7 +630,7 @@ test('after a restart the last reading is remembered, with a blocked window stil
 });
 
 test('an explicit refresh asks the source to read its provider, once', async t => {
-  const { oracle, reads } = pushedOracle(makeMemoryJournal());
+  const { oracle, reads } = pushedOracle(t, makeMemoryJournal());
   await E(oracle).getPlan();
   t.is(reads(), 0);
   await E(oracle).refresh();
@@ -646,7 +653,7 @@ test('a reading pushed while the answer is being built is not overwritten by it'
   const observed = new Promise(resolve => {
     observedOnce = () => resolve(undefined);
   });
-  const oracle = makeAccountOracle({
+  const oracle = makeTestOracle(t, {
     providerId: 'codex',
     now: () => T0,
     journal: {

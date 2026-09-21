@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { makePromiseKit } from './_promise-kit.js';
 
 import {
   createPrivateTurnStorage,
@@ -11,6 +12,58 @@ import {
 const eventName = index => `floot-turn-event-${`${index}`.padStart(20, '0')}`;
 const prefix = 'floot-private-turn-7-session-';
 const schemaName = `${prefix}schema`;
+
+for (const fails of [false, true]) {
+  test(`private storage close drains admitted writes and fences old facet: fails=${fails}`, async t => {
+    const values = new Map([
+      [schemaName, harden({ version: 1, sessionId: 'session' })],
+    ]);
+    const entered = makePromiseKit();
+    const release = makePromiseKit();
+    const host = Far('DelayedPrivateStorage', {
+      list: () => harden([...values.keys()]),
+      lookup: name => values.get(name),
+      storeValue: async (value, name) => {
+        entered.resolve(undefined);
+        await release.promise;
+        values.set(name, value);
+        if (fails) throw Error('Write acknowledgement lost');
+      },
+      remove: name => {
+        values.delete(name);
+      },
+    });
+    const storage = await providePrivateTurnStorage(host, 'session');
+    const writing = E(storage).storeValue(
+      harden({ value: 'retained' }),
+      eventName(0),
+    );
+    void writing.catch(() => {});
+    await entered.promise;
+    let settled = false;
+    const closing = E(storage)
+      .close()
+      .finally(() => {
+        settled = true;
+      });
+    void closing.catch(() => {});
+    await t.throwsAsync(E(storage).list(), { message: /closed/ });
+    t.false(settled);
+    release.resolve(undefined);
+    if (fails) {
+      await t.throwsAsync(writing, { message: /acknowledgement/ });
+      await t.throwsAsync(closing, { message: /uncertain storage/ });
+    } else {
+      await writing;
+      await closing;
+    }
+    await t.throwsAsync(E(storage).storeValue('late', eventName(1)), {
+      message: /closed/,
+    });
+    const restored = await providePrivateTurnStorage(host, 'session');
+    t.deepEqual(await E(restored).lookup(eventName(0)), { value: 'retained' });
+  });
+}
 const fixture = () => {
   const values = new Map();
   const calls = [];

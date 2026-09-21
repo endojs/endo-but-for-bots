@@ -20,7 +20,9 @@ import {
 } from './account.js';
 
 /**
- * Build the read-only account facet over two sources and one durable memory.
+ * Build a lifecycle-owned account kit over two sources and one durable memory.
+ * The account facet is read-only; its owner must close and drain the kit before
+ * replacing its journal writer. Do not expose the private close authority.
  *
  * The oracle exists because plan and quota are facts about the *account behind
  * a credential*, not about the credential: they change while the capability
@@ -52,8 +54,9 @@ import {
  * @param {{ read: () => Promise<any>, write: (snapshot: any) => Promise<void> }} [options.journal]
  * @param {() => string} [options.now] - ISO 8601 clock, injectable for tests.
  * @param {(callback: () => void, ms: number) => unknown} [options.setTimer]
+ * @param {(handle: any) => void} [options.clearTimer]
  */
-export const makeAccountOracle = ({
+export const makeAccountOracleKit = ({
   providerId,
   provideDeclared,
   provideObserved,
@@ -62,6 +65,7 @@ export const makeAccountOracle = ({
   journal,
   now = () => new Date().toISOString(),
   setTimer = (callback, ms) => globalThis.setTimeout(callback, ms),
+  clearTimer = handle => globalThis.clearTimeout(handle),
 }) => {
   (typeof providerId === 'string' && providerId !== '') ||
     Fail`Account oracle requires a providerId`;
@@ -76,6 +80,20 @@ export const makeAccountOracle = ({
   let journalled = {};
   let journalLoaded = false;
   const topic = makeLatestTopic();
+  let closed = false;
+  const pending = new Set();
+  const writeFailures = [];
+  const assertOpen = () => {
+    if (closed) throw Error('Account oracle is closed');
+  };
+  const track = promise => {
+    pending.add(promise);
+    void promise.then(
+      () => pending.delete(promise),
+      () => pending.delete(promise),
+    );
+    return promise;
+  };
 
   const SECTIONS = harden(['plan', 'rateLimits', 'rateCard']);
 
@@ -372,6 +390,7 @@ export const makeAccountOracle = ({
           await journal.write(harden(record));
           journalled = { ...record };
         } catch (error) {
+          writeFailures.push(error);
           console.error(
             `[account-oracle] ${providerId}: could not persist snapshot: ${
               error instanceof Error ? error.message : String(error)
@@ -472,6 +491,7 @@ export const makeAccountOracle = ({
         await journal.write(harden(record));
         journalled = record;
       } catch (error) {
+        writeFailures.push(error);
         console.error(
           `[account-oracle] ${providerId}: could not persist snapshot: ${
             error instanceof Error ? error.message : String(error)
@@ -488,50 +508,70 @@ export const makeAccountOracle = ({
   let retryPending = false;
   let retryMs = 5000;
   let failureLogged = false;
+  let retryTimer;
+  let sourceReader;
+  let sourceClose;
+  const closeSource = () => {
+    if (sourceReader === undefined) return Promise.resolve();
+    sourceClose ??= E(sourceReader).close();
+    return sourceClose;
+  };
   const ensureWatching = () => {
-    if (watching || retryPending || watchObserved === undefined) return;
+    if (closed || watching || retryPending || watchObserved === undefined)
+      return;
     watching = true;
-    void (async () => {
-      try {
-        const ref = await watchObserved();
-        // A source with nothing to subscribe to is not retried on a timer;
-        // the next reader asks again, which is how a source bound later is
-        // found.
-        if (ref === undefined) {
-          watching = false;
-          return;
-        }
-        const readings = iterateReader(ref);
-        for await (const raw of readings) {
-          retryMs = 5000;
-          failureLogged = false;
+    void track(
+      (async () => {
+        try {
+          const ref = await watchObserved();
+          // A source with nothing to subscribe to is not retried on a timer;
+          // the next reader asks again, which is how a source bound later is
+          // found.
+          if (ref === undefined) {
+            watching = false;
+            return;
+          }
+          sourceReader = ref;
+          sourceClose = undefined;
+          if (closed) return;
+          const readings = iterateReader(ref);
+          for await (const raw of readings) {
+            if (closed) return;
+            retryMs = 5000;
+            failureLogged = false;
 
-          await applyObserved(raw).catch(() => {});
+            await applyObserved(raw).catch(() => {});
+          }
+        } catch (error) {
+          // Once per outage, not once per attempt.
+          if (!failureLogged) {
+            failureLogged = true;
+            console.error(
+              `[account-oracle] ${providerId}: reading stream failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        } finally {
+          await closeSource();
         }
-      } catch (error) {
-        // Once per outage, not once per attempt.
-        if (!failureLogged) {
-          failureLogged = true;
-          console.error(
-            `[account-oracle] ${providerId}: reading stream failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+        watching = false;
+        if (!closed && topic.watcherCount() > 0) {
+          retryPending = true;
+          retryTimer = setTimer(() => {
+            retryPending = false;
+            ensureWatching();
+          }, retryMs);
+          retryMs = Math.min(retryMs * 2, 60_000);
         }
-      }
-      watching = false;
-      if (topic.watcherCount() > 0) {
-        retryPending = true;
-        setTimer(() => {
-          retryPending = false;
-          ensureWatching();
-        }, retryMs);
-        retryMs = Math.min(retryMs * 2, 60_000);
-      }
-    })();
+      })(),
+    ).catch(error => {
+      if (!closed)
+        console.error('[account-oracle] source cleanup failed:', error);
+    });
   };
 
-  return makeExo('HostedAccount', HostedAccountInterface, {
+  const methods = {
     async getPlan() {
       await null;
       ensureWatching();
@@ -627,9 +667,56 @@ export const makeAccountOracle = ({
       }
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },
+  };
+  /**
+   * @template {unknown[]} A
+   * @template R
+   * @param {(...args: A) => R} method
+   * @returns {(...args: A) => R}
+   */
+  const guard =
+    method =>
+    (...args) => {
+      assertOpen();
+      const result = method(...args);
+      track(Promise.resolve(result));
+      return result;
+    };
+  const account = makeExo('HostedAccount', HostedAccountInterface, {
+    getPlan: guard(methods.getPlan),
+    getRateLimits: guard(methods.getRateLimits),
+    getRateCard: guard(methods.getRateCard),
+    estimateCost: guard(methods.estimateCost),
+    refresh: guard(methods.refresh),
+    watch: guard(methods.watch),
+    help: guard(methods.help),
   });
+  let closing;
+  const close = () => {
+    closed = true;
+    topic.close();
+    if (retryTimer !== undefined) clearTimer(retryTimer);
+    closing ??= (async () => {
+      // Failure must refuse handoff rather than wait on an unclosed reader.
+      await closeSource();
+      while (pending.size > 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.allSettled([...pending]);
+      }
+      await closeSource();
+      await order;
+      if (writeFailures.length) {
+        throw AggregateError(
+          writeFailures,
+          'Account journal persistence is uncertain',
+        );
+      }
+    })();
+    return closing;
+  };
+  return harden({ account, close, assertOpen });
 };
-harden(makeAccountOracle);
+harden(makeAccountOracleKit);
 
 /**
  * A durable, append-only snapshot journal over an Endo pet store.

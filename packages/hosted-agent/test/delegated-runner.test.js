@@ -4,6 +4,8 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
+import { normalizeBackendCatalog } from '../src/backend-catalog.js';
+
 import {
   makeDelegatedRunner,
   normalizeRunnerLimits,
@@ -47,7 +49,17 @@ const makeBeneath = () => {
         supportedNetworkPolicies: ['off', 'public-internet'],
         ...(state.bounded ? { enforcesStorageBound: true } : {}),
       }),
-    listModels: async () => harden([{ id: 'small' }, { id: 'large' }]),
+    modelCatalog: async subscriptionId =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: subscriptionId ?? 'work',
+            state: 'current',
+            observedAt: 1,
+            models: [descriptor('small'), descriptor('large')],
+          },
+        ],
+      }),
     create: async (spec, toolSet) => {
       calls.push({ verb: 'create', spec, toolSet });
       if (state.hang) await state.hang;
@@ -88,6 +100,20 @@ const tools = Far('HostedToolSet', {});
  * @param options.store
  * @param options.beneath
  */
+/**
+ * A provider-native descriptor as a broker's reader answers it.
+ * @param {string} id
+ */
+const descriptor = id =>
+  harden({
+    id,
+    title: `Model ${id}`,
+    description: '',
+    default: false,
+    defaultReasoningEffort: null,
+    reasoningEfforts: [],
+  });
+
 const makeHarness = ({
   runnerId = 'alice',
   limits = {},
@@ -390,7 +416,16 @@ test('revoking takes effect at once: turns of sessions made earlier are refused,
   // A holder's Floot asks every backend it knows at once: a runner that is
   // over still says what it is, and offers nothing to start.
   t.is((await E(factory).describe()).id, 'codex-alice');
-  t.deepEqual(await E(factory).listModels(), []);
+  t.deepEqual(await E(factory).modelCatalog(), {
+    accounts: [
+      {
+        subscriptionId: 'default',
+        state: 'unavailable',
+        observedAt: null,
+        models: [],
+      },
+    ],
+  });
   // After a restart too.
   const revived = makeHarness({ store, beneath });
   await t.throwsAsync(
@@ -443,7 +478,21 @@ test('an expired runner refuses turns on sessions it made, and stops them itself
 
 test('models are the operator’s allowlist, in a session’s spec and on every turn', async t => {
   const { factory } = makeHarness({ limits: { models: ['small'] } });
-  t.deepEqual(await E(factory).listModels(), [{ id: 'small' }]);
+  // The lane's account, under a name of its own, narrowed to the allowlist.
+  t.deepEqual(await E(factory).modelCatalog(), {
+    accounts: [
+      {
+        subscriptionId: 'default',
+        state: 'current',
+        observedAt: 1,
+        models: [descriptor('small')],
+      },
+    ],
+  });
+  // What a runner answers is what a holder's Floot validates: the shape
+  // crosses as a backend catalog, no looser.
+  const answered = await E(factory).modelCatalog();
+  t.notThrows(() => normalizeBackendCatalog(answered));
   await t.throwsAsync(
     () => E(factory).create(harden({ sessionId: 's', model: 'large' }), tools),
     { message: /does not allow that model/ },
@@ -516,7 +565,8 @@ test('a destroy and a create of one id, sent together, never leave a live sessio
   const beneath = makeBeneath();
   const factory = Far('queued beneath', {
     describe: () => E(beneath.factory).describe(),
-    listModels: () => E(beneath.factory).listModels(),
+    modelCatalog: subscriptionId =>
+      E(beneath.factory).modelCatalog(subscriptionId),
     create: async (spec, toolSet) => {
       await null;
       return inOrder(spec.sessionId, async () => {
