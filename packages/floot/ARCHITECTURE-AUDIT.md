@@ -5,7 +5,7 @@
 | **Created** | 2026-09-21 |
 | **Updated** | 2026-09-21 |
 | **Author** | kumavis (prompted) |
-| **Status** | Active — audit complete; remediation open |
+| **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
 | **Scope** | PR #1248 and the associated endo-host deployment wiring |
 
@@ -92,13 +92,32 @@ Maps establishes that invariant.
 Private journal retirement must occur only during terminal deletion, after the
 writer and backend drain, not in generic `cleanupSessionResources`: startup also
 calls that helper for incomplete creation and then reopens the existing schema.
-The factory currently ignores its context; it needs an explicit disposal hook,
-admission fence, and drain of creation, registry/submission writes, and journal
-queues before replacement can safely start.
-A production-factory test using a real daemon now reproduces early disposal
-acknowledgement while a voice-preferences persistence write is held open.
-The pending fix must cover all admitted factory/session work, not just that
-single write path.
+The factory now registers and awaits its formula disposal hook before startup.
+It fences retained factory/session/spawner facets, drains admitted work and
+private journal/submission queues, and terminates backend admins without deleting
+established sessions or persisting an operator emergency-stop flag.
+Interrupted creation can still roll back its provisional session resources.
+A second resource sweep and a post-acquisition fence stop late native admins.
+Three real-daemon tests cover a held voice-preferences write, write-then-reject
+uncertainty, and a held native creation that returns its admin during disposal.
+Successful disposal permits reconstruction; failed admitted writes/creation
+retain the daemon's failed-disposal barrier.
+Independent unit/adjacent coverage passes 110 tests, with separate watcher tests
+below. This does not establish full archived-turn/inbox process-loss recovery.
+The final combined change passes all 446 Floot tests and the three real-daemon
+factory lifecycle cases; scoped lint has no errors. Global type checking still
+fails on the existing declaration baseline; no new relevant diagnostics remain.
+Account observers now fence reconciliation after awaits, cancel retry timers,
+explicitly close acquired oracle readers, and drain admitted refresh/reset calls.
+Seven new watcher lifecycle tests plus eight existing projection/observation
+tests pass; historical stream failure is distinguished from an independent
+reader-close acknowledgement, and failed reader closure remains retryable.
+A rejected watch-acquisition reply can still hide a remote reader allocation
+whose capability was never received. This observer-protocol reclamation gap
+remains open; no claim that every remote reader is reclaimed is made.
+It does not grant the closed factory a new reader or revive its canonical writer.
+Closed private-journal facades remain retained until factory disposal; terminal
+journal namespace retirement and earlier facade reclamation remain open.
 An incarnation-local registry does not establish cross-worker exclusion.
 The daemon barrier now rejects reconstruction while exact-formula disposal is
 pending or failed, including dependency cancellation.

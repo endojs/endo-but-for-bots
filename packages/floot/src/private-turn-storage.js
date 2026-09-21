@@ -76,9 +76,11 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     return /** @type {string} */ (name);
   };
   let poisoned = false;
+  let closed = false;
   let queue = Promise.resolve();
   /** @param {() => Promise<any>} operation */
   const serialized = operation => {
+    !closed || Fail`Private journal incarnation is closed`;
     const result = queue.then(async () => {
       !poisoned || Fail`Private journal unavailable after uncertain storage`;
       return operation();
@@ -90,6 +92,11 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     return result;
   };
   return Far('FactoryPrivateTurnStorage', {
+    close: async () => {
+      closed = true;
+      await queue;
+      !poisoned || Fail`Private journal unavailable after uncertain storage`;
+    },
     list: () =>
       serialized(async () =>
         harden(

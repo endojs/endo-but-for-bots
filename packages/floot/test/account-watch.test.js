@@ -90,7 +90,7 @@ test('a view is told every account now and when any of them changes', async t =>
   ]);
   t.is(account.title, 'Codex');
   await reader.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('an oracle bound after the first view subscribed is found by the next', async t => {
@@ -121,7 +121,7 @@ test('an oracle bound after the first view subscribed is found by the next', asy
     heard = (await early.next()).value;
   }
   t.is(heard.accounts[0].backendId, 'codex');
-  watch.close();
+  await watch.close();
 });
 
 test('counts become text and nothing but data reaches a view', t => {
@@ -179,6 +179,7 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
       unknown: [],
     }),
     setTimer: (callback, ms) => timers.push({ callback, ms }),
+    clearTimer: () => {},
     log: (...args) => lines.push(args.join(' ')),
   });
   const reader = iterateReader(watch.watch());
@@ -207,7 +208,7 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
   );
   await reader.return(undefined);
   await second.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('a backend that could not be looked up keeps the account it had', async t => {
@@ -242,7 +243,7 @@ test('a backend that could not be looked up keeps the account it had', async t =
     heard = (await reader.next()).value;
   }
   t.pass();
-  watch.close();
+  await watch.close();
 });
 
 test('a backend with several subscriptions is one account each, told apart by key', async t => {
@@ -304,7 +305,7 @@ test('a backend with several subscriptions is one account each, told apart by ke
     [],
   );
   await reader.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('an account with an admin shows where its redeems stand, and a redeem goes through that admin only', async t => {
@@ -391,7 +392,7 @@ test('an account with an admin shows where its redeems stand, and a redeem goes 
   t.is(of(settled, 'codex').reset.pending, null);
   t.is(of(settled, 'codex').reset.last.outcome, 'reset');
   await reader.return(undefined);
-  watch.close();
+  await watch.close();
 });
 
 test('a reset state is plain data whatever the admin answered', t => {

@@ -25,6 +25,7 @@ import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   makeConversationTree,
@@ -51,6 +52,7 @@ import {
 } from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
+import { makeFactoryOwnership } from './src/factory-ownership.js';
 import {
   UNSETTLED_TOOL_RESULT,
   hostedTurnPartialOf,
@@ -2681,7 +2683,10 @@ export const resolveSharedWorkspaceHostPath = async (
 };
 harden(resolveSharedWorkspaceHostPath);
 
-export const make = (hostPowers, _context, { env } = {}) => {
+export const make = async (hostPowers, context, { env } = {}) => {
+  const ownership = makeFactoryOwnership();
+  const makeOwnedExo = (name, iface, methods) =>
+    makeExo(name, iface, ownership.methods(methods));
   /** @type {any} */
   const powers = hostPowers;
   const systemPrompt = env?.FLOOT_SYSTEM_PROMPT || undefined;
@@ -3082,6 +3087,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // a recreate that is still in flight.
   /** @type {Map<string, { close: () => Promise<void> }>} */
   const hostedMountClients = new Map();
+  const privateJournals = new Set();
 
   // A hosted backend refuses to stop under an unsettled Endo tool call — and
   // the attach that asks for a recreate IS one until its result is back —
@@ -3155,6 +3161,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
       live = session;
       liveDeclared = declaring;
       backendAdmins.set(id, session.admin);
+      // A create admitted before disposal may return after the first cleanup
+      // snapshot. Retain and stop that exact native owner before continuing.
+      if (ownership.isClosed()) {
+        await terminateLive();
+        throw Error('Floot factory incarnation is closed');
+      }
     };
     const liveIsCurrent = () =>
       live !== undefined &&
@@ -3476,7 +3488,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     registryWrite = result.catch(error => {
       console.error('[floot-factory] session registry save failed:', error);
     });
-    return result;
+    return ownership.track(result);
   };
 
   // Whole-Floot voice/TTS preferences, kept in the factory's own petstore. A
@@ -3719,6 +3731,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       );
   };
   const assertSessionAdmission = id => {
+    ownership.assertOpen();
     assertPublished(id);
     const entry = (registry || []).find(session => session.id === id);
     if (
@@ -3911,6 +3924,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return result;
   };
   const getAgent = (id, { observeOnly = false } = {}) => {
+    ownership.assertOpen();
     assertPublished(id);
     if (!observeOnly) assertSessionAdmission(id);
     if (networkChanges.has(id))
@@ -3926,6 +3940,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       agentP = (async () => {
         const host = getHost();
         const journalPowers = await providePrivateTurnStorage(host, id);
+        privateJournals.add(journalPowers);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
         const handleName = `session-${id}`;
@@ -4246,7 +4261,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
           }),
         );
         // Each session is addressable by mail: start following its inbox.
-        if (suspended || stopFences.has(id)) await agent.shutdown(true);
+        if (ownership.isClosed() || suspended || stopFences.has(id))
+          await agent.shutdown(true);
         else agent.startInbox();
         revivalFailures.delete(id);
         void refreshLastTurn(id, agent);
@@ -4285,7 +4301,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         }
         throw error;
       });
-      agents.set(id, agentP);
+      agents.set(id, ownership.track(agentP));
     }
     return agentP;
   };
@@ -4349,6 +4365,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Why the session admits no work right now. Transient: the pump is
         // run again from wherever one of these can change.
         refusal: () => {
+          if (ownership.isClosed())
+            return 'Floot factory incarnation is closed';
           const registered = (registry || []).find(item => item.id === id);
           if (!registered) return 'Unknown session';
           if ((registered.lifecycle || 'ready') !== 'ready')
@@ -4404,7 +4422,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     let facet = facets.get(id);
     if (!facet) {
       const turns = turnSlotFor(id);
-      facet = makeExo('FlootSession', FlootSessionInterface, {
+      facet = makeOwnedExo('FlootSession', FlootSessionInterface, {
         getExecutionState: () => executionState(id),
         emergencyStop: () => emergencyStop(id),
         resume: () => resumeSession(id),
@@ -5145,7 +5163,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         session => session.parentSessionId === parentId,
       );
     };
-    return makeExo('SubagentSpawner', SubagentSpawnerInterface, {
+    return makeOwnedExo('SubagentSpawner', SubagentSpawnerInterface, {
       /**
        * @param {string} name
        * @param {{ systemPrompt?: string }} [options]
@@ -5246,13 +5264,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // inbox loop. New sessions start their loops in getAgent at creation time.
   const startAllInboxes = async () => {
     const reg = await loadRegistry();
+    ownership.assertOpen();
     for (const s of reg) {
       // Read each queue, so the list can say which sessions have messages
       // held over from before the restart. Nothing is dispatched: a queue
       // that comes back non-empty is held until the user sends.
       if ((s.lifecycle || 'ready') === 'ready') {
-        void submissionsFor(s.id)
-          .ready()
+        void ownership
+          .track(submissionsFor(s.id).ready())
           .then(touchSessionList, error => {
             console.error(
               `[floot-factory] could not read the queue of session-${s.id}:`,
@@ -5265,7 +5284,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         (s.executionState === 'stopping' || s.executionState === 'stopped')
       ) {
         if (s.executionState === 'stopping') {
-          void emergencyStop(s.id).catch(error => {
+          void ownership.track(emergencyStop(s.id)).catch(error => {
             console.error(
               '[floot-factory] emergency stop recovery incomplete:',
               error,
@@ -5273,7 +5292,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         }
       } else if (s.lifecycle === 'deleting' || s.lifecycle === 'error') {
-        finishSessionDeletion(s.id).catch(error => {
+        ownership.track(finishSessionDeletion(s.id)).catch(error => {
           console.error(
             `[floot-factory] cleanup recovery failed for session-${s.id}: ${
               error instanceof Error ? error.message : String(error)
@@ -5289,17 +5308,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
           }
           return getAgent(s.id);
         };
-        recoverCreating()
-          .then(async () => {
-            if (s.lifecycle === 'creating') {
-              /** @type {number} */
-              const index = reg.findIndex(entry => entry.id === s.id);
-              if (index >= 0) {
-                reg[index] = harden({ ...reg[index], lifecycle: 'ready' });
-                await saveRegistry();
+        ownership
+          .track(
+            recoverCreating().then(async () => {
+              if (s.lifecycle === 'creating') {
+                /** @type {number} */
+                const index = reg.findIndex(entry => entry.id === s.id);
+                if (index >= 0) {
+                  reg[index] = harden({ ...reg[index], lifecycle: 'ready' });
+                  await saveRegistry();
+                }
               }
-            }
-          })
+            }),
+          )
           .catch(error => {
             console.warn(
               `[floot-factory] could not start inbox for session-${s.id}: ${
@@ -5310,14 +5331,82 @@ export const make = (hostPowers, _context, { env } = {}) => {
       }
     }
   };
-  startAllInboxes().catch(error => {
+  let disposal;
+  const disposeFactory = () => {
+    ownership.fence();
+    disposal ??= (async () => {
+      const failures = [];
+      const attempt = async operation => {
+        try {
+          await operation();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      const submissionClosures = [...submissions.values()].map(entry =>
+        entry.close(),
+      );
+      const accountClosure = accountsWatch.close();
+      void Promise.resolve(accountClosure).catch(() => {});
+      for (const flight of submissionClosures) void flight.catch(() => {});
+      const stopResources = () =>
+        Promise.all([
+          ...[...agents.values()].map(pending =>
+            attempt(async () => {
+              const agent = await pending;
+              await agent.shutdown();
+            }),
+          ),
+          ...[...hostedMountClients.values()].map(client =>
+            attempt(() => client.close()),
+          ),
+          ...[...backendAdmins.values()].map(admin =>
+            attempt(() => E(admin).terminate()),
+          ),
+        ]);
+      // Interrupt consumers before waiting for callers which depend on them.
+      await stopResources();
+      await attempt(() => ownership.drain());
+      // Admitted construction can acquire a resource after the first snapshot.
+      await stopResources();
+      await Promise.all(
+        submissionClosures.map(flight => attempt(() => flight)),
+      );
+      await Promise.all(
+        [...submissions.values()].map(entry => attempt(() => entry.close())),
+      );
+      await Promise.all(
+        [...privateJournals].map(journal => attempt(() => E(journal).close())),
+      );
+      await attempt(() =>
+        Promise.all([
+          registryWrite,
+          voicePrefsWrite,
+          ...publishChains.values(),
+        ]),
+      );
+      for (const watch of sessionWatches.values()) watch.end();
+      sessionListWatch.end();
+      await attempt(() => accountClosure);
+      if (failures.length)
+        throw new AggregateError(failures, 'Floot factory disposal failed');
+    })();
+    return disposal;
+  };
+  if (context !== undefined) {
+    await E(context).addDisposalHook(
+      Far('FlootFactoryDisposal', disposeFactory),
+    );
+  }
+  ownership.assertOpen();
+  ownership.track(startAllInboxes()).catch(error => {
     console.error(
       '[floot-factory] inbox revival error:',
       error instanceof Error ? error.message : String(error),
     );
   });
 
-  return makeExo('FlootFactory', FlootFactoryInterface, {
+  return makeOwnedExo('FlootFactory', FlootFactoryInterface, {
     /**
      * @param {Record<string, any>} options
      * @returns {Promise<object>} an opaque session facet

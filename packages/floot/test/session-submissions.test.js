@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { makePromiseKit } from './_promise-kit.js';
 
 import { makePendingQueue } from '../src/pending-queue.js';
 import { makeSessionSubmissions } from '../src/session-submissions.js';
@@ -19,6 +20,43 @@ const makeHost = () => {
     },
   });
 };
+
+test('incarnation close drains an admitted queue write without dispatching or operator stop state', async t => {
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  const values = new Map();
+  const host = Far('DelayedQueueHost', {
+    has: name => values.has(name),
+    lookup: name => values.get(name),
+    storeValue: async (value, name) => {
+      entered.resolve(undefined);
+      await release.promise;
+      values.set(name, value);
+    },
+    remove: name => {
+      values.delete(name);
+    },
+  });
+  const { submissions, started } = makeSession(host);
+  const submitted = submissions.submit('keep this message');
+  await entered.promise;
+  let closed = false;
+  const closing = submissions.close().then(() => {
+    closed = true;
+  });
+  t.throws(() => submissions.submit('too late'), { message: /closed/ });
+  await Promise.resolve();
+  t.false(closed);
+  release.resolve(undefined);
+  await submitted;
+  await closing;
+  t.is(started.length, 0);
+  t.not(submissions.read().hold?.reason, 'stopped');
+  const restored = makeSession(host);
+  await restored.submissions.ready();
+  t.is(restored.submissions.read().entries.length, 1);
+  t.is(restored.submissions.read().hold?.reason, 'restart');
+});
 
 /**
  * A session with one turn slot whose turns the test finishes by hand.

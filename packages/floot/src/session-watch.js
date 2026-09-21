@@ -599,6 +599,7 @@ harden(makeSessionWatch);
  * @param {Timers} [timers]
  */
 export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
+  let ended = false;
   /** @type {Map<string, { id: string }>} */
   let published = new Map();
   let opening = 0;
@@ -613,6 +614,7 @@ export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
   // eslint-disable-next-line prefer-const
   let chain;
   const refresh = async () => {
+    if (ended) return;
     stale = false;
     let sessions;
     try {
@@ -624,6 +626,7 @@ export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
       );
     } catch (error) {
       // What viewers hold stands; the change that prompted this is not lost.
+      if (ended) return;
       stale = true;
       if (retryHandle === undefined) {
         retryHandle = timers.setTimeout(() => {
@@ -634,6 +637,7 @@ export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
       }
       throw error;
     }
+    if (ended) return;
     retryMs = RETRY_FIRST_MS;
     const next = new Map();
     for (const session of sessions) next.set(session.id, session);
@@ -654,15 +658,18 @@ export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
   });
   return harden({
     touch() {
+      if (ended) return;
       if (viewers.size() > 0 || opening > 0) chain.schedule();
     },
     /** @returns {Promise<object>} a Far StreamReader */
     watch: () => {
+      if (ended) return Promise.reject(Error('Session list watch is closed'));
       opening += 1;
       return chain
         .run(async () => {
           // A viewer cannot be opened on a list that could not be read.
           await refresh();
+          if (ended) throw Error('Session list watch is closed');
           return viewers.open({
             type: 'snapshot',
             sessions: [...published.values()],
@@ -675,6 +682,12 @@ export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
     },
     viewers: () => viewers.size(),
     isStale: () => stale,
+    end: () => {
+      ended = true;
+      timers.clearTimeout(retryHandle);
+      retryHandle = undefined;
+      viewers.end();
+    },
   });
 };
 harden(makeSessionListWatch);

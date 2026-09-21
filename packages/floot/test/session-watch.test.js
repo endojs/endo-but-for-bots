@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { makePromiseKit } from './_promise-kit.js';
 
 import {
   applyTranscript,
@@ -11,6 +12,38 @@ import {
 
 const user = text => harden({ role: 'user', content: text });
 const reply = text => harden({ role: 'assistant', content: text });
+
+for (const fails of [false, true]) {
+  test(`session list end invalidates a held refresh without retry: fails=${fails}`, async t => {
+    const pending = makePromiseKit();
+    const entered = makePromiseKit();
+    const timers = new Set();
+    const watch = makeSessionListWatch(
+      async () => {
+        entered.resolve(undefined);
+        return pending.promise;
+      },
+      {
+        setTimeout: (fn, ms) => {
+          const handle = { fn, ms };
+          timers.add(handle);
+          return handle;
+        },
+        clearTimeout: handle => timers.delete(handle),
+      },
+    );
+    const opening = watch.watch();
+    void opening.catch(() => {});
+    await entered.promise;
+    watch.end();
+    if (fails) pending.reject(Error('Read failed'));
+    else pending.resolve(harden([{ id: 'late' }]));
+    await t.throwsAsync(opening, { message: /closed/ });
+    t.is(timers.size, 0);
+    t.is(watch.viewers(), 0);
+    await t.throwsAsync(watch.watch(), { message: /closed/ });
+  });
+}
 
 /** A controllable set of sources, and the number of transcript reads. */
 const makeSources = () => {
