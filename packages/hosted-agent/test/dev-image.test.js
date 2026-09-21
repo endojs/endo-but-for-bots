@@ -58,13 +58,13 @@ test('shared builder rejects mutable overrides before invoking the engine', asyn
   );
 });
 
-test('shared builder returns the inspected ID and rejects platform mismatch', async t => {
+test('shared builder normalizes bare Podman IDs, supports reuse, and rejects platform mismatch', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'endo-dev-image-test-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const engine = join(directory, 'engine');
   await writeFile(
     engine,
-    `#!/bin/sh\nset -eu\n[ "$1 $2" = 'image inspect' ]\ncase "$4" in\n  '{{.Os}}/{{.Architecture}}') printf '%s\\n' "$TEST_PLATFORM" ;;\n  '{{.Id}}') printf '%s\\n' '${digest}' ;;\n  *) exit 1 ;;\nesac\n`,
+    `#!/bin/sh\nset -eu\n[ "$1 $2" = 'image inspect' ]\ncase "$4" in\n  '{{.Os}}/{{.Architecture}}') printf '%s\\n' "$TEST_PLATFORM" ;;\n  '{{.Id}}') printf '%s\\n' '${digest.slice(7)}' ;;\n  *) exit 1 ;;\nesac\n`,
     { mode: 0o700 },
   );
   const env = {
@@ -75,6 +75,10 @@ test('shared builder returns the inspected ID and rejects platform mismatch', as
   };
   const { stdout } = await exec('sh', [script], { env });
   t.is(stdout, `${digest}\n`);
+  const reused = await exec('sh', [script], {
+    env: { ...env, ENDO_DEV_IMAGE: stdout.trim() },
+  });
+  t.is(reused.stdout, stdout);
   await t.throwsAsync(exec('sh', [script, 'linux/arm64'], { env }), {
     message: /platform mismatch/,
   });

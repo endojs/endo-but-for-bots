@@ -25,4 +25,9 @@ fi
 actual_platform=$("$engine" image inspect --format '{{.Os}}/{{.Architecture}}' "$image_name")
 [ "$actual_platform" = "$image_platform" ] ||
   { echo "Development image platform mismatch: $actual_platform != $image_platform" >&2; exit 1; }
-"$engine" image inspect --format '{{.Id}}' "$image_name"
+image_id=$("$engine" image inspect --format '{{.Id}}' "$image_name")
+# Podman may return bare hexadecimal while Docker prefixes sha256:.
+image_hex=${image_id#sha256:}
+printf '%s\n' "$image_hex" | grep -Eq '^[a-f0-9]{64}$' ||
+  { echo 'Engine returned an invalid development image ID' >&2; exit 1; }
+printf 'sha256:%s\n' "$image_hex"
