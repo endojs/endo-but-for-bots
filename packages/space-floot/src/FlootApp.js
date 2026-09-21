@@ -71,6 +71,20 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   const backendModels = models.filter(
     m => (m.backendId || 'provider') === backend,
   );
+  const [modelQuery, setModelQuery] = useState('');
+  /**
+   * @param {FlootModel} candidate
+   * @param {string} query
+   */
+  const matchesModel = (candidate, query) => {
+    const needle = query.trim().toLowerCase();
+    return [candidate.title, candidate.id, candidate.modelId || ''].some(
+      value => value.toLowerCase().includes(needle),
+    );
+  };
+  const visibleModels = backendModels.filter(candidate =>
+    matchesModel(candidate, modelQuery),
+  );
   const [model, setModel] = useState(preferred ? preferred.id : '');
   const [reasoningEffort, setReasoningEffort] = useState(
     maximumEffort(preferred),
@@ -121,6 +135,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   );
                   const next = candidates.find(m => m.default) || candidates[0];
                   setBackend(e.target.value);
+                  setModelQuery('');
                   setModel(next?.id || '');
                   setReasoningEffort(maximumEffort(next));
                 },
@@ -140,6 +155,34 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
         ? h(
             'label',
             { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Search models'),
+            h('input', {
+              class: 'floot-model-select',
+              type: 'search',
+              'aria-label': 'Search models',
+              placeholder: 'Search by name or model ID',
+              value: modelQuery,
+              onInput: (/** @type {FlootSafeEvent} */ e) => {
+                const query = e.target.value;
+                setModelQuery(query);
+                const matches = backendModels.filter(candidate =>
+                  matchesModel(candidate, query),
+                );
+                const next =
+                  matches.find(candidate => candidate.id === model) ||
+                  matches[0];
+                setModel(next?.id || '');
+                if (next?.id !== model) {
+                  setReasoningEffort(maximumEffort(next));
+                }
+              },
+            }),
+          )
+        : null,
+      models.length
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
             h('span', { class: 'floot-modal-label' }, 'Model'),
             h(
               'select',
@@ -147,6 +190,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                 class: 'floot-model-select',
                 'aria-label': 'Model',
                 value: model,
+                disabled: visibleModels.length === 0,
                 onChange: (/** @type {FlootSafeEvent} */ e) => {
                   const next = models.find(
                     candidate => candidate.id === e.target.value,
@@ -155,13 +199,20 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   setReasoningEffort(maximumEffort(next));
                 },
               },
-              backendModels.map(m =>
+              visibleModels.map(m =>
                 h(
                   'option',
                   { key: m.id, value: m.id },
-                  `${m.title}${m.default ? ' (default)' : ''}`,
+                  `${m.title} — ${m.modelId || m.id}${m.default ? ' (default)' : ''}`,
                 ),
               ),
+            ),
+            h(
+              'small',
+              { role: 'status', 'aria-live': 'polite' },
+              visibleModels.length
+                ? `${visibleModels.length} models available`
+                : 'No models match your search. Try a different name or model ID.',
             ),
           )
         : null,
@@ -250,6 +301,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
+              disabled: models.length > 0 && visibleModels.length === 0,
               onClick: () =>
                 onPick(
                   p.id,

@@ -380,8 +380,20 @@ Independent review covered both readers and caught a cross-provider timestamp
 mismatch; both now report epoch milliseconds.
 The initial focused suite passes 24 tests; these are mocked metadata reads, not
 live discovery or inference acceptance.
+An additional one-shot metadata-only probe on Tokyo successfully read 443
+account-filtered OpenRouter models, including 375 text-output/tool-capable models.
+The requested `openrouter/free` route advertised text/image input, text output,
+tools, a 200000-token context, and no concrete reasoning-effort metadata.
+No inference or credential writes were performed; this does not test Codex discovery.
+The new-session picker now searches names and IDs within its selected backend,
+retains all choices, and preserves exact routes and existing thinking selections.
+Independent review and component tests cover a 150-model catalog and no-results
+handling; all 52 Floot component tests pass after correcting an outdated quota-label
+assertion to match the existing label formatter and its unit test.
+This is not a live-browser accessibility or deployed picker acceptance result.
 Broker/account-generation binding, account-specific route admission and failover,
-static configuration removal, searchable UI, and deployment remain pending.
+static configuration removal, live searchable-UI verification, and deployment
+remain pending.
 Pool review found that editing a member's account or secret binding under an
 existing ID reused its cached credential handler and could mix old credentials
 with new account metadata.
