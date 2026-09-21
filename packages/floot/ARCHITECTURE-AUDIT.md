@@ -50,7 +50,7 @@ no retained formula referring to it.
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
-| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Open |
+| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional session creation removed locally; migration/cache branches pending |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | OpenCode broker wrapper removed locally; credential shims pending |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
@@ -382,6 +382,23 @@ Keep private effects storage itself and required crash recovery for the current 
 Completion: fresh-state fixtures need no legacy migration branches; accounting and session
 selection work through one current API and schema.
 
+### Positional session creation removed
+
+`createSession` now requires one options record.
+The factory's sole positional production caller now supplies
+`{ title: 'New chat', spoken: true }`, preserving its voice behavior explicitly.
+The current UI already supplies a record.
+Public delegation-field stripping and current model/network/subscription options
+remain unchanged; model-selection aliases are not removed in this slice.
+Thirty focused factory tests pass, including rejection of missing, string, null,
+array, and extra arguments before provisioning.
+The full Floot suite also passes all 403 tests with local socket permissions.
+Changed-file ESLint has no errors; formatting passes.
+Independent review approved the code; deployment is pending.
+The repository documentation gate was run and failed with 8,985 reported errors,
+including missing `Far` declarations and unresolved entrypoints in unrelated
+packages; this is not a claim of green repository-wide type/docs checks.
+
 ## FA-12 — Retire compatibility-only entrypoints
 
 Claude/OpenCode `src/managed-credentials-module.js` wrappers preserve old formula specifiers.
@@ -657,6 +674,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-21 | Broker and legacy retirement (`88c5114`, `e303296`) and coordinated generation 157 | Reviewed helpers: five/four tests; 22 broker bindings and four obsolete formulas retired; old daemon stopped; app `056310a75` plus host `e303296` activated; six Secrets/archive roots preserved; cross-backend acceptance in progress |
 | 2026-09-21 | Reject incomplete restoration coverage (`f502c87`) | Eight tests and adversarial review; fresh three-backend live acceptance started, results pending |
 | 2026-09-21 | FA-12: remove unused OpenCode broker-service wrapper/export | Seven authority/lifecycle tests retained against shared kit; 218 package tests pass with socket permissions; ESLint zero errors/36 warnings; no broker or credential identity changes; not yet deployed |
+| 2026-09-21 | FA-11: require record-only session creation | Setup caller and help updated; voice/delegation/model/network/subscription behavior preserved; 403 package tests and independent review pass; repository docs gate remains failing; not yet deployed |
 
 ## Request
 

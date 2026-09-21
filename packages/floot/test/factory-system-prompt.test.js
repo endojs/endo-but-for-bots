@@ -288,14 +288,39 @@ test('an operator prompt replaces the preset’s and is not recomposed', async t
   t.is(await world.promptOf(session), 'Be a poet.');
 });
 
-test('the positional call is the Floot space’s, and is spoken', async t => {
+test('an explicit spoken record retains the setup session voice rules', async t => {
   t.timeout(10_000);
   const world = makeWorld({ promptEnvironment: sandboxed });
   t.teardown(world.close);
-  await E(world.factory).createSession('Spoken', 'general', 'test:m');
+  await E(world.factory).createSession({
+    title: 'Spoken',
+    presetId: 'general',
+    model: 'test:m',
+    spoken: true,
+  });
   const [entry] = await E(world.factory).listSessions();
   const session = await E(world.factory).getSession(entry.id);
   t.true((await world.promptOf(session)).includes('spoken aloud'));
+});
+
+test('createSession rejects non-record and positional arguments before provisioning', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  const invalidArguments = [
+    [],
+    ['Spoken'],
+    [null],
+    [[]],
+    ['Spoken', 'general', 'test:m'],
+    [{ ...hosted }, 'general'],
+  ];
+  await Promise.all(
+    invalidArguments.map(args =>
+      t.throwsAsync(E(world.factory).createSession(...args)),
+    ),
+  );
+  t.deepEqual(await E(world.factory).listSessions(), []);
 });
 
 test('a session keeps the prompt it started with when the backend changes its story', async t => {

@@ -176,9 +176,7 @@ const makeBufferingWriter = () => {
 };
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
-  createSession: M.callWhen()
-    .optional(M.any(), M.string(), M.string())
-    .returns(M.remotable()),
+  createSession: M.callWhen(M.record()).returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   watchSessions: M.callWhen().returns(M.remotable()),
   watchAccounts: M.callWhen().returns(M.remotable()),
@@ -5366,23 +5364,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   return makeExo('FlootFactory', FlootFactoryInterface, {
     /**
-     * @param {string | Record<string, any>} [titleOrOptions]
-     * @param {string} [presetId]
-     * @param {string} [model]
+     * @param {Record<string, any>} options
      * @returns {Promise<object>} an opaque session facet
      */
-    async createSession(titleOrOptions, presetId, model) {
-      const options =
-        titleOrOptions && typeof titleOrOptions === 'object'
-          ? titleOrOptions
-          : {
-              title: titleOrOptions,
-              presetId,
-              model,
-              // The positional form is the Floot space's original call, from
-              // before a caller could say how it is driven.
-              spoken: true,
-            };
+    async createSession(options) {
       // The delegation fields are minted by the spawner, never accepted from a
       // caller: a session that claimed another's parentage would join that
       // parent's subagent list and become stoppable by it.
@@ -5719,11 +5704,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
-          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:
