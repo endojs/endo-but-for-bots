@@ -5764,35 +5764,41 @@ const makeDaemonCore = async (
   async function formulateMarshalValue(value, deferredTasks, pin) {
     return /** @type {FormulateResult<void>} */ (
       withFormulaGraphLock(async () => {
-        const ownFormulaNumber = /** @type {FormulaNumber} */ (
-          await randomHex256()
-        );
-        const ownId = formatId({
-          number: ownFormulaNumber,
-          node: localNodeNumber,
-        });
-        // Pin before formulate so the formula is protected from
-        // collection even if the lock is bypassed via re-entrancy.
-        if (pin) {
-          pin(ownId);
-        }
-
-        const identifiers = harden({
-          marshalId: ownId,
-          marshalFormulaNumber: ownFormulaNumber,
-        });
-
-        await deferredTasks.execute(identifiers);
-
         const { body, slots } = marshaller.toCapData(value);
-
-        /** @type {MarshalFormula} */
-        const formula = {
-          type: 'marshal',
-          body,
-          slots,
-        };
-        return formulate(ownFormulaNumber, formula);
+        // Dependency edges are registered only after persistence. Retain each
+        // slot before the first await: another operation can remove its last
+        // name while this operation allocates an ID or writes the formula.
+        const retained = new Set(slots);
+        for (const id of retained) pinTransient(id);
+        try {
+          const ownFormulaNumber = /** @type {FormulaNumber} */ (
+            await randomHex256()
+          );
+          const ownId = formatId({
+            number: ownFormulaNumber,
+            node: localNodeNumber,
+          });
+          // Protect the otherwise unreferenced new formula until publication.
+          pinTransient(ownId);
+          retained.add(ownId);
+          const identifiers = harden({
+            marshalId: ownId,
+            marshalFormulaNumber: ownFormulaNumber,
+          });
+          /** @type {MarshalFormula} */
+          const formula = { type: 'marshal', body, slots };
+          const result = await formulate(ownFormulaNumber, formula);
+          // A published petstore name must never refer to a formula that has
+          // not been persisted. Failed publication may leave a valid binding,
+          // but failed formulation must not replace an existing binding.
+          await deferredTasks.execute(identifiers);
+          // Transfer retention to the caller only when it receives the ID.
+          // Otherwise a rejected call leaves a pin it has no way to release.
+          if (pin) pin(ownId);
+          return result;
+        } finally {
+          await Promise.all([...retained].map(id => unpinTransient(id)));
+        }
       })
     );
   }

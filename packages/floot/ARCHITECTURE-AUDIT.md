@@ -65,14 +65,14 @@ No claim of complete retrospective coverage is made yet.
 
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
-| Catalog reads and renewal owner | Standalone readers are inert; integration initially let metadata work outlive service close. Uncommitted working-tree integration now drains admitted reads in local tests. | Real formula cancellation/reconstruction with reads paused before and during renewal; restart evidence still missing. |
+| Catalog reads and renewal owner | Uncommitted integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. |
 | Pool member identity | `275710d5a` pins identity only in memory; chooser state is persisted. Same-ID rebinding after restart can inherit another account's state. | Persist and validate identity with chooser state; test restart, removed IDs, and failed writes. |
 | Credential ownership and Secret rebinding | Removal/re-add can create another handler while old grants/facets survive; mutable pet names can resolve to a new Secret capability. | Fence and drain retired dependents, retain exclusive renewal ownership, and bind catalog/renewal work to actual Secret identity and generation. |
 | Native teardown after reconstruction | `session-supervisor.js` accepts absent/failed scope lookup as diagnostic if mount reclaim succeeds; runtime lookup reads only an in-memory map. Daemon owner can then write `native-closed=yes`. | Require independent native cleanup proof after process loss before acknowledging stop or deleting storage; fault/restart test required. |
 | Native state creation | `session-state-storage.js` creates a directory before publishing its ownership marker. A crash between them leaves a path that prepare and removal both refuse. | Recoverable, journaled or atomic creation; inject failure between directory creation and marker publication. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
-| Daemon value publication | `host.storeValue` defers name publication through `formulateMarshalValue`, whose deferred tasks run before the marshal formula is written. A crash can leave a durable name pointing to a missing formula. | Verify and fix publication ordering at the actual daemon boundary, including transient pins/dependencies and crash/failure injection; absent-or-complete Map mocks do not cover dangling durable names. |
+| Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
 | Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
 
@@ -104,6 +104,41 @@ is on `/dev/vdb`, ext4.
 This proves filesystem/permission support, not deployment or a power-loss test.
 Repository type generation remains blocked by widespread TS5055 stale-output
 errors; no global typecheck success is claimed.
+Daemon publication fix: nine tests exercise pending/failed persistence with
+absent and existing names, successful publication, failed-publication collection,
+and an actual daemon process restart.
+With collection enabled, replacing a directory's sole name with a copy record
+containing its capability preserves the referenced directory and contents,
+including after restart; the new marshal slot retains the original formula.
+All seven deferred-publication callers were inspected; none requires names to
+be published before formulation.
+Independent adversarial review reproduced an additional defect: another
+operation can remove the last root of a referenced capability while formula
+persistence is pending, before the new dependency edges are registered.
+The regression observed the referenced directory's persisted formula disappear.
+The working-tree correction pins every distinct marshal slot before the first
+await, retains the new formula through publication, and releases temporary pins
+on both success and failure.
+Independent adversarial review and the concurrent-removal regression now pass.
+Failed persistence releases the temporary dependency pins, allowing collection
+after the sole old root was removed.
+After-write lost-acknowledgement injection preserves absent/existing names but
+leaves an unnamed durable formula; its reclamation remains an open requirement.
+Restart is orderly, not physical power loss between each persistence step.
+Existing graph cleanup after a throwing operation runs on a subsequent graph
+operation; the failed-publication collection test explicitly drains that work.
+Catalog integration evidence: independent runs pass 45 shared catalog/scopes/
+projection tests, three Codex adapter tests, seven OpenCode adapter tests, and
+one real-daemon formula cancellation/reconstruction test.
+The latter verifies renewal completion precedes close acknowledgement and
+successor construction; the old in-worker facet remains fenced afterward.
+No durable catalog cache or model-admission policy is introduced in this slice.
+Native state recovery now has operator approval for a breaking layout rewrite:
+uniquely allocated directories with atomically published ownership records.
+A marker-before-fixed-directory draft was rejected because crash recovery
+could adopt a foreign directory; that draft was removed.
+Implementation and review remain pending; retire affected test sessions before
+deployment while preserving Secrets, renewal credentials, and workspaces.
 
 | ID | Priority | Finding | Evidence class | Status |
 |---|---|---|---|---|
@@ -964,6 +999,8 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Retrospective durability: checkpoint directory flushes (`c645f567f`) | 13 tests and independent review pass; Tokyo filesystem supports required flushes; pushed, not deployed |
+| 2026-09-21 | Retrospective durability: persist marshal formula before name publication and retain pending slot dependencies | Nine manager/persistence tests including concurrent-root removal, lost acknowledgement, and real daemon restart pass; independent review; not deployed |
 | 2026-09-21 | Initial audit and FA-01–FA-13 register | Source review plus two in-memory reproductions; no remediation or deployment claimed |
 | 2026-09-21 | FA-03: stop creating legacy Claude form topology | 16 setup tests passed; independent review; retained resources untouched; not deployed |
 | 2026-09-21 | FA-04 A: delete obsolete OpenCode client formula | 60 focused tests passed, 53 independently rerun; legacy formula retirement pending; not deployed |
