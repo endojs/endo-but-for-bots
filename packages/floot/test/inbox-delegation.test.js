@@ -390,16 +390,17 @@ test('a partial message does not swallow its settled revision', async t => {
   await agent.shutdown();
 });
 
-test('legacy recovery pauses queued mail until acknowledgement without dismissing it', async t => {
-  t.timeout(10_000);
+test('poisoned journal preserves queued mail and shutdown releases its readiness wait', async t => {
+  t.timeout(5000);
   const mailbox = makeLiveMailbox();
   let turns = 0;
-  let resolution;
-  const migration = Far('Migration', {
-    status: () =>
-      harden({ required: true, ...(resolution ? { resolution } : {}) }),
-    resolve: note => {
-      resolution = note;
+  const journalValues = new Map();
+  const journalPowers = Far('UncertainJournalStorage', {
+    list: () => harden([...journalValues.keys()]),
+    lookup: name => journalValues.get(name),
+    storeValue: (value, name) => {
+      journalValues.set(name, value);
+      throw Error('Lost journal acknowledgement');
     },
   });
   const provider = makeScriptedProvider([
@@ -416,12 +417,20 @@ test('legacy recovery pauses queued mail until acknowledgement without dismissin
     undefined,
     { provider },
     'test',
-    harden({ timers: inertTimers, journalMigration: migration }),
+    harden({ timers: inertTimers, journalPowers }),
   );
   t.teardown(async () => {
     mailbox.close();
     await agent.shutdown();
   });
+  // Commit the dispatch but lose its acknowledgement before provider execution.
+  // This incarnation cannot safely recover by simply acknowledging a turn.
+  await t.throwsAsync(
+    agent.converse('UI operation', makeReplyChannel().writer),
+    { message: /Lost journal acknowledgement/ },
+  );
+  t.is(journalValues.size, 1);
+  t.is([...journalValues.values()][0].type, 'dispatch');
   agent.startInbox();
   const message = mailbox.deliver({
     from: locatorFor(HOST),
@@ -431,49 +440,15 @@ test('legacy recovery pauses queued mail until acknowledgement without dismissin
   t.is(turns, 0);
   t.false(mailbox.dismissed.includes(message.number));
   t.is(mailbox.sent.length, 0);
-  await agent.resolveTurn('legacy-import', 'Checked external effects');
-  t.true(await until(() => mailbox.dismissed.includes(message.number)));
-  t.is(turns, 1);
-});
-
-test('shutdown releases fenced mail without dismissing it or waiting for acknowledgment', async t => {
-  t.timeout(2000);
-  const mailbox = makeLiveMailbox();
-  let sends = 0;
-  const migration = Far('Migration', {
-    status: () => harden({ required: true }),
-    resolve: () => {
-      throw Error('No operator acknowledgment');
-    },
+  await t.throwsAsync(agent.resolveTurn('1', 'External effects checked'), {
+    message: /uncertain storage/,
   });
-  const provider = makeScriptedProvider([
-    () => {
-      sends += 1;
-      throw Error('Fenced mail must not run');
-    },
-  ]);
-  const agent = await makeStreamingAgent(
-    mailbox.powers,
-    undefined,
-    { provider },
-    'test',
-    { timers: inertTimers, journalMigration: migration },
-  );
-  t.teardown(async () => {
-    mailbox.close();
-    await agent.shutdown();
-  });
-  agent.startInbox();
-  const mail = mailbox.deliver({
-    from: locatorFor(HOST),
-    strings: ['leave pending'],
-  });
-  await new Promise(resolve => setTimeout(resolve, 50));
-  // Do not close the mailbox first: shutdown must release its own recovery wait.
+  // Do not close the mailbox first: shutdown must release its own readiness wait.
   await agent.shutdown();
-  t.is(sends, 0);
-  t.false(mailbox.dismissed.includes(mail.number));
+  t.is(turns, 0);
+  t.false(mailbox.dismissed.includes(message.number));
   t.is(mailbox.sent.length, 0);
+  t.is(journalValues.size, 1);
 });
 
 test('unrelated queued mail proceeds after UI uncertainty without resolving or replaying it', async t => {

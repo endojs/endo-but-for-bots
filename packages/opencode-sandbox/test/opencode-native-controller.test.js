@@ -76,17 +76,6 @@ const gate = () => {
   if (resolve === undefined) throw Error('Promise executor did not run');
   return { promise, resolve };
 };
-// As recorded: JSON has no bigint, so the OCI quantities are digit strings.
-const nativeProfile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
 const planFor = id =>
   harden({
     sessionId: id,
@@ -97,7 +86,6 @@ const planFor = id =>
     workspaceMountPoint: `/private/${id}/work-mount`,
     mcpDir: `/private/${id}/mcp`,
     mounterSocketDir: `/private/${id}/9p`,
-    nativeProfile,
     model: 'openrouter/anthropic/claude-sonnet-4',
     initialPrompt: 'must never run',
   });
@@ -238,21 +226,16 @@ const fixture = (t, { realClient = false } = {}) => {
       return grants.get(id);
     },
   });
-  const stateProvider = Far('State', {
-    async prepareSessionDirectory(id) {
-      events.push(`state ${id}`);
-      return harden({ directory: `/state/${id}` });
-    },
-  });
   const roles = {
     sandboxService,
     brokerService,
-    stateProvider,
     tools,
   };
   const resolver = Far('Resolver', {
     async get(role) {
       events.push(`resolve ${role}`);
+      if (role === 'stateProvider')
+        throw Error('OpenCode has no native state provider');
       // Stands in for a service formula that refuses to revive.
       if (faults.resolverFail === role) throw Error(`cannot revive ${role}`);
       return roles[role];
@@ -661,6 +644,19 @@ test('real eager client disposes its slice and never starts the discarded initia
   t.is(f.scopes.size, 0);
 });
 
+test('retired native session resume plan acquires no resources', async t => {
+  const f = fixture(t);
+  const controller = f.makeController();
+  const text = JSON.stringify({
+    ...planFor('a'),
+    opencodeSessionId: 'ses_old',
+  });
+  await t.throwsAsync(E(controller).activate(text, f.resolver), {
+    message: /Retired opencodeSessionId field/,
+  });
+  t.deepEqual(f.events, []);
+});
+
 test('terminating a session that has a live client revokes its grant', async t => {
   // The grant is the only thing between a session and the operator's
   // credential, and it no longer carries an expiry, so an unrevoked one is
@@ -745,46 +741,6 @@ test('public network uses approved proxy environment and literal resolver conten
   t.is(options.policy.profile, 'hosted-agent-v1');
   await E(controller).terminate(text, f.resolver);
 });
-
-/** @type {readonly [string, (profile: any) => unknown, RegExp][]} */
-const refusedProfiles = harden([
-  ['missing', () => undefined, /Missing native profile/],
-  [
-    'a non-decimal quantity',
-    profile => ({ ...profile, memoryBytes: '512M' }),
-    /decimal digit strings/,
-  ],
-  [
-    'an unmapped identity',
-    profile => ({ ...profile, uid: 0xffff_ffff }),
-    /Invalid native process identity/,
-  ],
-  [
-    'an unexpected field',
-    profile => ({ ...profile, seccomp: 'unconfined' }),
-    /native Podman profile/,
-  ],
-  ['a zero count', profile => ({ ...profile, pids: 0 }), /positive uint32/],
-]);
-
-for (const [name, mutate, message] of refusedProfiles) {
-  test(`controller refuses a plan with ${name} native profile before any acquisition`, async t => {
-    const f = fixture(t);
-    const controller = f.makeController();
-    const { nativeProfile: recorded, ...rest } = planFor('a');
-    const profile = mutate(recorded);
-    const text = JSON.stringify({
-      ...rest,
-      ...(profile === undefined ? {} : { nativeProfile: profile }),
-    });
-    await t.throwsAsync(E(controller).activate(text, f.resolver), { message });
-    t.false(f.events.some(event => `${event}`.startsWith('provide ')));
-    t.false(f.events.some(event => `${event}`.startsWith('resolve ')));
-    await E(controller).terminate(text, f.resolver);
-    t.is(f.scopes.size, 0);
-    t.is(f.grants.size, 0);
-  });
-}
 
 for (const [fault, message] of /** @type {const} */ ([
   ['missingPublic', /network evidence/],

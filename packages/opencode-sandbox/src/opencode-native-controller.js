@@ -56,11 +56,8 @@ import { readSessionPlan } from './opencode-session-plan.js';
  * Fresh inert construction is cancelled by the daemon's construction kit instead.
  * The caller must pre-create and own the private mounterSocketDir and keep all
  * mount/socket paths under stable, disjoint ancestry outside guest writes.
- * Each operation requests the recorded native profile: explicit identity and
- * resource settings, a trusted startup gate, and kernel observation of the
- * gate's posture and declared mounts before release. Those are the sandbox's
- * checks; this helper records and forwards the profile and is not itself
- * evidence of the hosted envelope on a live host.
+ * Each operation requests the shared hosted policy resource settings and
+ * mount table. The sandbox verifies their enforcement before handing off the slice.
  *
  * @param {object} [powers]
  * @param {typeof makeDefaultMounter} [powers.makeMounter]
@@ -142,13 +139,6 @@ export const makeOpencodeNativeController = ({
         (publicNetwork !== undefined) ||
         Fail`Broker network evidence does not match the recorded policy`;
       assertOpen();
-      const stateProvider = await E(resolver).get('stateProvider');
-      assertOpen();
-      const state = await E(stateProvider).prepareSessionDirectory(
-        approved.sandboxSessionId,
-      );
-      assertCopyData(harden(state));
-      assertOpen();
       // Exactly one of the two is recorded; the parser enforces it.
       // Retained before it is established, so a failed mount is still
       // closed by this owner's ordinary cleanup.
@@ -169,10 +159,8 @@ export const makeOpencodeNativeController = ({
       assertOpen();
       await mounter.mount();
       assertOpen();
-      // The attested table. The workspace is the 9P projection this
-      // controller just established; the CLI's own data directory is a bind
-      // rather than a projection because opencode forces SQLite WAL, which
-      // needs a local filesystem.
+      // The workspace is this incarnation's 9P projection. OpenCode's own
+      // database is in memory and its remaining CLI state lives on tmpfs.
       const mounts = [
         {
           role: 'workspace',
@@ -289,9 +277,6 @@ export const makeOpencodeNativeController = ({
           OPENCODE_BRIDGE_DIRECTORY: '/workspace',
           OPENCODE_SERVER_PASSWORD: makePassword(),
           OPENCODE_MCP_SERVER_NAME: DEFAULT_SERVER_NAME,
-          ...(approved.opencodeSessionId
-            ? { OPENCODE_SESSION_ID: approved.opencodeSessionId }
-            : {}),
         },
       });
       assertCopyData(options);
@@ -331,8 +316,6 @@ export const makeOpencodeNativeController = ({
         rootfsLabel: rootfsLabel(rootfs),
         model: approved.model,
         systemPrompt: approved.systemPrompt,
-        opencodeSessionId: approved.opencodeSessionId,
-        resumePriorConversation: Boolean(approved.opencodeSessionId),
       });
     },
   });

@@ -48,16 +48,6 @@ const brokerConfig = (overrides = {}) =>
     credentialKind: 'oauthToken',
     ...overrides,
   });
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
 const makeToolSet = () =>
   makeExo('HostedToolSet', HostedToolSetInterface, {
     async describe() {
@@ -225,7 +215,6 @@ const fixture = async t => {
   const env = harden({
     CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
     CLAUDE_MCP_DIR: roots.mcpDir,
-    CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
   });
   const exists = async directory =>
     access(directory).then(
@@ -283,18 +272,12 @@ test('resolveBackendConfig defaults nothing', t => {
   const env = {
     CLAUDE_WORKSPACE_BASE_DIR: '/srv/ws',
     CLAUDE_MCP_DIR: '/srv/private',
-    CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
   };
   const config = resolveBackendConfig(env);
-  t.deepEqual(config.nativeProfile, profile);
   t.false(Object.hasOwn(config, 'mounterEnv'));
   // The image and the credential kind come from the recorded broker, never
   // from this environment.
-  t.deepEqual(Object.keys(config).sort(), [
-    'mcpBaseDir',
-    'nativeProfile',
-    'workspaceBaseDir',
-  ]);
+  t.deepEqual(Object.keys(config).sort(), ['mcpBaseDir', 'workspaceBaseDir']);
   t.deepEqual(
     resolveBackendConfig({
       ...env,
@@ -310,12 +293,6 @@ test('resolveBackendConfig defaults nothing', t => {
       /CLAUDE_WORKSPACE_BASE_DIR must be/,
     ],
     ['CLAUDE_MCP_DIR', '/srv/private/', /CLAUDE_MCP_DIR must be/],
-    ['CLAUDE_NATIVE_PROFILE', undefined, /CLAUDE_NATIVE_PROFILE is required/],
-    [
-      'CLAUDE_NATIVE_PROFILE',
-      JSON.stringify({ ...profile, uid: 'root' }),
-      /uid: .* Must be a number/,
-    ],
     [
       'CLAUDE_MOUNTER_ENV',
       JSON.stringify({ NINEP_MOUNT_PROGRAM: 'rm' }),
@@ -387,7 +364,6 @@ test('create() records the plan under the sandbox id with exact dependencies, th
     workspaceMountPoint: path.join(f.roots.mcpDir, sid, 'workspace'),
     mcpDir: path.join(f.roots.mcpDir, sid, 'mcp'),
     mounterSocketDir: path.join(f.roots.mcpDir, sid, '9p'),
-    nativeProfile: profile,
     model: 'claude-sonnet-4-6',
     reasoningEffort: 'max',
     systemPrompt: 'You are Floot.',

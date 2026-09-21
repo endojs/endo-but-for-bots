@@ -126,21 +126,18 @@ of a temporary directory to terminate that worker.
 - `mcp-bridge.js`, `mcp-server.js`, `mcp-stdio-bridge.js` — Endo tools over a
   per-session MCP socket for the CLIs that take tools that way.
 
-## Session execution powers
+## Retired session execution powers
 
-`session-powers.js` replaces generated powers source in Claude and OpenCode.
-The host resolves selected capabilities once and persists them with `storeValue`.
-A static daemon formula turns that bundle into resource accessors, exact mount
-path/name registration, and optional state access restricted to one session ID.
-Neither the host agent nor host lookup is exposed to the client.
-The input bundle and powers construction names remain until the client formula
-retains the chain of dependencies.
-
-This is an active execution bundle: reading it revives its capability references.
-It must not contain the client or replace the passive ownership records above.
-Real daemon tests cover name rebinding, GC, restart, and scoped state access.
-The module does not provide runtime reconciliation or ownership across failed
-client construction; those still belong to the session supervisor.
+The legacy `session-powers.js` module and export have been removed with the old
+Claude client-formula topology.
+Current native controllers start from passive records and acquire dependencies through
+the daemon owner's resolver under the shared supervisor.
+They do not replace passive records with an active bundle that revives native work when read.
+Generic exact-capability retention, rebinding, restart, GC, and remote-adoption coverage
+now lives in daemon tests using a daemon-owned dependency-bundle fixture.
+Before deploying the source removal, retire retained old formulas while their release
+is still available; see the Claude package's
+[retirement gate](../claude-sandbox/docs/legacy-retirement.md).
 
 ## Account visibility
 

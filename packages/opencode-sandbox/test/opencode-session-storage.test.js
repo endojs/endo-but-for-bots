@@ -15,16 +15,6 @@ import path from 'node:path';
 
 import { makeOpencodeSessionStorage } from '../src/opencode-session-storage.js';
 
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
 /** @param {import('ava').ExecutionContext} t */
 const fixture = async t => {
   const base = await realpath(
@@ -45,7 +35,6 @@ const fixture = async t => {
     workspaceMountPoint: path.join(roots.mcpDir, id, 'workspace'),
     mcpDir: path.join(roots.mcpDir, id, 'mcp'),
     mounterSocketDir: path.join(roots.mcpDir, id, '9p'),
-    nativeProfile: profile,
   });
   /** @type {string[]} */
   const removedState = [];

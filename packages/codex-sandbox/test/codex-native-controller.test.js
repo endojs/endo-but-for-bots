@@ -75,15 +75,6 @@ const fixture = async (
     mounterSocketDir: join(root, '9p'),
     containerMounts: [],
     model: 'model-a',
-    nativeProfile: {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    },
   });
   const text = JSON.stringify(plan);
   const events = [];

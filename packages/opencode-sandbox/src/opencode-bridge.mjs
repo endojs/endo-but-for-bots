@@ -23,8 +23,6 @@
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 import { clearTimeout, setImmediate, setTimeout } from 'node:timers';
@@ -466,7 +464,6 @@ const main = async () => {
   const username = process.env.OPENCODE_SERVER_USERNAME ?? 'opencode';
   const executable = process.env.OPENCODE_BIN ?? 'opencode';
   const directory = process.env.OPENCODE_BRIDGE_DIRECTORY ?? process.cwd();
-  const requestedSession = process.env.OPENCODE_SESSION_ID;
 
   const headers = {
     authorization: `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`,
@@ -585,58 +582,21 @@ const main = async () => {
     return;
   }
 
-  // Resolve, resume, or create the session. A recorded or requested session
-  // that cannot be read fails closed: silently starting a new history would
-  // break the transcript continuity contract.
-  const stateDir = process.env.XDG_DATA_HOME || '/opencode-state';
-  const sessionFile = path.join(stateDir, 'opencode-session-id');
-  let sessionID = requestedSession;
-  if (sessionID) {
-    try {
-      await api(`/session/${encodeURIComponent(sessionID)}`);
-    } catch (error) {
-      const status = /** @type {{ status?: number }} */ (error)?.status;
-      await shutdown(
-        1,
-        `requested session ${sessionID} is unavailable (${status ?? 'error'})`,
-      );
-      return;
-    }
-  } else {
-    const recorded = await readFile(sessionFile, 'utf8').catch(() => undefined);
-    const candidate = recorded?.trim();
-    if (candidate) {
-      try {
-        await api(`/session/${encodeURIComponent(candidate)}`);
-        sessionID = candidate;
-      } catch {
-        await shutdown(
-          1,
-          'recorded opencode session is unavailable; refusing to start a new history',
-        );
-        return;
-      }
-    }
-  }
-  if (!sessionID) {
-    try {
-      const session = await api('/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'endo-opencode-sandbox' }),
-      });
-      sessionID = session.id;
-    } catch (error) {
-      await shutdown(1, `could not create a session: ${error}`);
-      return;
-    }
-  }
-  // Persist the id so the next incarnation resumes this history.
+  // Every incarnation starts a fresh native conversation. The host imports
+  // its canonical transcript before sending the first prompt; a stale local
+  // ID must never bypass that restoration boundary.
+  let sessionID;
   try {
-    await mkdir(stateDir, { recursive: true, mode: 0o700 });
-    await writeFile(sessionFile, `${sessionID}\n`, { mode: 0o600 });
+    const session = await api('/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'endo-opencode-sandbox' }),
+    });
+    sessionID = session.id;
+    if (typeof sessionID !== 'string' || sessionID.length === 0)
+      throw Error('server returned no session ID');
   } catch (error) {
-    await shutdown(1, `cannot persist the opencode session id: ${error}`);
+    await shutdown(1, `could not create a session: ${error}`);
     return;
   }
   const activeSessionId = String(sessionID);
@@ -649,7 +609,7 @@ const main = async () => {
     // answers nothing — which the client can only discover by waiting out a
     // timeout on every incarnation. Saying so here costs nothing and lets it
     // take the fallback immediately.
-    features: ['import'],
+    features: ['import', 'fresh-session'],
   });
 
   // Context limits are only for display, so they load beside the first turn

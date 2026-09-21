@@ -81,7 +81,7 @@ const withinSession = (root, child, sessionId) => {
  * storage.
  *
  * @param {object} powers
- * @param {{ removeSessionDirectory(sessionId: string): Promise<void> }} powers.stateStorage
+ * @param {{ removeSessionDirectory(sessionId: string): Promise<void> }} [powers.stateStorage] Optional adapter-owned CLI state.
  * @param {{ workspaceDir: string, mcpDir: string }} powers.roots
  * @param {(text: string) => StoragePlan} powers.readPlan The adapter's plan
  *   parser; it refuses anything but the exact recorded shape.
@@ -175,7 +175,9 @@ export const makeSessionStorage = ({
         if (code !== 'ENOENT' && code !== 'ENOTEMPTY') throw error;
       });
     }
-    await E(stateStorage).removeSessionDirectory(plan.sandboxSessionId);
+    if (stateStorage !== undefined) {
+      await E(stateStorage).removeSessionDirectory(plan.sandboxSessionId);
+    }
   };
 
   return makeExo('SessionStorage', StorageInterface, {

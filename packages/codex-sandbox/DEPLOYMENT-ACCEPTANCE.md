@@ -26,7 +26,7 @@ Historical XFS acceptance cannot certify the replacement.
 
 ## Live migration gates
 
-Record commit, image digests, CLI version, native profile, and host configuration
+Record commit, image digests, CLI version, effective hosted policy, and host configuration
 without recording credentials.
 
 1. Deliberately retire old retained Codex formulas and exact native resources,

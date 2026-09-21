@@ -211,15 +211,6 @@ test('Codex placement is recorded before directories and replacement stops befor
     protectedRoots: [join(root, 'state')],
     imageRef: `example@sha256:${'a'.repeat(64)}`,
     accountRef: 'account-a',
-    nativeProfile: {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    },
   });
   const tools = Far('Tools', {});
   const request = harden({

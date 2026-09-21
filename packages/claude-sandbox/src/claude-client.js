@@ -11,7 +11,7 @@
  * race the same workspace conversation; `--continue` on every turn
  * after the first resumes the conversation persisted in the session's
  * Claude config dir (a dedicated per-session mount that survives daemon
- * restarts — see `claude-client-module.js`), letting a sequence of
+ * restarts — see `claude-native-controller.js`), letting a sequence of
  * `send()` calls build on each other (no long-lived stdin plumbing).
  * A client reincarnated after a restart does **not** resume that config
  * dir. The store outlives the daemon, so it is still sitting there, but a
@@ -27,13 +27,12 @@
  * reader aborts the turn** — it kills the in-flight `claude` process (or
  * makes a still-queued turn bail). This mirrors the floot session's
  * reply channel; `interrupt()` is the same thing applied to the current
- * turn. See `DESIGN.md` § "Turn model".
+ * turn. See `DESIGN.md` § "Turns and restoration".
  *
- * The slice and 9P mount are provisioned lazily (see the `provision`
- * thunk and `claude-client-module.js`), so the exo can be a pure-`env`
- * formula that reincarnates across daemon restarts. `terminate()`
- * disposes the slice, unmounts the workspace, and revokes the
- * credential grant.
+ * The current native controller supplies an acquired slice under the shared
+ * session supervisor. `terminate()` disposes that slice; the controller owns
+ * release of its sandbox scope, workspace projection, MCP bridge, and broker
+ * grant. Optional injected provisioning hooks remain for standalone callers.
  *
  * @module
  */
@@ -247,8 +246,7 @@ const defaultStderrIterable = proc =>
  *   fresh, context-free conversation. Absent for sessions with no
  *   persistent config dir, which fall back to `--continue`.
  * @property {() => unknown} [describeTranscripts] - Opt-in resume
- *   diagnostic (see `ENDO_CLAUDE_DEBUG_RESUME` in
- *   `claude-client-module.js`). When set, every spawn reports the
+ *   diagnostic for callers supplying this hook. When set, every spawn reports the
  *   resume decision, Claude's own `system/init` event, and whether the
  *   turn's prompt chained onto earlier ones. Absent in production.
  * @property {string} [mcpConfigPath] - Slice-internal path to an MCP

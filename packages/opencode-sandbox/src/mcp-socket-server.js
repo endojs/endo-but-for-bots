@@ -58,7 +58,7 @@ harden(buildOpencodeMcpServer);
  * The opencode-native `mcp` config block (unlike Claude Code's
  * `mcpServers`/`type: 'stdio'` shape).  Written beside the socket for
  * diagnostics; the authoritative copy is merged into
- * `OPENCODE_CONFIG_CONTENT` by `opencode-client-module.js`, which builds the
+ * `OPENCODE_CONFIG_CONTENT` by `opencode-native-controller.js`, which builds the
  * same entry via {@link buildOpencodeMcpServer}.
  *
  * @param {object} options

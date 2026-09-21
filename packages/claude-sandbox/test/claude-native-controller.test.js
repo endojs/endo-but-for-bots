@@ -79,17 +79,6 @@ const gate = () => {
   return { promise, resolve };
 };
 
-// As recorded: JSON has no bigint, so the OCI quantities are digit strings.
-const nativeProfile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
 const digest = `sha256:${'a'.repeat(64)}`;
 
 const planFor = (id, overrides = {}) =>
@@ -103,7 +92,6 @@ const planFor = (id, overrides = {}) =>
     workspaceMountPoint: `/private/${id}/workspace`,
     mcpDir: `/private/${id}/mcp`,
     mounterSocketDir: `/private/${id}/9p`,
-    nativeProfile,
     model: 'claude-sonnet-4',
     reasoningEffort: 'max',
     systemPrompt: 'You are Floot.',

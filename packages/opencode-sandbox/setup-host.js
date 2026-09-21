@@ -2,7 +2,6 @@
 /* global process */
 // endo run --UNCONFINED setup-host.js --powers @agent
 //   [-E ENDO_OPENCODE_SANDBOX_OWNER_ID=operator-chosen-stable-id]
-//   [-E ENDO_OPENCODE_STATE_DIR=/var/lib/endo/opencode-state]
 //   -E ENDO_SANDBOX_RUNTIME_DIR=<existing-private-host-directory>
 //   -E ENDO_SANDBOX_GENERATED_MAX_BYTES=<decimal-byte-budget>
 //   -E ENDO_SANDBOX_GENERATED_MAX_ENTRIES=<positive-decimal-entry-budget>
@@ -17,12 +16,6 @@
 //                      ownership marker of `ENDO_SANDBOX_RUNTIME_DIR`, stages
 //                      generated files there, and reconciles Podman orphans
 //                      under its owner label.
-//   state-provider   — host-backed durable per-session state. opencode forces
-//                      SQLite WAL, which needs same-host shared memory and
-//                      cannot run over the 9P workspace, so each session gets
-//                      a 0700 directory under `ENDO_OPENCODE_STATE_DIR`
-//                      (default `/var/lib/endo/opencode-state`) exposed to the
-//                      slice through a daemon-minted mount.
 //
 // The capability-based `sandbox-factory` and the shared `fs-mounter` are no
 // longer minted: each session mounts its workspace through its controller's
@@ -42,8 +35,6 @@
 // same machine — see setup-hosted.js.
 
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, stat } from 'node:fs/promises';
-import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
@@ -55,34 +46,12 @@ import {
   nativeSandboxSpecifier,
   prepareRuntimeEnv,
   readNativeSandbox,
-  readStateProvider,
-  stateProviderSpecifier,
 } from './src/hosted-runtime-setup.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 
 // Kept in sync with setup-hosted.js and the backend's session records directory.
 const SANDBOX_DIR = 'opencode-sandbox';
-
-/**
- * The state root holds per-session SQLite databases and ownership markers and
- * is handed to the provider as ambient Node authority. Require an absolute,
- * normalized, non-root path so a typo or hostile env cannot chmod/overwrite
- * outside the deploy's own tree, and refuse a symlinked root so writes through
- * it cannot be redirected elsewhere (DESIGN § State provider).
- *
- * @param {string} value
- * @returns {string}
- */
-const assertStateDir = value => {
-  if (!path.isAbsolute(value)) {
-    throw Fail`ENDO_OPENCODE_STATE_DIR must be absolute, got ${value}`;
-  }
-  if (path.normalize(value) !== value || value === '/') {
-    throw Fail`ENDO_OPENCODE_STATE_DIR must be a normalized, non-root path, got ${value}`;
-  }
-  return value;
-};
 
 /**
  * @param {EndoHost} hostAgent
@@ -109,16 +78,7 @@ export const main = async hostAgent => {
     }
   };
 
-  // Validate the state root before any mint, so a bad value cannot strand a
-  // profile that later writes through it.
-  const existingState = await hasInSandbox('state-provider');
-  const requestedRoots = getHostedStorageRoots(env);
-  const stateDir = assertStateDir(
-    existingState
-      ? (await readStateProvider(hostAgent)).stateDir
-      : requestedRoots.stateDir,
-  );
-  const roots = harden({ ...requestedRoots, stateDir });
+  const roots = getHostedStorageRoots(env);
   const legacyFactory = await hasInSandbox('sandbox-factory');
   const legacyMounter = await hasInSandbox('fs-mounter');
 
@@ -199,41 +159,6 @@ export const main = async hostAgent => {
         `${SANDBOX_DIR}/${name} is bound but no longer minted or used by sessions; remove it once its processes have stopped.`,
       );
     }
-  }
-
-  // 2. State provider — `@agent` powers grant `provideMount`, used only by
-  //    the legacy client's Mount facade (`provideSessionMount`); a native
-  //    session controller takes `prepareSessionDirectory`'s host path and
-  //    binds it directly.
-  if (!existingState) {
-    // Prepare the root only when this run actually mints the provider: an
-    // already-minted provider keeps the root baked into its formula, so
-    // creating (or chmodding) a new one from a changed env would be a stray
-    // directory, not a rebind.
-    const info = await lstat(stateDir).catch(() => undefined);
-    if (info?.isSymbolicLink()) {
-      throw Fail`ENDO_OPENCODE_STATE_DIR must not be a symlink: ${stateDir}`;
-    }
-    if (info && !info.isDirectory()) {
-      throw Fail`ENDO_OPENCODE_STATE_DIR must be a directory: ${stateDir}`;
-    }
-    if (info) {
-      (await stat(stateDir)).uid === process.getuid?.() ||
-        Fail`ENDO_OPENCODE_STATE_DIR must be owned by the daemon user: ${stateDir}`;
-      // Owned by us: normalize permissions rather than trusting the mode the
-      // operator (or a stale deploy) left behind.
-      await chmod(stateDir, 0o700);
-    } else {
-      await mkdir(stateDir, { recursive: true, mode: 0o700 });
-    }
-    await E(hostAgent).makeUnconfined('@main', stateProviderSpecifier, {
-      powersName: '@agent',
-      resultName: [SANDBOX_DIR, 'state-provider'],
-      env: harden({ ENDO_OPENCODE_STATE_DIR: stateDir }),
-    });
-    console.log(
-      `Minted ${SANDBOX_DIR}/state-provider (state under ${stateDir})`,
-    );
   }
 
   console.log('OpenCode sandbox HOST setup complete.');

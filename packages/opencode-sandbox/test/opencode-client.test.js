@@ -5,11 +5,6 @@ import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeOpencodeClient } from '../src/opencode-client.js';
-import {
-  planBrokerClient,
-  resolveBridgeTurnTimeout,
-  resolveBrokerTransport,
-} from '../src/opencode-client-module.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -170,7 +165,7 @@ const drain = async reader => {
 
 // The bridge names what it understands. An image built before the import
 // route carries a bridge that sends no list and answers no `import`.
-const readyLine = (sessionId, features = ['import']) =>
+const readyLine = (sessionId, features = ['import', 'fresh-session']) =>
   JSON.stringify({ type: 'ready', sessionId, port: 4096, features });
 const legacyReadyLine = sessionId =>
   JSON.stringify({ type: 'ready', sessionId, port: 4096 });
@@ -179,7 +174,7 @@ for (const wireType of ['commentary-delta', 'thinking-delta']) {
   test(`OpenCode normalizes public reasoning from ${wireType}`, async t => {
     const bridge = makeFakeBridge();
     const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
-    bridge.push(legacyReadyLine('ses_legacy'));
+    bridge.push(readyLine('ses_1'));
     const reader = await client.send('hello');
     await tick();
     bridge.push(JSON.stringify({ type: wireType, text: 'Public reasoning' }));
@@ -679,115 +674,6 @@ test('initialPrompt is fired and drained at construction', async t => {
   t.is((await drain(reader)).pop()?.type, 'end');
 });
 
-test.serial(
-  'resolveBridgeTurnTimeout prefers the backend value, then the daemon env',
-  t => {
-    const previous = process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
-    delete process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
-    t.teardown(() => {
-      if (previous === undefined) {
-        delete process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
-      } else {
-        process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS = previous;
-      }
-    });
-    t.is(
-      resolveBridgeTurnTimeout({ OPENCODE_BRIDGE_TURN_TIMEOUT_MS: '60000' }),
-      '60000',
-    );
-    process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS = '1200000';
-    t.is(resolveBridgeTurnTimeout({}), '1200000');
-    t.is(
-      resolveBridgeTurnTimeout({ OPENCODE_BRIDGE_TURN_TIMEOUT_MS: '60000' }),
-      '60000',
-      'the backend value still wins over the daemon env',
-    );
-    delete process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
-    t.is(resolveBridgeTurnTimeout({}), '');
-  },
-);
-
-test('resolveBrokerTransport requires the loopback URL and listener together', t => {
-  t.deepEqual(resolveBrokerTransport({}), { broker: false });
-  t.deepEqual(
-    resolveBrokerTransport({
-      OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
-      OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
-    }),
-    {
-      broker: true,
-      baseUrl: 'http://127.0.0.1:41337/api/v1',
-      container: 'endo-provider-abc',
-      apiKey: 'opencode-broker-placeholder',
-    },
-  );
-  // The placeholder is synthesized: an environment value is ignored, so a
-  // deployment cannot park a real key in the slice under this name.
-  const placeholder = resolveBrokerTransport({
-    OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
-    OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
-    OPENCODE_BROKER_API_KEY: 'sk-or-real-key',
-  });
-  t.is(
-    placeholder.broker ? placeholder.apiKey : undefined,
-    'opencode-broker-placeholder',
-  );
-  t.throws(
-    () =>
-      resolveBrokerTransport({
-        OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
-      }),
-    { message: /both the loopback base URL and the listener container/ },
-  );
-  t.throws(
-    () =>
-      resolveBrokerTransport({
-        OPENCODE_BROKER_CONTAINER: '../escape',
-      }),
-    { message: /both the loopback base URL and the listener container/ },
-  );
-  t.throws(
-    () =>
-      resolveBrokerTransport({
-        OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
-        OPENCODE_BROKER_CONTAINER: '../escape',
-      }),
-    { message: /container name is invalid/ },
-  );
-});
-
-test('planBrokerClient maps a broker lease to join/placeholder and direct to passthrough', t => {
-  const broker = planBrokerClient({
-    transport: resolveBrokerTransport({
-      OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
-      OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
-    }),
-    network: 'private',
-  });
-  t.true(broker.broker);
-  t.is(broker.network, 'join');
-  t.is(broker.networkRef, 'endo-provider-abc');
-  t.deepEqual(broker.configOptions, {
-    baseUrl: 'http://127.0.0.1:41337/api/v1',
-    allowLoopbackHttp: true,
-  });
-  t.deepEqual(broker.credentialEnv, {
-    OPENROUTER_API_KEY: 'opencode-broker-placeholder',
-  });
-  t.false(broker.useCredentialCap);
-
-  const direct = planBrokerClient({
-    transport: resolveBrokerTransport({}),
-    network: 'private',
-  });
-  t.false(direct.broker);
-  t.is(direct.network, 'private');
-  t.is(direct.networkRef, undefined);
-  t.deepEqual(direct.configOptions, {});
-  t.deepEqual(direct.credentialEnv, {});
-  t.true(direct.useCredentialCap);
-});
-
 test('a new incarnation restores the stack\u2019s record before its first turn', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
@@ -833,34 +719,15 @@ test('a new incarnation restores the stack\u2019s record before its first turn',
   t.is(JSON.parse(bridge.commands[2]).text, 'and a header');
 });
 
-test('a resumed session is not given a history it already has', async t => {
-  const bridge = makeFakeBridge();
-  const fake = makeFakeSlice(bridge);
-  const client = makeOpencodeClient(
-    baseArgs(fake, { resumePriorConversation: true }),
-  );
-  bridge.push(readyLine('ses_1'));
-  const reader = await client.send('carry on', {
-    transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
-  });
-  bridge.push(JSON.stringify({ type: 'end' }));
-  await drain(reader);
-  t.is(JSON.parse(bridge.commands[0]).text, 'carry on');
-});
-
-test('a resume that missed restores rather than continuing context-free', async t => {
+test('a fresh native id restores the canonical transcript', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
   const client = makeOpencodeClient(
     baseArgs(fake, {
-      resumePriorConversation: true,
-      opencodeSessionId: 'ses_gone',
       model: 'openrouter/deepseek/v4',
     }),
   );
-  // The store no longer holds the recorded session, so the bridge started a
-  // fresh one. That case had no handling: the session simply continued
-  // context-free, which is the silent version of losing a conversation.
+  // A new native session is diagnostic identity, not transcript authority.
   bridge.push(readyLine('ses_new'));
   const reader = await client.send('carry on', {
     transcript: [{ kind: 'message', role: 'user', content: 'earlier work' }],
@@ -874,9 +741,11 @@ test('a resume that missed restores rather than continuing context-free', async 
   t.is(JSON.parse(bridge.commands[1]).text, 'carry on');
   bridge.push(JSON.stringify({ type: 'end' }));
   await drain(reader);
+  t.is((await client.status()).opencodeSessionId, 'ses_new');
 });
 
 test('a bridge that cannot import refuses the turn instead of degrading it', async t => {
+  t.timeout(5000);
   // The image carries the bridge, so a slice running one built before the
   // import route cannot take the conversation at all. Reading it into the
   // prompt instead would let the session keep answering while the mechanism
@@ -888,7 +757,7 @@ test('a bridge that cannot import refuses the turn instead of degrading it', asy
   const client = makeOpencodeClient(
     baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
   );
-  bridge.push(legacyReadyLine('ses_1'));
+  bridge.push(readyLine('ses_1', ['fresh-session']));
   const transcript = harden([
     { kind: 'message', role: 'user', content: 'remember ALPENGLOW' },
   ]);
@@ -900,9 +769,14 @@ test('a bridge that cannot import refuses the turn instead of degrading it', asy
   // Nothing was sent: not the import it cannot do, and not a prompt that
   // would have been answered out of an empty context.
   t.is(bridge.commands.length, 0);
+  const retry = await drain(await client.send('try without history'));
+  t.is(retry.at(-1).type, 'abort');
+  t.regex(retry.at(-1).reason, /previous conversation restoration failed/);
+  t.is(bridge.commands.length, 0);
 });
 
 test('restoration goes through the structured import, or not at all', async t => {
+  t.timeout(5000);
   const transcript = harden([
     { kind: 'message', role: 'user', content: 'build the page' },
     { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"a"}' },
@@ -967,5 +841,54 @@ test('restoration goes through the structured import, or not at all', async t =>
     t.is(abort.type, 'abort');
     t.regex(abort.reason, /refused or did not answer/);
     t.is(bridge.commands.length, 1);
+    const retry = await drain(await client.send('try again', { transcript }));
+    t.is(retry.at(-1).type, 'abort');
+    t.regex(retry.at(-1).reason, /previous conversation restoration failed/);
+    t.is(bridge.commands.length, 1);
   }
+});
+
+for (const ready of [
+  legacyReadyLine('ses_old'),
+  readyLine('ses_old', ['import']),
+]) {
+  test(`an image without fresh-session refuses all turns: ${ready}`, async t => {
+    t.timeout(5000);
+    const bridge = makeFakeBridge();
+    const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
+    bridge.push(ready);
+    const first = await drain(await client.send('empty history'));
+    t.is(first.at(-1).type, 'abort');
+    t.regex(first.at(-1).reason, /no fresh-session guarantee/);
+    const retry = await drain(await client.send('try again'));
+    t.is(retry.at(-1).type, 'abort');
+    t.regex(retry.at(-1).reason, /previous conversation restoration failed/);
+    t.deepEqual(bridge.commands, []);
+  });
+}
+
+test('an uncertain import write fences later sends without replaying', async t => {
+  t.timeout(5000);
+  const bridge = makeFakeBridge();
+  const client = makeOpencodeClient(
+    baseArgs(makeFakeSlice(bridge), {
+      model: 'openrouter/deepseek/v4',
+      makeStdinWriter: async () => ({
+        next: async bytes => {
+          bridge.commands.push(new TextDecoder().decode(bytes));
+          throw Error('import write acknowledgment lost');
+        },
+      }),
+    }),
+  );
+  bridge.push(readyLine('ses_1'));
+  const transcript = [{ kind: 'message', role: 'user', content: 'earlier' }];
+  const first = await drain(await client.send('continue', { transcript }));
+  t.is(first.at(-1).type, 'abort');
+  t.regex(first.at(-1).reason, /acknowledgment lost/);
+  t.is(JSON.parse(bridge.commands[0]).op, 'import');
+  const retry = await drain(await client.send('continue', { transcript }));
+  t.is(retry.at(-1).type, 'abort');
+  t.regex(retry.at(-1).reason, /previous conversation restoration failed/);
+  t.is(bridge.commands.length, 1);
 });

@@ -9,16 +9,6 @@ import { Far } from '@endo/far';
 import { make } from '../src/claude-session-storage-module.js';
 import { make as makeStateProvider } from '../src/claude-state-provider-module.js';
 
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
-
 const exists = async p =>
   access(p).then(
     () => true,
@@ -72,7 +62,6 @@ test('the storage caplet requires both roots and removes one recorded plan throu
     workspaceMountPoint: path.join(roots.mcpDir, id, 'workspace'),
     mcpDir: path.join(roots.mcpDir, id, 'mcp'),
     mounterSocketDir: path.join(roots.mcpDir, id, '9p'),
-    nativeProfile: profile,
   };
   await Promise.all(
     [plan.workspaceDir, plan.mcpDir, plan.mounterSocketDir].map(directory =>

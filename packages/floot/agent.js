@@ -79,8 +79,12 @@ import {
 import {
   projectTranscript,
   recoverTurnTranscript,
+  transcriptToProviderMessages,
 } from './src/transcript-projection.js';
-import { providePrivateTurnStorage } from './src/private-turn-storage.js';
+import {
+  createPrivateTurnStorage,
+  providePrivateTurnStorage,
+} from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
@@ -175,9 +179,7 @@ const makeBufferingWriter = () => {
 };
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
-  createSession: M.callWhen()
-    .optional(M.any(), M.string(), M.string())
-    .returns(M.remotable()),
+  createSession: M.callWhen(M.record()).returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   watchSessions: M.callWhen().returns(M.remotable()),
   watchAccounts: M.callWhen().returns(M.remotable()),
@@ -582,7 +584,6 @@ const provisionPresetObjects = async (
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
  * @param {any} [options.journalPowers] - Factory-private journal storage. Standalone callers that omit this retain cooperative guest storage.
- * @param {any} [options.journalMigration] - Private legacy-import acknowledgement capability.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
@@ -638,7 +639,6 @@ export const makeStreamingAgent = async (
     extraTools,
     hostedContinuity,
     journalPowers = powers,
-    journalMigration,
     onChange,
   } = {},
 ) => {
@@ -688,9 +688,7 @@ export const makeStreamingAgent = async (
   const effectivePrompt =
     systemPrompt || composePresetPrompt({ presetId: 'general' });
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
-  const turnJournal = makeTurnJournal(journalPowers, {
-    migration: journalMigration,
-  });
+  const turnJournal = makeTurnJournal(journalPowers);
   // Validate persisted evidence before installing a backend or starting inbox work.
   await turnJournal.list();
   let activeJournalTurn;
@@ -820,9 +818,8 @@ export const makeStreamingAgent = async (
       },
     });
 
-  // Cumulative token usage for this session, persisted to the guest petstore so
-  // it survives a daemon restart. Loaded lazily; updated after each turn.
-  const USAGE_NAME = 'floot-usage';
+  // Completed usage is committed with each conversation node and recovered
+  // from the durable leaf. Incomplete usage is counted from the turn journal.
   /**
    * The five disjoint counts and the last context reading of
    * `@endo/hosted-agent/token-usage.js`, and how many turns completed. Totals
@@ -863,35 +860,8 @@ export const makeStreamingAgent = async (
       : {};
   const loadUsage = async () => {
     if (usage) return usage;
-    const recorded = await findRecordedUsage();
-    if (recorded) {
-      usage = recorded;
-    } else if (await E(powers).has(USAGE_NAME)) {
-      usage = totalsFrom(await E(powers).lookup(USAGE_NAME));
-    } else {
-      usage = totalsFrom(undefined);
-    }
+    usage = (await findRecordedUsage()) ?? totalsFrom(undefined);
     return usage;
-  };
-  // Serialize writes to the legacy summary cache. The authoritative totals are
-  // also committed in conversation-node metadata, so a crash or cache write
-  // failure can be recovered by walking back from the durable leaf.
-  let usageWrite = Promise.resolve();
-  const saveUsage = () => {
-    const snapshot = harden({ ...usage });
-    usageWrite = usageWrite
-      .then(async () => {
-        await null;
-        if (await E(powers).has(USAGE_NAME)) await E(powers).remove(USAGE_NAME);
-        await E(powers).storeValue(snapshot, USAGE_NAME);
-      })
-      .catch(error => {
-        console.error(
-          '[floot] could not persist usage:',
-          error instanceof Error ? error.message : String(error),
-        );
-      });
-    return usageWrite;
   };
 
   // Delegation state is per session and lives beside the inbox loop that feeds
@@ -1102,7 +1072,6 @@ export const makeStreamingAgent = async (
       });
       cachedLeaf = finalNode.id;
       usage = nextUsage;
-      await saveUsage();
       await turnJournal.append(turnId, {
         type: 'finish',
         state: 'completed',
@@ -1317,37 +1286,10 @@ export const makeStreamingAgent = async (
       getContext: async () => {
         // Include prior failed/cancelled turns and their known effects, not just
         // successful tree nodes. The active turn's staging stays separate.
-        const history = await getHistory(turnId);
-        const path = [];
-        for (const [index, message] of history.entries()) {
-          // Public reasoning is display-only, never replayed as instructions.
-          if (message.role === 'thinking') {
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          if (message.role === 'tool') {
-            const callId = `floot-history-${index}`;
-            path.push({
-              role: 'assistant',
-              content: '',
-              tool_calls: [
-                {
-                  id: callId,
-                  type: 'function',
-                  function: {
-                    name: message.name,
-                    arguments: message.args,
-                  },
-                },
-              ],
-            });
-            path.push({
-              role: 'tool',
-              tool_call_id: callId,
-              content: message.result ?? UNSETTLED_TOOL_RESULT,
-            });
-          } else path.push({ role: message.role, content: message.content });
-        }
+        // Model context is not a UI history projection: the latter deliberately
+        // carries previews. Hydrate the same full transcript hosted runners use.
+        const transcript = await getTranscript(turnId);
+        const path = transcriptToProviderMessages(transcript);
         return [
           { role: 'system', content: effectivePrompt },
           ...path.filter(message => message.role !== 'system'),
@@ -1519,7 +1461,6 @@ export const makeStreamingAgent = async (
     });
     cachedLeaf = committedNode.id;
     usage = { ...totals };
-    await saveUsage();
     await turnJournal.append(turnId, {
       type: 'finish',
       state: 'completed',
@@ -1744,20 +1685,13 @@ export const makeStreamingAgent = async (
   const inboxStopped = new Promise(resolve => {
     signalInboxStopped = resolve;
   });
-  let signalJournalRecovery;
-  let journalRecovery = new Promise(resolve => {
-    signalJournalRecovery = resolve;
-  });
-  const waitForJournalRecovery = async () => {
-    while (!stopped && !quarantineError) {
-      // Capture before the read so a concurrent acknowledgement cannot be lost.
-      const wake = journalRecovery;
-      try {
-        await turnJournal.assertReady();
-        return;
-      } catch {
-        await Promise.race([wake, inboxStopped]);
-      }
+  const waitForJournalReadiness = async () => {
+    try {
+      await turnJournal.assertReady();
+    } catch {
+      // An uncertain write poisons this incarnation. Operator resolution
+      // cannot repair it; leave mail pending until shutdown and revival.
+      await inboxStopped;
     }
   };
   /** Wakes the mail worker; rebound when a pump starts. */
@@ -1838,9 +1772,8 @@ export const makeStreamingAgent = async (
             pendingMail.shift()
           );
           try {
-            // Keep queued mail intact while an operator verifies recovery.
-            // Waiting outside turnChain leaves resolveTurn free to unblock us.
-            await waitForJournalRecovery();
+            // Keep queued mail intact if this journal incarnation is poisoned.
+            await waitForJournalReadiness();
             if (stopped || quarantineError) return;
             const { writer, done: turnDone } = makeBufferingWriter();
             // Route through converse so the turn joins turnChain and shares
@@ -2172,8 +2105,26 @@ export const makeStreamingAgent = async (
    * before reporting it. Recovery is labeled, not silently presented as a
    * faithful reconstruction of the backend's event ordering.
    */
-  const getTranscript = async () => {
-    const turns = await turnJournal.list();
+  // A full-history API necessarily reads the archive, but keep it local to the
+  // request rather than growing the journal's bounded resident record map.
+  // Unresolved old turns may remain retained after newer turns are archived.
+  const readAllTurns = async () => {
+    // Capture retained records first: a concurrent snapshot may archive one
+    // before the second read. Deduplicate that overlap rather than losing it
+    // between an archive-first read and a retained read.
+    const retained = await turnJournal.list();
+    const archived = await turnJournal.listArchived();
+    const byId = new Map(
+      [...archived, ...retained].map(turn => [turn.turnId, turn]),
+    );
+    return [...byId.values()].sort((left, right) => {
+      if (left.turnId === right.turnId) return 0;
+      return BigInt(left.turnId) < BigInt(right.turnId) ? -1 : 1;
+    });
+  };
+
+  const getTranscript = async (excludeTurnId = undefined) => {
+    const turns = await readAllTurns();
     const ids = new Set(turns.map(turn => turn.turnId));
     const nodes = [];
     let id = await getOrCreateLeaf();
@@ -2200,6 +2151,7 @@ export const makeStreamingAgent = async (
       // The current prompt is passed separately to send(). Do not replay it
       // or incomplete live evidence into its own backend dispatch.
       if (
+        turn.turnId !== excludeTurnId &&
         turn.state !== 'pending' &&
         (!turn.conversationNodeId || pathIds.has(turn.conversationNodeId))
       ) {
@@ -2217,7 +2169,7 @@ export const makeStreamingAgent = async (
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const leafId = await getOrCreateLeaf();
-    const turns = await turnJournal.list();
+    const turns = await readAllTurns();
     if (!turns.length) return projectHistory(await tree.getPath(leafId));
     const ids = new Set(turns.map(turn => turn.turnId));
     const nodes = [];
@@ -2240,7 +2192,11 @@ export const makeStreamingAgent = async (
       }
     }
     const out = [...projectHistory(legacy)];
+    const pathIds = new Set(nodes.map(node => node.id));
     for (const turn of turns) {
+      if (turn.conversationNodeId && !pathIds.has(turn.conversationNodeId))
+        // eslint-disable-next-line no-continue
+        continue;
       // eslint-disable-next-line no-continue
       if (turn.turnId === excludeTurnId) continue;
       // A settled view leaves out the turn that is running: by its journal
@@ -2407,10 +2363,6 @@ export const makeStreamingAgent = async (
       if (activeJournalTurn || executingTools.size)
         throw Error('Cannot resolve an active Floot turn or unsettled tool');
       await turnJournal.resolve(turnId, note);
-      signalJournalRecovery();
-      journalRecovery = new Promise(resolve => {
-        signalJournalRecovery = resolve;
-      });
       notifyChange('turn-resolved');
     });
 
@@ -2428,13 +2380,7 @@ export const makeStreamingAgent = async (
     let sum = projectUsage(undefined);
     let count = 0;
     for (const turn of turns) {
-      // The synthetic record of a journal imported from before journals is
-      // not a turn anybody ran.
-      if (
-        turn.terminal &&
-        turn.state !== 'completed' &&
-        turn.turnId !== 'legacy-import'
-      ) {
+      if (turn.terminal && turn.state !== 'completed') {
         count += 1;
         sum = addUsage(sum, turn.usage);
       }
@@ -2553,14 +2499,11 @@ harden(makeStreamingAgent);
 // Floot Factory — entry point (mirrors fae's factory recipe)
 // ============================================================================
 
-// Petname (in the factory guest's own petstore) where the session registry —
-// an array of { id, title, createdAt } — is persisted.
-const REGISTRY_NAME = 'floot-sessions';
-// Legacy write-ahead snapshot: authoritative until migrated into the journal.
-const REGISTRY_BACKUP_NAME = 'floot-sessions-backup';
+// Registry snapshots live in the factory guest's own petstore. Legacy names
+// are recognized only to reject an unsupported namespace, never imported.
 const REGISTRY_PREFIX = 'floot-sessions-v1-';
 /**
- * Snapshots retained behind the newest. One is enough for correctness — the
+ * Snapshots retained, including the newest. One is enough for correctness — the
  * newest complete snapshot is the record — and a handful gives an operator
  * something to fall back on if the newest turns out to be unreadable.
  */
@@ -2645,7 +2588,8 @@ const newSessionId = () =>
  * pin per session.
  *
  * Persistence is daemon-only: the session registry lives in the factory's own
- * petstore (REGISTRY_NAME), and each session's history lives in its guest's
+ * petstore (REGISTRY_PREFIX snapshots), and each session's history lives in
+ * its guest's
  * petstore. On restart the daemon revives the pinned factory; sessions are
  * revived lazily (provideGuest is idempotent) on first use.
  *
@@ -3424,17 +3368,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
-  const retireRegistryBackup = async () => {
-    try {
-      if (await E(powers).has(REGISTRY_BACKUP_NAME)) {
-        await E(powers).remove(REGISTRY_BACKUP_NAME);
-      }
-    } catch (error) {
-      // The journal is already durable. Keep the obsolete backup rooted and
-      // retry on the next load/save without rolling back the committed record.
-      console.error('[floot-factory] registry backup cleanup failed:', error);
-    }
-  };
   const loadRegistry = () => {
     if (registry) return Promise.resolve(registry);
     if (!registryLoadP) {
@@ -3460,27 +3393,18 @@ export const make = (hostPowers, _context, { env } = {}) => {
           ) {
             throw Error('Floot lifecycle registry journal is corrupt');
           }
-          await retireRegistryBackup();
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
-        } else if (await E(powers).has(REGISTRY_BACKUP_NAME)) {
-          const stored = await E(powers).lookup(REGISTRY_BACKUP_NAME);
-          if (!Array.isArray(stored)) {
-            throw Error('Floot legacy registry backup is corrupt');
-          }
-          // An interrupted legacy replacement may have no canonical name,
-          // or a stale one. Publish its backup to a fresh journal name before
-          // releasing that recovery root or exposing the registry in memory.
-          await E(powers).storeValue(
-            harden({ version: 1, sequence: 0n, sessions: stored }),
-            `${REGISTRY_PREFIX}${'0'.repeat(20)}`,
+        } else if (
+          (Array.isArray(names) ? names : []).some(name =>
+            ['floot-sessions', 'floot-sessions-backup'].includes(name),
+          )
+        ) {
+          // Do not silently expose an empty registry over unrecognized state.
+          // A valid modern snapshot wins over inert legacy roots above.
+          throw Error(
+            'Floot legacy registry is unsupported; use a fresh factory',
           );
-          await retireRegistryBackup();
-          registry = [...stored];
-          registrySequence = 1n;
-        } else if (await E(powers).has(REGISTRY_NAME)) {
-          const stored = await E(powers).lookup(REGISTRY_NAME);
-          registry = Array.isArray(stored) ? [...stored] : [];
         } else {
           registry = [];
         }
@@ -3532,7 +3456,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
         }),
         name,
       );
-      await retireRegistryBackup();
       // Append-only was never meant to be unbounded: every lifecycle
       // transition wrote a snapshot and nothing removed one, so the factory
       // host's pet store accumulated a full copy of the session array per
@@ -3782,7 +3705,21 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const stopFences = new Set();
   const stopFlights = new Map();
   const resumeTokens = new Map();
+  const creatingIds = new Set();
+  // Synchronous allocation makes concurrent IDs distinct even if the clock
+  // and random prefix repeat. Durable namespaces still guard reincarnations.
+  let creationOrdinal = 0n;
+  // Retain this fence after an uncertain first registry write. Only revival
+  // from a durable snapshot may recover that creation in another incarnation.
+  const publicationFences = new Set();
+  const assertPublished = id => {
+    if (publicationFences.has(id))
+      throw Error(
+        'Session initial registry publication is pending or uncertain',
+      );
+  };
   const assertSessionAdmission = id => {
+    assertPublished(id);
     const entry = (registry || []).find(session => session.id === id);
     if (
       stopFences.has(id) ||
@@ -3974,6 +3911,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return result;
   };
   const getAgent = (id, { observeOnly = false } = {}) => {
+    assertPublished(id);
     if (!observeOnly) assertSessionAdmission(id);
     if (networkChanges.has(id))
       throw Error('Network policy change in progress');
@@ -3987,6 +3925,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       let runningTurn;
       agentP = (async () => {
         const host = getHost();
+        const journalPowers = await providePrivateTurnStorage(host, id);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
         const handleName = `session-${id}`;
@@ -3997,15 +3936,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // control methods. So we pass an explicit agentName and look the
         // controlling *agent* up by that name to get the full guest facet for
         // the session's powers (the same agent fae runs its driver against).
-        const legacyRequired = await E(host).has(agentName);
         await E(host).provideGuest(handleName, { agentName });
         const sessionGuest = await E(host).lookup(agentName);
-        const journalKit = await providePrivateTurnStorage(
-          host,
-          id,
-          sessionGuest,
-          { legacyRequired },
-        );
         // Introduce the user to the session under the petname "user" so the
         // agent can mail them directly (send/reply target "user"). The factory
         // host's own "@host" is the user — the @agent that provisioned the
@@ -4268,8 +4200,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sessionPrompt,
           harden({
             maxToolRounds,
-            journalPowers: journalKit.storage,
-            journalMigration: journalKit.migration,
+            journalPowers,
             backendId: entry?.backendId || 'provider',
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
@@ -4365,6 +4296,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const facets = new Map();
   const assertSessionReady = async id => {
     await loadRegistry();
+    assertPublished(id);
     const entry = (registry || []).find(session => session.id === id);
     if (!entry) throw Error(`Unknown session "${id}".`);
     if ((entry.lifecycle || 'ready') !== 'ready') {
@@ -4892,7 +4824,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const provisionSession = async options => {
     await loadRegistry();
     const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
-    const id = newSessionId();
+    const id = `${newSessionId()}-${creationOrdinal.toString(36)}`;
+    creationOrdinal += 1n;
     const { parentSessionId, subagentName, subagentDepth } = options;
     const delegationFields =
       parentSessionId === undefined
@@ -5040,8 +4973,26 @@ export const make = (hostPowers, _context, { env } = {}) => {
           ? { model: selectedModel }
           : {}),
     });
-    /** @type {any[]} */ (registry).push(entry);
-    await saveRegistry();
+    // Claim the ID before asynchronous namespace checks. Petstore writes are
+    // not compare-and-swap, so random IDs alone cannot serialize collisions.
+    if (creatingIds.has(id) || (registry || []).some(item => item.id === id))
+      throw Error('Session ID already exists');
+    creatingIds.add(id);
+    try {
+      const host = getHost();
+      if (
+        (await E(host).has(`session-${id}`)) ||
+        (await E(host).has(`session-agent-${id}`))
+      )
+        throw Error('Session guest bindings already exist');
+      await createPrivateTurnStorage(host, id);
+      publicationFences.add(id);
+      /** @type {any[]} */ (registry).push(entry);
+      await saveRegistry();
+      publicationFences.delete(id);
+    } finally {
+      creatingIds.delete(id);
+    }
     // Build the agent now so the new session immediately follows its inbox
     // (addressable by mail without waiting for a first UI turn) and its
     // preset objects are provisioned up front.
@@ -5121,6 +5072,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
    */
   const releaseSession = async id => {
     await loadRegistry();
+    assertPublished(id);
     const index = (registry || []).findIndex(session => session.id === id);
     if (index === -1) throw Error(`Unknown session "${id}".`);
     const children = (registry || []).filter(
@@ -5367,23 +5319,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   return makeExo('FlootFactory', FlootFactoryInterface, {
     /**
-     * @param {string | Record<string, any>} [titleOrOptions]
-     * @param {string} [presetId]
-     * @param {string} [model]
+     * @param {Record<string, any>} options
      * @returns {Promise<object>} an opaque session facet
      */
-    async createSession(titleOrOptions, presetId, model) {
-      const options =
-        titleOrOptions && typeof titleOrOptions === 'object'
-          ? titleOrOptions
-          : {
-              title: titleOrOptions,
-              presetId,
-              model,
-              // The positional form is the Floot space's original call, from
-              // before a caller could say how it is driven.
-              spoken: true,
-            };
+    async createSession(options) {
       // The delegation fields are minted by the spawner, never accepted from a
       // caller: a session that claimed another's parentage would join that
       // parent's subagent list and become stoppable by it.
@@ -5610,6 +5549,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     async renameSession(id, title) {
       await loadRegistry();
+      assertPublished(id);
       const reg = registry || [];
       const idx = reg.findIndex(s => s.id === id);
       if (idx === -1) throw new Error(`Unknown session "${id}".`);
@@ -5720,11 +5660,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken} | title?, presetId?, model?) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
-          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), and spoken. The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:

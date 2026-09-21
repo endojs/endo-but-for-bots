@@ -299,20 +299,22 @@ const makeHost = async (config, cancelled) => {
 
 /**
  * @param {ExecutionContext<any>} t
+ * @param {string} [configName]
  * @returns {Promise<ReturnType<prepareConfig> & ReturnType<makeHost>>}
  */
-const prepareHost = async t => {
+const prepareHost = async (t, configName = t.title) => {
   // eslint-disable-next-line no-use-before-define
-  const { cancel, cancelled, config } = await prepareConfig(t);
+  const { cancel, cancelled, config } = await prepareConfig(t, { configName });
   const { host } = await makeHost(config, cancelled);
   return { cancel, cancelled, config, host };
 };
 
 /**
  * @param {ExecutionContext<any>} t
+ * @param {string} [configName]
  */
-const prepareHostWithTestNetwork = async t => {
-  const { host } = await prepareHost(t);
+const prepareHostWithTestNetwork = async (t, configName = t.title) => {
+  const { host } = await prepareHost(t, configName);
 
   // Store the listen address before the network service starts.
   await E(host).storeValue('127.0.0.1:0', 'tcp-listen-addr');
@@ -460,11 +462,15 @@ const getConfigDirectoryName = (testTitle, testConfigIndex) => {
  * @param {ExecutionContext<any>} t
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled]
+ * @param {string} [options.configName] Short name for platforms with small socket paths.
  */
-const prepareConfig = async (t, { gcEnabled = true } = {}) => {
+const prepareConfig = async (
+  t,
+  { gcEnabled = true, configName = t.title } = {},
+) => {
   const { cancelled, cancel } = makeCancelKit();
   const config = {
-    ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
+    ...makeConfig('tmp', getConfigDirectoryName(configName, t.context.length)),
     gcEnabled,
   };
 
@@ -1414,12 +1420,15 @@ testNeedsNodeWorker.serial(
 );
 
 testNeedsNodeWorker.serial(
-  'static session powers retain exact dependencies across rebinding and restart',
+  'static dependency bundles retain exact capabilities across rebinding and restart',
   async t => {
     t.timeout(30_000);
-    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { cancelled, config } = await prepareConfig(t, {
+      gcEnabled: true,
+      configName: 'dp',
+    });
     const modulePath = url.fileURLToPath(
-      new URL('../../hosted-agent/src/session-powers.js', import.meta.url),
+      new URL('./_dependency-bundle.js', import.meta.url),
     );
     let originalIds;
     let bundleId;
@@ -1455,13 +1464,10 @@ testNeedsNodeWorker.serial(
       ]);
       await E(host).storeValue(
         harden({
-          agent: await E(host).lookup('@agent'),
           sandboxFactory: factory,
           fsMounter: mounter,
           filesystem,
           stateProvider,
-          sessionId: 'session-a',
-          mounts: [],
         }),
         'powers-input',
       );
@@ -1509,19 +1515,18 @@ testNeedsNodeWorker.serial(
       const filesystem = await E(powers).filesystem();
       t.is(await E(filesystem).readText('identity'), 'original-filesystem');
       const provider = await E(powers).stateProvider();
-      t.is(await E(provider).provideSessionMount(), 'original-state');
-      await t.throwsAsync(() => E(provider).removeSession('session-b'), {
-        message: /restricted to its approved session/,
-      });
+      t.is(
+        await E(provider).provideSessionMount('session-a'),
+        'original-state',
+      );
       t.false(await E(filesystem).has('removed'));
-      await E(provider).removeSession();
+      await E(provider).removeSession('session-a');
       t.is(await E(filesystem).readText('removed'), 'session-a');
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(powers).__getMethodNames__();
       t.false(methods.includes('lookup'));
       t.false(methods.includes('lookupById'));
       t.false(methods.includes('agent'));
-      t.is(await E(powers).credentials(), null);
 
       await E(host).remove('session-powers');
       for (const id of [...originalIds, bundleId]) {
@@ -2739,14 +2744,15 @@ testNeedsNodeManager(
   'the OpenCode backend records a session through the daemon owner and destroy reaches its storage',
   async t => {
     t.timeout(120_000);
-    const { cancelled, config } = await prepareConfig(t);
+    // Keep the Unix socket below macOS's 104-byte limit in a deep worktree.
+    // getConfigDirectoryName still supplies its unique test/config suffix.
+    const { cancelled, config } = await prepareConfig(t, { configName: 'oc' });
     const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
     const base = config.statePath;
     const roots = {
       workspaceDir: path.join(base, 'opencode-workspaces'),
       mcpDir: path.join(base, 'opencode-private'),
     };
-    const stateDir = path.join(base, 'opencode-state');
     const nativeRuntime = path.join(base, 'opencode-native-runtime');
     const brokerDir = path.join(base, 'opencode-broker');
     for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
@@ -2754,29 +2760,10 @@ testNeedsNodeManager(
       await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
     }
     const digest = `sha256:${'a'.repeat(64)}`;
-    const profile = {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    };
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('opencode-sandbox');
     // The same services setup-host.js and setup-hosted.js mint, over the
-    // same powers shapes: host powers, a stored null, a SecretBlob, and the
-    // state provider.
-    await E(host).makeUnconfined(
-      '@node',
-      spec('opencode-sandbox/src/opencode-state-provider-module.js'),
-      {
-        powersName: '@agent',
-        resultName: ['opencode-sandbox', 'state-provider'],
-        env: { ENDO_OPENCODE_STATE_DIR: stateDir },
-      },
-    );
+    // same powers shapes: host powers, a stored null, and a SecretBlob.
     await E(host).storeValue(null, 'opencode.null-powers');
     await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
       powersName: 'opencode.null-powers',
@@ -2818,15 +2805,12 @@ testNeedsNodeManager(
       },
     );
     await E(host).remove('opencode-auth.broker-read');
-    await E(host).copy(
-      ['opencode-sandbox', 'state-provider'],
-      ['opencode.state-provider-powers'],
-    );
+    await E(host).storeValue(null, 'opencode.storage-null-powers');
     await E(host).makeUnconfined(
       '@node',
       spec('opencode-sandbox/src/opencode-session-storage-module.js'),
       {
-        powersName: 'opencode.state-provider-powers',
+        powersName: 'opencode.storage-null-powers',
         resultName: ['opencode-sandbox', 'session-storage'],
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
@@ -2834,7 +2818,7 @@ testNeedsNodeManager(
         },
       },
     );
-    await E(host).remove('opencode.state-provider-powers');
+    await E(host).remove('opencode.storage-null-powers');
     const backend = await E(host).makeUnconfined(
       '@node',
       spec('opencode-sandbox/src/opencode-backend-module.js'),
@@ -2844,7 +2828,6 @@ testNeedsNodeManager(
         env: {
           OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           OPENCODE_MCP_DIR: roots.mcpDir,
-          OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
         },
       },
     );
@@ -2890,13 +2873,12 @@ testNeedsNodeManager(
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
     t.is(plan.rootfs, `oci:localhost/opencode@${digest}`);
-    t.deepEqual(plan.nativeProfile, profile);
+    t.false(Object.hasOwn(plan, 'nativeProfile'));
     t.is(await E(record).maybeReadText('lifecycle'), 'starting');
     t.deepEqual([...(await E(record).list('references'))].sort(), [
       'brokerService',
       'client',
       'sandboxService',
-      'stateProvider',
       'storage',
       'worker',
     ]);
@@ -2939,7 +2921,9 @@ testNeedsNodeManager(
   'the Claude backend records a session through the daemon owner and destroy reaches its storage',
   async t => {
     t.timeout(120_000);
-    const { cancelled, config } = await prepareConfig(t);
+    // Keep the Unix socket below macOS's 104-byte limit in a deep worktree.
+    // getConfigDirectoryName still supplies its unique test/config suffix.
+    const { cancelled, config } = await prepareConfig(t, { configName: 'cl' });
     const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
     const base = config.statePath;
     const roots = {
@@ -2954,15 +2938,6 @@ testNeedsNodeManager(
       await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
     }
     const digest = `sha256:${'a'.repeat(64)}`;
-    const profile = {
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    };
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('claude-sandbox');
     // The same services setup-host.js and setup-hosted.js mint, over the
@@ -3045,7 +3020,6 @@ testNeedsNodeManager(
         env: {
           CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
           CLAUDE_MCP_DIR: roots.mcpDir,
-          CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
         },
       },
     );
@@ -3085,7 +3059,7 @@ testNeedsNodeManager(
     t.is(plan.rootfs, `oci:localhost/claude@${digest}`);
     t.is(plan.networkPolicy, 'off');
     t.is(plan.credentialKind, 'oauthToken');
-    t.deepEqual(plan.nativeProfile, profile);
+    t.false(Object.hasOwn(plan, 'nativeProfile'));
     t.is(await E(record).maybeReadText('lifecycle'), 'starting');
     t.deepEqual([...(await E(record).list('references'))].sort(), [
       'brokerService',
@@ -5077,6 +5051,40 @@ test('read unknown node id', async t => {
     message: /No peer found for node identifier /u,
   });
 });
+
+testNeedsNodeWorker.serial(
+  'an adopted remote capability is endowable by name, unlike a bare presence',
+  async t => {
+    t.timeout(120_000);
+    const host = await prepareHostWithTestNetwork(t, 'rc');
+    const peer = await prepareHostWithTestNetwork(t, 'rc');
+    await E(host).addPeerInfo(await E(peer).getPeerInfo());
+    await E(peer).addPeerInfo(await E(host).getPeerInfo());
+    const remote = await E(peer).makeDirectory('project');
+    await E(remote).writeText('identity', 'remote-project');
+    await t.throwsAsync(E(host).storeValue(remote, 'bare-presence'), {
+      message: /No corresponding formula/,
+    });
+    const invitation = await E(peer).invite('recipient');
+    await E(host).accept(await E(invitation).locate(), 'sender');
+    await E(peer).send('recipient', ['workspace'], ['filesystem'], ['project']);
+    const messages = await E(host).listMessages();
+    const pkg = messages.find(
+      message =>
+        message.type === 'package' && message.strings?.[0] === 'workspace',
+    );
+    t.truthy(pkg);
+    await E(host).adopt(pkg.number, 'filesystem', ['remote-project']);
+    const identity = await E(host).evaluate(
+      '@main',
+      "E(project).readText('identity')",
+      ['project'],
+      ['remote-project'],
+      'probe-result',
+    );
+    t.is(identity, 'remote-project');
+  },
+);
 
 testNeedsNodeWorker('read remote value', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
@@ -8346,9 +8354,14 @@ test('provideSubMount carries the parent deny list into the child', async t => {
   });
   await t.throwsAsync(E(parent).lookup(['secrets', 'key.pem']));
 
-  const child = await E(host).provideSubMount(parent, [], 'submount-deny-child', {
-    readOnly: true,
-  });
+  const child = await E(host).provideSubMount(
+    parent,
+    [],
+    'submount-deny-child',
+    {
+      readOnly: true,
+    },
+  );
   t.is(await E(await E(child).lookup('index.html')).text(), '<p>hello</p>\n');
   await t.throwsAsync(E(child).lookup(['secrets', 'key.pem']));
   t.false((await E(child).list()).includes('secrets'));

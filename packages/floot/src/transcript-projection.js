@@ -109,6 +109,62 @@ export const projectTranscript = path => {
 harden(projectTranscript);
 
 /**
+ * Render full transcript records for a direct chat-completions provider.
+ * Pair calls before projecting so repeated native IDs in different turns do
+ * not alias, and each replayed call has a result even after an interrupted turn.
+ * Thinking remains display-only; this provider has no native compaction store.
+ *
+ * @param {readonly TranscriptRecord[]} records
+ */
+export const transcriptToProviderMessages = records => {
+  const calls = new Map();
+  const pending = new Map();
+  for (const [index, record] of records.entries()) {
+    if (record.kind === 'message' && record.role === 'user') {
+      // Native IDs are only meaningful within a turn. An unanswered call
+      // stays unanswered when a later turn reuses its ID.
+      pending.clear();
+    } else if (record.kind === 'tool-call') {
+      const call = { record, id: `floot-history-${index}`, result: undefined };
+      calls.set(index, call);
+      const queue = pending.get(record.id) || [];
+      queue.push(call);
+      pending.set(record.id, queue);
+    } else if (record.kind === 'tool-result') {
+      const call = pending.get(record.id)?.shift();
+      if (call) call.result = record.content;
+    }
+  }
+  const messages = [];
+  for (const [index, record] of records.entries()) {
+    if (record.kind === 'message') {
+      messages.push({ role: record.role, content: record.content });
+    } else if (record.kind === 'tool-call') {
+      const call = calls.get(index);
+      messages.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: call.id,
+            type: 'function',
+            function: { name: record.name, arguments: record.args },
+          },
+        ],
+      });
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content:
+          call.result ?? 'Tool outcome unknown; do not automatically retry.',
+      });
+    }
+  }
+  return harden(messages);
+};
+harden(transcriptToProviderMessages);
+
+/**
  * Supplement a settled turn's mirrored transcript with durable execution
  * evidence. The stream may fail before reporting an executed tool. Keep that
  * evidence distinct from backend observations, and never claim it ran twice.

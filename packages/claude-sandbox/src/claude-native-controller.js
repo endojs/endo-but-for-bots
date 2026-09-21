@@ -99,9 +99,8 @@ const CREDENTIAL_PLACEHOLDER = 'claude-broker-placeholder';
  * Fresh inert construction is cancelled by the daemon's construction kit
  * instead. The caller must pre-create and own the private mounterSocketDir
  * and keep all mount/socket paths under stable, disjoint ancestry outside
- * guest writes. Each operation requests the recorded native profile; those
- * are the sandbox's checks, and this helper is not itself evidence of the
- * hosted envelope on a live host.
+ * guest writes. Each operation requests the shared hosted policy resource
+ * settings; the sandbox verifies their enforcement before handing off the slice.
  *
  * @param {object} [powers]
  * @param {typeof makeDefaultMounter} [powers.makeMounter]
@@ -316,8 +315,8 @@ export const makeClaudeNativeController = ({
       });
       assertCopyData(options);
       // `make`, not `makeResolved`: the runtime returns a slice only once its
-      // mount table verifies against the anchor's own, which is also what
-      // lets this adapter take runtime attaches it previously had to refuse.
+      // mount table verifies against the anchor's own. Arbitrary runtime
+      // container attaches remain refused by the current backend factory.
       const slice = await E(sandboxScope).make(options);
       // Checked twice. The runtime proved the slice's confinement to itself;
       // this proves the slice it returned is the one this session was

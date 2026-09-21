@@ -6,7 +6,40 @@ import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 import {
   projectTranscript,
   recoverTurnTranscript,
+  transcriptToProviderMessages,
 } from '../src/transcript-projection.js';
+
+test('provider projection pairs repeated IDs and preserves full tool arguments', t => {
+  const args = JSON.stringify({ text: 'x'.repeat(9000) });
+  const messages = transcriptToProviderMessages([
+    { kind: 'tool-call', id: 'same', name: 'first', args },
+    { kind: 'tool-result', id: 'same', content: 'first result' },
+    { kind: 'tool-call', id: 'same', name: 'second', args: '{}' },
+    { kind: 'tool-result', id: 'same', content: 'second result' },
+    { kind: 'tool-call', id: 'pending', name: 'third', args: '{}' },
+  ]);
+  t.is(messages[0].tool_calls[0].function.arguments, args);
+  t.not(messages[0].tool_calls[0].id, messages[2].tool_calls[0].id);
+  t.is(messages[1].content, 'first result');
+  t.is(messages[3].content, 'second result');
+  t.regex(messages[5].content, /outcome unknown; do not automatically retry/);
+});
+
+test('provider projection does not settle an earlier turn with a reused native ID', t => {
+  const messages = transcriptToProviderMessages([
+    { kind: 'message', role: 'user', content: 'First turn' },
+    { kind: 'tool-call', id: 'same', name: 'first', args: '{}' },
+    { kind: 'message', role: 'user', content: 'Second turn' },
+    { kind: 'tool-call', id: 'same', name: 'second', args: '{}' },
+    { kind: 'tool-call', id: 'parallel', name: 'parallel', args: '{}' },
+    { kind: 'tool-result', id: 'parallel', content: 'parallel result' },
+    { kind: 'tool-result', id: 'same', content: 'second result' },
+  ]);
+  const results = messages.filter(message => message.role === 'tool');
+  t.regex(results[0].content, /outcome unknown; do not automatically retry/);
+  t.is(results[1].content, 'second result');
+  t.is(results[2].content, 'parallel result');
+});
 
 const call = (id, name, args) => ({
   id,

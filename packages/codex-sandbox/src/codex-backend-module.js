@@ -12,7 +12,6 @@ import {
   containsPath,
   makeSandboxSessionId,
   readMounterEnv,
-  readNativeProfile,
   readRecordedPath,
 } from '@endo/hosted-agent/session-plan.js';
 import { lstat, mkdir, realpath } from 'node:fs/promises';
@@ -99,7 +98,6 @@ harden(makeSubscriptionLister);
  * @param {readonly string[]} powers.protectedRoots Host-only records and services.
  * @param {string} powers.imageRef
  * @param {string} powers.accountRef
- * @param {any} powers.nativeProfile
  * @param {Record<string,string>} [powers.mounterEnv]
  */
 export const makeCodexSessionProvisioner = ({
@@ -110,7 +108,6 @@ export const makeCodexSessionProvisioner = ({
   protectedRoots,
   imageRef,
   accountRef,
-  nativeProfile,
   mounterEnv,
 }) => {
   readRecordedPath('workspace root', workspaceRoot);
@@ -118,7 +115,6 @@ export const makeCodexSessionProvisioner = ({
   (!containsPath(workspaceRoot, privateRoot) &&
     !containsPath(privateRoot, workspaceRoot)) ||
     Fail`Codex storage roots must be disjoint`;
-  readNativeProfile(nativeProfile);
   for (const root of protectedRoots) readRecordedPath('protected root', root);
   if (mounterEnv !== undefined) readMounterEnv(mounterEnv);
   /**
@@ -140,7 +136,6 @@ export const makeCodexSessionProvisioner = ({
         : { workspaceHostPath: request.workspaceHostPath }),
       workspaceMountPoint: join(privateDir, 'workspace'),
       mounterSocketDir: join(privateDir, '9p'),
-      nativeProfile,
       containerMounts: request.containerMounts,
       ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...Object.fromEntries(
@@ -248,9 +243,6 @@ export const make = async (host, _context, { env = {} } = {}) => {
   (storage.env.CODEX_WORKSPACE_BASE_DIR === workspaceRoot &&
     storage.env.CODEX_PRIVATE_DIR === privateRoot) ||
     Fail`Codex backend roots must match its storage owner`;
-  typeof env.CODEX_NATIVE_PROFILE === 'string' ||
-    Fail`Missing CODEX_NATIVE_PROFILE`;
-  const nativeProfile = JSON.parse(env.CODEX_NATIVE_PROFILE);
   const mounterEnv =
     env.CODEX_MOUNTER_ENV === undefined
       ? undefined
@@ -277,7 +269,6 @@ export const make = async (host, _context, { env = {} } = {}) => {
     protectedRoots,
     imageRef: brokerConfig.imageRef,
     accountRef: brokerConfig.accountRef,
-    nativeProfile,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });
   return makeCodexBackendFactory({

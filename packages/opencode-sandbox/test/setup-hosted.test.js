@@ -7,11 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { main } from '../setup-hosted.js';
+import { OPENCODE_MODELS } from '../src/opencode-backend-factory.js';
+import { parseModelRef } from '../src/opencode-agent-config.js';
 import {
   brokerServiceSpecifier,
   nativeSandboxSpecifier,
   sessionStorageSpecifier,
-  stateProviderSpecifier,
 } from '../src/hosted-runtime-setup.js';
 
 // What the fake reports for a persisted formula it has no entry for: a
@@ -34,6 +35,7 @@ const makeFakeHost = ({
   const mints = [];
   const copies = [];
   const removed = [];
+  const stored = [];
   /** @type {Map<string, Record<string, string | undefined>>} */
   const environments = new Map();
   environments.set(
@@ -45,21 +47,15 @@ const makeFakeHost = ({
       ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
     }),
   );
-  environments.set(
-    'state-provider-id',
-    harden({ ENDO_OPENCODE_STATE_DIR: process.env.ENDO_OPENCODE_STATE_DIR }),
-  );
   const reads = [];
   /** @type {Map<string, string>} Specifier reported for a persisted formula id. */
-  const specifiers = new Map([
-    ['state-provider-id', stateProviderSpecifier],
-    ['native-sandbox-id', nativeSpecifier],
-  ]);
+  const specifiers = new Map([['native-sandbox-id', nativeSpecifier]]);
   return {
     bindings,
     mints,
     copies,
     removed,
+    stored,
     environments,
     reads,
     specifiers,
@@ -97,6 +93,10 @@ const makeFakeHost = ({
             return harden({ list: async () => [] });
           }
           return harden({ createBase64: async () => {} });
+        },
+        async storeValue(value, name) {
+          stored.push({ value, name });
+          bindings.set(key(name), value);
         },
         async copy(from, to) {
           copies.push({ from, to });
@@ -150,7 +150,7 @@ const withEnv = async (t, values) => {
 
 const preflightHost = () => {
   const fake = makeFakeHost();
-  for (const name of ['state-provider', 'native-sandbox']) {
+  for (const name of ['native-sandbox']) {
     fake.bindings.set(key('opencode-sandbox', name), 'cap');
   }
   fake.bindings.set(key('floot', 'controller-profile'), 'dir');
@@ -169,20 +169,11 @@ const baseEnv = async t => {
     ENDO_OPENCODE_CREDS_NAME: 'test-auth',
     ENDO_OPENROUTER_API_KEY: 'seed-token',
     ENDO_FLOOT_DIR: 'floot',
-    // Daemon-owned sessions require the broker and the resource profile.
+    // Daemon-owned sessions require the broker; resource policy is shared.
     ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
     ENDO_OPENCODE_BROKER_DIR: path.join(base, 'broker'),
     ENDO_OPENCODE_BROKER_OWNER_ID: 'test-broker',
     ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@sha256:${'a'.repeat(64)}`,
-    ENDO_OPENCODE_NATIVE_PROFILE: JSON.stringify({
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 1,
-    }),
     // The mounter's own operator variables must not leak in from a developer
     // shell that runs the rootless mounter locally.
     NINEP_SUDO: undefined,
@@ -197,9 +188,6 @@ const baseEnv = async t => {
 
 test.serial('requires setup-host.js artifacts', async t => {
   await baseEnv(t);
-  const noProvider = makeFakeHost();
-  await t.throwsAsync(main(noProvider.host), { message: /state-provider/ });
-
   const noNative = makeFakeHost();
   noNative.bindings.set(key('opencode-sandbox', 'state-provider'), 'cap');
   await t.throwsAsync(main(noNative.host), { message: /native-sandbox/ });
@@ -211,7 +199,7 @@ test.serial(
   async t => {
     await baseEnv(t);
     const fake = makeFakeHost({ nativeSpecifier: unsupportedSpecifier });
-    for (const name of ['state-provider', 'native-sandbox']) {
+    for (const name of ['native-sandbox']) {
       fake.bindings.set(key('opencode-sandbox', name), 'cap');
     }
     await t.throwsAsync(main(fake.host), { message: /Retire the old runtime/ });
@@ -253,12 +241,8 @@ test.serial(
     await withEnv(t, {
       ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
     });
-    fake.environments.set(
-      'state-provider-id',
-      harden({ ENDO_OPENCODE_STATE_DIR: base }),
-    );
-    await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
-    t.deepEqual(fake.mints, []);
+    await main(fake.host);
+    t.false(fake.reads.some(([, id]) => id === 'state-provider-id'));
   },
 );
 
@@ -280,8 +264,6 @@ test.serial(
     t.deepEqual(fake.reads, [
       ['formula', 'native-sandbox-id'],
       ['env', 'native-sandbox-id'],
-      ['formula', 'state-provider-id'],
-      ['env', 'state-provider-id'],
     ]);
   },
 );
@@ -339,10 +321,10 @@ test.serial(
 );
 
 test.serial(
-  'mints the session storage owner over the state provider with the persisted roots',
+  'mints the session storage owner over null powers with the persisted roots',
   async t => {
     const base = await baseEnv(t);
-    const { host, bindings, mints, copies, removed } = preflightHost();
+    const { host, bindings, mints, stored, removed } = preflightHost();
     await main(host);
     const storage = mints.find(
       mint => mint.specifier === sessionStorageSpecifier,
@@ -352,55 +334,40 @@ test.serial(
       'opencode-sandbox',
       'session-storage',
     ]);
-    t.is(storage?.options.powersName, 'opencode.state-provider-powers');
+    t.is(storage?.options.powersName, 'opencode.storage-null-powers');
     t.deepEqual(storage?.options.env, {
       OPENCODE_WORKSPACE_BASE_DIR: path.join(base, 'workspaces'),
       OPENCODE_MCP_DIR: path.join(base, 'mcp'),
     });
-    t.true(
-      copies.some(
-        ({ from, to }) =>
-          key(...from) === key('opencode-sandbox', 'state-provider') &&
-          key(...to) === key('opencode.state-provider-powers'),
-      ),
-      'the powers alias is copied from the state provider',
-    );
+    t.deepEqual(stored, [
+      { value: null, name: 'opencode.storage-null-powers' },
+    ]);
     t.true(
       removed.some(
-        parts => key(...parts) === key('opencode.state-provider-powers'),
+        parts => key(...parts) === key('opencode.storage-null-powers'),
       ),
     );
-    t.false(bindings.has(key('opencode.state-provider-powers')));
+    t.false(bindings.has(key('opencode.storage-null-powers')));
     t.true(mints.some(mint => mint.specifier === brokerServiceSpecifier));
   },
 );
 
-test.serial(
-  'refuses to mint the backend without the broker image or the profile',
-  async t => {
-    const base = await baseEnv(t);
-    await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
-    const noBroker = preflightHost();
-    await t.throwsAsync(main(noBroker.host), {
-      message: /ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required/,
-    });
-    t.deepEqual(noBroker.mints, [], 'refused before any mint');
-    // The workspace root itself is absent: the refusal precedes the mkdir
-    // that would otherwise create it after the credential mint.
-    await t.throwsAsync(
-      access(path.join(base, 'workspaces')),
-      { code: 'ENOENT' },
-      'refused before any directory creation',
-    );
-    await baseEnv(t);
-    await withEnv(t, { ENDO_OPENCODE_NATIVE_PROFILE: undefined });
-    const noProfile = preflightHost();
-    await t.throwsAsync(main(noProfile.host), {
-      message: /ENDO_OPENCODE_NATIVE_PROFILE is required/,
-    });
-    t.deepEqual(noProfile.mints, []);
-  },
-);
+test.serial('refuses to mint the backend without the broker image', async t => {
+  const base = await baseEnv(t);
+  await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
+  const noBroker = preflightHost();
+  await t.throwsAsync(main(noBroker.host), {
+    message: /ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required/,
+  });
+  t.deepEqual(noBroker.mints, [], 'refused before any mint');
+  // The workspace root itself is absent: the refusal precedes the mkdir
+  // that would otherwise create it after the credential mint.
+  await t.throwsAsync(
+    access(path.join(base, 'workspaces')),
+    { code: 'ENOENT' },
+    'refused before any directory creation',
+  );
+});
 
 test.serial(
   'mints the broker service from the managed credential when the listener image is configured',
@@ -456,7 +423,10 @@ test.serial(
       publicInternet: true,
     });
     t.true(Array.isArray(config.models) && config.models.length > 0);
-    t.true(config.models.every(model => !model.startsWith('openrouter/')));
+    t.deepEqual(
+      config.models,
+      OPENCODE_MODELS.map(model => parseModelRef(model.id)),
+    );
     // eslint-disable-next-line no-bitwise
     t.is((await stat(path.join(base, 'broker'))).mode & 0o777, 0o700);
     t.true(
@@ -531,7 +501,6 @@ test.serial(
     );
     t.deepEqual(Object.keys(backend?.options.env ?? {}).sort(), [
       'OPENCODE_MCP_DIR',
-      'OPENCODE_NATIVE_PROFILE',
       'OPENCODE_WORKSPACE_BASE_DIR',
     ]);
     t.like(backend?.options.env, persistedRoots);
@@ -826,37 +795,6 @@ test.serial(
   },
 );
 
-test.serial(
-  'validates the operator native profile before any mint and records it for the backend',
-  async t => {
-    await baseEnv(t);
-    const text = JSON.stringify({
-      uid: 1000,
-      gid: 1000,
-      memoryBytes: '536870912',
-      cpuQuotaMicros: '200000',
-      pids: 128,
-      cpuPeriodMicros: 100_000,
-      maxConcurrentOperations: 2,
-    });
-    await withEnv(t, { ENDO_OPENCODE_NATIVE_PROFILE: text });
-    const valid = preflightHost();
-    await main(valid.host);
-    const backend = valid.mints.find(mint =>
-      /opencode-backend-module\.js$/.test(mint.specifier),
-    );
-    t.is(backend?.options.env.OPENCODE_NATIVE_PROFILE, text);
-    await withEnv(t, {
-      ENDO_OPENCODE_NATIVE_PROFILE: JSON.stringify({ uid: 'root' }),
-    });
-    const invalid = preflightHost();
-    await t.throwsAsync(main(invalid.host), {
-      message: /decimal digit strings/,
-    });
-    t.deepEqual(invalid.mints, []);
-  },
-);
-
 test.serial('ignores bare OPENCODE_* variables the daemon strips', async t => {
   await baseEnv(t);
   await withEnv(t, {
@@ -909,7 +847,7 @@ test.serial(
       key('floot', 'controller-profile', 'opencode-backend'),
       'old-backend',
     );
-    for (const name of ['state-provider', 'native-sandbox']) {
+    for (const name of ['native-sandbox']) {
       failing.bindings.set(key('opencode-sandbox', name), 'cap');
     }
     failing.bindings.set(key('floot', 'controller-profile'), 'dir');

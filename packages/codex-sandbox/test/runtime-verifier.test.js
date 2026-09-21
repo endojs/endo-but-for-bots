@@ -2,6 +2,7 @@
 import '@endo/init';
 import test from 'ava';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -148,6 +149,59 @@ test('controlled probe success binds evidence and launches exact bounded preflig
   t.is(f.kills(), 0);
   t.is(f.waits(), 1);
 });
+
+test('admitted image metadata matches the shared base and Codex overlay contract', async t => {
+  const f = fixture();
+  await E(f.verifier).attest(f.context);
+  const { environment } = JSON.parse(f.call().argv[4]);
+  const base = readFileSync(
+    new URL('../../hosted-agent/oci/dev/Containerfile', import.meta.url),
+    'utf8',
+  );
+  const overlay = readFileSync(
+    new URL('../oci/Containerfile', import.meta.url),
+    'utf8',
+  );
+  const nodeVersion = /^FROM docker\.io\/library\/node:([\d.]+)-/mu.exec(
+    base,
+  )?.[1];
+  t.truthy(nodeVersion);
+  t.is(environment.NODE_VERSION, nodeVersion);
+  const declarations = [
+    ...base.matchAll(/^ENV (.+)$/gmu),
+    ...overlay.matchAll(/^ENV (.+)$/gmu),
+  ];
+  for (const declaration of declarations) {
+    for (const entry of declaration[1].split(/\s+/u)) {
+      const [name, value] = entry.split('=');
+      t.is(environment[name], value, `pinned image metadata ${name}`);
+    }
+  }
+  t.is(environment.YARN_VERSION, '1.22.22');
+});
+
+for (const [category, message] of [
+  [
+    'environment',
+    'Codex runtime verification failed: image environment mismatch',
+  ],
+  [
+    'runtime-version',
+    'Codex runtime verification failed: CLI version mismatch',
+  ],
+]) {
+  test(`trusted ${category} failure exposes only its fixed category`, async t => {
+    const f = fixture({
+      code: 1,
+      stderr: `SECRET-CANARY\nENDO_CODEX_PROBE_FAILURE:${category}\nSECRET-CANARY`,
+    });
+    const error = await t.throwsAsync(() => E(f.verifier).attest(f.context), {
+      message,
+    });
+    t.notRegex(String(error), /SECRET-CANARY/u);
+    t.is(f.kills(), 1);
+  });
+}
 
 for (const [label, options] of [
   ['exit failure', { code: 1 }],

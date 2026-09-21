@@ -21,14 +21,6 @@ import { readOpencodeBrokerConfig } from './opencode-broker-service-agent.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 
-export const stateProviderSpecifier = assertCurrentSpecifier(
-  toCurrentSpecifier(
-    new URL('./opencode-state-provider-module.js', import.meta.url).href,
-  ),
-  'state provider',
-);
-harden(stateProviderSpecifier);
-
 /** Host-only native sandbox service; constructed with slot-free null powers. */
 export const nativeSandboxSpecifier = assertCurrentSpecifier(
   toCurrentSpecifier(
@@ -71,20 +63,6 @@ const readProvisionedEnvironment = (host, name, expectedSpecifier) =>
     namePath: ['opencode-sandbox', name],
     expectedSpecifier,
   });
-
-/** @param {EndoHost} host */
-export const readStateProvider = async host => {
-  const { identifier, env } = await readProvisionedEnvironment(
-    host,
-    'state-provider',
-    stateProviderSpecifier,
-  );
-  const stateDir = env.ENDO_OPENCODE_STATE_DIR;
-  (typeof stateDir === 'string' && stateDir.length > 0) ||
-    Fail`State provider must have a persisted ENDO_OPENCODE_STATE_DIR`;
-  return harden({ identifier, stateDir });
-};
-harden(readStateProvider);
 
 /** @param {EndoHost} host */
 export const readNativeSandbox = async host => {
@@ -134,7 +112,6 @@ export const getHostedStorageRoots = env => {
     env.ENDO_OPENCODE_WORKSPACE_DIR ||
     path.join(homedir(), 'opencode-workspaces');
   return harden({
-    stateDir: env.ENDO_OPENCODE_STATE_DIR || '/var/lib/endo/opencode-state',
     workspaceDir,
     mcpDir: env.ENDO_OPENCODE_MCP_DIR || path.join(homedir(), 'opencode-mcp'),
   });

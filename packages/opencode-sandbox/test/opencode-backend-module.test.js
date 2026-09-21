@@ -19,7 +19,6 @@ import {
   brokerServiceSpecifier,
   nativeSandboxSpecifier,
   sessionStorageSpecifier,
-  stateProviderSpecifier,
 } from '../src/hosted-runtime-setup.js';
 import {
   SESSION_RECORDS_PATH,
@@ -33,16 +32,6 @@ import { makeSandboxSessionId } from '../src/opencode-session-plan.js';
 
 const key = (...parts) => JSON.stringify(parts.flat());
 const digest = `sha256:${'a'.repeat(64)}`;
-
-const profile = harden({
-  uid: 1000,
-  gid: 1000,
-  memoryBytes: '536870912',
-  cpuQuotaMicros: '200000',
-  pids: 128,
-  cpuPeriodMicros: 100_000,
-  maxConcurrentOperations: 1,
-});
 
 const makeToolSet = () =>
   makeExo('HostedToolSet', HostedToolSetInterface, {
@@ -158,9 +147,6 @@ const fixture = async t => {
       publicInternet: true,
     }),
   });
-  seed('state-provider', 'state-id', stateProviderSpecifier, {
-    ENDO_OPENCODE_STATE_DIR: path.join(base, 'state'),
-  });
   seed('session-storage', 'storage-id', sessionStorageSpecifier, {
     OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
     OPENCODE_MCP_DIR: roots.mcpDir,
@@ -206,7 +192,6 @@ const fixture = async t => {
   const env = harden({
     OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
     OPENCODE_MCP_DIR: roots.mcpDir,
-    OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
   });
   const exists = async directory =>
     access(directory).then(
@@ -250,9 +235,7 @@ test('resolveBackendConfig defaults nothing', t => {
   const env = {
     OPENCODE_WORKSPACE_BASE_DIR: '/srv/ws',
     OPENCODE_MCP_DIR: '/srv/private',
-    OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
   };
-  t.deepEqual(resolveBackendConfig(env).nativeProfile, profile);
   t.false(Object.hasOwn(resolveBackendConfig(env), 'mounterEnv'));
   t.deepEqual(
     resolveBackendConfig({
@@ -277,16 +260,6 @@ test('resolveBackendConfig defaults nothing', t => {
       'OPENCODE_MCP_DIR',
       '/srv/private/',
       /OPENCODE_MCP_DIR must be a normalized absolute path/,
-    ],
-    [
-      'OPENCODE_NATIVE_PROFILE',
-      undefined,
-      /OPENCODE_NATIVE_PROFILE is required/,
-    ],
-    [
-      'OPENCODE_NATIVE_PROFILE',
-      JSON.stringify({ ...profile, uid: 'root' }),
-      /uid: .* Must be a number/,
     ],
   ];
   for (const [name, value, message] of invalid) {
@@ -345,14 +318,12 @@ test('create() records the plan under the sandbox id with exact dependencies, th
     workspaceMountPoint: path.join(f.roots.mcpDir, sid, 'workspace'),
     mcpDir: path.join(f.roots.mcpDir, sid, 'mcp'),
     mounterSocketDir: path.join(f.roots.mcpDir, sid, '9p'),
-    nativeProfile: profile,
     model: 'openrouter/deepseek/deepseek-v4.1-flash',
     systemPrompt: 'You are Floot.',
   });
   t.deepEqual(references, {
     sandboxService: 'native-id',
     brokerService: 'broker-id',
-    stateProvider: 'state-id',
     storage: 'storage-id',
   });
   // No formula is minted for the workspace: the controller projects the

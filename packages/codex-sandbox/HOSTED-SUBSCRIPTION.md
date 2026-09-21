@@ -216,7 +216,9 @@ subscriptions"), so a lane needs a pooled broker to begin with.
 
 Required hosted settings are `ENDO_CODEX_ENABLE=1`, `ENDO_CODEX_HOST_DIR`,
 `ENDO_CODEX_SANDBOX_IMAGE`, `ENDO_CODEX_BROKER_LISTENER_IMAGE`,
-`ENDO_CODEX_NATIVE_PROFILE` (JSON), and `ENDO_CODEX_MODELS` (nonempty JSON array).
+and `ENDO_CODEX_MODELS` (nonempty JSON array).
+Hosted resource settings come from the shared hosted policy, not a per-backend
+native profile environment variable.
 The runtime image is resolved to a digest; the listener reference must be immutable.
 
 Optional `ENDO_CODEX_WORKSPACE_DIR` and `ENDO_CODEX_PRIVATE_DIR` default to

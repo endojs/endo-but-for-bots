@@ -2,9 +2,9 @@
 import '@endo/init';
 import test from 'ava';
 import { makeExo } from '@endo/exo';
+import { make } from '@endo/hosted-agent/managed-credentials-module.js';
 import { M } from '@endo/patterns';
 
-import { make } from '../src/managed-credentials-module.js';
 import { provideManagedCredentials } from '../src/managed-credentials.js';
 
 test('managed grants read the current secret once and fail closed on revocation', async t => {
@@ -112,7 +112,7 @@ test('setup imports into the catalog and delegates only SecretBlob, never the to
       bindings.delete(name);
     },
     makeUnconfined: async (_worker, url, options) => {
-      t.true(url.endsWith('/managed-credentials-module.js'));
+      t.true(url.endsWith('/hosted-agent/src/managed-credentials-module.js'));
       t.deepEqual(options, {
         powersName: 'openrouter-auth-secret-read',
         resultName: 'openrouter-auth',

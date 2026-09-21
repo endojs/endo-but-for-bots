@@ -139,19 +139,27 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
       ['session-agent-one', guest],
       ['codex-backend', backend],
       [
-        'floot-sessions',
-        harden([
-          {
-            id: 'one',
-            title: 'One',
-            createdAt: 1,
-            presetId: 'general',
-            lifecycle,
-            ...(executionState ? { executionState } : {}),
-            backendId: 'test',
-            modelId: 'm',
-          },
-        ]),
+        'floot-private-turn-3-one-schema',
+        harden({ version: 1, sessionId: 'one' }),
+      ],
+      [
+        'floot-sessions-v1-00000000000000000000',
+        harden({
+          version: 1,
+          sequence: 0n,
+          sessions: [
+            {
+              id: 'one',
+              title: 'One',
+              createdAt: 1,
+              presetId: 'general',
+              lifecycle,
+              ...(executionState ? { executionState } : {}),
+              backendId: 'test',
+              modelId: 'm',
+            },
+          ],
+        }),
       ],
     ]),
   );
@@ -180,10 +188,6 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   });
   const session = await E(factory).getSession('one');
   await E(session).getTurns();
-  await E(session).resolveTurn(
-    'legacy-import',
-    'Fixture legacy evidence checked',
-  );
   if (!executionState) await until(() => inboxes.length > 0);
   return {
     session,

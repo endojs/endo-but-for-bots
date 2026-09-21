@@ -15,21 +15,12 @@ const plan = harden({
   workspaceMountPoint: '/private/a/workspace',
   mounterSocketDir: '/private/a/9p',
   containerMounts: [],
-  nativeProfile: {
-    uid: 1000,
-    gid: 1000,
-    memoryBytes: '536870912',
-    cpuQuotaMicros: '200000',
-    pids: 128,
-    cpuPeriodMicros: 100_000,
-    maxConcurrentOperations: 1,
-  },
 });
 
 test('Codex records placement without a volume lease or an MCP directory', t => {
   const parsed = readCodexSessionPlan(JSON.stringify(plan));
   t.is(parsed.sandboxSessionId, plan.sandboxSessionId);
-  t.is(parsed.nativeProfile.memoryBytes, 536_870_912n);
+  t.false(Object.hasOwn(parsed, 'nativeProfile'));
   t.false('mcpDir' in parsed);
   const foreign = { ...plan, workspaceDir: undefined };
   t.is(
@@ -90,4 +81,13 @@ test('a plan may pin its session to one of the provider’s subscriptions', t =>
       { message: /subscription must be auto or a subscription id/ },
     );
   }
+});
+
+test('retired per-session native profiles are refused rather than ignored', t => {
+  t.throws(
+    () => readCodexSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
+    {
+      message: /Retired nativeProfile field/,
+    },
+  );
 });

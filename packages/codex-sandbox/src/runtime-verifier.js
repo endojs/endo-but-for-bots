@@ -12,8 +12,25 @@ import {
   makeBrokerEnvironment,
 } from './app-server-transport.js';
 
+// Exact metadata of the shared development base, not caller-selected policy.
+// The image contract regression checks these values against its Containerfile.
+const knownImageEnv = harden({
+  PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  SOURCE_DATE_EPOCH: '1789862400',
+  NODE_VERSION: '22.23.2',
+  YARN_VERSION: '1.22.22',
+  LANG: 'C.UTF-8',
+  LC_ALL: 'C.UTF-8',
+  TZ: 'UTC',
+  CODEX_HOME: '/codex-home',
+});
+
 const PROBE = String.raw`
 import json,os,re,select,shutil,socket,subprocess,sys,tempfile,time
+def require(condition,category):
+    if not condition:
+        print("ENDO_CODEX_PROBE_FAILURE:"+category,file=sys.stderr)
+        raise AssertionError("probe requirement failed")
 def run(argv,timeout):
     child=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     output={child.stdout:bytearray(),child.stderr:bytearray()}
@@ -50,8 +67,8 @@ if "HOSTNAME" in observed:
     hostname=observed.pop("HOSTNAME")
     assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}",hostname)
     assert hostname==socket.gethostname(), "hostname metadata mismatch"
-assert observed==p["environment"], "environment mismatch: known="+",".join(k for k,v in p["environment"].items() if observed.get(k)!=v)+" unexpected-count="+str(len(set(observed)-set(p["environment"]))) 
-assert run(["codex","--version"],5).strip()=="codex-cli 0.152.0"
+require(observed==p["environment"], "environment")
+require(run(["codex","--version"],5).strip()=="codex-cli 0.152.0", "runtime-version")
 for name in ("auth.json","auth.json.lock"):
     assert not os.path.exists("/codex-home/"+name), "codex home holds "+name
 with socket.create_connection((p["host"],p["port"]),timeout=2): pass
@@ -89,23 +106,12 @@ print("CODEX_RUNTIME_PROBE_V1_OK")
  * @param {number} [options.timeoutMs]
  */
 export const makeCodexRuntimeVerifier = ({
-  imageEnvironment = {
-    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-    SOURCE_DATE_EPOCH: '1757376000',
-    NODE_VERSION: '22.19.0',
-    YARN_VERSION: '1.22.22',
-  },
+  imageEnvironment = knownImageEnv,
   timeoutMs = 30_000,
 } = {}) => {
   (Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 0x7fff_ffff) ||
     Fail`Invalid runtime probe deadline`;
   const imageEnv = harden({ ...imageEnvironment });
-  const knownImageEnv = harden({
-    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-    SOURCE_DATE_EPOCH: '1757376000',
-    NODE_VERSION: '22.19.0',
-    YARN_VERSION: '1.22.22',
-  });
   for (const [key, value] of Object.entries(imageEnv)) {
     (Object.hasOwn(knownImageEnv, key) && knownImageEnv[key] === value) ||
       Fail`Unapproved image environment`;
@@ -143,6 +149,7 @@ export const makeCodexRuntimeVerifier = ({
         });
         /** @type {any} */
         let proc;
+        let failureCategory;
         let expired = false;
         /** @type {ReturnType<typeof globalThis.setTimeout> | undefined} */
         let timer;
@@ -190,7 +197,7 @@ export const makeCodexRuntimeVerifier = ({
         };
         try {
           proc = await Promise.race([spawning, deadline]);
-          const [stdout, , result] = await Promise.race([
+          const [stdout, stderr, result] = await Promise.race([
             Promise.all([
               E(proc).stdout().then(collect),
               E(proc).stderr().then(collect),
@@ -198,6 +205,23 @@ export const makeCodexRuntimeVerifier = ({
             ]),
             deadline,
           ]);
+          // Never expose raw probe/child output or environment values. Only
+          // exact fixed diagnostic markers from our trusted probe are mapped.
+          if (result.code !== 0) {
+            if (
+              stderr
+                .split('\n')
+                .includes('ENDO_CODEX_PROBE_FAILURE:environment')
+            ) {
+              failureCategory = 'environment';
+            } else if (
+              stderr
+                .split('\n')
+                .includes('ENDO_CODEX_PROBE_FAILURE:runtime-version')
+            ) {
+              failureCategory = 'runtime-version';
+            }
+          }
           (result.code === 0 &&
             result.signal === null &&
             stdout === 'CODEX_RUNTIME_PROBE_V1_OK\n') ||
@@ -244,6 +268,12 @@ export const makeCodexRuntimeVerifier = ({
             } finally {
               globalThis.clearTimeout(cleanupTimer);
             }
+          }
+          if (failureCategory === 'environment') {
+            return Fail`Codex runtime verification failed: image environment mismatch`;
+          }
+          if (failureCategory === 'runtime-version') {
+            return Fail`Codex runtime verification failed: CLI version mismatch`;
           }
           return Fail`Codex runtime verification failed`;
         } finally {

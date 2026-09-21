@@ -25,10 +25,9 @@ import {
 const key = (...parts) => JSON.stringify(parts.flat());
 
 /**
- * A fake host. The inbox-form factory's own objects (`service`, `profile`,
- * `handle`, `readme.md`) and the legacy `fs-mounter` read as present so its
- * setup is skipped; `sandbox-factory`, `native-sandbox`, and `state-provider`
- * are minted unless seeded.
+ * A fake host with no preseeded legacy form services. Only the native runtime
+ * and state provider should be minted; old bindings may be explicitly seeded
+ * to verify that setup leaves retirement to the operator.
  */
 const makeFakeHost = () => {
   const bindings = new Map();
@@ -42,15 +41,6 @@ const makeFakeHost = () => {
   const removed = [];
   /** @type {string[][]} */
   const reads = [];
-  for (const name of [
-    'fs-mounter',
-    'service',
-    'profile',
-    'handle',
-    'readme.md',
-  ]) {
-    bindings.set(key('claude-sandbox', name), 'legacy');
-  }
   bindings.set(key('claude-sandbox'), 'dir');
   const seedFormula = (name, specifier, env) => {
     const id = `persisted-${name}`;
@@ -159,7 +149,32 @@ const runtimeEnv = directory =>
   });
 
 test.serial(
-  'mints the legacy factory, the native runtime over the runtime directory, and the state provider',
+  'leaves retained legacy bindings for explicit retirement',
+  async t => {
+    await withRuntime(t);
+    const { host, bindings, removed } = makeFakeHost();
+    const legacyNames = [
+      'sandbox-factory',
+      'fs-mounter',
+      'service',
+      'profile',
+      'handle',
+    ];
+    for (const name of legacyNames) {
+      bindings.set(key('claude-sandbox', name), `old-${name}`);
+    }
+    await main(host);
+    for (const name of legacyNames) {
+      t.is(bindings.get(key('claude-sandbox', name)), `old-${name}`);
+      t.false(
+        removed.some(parts => key(...parts) === key('claude-sandbox', name)),
+      );
+    }
+  },
+);
+
+test.serial(
+  'mints only the native runtime and state provider, without form infrastructure',
   async t => {
     const { runtimeDir, tmp } = await withRuntime(t);
     const { host, mints, stored, removed, bindings } = makeFakeHost();
@@ -167,16 +182,15 @@ test.serial(
     t.deepEqual(
       mints.map(mint => mint.options.resultName),
       [
-        ['claude-sandbox', 'sandbox-factory'],
         ['claude-sandbox', 'native-sandbox'],
         ['claude-sandbox', 'state-provider'],
       ],
     );
-    const [factory, native, state] = mints;
-    t.regex(factory.options.env.ENDO_SANDBOX_OWNER_ID, /^claude-[0-9a-f]{64}$/);
-    t.deepEqual(factory.options.env, {
-      ENDO_SANDBOX_OWNER_ID: factory.options.env.ENDO_SANDBOX_OWNER_ID,
-    });
+    const [native, state] = mints;
+    t.regex(
+      native.options.env.ENDO_SANDBOX_OWNER_ID,
+      /^claude-[0-9a-f]{64}-native$/,
+    );
     // The native service is constructed over a stored literal null and owns
     // the validated runtime directory itself under a derived label.
     t.is(native.specifier, nativeSandboxSpecifier);
@@ -186,7 +200,7 @@ test.serial(
     t.false(bindings.has(key('claude.null-powers')), 'alias removed');
     t.deepEqual(native.options.env, {
       ENDO_SANDBOX_RUNTIME_DIR: runtimeDir,
-      ENDO_SANDBOX_OWNER_ID: `${factory.options.env.ENDO_SANDBOX_OWNER_ID}-native`,
+      ENDO_SANDBOX_OWNER_ID: native.options.env.ENDO_SANDBOX_OWNER_ID,
       ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
       ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
     });
@@ -207,24 +221,20 @@ test.serial(
       ENDO_SANDBOX_GENERATED_MAX_BYTES: 'changed-and-ignored',
     });
     await main(host);
-    t.is(mints.length, 3);
+    t.is(mints.length, 2);
   },
 );
 
-test.serial(
-  'honors an explicit owner for both runtimes without resolving host identity',
-  async t => {
-    await withRuntime(t);
-    await withEnv(t, { ENDO_CLAUDE_SANDBOX_OWNER_ID: 'custom-claude-owner' });
-    const { host, mints } = makeFakeHost();
-    await main(host);
-    t.is(mints[0].options.env.ENDO_SANDBOX_OWNER_ID, 'custom-claude-owner');
-    t.is(
-      mints[1].options.env.ENDO_SANDBOX_OWNER_ID,
-      'custom-claude-owner-native',
-    );
-  },
-);
+test.serial('honors an explicit owner for the native runtime', async t => {
+  await withRuntime(t);
+  await withEnv(t, { ENDO_CLAUDE_SANDBOX_OWNER_ID: 'custom-claude-owner' });
+  const { host, mints } = makeFakeHost();
+  await main(host);
+  t.is(
+    mints[0].options.env.ENDO_SANDBOX_OWNER_ID,
+    'custom-claude-owner-native',
+  );
+});
 
 test.serial('hosts sharing a peer do not share cleanup ownership', async t => {
   await withRuntime(t);
@@ -245,7 +255,7 @@ test.serial('hosts sharing a peer do not share cleanup ownership', async t => {
     );
     // eslint-disable-next-line no-await-in-loop
     await main(host);
-    owners.push(fake.mints[1].options.env.ENDO_SANDBOX_OWNER_ID);
+    owners.push(fake.mints[0].options.env.ENDO_SANDBOX_OWNER_ID);
   }
   t.not(owners[0], owners[1]);
 });
@@ -305,8 +315,8 @@ test.serial(
     await main(fake.host);
     t.deepEqual(
       fake.mints.map(mint => mint.options.resultName[1]),
-      ['sandbox-factory'],
-      'only the legacy factory is minted',
+      [],
+      'no legacy factory is minted',
     );
     t.deepEqual(fake.stored, []);
     // A retained native runtime whose directory would contain guest storage is

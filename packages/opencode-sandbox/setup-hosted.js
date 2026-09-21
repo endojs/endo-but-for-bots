@@ -25,8 +25,6 @@
 //   ENDO_OPENCODE_SANDBOX_IMAGE — OCI rootfs (`oci:<image>` name); pinned to
 //     its digest through Podman when a broker is minted, ignored when one is
 //     retained
-//   ENDO_OPENCODE_NATIVE_PROFILE — the deployment resource profile (JSON)
-//     recorded into every session plan; required, no default
 //   ENDO_NINEP_SUDO=1, ENDO_NINEP_MOUNT_PROGRAM, ENDO_NINEP_UMOUNT_PROGRAM
 //     (or their unprefixed spellings; the ENDO_ spelling wins) — rootless
 //     mount settings recorded into every session plan for the session's own
@@ -79,7 +77,6 @@ import {
   readNativeSandbox,
   readSessionStorage,
   readSliceImageReference,
-  readStateProvider,
   resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
@@ -90,7 +87,6 @@ import { readOpencodeBrokerConfig } from './src/opencode-broker-service-agent.js
 import {
   isNormalizedAbsolutePath,
   readMounterEnv,
-  readNativeProfile,
 } from './src/opencode-session-plan.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
@@ -132,14 +128,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // switch: an upstream or listener failure is always logged there, since
   // the slice is only ever told 502.
   const diagnostics = env.ENDO_OPENCODE_DIAGNOSTICS === '1';
-  // The deployment resource profile is recorded into each session plan by the
-  // backend. It has no defaults; validate the operator's value before any
-  // mint so a malformed profile cannot reach a formula environment.
-  const nativeProfileText = env.ENDO_OPENCODE_NATIVE_PROFILE;
-  if (typeof nativeProfileText !== 'string') {
-    throw Fail`ENDO_OPENCODE_NATIVE_PROFILE is required: the backend records it into every session plan`;
-  }
-  readNativeProfile(JSON.parse(nativeProfileText));
   // The rootless mount settings a session's own 9P mounter needs, recorded
   // into every plan through the backend. A hosted daemon forwards only
   // ENDO_-prefixed variables to its ENDO_EXTRA subprocesses, so the mounter's
@@ -164,18 +152,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // existing secret from a possibly stale environment variable.
   const seedApiKey = env.ENDO_OPENROUTER_API_KEY || '';
 
-  // Every session's durable state is mounted through this provider; a backend
-  // minted without it would fail on first provision.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'state-provider'))) {
-    throw Fail`${q(`${SANDBOX_DIR}/state-provider`)} is missing — run setup-host.js first.`;
-  }
   // The native sandbox service is what session controllers acquire scopes from.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox'))) {
     throw Fail`${q(`${SANDBOX_DIR}/native-sandbox`)} is missing — run setup-host.js first.`;
   }
   const runtime = await readNativeSandbox(hostAgent);
-  const state = await readStateProvider(hostAgent);
-  // Like the state root, a retained storage owner's roots are the effective
+  // A retained storage owner's roots are the effective
   // ones: the backend must record sessions where that owner can remove them.
   // The current environment's roots apply only when the owner is minted now.
   const existingStorage = await E(hostAgent).has(
@@ -193,7 +175,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   isNormalizedAbsolutePath(mcpDir) ||
     Fail`ENDO_OPENCODE_MCP_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(mcpDir)}`;
   await assertRuntimePlacement(runtime.config.directory, {
-    stateDir: state.stateDir,
     workspaceDir,
     mcpDir,
   });
@@ -204,8 +185,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // (its entrypoint and persisted shape are verified here, not the kit's
   // predicates); otherwise everything the broker kit would refuse of the
   // operator's configuration is refused here, before any mint or directory
-  // creation, for the same reason as the storage roots and the profile
-  // above. Only asking Podman for an unpinned slice image's digest and
+  // creation, for the same reason as the storage roots above. Only asking Podman for an unpinned slice image's digest and
   // creating the broker directory wait for the mint.
   const existingBroker = await E(hostAgent).has(SANDBOX_DIR, 'broker-service');
   let brokerOwnerId = '';
@@ -289,23 +269,29 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   }
 
   // Session storage owner — the `storage` role the daemon owner records with
-  // each session and invokes inside record removal. Its powers is the state
-  // provider, so native state removal keeps that provider's marker checks.
+  // each session and invokes inside record removal. It has null powers:
+  // OpenCode's CLI database is ephemeral; the stack retains the transcript.
   if (existingStorage) {
     console.log(
       'Retaining OpenCode session storage with its persisted roots; current workspace and MCP roots are not reapplied.',
     );
   } else {
-    await mintWithPowersPath(hostAgent, {
-      powersPath: [SANDBOX_DIR, 'state-provider'],
-      temporary: 'opencode.state-provider-powers',
-      specifier: sessionStorageSpecifier,
-      resultName: [SANDBOX_DIR, 'session-storage'],
-      env: {
-        OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
-        OPENCODE_MCP_DIR: mcpDir,
-      },
-    });
+    const powersName = 'opencode.storage-null-powers';
+    if (await E(hostAgent).has(powersName))
+      await E(hostAgent).remove(powersName);
+    await E(hostAgent).storeValue(null, powersName);
+    try {
+      await E(hostAgent).makeUnconfined('@main', sessionStorageSpecifier, {
+        powersName,
+        resultName: [SANDBOX_DIR, 'session-storage'],
+        env: harden({
+          OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
+          OPENCODE_MCP_DIR: mcpDir,
+        }),
+      });
+    } finally {
+      await E(hostAgent).remove(powersName);
+    }
     console.log(`Minted ${SANDBOX_DIR}/session-storage`);
   }
 
@@ -331,7 +317,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     env: harden({
       OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
       OPENCODE_MCP_DIR: mcpDir,
-      OPENCODE_NATIVE_PROFILE: nativeProfileText,
       ...(mounterEnvText === undefined
         ? {}
         : { OPENCODE_MOUNTER_ENV: mounterEnvText }),

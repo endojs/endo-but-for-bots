@@ -438,13 +438,13 @@ export const main = async agent => {
   const factory = await E(agent).lookup(controllerPath);
   const sessions = await E(factory).listSessions();
   if (sessions.length === 0) {
-    await E(factory).createSession('New chat');
+    await E(factory).createSession({ title: 'New chat', spoken: true });
     console.log('Seeded a default session.');
   }
   console.log(
     `Ready (provider: ${provider}${model ? `, model: ${model}` : ''}${
       codePath ? `, code mount: ${codePath}` : ''
-    }). Look up "${dir}/controller" and call createSession()/listSessions().`,
+    }). Look up "${dir}/controller" and call createSession({})/listSessions().`,
   );
 };
 harden(main);
