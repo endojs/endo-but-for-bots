@@ -58,7 +58,16 @@ Ordinary commentary remains separate, and reasoning is excluded from answer
 speech and backend context restoration.
 This increment does not add reasoning extraction to the Codex, Claude, or
 direct-provider adapters; their ordinary progress is not relabeled as reasoning.
-Local regression tests pass; deployment of this increment remains pending.
+Local regression tests and the production UI build pass.
+Tokyo generation 150 runs `254cecea6`, including OpenCode-only normalization
+of the pinned bridge's legacy reasoning event name.
+The existing bridge uses `commentary-delta` exclusively for public reasoning;
+this normalization does not affect other backends' ordinary commentary.
+A live OpenCode/DeepSeek Floot turn completed and saved two reasoning items
+(396 and 43 characters), both with completion timestamps.
+The disposable test session was removed.
+UI regression tests verify default-collapsed content, escaping, completed
+duration, and session-isolated expansion state.
 
 ### Historical UA deployment — 2026-09-17
 
