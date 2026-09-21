@@ -33,8 +33,18 @@
 // backoff while someone is watching; it never stops the parts that can be read.
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { assertPassable } from '@endo/pass-style';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
+/** @import { Passable } from '@endo/pass-style' */
+
+/** @param {unknown} event */
+const wireEvent = event => {
+  const hardened = harden(event);
+  assertPassable(hardened);
+  // assertPassable validates at runtime but has no TS assertion signature.
+  return /** @type {Passable} */ (hardened);
+};
 
 // History metadata passes through unfiltered, so a bigint may one day ride in
 // it; `JSON.stringify` throws on one, and a throw here would stop a sync.
@@ -158,9 +168,9 @@ const makeViewers = (timers, onEmpty = () => {}) => {
   /** @type {Set<BufferedReaderKit>} */
   const views = new Set();
   let ended = false;
-  /** @param {BufferedReaderKit} view */
   /** @type {Map<BufferedReaderKit, unknown>} */
   const reapers = new Map();
+  /** @param {BufferedReaderKit} view */
   const drop = view => {
     if (!views.delete(view)) return;
     timers.clearTimeout(reapers.get(view));
@@ -170,8 +180,10 @@ const makeViewers = (timers, onEmpty = () => {}) => {
   return harden({
     /** @param {unknown} first the snapshot event */
     open(first) {
+      // Validate before allocating a reader or registering its reaper.
+      const snapshot = wireEvent(first);
       const view = makeBufferedReader();
-      view.push(harden(first));
+      view.push(snapshot);
       if (ended) {
         view.push(harden({ type: 'end' }));
         return view.reader;
@@ -192,9 +204,7 @@ const makeViewers = (timers, onEmpty = () => {}) => {
     },
     /** @param {unknown} event */
     publish(event) {
-      const hardened = /** @type {import('@endo/pass-style').Passable} */ (
-        harden(event)
-      );
+      const hardened = wireEvent(event);
       for (const view of [...views]) view.push(hardened);
     },
     end() {
@@ -372,11 +382,12 @@ export const makeSessionWatch = ({
       )
         .then(
           next => {
+            wireEvent(next);
             retryMs = RETRY_FIRST_MS;
             if (!loaded || !sameData(next, value)) {
+              viewers.publish(toEvent(next));
               value = next;
               loaded = true;
-              viewers.publish(toEvent(value));
             }
           },
           () => {
@@ -386,6 +397,9 @@ export const makeSessionWatch = ({
           },
         )
         .catch(error => {
+          isDirty = true;
+          suspended = true;
+          scheduleRetry();
           console.error(`[floot-watch] publishing ${what} failed:`, error);
         })
         .finally(() => {
@@ -432,14 +446,16 @@ export const makeSessionWatch = ({
   // before it is read: an emergency stop must not wait out a slow read.
   const publishUnordered = () => {
     const nextPending = readPending();
+    wireEvent(nextPending);
     if (!sameData(nextPending, pending)) {
+      viewers.publish({ type: 'pending', pending: nextPending });
       pending = nextPending;
-      viewers.publish({ type: 'pending', pending });
     }
     const nextExecution = readExecution();
+    wireEvent(nextExecution);
     if (!sameData(nextExecution, execution)) {
+      viewers.publish({ type: 'execution', execution: nextExecution });
       execution = nextExecution;
-      viewers.publish({ type: 'execution', execution });
     }
   };
 
@@ -457,6 +473,7 @@ export const makeSessionWatch = ({
           'The transcript',
           timers,
         );
+        wireEvent(messages);
         const previous = transcript;
         const delta = diffTranscript(
           previous ? previous.messages : [],
@@ -467,17 +484,17 @@ export const makeSessionWatch = ({
           delta.append.length > 0 ||
           delta.keep !== previous.messages.length;
         if (changed) {
-          transcriptVersion += 1;
-          transcript = { version: transcriptVersion, messages };
           // With no previous transcript every viewer holds none (it is dropped
           // only when nobody is watching, and otherwise absent because no read
           // has succeeded yet), so base 0 is what they can all apply.
           viewers.publish({
             type: 'transcript',
-            version: transcriptVersion,
+            version: transcriptVersion + 1,
             base: previous ? previous.version : 0,
             ...delta,
           });
+          transcriptVersion += 1;
+          transcript = { version: transcriptVersion, messages };
         }
         transcriptError = '';
         retryMs = RETRY_FIRST_MS;
@@ -499,14 +516,16 @@ export const makeSessionWatch = ({
     // what is running come only after it: a turn is reported gone once the
     // transcript that contains it has been.
     const nextTurn = readTurn();
+    wireEvent(nextTurn);
     if (nextTurn !== turn) {
+      viewers.publish({ type: 'turn', turn: nextTurn });
       turn = nextTurn;
-      viewers.publish({ type: 'turn', turn });
     }
     const nextRunning = readRunning();
+    wireEvent(nextRunning);
     if (!sameData(nextRunning, running)) {
+      viewers.publish({ type: 'running', running: nextRunning });
       running = nextRunning;
-      viewers.publish({ type: 'running', running });
     }
     publishUnordered();
     if (journalDirty) {
@@ -639,6 +658,7 @@ export const makeSessionListWatch = (loadSessions, timers = defaultTimers) => {
     }
     if (ended) return;
     retryMs = RETRY_FIRST_MS;
+    wireEvent(sessions);
     const next = new Map();
     for (const session of sessions) next.set(session.id, session);
     for (const id of published.keys()) {

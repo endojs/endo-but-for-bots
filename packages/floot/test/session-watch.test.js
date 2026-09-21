@@ -13,6 +13,41 @@ import {
 const user = text => harden({ role: 'user', content: text });
 const reply = text => harden({ role: 'assistant', content: text });
 
+test('session list rejects non-passable updates before delivering them', async t => {
+  t.timeout(5000);
+  /** @type {Array<{id: string, title?: string, invalid?: () => void}>} */
+  let sessions = [{ id: 'valid' }];
+  const watch = makeSessionListWatch(async () => sessions);
+  t.teardown(() => watch.end());
+  const reader = await watch.watch();
+  const stream = iterateReader(reader);
+  t.teardown(() => stream.return?.());
+  t.like((await stream.next()).value, { type: 'snapshot' });
+  sessions = [{ id: 'valid', invalid: () => {} }];
+  await t.throwsAsync(watch.watch(), {
+    message: /passable|remotable|function/i,
+  });
+  t.is(watch.viewers(), 1);
+  sessions = [{ id: 'valid', title: 'corrected' }];
+  const second = iterateReader(await watch.watch());
+  t.teardown(() => second.return?.());
+  t.like((await stream.next()).value, {
+    type: 'session',
+    session: { id: 'valid', title: 'corrected' },
+  });
+});
+
+test('session list rejects a non-passable initial reading without retaining a viewer', async t => {
+  const watch = makeSessionListWatch(async () => [
+    { id: 'invalid', invalid: () => {} },
+  ]);
+  t.teardown(() => watch.end());
+  await t.throwsAsync(watch.watch(), {
+    message: /passable|remotable|function/i,
+  });
+  t.is(watch.viewers(), 0);
+});
+
 for (const fails of [false, true]) {
   test(`session list end invalidates a held refresh without retry: fails=${fails}`, async t => {
     const pending = makePromiseKit();
@@ -132,6 +167,25 @@ const turns = async (count = 20) => {
     await null;
   }
 };
+
+test('invalid local session data cannot poison the next snapshot', async t => {
+  t.timeout(5000);
+  const { state, watch } = makeSources();
+  t.teardown(() => watch.end());
+  state.running = { input: 'same', invalid: () => {} };
+  await t.throwsAsync(watch.watch(), {
+    message: /passable|remotable|function/i,
+  });
+  t.is(watch.viewers(), 0);
+  // JSON comparison drops the function: validation must precede caching.
+  state.running = { input: 'same' };
+  const stream = iterateReader(await watch.watch());
+  t.teardown(() => stream.return?.());
+  t.like((await stream.next()).value, {
+    type: 'snapshot',
+    running: { input: 'same' },
+  });
+});
 
 const open = async watch => iterateReader(await watch.watch());
 const next = async view => (await view.next()).value;

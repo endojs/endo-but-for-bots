@@ -213,6 +213,13 @@ and retained workspaces stay outside per-session native cleanup.
 Current host startup owner-marker/name-prefix sweeps must be replaced with this
 exact ownership protocol before deployment. This is approved design direction,
 not an implemented or verified recovery capability.
+Independent host review also found port/UID-based process killing, recursive
+socket deletion, and mount-prefix lazy unmounts in `modules/endo-daemon.nix`.
+Daemon exit alone does not establish ownership or stop proof for these resources.
+The replacement must not retain these as fallback cleanup paths or inherit the
+existing unrestricted mount/umount sudo command surface.
+Verify pending launches and delegated descendants are stopped, and leave unknown
+resources untouched; unit inactivity alone is not a cleanup receipt.
 The runtime's exclusive owner symlink also lacked directory flushes.
 The local fix flushes directory ancestry before acquisition and the marker's
 directory before returning an effect-producing owner.
@@ -257,6 +264,21 @@ API documentation generation against the corrected declarations completed with
 3,148 errors and 152 warnings; this gate remains failing, separately from the
 passing clean declaration build. Incremental generation and documentation need
 further diagnosis; no repository-wide green-build claim is made.
+The documentation run repeatedly compiles root-project diagnostics in several
+package conversions; its error total is not a count of distinct defects.
+Three Floot source contract corrections cover optional cached-input usage,
+snapshot wire validation, and optional tool-preview truncation flags.
+Independent review rejected an unchecked snapshot cast: local callbacks can
+return non-passable values, and the buffer does not validate without a pattern.
+Snapshots and updates now share an explicit passability check before allocation
+or delivery. Validation precedes cache mutation and JSON equality checks so
+invalid local data cannot poison later snapshots; detached read failures remain
+retryable. The 36 focused account-tool/session-watch/tool-evidence tests pass,
+including invalid initial/update data and same-JSON corrected-data recovery.
+The full Floot suite passes all 449 tests; scoped ESLint has no errors.
+Package TypeScript checking no longer reports Floot `src` diagnostics, but still
+fails on test fixtures; this is not a passing package type gate.
+The changes add no stored state, formula lifecycle, or provider effects.
 Daemon publication fix: nine tests exercise pending/failed persistence with
 absent and existing names, successful publication, failed-publication collection,
 and an actual daemon process restart.
@@ -1245,6 +1267,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-21 | Correct Floot source contracts and validate watch events before caching; expand host cleanup audit | 36 focused tests pass; review found unchecked snapshot typing and invalid-data cache poisoning, both corrected; test fixture type errors remain; native recovery integration and deployment pending |
 | 2026-09-21 | Correct cross-package type contracts and separate the setup pool flag from runtime authority | Clean root declaration build passes; 170 hosted-agent tests independently pass plus 59 UI, 11 Claude, and 19 Codex tests; scoped lint and independent source review pass; docs and incremental declaration generation remain failing; not deployed |
 | 2026-09-21 | Durable pool identity prerequisite: bind actual capabilities before credential activation | 23 shared and one real-daemon restart test pass independently; read/write uncertainty fenced; full retirement/exclusion and deployment pending |
 | 2026-09-21 | Daemon durability: disposal/collection fences and stale-read invalidation | 32 tests and independent review pass; disposal precedes reclamation; module-specific drains and Tokyo deployment pending |
