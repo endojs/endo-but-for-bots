@@ -330,7 +330,7 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [hosted-agent-subscriptions](hosted-agent-subscriptions.md) | 2026-09-20 | 2026-09-21 | In Progress — phases 1 to 6 implemented; Claude and Codex pools deployed. Claude memory-only access tokens, direct usage and restart renewal passed two-account Tokyo acceptance at `00799f3f5`. Secondary Codex needs fresh login; live exhaustion handover and soak remain. |
-| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-22 | In Progress — one session provisioner and factory shared by the three adapters (2026-09-22); shared harness image deployment and broader conformance pending; [architecture audit/remediation register](../packages/floot/ARCHITECTURE-AUDIT.md) records open FA-01–FA-13 findings and compatibility-free retirement plan |
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-22 | In Progress — one session provisioner, factory and execution envelope shared by the three adapters (2026-09-22); shared harness image deployment and broader conformance pending; [architecture audit/remediation register](../packages/floot/ARCHITECTURE-AUDIT.md) records open FA-01–FA-13 findings and compatibility-free retirement plan |
 | [hosted-native-recovery-investigation](hosted-native-recovery-investigation.md) | 2026-09-21 | 2026-09-21 | Proposed — separate research follow-up; producer architecture not selected |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |

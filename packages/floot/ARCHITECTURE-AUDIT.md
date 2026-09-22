@@ -101,6 +101,7 @@ No claim of complete retrospective coverage is made yet.
 | Model admission and account catalogs | Implemented locally: each pool member's catalog owner is per incarnation and deliberately ephemeral (`model-catalog.js`); admission and `modelCatalog()` read it through the member's fenced lifecycle with a non-sticky credential facet; retirement closes it after draining a read in flight, and a far share's read has a deadline; a retained broker configuration carrying an operator `models` list is refused with the retirement instruction. Twenty-four new focused tests, 656 hosted-agent tests and the real-daemon catalog reconstruction test pass. | Reconstruction re-reads the provider under the same credential owner and cannot revive retired authority or spend; the durable pin stays in the session plan. Retire and re-mint the three brokers at cutover; observe live Codex, Claude and OpenRouter catalog reads on Tokyo. Not deployed. |
 | Backend catalogs and pin admission | Implemented locally: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Not deployed. |
 | Session provisioning and factory (FA-06) | Implemented locally: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Not deployed; deploy with a state wipe. |
+| Execution envelope (FA-06) | Implemented locally: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Not deployed. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -421,7 +422,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed and inventoried producers retired; acceptance pending |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
-| FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner and one factory own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion (2026-09-22, not deployed); open: the native controllers' execution envelope, where Codex alone verifies raw placement |
+| FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22, not deployed; completion criteria met locally, pending deployment and acceptance) |
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
@@ -782,6 +783,59 @@ and post-handoff verification, where Codex alone verifies raw placement); that
 is the next FA-06 slice.
 A pre-existing Codex controller test that still expected the CLI home path
 from before the allocation rewrite was corrected in its own commit.
+
+### One execution envelope — 2026-09-22
+
+Implemented locally and reviewed; not deployed.
+`@endo/hosted-agent/execution-envelope.js` owns what the three native
+controllers did in the same order with the same checks: acquire the sandbox
+scope and the broker scope, hold the grant and the broker's evidence to the
+recorded image, account, model and network policy, prepare the runtime's
+state, project the recorded workspace through the session's own 9P mounter,
+stand up the runtime's tools, compose the attested mount table (resolver row
+first when the policy is public, workspace, the runtime's binds, the
+temporary mounts, the session's declared attaches), ask for the slice, and
+check the slice twice, raw placement and then the hosted contract.
+Each controller now declares its broker scope request, its pinned image, its
+state, its tools, its binds and their roots, its attaches, its slice
+environment and its policy binding, then builds its client; Codex runs its
+runtime verifier and audit event after the envelope returns.
+The three controllers fell from 1,155 to 756 lines against
+424 shared lines, and the provider-grant check and the canonical JSON
+encoder moved from Codex into hosted-agent (`provider-grant.js`,
+`canonical-json.js`, with Codex re-exporting both under its old names), as
+did a copy-data assertion (`copy-data.js`) the plan reader and the envelope
+use without depending on the daemon package.
+
+Where the three had drifted, the stricter rule now holds for all: the exact
+provider-grant check, the exact evidence check and the raw slice attestation
+check, each previously Codex-only, apply to Claude and OpenCode too. The
+review verified against the shared grant issuer and the sandbox's attestation
+builder that a real grant, evidence record and slice for each adapter satisfy
+them (the issuer reports the same nine evidence fields for every adapter; the
+attestation reports the mount options in the order the check expects and the
+limits the resources request). The review found one defect, fixed: the first
+draft required an OAuth grant for every Claude session recorded with a
+subscription token, but the broker reports OAuth only in pool mode, so a
+single-token subscription session would have failed activation; the grant's
+mode is now held to the broker's own, and the test fixture reports what the
+issuer does. Restored from Codex: the evidence's network must equal the
+grant's, not merely be well formed. Added: the sidecar container the evidence
+names is checked in shape before use.
+Tests: a hosted-agent suite drives the envelope with a fake resolver through
+the acquisition order, the mount table, the slice options, and refusals of
+another image, missing public evidence, evidence naming another grant or
+proxy, a grant for another account or model, and a slice whose raw
+attestation differs (10 cases); the three controller suites pass unchanged in
+their expectations once their fixtures report the full grant and evidence
+records and the attestation shape a runtime reports. hosted-agent 674, Claude
+203, Codex 306 and OpenCode 250 tests pass; ESLint gates clean; hosted-agent
+types pass.
+FA-06's completion criteria are met locally: one implementation owns each
+common invariant of provisioning, the factory and the envelope, and the
+conformance suite runs all three adapters through partial acquisition
+failure, stop and retry, restart and deletion. Deployment and acceptance on
+Tokyo follow the wipe model.
 
 ## FA-07 — Separate runtime, provider, account, and route
 
@@ -1635,6 +1689,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | FA-06: one execution envelope in hosted-agent for the three native controllers; the provider-grant check and the canonical JSON encoder move from Codex into hosted-agent; exact grant, evidence and raw placement checks apply to every runtime | Envelope suite (10 cases); hosted-agent 674, Claude 203, Codex 306, OpenCode 250 pass; ESLint gates clean; hosted-agent types pass; independent adversarial review verified the checks against the real issuer and sandbox attestation builder and found one defect (Claude's single-token subscription sessions would have required an OAuth grant), fixed; FA-06 completion criteria met locally; not deployed |
 | 2026-09-22 | FA-06: one session provisioner and one backend factory in hosted-agent; the three adapters declare their differences; shared placement reader and subscription lister; Claude/OpenCode setup refuse non-normalized or overlapping protected directories | Shared conformance suite (20, 20 and 19 cases across Claude, Codex and OpenCode); Claude 203, Codex 306, OpenCode 250 and hosted-agent 664 pass; package ESLint gates clean; hosted-agent types pass; independent adversarial review found a setup gap and a spread-order footgun, both fixed; the native controllers' envelope is the next slice; not deployed |
 | 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
 | 2026-09-22 | UI follow-up from the operator: the backend's public thinking folds into the same collapsed actions group as its tool calls, with the thought's duration on the group's head (live while it streams) and the reasoning one click further in; groups are keyed by session so an open one does not come up open elsewhere | space-floot 52 and chat 935 pass; independent review found a lint error, thought text styled as scrolling monospace code, and a preview that could read reasoning as a shell command, all fixed; deployed as generation 163 (`4411c058e`), discovery gate passed |

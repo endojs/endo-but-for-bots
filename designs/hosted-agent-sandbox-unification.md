@@ -21,8 +21,12 @@ run facet. The stricter rule won wherever the copies had drifted: protected
 roots and canonical placement on every provision, revisable subscription pins,
 derived sandbox ids, no unknown plan fields, one session-id spelling. A shared
 conformance suite runs all three adapters through the lifecycle (audit FA-06).
-The native controllers' execution envelope is the next extraction. Implemented
-and reviewed locally; not deployed.
+The same day the native controllers' execution envelope followed
+(`execution-envelope.js`): scope acquisition, the exact grant and evidence
+checks, the workspace projection, the mount table, slice construction and both
+handoff checks are shared, and the raw placement and exact grant checks Codex
+alone applied now hold for every runtime. FA-06's completion criteria are met
+locally. Implemented and reviewed locally; not deployed.
 
 ### Architecture audit and remediation tracking — 2026-09-21
 
