@@ -31,8 +31,8 @@ identifier. This document specifies that server: how the formula id is threaded
 from the configuration into the server process, how the server reaches the guest
 capability through the ordinary daemon client, how the tool catalog is derived and
 pinned, what happens when the child dies, how the tool names survive the denied
-built-in set without colliding with the reconciled reserved names — and, honestly,
-which confinement properties are structural under this transport and which become
+built-in set without colliding with the reconciled reserved names, and which
+confinement properties are structural under this transport and which become
 runtime.
 
 ### Why this is its own document, not an extension of an existing one
@@ -235,10 +235,9 @@ available only where it is not. Stated honestly, per property:
   daemon, so it cannot resolve *any* guest — its own or another — except by asking
   the harness-held connection, which is pinned to its one facet.
 
-**How this constrains where the connection-holding process may live.** The 2026-09-17
-simplification collapsed the earlier adapter+broker pair into one claude-spawned
-process that holds the daemon connection. Under the confinement premise above that
-collapse is only sound where `claude` is **not** being confined against the daemon
+**How this constrains where the connection-holding process may live.** A single
+claude-spawned process that both serves MCP and holds the daemon connection is
+only sound under the confinement premise above where `claude` is **not** being confined against the daemon
 socket — a single-tenant, non-adversarial deployment where the guest resolving its
 own id over a reachable socket is acceptable and there is no sibling to reach. It is
 **not** sound for the confined, potentially-adversarial case, where the socket must
@@ -250,7 +249,7 @@ electing one as canonical:
 
 1. **Harness-owned connection (the confined, structural case).** The daemon
    connection is held by a harness-owned process outside the confined tree — either
-   the earlier draft's two-process broker, or, better, a daemon that hands that
+   a two-process broker, or, better, a daemon that hands that
    process a bootstrap **already scoped to the one guest** (the ocapn offset-0
    gateway brought forward over the daemon UDS: a guest-scoped agent rather than the
    host root, so the connection resolves only this guest and exposes no enumeration
@@ -433,9 +432,9 @@ reasons make this correct rather than a limitation:
    — a fresh process per `claude -p` inference (§ *The stdio transport*) — a
    legitimately changed grant is simply picked up by the **next** inference's fresh
    snapshot. There is no long-lived broker whose pinned value could outlast a grant
-   change, so the earlier draft's "tear down and reconstruct the broker on
-   reprovision" obligation and its capability-gated-re-pin open question both
-   dissolve: staleness cannot exceed one inference's lifetime. Continuity of a long
+   change, so no "tear down and reconstruct the broker on
+   reprovision" obligation and no capability-gated-re-pin question arise:
+   staleness cannot exceed one inference's lifetime. Continuity of a long
    line of thought is an Endo-side capability, never live catalog mutation.
 
 ## The stdio transport
@@ -725,7 +724,7 @@ positive-confinement test. An implementation is accepted only when these pass.
 | [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, the `initialize` response *shape*, and the `mcp__<server>__<tool>` naming *grammar* (each transport pins its own `serverInfo.name`, `endo` here vs `endo-gateway` there); differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
 | [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
 | Endo daemon (`@endo/daemon`, `packages/where`) | **Session substrate.** Provides the client (`makeEndoClient` over `whereEndoSock(...)`, `getBootstrap`, `E(bootstrap).host()`) and the bootstrap root host against which `E(host).lookupById(formulaId)` (guarded `M.call(IdShape)` on `HostInterface`) resolves the formula id to a facet — the existing surface that reaches one guest with no new daemon method. A **daemon obligation for the confined shape** (direction set, PR #1226): publish a per-session, formula-id-scoped bootstrap (the ocapn offset-0 gateway brought forward) so the connection resolves only the one guest and carries no host authority into the confined tree; until then the confined shape rides the harness-owned broker narrowing a host-root connection (Open Questions). |
-| [endo-posix-sandbox](endo-posix-sandbox.md) | **The confinement boundary (load-bearing).** Owns the per-spawn `bwrap` slice confining `claude`. The premise (PR #1226): the slice must **deny the confined `claude` tree the daemon socket and all system resources** — via the `none`/`private` network profile and filesystem-namespace isolation that keep the socket path out of the slice — forcing all authority through the MCP surface; **if `claude` can open an arbitrary domain socket, this design is forfeit**. Consequence: in the confined shape the daemon-connection process runs **outside** the slice (§ *Scoping*). The earlier draft's per-guest-socket re-mount and per-guest-uid `SO_PEERCRED` machinery stay withdrawn; the remaining obligation is to confirm the slice denies `claude` the socket while the harness-owned connection process reaches it from outside. |
+| [endo-posix-sandbox](endo-posix-sandbox.md) | **The confinement boundary (load-bearing).** Owns the per-spawn `bwrap` slice confining `claude`. The premise (PR #1226): the slice must **deny the confined `claude` tree the daemon socket and all system resources** — via the `none`/`private` network profile and filesystem-namespace isolation that keep the socket path out of the slice — forcing all authority through the MCP surface; **if `claude` can open an arbitrary domain socket, this design is forfeit**. Consequence: in the confined shape the daemon-connection process runs **outside** the slice (§ *Scoping*). This design carries no per-guest-socket re-mount or per-guest-uid `SO_PEERCRED` machinery; the remaining obligation is to confirm the slice denies `claude` the socket while the harness-owned connection process reaches it from outside. |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
 | `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming convention, adopted (not a construction gate).** This server adopts its flat interface-native camelCase convention; it does **not** key any fail-closed construction throw on that PR's reserved-name list. A bare-name collision against its reservations is at most an advisory warning here. |
 
