@@ -7,15 +7,14 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { FlootApp } from '@endo/space-floot';
+import { makeReplyFold } from '@endo/floot/src/reply-fold.js';
+import { applyTranscript } from '@endo/floot/src/transcript-delta.js';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
 import { makeFlootNetwork } from './floot-network.js';
 import { makeFlootExecution } from './floot-execution.js';
-import {
-  applyTranscriptEvent,
-  normalizePending,
-} from './floot-session-state.js';
+import { normalizePending } from './floot-session-state.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -94,9 +93,7 @@ export const contextPercent = usage => {
 };
 
 /**
- * @typedef {{ role: 'assistant' | 'tool' | 'thinking', text?: string, id?: string,
- *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
- *   name?: string, args?: string, result?: string | null }} TurnMessage
+ * @typedef {import('@endo/floot/src/reply-fold.js').FoldedMessage} TurnMessage
  * @typedef {{
  *   sessionId: string,
  *   ref: Promise<any>,
@@ -148,10 +145,6 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   const listeners = new Set();
   /** @type {TurnMessage[]} */
   const messages = [];
-  // Tool calls in one batch run concurrently, so results arrive out of order —
-  // track each pending call by its id and pair its result back by id.
-  /** @type {Map<string, TurnMessage>} */
-  const pendingTools = new Map();
   let stopped = false;
   /** @type {() => void} */
   let resolveDone = () => {};
@@ -212,112 +205,38 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   };
   registry.set(key, turn);
 
+  // The same fold the daemon runs: a view opens on the turn's state as of
+  // the moment `watch()` ran, so no event is lost to the round trip and a
+  // reattaching component repaints a turn already in progress; the events
+  // after it are applied the way the daemon applied them. Usage is projected
+  // to the counts this component shows.
+  const fold = makeReplyFold({
+    projectUsage: reported => ({
+      ...usageOf(reported),
+      turns: reported.turns,
+      incompleteTurns: reported.incompleteTurns || 0,
+    }),
+  });
   (async () => {
     try {
       for await (const raw of await repliesP) {
         const value = /** @type {any} */ (raw);
         if (value.type === 'snapshot') {
-          // A view opens on the turn's state as of the moment `watch()` ran, so
-          // no event is lost to the round trip and a reattaching component
-          // repaints a turn already in progress. Adopt it wholesale.
-          const { status } = value;
-          messages.length = 0;
-          // The snapshot arrives hardened; a pending tool message is still
-          // waiting for its result to be written into it, so keep copies.
-          messages.push(
-            ...status.messages.map((/** @type {TurnMessage} */ message) => ({
-              ...message,
-            })),
-          );
-          pendingTools.clear();
-          for (const message of messages) {
-            if (message.role === 'tool' && message.id && !message.result) {
-              pendingTools.set(message.id, message);
-            }
-          }
-          turn.streamingText = status.streamingText;
-          turn.phase = status.phase;
-          turn.usage = status.usage;
-          turn.error = status.error;
+          fold.adopt(turn, value.status);
           emit({ type: 'snapshot' });
-        } else if (value.type === 'delta') {
-          turn.streamingText += value.text;
-          emit({ type: 'delta' });
-        } else if (value.type === 'final') {
-          turn.streamingText = value.text;
-          emit({ type: 'final' });
-        } else if (value.type === 'thinking') {
-          if (turn.streamingText.trim())
-            messages.push({
-              role: 'assistant',
-              text: turn.streamingText.trim(),
-            });
-          turn.streamingText = '';
-          let message = messages.find(
-            item => item.role === 'thinking' && item.id === value.id,
-          );
-          if (!message) {
-            message = { role: 'thinking', id: value.id, text: '' };
-            messages.push(message);
-          }
-          message.text = `${message.text || ''}${value.text}`;
-          message.thinking = {
-            startedAt: value.startedAt,
-            endedAt: value.endedAt,
-            truncated: value.truncated,
-          };
-          emit({ type: 'thinking' });
-        } else if (value.type === 'tool_call') {
-          if (turn.streamingText.trim()) {
-            messages.push({
-              role: 'assistant',
-              text: turn.streamingText.trim(),
-            });
-          }
-          turn.streamingText = '';
-          const toolMsg = {
-            role: /** @type {const} */ ('tool'),
-            id: value.id,
-            name: value.name,
-            args: value.args,
-            result: /** @type {string | null} */ (null),
-          };
-          pendingTools.set(value.id, toolMsg);
-          messages.push(toolMsg);
-          emit({ type: 'tool_call' });
-        } else if (value.type === 'tool_result') {
-          const toolMsg = pendingTools.get(value.id);
-          if (toolMsg) {
-            toolMsg.result = value.result;
-            pendingTools.delete(value.id);
-          }
-          emit({ type: 'tool_result' });
-        } else if (value.type === 'phase') {
-          turn.phase = value.phase;
-          emit({ type: 'phase' });
-        } else if (value.type === 'usage') {
-          turn.usage = {
-            ...usageOf(value),
-            turns: value.turns,
-            incompleteTurns: value.incompleteTurns || 0,
-          };
-          emit({ type: 'usage' });
-        } else if (value.type === 'end') {
-          break;
-        } else if (value.type === 'abort') {
-          turn.error = value.reason;
-          emit({ type: 'abort' });
-          break;
+          // eslint-disable-next-line no-continue
+          continue;
         }
-      }
-      if (turn.streamingText.trim()) {
-        messages.push({ role: 'assistant', text: turn.streamingText.trim() });
-        turn.streamingText = '';
+        const terminal = fold.apply(turn, value);
+        if (value.type === 'end') break;
+        emit({ type: value.type });
+        if (terminal) break;
       }
     } catch (err) {
       turn.error = /** @type {Error} */ (err)?.message || String(err);
       emit({ type: 'abort' });
     } finally {
+      fold.finish(turn);
       turn.done = true;
       if (registry.get(key) === turn) registry.delete(key);
       emit({ type: 'done' });
@@ -1459,7 +1378,7 @@ export const flootComponent = (
     if (snapshot || event.type === 'transcript') {
       const delta = snapshot ? event.transcript : event;
       if (delta) {
-        const next = applyTranscriptEvent(
+        const next = applyTranscript(
           snapshot ? null : session.transcript,
           delta,
         );

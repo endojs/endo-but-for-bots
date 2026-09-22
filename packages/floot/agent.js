@@ -62,6 +62,7 @@ import {
   hostedTurnPartialOf,
   runHostedTurn,
 } from './src/hosted-turn.js';
+import { hostedTurnMessages } from './src/turn-messages.js';
 import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
@@ -991,64 +992,16 @@ export const makeStreamingAgent = async (
       await assertTurnToolsSettled(turnId);
       const current = await loadUsage();
       const nextUsage = totalsWithTurn(current, turnUsage);
-      const messages = receivedMail ? [] : [...inputMessages];
-      // A hosted backend that reports segments preserves the real interleaving
-      // of text and tool rounds; grouping every call into one assistant message
-      // and concatenating every text run made the transcript read as one long
-      // answer with all tools at the end (and joined split sentences like
-      // "Let me write the review.REVIEW-COMPLETE").
-      const appendToolRound = calls => {
-        messages.push({
-          role: 'assistant',
-          content: '',
-          tool_calls: calls.map(call => ({
-            id: call.id,
-            type: 'function',
-            function: { name: call.name, arguments: call.args },
-          })),
-        });
-        messages.push(
-          ...calls.map(call => ({
-            role: 'tool',
-            tool_call_id: call.id,
-            content: call.result ?? '',
-          })),
-        );
-      };
-      if (segments && segments.length > 0) {
-        for (const segment of segments) {
-          if (segment.type === 'text') {
-            if (segment.text) {
-              messages.push({ role: 'assistant', content: segment.text });
-            }
-          } else if (segment.type === 'thinking') {
-            messages.push({
-              role: 'thinking',
-              content: segment.text,
-              thinking: {
-                startedAt: segment.startedAt,
-                endedAt: segment.endedAt,
-                truncated: segment.truncated,
-              },
-            });
-          } else if (segment.type === 'compaction') {
-            // The boundary the backend drew, kept in place. `projectTranscript`
-            // carries it into the record stream, where its position is what
-            // tells a restored session which span is still live context.
-            messages.push({
-              role: 'compaction',
-              content: segment.summary || '',
-            });
-          } else {
-            appendToolRound(segment.calls);
-          }
-        }
-      } else {
-        if (toolCalls.length > 0) {
-          appendToolRound(toolCalls);
-        }
-        messages.push({ role: 'assistant', content: replyText });
-      }
+      // The completed answer always goes on record, even an empty one.
+      const messages = [
+        ...(receivedMail ? [] : inputMessages),
+        ...hostedTurnMessages({
+          replyText,
+          toolCalls,
+          segments,
+          recordEmptyReply: true,
+        }),
+      ];
       // Commit the external answer and accounting as a unit. Typed incoming
       // mail was recorded separately; ordinary input remains atomic with its
       // answer, so a failed runtime call cannot leave an orphaned UI turn.
@@ -1109,63 +1062,10 @@ export const makeStreamingAgent = async (
       toolCalls = [],
       segments = undefined,
     ) => {
-      const messages = receivedMail ? [] : [...inputMessages];
-      const appendToolRound = calls => {
-        messages.push({
-          role: 'assistant',
-          content: '',
-          tool_calls: calls.map(call => ({
-            id: call.id,
-            type: 'function',
-            function: { name: call.name, arguments: call.args },
-          })),
-        });
-        messages.push(
-          ...calls.map(call => ({
-            role: 'tool',
-            tool_call_id: call.id,
-            // A call the turn ended before settling: say so, rather than
-            // record an empty result that reads as a tool still running.
-            content: call.result ?? UNSETTLED_TOOL_RESULT,
-          })),
-        );
-      };
-      if (segments && segments.length > 0) {
-        for (const segment of segments) {
-          if (segment.type === 'text') {
-            if (segment.text) {
-              messages.push({ role: 'assistant', content: segment.text });
-            }
-          } else if (segment.type === 'thinking') {
-            messages.push({
-              role: 'thinking',
-              content: segment.text,
-              thinking: {
-                startedAt: segment.startedAt,
-                endedAt: segment.endedAt,
-                truncated: segment.truncated,
-              },
-            });
-          } else if (segment.type === 'compaction') {
-            // The boundary the backend drew, kept in place. `projectTranscript`
-            // carries it into the record stream, where its position is what
-            // tells a restored session which span is still live context.
-            messages.push({
-              role: 'compaction',
-              content: segment.summary || '',
-            });
-          } else {
-            appendToolRound(segment.calls);
-          }
-        }
-      } else {
-        if (toolCalls.length > 0) {
-          appendToolRound(toolCalls);
-        }
-        if (replyText) {
-          messages.push({ role: 'assistant', content: replyText });
-        }
-      }
+      const messages = [
+        ...(receivedMail ? [] : inputMessages),
+        ...hostedTurnMessages({ replyText, toolCalls, segments }),
+      ];
       if (messages.length === 0) return;
       const node = await tree.addNode(baseLeafId, messages, { turnId });
       cachedLeaf = node.id;

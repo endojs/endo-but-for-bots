@@ -22,23 +22,14 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { M } from '@endo/patterns';
 
+import { makeReplyFold } from './reply-fold.js';
 import { makeReplyChannel } from './stream.js';
 import { speakTurn } from './turn-speech.js';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
 /** @import { ReplyEvent } from './stream.js' */
 
-/**
- * @typedef {{
- *   role: 'assistant' | 'tool' | 'thinking',
- *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
- *   text?: string,
- *   id?: string,
- *   name?: string,
- *   args?: string,
- *   result?: string | null,
- * }} TurnMessage
- */
+/** @typedef {import('./reply-fold.js').FoldedMessage} TurnMessage */
 
 /**
  * @typedef {import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number, incompleteTurns: number }} TurnUsage
@@ -108,82 +99,21 @@ const snapshotOf = status =>
  *   or null if it was closed without one.
  */
 const drainReplyReader = async (reader, status, emit) => {
-  /** @type {Map<string, TurnMessage>} */
-  const pendingTools = new Map();
+  const fold = makeReplyFold();
   /** @type {ReplyEvent | null} */
   let terminal = null;
-
-  const flushStreamingText = () => {
-    if (status.streamingText.trim()) {
-      status.messages.push({
-        role: 'assistant',
-        text: status.streamingText.trim(),
-      });
+  try {
+    for await (const raw of iterateReader(reader, { buffer: 8 })) {
+      const event = /** @type {ReplyEvent} */ (raw);
+      if (event.type !== 'end' && event.type !== 'abort') emit(event);
+      terminal = fold.apply(status, event) ?? null;
+      if (terminal) break;
     }
-    status.streamingText = '';
-  };
-
-  for await (const raw of iterateReader(reader, { buffer: 8 })) {
-    const event = /** @type {any} */ (raw);
-    if (event.type !== 'end' && event.type !== 'abort') emit(event);
-    if (event.type === 'delta') {
-      status.streamingText += event.text;
-    } else if (event.type === 'final') {
-      status.streamingText = event.text;
-    } else if (event.type === 'thinking') {
-      flushStreamingText();
-      let message = status.messages.find(
-        item => item.role === 'thinking' && item.id === event.id,
-      );
-      if (!message) {
-        message = { role: 'thinking', id: event.id, text: '' };
-        status.messages.push(message);
-      }
-      message.text = `${message.text || ''}${event.text}`;
-      message.thinking = {
-        startedAt: event.startedAt,
-        ...(event.endedAt === undefined ? {} : { endedAt: event.endedAt }),
-        truncated: event.truncated,
-      };
-    } else if (event.type === 'tool_call') {
-      // The assistant text that preceded the call is a finished message: a tool
-      // round follows it, and more text after that is a separate message.
-      flushStreamingText();
-      /** @type {TurnMessage} */
-      const toolMessage = {
-        role: 'tool',
-        id: event.id,
-        name: event.name,
-        args: event.args,
-        result: null,
-      };
-      pendingTools.set(event.id, toolMessage);
-      status.messages.push(toolMessage);
-    } else if (event.type === 'tool_result') {
-      // Concurrent calls in one round settle out of order, so pair by id.
-      const toolMessage = pendingTools.get(event.id);
-      if (toolMessage) {
-        toolMessage.result = event.result;
-        pendingTools.delete(event.id);
-      }
-    } else if (event.type === 'phase') {
-      status.phase = event.phase;
-    } else if (event.type === 'usage') {
-      const { type: _type, ...reported } = event;
-      status.usage = {
-        ...reported,
-        incompleteTurns: event.incompleteTurns || 0,
-      };
-    } else if (event.type === 'end') {
-      terminal = event;
-      break;
-    } else if (event.type === 'abort') {
-      status.error = event.reason;
-      terminal = event;
-      break;
-    }
+  } finally {
+    // Whatever assistant text was still arriving is a message now, even
+    // when the channel failed under it.
+    fold.finish(status);
   }
-  flushStreamingText();
   return terminal;
 };
 

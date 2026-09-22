@@ -34,6 +34,11 @@
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { assertPassable } from '@endo/pass-style';
+import {
+  applyTranscript,
+  diffTranscript,
+  sameData,
+} from './transcript-delta.js';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
 /** @import { Passable } from '@endo/pass-style' */
@@ -45,15 +50,6 @@ const wireEvent = event => {
   // assertPassable validates at runtime but has no TS assertion signature.
   return /** @type {Passable} */ (hardened);
 };
-
-// History metadata passes through unfiltered, so a bigint may one day ride in
-// it; `JSON.stringify` throws on one, and a throw here would stop a sync.
-const canonical = value =>
-  JSON.stringify(value, (_key, item) =>
-    typeof item === 'bigint' ? `${item}n` : item,
-  );
-const sameData = (left, right) =>
-  left === right || canonical(left) === canonical(right);
 
 // A load that never answers must not stop every later event. These are well
 // past anything a healthy read takes; a read that exceeds one is treated as
@@ -117,46 +113,10 @@ const within = (promise, ms, what, timers) =>
     );
   });
 
-/**
- * How to turn one transcript into another: keep the first `keep` messages and
- * append the rest. A finished turn appends; a resolution rewrites the tail.
- *
- * @param {readonly unknown[]} previous
- * @param {readonly unknown[]} next
- * @returns {{ keep: number, append: unknown[] }}
- */
-export const diffTranscript = (previous, next) => {
-  const limit = Math.min(previous.length, next.length);
-  let keep = 0;
-  while (keep < limit && sameData(previous[keep], next[keep])) keep += 1;
-  return harden({ keep, append: next.slice(keep) });
-};
-harden(diffTranscript);
-
-/**
- * Apply a transcript event to the messages a viewer holds. Returns undefined
- * when the event does not follow from what the viewer has (a gap), which means
- * the viewer must reopen its view rather than guess.
- *
- * @param {{ version: number, messages: readonly unknown[] } | null} held
- * @param {{ version: number, base: number, keep: number, append: readonly unknown[] }} event
- * @returns {{ version: number, messages: unknown[] } | undefined}
- */
-export const applyTranscript = (held, event) => {
-  if (!held) {
-    if (event.base !== 0 || event.keep !== 0) return undefined;
-    return { version: event.version, messages: [...event.append] };
-  }
-  if (event.version <= held.version)
-    return { ...held, messages: [...held.messages] };
-  if (event.base !== held.version || event.keep > held.messages.length)
-    return undefined;
-  return {
-    version: event.version,
-    messages: [...held.messages.slice(0, event.keep), ...event.append],
-  };
-};
-harden(applyTranscript);
+// The transcript delta the daemon publishes and a viewer applies; both ends
+// run `./transcript-delta.js`, and this module remains the authority on the
+// wire format.
+export { applyTranscript, diffTranscript };
 
 /**
  * The viewers of one subject.
