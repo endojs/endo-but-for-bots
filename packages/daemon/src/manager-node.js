@@ -25,6 +25,7 @@ import {
 } from './manager-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
 import { runExtraSetups } from './extra-setups.js';
+import { installShutdownSignals } from './shutdown-signals.js';
 
 const fsp = { access: fs.promises.access };
 /** @import { Config } from './types.js' */
@@ -264,8 +265,18 @@ const main = async () => {
   cancelGracePeriod(new Error('Terminated normally'));
 };
 
-process.once('SIGINT', () => cancel(new Error('SIGINT')));
-process.once('SIGTERM', () => cancel(new Error('SIGTERM')));
+// SIGINT/SIGTERM initiate a graceful cancel, but a daemon that cannot drain
+// its services must still terminate rather than hang holding the signal — so a
+// bounded backstop force-exits, and on that forced path SIGKILLs any surviving
+// worker children so they are not reparented to init and left to respawn. With
+// ENDO_EXIT_WHEN_ORPHANED=1 (set by the test harness) the daemon also stops
+// once its launcher dies.
+installShutdownSignals({
+  cancel,
+  graceMs: Number(process.env.ENDO_SHUTDOWN_GRACE_MS) || 5000,
+  beforeForceExit: () => killStaleWorkers().catch(() => {}),
+  exitWhenOrphaned: process.env.ENDO_EXIT_WHEN_ORPHANED === '1',
+});
 
 // @ts-ignore Yes, we can assign to exitCode, typedoc.
 process.exitCode = 1;
