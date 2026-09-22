@@ -102,6 +102,7 @@ No claim of complete retrospective coverage is made yet.
 | Backend catalogs and pin admission | Implemented locally: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Not deployed. |
 | Session provisioning and factory (FA-06) | Implemented locally: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Not deployed; deploy with a state wipe. |
 | Execution envelope (FA-06) | Implemented locally: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Not deployed. |
+| Reply fold, turn messages, transcript delta (FA-10) | Implemented locally: no new durable state. The converter changes what a completed hosted turn commits only in a case that cannot occur (an unsettled call) and what a mirrored turn commits not at all; the fold changes what a view holds only where the two copies disagreed, on the rule the daemon already applied; the delta's wire format is unchanged and the daemon still hardens what it publishes. Floot 462, chat 935 and space-floot 52 pass. | Nothing replayed or reconstructed changes; tree nodes and journal records are written as before. Not deployed. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -426,7 +427,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
-| FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
+| FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier (2026-09-22, not deployed); open: the two reconciliations of history and native restoration, and the tool-pairing rule written four times |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 160 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 160; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
@@ -1190,6 +1191,59 @@ Completion: daemon snapshots and browser deltas converge under the same fixture 
 success, failure, cancellation, and restoration share record conversion without inventing
 guest-reported effects or dropping host-observed uncertainty.
 
+### One fold, one converter, one delta — 2026-09-22
+
+Implemented locally and reviewed; not deployed.
+Three of the duplications are gone.
+The two hosted-turn commits in `agent.js` (the completed turn and the turn
+mirrored after a stop or a failure) were byte-identical converters apart from
+two rules; both now call `src/turn-messages.js`, which records an unsettled
+call's result as `UNSETTLED_TOOL_RESULT` in both cases (a completed turn has
+no unsettled call: the journal's tools are asserted settled first, and the
+hosted turn throws at its end when a reported call is still unsettled, so
+only the mirrored path ever sees one) and takes whether an empty reply is
+recorded (a completed turn's is; a mirrored turn's is not).
+The reply-event fold that turns a turn's events into the messages a view
+renders existed once in the daemon's turn (`src/session-turn.js`, the source
+of snapshots) and once in the browser's component
+(`chat/floot-component.js`, which adopts a snapshot and applies the events
+after it); both now run `src/reply-fold.js`, exported from Floot and a
+runtime dependency of chat, so a view repainted from a snapshot and one that
+applied every event converge on the same messages. Seven differences between
+the copies were resolved on one rule each: a thinking block's end time is
+omitted while it is undefined; a snapshot's pending tools are the calls
+without a result, so an empty result is a result; usage is projected by the
+caller (the daemon keeps it as reported, the browser projects its counts,
+now from a snapshot as well as from an event); the trailing text is flushed
+in `finally` on both sides, so text streamed before a failed channel is kept;
+emission order stays each side's own (the daemon forwards an event before
+folding it, the browser notifies after); terminal handling stays the
+caller's.
+The transcript delta (`diffTranscript`, `applyTranscript`) moved into
+`src/transcript-delta.js`, pure and unhardened so the browser bundle runs it;
+`session-watch.js` re-exports and hardens what it publishes, and chat's
+documented mirror is deleted.
+The authority distinction the finding guards is untouched: neither the fold
+nor the converter reads the journal's host-recorded tools or guest-reported
+activity, which stay separate lists with separate provenance.
+Tests: `test/reply-fold.test.js` folds a corpus with text around a tool round
+whose calls settle out of order, a growing thinking block, usage and an end,
+and proves that a viewer adopting a snapshot at every cut of that corpus
+converges with one that applied every event; `test/turn-messages.test.js`
+covers ordered segments, the one-round fallback and the empty-reply rule.
+Floot 462, chat 935 and space-floot 52 tests pass; the Floot and chat ESLint
+gates have no errors from this change (Floot's gate had one pre-existing
+shadowed variable in `test/factory-subscription.test.js`, corrected in its
+own commit); chat's type gate fails only in its own test files
+(`test/component/floot.test.js` on variables declared without a type,
+`test/helpers/fake-floot.js` on passable typing), both untouched here and
+failing before this change.
+Still duplicated, for the next slice: the reconciliation of host and guest
+tool evidence in `getHistory` and in `recoverTurnTranscript`, which differ in
+matching rule, identity use and the text they read, and the tool-pairing rule
+written in `projectHistory`, `transcriptToProviderMessages`,
+`recoverTurnTranscript` and `transcript-records.js`.
+
 ## FA-11 — Remove compatibility scaffolding after cutover
 
 Reachable legacy branches, not intrinsically dead functions:
@@ -1689,6 +1743,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | FA-10: one reply-event fold shared by the daemon turn and the browser component, one hosted-turn message converter for both commits, one transcript-delta applier in place of chat's mirror; chat depends on Floot at runtime for the two pure modules | New fold suite proves snapshot-adopting and event-applying views converge at every cut of a corpus; Floot 462, chat 935, space-floot 52 pass; package ESLint gates clean for the change; independent adversarial review; reconciliation and tool-pairing duplication remain; not deployed |
 | 2026-09-22 | FA-06: one execution envelope in hosted-agent for the three native controllers; the provider-grant check and the canonical JSON encoder move from Codex into hosted-agent; exact grant, evidence and raw placement checks apply to every runtime | Envelope suite (10 cases); hosted-agent 674, Claude 203, Codex 306, OpenCode 250 pass; ESLint gates clean; hosted-agent types pass; independent adversarial review verified the checks against the real issuer and sandbox attestation builder and found one defect (Claude's single-token subscription sessions would have required an OAuth grant), fixed; FA-06 completion criteria met locally; not deployed |
 | 2026-09-22 | FA-06: one session provisioner and one backend factory in hosted-agent; the three adapters declare their differences; shared placement reader and subscription lister; Claude/OpenCode setup refuse non-normalized or overlapping protected directories | Shared conformance suite (20, 20 and 19 cases across Claude, Codex and OpenCode); Claude 203, Codex 306, OpenCode 250 and hosted-agent 664 pass; package ESLint gates clean; hosted-agent types pass; independent adversarial review found a setup gap and a spread-order footgun, both fixed; the native controllers' envelope is the next slice; not deployed |
 | 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
