@@ -4,10 +4,10 @@
  * Behavioural coverage for `packages/ocapn-noise/src/transports/ws-node.js`.
  *
  * The hardening fixes shipped under PR #49 (non-binary rejection,
- * double-listen guard, connect-failure cleanup, wildcard-host
- * substitution) were tsc-validated only; this file exercises each on a
- * real `WebSocketServer` from the `ws` library so a regression in any
- * one path fails loud.
+ * double-listen guard, connect-failure cleanup, wildcard-bind
+ * host advertisement) were tsc-validated only; this file exercises each
+ * on a real `WebSocketServer` from the `ws` library so a regression in
+ * any one path fails loud.
  */
 
 import baseTest from '@endo/ses-ava/test.js';
@@ -62,7 +62,7 @@ test('ws transport: peer round-trip exchanges binary frames in both directions',
     WebSocketServer,
   });
   t.teardown(() => clientTransport.shutdown());
-  const clientStream = await clientTransport.connect(listener.hints);
+  const clientStream = await clientTransport.connect(listener.hints[0]);
   const sStream = await serverStream;
 
   // Client → server.
@@ -103,9 +103,9 @@ test('ws transport: receiving a non-binary frame rejects the next reader.next()'
 
   const clientTransport = makeWebSocketTransport({ WebSocket });
   t.teardown(() => clientTransport.shutdown());
-  const clientStream = await clientTransport.connect({
-    url: `ws://${addr.address}:${addr.port}`,
-  });
+  const clientStream = await clientTransport.connect(
+    `ws://${addr.address}:${addr.port}`,
+  );
   const serverWs = await serverWsPromise;
   t.teardown(() => serverWs.close());
 
@@ -137,21 +137,57 @@ test('ws transport: calling listen twice throws', async t => {
   });
 });
 
-test('ws transport: listening on 0.0.0.0 advertises 127.0.0.1 in the url hint', async t => {
+test('ws transport: a wildcard bind advertises routable hosts, never loopback', async t => {
+  // Binding to a wildcard host no longer substitutes loopback: the
+  // transport enumerates routable interfaces (omitting a hint entirely
+  // when there are none) and never advertises `127.0.0.1` / `::1`. Use
+  // the explicit `hosts` override to make the assertion deterministic
+  // regardless of the CI host's interfaces, and confirm IPv6 sorts
+  // ahead of IPv4 with the endpoint path carried on each dial URL.
   const transport = makeWebSocketTransport({
     WebSocket,
     WebSocketServer,
     host: '0.0.0.0',
     port: 0,
+    hosts: ['203.0.113.7', '2001:db8::1'],
   });
   t.teardown(() => transport.shutdown());
   const listen = transport.listen;
   if (!listen) throw Error('ws transport must expose listen');
   const listener = await listen(noopHandler);
   t.teardown(() => listener.close());
-  const url = new URL(listener.hints.url);
-  t.is(url.hostname, '127.0.0.1', 'wildcard host substituted with loopback');
-  t.not(url.port, '', 'port is populated');
+
+  t.is(listener.hints.length, 2, 'both advertised hosts appear');
+  for (const hint of listener.hints) {
+    const url = new URL(hint);
+    t.not(url.hostname, '127.0.0.1', 'never advertises loopback');
+    t.is(url.pathname, '/ocapn-cbor-np', 'carries the endpoint path');
+    t.not(url.port, '', 'port is populated');
+  }
+  t.is(
+    new URL(listener.hints[0]).hostname,
+    '[2001:db8::1]',
+    'IPv6 sorts ahead of IPv4',
+  );
+  t.is(new URL(listener.hints[1]).hostname, '203.0.113.7');
+});
+
+test('ws transport: a wildcard bind with no routable hosts omits the hint', async t => {
+  // With interface enumeration forced empty (an override of `[]`), the
+  // listener advertises nothing rather than a loopback address.
+  const transport = makeWebSocketTransport({
+    WebSocket,
+    WebSocketServer,
+    host: '0.0.0.0',
+    port: 0,
+    hosts: [],
+  });
+  t.teardown(() => transport.shutdown());
+  const listen = transport.listen;
+  if (!listen) throw Error('ws transport must expose listen');
+  const listener = await listen(noopHandler);
+  t.teardown(() => listener.close());
+  t.deepEqual(listener.hints, [], 'empty advertised-host set omits the hint');
 });
 
 test('ws transport: connect to a closed port rejects without hanging', async t => {
@@ -176,10 +212,9 @@ test('ws transport: connect to a closed port rejects without hanging', async t =
   // The `ws` library rejects with a raw ErrorEvent (not an Error), so
   // pass `any: true`; we only care that the connect path settles
   // rather than hanging.
-  await t.throwsAsync(
-    () => transport.connect({ url: `ws://127.0.0.1:${port}` }),
-    { any: true },
-  );
+  await t.throwsAsync(() => transport.connect(`ws://127.0.0.1:${port}`), {
+    any: true,
+  });
 
   // After the connect rejection settles, `transport.shutdown()` must
   // be a no-op (no leaked socket, no double-close throw). Verify

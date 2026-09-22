@@ -69,9 +69,9 @@ const makeUnackedPipe = () => {
 /**
  * Build an in-process transport fabric shared by `N` peers. Each peer
  * gets its own `OcapnNoiseTransport` keyed by an arbitrary string name;
- * `connect({ to: '<name>' })` routes to the matching listener in the
- * shared directory. The fabric's name is the transport scheme so peers
- * can hint with `mesh:to=<name>`.
+ * `connect('mesh:<name>')` routes to the matching listener in the
+ * shared directory. The fabric's scheme is `mesh`, so a listener
+ * advertises a `mesh:<name>` dial hint.
  */
 export const makeMockMeshFabric = () => {
   /** @type {Map<string, (stream: ByteStream) => void>} */
@@ -97,9 +97,9 @@ export const makeMockMeshFabric = () => {
     /** @type {OcapnNoiseTransport} */
     const transport = harden({
       scheme: 'mesh',
-      connect: async hints => {
-        const target = hints.to;
-        if (!target) throw Error(`mesh transport: missing 'to' hint`);
+      connect: async hint => {
+        const target = hint ? new URL(hint).pathname : '';
+        if (!target) throw Error(`mesh transport: missing dial hint`);
         const accept = listeners.get(target);
         if (!accept)
           throw Error(`mesh transport: no listener registered for ${target}`);
@@ -115,7 +115,7 @@ export const makeMockMeshFabric = () => {
         closers.add(() => listeners.delete(name));
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { to: name },
+          hints: [`mesh:${name}`],
           close: () => listeners.delete(name),
         });
         return listener;
