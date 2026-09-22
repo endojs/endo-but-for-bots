@@ -152,3 +152,31 @@ export interface SplitLinesResult {
   lines: string[];
   trailingNewline: boolean;
 }
+
+/**
+ * One line of a hashline read view: the 1-indexed line number, its
+ * CRC32 anchor hash (at the file's native width), and the raw line
+ * content (excluding the terminating LF).
+ *
+ * `{ line, hash }` is exactly an `Anchor`, so a caller constructs an
+ * `EditOp` by copying a view line's `line` and `hash` into the op's
+ * anchor.
+ */
+export interface HashlineViewLine {
+  line: number;
+  hash: string;
+  text: string;
+}
+
+/**
+ * The result of `EndoMount.readTextHashline`: the whole-file CAS hash
+ * (used as a subsequent patch's `expectedFileHash`), the native anchor
+ * width, the trailing-newline flag, and the per-line anchor view. This
+ * is the read-side companion the hashline edit round trip needs.
+ */
+export interface HashlineView {
+  fileHash: string;
+  width: number;
+  trailingNewline: boolean;
+  lines: HashlineViewLine[];
+}
