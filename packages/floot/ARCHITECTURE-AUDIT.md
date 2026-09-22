@@ -984,12 +984,14 @@ models the runtime cannot run is open); and Luna's `/bin/bash -c` wrapper
 and a free-route model's URL quoting defeated the driver's exact-string
 command check, which now also accepts a command that reads the same once
 quoting is taken out.
-Restart/restore passed for Fae and failed for every hosted backend: see the
-native-teardown row above and "Restart regression" in the cutover note. That
-is commit `0d66bd945` shipped on the branch tip, not discovery; hosted
-sessions on generation 160 cannot survive a daemon restart until #1323's
-reconciliation lands, and the decision between rolling back and keeping the
-release is the operator's.
+Restart/restore first passed for Fae and failed for every hosted backend on
+generation 160: commit `0d66bd945` (fail-closed native teardown) shipped on
+the branch tip, not discovery. The operator chose to evict it: `2cfcfeb02`
+reverts it on this branch and `b3f7bb1e0` re-applies it on the #1323
+research branch; generation 161 activated the reverted release, the three
+stranded sessions reopened and were deleted, a fresh restoration run passed
+on all four backends after a graceful daemon restart, and Tokyo ended with
+zero native records, containers and mounts.
 Recorded, not changed: a backend may answer up to sixteen accounts of 4096
 descriptors each; a subagent delegated during a catalog outage is a new pin
 and is refused then; the direct provider's `lal` OpenRouter adapter still reads
@@ -1483,6 +1485,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | Date | Change | Verification / deployment |
 |---|---|---|
 | 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
+| 2026-09-22 | FA-07 cutover, second activation: `0d66bd945` evicted to #1323 (`2cfcfeb02` reverts; `b3f7bb1e0` re-applies on `codex/native-recovery-research`); generation 161 activates `2cfcfeb02` without broker retirement | Discovery gate passed again; restart/restore passed on all four backends after a graceful restart; all acceptance sessions deleted; zero native records, containers and 9p mounts; Secrets and archives unchanged |
 | 2026-09-22 | FA-07 cutover: generation 160 activates `64176d7d5` on Tokyo after retiring the three pre-catalog brokers; live discovery gate passed (Luna, free routes, every account current); create, tools, network policy, cancel and delete passed on Luna, Haiku 4.5 and the free routes | Restart/restore passed for Fae, failed for all hosted backends (`0d66bd945` fail-closed teardown, #1323); six acceptance sessions stranded; Claude acceptance pinned to Haiku 4.5 after Anthropic's first-listed `claude-fable-5-1` failed in the runtime; rollback-or-keep decision with the operator |
 | 2026-09-22 | FA-07: provider-backed model discovery end to end; static, Floot and NixOS model lists removed; per-account catalogs reach the picker; new pins admitted at plan recording, recorded pins kept; no "first listed" default; discovery re-read when the picker opens | Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231, hosted-agent 663 pass; host NixOS option and environment removed; independent adversarial review found eighteen issues, all addressed and re-reviewed; root type build clean and documentation gate at 0 errors (177 warnings) after quarantining stale generated declarations; live catalog reads, Luna and free routes are deployment gates; not deployed |
 | 2026-09-21 | Separate native crash-recovery research from the current refactor | Dedicated investigation records evidence, retained-commit review, alternatives, and bounded continuation; prototypes isolated for draft tracking, not implementation approval; no deployment |

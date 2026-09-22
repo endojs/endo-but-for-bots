@@ -45,11 +45,13 @@ backend that could not list the declared set still offers an `auto` session
 nothing a lane alone lists.
 The picker reads discovery beside the session list and again each time it
 opens; the direct provider without discovery is offered unpinned.
-Deployed to Tokyo on 2026-09-22 (generation 160, app `64176d7d5`) after the
-three pre-catalog brokers were retired; the live discovery gate and the
-create, tool, policy, cancel and delete checks passed on Luna, Haiku 4.5 and
-the free routes. Hosted restart/restore failed on that release for a reason
-outside this design (fail-closed native teardown, #1323).
+Deployed to Tokyo on 2026-09-22 after the three pre-catalog brokers were
+retired: generation 160 (app `64176d7d5`) passed the live discovery gate and
+the create, tool, policy, cancel and delete checks on Luna, Haiku 4.5 and the
+free routes but failed hosted restart/restore for a reason outside this
+design (fail-closed native teardown, evicted to #1323); generation 161 (app
+`2cfcfeb02`, that change reverted) passed restart/restore on all four
+backends as well.
 
 ### Previous increment — 2026-09-21
 
