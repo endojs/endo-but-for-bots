@@ -242,15 +242,22 @@ harden(splitAtLastCompaction);
  * reported rather than dropped, because a call whose result vanished is a
  * turn that was interrupted and the CLI needs to see it that way.
  *
+ * Native ids are only meaningful within a turn. A caller replaying to a
+ * provider asks for `perTurn`, so an unanswered call stays unanswered when a
+ * later turn reuses its id: each user message starts the pairing afresh.
+ *
  * @param {readonly TranscriptRecord[]} records
+ * @param {{ perTurn?: boolean }} [options]
  */
-export const pairToolCalls = records => {
+export const pairToolCalls = (records, { perTurn = false } = {}) => {
   /** @type {Map<string, number[]>} */
   const waiting = new Map();
   /** @type {{ call: TranscriptToolCall, result?: TranscriptToolResult }[]} */
   const pairs = [];
   for (const record of records) {
-    if (record.kind === 'tool-call') {
+    if (perTurn && record.kind === 'message' && record.role === 'user') {
+      waiting.clear();
+    } else if (record.kind === 'tool-call') {
       const queue = waiting.get(record.id) || [];
       queue.push(pairs.length);
       waiting.set(record.id, queue);

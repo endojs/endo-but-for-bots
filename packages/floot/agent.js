@@ -57,12 +57,12 @@ import {
 
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
-import {
-  UNSETTLED_TOOL_RESULT,
-  hostedTurnPartialOf,
-  runHostedTurn,
-} from './src/hosted-turn.js';
+import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { hostedTurnMessages } from './src/turn-messages.js';
+import {
+  UNKNOWN_TOOL_OUTCOME,
+  reconcileTurnEvidence,
+} from './src/turn-evidence.js';
 import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
@@ -78,11 +78,6 @@ import {
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
-import {
-  sameExecutedToolName,
-  sameToolArgs,
-  sameToolResult,
-} from './src/tool-evidence.js';
 import {
   projectTranscript,
   recoverTurnTranscript,
@@ -1971,6 +1966,9 @@ export const makeStreamingAgent = async (
           const index = out.length;
           out.push({
             role: 'tool',
+            // The provider's id, so evidence the backend reported under it
+            // reconciles by identity rather than by resemblance.
+            ...(typeof tc.id === 'string' && tc.id !== '' ? { id: tc.id } : {}),
             name: tc.function?.name || 'tool',
             args: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
             result: null,
@@ -2104,49 +2102,6 @@ export const makeStreamingAgent = async (
       };
       const committed = byTurn.get(turn.turnId);
       const projected = committed ? projectHistory(committed) : [];
-      // An input-only mail node is not a complete turn transcript. The journal
-      // owns failed-turn evidence even when part of that turn reached the tree.
-      const evidence = [...(turn.activity || [])];
-      const unmatched = [...evidence];
-      for (const tool of turn.tools) {
-        const match = unmatched.findIndex(
-          other =>
-            sameExecutedToolName(other.name, tool.name) &&
-            sameToolArgs(
-              { text: other.args, cut: other.argsRef !== undefined },
-              { text: tool.args, cut: tool.argsRef !== undefined },
-            ) &&
-            (other.result === tool.result ||
-              sameToolResult(
-                { text: other.result, cut: other.resultRef !== undefined },
-                { text: tool.result, cut: tool.resultRef !== undefined },
-              )),
-        );
-        if (match >= 0) unmatched.splice(match, 1);
-        else
-          evidence.push(
-            turn.activity?.length
-              ? {
-                  ...tool,
-                  result: `[Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution.]\n${tool.result ?? 'Tool outcome unknown; do not automatically retry.'}`,
-                }
-              : tool,
-          );
-      }
-      const journalTools = evidence.map(tool => ({
-        role: 'tool',
-        name: tool.name,
-        args: tool.args,
-        result:
-          tool.result ?? 'Tool outcome unknown; do not automatically retry.',
-      }));
-      // Which of those the journal holds only a preview of. Kept beside the
-      // messages rather than on them: a message is what a view is handed.
-      const journalCuts = evidence.map(tool => ({
-        args: tool.argsRef !== undefined,
-        result: tool.resultRef !== undefined,
-      }));
-      const users = projected.filter(message => message.role === 'user');
       // A partial turn the backend retained was mirrored into the tree in
       // stream order; prefer it over the journal's joined output so a
       // failed/cancelled turn keeps the same text/tool interleaving as a
@@ -2157,45 +2112,77 @@ export const makeStreamingAgent = async (
       );
       const ordered =
         (turn.state === 'completed' && Boolean(committed)) || mirrored;
-      const messages = ordered
-        ? [...projected]
-        : [
-            ...(users.length ? users : [{ role: 'user', content: turn.input }]),
-            ...journalTools,
-            ...(turn.output
-              ? [{ role: 'assistant', content: turn.output }]
-              : projected.filter(message => message.role === 'assistant')),
-          ];
+      const treeTools = ordered
+        ? projected.filter(message => message.role === 'tool')
+        : [];
+      // An input-only mail node is not a complete turn transcript. The journal
+      // owns failed-turn evidence even when part of that turn reached the
+      // tree. The tree mirrors the provider's argument string and the whole
+      // result; the journal re-serializes the one and may hold a preview of
+      // either, so the journal's texts are compared as the previews they are.
+      const rows = await reconcileTurnEvidence({
+        turnId: turn.turnId,
+        known: treeTools.map(message => ({
+          id: message.id ?? '',
+          name: message.name,
+          args: message.args,
+          result: message.result ?? undefined,
+        })),
+        activity: turn.activity,
+        tools: turn.tools,
+        read: tool => ({
+          args: tool.args,
+          result: tool.result,
+          cut: {
+            args: tool.argsRef !== undefined,
+            result: tool.resultRef !== undefined,
+          },
+        }),
+      });
+      /** @param {import('./src/turn-evidence.js').EvidenceRow} row */
+      const evidenceRow = row => ({
+        role: 'tool',
+        ...(row.source === 'guest' ? { id: row.id } : {}),
+        name: row.name,
+        args: row.args,
+        result:
+          row.source === 'host' && turn.activity?.length
+            ? `[Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution.]\n${row.result ?? UNKNOWN_TOOL_OUTCOME}`
+            : (row.result ?? UNKNOWN_TOOL_OUTCOME),
+      });
+      const recovered = rows.filter(row => row.source !== 'tree');
+      const users = projected.filter(message => message.role === 'user');
+      /** @type {any[]} */
+      let messages;
       if (ordered) {
-        const unmatchedTools = projected.filter(
-          message => message.role === 'tool',
+        messages = [...projected];
+        // A mirrored call the journal settled shows the settled result. The
+        // rows the tree contributed come first, in the tree's order, so each
+        // settles the message it was read from, whatever id that message
+        // carries.
+        const treeAt = projected.flatMap((message, index) =>
+          message.role === 'tool' ? [index] : [],
         );
-        // Both placeholders mean "no result was reported"; a journal entry
-        // carrying one must not duplicate a mirrored call carrying the other.
-        const placeholders = new Set([
-          UNSETTLED_TOOL_RESULT,
-          'Tool outcome unknown; do not automatically retry.',
-        ]);
-        const sameResult = (left, right, cut) =>
-          left === right ||
-          (placeholders.has(left) && placeholders.has(right)) ||
-          sameToolResult({ text: left }, { text: right, cut });
-        for (const [index, tool] of journalTools.entries()) {
-          // The tree mirrors the provider's argument string and the whole
-          // result; the journal re-serializes the one and may hold a preview
-          // of either. The same call, compared as strings, showed up twice.
-          const match = unmatchedTools.findIndex(
-            other =>
-              sameExecutedToolName(other.name, tool.name) &&
-              sameToolArgs(
-                { text: other.args },
-                { text: tool.args, cut: journalCuts[index].args },
-              ) &&
-              sameResult(other.result, tool.result, journalCuts[index].result),
+        treeAt.forEach((index, position) => {
+          const row = rows[position];
+          if (row.settledBy)
+            messages[index] = { ...messages[index], result: row.result };
+        });
+        for (const row of recovered) {
+          messages.splice(
+            Math.max(0, messages.length - 1),
+            0,
+            evidenceRow(row),
           );
-          if (match >= 0) unmatchedTools.splice(match, 1);
-          else messages.splice(Math.max(0, messages.length - 1), 0, tool);
         }
+      } else {
+        messages = [
+          ...(users.length ? users : [{ role: 'user', content: turn.input }]),
+          ...recovered.map(evidenceRow),
+          ...(turn.output
+            ? [{ role: 'assistant', content: turn.output }]
+            : projected.filter(message => message.role === 'assistant')),
+        ];
       }
       out.push(
         ...messages.map(message =>
