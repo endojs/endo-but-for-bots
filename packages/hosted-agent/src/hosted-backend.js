@@ -186,6 +186,9 @@ const OPTIONAL_DESCRIPTOR_KEYS = harden([
   'enforcesStorageBound',
   'promptEnvironment',
   'providerId',
+  // The bindings a reopen of a session on this backend may be authorized
+  // to change, as its provisioner names them (`image`, `provider`, ...).
+  'rebindableBindings',
   'subscriptions',
   'supportedNetworkPolicies',
 ]);
@@ -273,6 +276,17 @@ export const assertHostedBackendDescriptor = descriptor => {
   descriptor.enforcesStorageBound === undefined ||
     typeof descriptor.enforcesStorageBound === 'boolean' ||
     Fail`Hosted backend descriptor has an invalid storage bound flag`;
+  if (descriptor.rebindableBindings !== undefined) {
+    const declared = /** @type {unknown} */ (descriptor.rebindableBindings);
+    (Array.isArray(declared) &&
+      declared.length <= 8 &&
+      declared.every(
+        name =>
+          typeof name === 'string' && name.length > 0 && name.length <= 64,
+      ) &&
+      new Set(declared).size === declared.length) ||
+      Fail`Hosted backend descriptor has invalid rebindable bindings`;
+  }
   return harden({
     id: descriptor.id,
     title: descriptor.title,
@@ -296,6 +310,9 @@ export const assertHostedBackendDescriptor = descriptor => {
     ...(descriptor.supportedNetworkPolicies === undefined
       ? {}
       : { supportedNetworkPolicies: [...descriptor.supportedNetworkPolicies] }),
+    ...(descriptor.rebindableBindings === undefined
+      ? {}
+      : { rebindableBindings: [...descriptor.rebindableBindings] }),
     ...(descriptor.promptEnvironment === undefined
       ? {}
       : {

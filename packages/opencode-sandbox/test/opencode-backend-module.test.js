@@ -388,7 +388,11 @@ test('an operator-supplied workspace is recorded and served but never owned', as
   const worktree = path.join(f.base, 'worktree-a');
   await mkdir(worktree, { recursive: true });
   await E(factory).create(
-    harden({ sessionId: 'session-a', model: FREE, workspaceHostPath: worktree }),
+    harden({
+      sessionId: 'session-a',
+      model: FREE,
+      workspaceHostPath: worktree,
+    }),
     makeToolSet(),
   );
   const [, , planText] = f.log.find(([kind]) => kind === 'create') ?? [];
@@ -517,7 +521,7 @@ test('a foreign workspace must exist as a real directory outside both roots', as
   );
 });
 
-test('a broker re-pinned to a different image refuses an existing session rather than rebinding it', async t => {
+test('a broker re-pinned to a different image refuses an existing session until a request authorizes rebinding it', async t => {
   const f = await fixture(t);
   const first = await make(f.host, undefined, { env: f.env });
   const { admin } = await E(first).create(
@@ -539,10 +543,20 @@ test('a broker re-pinned to a different image refuses an existing session rather
     }),
   );
   const second = await make(f.host, undefined, { env: f.env });
+  t.deepEqual((await E(second).describe()).rebindableBindings, [
+    'image',
+    'provider',
+  ]);
   const before = f.log.length;
   await t.throwsAsync(
-    E(second).create(harden({ sessionId: 'session-a', model: FREE }), makeToolSet()),
-    { message: /image cannot change; destroy the session first/ },
+    E(second).create(
+      harden({ sessionId: 'session-a', model: FREE }),
+      makeToolSet(),
+    ),
+    {
+      message:
+        /image cannot change without a reopen that authorizes rebinding it/,
+    },
   );
   t.deepEqual(
     f.log.slice(before).map(entry => entry[0]),
@@ -554,6 +568,22 @@ test('a broker re-pinned to a different image refuses an existing session rather
     `oci:localhost/opencode@${digest}`,
     'the recorded plan is untouched',
   );
+  // Authorized, the record rebinds to the re-pinned image after a stop and
+  // keeps its identity, workspace and pin.
+  const rebound = f.log.length;
+  await E(second).create(
+    harden({ sessionId: 'session-a', model: FREE, rebind: ['image'] }),
+    makeToolSet(),
+  );
+  t.deepEqual(
+    f.log.slice(rebound).map(entry => entry[0]),
+    ['inspect', 'stop', 'revise', 'start'],
+  );
+  t.like(JSON.parse(f.records.get('session-a')?.plan ?? ''), {
+    sessionId: 'session-a',
+    rootfs: `oci:localhost/opencode@${other}`,
+    model: FREE,
+  });
 });
 
 test('a refused record leaves no session directories behind', async t => {
@@ -561,7 +591,10 @@ test('a refused record leaves no session directories behind', async t => {
   const factory = await make(f.host, undefined, { env: f.env });
   f.knobs.createError = Error('owner refused the record');
   await t.throwsAsync(
-    E(factory).create(harden({ sessionId: 'session-a', model: FREE }), makeToolSet()),
+    E(factory).create(
+      harden({ sessionId: 'session-a', model: FREE }),
+      makeToolSet(),
+    ),
     { message: /owner refused the record/ },
   );
   const privateDir = path.join(
@@ -589,7 +622,11 @@ test('a foreign workspace spelled through an alias of a storage root is refused 
   const aliased = path.join(f.base, 'alias', 'workspaces', 'victim');
   await t.throwsAsync(
     E(factory).create(
-      harden({ sessionId: 'session-a', model: FREE, workspaceHostPath: aliased }),
+      harden({
+        sessionId: 'session-a',
+        model: FREE,
+        workspaceHostPath: aliased,
+      }),
       makeToolSet(),
     ),
     { message: /must be a canonical path; it resolves to/ },
@@ -621,7 +658,10 @@ test('a backend re-rooted under a different private root refuses an existing ses
   });
   const before = f.log.length;
   await t.throwsAsync(
-    E(second).create(harden({ sessionId: 'session-a', model: FREE }), makeToolSet()),
+    E(second).create(
+      harden({ sessionId: 'session-a', model: FREE }),
+      makeToolSet(),
+    ),
     { message: /private directories cannot change; destroy the session first/ },
   );
   t.deepEqual(
@@ -644,7 +684,10 @@ test('a record whose directories are gone heals them on the next start', async t
   const plan = JSON.parse(planText);
   await rm(plan.mounterSocketDir, { recursive: true, force: true });
   await rm(plan.workspaceDir, { recursive: true, force: true });
-  await E(factory).create(harden({ sessionId: 'session-a', model: FREE }), makeToolSet());
+  await E(factory).create(
+    harden({ sessionId: 'session-a', model: FREE }),
+    makeToolSet(),
+  );
   t.true(await f.exists(plan.mounterSocketDir), 'socket directory recreated');
   t.true(await f.exists(plan.workspaceDir), 'owned workspace recreated');
   t.deepEqual(
@@ -660,7 +703,11 @@ test('a foreign workspace that vanished is refused on the next start rather than
   const worktree = path.join(f.base, 'worktree-b');
   await mkdir(worktree, { recursive: true });
   const { admin } = await E(factory).create(
-    harden({ sessionId: 'session-a', model: FREE, workspaceHostPath: worktree }),
+    harden({
+      sessionId: 'session-a',
+      model: FREE,
+      workspaceHostPath: worktree,
+    }),
     makeToolSet(),
   );
   await E(admin).terminate();
@@ -668,7 +715,11 @@ test('a foreign workspace that vanished is refused on the next start rather than
   const before = f.log.length;
   await t.throwsAsync(
     E(factory).create(
-      harden({ sessionId: 'session-a', model: FREE, workspaceHostPath: worktree }),
+      harden({
+        sessionId: 'session-a',
+        model: FREE,
+        workspaceHostPath: worktree,
+      }),
       makeToolSet(),
     ),
     { message: /must be an existing directory/ },
@@ -689,7 +740,10 @@ test('recorded mounter settings reach every plan', async t => {
   const factory = await make(f.host, undefined, {
     env: harden({ ...f.env, OPENCODE_MOUNTER_ENV: JSON.stringify(mounterEnv) }),
   });
-  await E(factory).create(harden({ sessionId: 'session-a', model: FREE }), makeToolSet());
+  await E(factory).create(
+    harden({ sessionId: 'session-a', model: FREE }),
+    makeToolSet(),
+  );
   const [, , planText] = f.log.find(([kind]) => kind === 'create') ?? [];
   t.deepEqual(JSON.parse(planText).mounterEnv, mounterEnv);
 });
@@ -794,7 +848,10 @@ test('a record from before pins were required is a new pin: asked for, never run
   // The runtime cannot run without a model, and OpenRouter marks no default:
   // a reopen naming none is refused, and nothing arbitrary is recorded.
   await t.throwsAsync(
-    E(factory).create(harden({ sessionId: 'session-a', model: '' }), makeToolSet()),
+    E(factory).create(
+      harden({ sessionId: 'session-a', model: '' }),
+      makeToolSet(),
+    ),
     { message: /No "OpenCode" model named, and the account marks no default/ },
   );
   t.false('model' in JSON.parse(f.records.get('session-a')?.plan ?? ''));

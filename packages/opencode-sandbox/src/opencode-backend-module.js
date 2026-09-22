@@ -139,9 +139,10 @@ export const makeOpencodeSessionProvisioner = ({
     readPlan: readSessionPlan,
     // The slice runs the exact image the broker pinned; the controller checks
     // the broker's evidence against this reference at activation, and a
-    // broker that now pins a different image is a different session.
+    // session reopens under a broker that now pins a different image only
+    // when the request authorizes that rebind.
     fields: () => ({ rootfs }),
-    immutable: { rootfs: 'image' },
+    rebindable: { rootfs: 'image' },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });

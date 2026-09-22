@@ -59,7 +59,7 @@ const harness = () => {
     provide: async id => {
       calls.push(['provide', id, await phase()]);
       if (id === 'client-id') return target;
-      if (id === 'dependency-id') return getDependency();
+      if (id.startsWith('dependency')) return getDependency();
       throw Error('Unexpected revival');
     },
     cancel: async () => {
@@ -291,6 +291,39 @@ test('failed activation requires cleanup before replacement and removal uses ori
     ['cancel', 'worker-id'],
   ]);
   t.is(await E(h.owner).inspect('a'), undefined);
+});
+
+test('a revision rebinds a dependency only after native stop released the incarnation, and the next start resolves it', async t => {
+  const h = harness();
+  await E(h.owner).create('a', 'original plan', {
+    dependency: 'dependency-id',
+  });
+  await E(h.owner).start('a');
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'rebound plan', { dependency: 'dependency-2' }),
+    { message: /Stop the client/ },
+  );
+  await E(h.owner).stop('a');
+  await E(h.owner).revise('a', 'rebound plan', { dependency: 'dependency-2' });
+  t.like(await E(h.owner).inspect('a'), {
+    plan: 'rebound plan',
+    references: { dependency: 'dependency-2' },
+    phase: 'stopped',
+  });
+  const before = h.calls.length;
+  await E(h.owner).start('a');
+  t.true(
+    h.calls
+      .slice(before)
+      .some(([kind, id]) => kind === 'provide' && id === 'dependency-2'),
+    'the next incarnation resolves the rebound dependency',
+  );
+  t.false(
+    h.calls
+      .slice(before)
+      .some(([kind, id]) => kind === 'provide' && id === 'dependency-id'),
+  );
+  await E(h.owner).stop('a');
 });
 
 test('removal drains detached dependency revival before cancelling formulas', async t => {

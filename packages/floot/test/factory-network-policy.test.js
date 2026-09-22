@@ -40,6 +40,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   let stopFails = false;
   let stopBarrier = Promise.resolve();
   let createBarrier = Promise.resolve();
+  let createFails = false;
   let writeFails = false;
   let tools;
   const key = name => (Array.isArray(name) ? name.join('/') : name);
@@ -77,6 +78,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
         continuity: 'explicit',
         toolOwnership: 'endo',
         supportedNetworkPolicies: ['off', 'public-internet'],
+        rebindableBindings: ['image', 'provider'],
       }),
     modelCatalog: () =>
       harden({
@@ -104,6 +106,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
       const generation = creates.length;
       events.push(`create:${generation}:${spec.networkPolicy}`);
       await createBarrier;
+      if (createFails) throw Error('backend unavailable');
       return harden({
         run: Far('NetworkRun', {
           send: async () => {
@@ -219,6 +222,9 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     },
     blockCreate: barrier => {
       createBarrier = barrier;
+    },
+    failCreate: value => {
+      createFails = value;
     },
     failWrite: value => {
       writeFails = value;
@@ -430,7 +436,7 @@ test('factory network request only asks; idle approval recreates policy and resu
   );
   t.false(
     catalog.dynamicTools.some(tool =>
-      /^(setNetworkPolicy|resolveNetworkPolicyRequest)$/.test(tool.name),
+      /^(setNetworkPolicy|resolveNetworkPolicyRequest|rebind)$/.test(tool.name),
     ),
   );
   const beforeInboxes = world.inboxes.length;
@@ -659,4 +665,78 @@ test('a message that waited out a network change runs when it ends', async t => 
   // …and runs once the session admits work again, with nobody pressing Send.
   await until(() => world.sends.length >= 1);
   t.deepEqual((await E(world.session).listPending()).entries, []);
+});
+
+test('rebind stops the incarnation and reopens it under the named bindings, once', async t => {
+  const world = await makeWorld(t);
+  t.is(world.creates.length, 1);
+  t.false('rebind' in world.creates[0]);
+  t.deepEqual(await E(world.session).rebind(['image', 'provider']), {
+    rebind: ['image', 'provider'],
+  });
+  // The old incarnation is stopped and released before the next is
+  // provisioned, and only that provisioning carries the authorization.
+  t.is(world.creates.length, 2);
+  t.deepEqual(world.creates[1].rebind, ['image', 'provider']);
+  const created = world.events.indexOf('create:2:off');
+  t.true(world.events.indexOf('terminate:1') < created);
+  t.true(world.events.indexOf('stop') < created);
+  const turn = await E(world.session).startTurn('hello');
+  await E(turn).whenFinished();
+  t.deepEqual(world.sends, [2]);
+  t.is(world.creates.length, 2, 'the authorization was spent');
+  // A name this backend does not declare is refused before the incarnation
+  // is touched, as is a list of the wrong size.
+  await t.throwsAsync(E(world.session).rebind(['imgae']), {
+    message: /rebind names the bindings a reopen may change/,
+  });
+  await t.throwsAsync(E(world.session).rebind(['account']), {
+    message: /from \["image","provider"\]/,
+  });
+  await t.throwsAsync(E(world.session).rebind([]), {
+    message: /between one and eight/,
+  });
+  t.is(world.creates.length, 2);
+  // A turn in flight refuses a rebind.
+  world.setMode('hold');
+  const held = await E(world.session).startTurn('held');
+  await until(() => world.sends.length === 2);
+  await t.throwsAsync(E(world.session).rebind(['image']), {
+    message: /active turn/,
+  });
+  world.finish();
+  await E(held).whenFinished();
+  t.is(world.creates.length, 2);
+});
+
+test('a rebind the backend refuses leaves no authorization behind for a later reopen', async t => {
+  const world = await makeWorld(t);
+  world.failCreate(true);
+  await t.throwsAsync(E(world.session).rebind(['image']), {
+    message: /backend unavailable/,
+  });
+  world.failCreate(false);
+  t.deepEqual(world.creates[1].rebind, ['image']);
+  // The next reopen carries nothing: the verb's authorization was spent by
+  // the request that failed, and would have been voided with the verb had
+  // no request been built.
+  const turn = await E(world.session).startTurn('hello');
+  await E(turn).whenFinished();
+  t.is(world.creates.length, 3);
+  t.false('rebind' in world.creates[2]);
+});
+
+test('a rebind refused before the incarnation is touched leaves it running and nothing behind', async t => {
+  const world = await makeWorld(t);
+  const backend = await E(world.host).lookup('codex-backend');
+  await E(world.host).remove('codex-backend');
+  await t.throwsAsync(E(world.session).rebind(['image']), {
+    message: /declares no rebindable bindings|unavailable/,
+  });
+  t.is(world.creates.length, 1, 'the incarnation was not replaced');
+  await E(world.host).storeValue(backend, 'codex-backend');
+  const turn = await E(world.session).startTurn('hello');
+  await E(turn).whenFinished();
+  t.deepEqual(world.sends, [1], 'the turn ran on the same incarnation');
+  t.is(world.creates.length, 1);
 });

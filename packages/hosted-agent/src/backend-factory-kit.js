@@ -73,9 +73,32 @@ const readWorkspaceHostPath = value => {
 };
 
 /**
+ * The bindings a reopen says it may change, as a short list of names; what
+ * each names, and whether it is known, is the provisioner's to decide.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {readonly string[]}
+ */
+const readRebind = (value, label) => {
+  // A statement rather than `Array.isArray(value) || Fail`: only control
+  // flow narrows.
+  if (
+    !Array.isArray(value) ||
+    value.length > 8 ||
+    !value.every(
+      name => typeof name === 'string' && name.length > 0 && name.length <= 64,
+    )
+  ) {
+    throw Fail`${b(label)} rebind must be a short list of binding names`;
+  }
+  return harden([...value]);
+};
+
+/**
  * @param {object} powers
  * @param {string} powers.label The adapter's name for messages.
- * @param {(sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>} powers.provisionSession
+ * @param {((sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>) & { rebindable?: readonly string[] }} powers.provisionSession
  *   Record (or reopen) the session's plan with the daemon owner and start its
  *   native controller with the pinned tool set, returning the client facet.
  *   A rejection leaves whatever the owner acquired under the owner's retained
@@ -170,6 +193,10 @@ export const makeHostedBackendFactory = ({
     }
     // The adapter's fields first: what the kit validated is never overridden
     // by a reader that happens to name the same field.
+    // Shape only: which bindings a reopen may change is the provisioner's,
+    // which refuses a name it does not know.
+    const rebind =
+      spec.rebind === undefined ? undefined : readRebind(spec.rebind, label);
     const request = harden({
       ...readRequest(spec),
       networkPolicy,
@@ -178,6 +205,7 @@ export const makeHostedBackendFactory = ({
       ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
       ...(workspaceHostPath ? { workspaceHostPath } : {}),
       ...(containerMounts === undefined ? {} : { containerMounts }),
+      ...(rebind === undefined ? {} : { rebind }),
     });
     // A predecessor that cannot stop refuses the successor rather than
     // running beside it: the registry retains its failed stop and rethrows.
@@ -229,12 +257,16 @@ export const makeHostedBackendFactory = ({
         label: member.label,
         ...(member.pinnedOnly === true ? { pinnedOnly: true } : {}),
       }));
+      const rebindable = provisionSession.rebindable ?? [];
       return harden({
         ...describe(),
         kind: 'hosted',
         toolOwnership: 'endo',
         ...(subscriptions.length ? { subscriptions } : {}),
         supportedNetworkPolicies: networkPolicies,
+        // What a reopen of a session on this backend may be authorized to
+        // rebind, as the provisioner names it.
+        ...(rebindable.length ? { rebindableBindings: [...rebindable] } : {}),
       });
     },
     modelCatalog: subscriptionId => catalog.catalog(subscriptionId),

@@ -87,8 +87,8 @@ No claim of complete retrospective coverage is made yet.
 
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
-| Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Not deployed. |
-| Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
+| Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Deployed since generation 157 (2026-09-21). |
+| Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Deployed since generation 157 (2026-09-21). |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
 | Credential ownership and Secret rebinding | Owned pool bindings retain actual capabilities and reject mutable-name rebinding. Member retirement now fences and drains retained facets, renewals, transports, wrapped readers/endpoints, and observation writes; 179 focused and two real-daemon tests pass. | Cross-worker renewal exclusion, retirement epochs, and process-loss transaction recovery remain open. Module-local drain does not establish these. |
 | Native teardown after reconstruction | The fail-closed teardown (`0d66bd945`: absent/failed scope lookup refuses stop acknowledgement; mount reclamation waits for sandbox close) was deployed on 2026-09-22 in generation 160 and observed: after a graceful `endo-daemon` restart every ready hosted session failed to reopen and to delete with `Original native cleanup proof is unavailable`, and six records were stranded with their listener containers and 9p mounts. **Reverted from this branch the same day and moved to #1323**: `session-supervisor.js` again treats absent/failed scope lookup as diagnostic and reclaims the recorded mount, as the release that passed the second pass's restart/restore did; runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof stays with the dedicated investigation (#1323), where the fail-closed teardown now lives with its six injected-reconstruction tests. A missing scope still cannot prove that native resources stopped. |
@@ -98,11 +98,12 @@ No claim of complete retrospective coverage is made yet.
 | Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
 | Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
-| Model admission and account catalogs | Implemented locally: each pool member's catalog owner is per incarnation and deliberately ephemeral (`model-catalog.js`); admission and `modelCatalog()` read it through the member's fenced lifecycle with a non-sticky credential facet; retirement closes it after draining a read in flight, and a far share's read has a deadline; a retained broker configuration carrying an operator `models` list is refused with the retirement instruction. Twenty-four new focused tests, 656 hosted-agent tests and the real-daemon catalog reconstruction test pass. | Reconstruction re-reads the provider under the same credential owner and cannot revive retired authority or spend; the durable pin stays in the session plan. Retire and re-mint the three brokers at cutover; observe live Codex, Claude and OpenRouter catalog reads on Tokyo. Not deployed. |
-| Backend catalogs and pin admission | Implemented locally: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Not deployed. |
-| Session provisioning and factory (FA-06) | Implemented locally: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Not deployed; deploy with a state wipe. |
-| Execution envelope (FA-06) | Implemented locally: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Not deployed. |
-| Reply fold, turn messages, transcript delta, turn evidence (FA-10) | Implemented locally: no new durable state. The converter changes what a completed hosted turn commits only in a case that cannot occur (an unsettled call) and what a mirrored turn commits not at all; the fold changes what a view holds only where the two copies disagreed, on the rule the daemon already applied; the delta's wire format is unchanged and the daemon still hardens what it publishes. The shared reconciliation reads the tree and the journal as before and writes neither; it changes what a restored transcript contains only where the history rule was looser than the restoration rule (a look-alike observation under another id is evidence of its own, and a settled execution answers a mirrored call the tree left unanswered), and what the projection emits only for a result no open call in its turn can take, which no writer produces. Floot 475, chat 935, space-floot 52 and hosted-agent 675 pass. | Nothing replayed or reconstructed changes for a well-formed tree; tree nodes and journal records are written as before. Not deployed. |
+| Model admission and account catalogs | Implemented: each pool member's catalog owner is per incarnation and deliberately ephemeral (`model-catalog.js`); admission and `modelCatalog()` read it through the member's fenced lifecycle with a non-sticky credential facet; retirement closes it after draining a read in flight, and a far share's read has a deadline; a retained broker configuration carrying an operator `models` list is refused with the retirement instruction. Twenty-four new focused tests, 656 hosted-agent tests and the real-daemon catalog reconstruction test pass. | Reconstruction re-reads the provider under the same credential owner and cannot revive retired authority or spend; the durable pin stays in the session plan. Retire and re-mint the three brokers at cutover; observe live Codex, Claude and OpenRouter catalog reads on Tokyo. Done: deployed as generation 160 (2026-09-22), the three brokers re-minted and the discovery gate reading every account's live catalog. |
+| Backend catalogs and pin admission | Implemented: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Deployed as generation 160 (2026-09-22). |
+| Session provisioning and factory (FA-06) | Implemented: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Deployed as generation 165 on 2026-09-22 under the wipe model; deploy with a state wipe. |
+| Execution envelope (FA-06) | Implemented: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
+| Reply fold, turn messages, transcript delta, turn evidence (FA-10) | Implemented: no new durable state. The converter changes what a completed hosted turn commits only in a case that cannot occur (an unsettled call) and what a mirrored turn commits not at all; the fold changes what a view holds only where the two copies disagreed, on the rule the daemon already applied; the delta's wire format is unchanged and the daemon still hardens what it publishes. The shared reconciliation reads the tree and the journal as before and writes neither; it changes what a restored transcript contains only where the history rule was looser than the restoration rule (a look-alike observation under another id is evidence of its own, and a settled execution answers a mirrored call the tree left unanswered), and what the projection emits only for a result no open call in its turn can take, which no writer produces. Floot 475, chat 935, space-floot 52 and hosted-agent 675 pass. | Nothing replayed or reconstructed changes for a well-formed tree; tree nodes and journal records are written as before. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
+| Rebindable session bindings (FA-08) | Implemented: no new record kind. The session record's `references` directory gains a replace-in-place write (`rebind`) for stable dependency roles, refused for the incarnation's own `client`/`worker`; the owner's `revise` writes the rebound references before the plan text, as creation does, so a plan is never published over edges that are not durable. Partial states fail closed: references rebound with the old plan, or the plan revised with the old references, leave a record the execution envelope refuses to activate (its exact grant and evidence checks compare the plan's recorded image against the live broker's evidence), and a retried rebind names the same identities and completes; a failed stop leaves the record `stopping` and unrevisable, as before. Floot 479, chat 935, space-floot 52, hosted-agent 676, Codex 308, Claude 205, OpenCode 252 and the daemon's session suites (72) pass. | The pet store overwrites a rebound name in one entry write; a daemon crash between two role writes leaves a half-rebound record that fails closed until retried. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -420,16 +421,16 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 |---|---|---|---|---|
 | FA-01 | High | Archived failed turns disappear from history/context | Reproduced bug | Fix deployed; bounded selection pending |
 | FA-02 | High | Direct-provider context reads lossy UI previews | Reproduced bug | Fix deployed; compaction policy pending |
-| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed and inventoried producers retired; acceptance pending |
-| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
-| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
-| FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22, not deployed; completion criteria met locally, pending deployment and acceptance) |
-| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
-| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
-| FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
-| FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met locally, not deployed |
-| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 160 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
-| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 160; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
+| FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed and inventoried producers retired; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
+| FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; cross-backend acceptance including OpenCode restart/restore passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
+| FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
+| FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generations 160 and 161, live since) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
+| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`), though that matrix has no `rebind` case (no re-minted broker to rebind to) and the verb's evidence is the conformance and module suites; open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
+| FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the operator deferred it on 2026-09-22 and will choose the mechanism and default bound later |
+| FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
+| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
+| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 159; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
@@ -458,7 +459,8 @@ Reading retained records first avoids losing a turn during concurrent archival.
 Tests cross the archive boundary with 290 turns and cover hosted revival.
 This does not add a lifetime resident cache, but full-history requests still materialize
 all records: archive pagination and explicit bounded context selection remain open.
-Not deployed or tested against a long-lived Tokyo session.
+Deployed since generation 157 (2026-09-21); not yet tested against a long-lived
+Tokyo session.
 
 ## FA-02 — Model context must not be built from UI previews
 
@@ -558,7 +560,8 @@ and entry-point conversion; it is not a passing gate.
 The independent review approved the source/export removal and corrected documentation.
 Both preserved real-daemon regressions pass after deletion.
 Claude and hosted-agent ESLint pass with zero errors and 276 warnings.
-This source removal is recoverable from Git and has not been deployed to Tokyo.
+This source removal is recoverable from Git; it shipped in the coordinated cutover
+of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
@@ -588,8 +591,9 @@ Repository and endo-host reference searches found no current producer of the old
 The focused client/controller/conformance suites pass 60 tests; independent review
 reran 53 client/controller tests and found no source-level blockers.
 Package ESLint reports no errors (36 warnings).
-Not deployed: retained legacy formulas must be retired with their old release available
-before switching releases; source deletion alone is not runtime retirement.
+It shipped in generation 157 (2026-09-21) after the retained legacy formulas were
+retired with their old release available; source deletion alone is not runtime
+retirement.
 
 Progress B: `refactor(opencode-sandbox): remove unused CLI state service` deletes the
 unused state-provider modules, exports, setup, controller allocation, and dependency role.
@@ -608,7 +612,9 @@ Review caught a daemon integration fixture still minting the deleted module; it 
 null-powered storage and retains the daemon-owner destroy assertions.
 That integration test passes after shortening its generated socket path for macOS;
 the fixture retains its unique suffix and does not alter production socket placement.
-Deployment is complete; native conformance and the separate `opencodeSessionId` audit remain open.
+Deployment is complete; the `opencodeSessionId` audit is the next subsection
+(shipped as generation 159). On-host native conformance was not re-recorded,
+though restart/restore passed on generations 159, 161 and 165.
 
 ### Obsolete native-session resume removed
 
@@ -633,10 +639,10 @@ allowing the next send to bypass restoration.
 The corrected client fences that incarnation after failed or uncertain restoration
 instead of retrying an import or sending a prompt without the required history.
 
-This slice is not deployed.
-The bridge is baked into the image: rebuild and pin the OpenCode image together
-with the host client at the next coordinated cutover, and retire old session
-plans using the old release first.
+This slice shipped as generation 159 on 2026-09-21 (app `81f3428e3`), after
+the OpenCode image was rebuilt and pinned with the host client and the old
+session plans were retired; four-backend restart/restore passed on that
+generation, on generation 161 and on generation 165 (2026-09-22).
 The fire-and-forget `initialPrompt` client path has been removed;
 repository search found no production caller.
 Client construction no longer has a branch that dispatches a prompt and
@@ -646,13 +652,13 @@ command, and only the subsequent explicit send dispatches a turn.
 This removes a replayable side-effect path rather than adding durable state.
 The focused client/controller suites pass 51 tests; changed-file lint has no
 errors. Independent adversarial source review approved this deletion;
-deployment remains pending.
+it shipped in generation 160 and has been live since.
 The equivalent unused Claude construction-time prompt path is also removed,
 including its obsolete replay-detection commentary.
 Fresh and prior-conversation client tests verify that construction stays inert
 and the next explicit send retains its existing resume behavior.
 Fifty-one Claude client/controller tests pass; independent source review approved
-the deletion and changed-file lint reports no errors. Deployment is pending.
+the deletion and changed-file lint reports no errors. It shipped in generation 160.
 Neither deletion introduces a new persistence mechanism or changes the
 canonical transcript restoration path.
 The full OpenCode suite passes 227 tests, and an independent reviewer reran
@@ -695,7 +701,11 @@ The reviewer independently ran 80 focused tests and 33 updated parser tests.
 Changed-JavaScript lint has no errors; formatting passes.
 The daemon fixture uses a short unique name for macOS socket limits; native Linux execution
 has not been exercised by these macOS owner/storage lifecycle tests.
-This is now deployed after old-plan retirement; native conformance remains open.
+This is now deployed after old-plan retirement; the cross-backend acceptance on
+Tokyo (generations 158, 160 to 161 and 165) exercised native Linux execution
+these macOS tests could not. Still open on the host: no Tokyo run asserted a
+slice's effective limits, and the obsolete field was never presented to the
+parsers because old plans were retired before activation.
 
 ## FA-06 — One session provisioner and execution envelope
 
@@ -727,7 +737,8 @@ three adapters through partial acquisition failure, stop/retry, restart, and del
 
 ### One session provisioner and factory — 2026-09-22
 
-Implemented locally and reviewed; not deployed.
+Implemented, reviewed and deployed as generation 165 on 2026-09-22 with the
+full acceptance matrix passed.
 `@endo/hosted-agent/session-provisioner.js` owns the lifecycle every adapter
 copied: inspect the record, settle the pin, compose the plan, refuse a
 placement the controller or the storage owner would refuse, create or reopen
@@ -787,7 +798,8 @@ from before the allocation rewrite was corrected in its own commit.
 
 ### One execution envelope — 2026-09-22
 
-Implemented locally and reviewed; not deployed.
+Implemented, reviewed and deployed as generation 165 on 2026-09-22 with the
+full acceptance matrix passed.
 `@endo/hosted-agent/execution-envelope.js` owns what the three native
 controllers did in the same order with the same checks: acquire the sandbox
 scope and the broker scope, hold the grant and the broker's evidence to the
@@ -832,11 +844,11 @@ their expectations once their fixtures report the full grant and evidence
 records and the attestation shape a runtime reports. hosted-agent 674, Claude
 203, Codex 306 and OpenCode 250 tests pass; ESLint gates clean; hosted-agent
 types pass.
-FA-06's completion criteria are met locally: one implementation owns each
+FA-06's completion criteria are met: one implementation owns each
 common invariant of provisioning, the factory and the envelope, and the
 conformance suite runs all three adapters through partial acquisition
 failure, stop and retry, restart and deletion. Deployment and acceptance on
-Tokyo follow the wipe model.
+Tokyo followed the wipe model (generation 165).
 
 ## FA-07 — Separate runtime, provider, account, and route
 
@@ -940,7 +952,9 @@ assertion to match the existing label formatter and its unit test.
 This is not a live-browser accessibility or deployed picker acceptance result.
 Broker/account-generation binding, account-specific route admission and failover,
 static configuration removal, live searchable-UI verification, and deployment
-remain pending.
+remained pending at this point; the cutover subsections below record what
+followed through the generation 160 and 161 deployment, except the deployed
+picker's visual state, which those runs did not verify.
 Pool review found that editing a member's account or secret binding under an
 existing ID reused its cached credential handler and could mix old credentials
 with new account metadata.
@@ -1158,6 +1172,115 @@ provider bindings while preserving conversation/workspace, with old authority fe
 replacement and explicit handling of failed transitions.
 Do not weaken per-incarnation image/grant checks to accomplish this.
 
+### Rebindable bindings — 2026-09-22
+
+Implemented, reviewed and deployed as generation 165 on 2026-09-22 with the
+full acceptance matrix passed; completion criteria met. That matrix has no
+`rebind` case (no re-minted broker to rebind to), so the verb's
+evidence is the conformance and module suites.
+What was already true: a session's durable identity is incarnation-free.
+Everything keyed by a session id alone (the derived sandbox id, the owned
+workspace, the private directories, the conversation tree, the private
+journal, the guest names) survives any restart, and the model, effort,
+subscription, network policy and persona were revisable between
+incarnations through the shared provisioner. What was not: the record's
+plan copied the broker's pinned image, account and credential kind at
+creation and treated them as immutable, so a broker re-minted with any of
+them changed refused every session it had served ("destroy the session
+first"); and the record's references (the broker, sandbox and state service
+formulas and the storage owner) were written once at creation and never
+revisable, so a backend re-minted over other services orphaned every
+session even when nothing visible changed.
+Now: the provisioner takes a `rebindable` set beside `immutable` (the three
+adapters declare their image, account and credential-kind fields there;
+placement stays immutable), and a reopen whose proposed plan differs in a
+rebindable field, or whose backend dependencies differ from the record's
+references (the binding named `provider`), is refused by name unless the
+request's `rebind` list names that binding; an unknown name is refused
+rather than ignored, and a creation takes no authorization. An authorized
+reopen stops the record through the owner, then revises it, passing the
+backend's dependencies when they differ, then starts it.
+Old authority is fenced before replacement by construction: the owner's
+`stop` does not resolve until the controller acknowledges native cleanup
+(the supervisor fences admission, closes the client, fences the grant,
+closes MCP admission and reaps the sandbox), and the owner's `revise`
+refuses while a client or worker reference remains or the record is not
+`planned`/`stopped`; a failed stop leaves the record `stopping` and
+unrevisable.
+The daemon's record store gains `rebind`, a replace-in-place write of
+stable dependency roles that refuses the incarnation's own `client` and
+`worker`, requires a complete plan, allows a role the record was created
+without, and is a no-op on the identity a role already holds; the owner's
+`revise` takes the references to rebind, refuses `tools` and the
+incarnation roles, and writes the references before the plan, as creation
+does.
+Failed transitions: a revision refused or failed leaves the stopped record
+on its previous plan and references, and a retry completes it (conformance
+and daemon tests); references rebound but the plan not, or the reverse,
+leave a record whose next activation the execution envelope refuses on
+mismatched image evidence (the exact grant and evidence checks are
+untouched and stricter than before), until a retried rebind names the same
+identities; a failed start after a successful revision leaves the rebound
+record `stopped` for a retry, as any failed start does.
+Floot's session facet exposes the operator's `rebind(bindings)`: hosted
+sessions only, no active turn, the names checked against the bindings the
+session's own backend declares (its descriptor's `rebindableBindings`,
+which the factory kit reads from the provisioner's declaration) before
+the incarnation is touched; it stops the
+incarnation and releases the mount client, admin and agent (the network
+policy change's two halves, now shared), stores a one-shot authorization,
+and the re-provisioning that follows the change carries it in the backend
+request, so a refusal surfaces at the verb. The authorization is spent by
+the first request built from it (a later container-mount recreate never
+carries it) and voided with the verb when no request was built, so it
+cannot be consumed by an unrelated later reopen; deletion clears it too.
+The hosted backend factory validates the list's shape; which names exist
+is the provisioner's. The verb is not a model tool. The review found the
+first draft leaving an authorization behind when the verb failed before
+the request was built, re-sending it on every mount recreate, tearing the
+incarnation down before validating the names, and the second draft
+validating against a vocabulary copied by hand into Floot rather than
+the backend's own declaration, and the third the hosted-agent workspace
+type check failing on a helper that detached the factory's JSDoc and on
+array checks the checker cannot narrow; all are corrected, and the
+per-workspace type checks CI runs (hosted-agent, daemon, Codex) are clean
+for the change, with the pre-existing test-file errors untouched.
+Tests: daemon store cases (edge replacement, a role added, the incarnation
+roles refused, a mid-way failure retried) and owner cases (refused while
+a client is held, `tools`/`client`/`worker` refused, rebound edges read by
+a reconstructed owner and kept by a later plain revision); conformance
+cases for each adapter's rebindable bindings (refused by name, another
+binding's authorization refused, an unknown name refused, the authorized
+rebind revising after a stop with the record then answering the rebound
+broker and refusing the original) and for the `provider` binding (refused,
+a failed revision leaving the old binding, the retry rebinding the
+references without touching the plan, a creation refusing an
+authorization); the Claude and OpenCode module tests rebind an image
+through the real modules; the native owner test rebinds a dependency
+after a native stop and proves the next start resolves it; the factory
+kit refuses a malformed list before provisioning; the descriptor validator
+refuses a malformed declaration; the Claude and OpenCode module tests read
+the declared bindings from the real descriptors; Floot
+factory tests rebind through the verb, refuse a name the backend does not
+declare, an empty list and a turn in flight, prove a refused rebind
+leaves no authorization behind, and that a refusal before the incarnation
+is touched leaves it running.
+Not covered: the execution envelope refusing a half-rebound record
+(argued from its exact checks, not exercised), a daemon crash between two
+reference writes, and the verb failing after the incarnation is replaced
+but before any request is built (the authorization is voided by
+construction; the path is hard to stage).
+Open, from the review: a `provider` rebind moves the state provider and
+storage owner without checking that they serve the recorded session's
+state root, which the plan does not record (the roots are host
+configuration under the wipe-and-recreate deployment model, so a re-rooted
+state provider is a host change, not a broker re-mint; recording the state
+root as placement would refuse it); for Claude and OpenCode the account is
+the broker's own rather than a plan field, so a broker re-minted over
+another Secret is a `provider` change, which the verb's help says; and the
+verb reports the names it authorized, not what the record now carries, so
+the operator authorizes a value they cannot inspect first.
+
 ## FA-09 — Give local development storage an explicit role
 
 The projected 9P workspace is a capability filesystem, not a promise of ordinary local
@@ -1173,6 +1296,57 @@ A larger host disk alone does not enforce per-session limits.
 Completion: the agent can install and reuse a toolchain on suitable local storage, knows
 which paths are projected/temporary/persistent, and cannot exhaust the host through an
 unbounded per-session storage grant.
+
+### Scoping — 2026-09-22
+
+Not implemented; scoped, with the host facts that decide the mechanism, and
+deferred by the operator on 2026-09-22 (deploy first; mechanism and bound later).
+What exists: every hosted slice gets the projected workspace at `/workspace`
+(9P, a capability filesystem), a 1 GiB tmpfs at `/tmp` and a 256 MiB tmpfs
+at `/run` (`TEMPORARY_MOUNTS` in `execution-envelope.js`), the runtime's own
+state directory under the state provider's root, and, for Codex,
+operator-declared container mounts recorded in the plan. Nothing is both
+durable and local: a toolchain installed under `/tmp` is gone at the next
+incarnation, and one installed in the workspace is projected through 9P,
+which promises no ordinary filesystem behaviour for package caches, SQLite
+or build output. The only storage bound in the app is the delegated
+runner's `storageBoundBytes`, a declaration a runner passes down and no
+backend enforces (`enforcesStorageBound` is declared by none, so the runner
+refuses a bounded session outright). The prompt describes `/workspace` and
+attached `/mnt/` disks; it does not say which paths are projected,
+temporary or persistent.
+Host facts (Tokyo, read 2026-09-22): `/var/lib/endo` is its own 100 GB
+ext4 volume (`/dev/vdb`, 27 GB used) beside a 50 GB ext4 root; `losetup`
+and `mkfs.ext4` are installed, no quota tools (`xfs_quota`, `setquota`) and
+no `prjquota` mount option; the daemon runs as `endo` and Podman is
+rootless.
+Mechanisms that bound bytes and inodes durably; each needs host privileges
+the daemon does not hold, so each is an endo-host (NixOS) change with a
+small root-owned helper the daemon speaks to, a new privileged surface to
+review:
+1. A per-session ext4 image: a sparse file of the bound's size, `mkfs.ext4`,
+   loop-mounted on the host and bind-mounted into the slice. Bytes and
+   inodes are bound by construction, removal is unmount and unlink, restart
+   is remount, and the image lives with the session's state root;
+   `losetup` and `mount` need root. Userspace `fuse2fs` would avoid root,
+   but a FUSE mount bound into a rootless container is fragile.
+2. ext4 project quotas on `/dev/vdb`: `tune2fs -O project,quota` on the
+   unmounted volume (a maintenance stop the wipe-and-recreate model already
+   takes), a project id per session directory and a `setquota -P` per
+   bound; `chattr -p` and `setquota` need root; no images to manage.
+3. A tmpfs of the bound's size: bounded and simple, RAM-backed and lost at
+   restart, which this finding rules out for toolchains.
+App-side contract, the same under 1 or 2: the plan records a local storage
+allocation (a host path under a `localRoot` beside the workspace and
+private roots, the byte and inode bounds) as placement; the envelope adds
+a `local` mount role at `/local`, or at the slice user's home so toolchains
+land there without instruction, with the bound in the attestation and in
+the hosted policy's mount accounting; the storage owner removes it with the
+session; the prompt names the three classes of path, projected
+`/workspace`, temporary `/tmp` and `/run`, persistent `/local`, with their
+bounds; the descriptor declares `enforcesStorageBound`, so a delegated
+runner's bound is honoured; a session at its bound sees `ENOSPC`, never the
+host. The operator decides the mechanism (1 or 2) and the default bound.
 
 ## FA-10 — Share representations without erasing authority distinctions
 
@@ -1193,7 +1367,8 @@ guest-reported effects or dropping host-observed uncertainty.
 
 ### One fold, one converter, one delta — 2026-09-22
 
-Implemented locally and reviewed; not deployed.
+Implemented, reviewed and deployed as generation 165 on 2026-09-22 with the
+full acceptance matrix passed.
 Three of the duplications are gone.
 The two hosted-turn commits in `agent.js` (the completed turn and the turn
 mirrored after a stop or a failure) were byte-identical converters apart from
@@ -1243,9 +1418,10 @@ followed the same day, below.
 
 ### One reconciliation, one pairing — 2026-09-22
 
-Implemented locally and reviewed; not deployed.
+Implemented, reviewed and deployed as generation 165 on 2026-09-22 with the
+full acceptance matrix passed.
 The last two duplications the finding names are gone, and its completion
-criteria are met locally: snapshots and deltas converge under one corpus
+criteria are met: snapshots and deltas converge under one corpus
 (above), and success, failure, cancellation and restoration now share record
 conversion and evidence reconciliation.
 A turn's tool calls are recorded up to three times: mirrored into the tree
@@ -1361,7 +1537,7 @@ Thirty focused factory tests pass, including rejection of missing, string, null,
 array, and extra arguments before provisioning.
 The full Floot suite also passes all 403 tests with local socket permissions.
 Changed-file ESLint has no errors; formatting passes.
-Independent review approved the code; deployment is pending.
+Independent review approved the code; it shipped in generation 159 (2026-09-21).
 The repository documentation gate was run and failed with 8,985 reported errors,
 including missing `Far` declarations and unresolved entrypoints in unrelated
 packages; this is not a claim of green repository-wide type/docs checks.
@@ -1378,7 +1554,7 @@ Provider and hosted restart tests seed a poisoned legacy cache, verify no cache
 access or mutation, and check recovered totals and subsequent accumulation.
 All 39 focused journal, hosted, evidence, and continuity tests pass; independent
 review approved the change and changed-file lint has no errors.
-Deployment remains pending.
+It shipped in generation 159 (2026-09-21).
 
 ### Legacy registry import removed
 
@@ -1396,11 +1572,12 @@ All 414 Floot tests pass, including 52 focused registry/factory tests; changed-f
 lint, formatting, and diff checks pass.
 Read-only Tokyo inspection found a valid version-1 snapshot at sequence 1085,
 four retained snapshots, one session, and neither legacy registry root.
-No live state was modified; deployment and post-deploy verification remain pending.
+No live state was modified; it shipped in generation 159 and Tokyo's inventory was
+verified on 2026-09-22 (see "Deployment verified; Tokyo's legacy state retired").
 
 ### Private journal removal: creation and revival boundary
 
-Implemented and tested locally; deployment is pending.
+Implemented and tested; shipped in generation 159 (2026-09-21).
 The code no longer imports guest journals.
 The replacement must distinguish a newly authorized session from revival of an
 existing registry entry, rather than inferring freshness from missing guest names.
@@ -1482,7 +1659,7 @@ The full documentation gate has not been rerun after that typing correction.
 ### Deployment verified; Tokyo's legacy state retired
 
 Every FA-11 code removal (`db12c4af4`, `c24d84d1c`, `a0911be55`, `162b9d6ef`)
-is an ancestor of the revision Tokyo has run since generation 160, and the
+is an ancestor of the revision Tokyo has run since generation 159, and the
 2026-09-21 and 2026-09-22 acceptance matrices exercised session creation,
 restart/restore and deletion on that code.
 A read-only inventory on 2026-09-22 (endo-host
@@ -1524,7 +1701,7 @@ ownership are untouched.
 The OpenCode credential tests now import the shared module and explicitly require
 newly minted URLs to select its shared entrypoint.
 All 27 focused OpenCode credential/setup tests pass; changed-file lint is clean.
-Deployment verification of the removal remains pending.
+The removal shipped in generation 159; its deployment is verified below.
 
 The OpenCode `src/opencode-broker-service.js` wrapper and its package export are removed.
 The current broker agent already uses the shared service kit directly.
@@ -1534,13 +1711,13 @@ Repository search found no remaining production callers of the removed export.
 Thirteen focused service/entrypoint tests and all 218 OpenCode package tests pass
 locally with Unix-socket permissions; restricted execution hit three `EPERM`
 socket failures before the unrestricted rerun passed.
-Package ESLint reports zero errors and 36 warnings; deployment is pending.
+Package ESLint reports zero errors and 36 warnings; it shipped in generation 159.
 Do not infer deadness for all wrappers: current controllers still use `parse-rootfs.js`.
 
 ### Deployment verified
 
 Both removals (`886192baf`, `8aa1edc99`, with `7f8eee056`) have run on Tokyo since
-generation 160.
+generation 159.
 The 2026-09-22 inventory lists 55 module formulas under the current release: the
 shared `managed-credentials-module.js` (two), `managed-renewable-credentials-module.js`
 (five), the account oracle, account source, subscription, subscription-admin and
@@ -1696,8 +1873,11 @@ their remaining work is not implied complete by this deployment sequence.
    Verify cleanup and preserved workspace/credential identity, not just UI success.
    Record failures and unavailable accounts explicitly rather than counting them as passes.
 5. Resume FA-11/FA-12 legacy retirement/deletion (done 2026-09-22; see "Legacy
-   retirement — 2026-09-22"), then FA-06/FA-10 extraction (done locally 2026-09-22, not deployed), FA-07/FA-08,
-   FA-09 storage, and remaining bounded-context/compaction and resource-failure acceptance.
+   retirement — 2026-09-22"), then FA-06/FA-10 extraction and FA-08 (deployed as
+   generation 165 on 2026-09-22 with the full acceptance matrix passed), FA-07
+   (deployed as generations 160 and 161 and accepted there), FA-09 storage (scoped
+   2026-09-22 and deferred by the operator), and remaining bounded-context/compaction
+   and resource-failure acceptance.
 
 ### Cutover progress — 2026-09-21
 
@@ -1789,11 +1969,12 @@ The broader audit remains open; resume deletion before abstraction next.
 The third cutover (endo-host `ops/hosted-cutover3-20260922.md`) retired the
 three pre-catalog brokers and activated the discovery release; its first
 activation (generation 160) failed hosted restart/restore because of the
-fail-closed native teardown, which was evicted to #1323, and generations
-161 to 163 then passed the whole matrix (create, native tool use, network
-policy, cancellation, graceful restart/restore, deletion) on Luna, Haiku 4.5
-and the free routes, followed by the picker ordering, the no-session-on-load
-rule and thinking folded into the actions group. Tokyo ended each activation
+fail-closed native teardown, which was evicted to #1323; generation 160 had
+passed create, native tool use, network policy and cancellation and generation
+161 passed graceful restart/restore and deletion, on Luna, Haiku 4.5 and the
+free routes, and generations 162 and 163 (the picker ordering, the
+no-session-on-load rule and thinking folded into the actions group) passed the
+discovery gate after each restart. Tokyo ended each activation
 with zero native records, containers and mounts beyond the operator's own
 sessions; Secrets and the four workspace archives are unchanged. The
 inventoried graph still carries legacy one-shot helper formulas
@@ -1832,6 +2013,9 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | Audit: status lines corrected to the deployed state, after two adversarial review passes: FA-03/04/05 register rows and the FA-05 line record the acceptance runs that exercised them (generations 158, 160 to 161 and 165) and what FA-05 still lacks; the FA-01, FA-03 and FA-04 lines and the two subscription-pool durability rows record generation 157, the FA-04 restoration slice generation 159 (on-host conformance left open) and the construction-prompt slices generation 160; FA-11/FA-12 pending lines and register rows record generation 159; the FA-07 register row, durability rows and progress paragraph record generations 160 and 161 (picker visual state unverified); the FA-06, FA-08 and FA-10 register, durability and section lines record generation 165; sequence step 5 and the 2026-09-22 cutover paragraph split the matrix across generations 160 and 161 as the record shows; FA-08 notes the matrix has no `rebind` case; FA-09 records the operator's deferral | Documentation only; no runtime change |
+| 2026-09-22 | Deploy: app `e1ad34345` (FA-06, FA-08, FA-10, FA-09 scoped) to Tokyo as generations 164 and 165 under the wipe model; the operator recreated the six Secrets by hand (the primary Codex one renamed `codex-subscription-1`) and removed the env-token Floot provider, so Floot runs on `secrets/openrouter-auth` | Discovery gate, hosted seed/policy/cancel/inspect/cleanup on Haiku 4.5, Luna and the free route, Fae seed and cancel, restart/restore on all four backends, deletion: all passed; one incident (a recall phase during the daemon restart let the CLI start a rival daemon that killed the host on port 8921; one clean restart recovered it); endo-host `ops/hosted-cutover4-20260922.md`. Operator instruction: never wipe the Secrets manager again |
+| 2026-09-22 | FA-08: a session record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen (`rebind: [...]`), after the owner's stop and with the daemon refusing the revision while any authority is held; the record store gains `rebind` and the owner's `revise` takes references; Floot's session facet gains the operator's `rebind` | Daemon store/owner cases; conformance cases per adapter plus the provider binding; Claude/OpenCode module cases; a Floot factory case; Floot 479, chat 935, space-floot 52, hosted-agent 676, Codex 308, Claude 205, OpenCode 252, daemon session suites 72 pass; package ESLint gates clean; independent adversarial review in four passes; FA-08 completion criteria met locally; not deployed |
 | 2026-09-22 | FA-10: one reconciliation of a turn's tool evidence (`src/turn-evidence.js`) for history and restoration, on the restoration rules; one tool-pairing rule (`pairToolCalls` with `perTurn`); history tool rows carry the provider's call id; the tree-to-records projection emits only results an open call in the turn can take | Reducer suite (11 cases), a projection case, a restoration case and a pairing case; Floot 475, chat 935, space-floot 52, hosted-agent 675 pass; Floot and hosted-agent ESLint gates clean for the change; independent adversarial review; FA-10 completion criteria met locally; not deployed |
 | 2026-09-22 | FA-10: one reply-event fold shared by the daemon turn and the browser component, one hosted-turn message converter for both commits, one transcript-delta applier in place of chat's mirror; chat depends on Floot at runtime for the two pure modules | New fold suite proves snapshot-adopting and event-applying views converge at every cut of a corpus; Floot 462, chat 935, space-floot 52 pass; package ESLint gates clean for the change; independent adversarial review; reconciliation and tool-pairing duplication remain; not deployed |
 | 2026-09-22 | FA-06: one execution envelope in hosted-agent for the three native controllers; the provider-grant check and the canonical JSON encoder move from Codex into hosted-agent; exact grant, evidence and raw placement checks apply to every runtime | Envelope suite (10 cases); hosted-agent 674, Claude 203, Codex 306, OpenCode 250 pass; ESLint gates clean; hosted-agent types pass; independent adversarial review verified the checks against the real issuer and sandbox attestation builder and found one defect (Claude's single-token subscription sessions would have required an OAuth grant), fixed; FA-06 completion criteria met locally; not deployed |

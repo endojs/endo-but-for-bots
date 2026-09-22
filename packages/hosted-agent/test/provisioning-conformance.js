@@ -23,8 +23,8 @@ import {
 /**
  * Shared provisioning conformance for the hosted CLI adapters.
  *
- * Every adapter declares its own plan fields, private paths, immutable fields
- * and pin policy over the one session provisioner and the one backend
+ * Every adapter declares its own plan fields, private paths, immutable and
+ * rebindable fields and pin policy over the one session provisioner and the one backend
  * factory (`session-provisioner.js`, `backend-factory-kit.js`). These are the
  * lifecycle properties that hold whatever the runtime is: what a record is
  * created with, what a reopen keeps and refuses, what a partial acquisition
@@ -41,8 +41,9 @@ import {
  *   adapter's plan needs beyond the shared ones (Codex's container mounts).
  * @param {Array<{ what: string, makeProvisioner: (powers: any) => (sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any> }>} [adapter.rebound]
  *   The same declaration over a broker re-minted with another binding a
- *   record cannot follow: another image, credential kind or account, named
- *   as the refusal names it.
+ *   record follows only under a request that authorizes it: another image,
+ *   credential kind or account, named as the refusal and the authorization
+ *   name it.
  */
 export const testProvisioningConformance = ({
   label,
@@ -124,11 +125,23 @@ export const testProvisioningConformance = ({
         const record = records.get(name);
         return record === undefined ? undefined : harden({ ...record });
       },
-      async revise(name, plan) {
-        log.push(['revise', name, plan]);
+      /**
+       * @param {string} name
+       * @param {string} plan
+       * @param {Record<string, string>} [references]
+       */
+      async revise(name, plan, references = undefined) {
+        log.push(
+          references === undefined
+            ? ['revise', name, plan]
+            : ['revise', name, plan, references],
+        );
         if (knobs.reviseError) throw knobs.reviseError;
         const record = records.get(name);
         if (!record) throw Error('missing record');
+        if (references !== undefined) {
+          record.references = { ...record.references, ...references };
+        }
         record.plan = plan;
       },
       async start(name, tools) {
@@ -434,7 +447,7 @@ export const testProvisioningConformance = ({
   });
 
   for (const { what, makeProvisioner: makeRebound } of rebound) {
-    test(`${label} a record cannot be reopened under a broker with another ${what}`, async t => {
+    test(`${label} a record reopened under a broker with another ${what} is refused until a request authorizes the rebind, which revises after a stop`, async t => {
       const f = await fixture(t);
       await f.provision('a', f.request, f.tools);
       const other = makeRebound({
@@ -447,12 +460,100 @@ export const testProvisioningConformance = ({
       });
       const before = f.log.length;
       await t.throwsAsync(other('a', f.request, f.tools), {
-        message: new RegExp(`${what} cannot change; destroy the session first`),
+        message: new RegExp(
+          `${what} cannot change without a reopen that authorizes rebinding it`,
+        ),
       });
-      t.deepEqual(f.names().slice(before), ['inspect']);
+      // Authorizing another binding is not authorizing this one, and a
+      // binding this adapter does not know is refused, not ignored.
+      await t.throwsAsync(
+        other('a', { ...f.request, rebind: ['provider'] }, f.tools),
+        { message: new RegExp(`${what} cannot change`) },
+      );
+      await t.throwsAsync(
+        other('a', { ...f.request, rebind: ['persona'] }, f.tools),
+        { message: /cannot rebind "persona"/ },
+      );
+      t.deepEqual(f.names().slice(before), ['inspect', 'inspect', 'inspect']);
       t.is(f.records.get('a')?.phase, 'ready');
+      const recordedBefore = f.plan('a');
+      t.is(
+        await other('a', { ...f.request, rebind: [what] }, f.tools),
+        f.client,
+      );
+      t.deepEqual(f.names().slice(-4), ['inspect', 'stop', 'revise', 'start']);
+      const revise = f.log.findLast(([kind]) => kind === 'revise');
+      t.is(revise?.length, 3, 'the dependencies are unchanged, none rebound');
+      const revised = f.plan('a');
+      t.notDeepEqual(revised, recordedBefore);
+      t.is(f.records.size, 1);
+      // Rebound, the record answers the rebound broker without a further
+      // authorization and refuses the one it was created under.
+      await other('a', f.request, f.tools);
+      t.deepEqual(f.names().slice(-3), ['inspect', 'stop', 'start']);
+      t.deepEqual(f.plan('a'), revised);
+      await t.throwsAsync(f.provision('a', f.request, f.tools), {
+        message: new RegExp(`${what} cannot change`),
+      });
     });
   }
+
+  test(`${label} a record reopened under other services rebinds its dependencies only when authorized, after a stop; a failed revision leaves the old binding`, async t => {
+    const f = await fixture(t);
+    await f.provision('a', f.request, f.tools);
+    const planBefore = f.plan('a');
+    const dependencies = harden({
+      ...f.dependencies,
+      brokerService: 'broker-2',
+    });
+    const other = makeProvisioner({
+      owner: f.owner,
+      dependencies,
+      workspaceRoot: f.workspaceRoot,
+      privateRoot: f.privateRoot,
+      protectedRoots: harden([f.protectedRoot]),
+      catalog: f.scripted.catalog,
+    });
+    const before = f.log.length;
+    await t.throwsAsync(other('a', f.request, f.tools), {
+      message:
+        /provider cannot change without a reopen that authorizes rebinding it/,
+    });
+    t.deepEqual(f.names().slice(before), ['inspect']);
+    t.deepEqual(f.records.get('a')?.references, f.dependencies);
+    f.knobs.reviseError = Error('record store refused');
+    await t.throwsAsync(
+      other('a', { ...f.request, rebind: ['provider'] }, f.tools),
+      { message: /record store refused/ },
+    );
+    t.deepEqual(f.names().slice(-3), ['inspect', 'stop', 'revise']);
+    t.deepEqual(
+      f.records.get('a')?.references,
+      f.dependencies,
+      'the old binding stands',
+    );
+    t.is(f.records.get('a')?.phase, 'stopped');
+    f.knobs.reviseError = undefined;
+    t.is(
+      await other('a', { ...f.request, rebind: ['provider'] }, f.tools),
+      f.client,
+    );
+    t.deepEqual(f.names().slice(-4), ['inspect', 'stop', 'revise', 'start']);
+    const revise = f.log.findLast(([kind]) => kind === 'revise');
+    t.deepEqual(revise?.[3], dependencies);
+    t.deepEqual(f.records.get('a')?.references, dependencies);
+    t.deepEqual(f.plan('a'), planBefore, 'the plan is untouched by it');
+    // Rebound, the record answers the rebound services without a further
+    // authorization.
+    await other('a', f.request, f.tools);
+    t.deepEqual(f.names().slice(-3), ['inspect', 'stop', 'start']);
+    // A new session takes no authorization: there is nothing to rebind.
+    await t.throwsAsync(
+      other('b', { ...f.request, rebind: ['provider'] }, f.tools),
+      { message: /has no record to rebind/ },
+    );
+    t.false(f.records.has('b'));
+  });
 
   const makeToolSet = () =>
     makeExo('HostedToolSet', HostedToolSetInterface, {
@@ -704,6 +805,32 @@ export const testProvisioningConformance = ({
     t.false(f.records.has('session-a'));
     await E(factory).destroy(spec);
     t.deepEqual(f.names().slice(10), ['remove']);
+  });
+
+  test(`${label} the factory refuses a rebind list of the wrong shape before provisioning`, async t => {
+    const { factory, names } = makeHarness();
+    for (const rebind of [
+      'image',
+      ['image', ''],
+      ['x'.repeat(65)],
+      Array.from({ length: 9 }, () => 'image'),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        E(factory).create(
+          harden({ sessionId: 'session-a', rebind }),
+          makeToolSet(),
+        ),
+        { message: /rebind must be a short list of binding names/ },
+      );
+    }
+    t.deepEqual(names(), []);
+    // A well-formed list reaches the provisioner as given.
+    await E(factory).create(
+      harden({ sessionId: 'session-a', rebind: ['image'] }),
+      makeToolSet(),
+    );
+    t.deepEqual(names(), ['provision']);
   });
 
   test(`${label} a refused plan propagates without any factory-side cleanup call`, async t => {

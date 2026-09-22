@@ -1354,6 +1354,11 @@ for await (const chunk of iterateBytesReader(reader, { buffer: 64 })) {
   OpenCode's a changed image pin, and both otherwise keep the retained
   configuration silently.
   Neither is a way to add an account.
+  (Since 2026-09-22, audit FA-08, a session created under one image, account
+  or credential kind reopens under a broker re-minted with another only when
+  the request names that binding as one it authorizes rebinding; the
+  refusals above are of the retained service's configuration, not of a
+  session's record.)
   Adding a member is a write of a value and a secret.
   Changing the account pin of an existing member stays refused: add a member.
 - **Readings are written on change**, through the oracle's new `push`. Only

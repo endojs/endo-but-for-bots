@@ -137,10 +137,10 @@ export const makeClaudeSessionProvisioner = ({
     readPlan: readClaudeSessionPlan,
     // The plan records the broker's pinned image and credential kind; the
     // controller later refuses a broker whose evidence names another digest,
-    // and a broker re-minted over another image or credential kind is a
-    // different session.
+    // and a session reopens under a broker re-minted over another image or
+    // credential kind only when the request authorizes that rebind.
     fields: () => ({ rootfs, credentialKind }),
-    immutable: { rootfs: 'image', credentialKind: 'credential kind' },
+    rebindable: { rootfs: 'image', credentialKind: 'credential kind' },
     pin: { unpinned: 'runtime-default', assertEffort: assertClaudeEffort },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),

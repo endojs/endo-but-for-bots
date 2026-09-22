@@ -8,11 +8,12 @@
  * tool set Floot pinned. The lifecycle is the same for every runtime: inspect
  * the record, settle the model pin, compose the plan, refuse a placement the
  * controller or the storage owner would refuse, create the record or reopen
- * it in place without rebinding what it was recorded with, stop whatever ran
- * before, heal the recorded directories, and start. Only the plan's own
- * fields, the private paths the runtime needs, the fields that cannot change
- * between incarnations and the pin policy differ between runtimes; an adapter
- * declares those and copies none of the algorithm.
+ * it in place, rebinding what it was recorded with only under a request that
+ * names that binding, stop whatever ran before, heal the recorded
+ * directories, and start. Only the plan's own fields, the private paths the
+ * runtime needs, the fields that cannot change between incarnations, the
+ * bindings a request may authorize changing and the pin policy differ between
+ * runtimes; an adapter declares those and copies none of the algorithm.
  *
  * Every provision re-resolves the guest roots and the protected roots (host
  * records, the runtime directory, the broker's directory) and refuses a guest
@@ -74,6 +75,40 @@ const PLACEMENT_NAMES = harden({
 });
 
 /**
+ * The name a request's authorization uses for the record's dependencies: the
+ * broker, the sandbox and state services and the storage owner, which change
+ * together when a backend is re-minted over other services.
+ */
+const PROVIDER = 'provider';
+
+/**
+ * What a reopen is authorized to rebind: the names of the bindings it may
+ * change, or none. An unknown name is refused rather than ignored, so an
+ * authorization meant for another adapter's binding cannot pass as one.
+ *
+ * @param {unknown} value
+ * @param {ReadonlySet<string>} known
+ * @param {string} label
+ * @returns {readonly string[]}
+ */
+const readRebind = (value, known, label) => {
+  if (value === undefined) return harden([]);
+  // A statement rather than `Array.isArray(value) || Fail`: only control
+  // flow narrows.
+  if (!Array.isArray(value)) {
+    throw Fail`${b(label)} rebind must list the bindings a reopen may change`;
+  }
+  /** @type {string[]} */
+  const names = [];
+  for (const name of value) {
+    (typeof name === 'string' && known.has(name)) ||
+      Fail`${b(label)} cannot rebind ${q(name)}; it rebinds ${q([...known])}`;
+    names.push(name);
+  }
+  return harden([...new Set(names)]);
+};
+
+/**
  * @param {object} powers
  * @param {string} powers.label The adapter's name for messages.
  * @param {any} powers.owner The daemon session owner the records belong to.
@@ -97,6 +132,12 @@ const PLACEMENT_NAMES = harden({
  *   The adapter's own plan fields.
  * @param {Record<string, string>} [powers.immutable] Adapter fields no reopen
  *   may change, by plan field and the name a refusal gives it.
+ * @param {Record<string, string>} [powers.rebindable] Adapter fields a reopen
+ *   may change only under a request that authorizes it, by plan field and
+ *   the name the authorization uses (`{ imageRef: 'image' }`); the record's
+ *   dependencies are rebindable alike, under `provider`. A durable session
+ *   keeps its identity, workspace and conversation across such a rebind;
+ *   the incarnation before it is stopped, and its authority released, first.
  * @param {object} [powers.pin]
  * @param {'catalog-default' | 'runtime-default'} [powers.pin.unpinned] What a
  *   session that names no model gets: the default the account's catalog
@@ -121,6 +162,7 @@ export const makeSessionProvisioner = ({
   readPlan,
   fields = () => ({}),
   immutable = {},
+  rebindable = {},
   pin: { unpinned = 'catalog-default', assertEffort = effort => effort } = {},
   catalog,
   mounterEnv,
@@ -146,6 +188,10 @@ export const makeSessionProvisioner = ({
     ),
     ...immutable,
   });
+  const rebindableNames = harden({ ...rebindable });
+  const bindings = harden(
+    new Set([...Object.values(rebindableNames), PROVIDER]),
+  );
 
   /**
    * The recorded pin answers a reopen that names it, or nothing; a new
@@ -276,19 +322,45 @@ export const makeSessionProvisioner = ({
     // The controller and the storage owner parse exactly this text later;
     // refuse now what they would refuse then.
     const plan = readPlan(text);
+    const authorized = readRebind(request.rebind, bindings, label);
+    // Whether the record's dependencies are those this backend holds now.
+    const rebound =
+      record !== undefined &&
+      Object.entries(dependencies).some(
+        ([role, id]) => record.references?.[role] !== id,
+      );
     if (record !== undefined) {
       if (recorded === undefined) {
         throw Fail`Session ${q(sessionId)} has an incomplete record; destroy it before reuse`;
       }
-      // What a record was created with cannot be revised: a request naming
-      // different storage, a broker re-pinned or re-credentialed since, or a
-      // re-rooted backend is a different session. The network policy, the
-      // pin, the subscription and the persona may change between
-      // incarnations.
+      // What a record was created with as its placement cannot be revised: a
+      // request naming different storage or a re-rooted backend is a
+      // different session. The network policy, the pin, the subscription and
+      // the persona may change between incarnations.
       for (const [name, what] of Object.entries(immutableNames)) {
         recorded[name] === plan[name] ||
           Fail`Session ${q(sessionId)} ${b(what)} cannot change; destroy the session first`;
       }
+      // What a record was bound to may change between incarnations only
+      // under a request that names it: the pinned image, the account or the
+      // credential kind a broker re-minted since now carries, and the
+      // services the record depends on. The session keeps its identity,
+      // workspace and conversation; the incarnation bound before is stopped
+      // first, below, and the daemon refuses the revision while any of its
+      // authority is still held.
+      const changed = new Set(
+        Object.entries(rebindableNames)
+          .filter(([name]) => recorded[name] !== plan[name])
+          .map(([, what]) => what),
+      );
+      if (rebound) changed.add(PROVIDER);
+      for (const what of changed) {
+        authorized.includes(what) ||
+          Fail`Session ${q(sessionId)} ${b(what)} cannot change without a reopen that authorizes rebinding it; destroy the session, or reopen it with rebind: [${q(what)}]`;
+      }
+    } else {
+      authorized.length === 0 ||
+        Fail`Session ${q(sessionId)} has no record to rebind`;
     }
     await assertPlacement(plan);
     if (record === undefined) {
@@ -297,9 +369,14 @@ export const makeSessionProvisioner = ({
       // Stop before reuse, whatever the record's phase: an interrupted start
       // is retried through its cleanup here rather than only through
       // deletion, and a live incarnation from an earlier backend cannot keep
-      // a tool authority this request does not hold.
+      // a tool authority this request does not hold. A revision the stop
+      // did not clear the way for is the daemon's to refuse.
       await E(owner).stop(sessionId);
-      if (record.plan !== text) await E(owner).revise(sessionId, text);
+      if (rebound) {
+        await E(owner).revise(sessionId, text, harden({ ...dependencies }));
+      } else if (record.plan !== text) {
+        await E(owner).revise(sessionId, text);
+      }
     }
     // Only a recorded plan owns these; the mounter creates the mount point.
     // Idempotent on every start, so a record whose directories were never
@@ -316,6 +393,10 @@ export const makeSessionProvisioner = ({
     }
     return E(owner).start(sessionId, toolSet);
   };
-  return harden(provision);
+  // The names a request may authorize, declared with the function so the
+  // factory's descriptor can carry them to an operator.
+  return harden(
+    Object.assign(provision, { rebindable: harden([...bindings]) }),
+  );
 };
 harden(makeSessionProvisioner);
