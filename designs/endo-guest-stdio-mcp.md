@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-08 |
-| **Updated** | 2026-09-21 |
+| **Updated** | 2026-09-22 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
@@ -23,16 +23,6 @@ which of them become runtime rather than structural. The broker model is retaine
 only as the documented multi-tenant hardening path (§ *Design Decisions*, item 1)
 should a deployment need structural cross-guest isolation before ocapn's
 domain-socket transport lands.
-
-Updated 2026-09-21 to **check the approach against the actual daemon client API**
-(the maintainer's "please check" / "check the approach against the actual daemon
-client API before landing"). The mechanism is realizable today with **no new daemon
-surface**: `makeEndoClient` → `getBootstrap` → `E(bootstrap).host()` reaches the
-bootstrap root host, and `E(host).lookupById(formulaId)` (guarded
-`M.call(IdShape).returns(M.promise())` on `HostInterface`,
-`packages/daemon/src/interfaces.js`) resolves a formula-identifier string to its
-value. § *Scoping* and § *Dependencies* now cite these named symbols rather than
-describing the resolution abstractly.
 
 ## What is the Problem Being Solved?
 
@@ -75,14 +65,17 @@ the [endo-agent-tools](endo-agent-tools.md) MCP-adapter projection rather than
 reinventing it, and does not re-derive endo-claude's client flags.
 
 **A cross-document note.** [endo-claude](endo-claude.md)'s *Local deployment* and
-*Multiplexing by guest identifier* sections still describe the earlier two-process
-adapter/broker split with an fd never inherited into the confined tree. Under the
-simplification adopted here that split is gone, so those two sections of
-endo-claude are **now out of step with this document** and must be reconciled to
-the single-process daemon-client model; that reconciliation is carried as a
-cross-document obligation in the Open Questions below. Until endo-claude is
-updated, **this document is authoritative for the stdio transport's topology and
-its confinement analysis.**
+*Multiplexing by guest identifier* sections describe the two-process adapter/broker
+split with an fd never inherited into the confined tree. That split is **not** to be
+consolidated away (maintainer, PR #1226: "there is more than one way to use Claude
+and we expect to use them"): it is the **confined, structural** topology, in which
+the harness owns the daemon connection outside the slice. This document adds a
+**second, coexisting** topology — a server-held connection for the single-tenant,
+non-adversarial deployment that does not confine `claude` against the socket — and
+§ *Scoping* carries both. The two documents therefore agree: endo-claude owns the
+harness-owned-broker shape, this document owns the server half of the contract common
+to both shapes plus the smaller single-tenant shape. No reconciliation-by-consolidation
+is owed.
 
 ## Division of labor with the neighboring designs
 
@@ -110,8 +103,17 @@ flowchart LR
   HARNESS -->|"1. spawns with --mcp-config (env: formula id)"| CLAUDE
   CLAUDE -->|"2. spawns as its MCP stdio server"| SERVER
   SERVER -->|uses| ADP
-  SERVER -->|"3. daemon client over the usual socket;<br/>resolve formula id at the bootstrap root host"| DAEMON
+  SERVER -->|"3. daemon connection; resolve to the one guest facet<br/>(edge 3 lives outside the confined tree in the confined shape)"| DAEMON
 ```
+
+The diagram shows the **single-tenant** shape, where the claude-spawned server holds
+the daemon connection itself (edge 3). In the **confined** shape the confinement
+premise moves edge 3 **out** of the `claude` subgraph: a harness-owned process (a
+broker, or a daemon-issued guest-scoped bootstrap) holds the daemon connection
+outside the slice, and the claude-spawned server speaks MCP over a channel it is
+given rather than opening the socket — because the sandbox denies the confined
+`claude` tree the daemon socket (§ *Scoping*). The server-side contract (resolve to
+one facet, pin the pruned catalog, dispatch check) is identical either way.
 
 [endo-claude](endo-claude.md) decides **when** to spawn, **with what flags**, and
 generates the per-guest `--allowedTools` from the same pinned catalog this server
@@ -120,15 +122,20 @@ facet's tool set to an MCP `tools/list` catalog, and an MCP `tools/call` to
 `E(facet).<method>(args)`), present today as a declared stub at
 `packages/agent-tools/src/adapters/mcp.js`. This document owns the **server** that
 hosts that projection over stdio: how it is told which guest, how it reaches that
-guest through the daemon client, the catalog pinning and server-side dispatch
+one guest's facet, the catalog pinning and server-side dispatch
 check, the fail-closed rules, and the naming.
 
 ## Scoping by formula identifier (the confinement boundary)
 
-This is the centerpiece. The server must speak for exactly one guest. Under the
-simplified transport the mechanism is: the server is told the guest's formula id
-out of band, connects to the daemon with the ordinary client, and resolves that one
-guest's facet at the bootstrap root host.
+This is the centerpiece. The server must speak for exactly one guest. The mechanism
+common to every topology is: the server is told the guest's formula id out of band,
+the one guest's facet is resolved through a daemon connection, and **all** traffic is
+served against that one facet and no other. What varies — and what the confinement
+premise decides — is **where the daemon connection lives**: held by a harness-owned
+process outside the confined tree in the confined shape, or by the claude-spawned
+server itself in the single-tenant shape (*How the confinement properties change*,
+below). The one-guest resolution and the always-dispatch-through-that-guest contract
+are identical across both.
 
 **The server is told which guest once, at startup, out of band from the MCP
 client.** The 64-hex formula id is delivered through the server process's
@@ -153,12 +160,24 @@ the one guest's value by the agent-only registry method
 (`packages/daemon/src/interfaces.js`), where `IdShape` is the formula-identifier
 string. This is the concrete daemon-client form of "the root that resolves *any*
 formula id against ambient daemon powers" that [endo-claude](endo-claude.md) Design
-Decision 8 names, and it is what makes the maintainer's simplification realizable
-today without any new daemon surface: `lookupById` already exists on the host the
-ordinary client reaches. All subsequent `tools/list` / `tools/call` traffic is
-served against that one resolved facet. The server inherits from `claude` only what
-the confinement slice grants it: **stdio to its parent, and reach to the daemon
-socket** — no other guest's connection, no bearer, no listening port.
+Decision 8 names, and `lookupById` already exists on the host the ordinary client
+reaches, so no new daemon surface is required to reach one guest. Once the one
+guest's facet is resolved, **all** subsequent `tools/list` / `tools/call` traffic is
+served against **that one facet and no other**: the server drills down to the guest
+facet and always dispatches through that guest (maintainer, PR #1226). The confined
+`claude` is then free to use whatever authority the guest itself holds — the guest
+facet *is* the ceiling, and the MCP surface never widens past it.
+
+**Where the daemon connection lives depends on the confinement posture** (developed
+fully in *How the confinement properties change*, below). The socket reach the
+resolution above needs is **not** unconditionally granted to the claude-spawned
+server: in the confined, potentially-adversarial deployment the sandbox denies
+`claude`'s whole tree the daemon socket, so a **harness-owned** process outside the
+slice holds the connection and the claude-spawned side speaks MCP over a channel it
+is given; only in a single-tenant, non-adversarial deployment does the claude-spawned
+server itself open the ordinary client over a socket the slice exposes. Either way
+the client can never name a different guest: no other guest's connection, no bearer,
+no listening port.
 
 **The ocapn framing.** Over an ocapn session the same operation is a **delivery to
 the bootstrap nonce locator (the "gateway") at export offset 0**: the connection's
@@ -172,11 +191,12 @@ gateway with no change to this server's catalog, dispatch, or naming contracts.
 
 ### How the confinement properties change under this transport
 
-The earlier draft made cross-guest isolation *structural*: the raw daemon
-connection lived in a separate harness-owned broker whose fd was never inherited
-into the confined tree, so a compromised `claude` had no descriptor on which to
-speak to the daemon and no socket path in reach. The simplification trades part of
-that structure for a much smaller design. Stated honestly, per property:
+Structural cross-guest isolation means the raw daemon connection lives outside the
+confined tree — in a harness-owned process whose fd is never inherited into `claude`'s
+slice — so a compromised `claude` has no descriptor on which to speak to the daemon
+and no socket path in reach. That is the required posture wherever the sandbox
+confines `claude` against the socket; the smaller server-held-connection shape is
+available only where it is not. Stated honestly, per property:
 
 - **Formula id never on the MCP wire — preserved.** The id arrives through the
   server's environment from the harness-generated config, never through the MCP
@@ -186,63 +206,74 @@ that structure for a much smaller design. Stated honestly, per property:
   entirely outside. This is acceptable because a formula id is **not a secret
   bearer**: it is content-derived, it names the guest's *own* recipe, and possessing
   it grants nothing without a daemon connection *and* the authority to resolve it.
-- **Per-process isolation — preserved and simplified.** Each inference is a fresh
-  `claude -p` that spawns its own MCP server process (§ *The stdio transport*); each
-  server holds its own daemon connection and its own freshly-pinned catalog. There is
-  **no shared multi-guest server** (that is the HTTP shape) and no long-lived
-  multiplexed broker. Isolation is per process, not per bearer, exactly as
-  [endo-claude](endo-claude.md) names — the process boundary now falls at the MCP
-  server itself rather than at a separate broker.
+- **Per-process isolation — preserved.** Each inference is a fresh `claude -p` that
+  spawns its own MCP server process (§ *The stdio transport*); each inference has its
+  own daemon connection — held by the claude-spawned server in the single-tenant
+  shape, or by a per-inference harness-owned broker in the confined shape — and its
+  own freshly-pinned catalog. There is **no shared multi-guest server** (that is the
+  HTTP shape) and no long-lived multiplexed connection across guests. Isolation is per
+  process, not per bearer, exactly as [endo-claude](endo-claude.md) names.
 - **Fail-closed on empty/underivable catalog — preserved.** Unchanged: an
   unresolvable formula id, a facet projecting zero tools, or an empty post-prune
   catalog is a construction throw before any tool is served (§ *Fail-closed
   behavior*).
-- **Cross-guest isolation — changed from structural to runtime + secrecy.** This is
-  the substantive change and must be named plainly. The MCP server now holds a
-  daemon connection whose **root-host bootstrap can resolve *any* formula id** it is
-  given — the very "resolve any formula id against ambient daemon powers" root
-  [endo-claude](endo-claude.md) keeps *host-only and never passed to a guest*. The
-  narrowing to one guest is therefore a **runtime property of the server's code** (it
-  resolves only its configured id), not a structural absence, and the daemon socket
-  is now **reachable from within the confined tree** (the server needs it). So a
-  `claude` compromised badly enough to run arbitrary code in the MCP server process,
-  or to open its own daemon connection over the now-reachable socket, could resolve a
-  **different** guest **if it learns that guest's formula id**. Cross-guest isolation
-  now rests on two facts rather than on structure: (1) formula ids are unguessable
-  and are **not enumerable** by the confined process from what it holds, and (2) each
-  server is configured with only its **own** guest's id.
+- **Cross-guest isolation — where the daemon connection lives is the boundary, and
+  it is not negotiable.** The confinement premise ([endo-posix-sandbox](endo-posix-sandbox.md),
+  [endo-claude](endo-claude.md) Design Decision 6) is that the sandbox slice denies
+  the confined `claude` — **and its whole spawned process tree** — direct access to
+  every system resource, the daemon's Unix domain socket included; the confined agent
+  reaches all authority **only** through the MCP surface. **If `claude` can open an
+  arbitrary domain socket on the shared host, this design is forfeit** (maintainer,
+  PR #1226): a `claude` that can reach the daemon socket itself is not confined at
+  all. So the socket must be **structurally out of the slice's reach**, not merely
+  "present but relied on not to be misused." This has a direct consequence for a
+  claude-**spawned**, in-slice stdio server: because that server lives inside
+  `claude`'s slice, a server that itself opened the daemon connection would require
+  the socket to be mounted **into** the slice — which grants `claude` the same reach
+  and forfeits confinement. **The daemon connection must therefore be held outside
+  the confined tree.** That is exactly [endo-claude](endo-claude.md)'s topology: a
+  **harness-owned** process (the facet broker) holds the raw connected fd, resolves
+  the one guest's facet, and hands the claude-spawned side only MCP over a channel it
+  is given; the raw fd is never inherited into the `claude` tree, and the socket path
+  is never inside the slice. Cross-guest isolation is then **structural**: the
+  confined process has no descriptor and no socket path on which to speak to the
+  daemon, so it cannot resolve *any* guest — its own or another — except by asking
+  the harness-held connection, which is pinned to its one facet.
 
-**Why this is an acceptable default, and the hardening path.** For the arc's
-near-term deployment — a single guest's own confined `claude` on the host, no
-adversarial co-tenant sharing the daemon — the runtime-narrowing posture is
-adequate: there is no sibling to reach, and the guest resolving its own id is the
-whole point. Where a deployment is genuinely **multi-tenant and adversarial** and
-needs cross-guest isolation to be structural before ocapn lands, two options
-restore it, in order of preference:
+**How this constrains where the connection-holding process may live.** The 2026-09-17
+simplification collapsed the earlier adapter+broker pair into one claude-spawned
+process that holds the daemon connection. Under the confinement premise above that
+collapse is only sound where `claude` is **not** being confined against the daemon
+socket — a single-tenant, non-adversarial deployment where the guest resolving its
+own id over a reachable socket is acceptable and there is no sibling to reach. It is
+**not** sound for the confined, potentially-adversarial case, where the socket must
+be denied to `claude`: there, a claude-spawned in-slice server cannot be the process
+that opens the connection, and the connection lives in a harness-owned process
+outside the slice. Both shapes are legitimate and expected — there is more than one
+way to run this (maintainer, PR #1226) — so this document keeps **both** rather than
+electing one as canonical:
 
-1. **An attenuated connection bootstrap (the ocapn offset-0 gateway, brought
-   forward).** The daemon hands the server, at connect time, a bootstrap that is
-   **already scoped to the one guest** — a guest-scoped agent rather than the host
-   root — so the connection resolves only this guest and exposes no enumeration or
-   host authority. This is precisely the "delivery to the bootstrap nonce locator /
-   gateway at export offset 0" the ocapn model provides; realizing it today over the
-   daemon's UDS is a **new obligation on the daemon** (publish a per-session,
-   formula-id-scoped bootstrap), carried in Open Questions. This is the right
-   long-term shape and collapses the runtime-vs-structural gap entirely.
-2. **The two-process broker model (retained, not deleted).** If neither
-   single-tenancy nor a scoped daemon bootstrap is available, the earlier draft's
-   harness-owned broker — which holds the raw connection outside the confined tree
-   and hands the confined side only MCP over a private channel — remains the
-   documented way to keep the connection fd structurally absent from the confined
-   tree. It is more machinery (a second process, a private channel, and, if
-   cross-guest peer forgery is in scope, socket-directory scoping and peer-credential
-   checks); this design does not adopt it by default, but records it as the fallback
-   in § *Design Decisions* item 1.
+1. **Harness-owned connection (the confined, structural case).** The daemon
+   connection is held by a harness-owned process outside the confined tree — either
+   the earlier draft's two-process broker, or, better, a daemon that hands that
+   process a bootstrap **already scoped to the one guest** (the ocapn offset-0
+   gateway brought forward over the daemon UDS: a guest-scoped agent rather than the
+   host root, so the connection resolves only this guest and exposes no enumeration
+   or host authority). The claude-spawned stdio side speaks MCP over its given
+   channel and never holds the raw fd. This is the shape a shared or adversarial host
+   **requires**, and it is what makes cross-guest isolation structural.
+2. **Server-held connection (the single-tenant, non-confined-against-the-socket
+   case).** Where the deployment does not need `claude` denied the socket — one
+   guest's own `claude` on a host it already trusts — the claude-spawned stdio server
+   may itself open the ordinary daemon client and resolve its one guest. This is the
+   smaller shape; it does **not** provide structural cross-guest isolation (the
+   connection is inside the confined tree), and it must not be used where the
+   confinement premise applies.
 
-Naming the boundary is the point: under the adopted default the cross-guest boundary
-is **formula-id secrecy plus per-server configuration**, not a structural absence of
-the daemon connection; the structural version is the scoped-bootstrap / ocapn path,
-available as a hardening step.
+Naming the boundary is the point: structural cross-guest isolation is a property of
+**where the daemon connection lives** — outside the confined tree — never of formula-id
+secrecy. Formula ids are content-derived, not bearer secrets; the design does not lean
+on their secrecy for confinement.
 
 ## Threading the formula id from configuration
 
@@ -293,37 +324,38 @@ facet (§ *Tool catalog derivation*) — and the client's `--allowedTools` is ge
 separately by the harness from the same pinned catalog. `--strict-mcp-config` pins
 `claude` to exactly this one server.
 
-**Avoiding a temporary config file (process substitution, and where it does not
-hold).** The maintainer asked to prefer process substitution over a temp config
-file; checking the actual spawn surface, there are three cases, in preference order:
+**Avoiding a temporary config file — decided, not left open.** The maintainer asked
+to prefer process substitution over a temp config file and, in PR #1226, to pin the
+carrier down now rather than defer it. It is already pinned, by the sibling harness
+design: [endo-claude](endo-claude.md)'s `--mcp-config` contract (its argv table and
+§ *Argv length is an operational ceiling*) records that `claude`'s `--mcp-config` is
+**variadic and accepts a JSON file path *or* an inline JSON string**, and that the
+harness **always renders it as a file path, never inline JSON** — because an inline
+JSON value rides argv and a large catalog would hit `spawn E2BIG`, and because a
+positional landing after a variadic `--mcp-config` is an argv-injection sink. This
+document adopts that same decision, so the two harness surfaces stay identical:
 
-1. **Inline config, no file at all.** Where the pinned `claude` CLI accepts
-   `--mcp-config` as an inline JSON **string** (not only a path), the harness passes
-   the JSON directly and no file — temporary or otherwise — exists. Verify this
-   against the pinned CLI version; if available it is strictly better than any file
-   or fifo. The formula id rides in that inline JSON's `env`, so it too touches no
-   file.
-2. **Process substitution `<(...)`.** Where `claude` requires a *path* and the
-   harness spawns it **through a shell**, `--mcp-config <(printf '%s' "$json")`
-   supplies a `/dev/fd/NN` path backed by a pipe, with no on-disk file. This holds
-   **only** when the consumer opens the path **exactly once** and reads it
-   sequentially: a process-substitution fd is a non-seekable pipe, so it breaks if
-   `claude` re-`stat`s, re-opens, or seeks the config (some CLIs re-read config on a
-   config-changed signal). Confirm `claude`'s config read pattern against the pinned
-   version before relying on this; a single startup read — the common case — is
-   safe. Process substitution also does **not** apply when `claude` is spawned
-   **without a shell** (a bare `spawn()` with no `shell: true` cannot expand
-   `<(...)`) or on Windows.
-3. **A `0600` temp file in a harness-private directory (fallback).** Where neither
-   inline JSON nor process substitution applies, the config is a mode-`0600` file in
-   a harness-owned directory, deleted after `claude` has opened it. The formula id in
-   it is not a secret bearer (§ *Scoping*), so the file's exposure is low-risk, but
-   the `0600`-and-unlink discipline keeps it out of world view regardless.
+- **The config is passed as a file *path*, backed by an anonymous pipe or `memfd` —
+  no on-disk file.** The harness opens a pipe/`memfd`, writes the JSON, and passes the
+  `/dev/fd/NN` (or `/proc/self/fd/NN`) path on argv. There is no temporary file on
+  disk to create, secure, or unlink, and the config value never rides argv. This is
+  the "avoid a temp file" goal met without inline JSON.
+- **Not shell process substitution `<(…)`.** `<(…)` is a *shell* construct, and both
+  this server's harness and `claude` are spawned **directly, never through a shell**
+  (endo-claude § *Argv order is a confinement boundary*), so `<(…)` cannot be
+  expanded; the harness performs the equivalent pipe/`memfd` plumbing itself. The
+  fd-based path is read once at startup, so the non-seekable-pipe hazard that would
+  break a re-`stat`/re-open consumer does not arise for a single startup read; if a
+  future pinned `claude` re-reads config mid-session, back the fd with a `memfd`
+  (seekable) rather than a pipe.
+- **The formula id never touches a file at all.** It rides in the config's `env` map
+  (§ above), delivered to the server process's environment, so even the pipe/`memfd`-
+  backed config carries only a non-secret, content-derived id (§ *Scoping*), never a
+  bearer.
 
-In every case the formula id can avoid an on-disk config-file of its own by riding
-in the process **environment**, so the "avoid a temp file" goal is fully reachable
-for the id itself; the only artifact that might still need a file is `claude`'s
-overall `--mcp-config`, handled by the ladder above.
+No `0600` on-disk fallback is needed on the pinned platform (Linux, `memfd`/`/dev/fd`
+available); it survives only as the degenerate carrier for a platform without an
+fd-path form, and even there the id itself stays in `env`.
 
 ## Tool catalog derivation
 
@@ -429,11 +461,13 @@ clients.
 `initialize` **response shape** [endo-gateway-mcp](endo-gateway-mcp.md) uses. The
 two sibling transports share the handshake *shape*, not the label *string*: each
 pins its own `serverInfo.name` (`endo` here, `endo-gateway` there). It further sets
-`tools: { listChanged: false }` (reflecting the pinned catalog) and, optionally,
-`logging: {}` so facet diagnostics can ship back as `notifications/message` (whether
-to advertise `logging` at all is an open question, since stderr already reaches the
-harness out of band). `resources` and `prompts` are omitted, as in
-[endo-gateway-mcp](endo-gateway-mcp.md).
+`tools: { listChanged: false }` (reflecting the pinned catalog) and advertises
+`logging: {}` so facet diagnostics ship back as `notifications/message`. A **logging
+facet is exposed** (maintainer, PR #1226); *how* the logs are obtained is immaterial,
+so the server is free to source them from stderr, from the facet's own diagnostics,
+or both, and to forward whichever the consumer wants over the in-band `logging`
+channel — the exposed facet is the contract, the plumbing behind it is not.
+`resources` and `prompts` are omitted, as in [endo-gateway-mcp](endo-gateway-mcp.md).
 
 **Process lifetime and topology.** The server is a **single process, spawned per
 call.** `claude` spawns it as the command its `--mcp-config` names; it lives for the
@@ -594,17 +628,21 @@ then runs the MCP framing loop — decoding `tools/list`/`tools/call` frames off
 stdin, applying the name- and argument-scope dispatch check, invoking the projection
 (`tools/call -> E(facet).method`), and writing replies to stdout.
 
-**This process holds the daemon connection and the facet.** That is the deliberate
-change from the earlier draft, where a separate broker held them and the
-claude-spawned side held neither. Under the simplification the claude-spawned server
-*is* the side that resolves the facet, so it holds the daemon reach — the confinement
-consequence of which is stated fully in § *Scoping* (*How the confinement properties
-change*). The exact split of the resolution-and-dispatch logic between
-`@endo/agent-tools` (the projection) and `@endo/claude` (the harness that generates
-the config) follows the ordinary module boundary and is settled at build time; this
-design fixes the *structure* (one process, told its guest by env, resolving through
-the daemon client) and the *contract* (one pinned pruned catalog, server-side
-dispatch check), not the module boundary.
+**Who holds the daemon connection depends on the confinement posture** (§ *Scoping*).
+In the **single-tenant** shape the claude-spawned server itself resolves the facet and
+holds the daemon reach; in the **confined** shape the connection is held by a
+harness-owned process outside the slice (a broker, or a daemon-issued scoped
+bootstrap) and the claude-spawned side holds only MCP over the channel it is given —
+never the raw fd, never a socket path. Either way the server-side contract this
+document owns is the same: resolve to **one** guest facet, pin the pruned catalog,
+apply the name- and argument-scope dispatch check, and dispatch `tools/call` to that
+one facet and no other. The exact split of the resolution-and-dispatch logic between
+`@endo/agent-tools` (the projection), `@endo/claude` (the harness that generates the
+config and, in the confined shape, owns the connection), and the claude-spawned stdio
+process follows the ordinary module boundary and is settled at build time; this design
+fixes the *contract* (one pinned pruned catalog, server-side dispatch check, one-guest
+dispatch) and the *confinement invariant* (the daemon connection never inside the
+confined tree when `claude` is confined against the socket), not the module boundary.
 
 Until the `@endo/agent-tools` MCP adapter lands, [endo-claude](endo-claude.md)
 carries a minimal stopgap stdio shim gated behind an explicit opt-in and marked for
@@ -640,14 +678,19 @@ positive-confinement test. An implementation is accepted only when these pass.
 - **The formula id is not on the MCP wire.** Across a full session the id never
   appears in any request or response frame; it is read only from the environment at
   startup.
-- **Runtime-narrowing posture is documented and its assumption is testable.** The
-  server resolves **only** its configured formula id and never enumerates or resolves
-  another; a test that configures guest A's id and attempts (from within the server's
-  own logic path) to resolve guest B's id is not part of the server's behavior and has
-  no code path. (The *structural* cross-guest guarantee — that a compromised client
-  could not resolve B even given B's id — is **not** claimed under the adopted default
-  and is only restored by the scoped-bootstrap / broker hardening of § *Scoping*; a
-  deployment electing that hardening adds the corresponding structural test then.)
+- **The daemon connection is not inside the confined tree (confined shape).** For the
+  confined deployment the confinement premise is structural, and its test is
+  structural: with the sandbox slice active, the confined `claude` tree has **no**
+  daemon socket path in its filesystem namespace and **no** connected fd inherited, so
+  an attempt from within the confined tree to open a daemon connection or reach the
+  socket fails outright (`if claude can open an arbitrary domain socket the design is
+  forfeit` — this test is the assertion that it cannot). The one guest's facet is
+  reached only through the harness-owned connection (broker or scoped bootstrap), which
+  is pinned to that guest. (The smaller **single-tenant** shape — server-held
+  connection — does not claim this structural guarantee and is used only where the
+  deployment does not confine `claude` against the socket; there the corresponding
+  assertion is only that the server resolves solely its configured id, with no
+  enumeration code path.)
 - **Name-scope rejection.** A `tools/call` for a name not in the pinned catalog (a
   pruned code-eval name, a `__`-containing name, or an unknown name) returns the
   `-32001` `tool-not-permitted` error with `data.reason = name-scope`, and never
@@ -682,38 +725,44 @@ positive-confinement test. An implementation is accepted only when these pass.
 
 | Design | Relationship |
 |---|---|
-| [endo-claude](endo-claude.md) | **Consumer / harness.** Generates `--mcp-config` (with the guest formula id in `env`) and `--allowedTools` from the catalog this server pins, spawns the confined `claude -p`, and settles inference outcomes on this server's errors. Names this server as its "adapter-implementation prerequisite." **Reconciliation owed:** its *Local deployment* and *Multiplexing by guest identifier* sections still describe the removed two-process broker split and must be updated to this single-process daemon-client model (Open Questions). |
+| [endo-claude](endo-claude.md) | **Consumer / harness.** Generates `--mcp-config` (with the guest formula id in `env`) and `--allowedTools` from the catalog this server pins, spawns the confined `claude -p`, and settles inference outcomes on this server's errors. Names this server as its "adapter-implementation prerequisite," and — in the confined shape — owns the harness-side connection process (broker) that holds the daemon reach outside the confined tree. **No consolidation owed** (PR #1226): endo-claude keeps its harness-owned broker (the confined, structural shape) and this document keeps the server-held connection (the single-tenant shape); both topologies stand, per the maintainer's "more than one way to use Claude" steer (Open Questions). |
 | [endo-agent-tools](endo-agent-tools.md) | **Projection.** The MCP adapter (`packages/agent-tools/src/adapters/mcp.js`, a declared stub) that maps a `ToolRecord`'s name/description/parameters/invoke to an MCP tool and dispatches `tools/call` to the facet. This server hosts it over stdio; it does not reinvent it. |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, the `initialize` response *shape*, and the `mcp__<server>__<tool>` naming *grammar* (each transport pins its own `serverInfo.name`, `endo` here vs `endo-gateway` there); differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
 | [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
-| Endo daemon (`@endo/daemon`, `packages/where`) | **Session substrate.** Provides the client (`makeEndoClient` over `whereEndoSock(...)`, `getBootstrap`, `E(bootstrap).host()`) and the bootstrap root host against which `E(host).lookupById(formulaId)` (guarded `M.call(IdShape)` on `HostInterface`) resolves the formula id to a facet — the existing surface that makes this simplification need no new daemon method by default. A **new optional obligation** for multi-tenant hardening: publish a per-session, formula-id-scoped bootstrap (the ocapn offset-0 gateway brought forward) so the connection resolves only the one guest (Open Questions). |
-| [endo-posix-sandbox](endo-posix-sandbox.md) | **Slice plumbing (reduced obligation).** Owns the per-spawn slice confining `claude`. Under this simplification the earlier per-guest-socket re-mount and per-guest-uid `SO_PEERCRED` obligations are **withdrawn**; what remains is that the confining slice must let the server reach the daemon socket (§ *Scoping*), the inverse of the earlier draft's scrub-the-socket-path posture. |
+| Endo daemon (`@endo/daemon`, `packages/where`) | **Session substrate.** Provides the client (`makeEndoClient` over `whereEndoSock(...)`, `getBootstrap`, `E(bootstrap).host()`) and the bootstrap root host against which `E(host).lookupById(formulaId)` (guarded `M.call(IdShape)` on `HostInterface`) resolves the formula id to a facet — the existing surface that reaches one guest with no new daemon method. A **daemon obligation for the confined shape** (direction set, PR #1226): publish a per-session, formula-id-scoped bootstrap (the ocapn offset-0 gateway brought forward) so the connection resolves only the one guest and carries no host authority into the confined tree; until then the confined shape rides the harness-owned broker narrowing a host-root connection (Open Questions). |
+| [endo-posix-sandbox](endo-posix-sandbox.md) | **The confinement boundary (load-bearing).** Owns the per-spawn `bwrap` slice confining `claude`. The premise (PR #1226): the slice must **deny the confined `claude` tree the daemon socket and all system resources** — via the `none`/`private` network profile and filesystem-namespace isolation that keep the socket path out of the slice — forcing all authority through the MCP surface; **if `claude` can open an arbitrary domain socket, this design is forfeit**. Consequence: in the confined shape the daemon-connection process runs **outside** the slice (§ *Scoping*). The earlier draft's per-guest-socket re-mount and per-guest-uid `SO_PEERCRED` machinery stay withdrawn; the remaining obligation is to confirm the slice denies `claude` the socket while the harness-owned connection process reaches it from outside. |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
 | `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming convention, adopted (not a construction gate).** This server adopts its flat interface-native camelCase convention; it does **not** key any fail-closed construction throw on that PR's reserved-name list. A bare-name collision against its reservations is at most an advisory warning here. |
 
 ## Design Decisions
 
-1. **One process, told its guest by env, reaching the guest through the ordinary
-   daemon client.** The claude-spawned MCP server reads the guest formula id from its
-   environment (never from the MCP wire), connects with the usual Endo daemon client,
-   and resolves the one guest's facet at the bootstrap root host. This holds a daemon
-   connection **inside** the confined tree and makes the one-guest narrowing a
-   **runtime property of the server's code** rather than a structural absence — a
-   deliberate trade for a much smaller design, per the maintainer's PR #1226 steer.
-   Cross-guest isolation therefore rests on formula-id secrecy and per-server
-   configuration (§ *Scoping*). Where a multi-tenant, adversarial deployment needs
-   the *structural* guarantee back, two hardening paths are retained: a daemon-issued
-   **scoped bootstrap** (the ocapn offset-0 gateway brought forward), or the earlier
-   draft's **harness-owned broker** that keeps the connection fd out of the confined
-   tree. Neither is adopted by default; both are documented fallbacks.
+1. **Told its guest by env; always dispatch through that one guest facet and no
+   other; where the daemon connection lives depends on the confinement posture.** The
+   server reads the guest formula id from its environment (never from the MCP wire),
+   resolves the one guest's facet, and serves **all** traffic against that one facet
+   and no other — the confined `claude` is free to use whatever authority that guest
+   holds, and nothing past it. The connection premise is not negotiable: the sandbox
+   denies the confined `claude` (and its whole spawned tree) the daemon socket — **if
+   `claude` can open an arbitrary domain socket the design is forfeit** (maintainer,
+   PR #1226) — so a claude-spawned in-slice server cannot be the process that opens the
+   connection in the confined case, because the socket it needs would then be
+   `claude`'s too. Two legitimate, coexisting topologies follow, and this design keeps
+   **both** rather than electing one (the maintainer's "more than one way to use
+   Claude" steer, PR #1226): **(a) a harness-owned connection** — a broker outside the
+   confined tree, or a daemon-issued **scoped bootstrap** (the ocapn offset-0 gateway
+   brought forward) — for the confined, structural case; and **(b) a server-held
+   connection** — the claude-spawned server opens the ordinary client itself — for the
+   single-tenant deployment that does not confine `claude` against the socket. Structural
+   cross-guest isolation is a property of the connection living outside the confined
+   tree, never of formula-id secrecy (§ *Scoping*).
 2. **The formula id is threaded from configuration through the environment, and
    never rides the MCP wire.** No bearer, no header, no port, no `initialize` param,
    no client-supplied field. An initial stdin handshake was considered and rejected
    for stdio MCP specifically, because the server's stdin is the *client's* channel, so
-   a handshake would be either client-supplied (a forgery vector) or would reintroduce
-   a trusted stdin intermediary (the removed broker). The environment variable has
-   neither problem, and the id can avoid an on-disk file entirely (§ *Threading the
-   formula id from configuration*).
+   a handshake would be either client-supplied (a forgery vector) or would require a
+   trusted stdin intermediary (a broker-shaped process interposed on the server's
+   stdin). The environment variable has neither problem, and the id can avoid an
+   on-disk file entirely (§ *Threading the formula id from configuration*).
 3. **One pinned, pre-pruned catalog drives the server dispatch check (boundary) and
    the client allow-list (belt).** Both derive from one hardened null-prototype
    snapshot taken once at startup, from the same facet under the same deterministic
@@ -739,40 +788,59 @@ positive-confinement test. An implementation is accepted only when these pass.
 
 ## Open Questions
 
-- **Reconcile [endo-claude](endo-claude.md) to the single-process model.** Its
-  *Local deployment* and *Multiplexing by guest identifier* sections still specify the
-  removed two-process adapter/broker split with an fd never inherited into the confined
-  tree. Those must be revised to the single-process daemon-client transport this
-  document now specifies (or explicitly note the broker as a multi-tenant hardening
-  option, not the default). Until then, this document is authoritative for the stdio
-  transport, and the two documents disagree; resolve before either is built.
-- **Should the daemon publish a per-session, formula-id-scoped bootstrap (the ocapn
-  offset-0 gateway, brought forward over the daemon UDS)?** Under the adopted default
-  the server resolves the formula id at the **host root**, so the connection carries
-  host-level resolution authority into the confined tree (§ *Scoping*). A daemon that
-  instead handed each session a bootstrap **already scoped to the one guest** would
-  restore structural cross-guest isolation without the broker, and is the natural
-  today-over-UDS approximation of the ocapn offset-0 gateway. This is a new obligation
-  on the daemon; resolve whether any near-term deployment is multi-tenant enough to
-  need it before ocapn's domain-socket transport lands.
-- **Verify `claude`'s `--mcp-config` intake against the pinned CLI version.** The
-  temp-file-avoidance ladder (§ *Threading the formula id from configuration*) depends
-  on whether the pinned `claude` accepts inline JSON, and on whether it reads the
-  config path exactly once (making process substitution safe) or re-reads/re-stats it
-  (breaking a fifo). Confirm both against the pinned version before choosing the
-  carrier.
-- **Should the daemon socket be reachable from inside the confining slice at all?**
-  The earlier draft scrubbed and mount-hid the daemon socket path from the confined
-  view; this transport requires the server (a confined child of `claude`) to reach it.
-  Confirm with [endo-posix-sandbox](endo-posix-sandbox.md) that the slice can expose
-  the daemon socket to the server while still denying `claude` its own useful reach to
-  it, or accept (per the runtime-narrowing posture) that `claude` can reach the socket
-  and rely on formula-id secrecy for cross-guest isolation.
-- **Should the stdio server advertise the MCP `logging` capability?** Forwarding
-  facet diagnostics as `notifications/message` mirrors
-  [endo-gateway-mcp](endo-gateway-mcp.md), but stderr already reaches the harness out
-  of band under stdio, so the value of the in-band channel is lower here. Decide when a
-  consumer needs the model to see a diagnostic mid-turn.
+- **Do NOT consolidate [endo-claude](endo-claude.md) onto a single topology
+  (resolved, PR #1226).** An earlier revision proposed reconciling endo-claude's
+  two-process adapter/broker split down to this document's single-process
+  daemon-client model. The maintainer's steer is the opposite: *do not consolidate
+  these yet — there is more than one way to use Claude and we expect to use them.*
+  So both topologies stand as legitimate and expected, and neither document is
+  "corrected" toward the other: endo-claude keeps its harness-owned broker (the
+  structural, confined shape), this document keeps the server-held connection as the
+  smaller single-tenant shape, and § *Scoping* now carries **both** explicitly rather
+  than electing one. No cross-document reconciliation is owed; the remaining work is
+  only to keep each document's confinement claims accurate to the shape it describes.
+- **A per-session, formula-id-scoped bootstrap is the target for the confined shape
+  (direction set, PR #1226).** The maintainer's model: the MCP server reaches the
+  daemon through its Unix domain socket, **drills down to the guest facet, and always
+  dispatches through that one guest and no other**; the confined `claude` is then free
+  to use whatever authority that guest holds. The clean realization is a daemon that
+  hands each session a bootstrap **already scoped to the one guest** (the ocapn
+  offset-0 gateway brought forward over the daemon UDS: a guest-scoped agent rather
+  than the host root), so the connection resolves only this guest and exposes no host
+  authority. Remaining question: schedule — is this daemon obligation taken up now
+  (the cleanest confined shape) or does the confined deployment first ride the
+  harness-owned broker holding a host-root connection it narrows to one facet? Both
+  keep the "always dispatch through the one guest" contract; they differ only in
+  whether the narrowing is enforced by the daemon (scoped bootstrap) or by the
+  harness (broker).
+- **`claude`'s `--mcp-config` intake (resolved, PR #1226).** Pinned now, not
+  deferred: `claude`'s `--mcp-config` is variadic and accepts a JSON file path or an
+  inline JSON string, but the carrier is a **file *path* backed by an anonymous pipe /
+  `memfd`** (no on-disk file, no inline JSON on argv, no shell process substitution),
+  matching [endo-claude](endo-claude.md)'s already-pinned `--mcp-config` contract; the
+  formula id rides in the config's `env` map and never touches a file
+  (§ *Threading the formula id from configuration*). The only residual is re-checking
+  the pinned CLI's config read pattern on each version bump (single startup read ⇒ a
+  pipe is fine; a mid-session re-read ⇒ back the fd with a seekable `memfd`).
+- **The daemon socket must NOT be reachable by `claude` from inside the slice
+  (resolved, PR #1226).** Not an option to weigh: the confinement premise is that the
+  sandbox denies the confined `claude` (and its whole spawned tree) access to all
+  system resources, the daemon socket included, forcing it through the MCP surface —
+  **if `claude` can open an arbitrary domain socket on the shared host, this design is
+  forfeit** (maintainer). The "accept that `claude` can reach the socket and rely on
+  formula-id secrecy" branch is struck. The engineering consequence is settled in
+  § *Scoping*: because a claude-spawned in-slice server sharing the socket would grant
+  `claude` the same reach, the daemon connection is held **outside** the confined tree
+  (harness-owned broker, or a daemon-issued scoped bootstrap) in the confined shape.
+  Remaining verification with [endo-posix-sandbox](endo-posix-sandbox.md): confirm the
+  bwrap slice's `none`/`private` network profile plus filesystem-namespace isolation
+  denies the socket path to the confined tree (the maintainer's "with sufficient flags"
+  expectation), and that the harness-owned connection process runs *outside* that slice.
+- **Logging (resolved, PR #1226).** The server **exposes a logging facet** and
+  advertises the MCP `logging` capability; *how the logs are obtained is immaterial*
+  (maintainer), so the source (stderr, facet diagnostics, or both) is an
+  implementation choice behind the exposed facet, not a design fork
+  (§ *The stdio transport*, `initialize`).
 
 ## Prompt
 
@@ -795,16 +863,17 @@ positive-confinement test. An implementation is accepted only when these pass.
 > https://github.com/kriscendobot/garden/issues/89 (item 5). Deliverable: one
 > design document, created or evolved. Do not build.
 
-**Revision note (2026-09-17, PR #1226 review).** kriskowal requested dropping the
-per-guest domain socket / named pipe and the facet-broker process in favor of
-feeding the guest formula id through the environment (or a stdin handshake) and
-using the ordinary Endo daemon client to resolve the guest at the bootstrap root
-host — an ocapn offset-0 gateway delivery once ocapn has a domain-socket transport —
-and asked to prefer process substitution over a temp config file. This revision
-adopts that simplification: § *Scoping* is rewritten to the single-process
-daemon-client model with an honest account of which confinement properties become
-runtime rather than structural; § *Threading the formula id from configuration* is
-new (recommends the environment variable over a stdin handshake, with the config
-shape and the temp-file-avoidance ladder); the two-process split, per-guest UDS,
-socket-discovery analysis, and `SO_PEERCRED` machinery are removed, retained only as
-a documented multi-tenant hardening path.
+**Revision note (2026-09-17 → 2026-09-22, PR #1226 review).** The 2026-09-17 revision
+adopted kriskowal's earlier steer to feed the guest formula id through the environment
+and resolve the guest through the ordinary daemon client, adding § *Threading the
+formula id from configuration* (environment variable over a stdin handshake). The
+2026-09-22 revision applies kriskowal's follow-up review (rsvp): the two topologies —
+the harness-owned-broker (confined, structural) and the server-held connection
+(single-tenant) — are **both** kept rather than consolidated ("more than one way to use
+Claude"); the confinement premise is restored as non-negotiable (the sandbox denies
+the confined `claude` tree the daemon socket, else the design is forfeit), so the
+daemon connection lives outside the confined tree in the confined shape and the
+"rely on formula-id secrecy" fallback is struck; the always-dispatch-through-one-guest
+contract is stated explicitly; the `--mcp-config` carrier is pinned to a
+pipe/`memfd`-backed file path (matching endo-claude) rather than left open; and a
+logging facet is exposed with its log source left as an implementation detail.
