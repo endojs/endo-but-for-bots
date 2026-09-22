@@ -184,7 +184,13 @@ jobs:
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          # Pin the 24.x leg to 24.18.1: Node 24.19.0 introduced a native-addon
+          # worker-teardown regression (RemoveEnvironmentCleanupHook asserting
+          # on a better-sqlite3 Statement destructor) that hangs test processes
+          # so ava fails to exit. Keep the matrix label at 24.x so required
+          # check names are preserved; revert once the nodejs/node#65042
+          # backport ships. The expression is a no-op for non-24.x legs.
+          node-version: ${{ matrix.node-version == '24.x' && '24.18.1' || matrix.node-version }}
           cache: yarn
 
       # Some tests (e.g., in package "daemon") create Unix domain sockets, and
@@ -305,7 +311,13 @@ jobs:
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          # Pin the 24.x leg to 24.18.1: Node 24.19.0 introduced a native-addon
+          # worker-teardown regression (RemoveEnvironmentCleanupHook asserting
+          # on a better-sqlite3 Statement destructor) that hangs test processes
+          # so ava fails to exit. Keep the matrix label at 24.x so required
+          # check names are preserved; revert once the nodejs/node#65042
+          # backport ships. The expression is a no-op for non-24.x legs.
+          node-version: ${{ matrix.node-version == '24.x' && '24.18.1' || matrix.node-version }}
           cache: yarn
 
       # end macro
@@ -347,7 +359,13 @@ jobs:
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          # Pin the 24.x leg to 24.18.1: Node 24.19.0 introduced a native-addon
+          # worker-teardown regression (RemoveEnvironmentCleanupHook asserting
+          # on a better-sqlite3 Statement destructor) that hangs test processes
+          # so ava fails to exit. Keep the matrix label at 24.x so required
+          # check names are preserved; revert once the nodejs/node#65042
+          # backport ships. The expression is a no-op for non-24.x legs.
+          node-version: ${{ matrix.node-version == '24.x' && '24.18.1' || matrix.node-version }}
           cache: yarn
 
       - name: Install dependencies
@@ -386,7 +404,13 @@ jobs:
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          # Pin the 24.x leg to 24.18.1: Node 24.19.0 introduced a native-addon
+          # worker-teardown regression (RemoveEnvironmentCleanupHook asserting
+          # on a better-sqlite3 Statement destructor) that hangs test processes
+          # so ava fails to exit. Keep the matrix label at 24.x so required
+          # check names are preserved; revert once the nodejs/node#65042
+          # backport ships. The expression is a no-op for non-24.x legs.
+          node-version: ${{ matrix.node-version == '24.x' && '24.18.1' || matrix.node-version }}
           cache: yarn
 
       - name: Install dependencies
@@ -492,7 +516,13 @@ jobs:
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          # Pin the 24.x leg to 24.18.1: Node 24.19.0 introduced a native-addon
+          # worker-teardown regression (RemoveEnvironmentCleanupHook asserting
+          # on a better-sqlite3 Statement destructor) that hangs test processes
+          # so ava fails to exit. Keep the matrix label at 24.x so required
+          # check names are preserved; revert once the nodejs/node#65042
+          # backport ships. The expression is a no-op for non-24.x legs.
+          node-version: ${{ matrix.node-version == '24.x' && '24.18.1' || matrix.node-version }}
           cache: yarn
 
       - name: Install dependencies
