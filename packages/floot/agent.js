@@ -2823,9 +2823,35 @@ export const make = async (
   };
 
   /**
+   * A backend's rows in the order a picker shows them: the model the
+   * provider marks first (whether or not the row says `default`, which the
+   * flattened listing reserves for the direct provider), then by title, then
+   * by id. A provider lists hundreds of models in an order of its own; nobody
+   * scrolls that.
+   *
+   * @template {{ title: string, modelId: string }} Row
+   * @param {Array<{ marked: boolean, row: Row }>} entries
+   */
+  const orderModelRows = entries => {
+    // Case-insensitive by title, then exact title, then id: `localeCompare`
+    // is tamed to code-point order under SES, so the key is lowered here.
+    /** @type {(a: string, b: string) => number} */
+    const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    return [...entries]
+      .sort(
+        (a, b) =>
+          Number(b.marked) - Number(a.marked) ||
+          compare(a.row.title.toLowerCase(), b.row.title.toLowerCase()) ||
+          compare(a.row.title, b.row.title) ||
+          compare(a.row.modelId, b.row.modelId),
+      )
+      .map(entry => entry.row);
+  };
+
+  /**
    * The rows a picker and the acceptance drivers read: one per model a
    * backend offers, with the accounts that list it, and the accounts'
-   * discovery states beside them.
+   * discovery states beside them; each backend's rows in the picker's order.
    *
    * @param {string} [backendId]
    */
@@ -2865,9 +2891,12 @@ export const make = async (
           ],
         }),
       );
+      /** @type {Array<{ marked: boolean, row: any }>} */
+      const providerRows = [];
       for (const model of snapshot.models) {
-        models.push(
-          harden({
+        providerRows.push({
+          marked: model.id === defaultModel,
+          row: harden({
             id: model.id,
             selectionId: model.id,
             backendId: 'provider',
@@ -2880,8 +2909,9 @@ export const make = async (
             reasoningEfforts: [],
             subscriptionIds: ['default'],
           }),
-        );
+        });
       }
+      models.push(...orderModelRows(providerRows));
     }
     if (backendId !== 'provider') {
       const hosted = await getHostedBackends();
@@ -2932,9 +2962,12 @@ export const make = async (
             }
           }
         }
+        /** @type {Array<{ marked: boolean, row: any }>} */
+        const rows = [];
         for (const { model, subscriptionIds } of byModel.values()) {
-          models.push(
-            harden({
+          rows.push({
+            marked: model.default,
+            row: harden({
               id: hostedModelId(id, model.id),
               selectionId: hostedModelId(id, model.id),
               backendId: id,
@@ -2949,8 +2982,9 @@ export const make = async (
               reasoningEfforts: model.reasoningEfforts,
               subscriptionIds,
             }),
-          );
+          });
         }
+        models.push(...orderModelRows(rows));
       }
     }
     return harden({ models, catalogs });

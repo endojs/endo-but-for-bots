@@ -6,6 +6,7 @@ import test from 'ava';
 
 /** @import { ExecutionContext } from 'ava' */
 import { Far } from '@endo/pass-style';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import {
@@ -2862,5 +2863,105 @@ test.serial(
     t.is(select('Model').value, 'codex:czz');
     await pick();
     t.like(created[0], { modelId: 'czz', subscription: 'sub1' });
+  },
+);
+
+test.serial(
+  'with no sessions the space makes none on its own, and says so',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const created = [];
+    const factory = farFactory('EmptyFactory', {
+      listSessions: () => harden([]),
+      listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listModels: () => harden([]),
+      listModelCatalogs: () => harden([]),
+      createSession: options => {
+        created.push(options);
+        throw Error('not expected');
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() =>
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'No sessions yet',
+      ),
+    );
+    await tick(50);
+    // The first session is the person's to start, with the backend and
+    // model they choose; the space does not make one just so there is one.
+    t.deepEqual(created, []);
+    t.is(parent.querySelectorAll('.floot-session-item').length, 0);
+    t.truthy(parent.querySelector('[aria-label="New session"]'));
+    // Nothing is loading: there is no session to load.
+    t.falsy(parent.querySelector('.floot-loading'));
+  },
+);
+
+test.serial(
+  'a session started from another page is shown when nothing was open',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const list = makeBufferedReader();
+    const facet = farSession('OtherPageSession', {
+      getInfo: () => harden({ id: 'other', title: 'From elsewhere' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = Far('ListFactory', {
+      listSessions: () => harden([]),
+      watchSessions: () => {
+        list.push(harden({ type: 'snapshot', sessions: [] }));
+        return list.reader;
+      },
+      listPresets: () => harden([]),
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listModels: () => harden([]),
+      listModelCatalogs: () => harden([]),
+      getSession: () => facet,
+      createSession: () => {
+        throw Error('not expected');
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      list.close();
+      parent.remove();
+    });
+    await waitFor(() =>
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'No sessions yet',
+      ),
+    );
+    list.push(
+      harden({
+        type: 'session',
+        session: { id: 'other', title: 'From elsewhere', createdAt: 1 },
+      }),
+    );
+    await waitFor(() => parent.querySelectorAll('.floot-session-item').length === 1);
+    await waitFor(() =>
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').trim().startsWith('Ready.'),
+    );
+    t.false(
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'No sessions yet',
+      ),
+    );
+    t.true(
+      parent.querySelector('.floot-session-item')?.classList.contains('active') ??
+        false,
+    );
   },
 );
