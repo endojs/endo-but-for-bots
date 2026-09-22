@@ -91,7 +91,7 @@ No claim of complete retrospective coverage is made yet.
 | Pool member identity | Authoritative journal now persists actual Secret/share capabilities, provider/account binding, and removed-member tombstones before credential activation. Twenty-three shared tests and one real-daemon restart test pass independently. | Integrate full owner retirement/exclusion; historical IDs and bound capabilities are deliberately not reusable yet. Not deployed. |
 | Formula disposal and replacement | Corrected locally: eventual invocation of remote hooks, exact-formula cancellation/collection fences, stale in-flight read invalidation, and disposal before reclamation. Thirty-two focused tests pass independently. | Deploy and audit each resource module's actual hook/admission drain. This does not establish cross-formula exclusion or persistent cleanup proof after process loss. |
 | Credential ownership and Secret rebinding | Owned pool bindings retain actual capabilities and reject mutable-name rebinding. Member retirement now fences and drains retained facets, renewals, transports, wrapped readers/endpoints, and observation writes; 179 focused and two real-daemon tests pass. | Cross-worker renewal exclusion, retirement epochs, and process-loss transaction recovery remain open. Module-local drain does not establish these. |
-| Native teardown after reconstruction | Corrected locally: absent/failed scope lookup now refuses stop acknowledgement, and mount reclamation waits for sandbox close. Six injected-reconstruction tests pass independently. Runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof deferred to the dedicated investigation. Current cutover requires verified operator retirement; a missing scope cannot prove that native resources stopped. |
+| Native teardown after reconstruction | Corrected locally: absent/failed scope lookup now refuses stop acknowledgement, and mount reclamation waits for sandbox close. Six injected-reconstruction tests pass independently. Runtime lookup still reads only an in-memory map. **Deployed on 2026-09-22 in generation 160 and observed: after a graceful `endo-daemon` restart every ready hosted session (Claude, Codex, OpenCode) failed to reopen and to delete with `Original native cleanup proof is unavailable`; six records are stranded in `stopping`/`removing` with six exited listener containers and six 9p mounts.** | Automatic reconciliation/process-loss proof deferred to the dedicated investigation (#1323); until it lands, hosted sessions do not survive a daemon restart on this release. A missing scope cannot prove that native resources stopped; the stranded records are the reconciliation evidence and must not be swept by hand. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
 | Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
@@ -967,10 +967,29 @@ matches), not from all the account offers; a thinking level the refreshed
 model no longer offers is replaced by its highest; the shared read keys the
 "every backend" ask apart from an empty backend name.
 Committed as `64176d7d5` and published; the host pin `84a6b90` removes the
-NixOS model option. The prebuild request on Tokyo was refused by the
-session's deploy guard, so the cutover (prebuild, prepare, broker
-retirement, switch, discovery verification, Luna/free-route acceptance)
-awaits the operator; nothing is deployed.
+NixOS model option. With the operator's approval the cutover ran on
+2026-09-22 (endo-host `ops/hosted-cutover3-20260922.md`): the three
+pre-catalog brokers were retired on the old release after the second pass's
+acceptance sessions and one empty auto-created chat were archived and
+removed, generation 160 activated app `64176d7d5`, and the discovery gate
+passed live: every account current, Luna listed by both Codex accounts, the
+free routes by Fae and OpenCode, eleven Claude models per account, with no
+inference. Create, native tool use, network-policy transitions, cancellation
+and deletion passed on Luna, Haiku 4.5 and the free routes. Two findings
+from the run: Anthropic lists `claude-fable-5-1` first and the pinned Claude
+Code runtime exits on it, so a picker or driver that takes "the first
+listed" for Claude pins a model the runtime cannot drive (the acceptance
+policy now pins Haiku 4.5; whether the Claude projection should leave out
+models the runtime cannot run is open); and Luna's `/bin/bash -c` wrapper
+and a free-route model's URL quoting defeated the driver's exact-string
+command check, which now also accepts a command that reads the same once
+quoting is taken out.
+Restart/restore passed for Fae and failed for every hosted backend: see the
+native-teardown row above and "Restart regression" in the cutover note. That
+is commit `0d66bd945` shipped on the branch tip, not discovery; hosted
+sessions on generation 160 cannot survive a daemon restart until #1323's
+reconciliation lands, and the decision between rolling back and keeping the
+release is the operator's.
 Recorded, not changed: a backend may answer up to sixteen accounts of 4096
 descriptors each; a subagent delegated during a catalog outage is a new pin
 and is refused then; the direct provider's `lal` OpenRouter adapter still reads
@@ -1464,6 +1483,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | Date | Change | Verification / deployment |
 |---|---|---|
 | 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
+| 2026-09-22 | FA-07 cutover: generation 160 activates `64176d7d5` on Tokyo after retiring the three pre-catalog brokers; live discovery gate passed (Luna, free routes, every account current); create, tools, network policy, cancel and delete passed on Luna, Haiku 4.5 and the free routes | Restart/restore passed for Fae, failed for all hosted backends (`0d66bd945` fail-closed teardown, #1323); six acceptance sessions stranded; Claude acceptance pinned to Haiku 4.5 after Anthropic's first-listed `claude-fable-5-1` failed in the runtime; rollback-or-keep decision with the operator |
 | 2026-09-22 | FA-07: provider-backed model discovery end to end; static, Floot and NixOS model lists removed; per-account catalogs reach the picker; new pins admitted at plan recording, recorded pins kept; no "first listed" default; discovery re-read when the picker opens | Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231, hosted-agent 663 pass; host NixOS option and environment removed; independent adversarial review found eighteen issues, all addressed and re-reviewed; root type build clean and documentation gate at 0 errors (177 warnings) after quarantining stale generated declarations; live catalog reads, Luna and free routes are deployment gates; not deployed |
 | 2026-09-21 | Separate native crash-recovery research from the current refactor | Dedicated investigation records evidence, retained-commit review, alternatives, and bounded continuation; prototypes isolated for draft tracking, not implementation approval; no deployment |
 | 2026-09-21 | Repair public native-controller/HTTP declarations and missing hosted-agent type dependency | Clean declarations and full docs pass (0 errors, 175 warnings); 7 HTTP and 44 asset-server tests pass; independently reviewed; incremental generation and native deployment remain pending |
