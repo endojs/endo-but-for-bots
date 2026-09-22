@@ -4327,7 +4327,11 @@ test('hashline edit through a guest: read attribution then edit', async t => {
 test('hashline edit through a guest: stale read is rejected (CAS)', async t => {
   const { host, config } = await prepareHost(t);
 
-  const mountPath = path.join(config.statePath, '..', 'mount-test-hashline-cas');
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-hashline-cas',
+  );
   await createMountFixture(mountPath, { 'doc.txt': 'first\nsecond\n' });
 
   const guest = await E(host).provideGuest('guest', {
