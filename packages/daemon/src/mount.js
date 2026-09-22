@@ -9,6 +9,20 @@ import { makeExo } from '@endo/exo';
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
 import { MountInterface, MountFileInterface } from './interfaces.js';
 import { makeIteratorRef } from './reader-ref.js';
+import { makeSerialJobs } from './serial-jobs.js';
+import {
+  DEFAULT_MAX_EDIT_FILE_SIZE,
+  DEFAULT_REAPPLY_WINDOW,
+  MAX_REAPPLY_WINDOW,
+  applyPatch,
+  byteLength,
+  computeFileHash,
+  describePatchProblem,
+  joinLines,
+  renderAnchored,
+  resolveAnchors,
+  splitLines,
+} from './hashline.js';
 
 /**
  * Validate a single path segment.
@@ -155,6 +169,10 @@ harden(isConfinedPath);
  * @property {boolean} readOnly
  * @property {FilePowers} filePowers
  * @property {string} description
+ * @property {import('./types.js').SerialJobs} editLock the per-mount-instance
+ *   lock serializing the read-validate-splice-write critical section.
+ *   Sub-mounts derived via `lookup()` inherit the parent's lock.
+ * @property {number} maxEditFileSize per-edit file-size cap, in bytes.
  */
 
 /**
@@ -164,8 +182,15 @@ harden(isConfinedPath);
  * @returns {object}
  */
 const makeMountExo = ctx => {
-  const { currentDir, confinementRoot, readOnly, filePowers, description } =
-    ctx;
+  const {
+    currentDir,
+    confinementRoot,
+    readOnly,
+    filePowers,
+    description,
+    editLock,
+    maxEditFileSize,
+  } = ctx;
 
   const assertWritable = () => {
     if (readOnly) {
@@ -261,6 +286,130 @@ const makeMountExo = ctx => {
       const parent = filePowers.joinPath(target, '..');
       await filePowers.makePath(parent);
       await filePowers.writeFileText(target, content);
+    },
+
+    async readTextAnchored(pathArg) {
+      await null;
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      const target = resolve(segments);
+      await assertConfined(target, confinementRoot, filePowers);
+      const content = await filePowers.readFileText(target);
+      return renderAnchored(content);
+    },
+
+    /**
+     * Hash-anchored line edit. Acquires the mount-internal lock, then
+     * runs the read-validate-splice-write critical section: whole-file
+     * SHA-256 CAS, per-line CRC32 anchor validation (with optional
+     * reapply relocation), the line splice, and the write. Returns a
+     * structured `EditResult` value (never throws for cases the agent
+     * can react to programmatically).
+     *
+     * @param {string | string[]} pathArg
+     * @param {import('./hashline.types.js').EditPatch} patch
+     * @param {import('./hashline.types.js').EditOptions} [options]
+     * @returns {Promise<import('./hashline.types.js').EditResult>}
+     */
+    async edit(pathArg, patch, options = {}) {
+      return editLock.enqueue(async () => {
+        /**
+         * @param {import('./hashline.types.js').EditFailureReason} reason
+         * @param {object} [extra]
+         */
+        const fail = (reason, extra = {}) =>
+          harden({ success: false, failure: harden({ reason, ...extra }) });
+
+        if (readOnly) {
+          return fail('permission-denied', {
+            diagnostic: 'Mount is read-only',
+          });
+        }
+
+        const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+        const target = resolve(segments);
+
+        // Path resolution / confinement failure is path-not-found so the
+        // agent's retry logic sees a uniform shape.
+        try {
+          await assertConfined(target, confinementRoot, filePowers);
+        } catch (err) {
+          const e = /** @type {{ message?: string }} */ (err);
+          return fail('path-not-found', {
+            diagnostic: e.message || 'path not found',
+          });
+        }
+
+        const exists = await filePowers.exists(target);
+        if (!exists) {
+          return fail('path-not-found', {
+            diagnostic: `No such file: ${q(segments.join('/'))}`,
+          });
+        }
+
+        // Shape validation (re-run on entry; CapTP delivers plain JSON).
+        const problem = describePatchProblem(patch);
+        if (problem !== undefined) {
+          return fail('patch-syntax', { diagnostic: problem });
+        }
+
+        let content;
+        try {
+          content = await filePowers.readFileText(target);
+        } catch (err) {
+          const e = /** @type {{ code?: string, message?: string }} */ (err);
+          if (e.code === 'EACCES') {
+            return fail('permission-denied', { diagnostic: e.message });
+          }
+          throw err;
+        }
+
+        const size = byteLength(content);
+        if (size > maxEditFileSize) {
+          return fail('patch-syntax', {
+            diagnostic: `File size ${size} exceeds the ${maxEditFileSize}-byte edit cap`,
+          });
+        }
+
+        // Whole-file CAS.
+        const fileHashActual = await computeFileHash(content);
+        if (patch.expectedFileHash !== fileHashActual) {
+          return fail('file-rev-mismatch', { fileHashActual });
+        }
+
+        const reapplyWindow = Math.min(
+          Math.max(1, options.reapplyWindow || DEFAULT_REAPPLY_WINDOW),
+          MAX_REAPPLY_WINDOW,
+        );
+        const parts = splitLines(content);
+        const resolution = resolveAnchors(patch, parts, {
+          reapply: Boolean(options.reapply),
+          reapplyWindow,
+        });
+        if (resolution.status === 'hash-mismatch') {
+          return fail('hash-mismatch', { mismatches: resolution.mismatches });
+        }
+        if (resolution.status === 'ambiguous-reapply') {
+          return fail('ambiguous-reapply', {
+            candidates: resolution.candidates,
+          });
+        }
+
+        const newParts = applyPatch(resolution.patch, parts);
+        const newContent = joinLines(newParts);
+
+        try {
+          await filePowers.writeFileText(target, newContent);
+        } catch (err) {
+          const e = /** @type {{ code?: string, message?: string }} */ (err);
+          if (e.code === 'EACCES') {
+            return fail('permission-denied', { diagnostic: e.message });
+          }
+          throw err;
+        }
+
+        const fileHashAfter = await computeFileHash(newContent);
+        return harden({ success: true, fileHashAfter });
+      });
     },
 
     async remove(pathArg) {
@@ -384,9 +533,15 @@ harden(makeMountFileExo);
  * @param {string} opts.rootPath
  * @param {boolean} opts.readOnly
  * @param {FilePowers} opts.filePowers
+ * @param {number} [opts.maxEditFileSize] per-edit file-size cap, in bytes
  * @returns {object}
  */
-export const makeMount = ({ rootPath, readOnly, filePowers }) => {
+export const makeMount = ({
+  rootPath,
+  readOnly,
+  filePowers,
+  maxEditFileSize = DEFAULT_MAX_EDIT_FILE_SIZE,
+}) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';
   /** @type {MountContext} */
   const ctx = {
@@ -395,6 +550,10 @@ export const makeMount = ({ rootPath, readOnly, filePowers }) => {
     readOnly,
     filePowers,
     description: `${prefix} at ${rootPath}`,
+    // One lock per top-level mount instance; sub-mounts inherit it via
+    // the `...ctx` spread in `lookup`.
+    editLock: makeSerialJobs(),
+    maxEditFileSize,
   };
 
   return makeMountExo(ctx);

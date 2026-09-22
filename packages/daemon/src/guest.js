@@ -367,6 +367,35 @@ export const makeGuestMaker = ({
       /** @type {any} */ ({
         help: makeHelp(guestHelp),
         ...guest,
+        /**
+         * Hash-anchored line edit, sugar delegating to
+         * `E(directoryRef).edit(path, patch, options)`. Exists so an
+         * agent holding only its guest ref can target a directory it was
+         * given by name. A ref that does not implement `edit` is
+         * translated to a structured `path-not-found` failure rather
+         * than escaping as a CapTP no-such-method error.
+         *
+         * @param {any} directoryRef
+         * @param {string | string[]} path
+         * @param {import('./hashline.types.js').EditPatch} patch
+         * @param {import('./hashline.types.js').EditOptions} [options]
+         */
+        edit: async (directoryRef, path, patch, options) => {
+          try {
+            return await E(directoryRef).edit(path, patch, options);
+          } catch (err) {
+            const e = /** @type {{ message?: string }} */ (err);
+            return harden({
+              success: false,
+              failure: harden({
+                reason: 'path-not-found',
+                diagnostic: `directoryRef does not back a splice-capable file store: ${
+                  e.message || q(err)
+                }`,
+              }),
+            });
+          }
+        },
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {
           const iterator = guest.followLocatorNameChanges(locator);

@@ -177,6 +177,10 @@ export const GuestInterface = M.interface('EndoGuest', {
   readText: M.call(NameOrPathShape).returns(M.promise()),
   maybeReadText: M.call(NameOrPathShape).returns(M.promise()),
   writeText: M.call(NameOrPathShape, M.string()).returns(M.promise()),
+  // Hash-anchored line edit: sugar delegating to E(directoryRef).edit
+  edit: M.call(M.remotable(), NameOrPathShape, M.any())
+    .optional(M.any())
+    .returns(M.promise()),
   // Mail
   // Get the guest's mailbox handle
   handle: M.call().returns(M.remotable()),
@@ -512,6 +516,9 @@ export const MountInterface = M.interface('EndoMount', {
   readText: M.call(PathArgShape).returns(M.promise()),
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
+  // Hash-anchored line edit (see designs/cli-edit-verb.md)
+  readTextAnchored: M.call(PathArgShape).returns(M.promise()),
+  edit: M.call(PathArgShape, M.any()).optional(M.any()).returns(M.promise()),
   // Mutation
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),

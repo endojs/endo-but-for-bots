@@ -37,6 +37,7 @@ import {
   addressesFromLocator,
   idFromLocator,
 } from '../src/locator.js';
+import { computeFileHash } from '../src/hashline.js';
 
 /**
  * @import {EReturn} from '@endo/eventual-send';
@@ -4821,4 +4822,252 @@ test('mount symlink - all symlink types together in one listing', async t => {
   const rawEntries = await fs.promises.readdir(mountRoot);
   t.is(rawEntries.length, 8); // 2 real + 2 internal + 4 escaping
   t.is(entries.length, 4); // 2 real + 2 internal
+});
+
+// --- hashline edit tests (designs/cli-edit-verb.md, phase 2) ---------
+//
+// These demonstrate the maintainer's acceptance criterion on PR #256:
+// the holder of a guest agent uses its surface to read a document with
+// hashline attribution and then edit it with hashline commands.
+
+/**
+ * Parse a `readTextAnchored` rendering into a map of line number to the
+ * displayed `LINE#HASH` anchor, so a test can author a patch exactly as
+ * an agent would from the anchored read.
+ *
+ * @param {string} anchored
+ * @returns {Map<number, { line: number, hash: string }>}
+ */
+const parseAnchored = anchored => {
+  const map = new Map();
+  for (const row of anchored.split('\n')) {
+    const match = /^\s*(\d+)#([0-9a-f]{2,4}) /.exec(row);
+    if (match) {
+      const line = Number(match[1]);
+      map.set(line, { line, hash: match[2] });
+    }
+  }
+  return map;
+};
+
+test('hashline edit - guest reads anchored, edits, reads back', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-rt');
+  const original = '# Today\n\nBuy milk.\nBuy eggs.\n';
+  await createMountFixture(mountPath, { 'notes.md': original });
+
+  await E(host).provideMount(mountPath, 'hl-mount');
+  const mount = await E(host).lookup(['hl-mount']);
+  const guest = await E(host).provideGuest('hl-guest', {
+    agentName: 'hl-agent',
+  });
+
+  // 1. The guest holds the mount capability and reads the document with
+  //    hashline attribution.
+  const anchored = await E(mount).readTextAnchored('notes.md');
+  t.regex(anchored, /^1#[0-9a-f]{2} # Today$/m);
+  const anchors = parseAnchored(anchored);
+
+  // 2. The guest computes the whole-file CAS hash of what it read and
+  //    authors a hashline patch referencing the anchors.
+  const rawText = await E(mount).readText('notes.md');
+  const expectedFileHash = await computeFileHash(rawText);
+  const patch = {
+    expectedFileHash,
+    ops: [
+      { op: 'replace', anchor: anchors.get(4), payload: ['Buy eggs (brown).'] },
+      { op: 'insert-after', anchor: anchors.get(4), payload: ['Buy bread.'] },
+    ],
+  };
+
+  // 3. The guest edits the document with hashline commands via its own
+  //    surface (`E(guest).edit`, sugar for `E(directoryRef).edit`).
+  const result = await E(guest).edit(mount, 'notes.md', patch);
+  t.true(result.success);
+  t.is(typeof result.fileHashAfter, 'string');
+
+  // 4. Read back and assert both the exo view and the on-disk bytes.
+  const after = await E(mount).readText('notes.md');
+  t.is(after, '# Today\n\nBuy milk.\nBuy eggs (brown).\nBuy bread.\n');
+  const onDisk = await fs.promises.readFile(
+    path.join(mountPath, 'notes.md'),
+    'utf-8',
+  );
+  t.is(onDisk, after);
+  t.is(result.fileHashAfter, await computeFileHash(after));
+});
+
+test('hashline edit - stale whole-file hash yields file-rev-mismatch', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-cas');
+  await createMountFixture(mountPath, { 'f.txt': 'a\nb\nc\n' });
+  await E(host).provideMount(mountPath, 'hl-cas');
+  const mount = await E(host).lookup(['hl-cas']);
+  const guest = await E(host).provideGuest('cas-guest');
+
+  const anchors = parseAnchored(await E(mount).readTextAnchored('f.txt'));
+  const staleHash = await computeFileHash('a\nb\nc\n');
+
+  // Modify the file externally between read and edit.
+  await fs.promises.writeFile(path.join(mountPath, 'f.txt'), 'a\nB\nc\n');
+
+  const result = await E(guest).edit(mount, 'f.txt', {
+    expectedFileHash: staleHash,
+    ops: [{ op: 'replace', anchor: anchors.get(1), payload: ['A'] }],
+  });
+  t.false(result.success);
+  t.is(result.failure.reason, 'file-rev-mismatch');
+  t.is(result.failure.fileHashActual, await computeFileHash('a\nB\nc\n'));
+  // The file is untouched by the failed edit.
+  t.is(
+    await fs.promises.readFile(path.join(mountPath, 'f.txt'), 'utf-8'),
+    'a\nB\nc\n',
+  );
+});
+
+test('hashline edit - stale per-line anchor yields hash-mismatch', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-line');
+  await createMountFixture(mountPath, { 'f.txt': 'alpha\nbeta\ngamma\n' });
+  await E(host).provideMount(mountPath, 'hl-line');
+  const mount = await E(host).lookup(['hl-line']);
+  const guest = await E(host).provideGuest('line-guest');
+
+  const rawText = await E(mount).readText('f.txt');
+  const expectedFileHash = await computeFileHash(rawText);
+
+  // A deliberately wrong-but-valid-hex per-line anchor hash on line 2.
+  const anchors = parseAnchored(await E(mount).readTextAnchored('f.txt'));
+  const realHash = anchors.get(2).hash;
+  const wrongHash = realHash === 'aa' ? 'bb' : 'aa';
+  const result = await E(guest).edit(mount, 'f.txt', {
+    expectedFileHash,
+    ops: [
+      { op: 'replace', anchor: { line: 2, hash: wrongHash }, payload: ['B'] },
+    ],
+  });
+  t.false(result.success);
+  t.is(result.failure.reason, 'hash-mismatch');
+  t.is(result.failure.mismatches.length, 1);
+  t.is(result.failure.mismatches[0].line, 2);
+  t.is(result.failure.mismatches[0].hashExpected, wrongHash);
+  // File untouched.
+  t.is(
+    await fs.promises.readFile(path.join(mountPath, 'f.txt'), 'utf-8'),
+    'alpha\nbeta\ngamma\n',
+  );
+});
+
+test('hashline edit - multi-op is atomic (one stale anchor aborts all)', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-atomic');
+  const original = 'one\ntwo\nthree\nfour\nfive\n';
+  await createMountFixture(mountPath, { 'f.txt': original });
+  await E(host).provideMount(mountPath, 'hl-atomic');
+  const mount = await E(host).lookup(['hl-atomic']);
+  const guest = await E(host).provideGuest('atomic-guest');
+
+  const anchors = parseAnchored(await E(mount).readTextAnchored('f.txt'));
+  const expectedFileHash = await computeFileHash(original);
+  const realThree = anchors.get(3).hash;
+  const wrongThree = realThree === 'aa' ? 'bb' : 'aa';
+
+  const result = await E(guest).edit(mount, 'f.txt', {
+    expectedFileHash,
+    ops: [
+      { op: 'replace', anchor: anchors.get(1), payload: ['ONE'] },
+      // Middle op has a stale anchor: the whole patch must be rejected.
+      {
+        op: 'replace',
+        anchor: { line: 3, hash: wrongThree },
+        payload: ['THREE'],
+      },
+      { op: 'replace', anchor: anchors.get(5), payload: ['FIVE'] },
+    ],
+  });
+  t.false(result.success);
+  t.is(result.failure.reason, 'hash-mismatch');
+  // Not one byte changed.
+  t.is(
+    await fs.promises.readFile(path.join(mountPath, 'f.txt'), 'utf-8'),
+    original,
+  );
+});
+
+test('hashline edit - concurrent edits serialize; loser sees file-rev-mismatch', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-conc');
+  const original = 'x\ny\nz\n';
+  await createMountFixture(mountPath, { 'f.txt': original });
+  await E(host).provideMount(mountPath, 'hl-conc');
+  const mount = await E(host).lookup(['hl-conc']);
+  const guest = await E(host).provideGuest('conc-guest');
+
+  const anchors = parseAnchored(await E(mount).readTextAnchored('f.txt'));
+  const expectedFileHash = await computeFileHash(original);
+
+  // Two patches authored against the same revision, fired concurrently.
+  const patchA = {
+    expectedFileHash,
+    ops: [{ op: 'replace', anchor: anchors.get(1), payload: ['A'] }],
+  };
+  const patchB = {
+    expectedFileHash,
+    ops: [{ op: 'replace', anchor: anchors.get(3), payload: ['B'] }],
+  };
+  const [ra, rb] = await Promise.all([
+    E(guest).edit(mount, 'f.txt', patchA),
+    E(guest).edit(mount, 'f.txt', patchB),
+  ]);
+
+  const successes = [ra, rb].filter(r => r.success);
+  const failures = [ra, rb].filter(r => !r.success);
+  t.is(successes.length, 1, 'exactly one edit wins');
+  t.is(failures.length, 1, 'exactly one edit loses');
+  t.is(failures[0].failure.reason, 'file-rev-mismatch');
+  t.is(
+    failures[0].failure.fileHashActual,
+    successes[0].fileHashAfter,
+    'the loser is told the winner-post hash so it can re-read',
+  );
+});
+
+test('hashline edit - absent path yields path-not-found', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-absent');
+  await createMountFixture(mountPath, {});
+  await E(host).provideMount(mountPath, 'hl-absent');
+  const mount = await E(host).lookup(['hl-absent']);
+  const guest = await E(host).provideGuest('absent-guest');
+
+  const result = await E(guest).edit(mount, 'nope.txt', {
+    expectedFileHash: await computeFileHash(''),
+    ops: [{ op: 'append', payload: ['x'] }],
+  });
+  t.false(result.success);
+  t.is(result.failure.reason, 'path-not-found');
+});
+
+test('hashline edit - read-only mount rejects with permission-denied', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-hashline-ro');
+  await createMountFixture(mountPath, { 'f.txt': 'a\nb\n' });
+  await E(host).provideMount(mountPath, 'hl-ro');
+  const mount = await E(host).lookup(['hl-ro']);
+  const readOnlyMount = await E(mount).readOnly();
+  const guest = await E(host).provideGuest('ro-guest');
+
+  const result = await E(guest).edit(readOnlyMount, 'f.txt', {
+    expectedFileHash: await computeFileHash('a\nb\n'),
+    ops: [{ op: 'append', payload: ['c'] }],
+  });
+  t.false(result.success);
+  t.is(result.failure.reason, 'permission-denied');
 });

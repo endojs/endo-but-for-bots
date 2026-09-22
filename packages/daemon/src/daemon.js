@@ -2981,6 +2981,7 @@ const makeDaemonCore = async (
             readText: disallowedFn,
             maybeReadText: disallowedFn,
             writeText: disallowedFn,
+            edit: disallowedFn,
             handle: disallowedSyncFn,
             listMessages: disallowedFn,
             followMessages: disallowedFn,
