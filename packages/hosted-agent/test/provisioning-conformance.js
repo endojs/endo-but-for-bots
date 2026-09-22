@@ -33,6 +33,7 @@ import {
  *
  * @param {object} adapter
  * @param {string} adapter.label
+ * @param {boolean} [adapter.nativeState] Whether the adapter pins a separate native state root.
  * @param {(powers: { owner: any, dependencies: Record<string, string>, workspaceRoot: string, privateRoot: string, protectedRoots: readonly string[], catalog: ReturnType<typeof makeBackendCatalog> }) => (sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>} adapter.makeProvisioner
  *   The adapter's declaration over the shared provisioner.
  * @param {(powers: { provisionSession: any, stopSession: any, removeSession: any, catalog: any, publicInternetEnabled?: boolean, listSubscriptions?: any }) => any} adapter.makeFactory
@@ -47,6 +48,7 @@ import {
  */
 export const testProvisioningConformance = ({
   label,
+  nativeState = false,
   makeProvisioner,
   makeFactory,
   request: extraRequest = {},
@@ -446,6 +448,115 @@ export const testProvisioningConformance = ({
     t.is(f.plan('a').systemPrompt, 'persona');
   });
 
+  /** @param {any} provision */
+  const inspectionFactory = provision =>
+    makeFactory({
+      provisionSession: provision,
+      stopSession: async () => {
+        throw Error('inspection stopped a session');
+      },
+      removeSession: async () => {
+        throw Error('inspection removed a session');
+      },
+      catalog: {
+        catalog: async () => {
+          throw Error('inspection read a catalog');
+        },
+      },
+    });
+
+  test(`${label} binding inspection is read-only and excludes nonbinding fields`, async t => {
+    const f = await fixture(t);
+    const factory = inspectionFactory(f.provision);
+    const before = await E(factory).inspectBindings({ sessionId: 'a' });
+    t.is(before.recorded, null);
+    t.deepEqual(before.changed, []);
+    t.deepEqual(f.names(), ['inspect']);
+    t.false(await f.exists(f.workspaceRoot));
+    await f.provision(
+      'a',
+      { ...f.request, systemPrompt: 'private persona' },
+      f.tools,
+    );
+    f.log.length = 0;
+    f.scripted.state.answer = false;
+    const after = await E(factory).inspectBindings({ sessionId: 'a' });
+    t.deepEqual(after.recorded, after.proposed);
+    t.deepEqual(after.changed, []);
+    t.deepEqual(after.proposed.provider, f.dependencies);
+    t.deepEqual(Object.keys(after.recorded).sort(), [
+      'account',
+      'image',
+      'provider',
+    ]);
+    t.false(JSON.stringify(after).includes('private persona'));
+    t.deepEqual(f.names(), ['inspect']);
+    t.is(f.records.get('a')?.phase, 'ready');
+  });
+
+  if (nativeState) {
+    test(`${label} provider rebind cannot relocate native state, but same-root replacement remains allowed`, async t => {
+      const f = await fixture(t);
+      await f.provision('a', f.request, f.tools);
+      const original = f.records.get('a');
+      t.is(f.plan('a').stateRoot, f.protectedRoot);
+      const changedRoot = join(f.base, 'other-state');
+      const dependencies = harden({
+        ...f.dependencies,
+        stateProvider: 'state-2',
+        storage: 'storage-2',
+      });
+      const replacement = stateRoot =>
+        makeProvisioner({
+          owner: f.owner,
+          dependencies,
+          workspaceRoot: f.workspaceRoot,
+          privateRoot: f.privateRoot,
+          protectedRoots: harden([stateRoot]),
+          catalog: f.scripted.catalog,
+        });
+      f.log.length = 0;
+      await t.throwsAsync(
+        replacement(changedRoot)(
+          'a',
+          {
+            ...f.request,
+            rebind: ['image', 'account', 'provider'],
+          },
+          f.tools,
+        ),
+        { message: /native state root cannot change/ },
+      );
+      t.deepEqual(f.names(), ['inspect']);
+      t.is(f.records.get('a'), original);
+      t.deepEqual(f.records.get('a')?.references, f.dependencies);
+      t.false(await f.exists(changedRoot));
+      await replacement(f.protectedRoot)(
+        'a',
+        { ...f.request, rebind: ['provider'] },
+        f.tools,
+      );
+      t.deepEqual(f.names().slice(-4), ['inspect', 'stop', 'revise', 'start']);
+      t.is(f.plan('a').stateRoot, f.protectedRoot);
+      t.deepEqual(f.records.get('a')?.references, dependencies);
+      // A reconstructed provisioner sees the durable pin, not an in-memory
+      // permission granted by the preceding rebind.
+      f.log.length = 0;
+      await t.throwsAsync(
+        replacement(changedRoot)(
+          'a',
+          {
+            ...f.request,
+            rebind: ['provider'],
+          },
+          f.tools,
+        ),
+        { message: /native state root cannot change/ },
+      );
+      t.deepEqual(f.names(), ['inspect']);
+    });
+  }
+
   for (const { what, makeProvisioner: makeRebound } of rebound) {
     test(`${label} a record reopened under a broker with another ${what} is refused until a request authorizes the rebind, which revises after a stop`, async t => {
       const f = await fixture(t);
@@ -458,6 +569,10 @@ export const testProvisioningConformance = ({
         protectedRoots: harden([f.protectedRoot]),
         catalog: f.scripted.catalog,
       });
+      const inspector = inspectionFactory(other);
+      const preview = await E(inspector).inspectBindings({ sessionId: 'a' });
+      t.deepEqual(preview.changed, [what]);
+      t.notDeepEqual(preview.recorded[what], preview.proposed[what]);
       const before = f.log.length;
       await t.throwsAsync(other('a', f.request, f.tools), {
         message: new RegExp(
@@ -492,6 +607,9 @@ export const testProvisioningConformance = ({
       await other('a', f.request, f.tools);
       t.deepEqual(f.names().slice(-3), ['inspect', 'stop', 'start']);
       t.deepEqual(f.plan('a'), revised);
+      const applied = await E(inspector).inspectBindings({ sessionId: 'a' });
+      t.deepEqual(applied.recorded, preview.proposed);
+      t.deepEqual(applied.changed, []);
       await t.throwsAsync(f.provision('a', f.request, f.tools), {
         message: new RegExp(`${what} cannot change`),
       });
@@ -514,6 +632,11 @@ export const testProvisioningConformance = ({
       protectedRoots: harden([f.protectedRoot]),
       catalog: f.scripted.catalog,
     });
+    const inspector = inspectionFactory(other);
+    const preview = await E(inspector).inspectBindings({ sessionId: 'a' });
+    t.deepEqual(preview.changed, ['provider']);
+    t.deepEqual(preview.recorded.provider, f.dependencies);
+    t.deepEqual(preview.proposed.provider, dependencies);
     const before = f.log.length;
     await t.throwsAsync(other('a', f.request, f.tools), {
       message:
@@ -543,6 +666,9 @@ export const testProvisioningConformance = ({
     t.deepEqual(revise?.[3], dependencies);
     t.deepEqual(f.records.get('a')?.references, dependencies);
     t.deepEqual(f.plan('a'), planBefore, 'the plan is untouched by it');
+    const applied = await E(inspector).inspectBindings({ sessionId: 'a' });
+    t.deepEqual(applied.recorded, preview.proposed);
+    t.deepEqual(applied.changed, []);
     // Rebound, the record answers the rebound services without a further
     // authorization.
     await other('a', f.request, f.tools);
@@ -788,6 +914,13 @@ export const testProvisioningConformance = ({
     t.deepEqual(await E(run).status(), {});
     // A reopen stops the retained incarnation, then the owner's stop again
     // before the revised plan starts.
+    // What a reopen may be authorized to rebind is the same vocabulary for
+    // every backend: the image, the account authority, the services.
+    t.deepEqual((await E(factory).describe()).rebindableBindings, [
+      'image',
+      'account',
+      'provider',
+    ]);
     await E(factory).create(
       harden({ ...spec, systemPrompt: 'persona' }),
       makeToolSet(),

@@ -67,8 +67,9 @@ const fixture = async (
   const plan = harden({
     sessionId: 'session-a',
     sandboxSessionId,
-    imageRef: `example@${imageDigest}`,
+    rootfs: `oci:example@${imageDigest}`,
     accountRef: 'account-a',
+    stateRoot: join(root, 'state'),
     networkPolicy: 'off',
     workspaceDir: join(root, 'workspace'),
     workspaceMountPoint: join(root, 'mount'),

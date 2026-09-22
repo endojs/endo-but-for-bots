@@ -120,13 +120,20 @@ export const readStateProvider = async host => {
 };
 harden(readStateProvider);
 
-/** @param {EndoHost} host */
-export const readSessionStorage = async host => {
-  const { identifier, env } = await readProvisionedEnvironment(
-    host,
-    [SANDBOX_DIR, 'session-storage'],
-    sessionStorageSpecifier,
-  );
+/**
+ * @param {EndoHost} host
+ * @param {string} stateProviderIdentifier
+ */
+export const readSessionStorage = async (host, stateProviderIdentifier) => {
+  (typeof stateProviderIdentifier === 'string' &&
+    stateProviderIdentifier !== '') ||
+    Fail`Claude storage requires an explicit state provider identity`;
+  const { identifier, env } = await readHostedProvisionedEnvironment(host, {
+    label: LABEL,
+    namePath: [SANDBOX_DIR, 'session-storage'],
+    expectedSpecifier: sessionStorageSpecifier,
+    expectedPowersIdentifier: stateProviderIdentifier,
+  });
   const { CLAUDE_WORKSPACE_BASE_DIR: workspaceDir, CLAUDE_MCP_DIR: mcpDir } =
     env;
   (typeof workspaceDir === 'string' &&

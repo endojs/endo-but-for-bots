@@ -98,7 +98,7 @@ const readRebind = (value, label) => {
 /**
  * @param {object} powers
  * @param {string} powers.label The adapter's name for messages.
- * @param {((sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>) & { rebindable?: readonly string[] }} powers.provisionSession
+ * @param {((sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>) & { rebindable?: readonly string[], inspectBindings?: (sessionId: string) => Promise<any> }} powers.provisionSession
  *   Record (or reopen) the session's plan with the daemon owner and start its
  *   native controller with the pinned tool set, returning the client facet.
  *   A rejection leaves whatever the owner acquired under the owner's retained
@@ -270,6 +270,12 @@ export const makeHostedBackendFactory = ({
       });
     },
     modelCatalog: subscriptionId => catalog.catalog(subscriptionId),
+    async inspectBindings(spec) {
+      const sessionId = assertSessionId(spec?.sessionId, label);
+      const inspect = provisionSession.inspectBindings;
+      if (!inspect) throw Fail`${b(label)} does not expose binding inspection`;
+      return sessions.inOrder(sessionId, () => inspect(sessionId));
+    },
     async create(spec, toolSet) {
       const sessionId = assertSessionId(spec?.sessionId, label);
       return sessions.inOrder(sessionId, () => createSession(spec, toolSet));
@@ -290,7 +296,7 @@ export const makeHostedBackendFactory = ({
       });
     },
     help() {
-      return `${label} backend factory: describe, modelCatalog(subscriptionId?), create, stop (keeps state), and idempotent destroy.`;
+      return `${label} backend factory: describe, modelCatalog(subscriptionId?), inspectBindings({ sessionId }) (read-only recorded/proposed bindings, not proof of activation), create, stop (keeps state), and idempotent destroy.`;
     },
   });
 };

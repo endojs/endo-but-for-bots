@@ -25,6 +25,7 @@ import {
   makeProviderBrokerServiceKit,
 } from '@endo/hosted-agent/provider-broker-service.js';
 import { M, matches } from '@endo/patterns';
+import { assertAccountAuthority } from '@endo/hosted-agent/account-authority.js';
 import {
   makeClaudeAccountRead,
   makeClaudeSubscriptionCredential,
@@ -32,7 +33,6 @@ import {
 
 import {
   ANTHROPIC_BETA_PATTERN,
-  CLAUDE_BROKER_ACCOUNT,
   DEFAULT_OAUTH_BETA,
   buildClaudeBrokerPolicy,
 } from './claude-broker.js';
@@ -49,6 +49,9 @@ const ConfigShape = M.splitRecord(
     imageDigest: M.string(),
     listenerImageRef: M.string(),
     credentialKind: M.or(...CREDENTIAL_KINDS),
+    // The account authority this broker serves (`account-authority.js`):
+    // the id every plan records and every grant reports.
+    accountAuthority: M.string(),
   },
   {
     anthropicBeta: M.string(),
@@ -56,7 +59,6 @@ const ConfigShape = M.splitRecord(
     publicInternet: M.boolean(),
     diagnostics: M.boolean(),
     pool: M.boolean(),
-    accountRef: M.string(),
   },
   harden({}),
 );
@@ -78,14 +80,29 @@ export const readClaudeBrokerConfig = env => {
   // error, since the broker it belongs to must be retired deliberately.
   !(config && typeof config === 'object' && Object.hasOwn(config, 'models')) ||
     Fail`Retained Claude broker configuration names models, which this release no longer reads (models are admitted by the account's own catalog): retire that broker and the sessions bound to it deliberately, then rerun setup`;
+  // A profile from before plans recorded the account authority names none;
+  // it is refused with the way out, not as a shape error, since the broker
+  // it belongs to must be retired deliberately. Only a profile that is
+  // otherwise whole reads as one from before; anything less is a shape error.
+  !(
+    config &&
+    typeof config === 'object' &&
+    [
+      'ownerId',
+      'directory',
+      'imageRef',
+      'imageDigest',
+      'listenerImageRef',
+    ].every(name => Object.hasOwn(config, name)) &&
+    !Object.hasOwn(config, 'accountAuthority')
+  ) ||
+    Fail`Retained Claude broker configuration names no account authority, which this release records into every session plan; retire that broker deliberately and set ENDO_CLAUDE_ACCOUNT_AUTHORITY for the next mint`;
   if (!matches(config, ConfigShape))
     throw Fail`Invalid Claude broker configuration`;
   config.pool !== true ||
     config.credentialKind === 'oauthToken' ||
     Fail`Claude pools require oauthToken credentials`;
-  config.accountRef === undefined ||
-    /^[A-Za-z0-9_-]{1,256}$/.test(config.accountRef) ||
-    Fail`Invalid Claude subscription account binding`;
+  assertAccountAuthority(config.accountAuthority, 'Claude');
   // What the broker grant refuses at every admission is refused here, at
   // construction, where a retained formula would otherwise be bound unusable.
   config.anthropicBeta === undefined ||
@@ -129,14 +146,18 @@ export const makeOwnedClaudeBrokerService = ({
           ? { authMode: /** @type {const} */ ('oauth') }
           : {}),
       },
-      accountRef: config.accountRef ?? CLAUDE_BROKER_ACCOUNT,
+      accountAuthority: config.accountAuthority,
     }),
     makeCredential: (config, secret) =>
       config.pool === true
         ? makeCredential({
             secret,
             rotate: secret,
-            accountRef: config.accountRef ?? CLAUDE_BROKER_ACCOUNT,
+            // A pool member's own account, supplied for the member; the
+            // pool's profile names none.
+            accountRef:
+              /** @type {{ accountRef?: string }} */ (config).accountRef ??
+              Fail`A Claude pool member must name its account`,
             now: Date.now,
             fetch: globalThis.fetch,
           })

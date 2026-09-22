@@ -61,9 +61,11 @@ harden(controllerSpecifier);
  * @param {Record<string,string>} powers.dependencies
  * @param {string} powers.workspaceRoot
  * @param {string} powers.privateRoot
+ * @param {string} powers.stateRoot The exact provider's immutable native storage root.
  * @param {readonly string[]} powers.protectedRoots Host-only records and services.
- * @param {string} powers.imageRef
- * @param {string} powers.accountRef
+ * @param {string} powers.imageRef The broker's pinned image, digest included.
+ * @param {string} powers.accountRef The account authority the broker serves,
+ *   recorded into every plan (`@endo/hosted-agent/account-authority.js`).
  * @param {ReturnType<MakeBackendCatalog>} powers.catalog Admits a new
  *   session's pin against the accounts it may be served from.
  * @param {Record<string,string>} [powers.mounterEnv]
@@ -73,6 +75,7 @@ export const makeCodexSessionProvisioner = ({
   dependencies,
   workspaceRoot,
   privateRoot,
+  stateRoot,
   protectedRoots,
   imageRef,
   accountRef,
@@ -85,19 +88,34 @@ export const makeCodexSessionProvisioner = ({
     dependencies,
     workspaceRoot,
     privateRoot,
-    protectedRoots,
+    protectedRoots: [...new Set([stateRoot, ...protectedRoots])],
+    immutable: { stateRoot: 'native state root' },
     sandboxIdFallback: 'codex',
     readPlan: readCodexSessionPlan,
     fields: ({ request }) => ({
-      imageRef,
+      stateRoot,
+      rootfs: `oci:${imageRef}`,
       accountRef,
       containerMounts: request.containerMounts,
     }),
-    rebindable: { imageRef: 'image', accountRef: 'account' },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });
 harden(makeCodexSessionProvisioner);
+
+/**
+ * What a session on this backend is bound to, from the broker's persisted
+ * profile: the pinned image every plan records as `rootfs`, and the account
+ * authority it records as `accountRef`, never the profile's own `accountRef`,
+ * which is the provider account of a single credential.
+ * @param {ReturnType<typeof readCodexBrokerConfig>} brokerConfig
+ */
+export const codexBackendBindings = brokerConfig =>
+  harden({
+    imageRef: brokerConfig.imageRef,
+    accountRef: brokerConfig.accountAuthority,
+  });
+harden(codexBackendBindings);
 
 /**
  * Operator entrypoint. Floot receives only the guarded factory returned here.
@@ -112,12 +130,17 @@ export const make = async (host, _context, { env = {} } = {}) => {
       namePath: ['codex-sandbox', name],
       expectedSpecifier: current(relative),
     });
-  const [sandbox, broker, state, storage] = await Promise.all([
+  const [sandbox, broker, state] = await Promise.all([
     read('native-sandbox', '../../sandbox/src/native-agent.js'),
     read('broker-service', './codex-broker-service-agent.js'),
     read('state-provider', './codex-state-provider-module.js'),
-    read('session-storage', './codex-session-storage-module.js'),
   ]);
+  const storage = await readProvisionedEnvironment(host, {
+    label: 'Codex',
+    namePath: ['codex-sandbox', 'session-storage'],
+    expectedSpecifier: current('./codex-session-storage-module.js'),
+    expectedPowersIdentifier: state.identifier,
+  });
   const brokerConfig = readCodexBrokerConfig(broker.env);
   const protectedRoots = harden([
     assertCodexStateRoot(state.env.ENDO_CODEX_STATE_DIR),
@@ -153,11 +176,13 @@ export const make = async (host, _context, { env = {} } = {}) => {
   // credential, with the reasoning levels the provider declares.
   const catalog = makeBackendCatalog({
     label: 'Codex',
+    authority: brokerConfig.accountAuthority,
     readCatalog: async subscriptionId =>
       E(await brokerService()).modelCatalog(subscriptionId),
     listSubscriptions,
   });
   const provisionSession = makeCodexSessionProvisioner({
+    stateRoot: assertCodexStateRoot(state.env.ENDO_CODEX_STATE_DIR),
     owner,
     dependencies: harden({
       sandboxService: sandbox.identifier,
@@ -168,8 +193,7 @@ export const make = async (host, _context, { env = {} } = {}) => {
     workspaceRoot,
     privateRoot,
     protectedRoots,
-    imageRef: brokerConfig.imageRef,
-    accountRef: brokerConfig.accountRef,
+    ...codexBackendBindings(brokerConfig),
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });

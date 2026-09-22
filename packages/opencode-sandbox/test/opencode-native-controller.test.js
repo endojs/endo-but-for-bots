@@ -79,13 +79,13 @@ const planFor = id =>
     sessionId: id,
     sandboxSessionId: makeSandboxSessionId(id),
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
+    accountRef: 'openrouter-main',
     networkPolicy: 'off',
     workspaceDir: `/workspaces/${id}`,
     workspaceMountPoint: `/private/${id}/work-mount`,
     mcpDir: `/private/${id}/mcp`,
     mounterSocketDir: `/private/${id}/9p`,
     model: 'openrouter/anthropic/claude-sonnet-4',
-    initialPrompt: 'must never run',
   });
 
 const fixture = (t, { realClient = false } = {}) => {
@@ -196,7 +196,7 @@ const fixture = (t, { realClient = false } = {}) => {
             sessionId: id,
             grantId: `grant-${id}`,
             imageDigest: `sha256:${'a'.repeat(64)}`,
-            accountRef: 'openrouter',
+            accountRef: 'openrouter-main',
             authMode: 'api-key',
             networkNamespaceId: id,
             ...(network ? { network } : {}),
@@ -668,7 +668,7 @@ test('retired native session resume plan acquires no resources', async t => {
     opencodeSessionId: 'ses_old',
   });
   await t.throwsAsync(E(controller).activate(text, f.resolver), {
-    message: /Retired opencodeSessionId field/,
+    message: /Unknown session plan field "opencodeSessionId"/,
   });
   t.deepEqual(f.events, []);
 });

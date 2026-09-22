@@ -23,7 +23,7 @@ export const make = async (namespace, context) => {
     }),
     makePolicy: () => ({
       policy: { origin: 'https://provider.invalid' },
-      accountRef: 'pool',
+      accountAuthority: 'pool',
     }),
     makeCredential: (config, secret) => {
       void E(control).note('construct');

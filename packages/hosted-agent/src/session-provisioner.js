@@ -75,11 +75,20 @@ const PLACEMENT_NAMES = harden({
 });
 
 /**
- * The name a request's authorization uses for the record's dependencies: the
- * broker, the sandbox and state services and the storage owner, which change
- * together when a backend is re-minted over other services.
+ * The bindings a reopen may be authorized to change, the same three for
+ * every hosted backend: `image`, the pinned image the plan records as
+ * `rootfs`; `account`, the account authority it records as `accountRef`
+ * (and, for an adapter whose credential has a kind, that kind); and
+ * `provider`, the record's dependencies, the broker, the sandbox and state
+ * services and the storage owner, which change together when a backend is
+ * re-minted over other services.
  */
+const IMAGE = 'image';
+const ACCOUNT = 'account';
 const PROVIDER = 'provider';
+const BINDINGS = harden([IMAGE, ACCOUNT, PROVIDER]);
+/** The plan fields every backend binds, by field and binding name. */
+const SHARED_REBINDABLE = harden({ rootfs: IMAGE, accountRef: ACCOUNT });
 
 /**
  * What a reopen is authorized to rebind: the names of the bindings it may
@@ -129,15 +138,19 @@ const readRebind = (value, known, label) => {
  *   adapter's parser: what the controller activates and the storage owner
  *   removes.
  * @param {(context: { request: Record<string, any> }) => Record<string, any>} [powers.fields]
- *   The adapter's own plan fields.
+ *   The adapter's own plan fields. Declared image/account binding fields
+ *   must be request-independent: inspection projects them with an empty
+ *   request without admitting a model or acquiring any session resources.
  * @param {Record<string, string>} [powers.immutable] Adapter fields no reopen
  *   may change, by plan field and the name a refusal gives it.
- * @param {Record<string, string>} [powers.rebindable] Adapter fields a reopen
- *   may change only under a request that authorizes it, by plan field and
- *   the name the authorization uses (`{ imageRef: 'image' }`); the record's
- *   dependencies are rebindable alike, under `provider`. A durable session
- *   keeps its identity, workspace and conversation across such a rebind;
- *   the incarnation before it is stopped, and its authority released, first.
+ * @param {Record<string, string>} [powers.rebindable] Further adapter fields
+ *   a reopen may change only under a request that authorizes it, by plan
+ *   field and the binding it sits under, `image` or `account`
+ *   (`{ credentialKind: 'account' }`); every backend binds `rootfs` under
+ *   `image` and `accountRef` under `account`, and its dependencies under
+ *   `provider`. A durable session keeps its identity, workspace and
+ *   conversation across such a rebind; the incarnation before it is stopped,
+ *   and its authority released, first.
  * @param {object} [powers.pin]
  * @param {'catalog-default' | 'runtime-default'} [powers.pin.unpinned] What a
  *   session that names no model gets: the default the account's catalog
@@ -188,10 +201,15 @@ export const makeSessionProvisioner = ({
     ),
     ...immutable,
   });
-  const rebindableNames = harden({ ...rebindable });
-  const bindings = harden(
-    new Set([...Object.values(rebindableNames), PROVIDER]),
-  );
+  for (const [field, name] of Object.entries(rebindable)) {
+    name === IMAGE ||
+      name === ACCOUNT ||
+      Fail`${b(label)} rebindable field ${q(field)} must sit under ${q(IMAGE)} or ${q(ACCOUNT)}, not ${q(name)}`;
+    !Object.hasOwn(SHARED_REBINDABLE, field) ||
+      Fail`${b(label)} rebindable field ${q(field)} is bound for every backend`;
+  }
+  const rebindableNames = harden({ ...SHARED_REBINDABLE, ...rebindable });
+  const bindings = harden(new Set(BINDINGS));
 
   /**
    * The recorded pin answers a reopen that names it, or nothing; a new
@@ -393,10 +411,63 @@ export const makeSessionProvisioner = ({
     }
     return E(owner).start(sessionId, toolSet);
   };
+  /**
+   * Diagnostic only: no catalog read, activation, mutation or authorization.
+   * Project only declared binding fields and dependency identities, never
+   * tools, persona, credentials or incarnation references. A later reopen
+   * still compares the actual record against its own proposed bindings.
+   * @param {string} sessionId
+   */
+  const inspectBindings = async sessionId => {
+    const record = await E(owner).inspect(sessionId);
+    const plan = record === undefined ? undefined : readPlan(record.plan);
+    const proposedFields = fields({ request: {} });
+    /** @param {Record<string, any>} values */
+    const project = values =>
+      Object.fromEntries(
+        [IMAGE, ACCOUNT].map(binding => [
+          binding,
+          Object.fromEntries(
+            Object.entries(rebindableNames)
+              .filter(([, name]) => name === binding)
+              .map(([field]) => [field, values[field] ?? null]),
+          ),
+        ]),
+      );
+    const proposed = {
+      ...project(proposedFields),
+      provider: { ...dependencies },
+    };
+    const recorded =
+      plan === undefined
+        ? null
+        : {
+            ...project(plan),
+            provider: Object.fromEntries(
+              Object.keys(dependencies).map(role => [
+                role,
+                record.references?.[role] ?? null,
+              ]),
+            ),
+          };
+    const changed =
+      recorded === null
+        ? []
+        : [...bindings].filter(binding =>
+            Object.entries(proposed[binding]).some(
+              ([key, value]) => recorded[binding][key] !== value,
+            ),
+          );
+    return harden({ recorded, proposed, changed });
+  };
+
   // The names a request may authorize, declared with the function so the
   // factory's descriptor can carry them to an operator.
   return harden(
-    Object.assign(provision, { rebindable: harden([...bindings]) }),
+    Object.assign(provision, {
+      rebindable: harden([...bindings]),
+      inspectBindings,
+    }),
   );
 };
 harden(makeSessionProvisioner);

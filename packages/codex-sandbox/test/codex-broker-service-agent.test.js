@@ -11,6 +11,7 @@ import {
   makeOwnedCodexBrokerService,
   readCodexBrokerConfig,
 } from '../src/codex-broker-service-agent.js';
+import { codexBackendBindings } from '../src/codex-backend-module.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const config = harden({
@@ -19,9 +20,23 @@ const config = harden({
   imageRef: `localhost/codex@${digest}`,
   imageDigest: digest,
   listenerImageRef: `localhost/provider@${digest}`,
+  accountAuthority: 'codex-main',
   accountRef: 'account-a',
 });
 const env = harden({ CODEX_BROKER_CONFIG: JSON.stringify(config) });
+
+test('a profile from before account authorities is refused with the way out, and a session binds to the authority, not the provider account', t => {
+  const { accountAuthority: _, ...before } = config;
+  t.throws(
+    () =>
+      readCodexBrokerConfig({ CODEX_BROKER_CONFIG: JSON.stringify(before) }),
+    { message: /names no account authority.*retire that broker deliberately/ },
+  );
+  t.deepEqual(codexBackendBindings(readCodexBrokerConfig(env)), {
+    imageRef: config.imageRef,
+    accountRef: 'codex-main',
+  });
+});
 
 test('Codex catalog uses retained credential and the packaged CLI version without starting runtime', async t => {
   let reads = 0;
@@ -133,6 +148,12 @@ test('Codex broker configuration refuses authority injection and unbound account
     { fetch: 'override' },
     { origin: 'https://elsewhere.test' },
     { accountRef: '' },
+    { accountAuthority: '' },
+    { accountAuthority: 'not an id' },
+    { accountAuthority: undefined },
+    // A pool's profile names no account; one credential's must.
+    { pool: true },
+    { accountRef: undefined },
   ]) {
     t.throws(() =>
       readCodexBrokerConfig({

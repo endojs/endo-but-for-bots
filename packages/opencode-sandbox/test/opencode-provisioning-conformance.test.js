@@ -14,6 +14,7 @@ testProvisioningConformance({
     makeOpencodeSessionProvisioner({
       ...powers,
       rootfs: `oci:localhost/opencode@${digest}`,
+      accountRef: 'openrouter-main',
     }),
   makeFactory: makeOpencodeBackendFactory,
   rebound: [
@@ -23,6 +24,16 @@ testProvisioningConformance({
         makeOpencodeSessionProvisioner({
           ...powers,
           rootfs: `oci:localhost/opencode@sha256:${'b'.repeat(64)}`,
+          accountRef: 'openrouter-main',
+        }),
+    },
+    {
+      what: 'account',
+      makeProvisioner: powers =>
+        makeOpencodeSessionProvisioner({
+          ...powers,
+          rootfs: `oci:localhost/opencode@${digest}`,
+          accountRef: 'openrouter-other',
         }),
     },
   ],

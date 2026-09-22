@@ -21,11 +21,23 @@ const config = harden({
   imageRef: `localhost/opencode@${digest}`,
   imageDigest: digest,
   listenerImageRef: `localhost/provider@${digest}`,
+  accountAuthority: 'openrouter-main',
 });
 const env = harden({ OPENCODE_BROKER_CONFIG: JSON.stringify(config) });
+
+test('a profile from before account authorities is refused with the way out', t => {
+  const { accountAuthority: _, ...before } = config;
+  t.throws(
+    () =>
+      readOpencodeBrokerConfig({
+        OPENCODE_BROKER_CONFIG: JSON.stringify(before),
+      }),
+    { message: /names no account authority.*retire that broker deliberately/ },
+  );
+});
 const spec = harden({
   providerOrigin: 'https://openrouter.ai',
-  accountRef: 'openrouter',
+  accountRef: 'openrouter-main',
   model: 'vendor/model',
 });
 const secret = Far('OriginalSecret', { readBase64: async () => btoa('key') });

@@ -25,7 +25,6 @@ import {
 
 export const OPENROUTER_ORIGIN = 'https://openrouter.ai';
 export const OPENROUTER_INFERENCE_PATH = '/api/v1/chat/completions';
-export const OPENCODE_BROKER_ACCOUNT = 'openrouter';
 export const OPENCODE_BROKER_VERSION = 'OpencodeProviderBrokerV1';
 
 // The shared budgets and owner pattern, re-exported for this package's users.
@@ -76,14 +75,16 @@ export const buildOpencodeBrokerPolicy = ({
  * kit (`@endo/hosted-agent/provider-broker-service.js`), bound to the
  * OpenRouter policy and account. Retain the kit before start().
  *
- * @param {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'>} options
+ * @param {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { accountAuthority: string }} options
+ *   `accountAuthority` is the account authority the broker serves, the id
+ *   its grants report (`@endo/hosted-agent/account-authority.js`).
  */
-export const makeOpencodeBrokerKit = options =>
+export const makeOpencodeBrokerKit = ({ accountAuthority, ...options }) =>
   makeProviderBrokerKit({
     ...options,
     label: 'OpenCode',
     policy: buildOpencodeBrokerPolicy(),
-    accountRef: OPENCODE_BROKER_ACCOUNT,
+    accountRef: accountAuthority,
   });
 harden(makeOpencodeBrokerKit);
 

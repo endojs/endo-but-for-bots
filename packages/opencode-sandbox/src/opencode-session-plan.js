@@ -10,7 +10,6 @@
  * @module
  */
 
-import { Fail, q } from '@endo/errors';
 import {
   containsPath,
   isNormalizedAbsolutePath,
@@ -32,6 +31,8 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
+ * @property {string} accountRef The account authority the session is bound
+ *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {string} [workspaceDir] Owned backing storage the workspace
  *   filesystem serves; absent when the workspace is an operator-supplied host
@@ -62,18 +63,12 @@ const SANDBOX_ID_FALLBACK = 'opencode';
  * @returns {SessionPlan}
  */
 export const readSessionPlan = text => {
-  const { placement, recorded } = readSessionPlacement(text, {
+  const { placement } = readSessionPlacement(text, {
     label: 'OpenCode',
     sandboxIdFallback: SANDBOX_ID_FALLBACK,
     privatePaths: ['mcpDir'],
   });
-  !Object.hasOwn(recorded, 'opencodeSessionId') ||
-    Fail`Retired opencodeSessionId field; recreate this hosted session plan`;
-  (typeof recorded.rootfs === 'string' && recorded.rootfs !== '') ||
-    Fail`Missing session plan field ${q('rootfs')}`;
-  return harden(
-    /** @type {SessionPlan} */ ({ ...placement, rootfs: recorded.rootfs }),
-  );
+  return harden(/** @type {SessionPlan} */ ({ ...placement }));
 };
 harden(readSessionPlan);
 

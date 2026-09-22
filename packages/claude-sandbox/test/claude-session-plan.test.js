@@ -11,6 +11,8 @@ const plan = harden({
   sessionId: 'session-a',
   sandboxSessionId: makeSandboxSessionId('session-a'),
   rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
+  accountRef: 'claude-main',
+  stateRoot: '/native-state',
   networkPolicy: 'off',
   credentialKind: 'apiKey',
   workspaceDir: '/workspaces/session-a-0123456789ab',
@@ -20,6 +22,25 @@ const plan = harden({
   model: 'claude-sonnet-4',
   reasoningEffort: 'max',
   systemPrompt: 'You are Floot.',
+});
+
+test('native state root is required and must be a normalized absolute non-root path', t => {
+  for (const stateRoot of [
+    undefined,
+    '/',
+    'relative',
+    '/state/../other',
+    '/state/',
+    `/state${String.fromCharCode(0)}bad`,
+  ]) {
+    t.throws(
+      () => readClaudeSessionPlan(JSON.stringify({ ...plan, stateRoot })),
+      {
+        message: /recorded absolute path for "stateRoot"/,
+      },
+    );
+  }
+  t.is(readClaudeSessionPlan(JSON.stringify(plan)).stateRoot, plan.stateRoot);
 });
 
 test('a recorded plan parses without deployment resource settings', t => {
@@ -130,7 +151,19 @@ test('retired per-session native profiles are refused rather than ignored', t =>
   t.throws(
     () => readClaudeSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
     {
-      message: /Retired nativeProfile field/,
+      message: /Unknown session plan field "nativeProfile"/,
     },
   );
+});
+
+test('unknown fields are refused rather than dropped', t => {
+  for (const [name, mutated] of [
+    ['stateDirectory', { ...plan, stateDirectory: '/host/records' }],
+    ['imageRef', { ...plan, imageRef: 'x' }],
+    ['containerMounts', { ...plan, containerMounts: [] }],
+  ]) {
+    t.throws(() => readClaudeSessionPlan(JSON.stringify(mutated)), {
+      message: new RegExp(`Unknown session plan field "${name}"; recreate`),
+    });
+  }
 });

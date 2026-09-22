@@ -57,6 +57,8 @@ test('the storage caplet requires both roots and removes one recorded plan throu
     sessionId: 'session-a',
     sandboxSessionId: id,
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
+    accountRef: 'claude-main',
+    stateRoot: path.join(base, 'state'),
     networkPolicy: 'off',
     credentialKind: 'apiKey',
     workspaceDir: path.join(roots.workspaceDir, id),

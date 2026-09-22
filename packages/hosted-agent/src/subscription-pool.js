@@ -1,6 +1,7 @@
 // @ts-check
 
 import { Fail, q } from '@endo/errors';
+import { assertAccountAuthority } from './account-authority.js';
 
 /**
  * Which of a provider's subscriptions serves a request.
@@ -378,7 +379,10 @@ export const normalizeSubscriptionSet = (
 ) => {
   (candidate !== null && typeof candidate === 'object') ||
     Fail`A subscription set must be a record`;
-  const { members, cacheLifetimeSeconds = 300 } = candidate;
+  const { id: setId, members, cacheLifetimeSeconds = 300 } = candidate;
+  // The account authority this set is: the pool's id, as the operator
+  // declared it (`account-authority.js`); absent for a set declared before.
+  setId === undefined || assertAccountAuthority(setId, 'Subscription set');
   (Array.isArray(members) && members.length > 0 && members.length <= 16) ||
     Fail`A subscription set must list between 1 and 16 members`;
   (typeof cacheLifetimeSeconds === 'number' &&
@@ -467,7 +471,11 @@ export const normalizeSubscriptionSet = (
   !requireAccountRef ||
     accounts.length === own.length ||
     Fail`Every subscription of this provider must name its account`;
-  return harden({ cacheLifetimeSeconds, members: projected });
+  return harden({
+    ...(setId === undefined ? {} : { id: setId }),
+    cacheLifetimeSeconds,
+    members: projected,
+  });
 };
 harden(normalizeSubscriptionSet);
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-22 |
+| **Updated** | 2026-09-23 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
@@ -25,8 +25,8 @@ The same day the native controllers' execution envelope followed
 (`execution-envelope.js`): scope acquisition, the exact grant and evidence
 checks, the workspace projection, the mount table, slice construction and both
 handoff checks are shared, and the raw placement and exact grant checks Codex
-alone applied now hold for every runtime. FA-06's completion criteria are met
-locally. Implemented and reviewed locally; not deployed.
+alone applied now hold for every runtime. FA-06's completion criteria are met;
+deployed as generation 165 (2026-09-22) with the full acceptance matrix passed.
 
 Durable identity and incarnation bindings (audit FA-08, 2026-09-22): a
 session's record keeps its identity, workspace, private directories and
@@ -37,11 +37,263 @@ rebindable to what the backend holds now, only under a request that names each
 binding it authorizes (`rebind: ['image', 'provider']`), after the previous
 incarnation is stopped and its authority released, which the daemon owner
 enforces by refusing the revision while a client or worker reference remains.
-The owner's `revise` takes the references to rebind and writes them before the
-plan, as creation does; a failed write leaves a record the execution envelope
-refuses to activate on mismatched evidence until the rebind is retried. Floot's
-session facet exposes the operator's `rebind(bindings)`. Implemented and
-reviewed locally; not deployed.
+The owner's `revise` takes the references to rebind, and the record store
+publishes them with the plan as one transition: staged whole under the record's
+`revision` entry first, shown as applied once its plan is staged, and finished
+before any other mutation of the record or the next activation, so a crash
+leaves the previous record or a durable intent, never a record between two
+bindings (the first, write-in-turn design was found not crash-safe by the
+operator's reviewer on 2026-09-22: the execution envelope cannot reject a
+replacement service reporting the same image and account, and does not check
+storage). Floot's session facet exposes the operator's `rebind(bindings)`. The
+first design deployed as generation 165 (2026-09-22); the one-transition
+revision is not deployed.
+
+### One binding vocabulary — planned 2026-09-23
+
+Planned; landing in slices before the next deploy and before the live rebind
+cases, so those exercise the final vocabulary and the deploy happens once.
+Slice 1 (2026-09-23, local): `rootfs` is the one image field, read and pinned
+by the shared placement reader (`readPinnedRootfs`: `oci:`, a digest, the
+runtime's pinned-reference pattern) for all three backends, so the execution
+envelope reads the plan's image itself and the per-adapter hook is gone;
+every plan reader refuses a field it does not know, the shared reader taking
+each adapter's declared fields (`fields`) beside its private paths, and the
+two retired-name checks fold into that rule; Codex's plan field `imageRef` is
+gone. Slices 2 and 3 (2026-09-23, local): every plan records `accountRef`, the
+operator-declared id of the account authority the broker serves, read by the
+shared placement reader; the host configuration declares it as
+`accountAuthority` per backend (`ENDO_<BACKEND>_ACCOUNT_AUTHORITY`, required),
+setup writes it into the broker's profile and refuses a retained broker that
+serves another, a pool set carries it as its `id`, the catalog snapshot
+carries it as `authority`, the grant reports it, and the controllers ask for
+it from the plan; the provider-name constants and the Codex `pool` label are
+gone, Codex's `accountRef` profile field is the verified provider account and
+only for a single credential, and the grant issuer no longer ties the id it
+reports to the policy's provider account. The provisioner owns the vocabulary:
+every backend binds `rootfs` under `image`, `accountRef` under `account` and
+its dependencies under `provider`, an adapter adding only extra fields under
+those names (Claude's `credentialKind` under `account`), so every descriptor
+lists `['image', 'account', 'provider']`. Not deployed: the deploy needs the
+three `accountAuthority` values in the host configuration and the three
+brokers retired, since their profiles change.
+
+Terms, as FA-07's axes name them. A *provider* is an inference endpoint
+(Anthropic, OpenRouter, OpenAI). An *account* is one credential-bearing identity
+at a provider; its credential lives in one Secret, or is wrapped from another
+subscription. A *pool* is a set of accounts at one provider that a broker
+selects among per request; its members are accounts with ids (`primary-oauth`,
+`secondary`). An *account authority* is what serves a session's requests: a
+single account, or a pool. It has an id the operator declares in the host
+configuration, which the account catalogs list; today the catalogs list the
+literal `default` for any single-credential broker, which identifies nothing,
+and nothing identifies a pool. A *Secret* is stored credential material and is
+never named by a plan; brokers resolve it.
+
+Why. FA-06 let each adapter declare its differences, and what each declared was
+the plan fields it already had, so the names a reopen may be authorized to
+change are those fields in disguise: Codex declares `image` and `account`
+(`imageRef`, `accountRef`), Claude `image` and `credential kind` (`rootfs`,
+`credentialKind`), OpenCode `image` alone (`rootfs`), and every backend
+`provider` for its recorded service identities. One concept has two spellings,
+and the account axis is recorded unevenly: a Codex pool broker writes
+`accountRef: 'pool'`, a label rather than an account, into every plan and every
+grant attestation (only a single-credential Codex broker records its verified
+account id); Claude and OpenCode record no account at all, and their grants name
+the provider (`CLAUDE_BROKER_ACCOUNT` is `anthropic`, `OPENCODE_BROKER_ACCOUNT`
+is `openrouter`), so a broker of theirs re-minted over another Secret changes
+nothing the plan or the grant can see and surfaces only as a `provider` change
+through the broker's identity. The credential kind, a property of the account
+authority's credential, stands as a binding of its own. This is FA-07's
+completion criterion "account identity does not depend on runtime" left open,
+and the FA-08 item that records it.
+
+Shape. Every hosted plan records the same three bindings under the same names,
+and the record's roles under the fourth:
+
+| Binding | Plan field | Value | Refused unless the reopen authorizes it |
+|---|---|---|---|
+| `image` | `rootfs` | the `oci:` reference the broker pins, digest included | a broker re-minted over another image |
+| `account` | `accountRef`, and `credentialKind` where the credential has a kind | the id of the account authority the broker serves: a pool's id, or a single account's id as the catalog lists it | a broker re-minted over another account authority, or over the same one with a credential of another kind |
+| `provider` | none: the record's references | the broker, sandbox, storage and, where the runtime keeps native state, state-provider identities | a backend re-minted over other services |
+
+Native state placement (2026-09-23, implemented, not deployed): Claude and Codex
+plans require `stateRoot`, the normalized absolute root read from the verified
+state-provider formula environment. The storage owner must capture that same
+provider. Root placement is immutable even under an authorized provider rebind;
+the provisioner refuses a changed root before stop/revision, but permits a
+same-root replacement. Both adapters protect the root from guest placement.
+The existing durable plan stores this pin before activation and reconstruction
+rechecks it. OpenCode has no separate durable native state provider. This adds
+no recovery adapter or claim about filesystem inode identity. Retire old
+Claude/Codex sessions with the old release before deployment: plans without the
+required root are refused, including during deletion. Preserve Secrets, renewal
+credentials and workspaces. Live rebind acceptance remains pending.
+
+Placement (the workspace, the private directories, native state roots, the mounter settings) stays
+immutable; a different placement is a different session. Which member of a pool
+serves a pinned session (`subscription`, or `auto`) stays the session's own
+revisable choice, as today: a member added to or removed from the same pool is
+the pool's business, not a change of what the session is bound to.
+
+Rules:
+
+- `rootfs` is the one image field. Codex's `imageRef` becomes `rootfs`, spelled
+  `oci:` plus the digest-pinned reference as Claude and OpenCode already record
+  it; the execution envelope's per-adapter `image(plan)` hook collapses into
+  the shared `parseRootfs` reader (Codex's stricter pinned-reference pattern
+  moves there); Codex keeps `containerMounts` beside it.
+- `accountRef` is required in every plan and names an account authority, never
+  a provider and never a Secret. The operator declares the authority's id in
+  the host configuration as `accountAuthority` for each hosted backend (a
+  pool's id is a new set-level field beside its member list, which the set
+  readers gain), setup writes it into the broker's persisted profile, the
+  catalog snapshot carries it as a field of its own beside the account list
+  (not as an account entry: those are pinnable subscriptions, and the single
+  account's `default` entry keeps that role), the provisioner copies it into
+  the plan at creation as Codex's does today, and the grant request carries
+  it, so `assertProviderGrantV1` compares an authority everywhere and a pool
+  differs from a single account by id. The two provider-name constants go,
+  together with the fallbacks to them in the service agents, the kits and the
+  controllers' `scopeRequest`, and Codex's `'pool'` label goes with them.
+  Codex's existing `accountRef` host option keeps its meaning, the provider
+  account the credential must match, so its profile carries both fields and
+  that check stays the credential's, separate from the authority id its plans
+  carry. Decision: a broker re-minted over another Secret under the same
+  declared id is the operator's statement that it is the same account with a
+  rotated credential, and is not an `account` change; a different id is. The
+  re-mint still surfaces as a `provider` change through the broker's identity,
+  and the statement is verified against the provider for Codex only (the
+  credential's account check); Claude and OpenCode take the operator's word,
+  and an id reused across a pool and a single account is an operator error
+  the design does not detect. A member's own account id (Codex's verified
+  one, Claude's synthetic `claude-<id>`) never reaches a plan, so its spelling
+  is the catalog's concern alone.
+- `credentialKind` stays recorded where the credential has a kind (Claude, to
+  choose the placeholder variable the slice receives), bound under `account`:
+  two plan fields map to one binding name, which the provisioner supports
+  today, so a changed kind is refused as `account` and authorized by
+  `rebind: ['account']`. The envelope's auth-mode hook, which Claude omits,
+  stays omitted: a broker re-minted between a pool and a single account
+  changes the authority id, which the grant carries and the envelope compares
+  exactly, so that re-mint is caught at activation as well as at reopen
+  without a second field.
+- Every backend's descriptor lists the same `rebindableBindings`,
+  `['image', 'account', 'provider']`. The provisioner owns that vocabulary; an
+  adapter declares only which of its fields sit under each name.
+- `stateProvider` remains an optional role under `provider`.
+- Every plan reader refuses a field it does not know (operator's decision,
+  2026-09-23). Today the shared placement reader drops unknown fields and
+  refuses only the retired names `nativeProfile` and `opencodeSessionId`; an
+  adapter will pass the names of the fields it records, and the shared reader
+  refuses any other key, so a stale or misspelled field fails at creation,
+  activation and deletion alike.
+
+Schemas. The vocabulary of this section, for the reader who arrives here first:
+a *session* is one conversation with one workspace, created by Floot under a
+session id; a *backend* is the code for one runtime (Claude, Codex, OpenCode);
+a *broker* is the host service that holds the credential and forwards
+inference requests, minted by setup, with a formula id and a persisted
+*profile*; a *record* is the daemon's stored data for one session; a *plan* is
+the JSON text in the record that says how to run it; the *references* are the
+formula ids of the services the session uses, by role; an *incarnation* is one
+run of the session's container; the *envelope* is the shared code that starts
+an incarnation and checks the broker's *grant* against the plan; the *catalog*
+is the list of accounts a backend can serve, with their models, which the UI
+picker reads and a session may pin as its `subscription`; the *provisioner* is
+the shared code that makes the plan from a request and the record and calls the
+*owner*, the daemon's session owner; a *reopen* provisions a record that
+already exists, and a *rebind* is an authorized change of a binding at reopen.
+The *operator* is the person who runs the host and writes its configuration.
+
+The record, one directory per session id under the owner's records directory:
+
+| Entry | Content |
+|---|---|
+| `plan` | the plan JSON |
+| `lifecycle` | `planned`, `constructing`, `starting`, `ready`, `aborting`, `stopping`, `stopped`, `removing` or `removing-unstarted` |
+| `references/<role>` | one formula id per role: `brokerService`, `sandboxService`, `storage` always; `stateProvider` where the runtime keeps native state (Claude, Codex); `client` and `worker` while an incarnation runs |
+| `revision/` | present only while a revision is staged: `references/<role>` and `plan` for the revision |
+
+The plan's shared fields, read by `readSessionPlacement` for every backend:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sessionId` | string | the Floot session id |
+| `sandboxSessionId` | string | derived from `sessionId`; names storage and the slice |
+| `networkPolicy` | `off` or `public-internet` | egress policy |
+| `workspaceDir` or `workspaceHostPath` | path | an owned workspace the storage owner removes, or an operator-supplied one it never touches; exactly one |
+| `workspaceMountPoint` | path | where the workspace is mounted |
+| `mounterSocketDir` | path | the 9P socket directory |
+| `mounterEnv` | record, optional | the rootless mount settings |
+| `model`, `reasoningEffort` | string, optional | the pin |
+| `systemPrompt` | string, optional | the persona |
+| `subscription` | string, optional | the pinned catalog entry, or absent for `auto` |
+
+The plan's backend fields, today and planned:
+
+| Field | Today | Planned | Meaning |
+|---|---|---|---|
+| `imageRef` | Codex | gone | the image, bare reference |
+| `rootfs` | Claude, OpenCode | all three | the image, `oci:` reference with digest |
+| `accountRef` | Codex: `pool`, or a verified account id for a single credential | all three: the declared account authority id | the account authority |
+| `credentialKind` | Claude: `apiKey` or `oauthToken` | Claude, unchanged | selects the placeholder variable the slice receives |
+| `mcpDir` | Claude, OpenCode | unchanged | the private MCP socket directory |
+| `containerMounts` | Codex | unchanged | operator-declared container mounts |
+
+The broker profile's fields that matter here:
+
+| Field | Today | Planned |
+|---|---|---|
+| image pin | reference and digest | unchanged |
+| `credentialKind` | Claude | unchanged |
+| `accountRef` | Codex: the verified account id, or `pool`; Claude and OpenCode: absent, the constants `anthropic` and `openrouter` stand in | Codex keeps it as the verified account the credential must match; the constants go |
+| `accountAuthority` | absent | the declared authority id, all three; the host option of the same name, and a pool set's new `id` field, supply it |
+
+The grant (`ProviderGrantV1`) carries `version`, `grantId`, `sessionId`,
+`imageDigest`, `networkNamespaceId`, `providerOrigin`, `endpoint`,
+`accountRef`, `authMode` (`api-key` or `oauth`), `model`, `modelAdmission`, and
+`network` for `public-internet` only. The envelope requires `sessionId`,
+`imageDigest`, `networkNamespaceId`, `providerOrigin` and `accountRef` to equal
+the plan's values, `authMode` to be one of its two values and, where the
+backend supplies the hook, equal to the backend's. Planned: `accountRef` carries
+the authority id, so a pool and a single account differ at activation too.
+
+The catalog snapshot is `{ accounts: [{ subscriptionId, label?, pinnedOnly?,
+models, ...status }] }`; planned, `{ authority, accounts }`, the single
+credential's entry keeping `subscriptionId: 'default'` for pinning.
+
+Interfaces. The owner: `create(name, plan, references)`; `inspect(name)`, passive,
+returning `{ identifier, plan, references, phase, revising? }`;
+`revise(name, plan, references?)`, one transition, refused while a client or
+worker reference exists; `start(name, tools?)`, which finishes a staged revision
+first; `client(name)`; `stop(name)`; `remove(name)`, which finishes a staged
+revision first. The provisioner request is the session fields above plus an
+optional `rebind: string[]`; a reopen that changes a binding the request does
+not name is refused with `Session "x" <binding> cannot change without a reopen
+that authorizes rebinding it; destroy the session, or reopen it with rebind:
+["<binding>"]`. The backend descriptor's `rebindableBindings: string[]` is today
+per backend and becomes `['image', 'account', 'provider']` for all three.
+Floot's session facet: `rebind(bindings: string[])` returns
+`{ rebind: string[] }`; hosted sessions only, no active turn, one to eight
+names each in the descriptor's list; it stops the incarnation and stores the
+authorization the next message's reopen carries.
+
+Records change shape. A Codex record carrying `imageRef` is refused as an
+unknown field, and a record without `rootfs` or without `accountRef` is refused
+for the missing field; both are recreated, not migrated, as the audit's request
+allows.
+Tokyo holds no hosted records at generation 165 beyond what an acceptance run
+makes and deletes.
+
+Verification when it lands: the shared conformance suite's rebind cases run
+once per binding on every adapter, where today each adapter's vocabulary
+differs, and rebind an account authority on every adapter; the module tests
+rebind an image and, for Claude, the credential kind through the real modules;
+the envelope's grant check is asserted against an authority id;
+the audit's FA-07 completion criterion and the FA-08 account item close. The
+state root as placement and the verb
+reporting the new bindings stay open.
 
 ### Architecture audit and remediation tracking — 2026-09-21
 

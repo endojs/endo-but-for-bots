@@ -648,6 +648,29 @@ test('queued lease request cannot be changed after issue invocation', async t =>
 const oauthCredential = (accountRef = spec.accountRef) =>
   harden({ accountRef, current: async () => harden({}) });
 
+test('the grant reports the account authority while an oauth credential is bound to the policy’s provider account', async t => {
+  const base = {
+    ...policy,
+    authMode: /** @type {const} */ ('oauth'),
+    accountRef: 'provider-account',
+  };
+  // The credential must be bound to the provider account the policy names,
+  // not to the authority id the grant reports.
+  t.throws(() => fixture({ policy: base, credential: oauthCredential() }), {
+    message: /Invalid provider grant issuer policy/,
+  });
+  const f = fixture({
+    policy: base,
+    credential: oauthCredential('provider-account'),
+  });
+  t.teardown(f.issuer.dispose);
+  const lease = await f.issuer(spec);
+  t.like(await E(lease).attestation(), {
+    accountRef: spec.accountRef,
+    authMode: 'oauth',
+  });
+});
+
 test('an oauth issuer requires a credential bound to its own account', async t => {
   const base = { ...policy, authMode: /** @type {const} */ ('oauth') };
   // No credential at all: the mode is refused at admission rather than on the

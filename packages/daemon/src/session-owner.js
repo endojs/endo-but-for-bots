@@ -311,6 +311,9 @@ export const makeSessionOwner = ({
   const start = async (name, checkAdmission, tools = undefined) => {
     checkAdmission();
     if (!native) throw Fail`Native session construction is not configured`;
+    // A revision whose intent is durable is finished before activation reads
+    // the record, so an incarnation never runs on edges between two bindings.
+    await records.settle(name);
     const record = await inspect(name);
     if (!record || record.plan === undefined)
       throw Fail`Session record is incomplete`;
@@ -572,8 +575,9 @@ export const makeSessionOwner = ({
     // A plan revision may rebind the record's stable dependencies to other
     // identities for the next incarnation, once the previous one has been
     // stopped and its authority released: the references named replace the
-    // roles they name, and are written before the plan, as at creation, so
-    // a plan is never published over edges that are not durable. The
+    // roles they name, and the store publishes them with the plan as one
+    // transition, staged whole first, so a crash leaves the previous record
+    // or a durable intent it finishes before the next activation. The
     // incarnation's own identities and the tool authority attached at
     // activation are not dependencies to rebind.
     revise: (name, plan, references = harden({})) =>
@@ -595,8 +599,7 @@ export const makeSessionOwner = ({
           Fail`Session tool authority must be attached at activation`;
         (references.client === undefined && references.worker === undefined) ||
           Fail`Native session identities must be constructed by their owner`;
-        await records.rebind(name, references);
-        await E(await recordDirectory(name)).writeText('plan', plan);
+        await records.revise(name, plan, references);
       }),
     client: name => inOrder(name, () => client(name)),
     stop: name => {
@@ -609,6 +612,9 @@ export const makeSessionOwner = ({
       fence(name);
       return inOrder(name, async () => {
         if (native) {
+          // As at start: a durable revision is finished before the record is
+          // read, so a removal that cannot finish it changes nothing.
+          await records.settle(name);
           const record = await inspect(name);
           if (!record) return;
           record.plan !== undefined ||

@@ -4,6 +4,7 @@ import { Fail, q } from '@endo/errors';
 
 import { normalizeHostedModelDescriptor } from './hosted-backend.js';
 import { CATALOG_STATES } from './model-catalog.js';
+import { assertAccountAuthority } from './account-authority.js';
 
 /** @import { CatalogState, HostedModelDescriptor } from './model-catalog.js' */
 
@@ -168,6 +169,9 @@ harden(revisedPin);
  *
  * @param {object} powers
  * @param {string} powers.label The adapter's name for messages.
+ * @param {string} [powers.authority] The account authority the broker
+ *   serves (`account-authority.js`), carried on every snapshot beside the
+ *   accounts, which are the pinnable subscriptions.
  * @param {(subscriptionId?: string) => Promise<any>} powers.readCatalog The
  *   broker service's `modelCatalog`.
  * @param {() => Promise<Array<{ id: string, label: string, pinnedOnly?: boolean }>>} [powers.listSubscriptions]
@@ -178,13 +182,15 @@ harden(revisedPin);
  */
 export const makeBackendCatalog = ({
   label,
+  authority = undefined,
   readCatalog,
   listSubscriptions = async () => [],
   project = model => model,
 }) => {
+  authority === undefined || assertAccountAuthority(authority, label);
   /**
    * @param {string} [subscriptionId]
-   * @returns {Promise<{ accounts: BackendCatalogAccount[] }>}
+   * @returns {Promise<{ authority?: string, accounts: BackendCatalogAccount[] }>}
    */
   const catalog = async subscriptionId => {
     subscriptionId === undefined ||
@@ -262,6 +268,7 @@ export const makeBackendCatalog = ({
       );
     }
     return harden({
+      ...(authority === undefined ? {} : { authority }),
       accounts: accounts.map(account => {
         const entry = labels.get(account.subscriptionId);
         return harden({

@@ -76,7 +76,8 @@ const kitOptionsFor = async (diagnostics, log) => {
         diagnostics,
         pool: false,
       }),
-    makePolicy: () => /** @type {any} */ ({ policy: {}, accountRef: 'a' }),
+    makePolicy: () =>
+      /** @type {any} */ ({ policy: {}, accountAuthority: 'a' }),
     makeServiceKit: /** @type {any} */ (
       options => {
         seen = options;
@@ -945,7 +946,7 @@ test('an owned pool binds actual secret capabilities before activation and refus
     makePolicy: config =>
       /** @type {any} */ ({
         policy: { origin: 'https://provider.test' },
-        accountRef: config.accountRef,
+        accountAuthority: 'pool',
         adaptRequest: () => ({
           path: '/x',
           headers: { 'x-account': config.accountRef },
@@ -1042,7 +1043,7 @@ test('chooser observations require an established matching capability binding an
     readConfig: () => ({ ownerId: 'chooser-bound-state', pool: true }),
     makePolicy: () => ({
       policy: { origin: 'https://provider.test' },
-      accountRef: 'pool',
+      accountAuthority: 'pool',
     }),
     makeServiceKit: value => {
       options = value;
@@ -1129,7 +1130,7 @@ test('failed authoritative identity write prevents owned-pool credential constru
     makePolicy: () =>
       /** @type {any} */ ({
         policy: { origin: 'https://provider.test' },
-        accountRef: 'pool',
+        accountAuthority: 'pool',
       }),
     makeCredential: () => {
       constructed += 1;

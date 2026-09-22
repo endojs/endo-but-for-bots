@@ -5,18 +5,18 @@
  * (`@endo/hosted-agent/session-plan.js`) with Claude's own fields. The plan is
  * the passive record the daemon session owner keeps for one logical session;
  * the native controller activates it and the storage owner removes it, and
- * both refuse any deviation in the recorded fields. Nothing unknown is carried
- * through: a field this parser does not know cannot add authority.
+ * both refuse any deviation in the recorded fields. Nothing unknown is
+ * admitted: a plan with a field this parser does not know is refused.
  *
  * @module
  */
 
-import { Fail, q } from '@endo/errors';
 import {
   containsPath,
   isNormalizedAbsolutePath,
   makeSandboxSessionId as makeSharedSandboxSessionId,
   readMounterEnv,
+  readRecordedPath,
   readSessionPlacement,
 } from '@endo/hosted-agent/session-plan.js';
 
@@ -37,6 +37,9 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
+ * @property {string} stateRoot Immutable native state-provider root.
+ * @property {string} accountRef The account authority the session is bound
+ *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {'apiKey' | 'oauthToken'} credentialKind The broker's credential
  *   kind, recorded so the controller places the CLI's placeholder under the
@@ -77,14 +80,13 @@ export const readClaudeSessionPlan = text => {
     label: 'Claude',
     sandboxIdFallback: SANDBOX_ID_FALLBACK,
     privatePaths: ['mcpDir'],
+    fields: ['credentialKind', 'stateRoot'],
     assertEffort: assertClaudeEffort,
   });
-  (typeof recorded.rootfs === 'string' && recorded.rootfs !== '') ||
-    Fail`Missing session plan field ${q('rootfs')}`;
   return harden(
     /** @type {ClaudeSessionPlan} */ ({
       ...placement,
-      rootfs: recorded.rootfs,
+      stateRoot: readRecordedPath('stateRoot', recorded.stateRoot),
       credentialKind: assertCredentialKind(recorded.credentialKind),
     }),
   );

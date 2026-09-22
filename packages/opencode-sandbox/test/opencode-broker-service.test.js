@@ -7,7 +7,6 @@ import { Far } from '@endo/far';
 import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 
 import {
-  OPENCODE_BROKER_ACCOUNT,
   OPENROUTER_INFERENCE_PATH,
   OPENROUTER_ORIGIN,
   buildOpencodeBrokerPolicy,
@@ -15,6 +14,8 @@ import {
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const model = 'deepseek/deepseek-v4.1-flash';
+// The account authority the fixture broker serves: the id its grants report.
+const OPENCODE_BROKER_ACCOUNT = 'openrouter-main';
 const spec = harden({
   providerOrigin: OPENROUTER_ORIGIN,
   accountRef: OPENCODE_BROKER_ACCOUNT,

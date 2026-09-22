@@ -161,68 +161,337 @@ test('cleanup refuses removal after detecting an external rebind', async t => {
   t.is(successor?.plan, 'successor');
 });
 
-test("rebind replaces stable dependency edges, adds a role, and never an incarnation's own", async t => {
-  const store = makeSessionRecordStore(makeDirectory());
+test("a revision replaces the plan and stable dependency edges as one transition, adds a role, and never an incarnation's own", async t => {
+  /** @type {{ failRemove: string }} */
+  const faults = { failRemove: '' };
+  const directory = makeDirectory(faults);
+  const store = makeSessionRecordStore(directory);
   await store.create('session-a', 'plan', { provider: 'provider-a' });
   await store.retain('session-a', 'client', 'client-a');
-  await t.throwsAsync(store.rebind('session-a', { client: 'client-b' }), {
-    message: /incarnation's own/,
-  });
-  await t.throwsAsync(store.rebind('session-a', { worker: 'worker-b' }), {
-    message: /incarnation's own/,
-  });
-  await store.rebind('session-a', {
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 2', { client: 'client-b' }),
+    { message: /incarnation's own/ },
+  );
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 2', { worker: 'worker-b' }),
+    { message: /incarnation's own/ },
+  );
+  await store.revise('session-a', 'plan 2', {
     provider: 'provider-b',
     storage: 'storage-a',
   });
-  t.like(await store.inspect('session-a'), {
-    plan: 'plan',
+  const revised = await store.inspect('session-a');
+  t.like(revised, {
+    plan: 'plan 2',
     references: {
       provider: 'provider-b',
       storage: 'storage-a',
       client: 'client-a',
     },
   });
-  // Rebinding to the identity a role already holds changes nothing.
-  await store.rebind('session-a', { provider: 'provider-b' });
-  t.is((await store.inspect('session-a'))?.references.provider, 'provider-b');
-  await t.throwsAsync(store.rebind('absent', { provider: 'provider-b' }), {
+  t.false(revised !== undefined && 'revising' in revised);
+  // A role named with the identity it already holds keeps it; a plan-only
+  // revision keeps every edge and stages nothing (a staging could not be
+  // dropped while its removal fails).
+  await store.revise('session-a', 'plan 3', { provider: 'provider-b' });
+  faults.failRemove = 'revision';
+  await store.revise('session-a', 'plan 4', {});
+  faults.failRemove = '';
+  t.like(await store.inspect('session-a'), {
+    plan: 'plan 4',
+    references: {
+      provider: 'provider-b',
+      storage: 'storage-a',
+      client: 'client-a',
+    },
+  });
+  t.false((await published(directory)).staged);
+  await t.throwsAsync(store.revise('absent', 'plan', { provider: 'p' }), {
     message: /Missing session record/,
   });
-  // A record whose creation never published its plan is not rebound.
+  // A record whose creation never published its plan is not revised.
   const partial = makeSessionRecordStore(makeDirectory({ failPlan: true }));
   await t.throwsAsync(partial.create('session-b', 'plan', { provider: 'p' }), {
     message: /Plan write failed/,
   });
-  await t.throwsAsync(partial.rebind('session-b', { provider: 'q' }), {
-    message: /incomplete/,
-  });
+  await t.throwsAsync(
+    partial.revise('session-b', 'plan 2', { provider: 'q' }),
+    {
+      message: /incomplete/,
+    },
+  );
 });
 
-test('a rebind that fails mid-way leaves the roles before it rebound for a retry', async t => {
-  const faults = { failReference: 'sandbox' };
-  const store = makeSessionRecordStore(makeDirectory(faults));
+/**
+ * What the record publishes, read under the store: the plan and two edges,
+ * and whether a revision is staged.
+ * @param {SessionRecordDirectory} directory
+ */
+const published = async directory => {
+  const record = /** @type {SessionRecordDirectory} */ (
+    await E(directory).lookup('session-a')
+  );
+  const entries = /** @type {SessionRecordDirectory} */ (
+    await E(record).lookup('references')
+  );
+  return {
+    plan: await E(record).maybeReadText('plan'),
+    provider: await E(entries).identify('provider'),
+    sandbox: await E(entries).identify('sandbox'),
+    staged: (await E(record).identify('revision')) !== undefined,
+  };
+};
+
+test('a revision interrupted after its intent is durable is shown whole and finished by the next mutation', async t => {
+  /** @type {{ failReference: string, passReferenceWrites: number }} */
+  const faults = { failReference: '', passReferenceWrites: 0 };
+  const directory = makeDirectory(faults);
+  const store = makeSessionRecordStore(directory);
   await store.create('session-a', 'plan', {
     provider: 'provider-a',
     storage: 'storage-a',
+    sandbox: 'sandbox-a',
   });
+  // The staged sandbox edge is written; the published one is not.
+  faults.failReference = 'sandbox';
+  faults.passReferenceWrites = 1;
   await t.throwsAsync(
-    store.rebind('session-a', { provider: 'provider-b', sandbox: 'sandbox-b' }),
+    store.revise('session-a', 'plan 2', {
+      provider: 'provider-b',
+      sandbox: 'sandbox-b',
+    }),
     { message: /Reference write failed/ },
   );
-  t.deepEqual((await store.inspect('session-a'))?.references, {
+  // Published edges are between two bindings under the old plan, and the
+  // intent is durable.
+  t.deepEqual(await published(directory), {
+    plan: 'plan',
     provider: 'provider-b',
-    storage: 'storage-a',
+    sandbox: 'sandbox-a',
+    staged: true,
   });
+  const whole = {
+    plan: 'plan 2',
+    references: {
+      provider: 'provider-b',
+      storage: 'storage-a',
+      sandbox: 'sandbox-b',
+    },
+  };
+  t.like(await store.inspect('session-a'), { ...whole, revising: true });
+  // A reconstructed store reads the same intent.
+  t.like(await makeSessionRecordStore(directory).inspect('session-a'), {
+    ...whole,
+    revising: true,
+  });
+  // Nothing mutates the record around the unfinished revision.
+  await t.throwsAsync(store.retain('session-a', 'client', 'client-a'), {
+    message: /Reference write failed/,
+  });
+  await t.throwsAsync(
+    store.remove('session-a', async () => t.fail('cleanup ran unsettled')),
+    { message: /Reference write failed/ },
+  );
+  t.like(await store.inspect('session-a'), { ...whole, revising: true });
   faults.failReference = '';
-  await store.rebind('session-a', {
+  await store.settle('session-a');
+  const settled = await store.inspect('session-a');
+  t.like(settled, whole);
+  t.false(settled !== undefined && 'revising' in settled);
+  t.deepEqual(await published(directory), {
+    plan: 'plan 2',
     provider: 'provider-b',
     sandbox: 'sandbox-b',
+    staged: false,
+  });
+  await store.settle('session-a');
+  t.deepEqual(await store.inspect('session-a'), settled);
+});
+
+test('a revision retried after an interruption finishes the durable intent first, or leaves it untouched when it cannot', async t => {
+  /** @type {{ failReference: string, passReferenceWrites: number, failText: string, passTextWrites: number }} */
+  const faults = {
+    failReference: '',
+    passReferenceWrites: 0,
+    failText: '',
+    passTextWrites: 0,
+  };
+  const directory = makeDirectory(faults);
+  const store = makeSessionRecordStore(directory);
+  await store.create('session-a', 'plan', {
+    provider: 'provider-a',
+    sandbox: 'sandbox-a',
+  });
+  faults.failReference = 'sandbox';
+  faults.passReferenceWrites = 1;
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 2', { sandbox: 'sandbox-b' }),
+    { message: /Reference write failed/ },
+  );
+  // A retry naming other identities cannot finish the intent while a staged
+  // edge's publication still fails, and leaves the intent as it was.
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 3', { sandbox: 'sandbox-c' }),
+    { message: /Reference write failed/ },
+  );
+  t.like(await store.inspect('session-a'), {
+    plan: 'plan 2',
+    references: { provider: 'provider-a', sandbox: 'sandbox-b' },
+    revising: true,
+  });
+  t.deepEqual(await published(directory), {
+    plan: 'plan',
+    provider: 'provider-a',
+    sandbox: 'sandbox-a',
+    staged: true,
+  });
+  // Once it can, a retry finishes the intent before staging its own: this
+  // one fails at its own plan, after the earlier intent's plan is published.
+  faults.failReference = '';
+  faults.failText = 'plan';
+  faults.passTextWrites = 1;
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 3', { sandbox: 'sandbox-c' }),
+    { message: /Text write failed: plan/ },
+  );
+  const finished = await store.inspect('session-a');
+  t.like(finished, {
+    plan: 'plan 2',
+    references: { provider: 'provider-a', sandbox: 'sandbox-b' },
+  });
+  t.false(finished !== undefined && 'revising' in finished);
+  t.deepEqual(await published(directory), {
+    plan: 'plan 2',
+    provider: 'provider-a',
+    sandbox: 'sandbox-b',
+    staged: true,
+  });
+  // The staging that never became intent is discarded by the next revision.
+  faults.failText = '';
+  await store.revise('session-a', 'plan 3', { sandbox: 'sandbox-c' });
+  t.deepEqual(await published(directory), {
+    plan: 'plan 3',
+    provider: 'provider-a',
+    sandbox: 'sandbox-c',
+    staged: false,
+  });
+});
+
+test('release finishes a durable intent before comparing the expected references', async t => {
+  /** @type {{ failReference: string, passReferenceWrites: number }} */
+  const faults = { failReference: '', passReferenceWrites: 0 };
+  const directory = makeDirectory(faults);
+  const store = makeSessionRecordStore(directory);
+  await store.create('session-a', 'plan', { provider: 'provider-a' });
+  await store.retain('session-a', 'client', 'client-a');
+  faults.failReference = 'provider';
+  faults.passReferenceWrites = 1;
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 2', { provider: 'provider-b' }),
+    { message: /Reference write failed/ },
+  );
+  faults.failReference = '';
+  // An expected identity the intent replaces is stale once it is finished.
+  await t.throwsAsync(
+    store.release('session-a', { provider: 'provider-a' }, async () =>
+      t.fail('cleanup ran against a stale expectation'),
+    ),
+    { message: /changed before cleanup/ },
+  );
+  t.deepEqual(await published(directory), {
+    plan: 'plan 2',
+    provider: 'provider-b',
+    sandbox: undefined,
+    staged: false,
+  });
+  let seen;
+  await store.release('session-a', { client: 'client-a' }, async record => {
+    seen = record;
+  });
+  t.like(seen, {
+    plan: 'plan 2',
+    references: { provider: 'provider-b', client: 'client-a' },
   });
   t.deepEqual((await store.inspect('session-a'))?.references, {
     provider: 'provider-b',
-    storage: 'storage-a',
-    sandbox: 'sandbox-b',
+  });
+});
+
+test('a revision interrupted at its plan publication is finished before removal reads the record', async t => {
+  /** @type {{ failText: string, passTextWrites: number }} */
+  const faults = { failText: '', passTextWrites: 0 };
+  const directory = makeDirectory(faults);
+  const store = makeSessionRecordStore(directory);
+  await store.create('session-a', 'plan', {
+    provider: 'provider-a',
+    sandbox: 'sandbox-a',
+  });
+  // The staged plan is written; the published one is not.
+  faults.failText = 'plan';
+  faults.passTextWrites = 1;
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 2', { provider: 'provider-b' }),
+    { message: /Text write failed: plan/ },
+  );
+  t.deepEqual(await published(directory), {
+    plan: 'plan',
+    provider: 'provider-b',
+    sandbox: 'sandbox-a',
+    staged: true,
+  });
+  faults.failText = '';
+  let seen;
+  await store.remove('session-a', async record => {
+    seen = record;
+  });
+  t.like(seen, {
+    plan: 'plan 2',
+    references: { provider: 'provider-b', sandbox: 'sandbox-a' },
+  });
+  t.false(seen !== undefined && 'revising' in seen);
+  t.is(await store.inspect('session-a'), undefined);
+});
+
+test('a revision interrupted before its intent is durable leaves the record as it was and its staging discarded', async t => {
+  /** @type {{ failText: string, passTextWrites: number }} */
+  const faults = { failText: '', passTextWrites: 0 };
+  const directory = makeDirectory(faults);
+  const store = makeSessionRecordStore(directory);
+  await store.create('session-a', 'plan', {
+    provider: 'provider-a',
+    sandbox: 'sandbox-a',
+  });
+  faults.failText = 'plan';
+  await t.throwsAsync(
+    store.revise('session-a', 'plan 2', { provider: 'provider-b' }),
+    { message: /Text write failed: plan/ },
+  );
+  const before = {
+    plan: 'plan',
+    references: { provider: 'provider-a', sandbox: 'sandbox-a' },
+  };
+  t.deepEqual(await published(directory), {
+    plan: 'plan',
+    provider: 'provider-a',
+    sandbox: 'sandbox-a',
+    staged: true,
+  });
+  const unchanged = await store.inspect('session-a');
+  t.like(unchanged, before);
+  t.false(unchanged !== undefined && 'revising' in unchanged);
+  t.like(await makeSessionRecordStore(directory).inspect('session-a'), before);
+  faults.failText = '';
+  // The next mutation drops the staging that never became intent.
+  await store.retain('session-a', 'client', 'client-a');
+  t.deepEqual(await published(directory), {
+    plan: 'plan',
+    provider: 'provider-a',
+    sandbox: 'sandbox-a',
+    staged: false,
+  });
+  t.like(await store.inspect('session-a'), {
+    ...before,
+    references: { ...before.references, client: 'client-a' },
   });
 });
 

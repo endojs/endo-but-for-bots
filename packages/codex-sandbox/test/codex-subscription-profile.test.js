@@ -134,6 +134,7 @@ test('operator JSON cannot replace the fixed provider adapter or origin', t => {
     imageRef: `runtime@sha256:${'a'.repeat(64)}`,
     imageDigest: `sha256:${'a'.repeat(64)}`,
     listenerImageRef: `listener@sha256:${'b'.repeat(64)}`,
+    accountAuthority: 'codex-main',
     accountRef: 'account-1',
   };
   for (const extra of [

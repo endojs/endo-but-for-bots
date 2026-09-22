@@ -31,6 +31,7 @@ const fixture = async t => {
     sessionId: 'session-a',
     sandboxSessionId: id,
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
+    accountRef: 'openrouter-main',
     networkPolicy: 'off',
     workspaceDir: path.join(roots.workspaceDir, id),
     workspaceMountPoint: path.join(roots.mcpDir, id, 'workspace'),

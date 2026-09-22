@@ -194,6 +194,7 @@ const baseEnv = async t => {
     NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
     NINEP_SUDO: '1',
     ENDO_CODEX_ACCOUNT_REF: undefined,
+    ENDO_CODEX_ACCOUNT_AUTHORITY: 'codex-main',
     ENDO_CODEX_PUBLIC_INTERNET: undefined,
     ENDO_CODEX_DIAGNOSTICS: undefined,
     ENDO_FLOOT_DIR: 'floot',
@@ -248,6 +249,7 @@ test.serial(
     t.deepEqual(fake.stored, [], 'no legacy credential/runtime powers bundle');
     const config = JSON.parse(broker.options.env.CODEX_BROKER_CONFIG);
     t.is(config.accountRef, accountId);
+    t.is(config.accountAuthority, 'codex-main');
     t.is(config.imageRef, `localhost/codex-subscription@${digest}`);
     t.false(config.publicInternet);
     t.false(config.diagnostics);
@@ -537,7 +539,9 @@ test.serial(
     );
     const config = JSON.parse(broker.options.env.CODEX_BROKER_CONFIG);
     t.true(config.pool);
-    t.is(config.accountRef, 'pool');
+    // The pool is the account authority; no single account is named.
+    t.is(config.accountAuthority, 'codex-main');
+    t.false(Object.hasOwn(config, 'accountRef'));
     const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
     t.truthy(powers);
     // Each member's credential under its secret name, and the set, with the
@@ -550,6 +554,7 @@ test.serial(
       'subscriptions',
     ]);
     t.deepEqual(powers.get('subscriptions'), {
+      id: 'codex-main',
       cacheLifetimeSeconds: 600,
       members: [
         {

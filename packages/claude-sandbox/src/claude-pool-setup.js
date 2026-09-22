@@ -38,6 +38,11 @@ export const readClaudePool = env => {
   new Set(secrets).size === secrets.length ||
     Fail`Claude subscriptions must use distinct Secrets entries`;
   const set = normalizeSubscriptionSet({
+    // The pool is the account authority the broker serves; its id is the
+    // operator's declared one, when the configuration names it.
+    ...(env.ENDO_CLAUDE_ACCOUNT_AUTHORITY
+      ? { id: env.ENDO_CLAUDE_ACCOUNT_AUTHORITY }
+      : {}),
     members: declared.map(({ id, label, weight }) => ({
       id,
       label,

@@ -183,6 +183,44 @@ test("a revision rebinds stable dependencies after a stop, never an incarnation'
   });
 });
 
+test('an interrupted revision is finished before removal, and refused removal until it can be', async t => {
+  /** @type {{ failReference: string, passReferenceWrites: number }} */
+  const faults = { failReference: '', passReferenceWrites: 0 };
+  const h = makeHarness();
+  const directory = makeDirectory(faults);
+  const powers = { ...h.powers, directory };
+  const owner = makeSessionOwner(powers);
+  await E(owner).create('a', 'approved plan', h.refs);
+  await E(owner).client('a');
+  await E(owner).stop('a');
+  // The staged broker edge is written; the published one is not.
+  faults.failReference = 'broker';
+  faults.passReferenceWrites = 1;
+  await t.throwsAsync(
+    E(owner).revise('a', 'revised plan', { broker: 'broker-b' }),
+    { message: /Reference write failed/ },
+  );
+  const intent = {
+    plan: 'revised plan',
+    references: { storage: 'storage-id', broker: 'broker-b' },
+    revising: true,
+    phase: 'stopped',
+  };
+  t.like(await E(owner).inspect('a'), intent);
+  const recovered = makeSessionOwner(powers);
+  t.like(await E(recovered).inspect('a'), intent);
+  // Removal finishes the revision first, so it cannot proceed until it can.
+  await t.throwsAsync(E(recovered).remove('a'), {
+    message: /Reference write failed/,
+  });
+  t.like(await E(recovered).inspect('a'), intent);
+  t.false(h.calls.some(([kind]) => kind === 'remove'));
+  faults.failReference = '';
+  await E(recovered).remove('a');
+  t.is(await E(recovered).inspect('a'), undefined);
+  t.deepEqual(h.calls.at(-1), ['remove', 'revised plan']);
+});
+
 test('failed removal persists intent across owner reconstruction', async t => {
   const h = makeHarness();
   await E(h.owner).create('a', 'original paths', h.refs);

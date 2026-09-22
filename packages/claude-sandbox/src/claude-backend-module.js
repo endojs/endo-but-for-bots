@@ -108,8 +108,11 @@ harden(resolveBackendConfig);
  * @param {Record<string, string>} powers.dependencies
  * @param {string} powers.workspaceRoot
  * @param {string} powers.privateRoot
+ * @param {string} powers.stateRoot The exact provider's immutable native storage root.
  * @param {readonly string[]} powers.protectedRoots
  * @param {string} powers.rootfs The broker's pinned image, as `oci:<ref>`.
+ * @param {string} powers.accountRef The account authority the broker serves,
+ *   recorded into every plan (`@endo/hosted-agent/account-authority.js`).
  * @param {'apiKey' | 'oauthToken'} powers.credentialKind
  * @param {ReturnType<MakeBackendCatalog>} powers.catalog
  * @param {Record<string, string>} [powers.mounterEnv]
@@ -119,8 +122,10 @@ export const makeClaudeSessionProvisioner = ({
   dependencies,
   workspaceRoot,
   privateRoot,
+  stateRoot,
   protectedRoots,
   rootfs,
+  accountRef,
   credentialKind,
   catalog,
   mounterEnv,
@@ -131,7 +136,8 @@ export const makeClaudeSessionProvisioner = ({
     dependencies,
     workspaceRoot,
     privateRoot,
-    protectedRoots,
+    protectedRoots: [...new Set([stateRoot, ...protectedRoots])],
+    immutable: { stateRoot: 'native state root' },
     sandboxIdFallback: 'claude',
     privatePaths: { mcpDir: 'mcp' },
     readPlan: readClaudeSessionPlan,
@@ -139,8 +145,10 @@ export const makeClaudeSessionProvisioner = ({
     // controller later refuses a broker whose evidence names another digest,
     // and a session reopens under a broker re-minted over another image or
     // credential kind only when the request authorizes that rebind.
-    fields: () => ({ rootfs, credentialKind }),
-    rebindable: { rootfs: 'image', credentialKind: 'credential kind' },
+    fields: () => ({ rootfs, accountRef, credentialKind, stateRoot }),
+    // The credential's kind is a property of the account authority's
+    // credential, so it sits under `account`.
+    rebindable: { credentialKind: 'account' },
     pin: { unpinned: 'runtime-default', assertEffort: assertClaudeEffort },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
@@ -160,12 +168,12 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   // Exact dependency identities are captured once, by verified entrypoint,
   // for the sessions this incarnation records; an existing record keeps the
   // identities it was created with.
-  const [sandbox, broker, state, storage] = await Promise.all([
+  const [sandbox, broker, state] = await Promise.all([
     readNativeSandbox(hostAgent),
     readBrokerService(hostAgent),
     readStateProvider(hostAgent),
-    readSessionStorage(hostAgent),
   ]);
+  const storage = await readSessionStorage(hostAgent, state.identifier);
   (storage.roots.workspaceDir === workspaceBaseDir &&
     storage.roots.mcpDir === mcpBaseDir) ||
     Fail`Backend roots must equal the recorded session storage owner's roots`;
@@ -189,6 +197,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   // efforts it can drive each model at.
   const catalog = makeBackendCatalog({
     label: 'Claude',
+    authority: broker.config.accountAuthority,
     readCatalog: async subscriptionId =>
       E(await brokerService()).modelCatalog(subscriptionId),
     listSubscriptions,
@@ -204,6 +213,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
     }),
     workspaceRoot: workspaceBaseDir,
     privateRoot: mcpBaseDir,
+    stateRoot: state.stateDir,
     // Host records, the runtime directory and the broker's directory: no
     // guest storage may resolve into them.
     protectedRoots: harden([
@@ -212,6 +222,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       broker.config.directory,
     ]),
     rootfs: `oci:${broker.config.imageRef}`,
+    accountRef: broker.config.accountAuthority,
     credentialKind: broker.config.credentialKind,
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),

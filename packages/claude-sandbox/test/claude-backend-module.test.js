@@ -25,6 +25,7 @@ import { makeSandboxSessionId } from '../src/claude-session-plan.js';
 import {
   brokerServiceSpecifier,
   nativeSandboxSpecifier,
+  readSessionStorage,
   sessionStorageSpecifier,
   stateProviderSpecifier,
 } from '../src/hosted-runtime-setup.js';
@@ -43,6 +44,7 @@ const brokerConfig = (overrides = {}) =>
     imageRef,
     imageDigest: digest,
     listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+    accountAuthority: 'claude-main',
     publicInternet: true,
     credentialKind: 'oauthToken',
     ...overrides,
@@ -139,7 +141,12 @@ const fixture = async t => {
       id,
       harden({
         type: 'make-unconfined',
-        properties: { specifier: { kind: 'literal', value: specifier } },
+        properties: {
+          specifier: { kind: 'literal', value: specifier },
+          ...(id === 'storage-id'
+            ? { powers: { kind: 'reference', identifier: 'state-id' } }
+            : {}),
+        },
       }),
     );
     environments.set(id, harden(env));
@@ -260,10 +267,34 @@ const fixture = async t => {
     knobs,
     ownerRequests,
     bindings,
+    formulas,
     environments,
     exists,
   };
 };
+
+test('Claude refuses a storage owner holding a different state provider before creating an owner', async t => {
+  const f = await fixture(t);
+  await t.throwsAsync(Reflect.apply(readSessionStorage, undefined, [f.host]), {
+    message: /requires an explicit state provider identity/,
+  });
+  const storage = f.formulas.get('storage-id');
+  f.formulas.set(
+    'storage-id',
+    harden({
+      ...storage,
+      properties: {
+        ...storage.properties,
+        powers: { kind: 'reference', identifier: 'old-state-id' },
+      },
+    }),
+  );
+  await t.throwsAsync(make(f.host, undefined, { env: f.env }), {
+    message: /storage owner must use the selected state provider/,
+  });
+  t.deepEqual(f.ownerRequests, []);
+  t.deepEqual(f.log, []);
+});
 
 test('Claude advertises only the network authority recorded by its broker', async t => {
   const f = await fixture(t);
@@ -277,7 +308,7 @@ test('Claude advertises only the network authority recorded by its broker', asyn
   // provisioner names it.
   t.deepEqual((await E(factory).describe()).rebindableBindings, [
     'image',
-    'credential kind',
+    'account',
     'provider',
   ]);
 });
@@ -399,7 +430,9 @@ test('create() records the plan under the sandbox id with exact dependencies, th
   t.deepEqual(JSON.parse(planText), {
     sessionId: 'session-a',
     sandboxSessionId: sid,
+    stateRoot: path.join(f.base, 'state'),
     rootfs,
+    accountRef: 'claude-main',
     networkPolicy: 'off',
     credentialKind: 'oauthToken',
     workspaceDir: path.join(f.roots.workspaceDir, sid),
@@ -541,7 +574,7 @@ test('a later create stops and revises a record in place and refuses a changed w
     E(rekeyed).create(harden({ sessionId: 'session-a' }), makeToolSet()),
     {
       message:
-        /credential kind cannot change without a reopen that authorizes rebinding it/,
+        /account cannot change without a reopen that authorizes rebinding it/,
     },
   );
   // Authorized, the record rebinds to the re-pinned image after a stop and

@@ -2799,6 +2799,7 @@ testNeedsNodeManager(
             imageRef: `localhost/opencode@${digest}`,
             imageDigest: digest,
             listenerImageRef: `localhost/listener@${digest}`,
+            accountAuthority: 'openrouter-main',
             models: ['deepseek/deepseek-v4.1-flash'],
           }),
         },
@@ -2987,6 +2988,7 @@ testNeedsNodeManager(
             imageRef: `localhost/claude@${digest}`,
             imageDigest: digest,
             listenerImageRef: `localhost/listener@${digest}`,
+            accountAuthority: 'claude-main',
             models: ['claude-sonnet-4-6'],
             credentialKind: 'oauthToken',
           }),
@@ -3134,6 +3136,7 @@ testNeedsNodeManager(
         imageRef: `localhost/opencode@${imageDigest}`,
         imageDigest,
         listenerImageRef: `localhost/provider@${imageDigest}`,
+        accountAuthority: 'openrouter-main',
         models: ['test/model'],
       }),
     };
@@ -3152,7 +3155,7 @@ testNeedsNodeManager(
     t.false(JSON.stringify(formula).includes('original-test-credential'));
     const scopeSpec = harden({
       providerOrigin: 'https://openrouter.ai',
-      accountRef: 'openrouter',
+      accountRef: 'openrouter-main',
       model: 'test/model',
     });
     const a = await E(service).provideScope('a', scopeSpec);

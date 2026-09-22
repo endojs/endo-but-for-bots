@@ -30,6 +30,7 @@ import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from './current-specifier.js';
+import { assertAccountAuthority } from './account-authority.js';
 
 /**
  * Read one immutable formula by the ID captured from its current binding.
@@ -44,11 +45,13 @@ import {
  * @param {string[]} options.namePath The pet name path of the formula;
  *   messages name its last segment.
  * @param {string} options.expectedSpecifier
+ * @param {string} [options.expectedPowersIdentifier] When supplied, require
+ *   this exact captured powers reference, not the current value of a pet name.
  * @returns {Promise<{ identifier: string, env: Record<string, string> }>}
  */
 export const readProvisionedEnvironment = async (
   host,
-  { label, namePath, expectedSpecifier },
+  { label, namePath, expectedSpecifier, expectedPowersIdentifier },
 ) => {
   const name = namePath[namePath.length - 1];
   const identified = await E(host).identify(...namePath);
@@ -61,6 +64,12 @@ export const readProvisionedEnvironment = async (
     specifier?.kind === 'literal' &&
     specifier.value === expectedSpecifier) ||
     Fail`${b(label)} ${b(name)} has an unsupported entrypoint. Retire the old runtime and prove its processes have stopped before replacing its formula; removing its name alone is insufficient.`;
+  if (expectedPowersIdentifier !== undefined) {
+    const powers = record.properties.powers;
+    (powers?.kind === 'reference' &&
+      powers.identifier === expectedPowersIdentifier) ||
+      Fail`${b(label)} ${b(name)} captures different powers; its storage owner must use the selected state provider`;
+  }
   const env = await E(host).getFormulaEnvironment(identifier);
   return harden({ identifier, env: env ?? {} });
 };
@@ -1007,6 +1016,22 @@ export const publishAccountOracle = async (
 harden(publishAccountOracle);
 
 /**
+ * The account authority a hosted backend's broker serves, from the host
+ * configuration (`ENDO_<BACKEND>_ACCOUNT_AUTHORITY`): required, since the
+ * literal a catalog lists for one credential identifies nothing.
+ * @param {Record<string, string | undefined>} env
+ * @param {string} name The variable's name.
+ * @param {string} label
+ */
+export const readAccountAuthority = (env, name, label) => {
+  const value = env[name] || '';
+  value !== '' ||
+    Fail`${b(name)} is required: the account authority this ${b(label)} broker serves, a pool or a single account, by the id the operator declared`;
+  return assertAccountAuthority(value, label);
+};
+harden(readAccountAuthority);
+
+/**
  * The spelling checks of a configured slice image that need no Podman — the
  * digest a broker or controller refuses at construction, and an option-like
  * name Podman would misparse — so setup refuses them before any mint.
@@ -1046,6 +1071,10 @@ export const resolvePinnedImageRef = async (
 ) => {
   const { image, imageDigest: pinned } = readSliceImageReference(rootfs, label);
   if (pinned !== undefined) {
+    // An operator's own pin gets the same runtime rule as a resolved one, here
+    // rather than at every session creation.
+    PINNED_IMAGE_REFERENCE_PATTERN.test(image) ||
+      Fail`Pinned ${b(label)} sandbox image ${q(image)} is not a pinned reference the native runtime will accept; drop the tag it was reached by and keep the digest`;
     return harden({ imageRef: image, imageDigest: pinned });
   }
   const { stdout } = await exec('podman', [

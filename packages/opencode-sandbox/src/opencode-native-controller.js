@@ -21,10 +21,7 @@ import {
 } from './opencode-hosted-policy.js';
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
-import {
-  OPENCODE_BROKER_ACCOUNT,
-  OPENROUTER_ORIGIN,
-} from './opencode-broker.js';
+import { OPENROUTER_ORIGIN } from './opencode-broker.js';
 import {
   buildOpencodeMcpServer,
   DEFAULT_INNER_DIR,
@@ -32,7 +29,7 @@ import {
   DEFAULT_SOCKET_NAME,
   makeMcpSocketServer,
 } from './mcp-socket-server.js';
-import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+import { rootfsLabel } from './parse-rootfs.js';
 import { readSessionPlan } from './opencode-session-plan.js';
 
 /** The CLI's home on the slice's own tmpfs; its store is in memory. */
@@ -104,11 +101,12 @@ export const makeOpencodeNativeController = ({
           ...(makeFilesystem ? { makeFilesystem } : {}),
           scopeRequest: plan => ({
             providerOrigin: OPENROUTER_ORIGIN,
-            accountRef: OPENCODE_BROKER_ACCOUNT,
+            // The account authority the plan is bound to, which the grant
+            // must report.
+            accountRef: plan.accountRef,
             networkPolicy: plan.networkPolicy,
             ...(plan.model ? { model: parseModelRef(plan.model) } : {}),
           }),
-          image: plan => parseRootfs(plan.rootfs),
           authMode: () => 'api-key',
           // The Endo tools Floot pinned reach the CLI over a per-session MCP
           // socket this controller runs; only JSON crosses it. Its socket

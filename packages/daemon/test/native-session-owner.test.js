@@ -14,6 +14,7 @@ import { makeDirectory } from './_session-record-directory.js';
 const harness = () => {
   const faults = {
     failReference: '',
+    passReferenceWrites: 0,
     failRemove: '',
     activate: false,
     detached: false,
@@ -324,6 +325,94 @@ test('a revision rebinds a dependency only after native stop released the incarn
       .some(([kind, id]) => kind === 'provide' && id === 'dependency-id'),
   );
   await E(h.owner).stop('a');
+});
+
+test('a revision interrupted after its intent is durable is finished before the next start, which is refused until it can be', async t => {
+  const h = harness();
+  await E(h.owner).create('a', 'original plan', {
+    dependency: 'dependency-id',
+  });
+  await E(h.owner).start('a');
+  await E(h.owner).stop('a');
+  // The staged dependency edge is written; the published one is not.
+  h.faults.failReference = 'dependency';
+  h.faults.passReferenceWrites = 1;
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'rebound plan', { dependency: 'dependency-2' }),
+    { message: /Reference write failed/ },
+  );
+  t.like(await E(h.owner).inspect('a'), {
+    plan: 'rebound plan',
+    references: { dependency: 'dependency-2' },
+    revising: true,
+    phase: 'stopped',
+  });
+  const constructions = h.calls.filter(([kind]) => kind === 'construct');
+  await t.throwsAsync(E(h.owner).start('a'), {
+    message: /Reference write failed/,
+  });
+  t.is(
+    h.calls.filter(([kind]) => kind === 'construct').length,
+    constructions.length,
+    'no incarnation is constructed on an unfinished revision',
+  );
+  t.is((await E(h.owner).inspect('a'))?.phase, 'stopped');
+  h.faults.failReference = '';
+  const before = h.calls.length;
+  await E(h.owner).start('a');
+  const ready = await E(h.owner).inspect('a');
+  t.like(ready, {
+    plan: 'rebound plan',
+    references: { dependency: 'dependency-2' },
+    phase: 'ready',
+  });
+  t.false(ready !== undefined && 'revising' in ready);
+  const since = h.calls.slice(before);
+  t.true(
+    since.some(
+      ([kind, plan]) => kind === 'activate' && plan === 'rebound plan',
+    ),
+    'the incarnation activates the revised plan',
+  );
+  t.true(
+    since.some(([kind, id]) => kind === 'provide' && id === 'dependency-2'),
+  );
+  t.false(
+    since.some(([kind, id]) => kind === 'provide' && id === 'dependency-id'),
+  );
+  await E(h.owner).stop('a');
+});
+
+test('removal finishes a durable revision first, and changes nothing while it cannot', async t => {
+  const h = harness();
+  await E(h.owner).create('a', 'original plan', {
+    dependency: 'dependency-id',
+  });
+  await E(h.owner).start('a');
+  await E(h.owner).stop('a');
+  h.faults.failReference = 'dependency';
+  h.faults.passReferenceWrites = 1;
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'rebound plan', { dependency: 'dependency-2' }),
+    { message: /Reference write failed/ },
+  );
+  const before = h.calls.length;
+  await t.throwsAsync(E(h.owner).remove('a'), {
+    message: /Reference write failed/,
+  });
+  t.is(h.calls.length, before, 'no native call is made');
+  t.like(await E(h.owner).inspect('a'), {
+    plan: 'rebound plan',
+    references: { dependency: 'dependency-2' },
+    revising: true,
+    phase: 'stopped',
+  });
+  // The lifecycle is untouched: the record is still revisable and startable.
+  const recovered = makeSessionOwner(h.powers);
+  t.is((await E(recovered).inspect('a'))?.phase, 'stopped');
+  h.faults.failReference = '';
+  await E(recovered).remove('a');
+  t.is(await E(recovered).inspect('a'), undefined);
 });
 
 test('removal drains detached dependency revival before cancelling formulas', async t => {
