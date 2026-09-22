@@ -21,6 +21,7 @@
     "./policy.js": "./src/policy.js",
     "./no-host-scratch.js": "./src/no-host-scratch.js",
     "./owned-native-service.js": "./src/owned-native-service.js",
+    "./native-producer-worker.js": "./src/native-producer-worker.js",
     "./native-podman-profile.js": "./src/native-podman-profile.js",
     ".": "./src/agent.js",
     "./types.js": "./src/types.d.ts",

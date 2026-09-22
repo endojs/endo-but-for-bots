@@ -50,9 +50,10 @@ const SupervisorInterface = M.interface('HostedSessionSupervisor', {
  * the daemon to delete the incarnation and subsequently remove its storage.
  *
  * Reconstruction uses recorded scope identities and kernel mount reclamation,
- * never replacement acquisitions. The native services retain responsibility
- * for their own orphan reconciliation; failed scope lookup is diagnostic, not
- * evidence that a lost runtime was reaped.
+ * never replacement acquisitions. Both original scopes must be recovered and
+ * closed before stop can be acknowledged. Missing/rejected lookup is uncertainty,
+ * never evidence that a lost runtime was reaped. Automatic reconciliation after
+ * scope loss requires a separate durable ownership/proof contract.
  *
  * @template {{sandboxSessionId: string, workspaceMountPoint: string,
  *   mounterSocketDir: string, mounterEnv?: Record<string, string>}} Plan
@@ -77,6 +78,7 @@ export const makeHostedSessionSupervisor = ({
 }) => {
   let stopping = false;
   let stopped = false;
+  let recovering = false;
   /** @type {string | undefined} */
   let originalText;
   /** @type {Promise<void> | undefined} */
@@ -96,6 +98,11 @@ export const makeHostedSessionSupervisor = ({
   /** @param {ResourceRole | 'brokerFence'} role */
   const release = role => {
     const resource = resources.get(role);
+    if (recovering && role === 'sandbox' && !resource) {
+      return Promise.reject(
+        Error('Original sandbox cleanup proof is unavailable'),
+      );
+    }
     if (!resource || resource.released) return Promise.resolve();
     if (!resource.flight) {
       resource.flight = Promise.resolve()
@@ -205,6 +212,7 @@ export const makeHostedSessionSupervisor = ({
     }
     closing = (async () => {
       if (!activating) {
+        recovering = true;
         const plan = readPlan(text);
         const recovered = await Promise.allSettled(
           /** @type {const} */ ([
@@ -214,17 +222,25 @@ export const makeHostedSessionSupervisor = ({
             if (resources.has(role)) return;
             const service = await E(resolver).get(dependency);
             const value = await E(service).lookupScope(plan.sandboxSessionId);
-            if (value) {
-              resources.set(role, { value, released: false });
-              if (role === 'broker') {
-                resources.set('brokerFence', { value, released: false });
-              }
+            (value !== undefined && value !== null) ||
+              Fail`Original ${q(role)} scope is unavailable; native cleanup proof is required`;
+            resources.set(role, { value, released: false });
+            if (role === 'broker') {
+              resources.set('brokerFence', { value, released: false });
             }
           }),
         );
         const released = await Promise.allSettled([
           closeResources(),
-          reclaimMount({ ...plan, mounterEnv: { ...env, ...plan.mounterEnv } }),
+          (async () => {
+            resources.has('sandbox') ||
+              Fail`Original sandbox cleanup proof is unavailable`;
+            await release('sandbox');
+            await reclaimMount({
+              ...plan,
+              mounterEnv: { ...env, ...plan.mounterEnv },
+            });
+          })(),
         ]);
         const failures = released.flatMap(result =>
           result.status === 'rejected' ? [result.reason] : [],
@@ -232,12 +248,11 @@ export const makeHostedSessionSupervisor = ({
         const diagnosed = recovered.flatMap(result =>
           result.status === 'rejected' ? [result.reason] : [],
         );
-        if (failures.length)
+        if (diagnosed.length || failures.length)
           throw AggregateError(
             [...diagnosed, ...failures],
-            'Original local 9P/MCP cleanup ownership is unavailable',
+            'Original native cleanup proof is unavailable',
           );
-        for (const error of diagnosed) reportError(error);
       } else {
         // Closing admitted owners may be what lets activation settle. Drain
         // it before the final sweep, which includes every late acquisition.
