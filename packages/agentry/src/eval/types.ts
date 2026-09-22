@@ -1,4 +1,8 @@
-import type { AgentEvent, StreamFn } from '@earendil-works/pi-agent-core';
+import type {
+  Agent,
+  AgentEvent,
+  StreamFn,
+} from '@earendil-works/pi-agent-core';
 import type { Model, Usage } from '@earendil-works/pi-ai';
 import type { CodeModePower } from '@endo/agent-tools/code-mode/types.js';
 import type { GetApiKey, ThinkingLevel } from '../harness/types.js';
@@ -31,6 +35,42 @@ export interface OutcomeReport {
 }
 
 /**
+ * The end-state a stage-and-commit scenario is scored against.
+ */
+export interface GitCommitTarget {
+  /** Repository-relative path the scenario commits. */
+  path: string;
+  /** The exact UTF-8 content the committed file must carry at HEAD. */
+  content: string;
+  /** The exact commit message HEAD must carry. */
+  message: string;
+}
+
+/**
+ * The end-state a conflict-rebase scenario is scored against.
+ */
+export interface GitConflictRebaseTarget {
+  /** Branch the scenario starts on and must leave checked out. */
+  featureBranch: string;
+  /** Branch the feature branch is rebased onto. */
+  integrationBranch: string;
+  /** The pre-run integration branch tip. */
+  integrationOid: string;
+  /** Feature commit summaries, oldest first, expected after replay. */
+  replayedSummaries: string[];
+  /** Feature commit oids before the rebase, oldest first. */
+  originalFeatureOids: string[];
+  /** Expected per-replayed-commit patches, oldest first. */
+  expectedPatches: string[];
+  /** Exact post-rebase feature tip tree. */
+  featureTreeOid: string;
+  /** Exact app.txt content after resolving the conflict. */
+  appText: string;
+  /** Notes that must be present at HEAD. */
+  notes: Array<{ path: string; content: string }>;
+}
+
+/**
  * A git code-mode eval scenario: a self-contained, model-agnostic description
  * of one task plus its outcome assertion. The same scenario is driven by a
  * scripted faux model (the no-LLM assertion-path test) and by a live model (a
@@ -52,11 +92,47 @@ export interface GitScenario<Expected = unknown> {
   referenceSourcePath: string;
   /** Named export in `referenceSourcePath` holding the reference solution. */
   referenceSourceExport: string;
+  /** Capabilities the scenario needs provisioned for its run. */
+  requirements?: GitScenarioRequirements;
   assertOutcome: (args: {
     git: unknown;
     workspace: unknown;
     readText: ReadText;
   }) => Promise<OutcomeReport>;
+}
+
+export interface GitScenarioRequirements {
+  /** Permit operations that rewrite existing Git history. */
+  allowHistoryRewrite?: boolean;
+}
+
+export interface ProvisionedGitScenario {
+  /**
+   * A writable Filesystem capability over a fresh scenario repository.
+   */
+  workspace: CodeModePower;
+  /** A writable Git capability over the same repository. */
+  git: CodeModePower;
+  /** A scenario-scoped, policy-bounded shell capability, when provisioned. */
+  shell?: unknown;
+  /** A provisioner may finalize targets that depend on the fresh repository. */
+  scenario?: GitScenario;
+  /** Human-readable repository path for diagnostics. */
+  repoRoot?: string;
+  /** Release temporary resources. */
+  cleanup?: () => Promise<void> | void;
+}
+
+export interface GitScenarioSpec {
+  /** Stable scenario name. */
+  name: string;
+  /** Build the scenario for one run. */
+  makeScenario: () => GitScenario;
+  /** Provision a fresh repository for that run. */
+  provisionRepo: (args: {
+    scenario: GitScenario;
+    requirements: GitScenarioRequirements;
+  }) => Promise<ProvisionedGitScenario>;
 }
 
 /**
@@ -109,6 +185,7 @@ export interface RunGitScenarioOptions<Expected = unknown> {
    */
   git: CodeModePower;
   scenario: GitScenario<Expected>;
+  shell?: unknown;
   /**
    * Read a committed File's content as UTF-8; passed through to the scenario's
    * outcome assertion.
@@ -125,4 +202,49 @@ export interface RunGitScenarioOptions<Expected = unknown> {
 export interface RunGitScenarioResult {
   outcome: OutcomeReport;
   metrics: RunMetrics;
+}
+
+export interface EvalCondition {
+  name: string;
+  makeAgent: (options: Omit<RunGitScenarioOptions, 'readText'>) => Agent;
+}
+
+export interface EvalMatrixModel {
+  model: Model<string>;
+  name?: string;
+  getApiKey?: GetApiKey;
+}
+
+export interface EvalMatrixRow {
+  scenario: string;
+  condition: string;
+  model: string;
+  repeat: number;
+  pass: boolean;
+  metrics: RunMetrics;
+  outcome: OutcomeReport;
+}
+
+export interface EvalMatrixAggregate {
+  scenario: string;
+  condition: string;
+  model: string;
+  runs: number;
+  passRate: number;
+  meanTokens: number;
+  medianTokens: number;
+  meanTurns: number;
+  medianTurns: number;
+  meanWallTimeMs: number;
+  medianWallTimeMs: number;
+}
+
+export interface EvalMatrixResult {
+  provenance: {
+    recordedAt: string;
+    providers: string[];
+    models: string[];
+  };
+  rows: EvalMatrixRow[];
+  aggregates: EvalMatrixAggregate[];
 }

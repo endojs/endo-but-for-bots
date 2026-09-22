@@ -487,13 +487,22 @@ harden(makeCodeModeAgentFromLookup);
  * @returns {Agent}
  */
 export const makeCodeModeGitLoopAgent = options => {
-  const { workspace, git, readOnlyGit = false } = options;
+  const {
+    workspace,
+    git,
+    readOnlyGit = false,
+    historyRewriteGit = false,
+  } = options;
   const { agent } = makeCodeModeAgent({
     model: options.model,
     powers: {
       workspace,
       git,
-      ...(readOnlyGit ? { gitMode: 'readOnly' } : {}),
+      gitMode: readOnlyGit
+        ? 'readOnly'
+        : historyRewriteGit
+          ? 'historyRewrite'
+          : 'readWrite',
     },
     endowments: options.endowments,
     globals: options.globals,
