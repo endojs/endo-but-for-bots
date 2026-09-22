@@ -9,19 +9,14 @@
 
 ## Status
 
-Revised 2026-09-17 to adopt the simplification kriskowal requested in the
-[PR #1226 review](https://github.com/endojs/endo-but-for-bots/pull/1226#pullrequestreview-5231787250):
-**no per-guest domain socket, named pipe, or facet-broker process.** The server
-is a single stdio process, spawned by `claude` from `--mcp-config`, that receives
-its guest's 64-hex formula id out of band (from the config, via its environment),
-uses the usual Endo daemon client to reach the daemon's bootstrap root host, and
-resolves that one guest's capability by formula id. The prior draft's two-process
-adapter/broker split, per-guest filesystem-path UDS, socket-discovery analysis,
-and `SO_PEERCRED` per-guest-uid machinery are removed; § *Scoping* now records
-exactly how the confinement properties change under the simpler transport, and
-which of them become runtime rather than structural. The broker model is retained
-only as the documented multi-tenant hardening path (§ *Design Decisions*, item 1)
-should a deployment need structural cross-guest isolation before ocapn's
+Not started. A single stdio MCP server, spawned by `claude` from `--mcp-config`,
+that speaks for exactly one Endo guest: it receives the guest's 64-hex formula id
+out of band, resolves that one guest's facet through a daemon connection, and
+serves **all** `tools/list`/`tools/call` traffic against that facet and no other.
+Where the daemon connection lives — a harness-owned process outside the confined
+tree, or the claude-spawned server itself — depends on the confinement posture
+(§ *Scoping*). The broker model is the multi-tenant hardening path (§ *Design
+Decisions*, item 1) for structural cross-guest isolation before ocapn's
 domain-socket transport lands.
 
 ## What is the Problem Being Solved?
@@ -862,18 +857,3 @@ positive-confinement test. An implementation is accepted only when these pass.
 > names from kriscendobot/minion.town PR #79). Child of arc
 > https://github.com/kriscendobot/garden/issues/89 (item 5). Deliverable: one
 > design document, created or evolved. Do not build.
-
-**Revision note (2026-09-17 → 2026-09-22, PR #1226 review).** The 2026-09-17 revision
-adopted kriskowal's earlier steer to feed the guest formula id through the environment
-and resolve the guest through the ordinary daemon client, adding § *Threading the
-formula id from configuration* (environment variable over a stdin handshake). The
-2026-09-22 revision applies kriskowal's follow-up review (rsvp): the two topologies —
-the harness-owned-broker (confined, structural) and the server-held connection
-(single-tenant) — are **both** kept rather than consolidated ("more than one way to use
-Claude"); the confinement premise is restored as non-negotiable (the sandbox denies
-the confined `claude` tree the daemon socket, else the design is forfeit), so the
-daemon connection lives outside the confined tree in the confined shape and the
-"rely on formula-id secrecy" fallback is struck; the always-dispatch-through-one-guest
-contract is stated explicitly; the `--mcp-config` carrier is pinned to a
-pipe/`memfd`-backed file path (matching endo-claude) rather than left open; and a
-logging facet is exposed with its log source left as an implementation detail.
