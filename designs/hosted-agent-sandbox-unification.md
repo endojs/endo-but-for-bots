@@ -3,12 +3,26 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-21 |
+| **Updated** | 2026-09-22 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
+
+### One session provisioner and factory — 2026-09-22
+
+The three hosted adapters no longer carry their own session provisioner,
+Floot-facing factory, plan reader or subscription lister. `@endo/hosted-agent`
+owns each (`session-provisioner.js`, `backend-factory-kit.js`, the placement
+reader in `session-plan.js`, `subscription-lister.js`); an adapter declares its
+plan fields, private paths, immutable bindings, pin policy, request rules and
+run facet. The stricter rule won wherever the copies had drifted: protected
+roots and canonical placement on every provision, revisable subscription pins,
+derived sandbox ids, no unknown plan fields, one session-id spelling. A shared
+conformance suite runs all three adapters through the lifecycle (audit FA-06).
+The native controllers' execution envelope is the next extraction. Implemented
+and reviewed locally; not deployed.
 
 ### Architecture audit and remediation tracking — 2026-09-21
 

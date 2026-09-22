@@ -100,6 +100,7 @@ No claim of complete retrospective coverage is made yet.
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
 | Model admission and account catalogs | Implemented locally: each pool member's catalog owner is per incarnation and deliberately ephemeral (`model-catalog.js`); admission and `modelCatalog()` read it through the member's fenced lifecycle with a non-sticky credential facet; retirement closes it after draining a read in flight, and a far share's read has a deadline; a retained broker configuration carrying an operator `models` list is refused with the retirement instruction. Twenty-four new focused tests, 656 hosted-agent tests and the real-daemon catalog reconstruction test pass. | Reconstruction re-reads the provider under the same credential owner and cannot revive retired authority or spend; the durable pin stays in the session plan. Retire and re-mint the three brokers at cutover; observe live Codex, Claude and OpenRouter catalog reads on Tokyo. Not deployed. |
 | Backend catalogs and pin admission | Implemented locally: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Not deployed. |
+| Session provisioning and factory (FA-06) | Implemented locally: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Not deployed; deploy with a state wipe. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -420,7 +421,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-03 | High | Claude's old form/credential topology is still provisioned | Live legacy infrastructure | Source removed and inventoried producers retired; acceptance pending |
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
-| FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
+| FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner and one factory own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion (2026-09-22, not deployed); open: the native controllers' execution envelope, where Codex alone verifies raw placement |
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
@@ -707,7 +708,11 @@ Observed drift:
   foreign workspaces against a narrower root set.
   This is policy drift, not a demonstrated unprivileged exploit.
 - Claude refuses subscription changes without destroying the session; Codex permits revision.
-- Subscription discovery/error handling differs; Claude drops `pinnedOnly` while Codex keeps it.
+- Subscription discovery/error handling differs: Codex caches the broker's list for
+  thirty seconds, believes a broker without the method and serves the last answer
+  through an outage; Claude asks the broker on every request; OpenCode has no
+  subscriptions. (The earlier claim that Claude dropped `pinnedOnly` was stale: both
+  preserve it end to end.)
 - Codex verifies raw slice placement before normalized evidence; the others use narrower checks.
 
 Keep the shared [session supervisor](../hosted-agent/src/session-supervisor.js).
@@ -717,6 +722,66 @@ Adapters should declare differences, not copy the lifecycle algorithm.
 
 Completion: one implementation owns each common invariant; conformance tests run all
 three adapters through partial acquisition failure, stop/retry, restart, and deletion.
+
+### One session provisioner and factory — 2026-09-22
+
+Implemented locally and reviewed; not deployed.
+`@endo/hosted-agent/session-provisioner.js` owns the lifecycle every adapter
+copied: inspect the record, settle the pin, compose the plan, refuse a
+placement the controller or the storage owner would refuse, create or reopen
+in place, stop, heal the recorded directories, start.
+`backend-factory-kit.js` owns the Floot-facing factory: request validation,
+per-session serialization, the retained terminate closure, the run and admin
+exos and the descriptor's subscription mapping.
+`session-plan.js` gains the one placement reader under the three plan parsers,
+and Codex's subscription lister moved to `subscription-lister.js`.
+Each adapter now declares its differences and copies none of the algorithm:
+Claude the pinned image, the credential kind, an MCP directory and a
+runtime-default pin checked against its own effort table; Codex the pinned
+image, the account, the operator's container mounts and a working directory;
+OpenCode the pinned image, an MCP directory and no effort axis.
+The three backend modules and factories fell from 1,912 to 1060 lines
+against 655 shared lines.
+
+Where the copies had drifted, the stricter rule now holds for all three:
+protected roots (the state, runtime and broker directories) are refused at
+construction and on every provision, with the canonical placement check run
+for owned workspaces too; a subscription pin is revisable on reopen (Codex's
+rule, and the FA-07 follow-up: Floot already downgrades an undeclared pin to
+auto, which Claude refused, leaving such a session unrunnable); sandbox ids
+must derive from the session id and a plan reader carries no unknown field
+(Codex's rules); session ids are bounded lowercase path components everywhere;
+a record without a model is a new pin unless the runtime runs its own default
+unpinned (OpenCode's rule, now Codex's too for a pre-discovery record); the
+immutable-field check precedes the existence check on reopen; request
+validation happens inside the per-session region and the request carries only
+the named fields; the subscription list is cached and outage-tolerant for
+Claude as it was for Codex.
+Claude and OpenCode setup now refuse a non-normalized broker directory and a
+layout whose guest roots overlap the protected directories, as Codex's setup
+did; Tokyo's directories are siblings under `/var/lib/endo` and are unaffected.
+
+A shared `hosted-agent/test/provisioning-conformance.js` runs each adapter
+through creation with exact dependencies, reopen through a catalog outage,
+refused placement, foreign-workspace and protected-root refusal, a failed
+start and a failed revision left for retry, an incomplete record, directory
+healing, policy and subscription revision, each adapter's own immutable
+bindings, and the factory over the provisioner end to end with stop
+retention, restart and idempotent deletion (20 Claude, 20 Codex and 19
+OpenCode cases).
+Claude 203, Codex 306, OpenCode 250 and hosted-agent 664 tests pass; each
+package's ESLint gate has no errors; the hosted-agent type check passes and
+Codex's fails only in pre-existing test fixtures.
+Independent adversarial review found the setup gap above and a request-field
+spread an adapter reader could have overridden, both fixed, and named the
+Codex model-less-record change, recorded here as intended; it confirmed the
+deliberate unifications and the placement checks.
+Not extracted yet: the native controllers' execution envelope (scope
+acquisition, image and network evidence, the mount table, slice construction
+and post-handoff verification, where Codex alone verifies raw placement); that
+is the next FA-06 slice.
+A pre-existing Codex controller test that still expected the CLI home path
+from before the allocation rewrite was corrected in its own commit.
 
 ## FA-07 — Separate runtime, provider, account, and route
 
@@ -1570,6 +1635,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | FA-06: one session provisioner and one backend factory in hosted-agent; the three adapters declare their differences; shared placement reader and subscription lister; Claude/OpenCode setup refuse non-normalized or overlapping protected directories | Shared conformance suite (20, 20 and 19 cases across Claude, Codex and OpenCode); Claude 203, Codex 306, OpenCode 250 and hosted-agent 664 pass; package ESLint gates clean; hosted-agent types pass; independent adversarial review found a setup gap and a spread-order footgun, both fixed; the native controllers' envelope is the next slice; not deployed |
 | 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
 | 2026-09-22 | UI follow-up from the operator: the backend's public thinking folds into the same collapsed actions group as its tool calls, with the thought's duration on the group's head (live while it streams) and the reasoning one click further in; groups are keyed by session so an open one does not come up open elsewhere | space-floot 52 and chat 935 pass; independent review found a lint error, thought text styled as scrolling monospace code, and a preview that could read reasoning as a shell command, all fixed; deployed as generation 163 (`4411c058e`), discovery gate passed |
 | 2026-09-22 | FA-07 follow-up from the operator's first look at the deployed picker: each backend's rows are listed in the picker's order (the provider's marked model first, then case-insensitively by title, then id; an OpenRouter account lists 372 in an order of its own), and the UI no longer makes a session on load when the factory lists none, since the first session is the person's to start with the backend and model they choose (sending a message with no session still starts one) | Floot 452, chat 935 and space-floot 49 pass; independent review found a lint error, a permanent loading state with no session, two wording gaps and a weak test, all fixed; deployed as generation 162 (`ca05516db`), discovery gate passed, the free router moved from position 208 to 72 |
