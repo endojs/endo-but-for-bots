@@ -22,11 +22,18 @@ import { makeResourceRegistry as makeSessionRegistry } from './resource-registry
 /**
  * A passive snapshot, containing no capability whose revival could start work.
  * An absent plan means creation did not finish; retain this record for cleanup.
+ * A staged revision (see `revise`) is shown as already applied, and said so,
+ * since the store finishes it before any other mutation of the record.
  * @typedef {object} SessionRecord
  * @property {string} identifier
  * @property {string | undefined} plan
  * @property {Record<string, string>} references
+ * @property {true} [revising] A revision's intent is durable but its edges
+ *   and plan are not all published yet.
  */
+
+/** The record entry under which a revision is staged before it is published. */
+const REVISION = 'revision';
 
 /**
  * Retain each session's approved plan and exact dependency identities through
@@ -61,30 +68,93 @@ export const makeSessionRecordStore = directory => {
   };
 
   /**
+   * The dependency edges a directory retains under `references`, read
+   * without reviving any.
+   * @param {SessionRecordDirectory} container
+   * @returns {Promise<Record<string, string>>}
+   */
+  const readReferences = async container => {
+    /** @type {Record<string, string>} */
+    const references = {};
+    const retained = await E(container).identify('references');
+    if (retained === undefined) return references;
+    const entries = /** @type {SessionRecordDirectory} */ (
+      await E(container).lookup('references')
+    );
+    for (const name of await E(entries).list()) {
+      // Serialize reads with this session's mutations; no entry is revived.
+      // eslint-disable-next-line no-await-in-loop
+      const id = await E(entries).identify(name);
+      id !== undefined || Fail`Missing retained session reference ${name}`;
+      Object.defineProperty(references, name, {
+        value: id,
+        enumerable: true,
+      });
+    }
+    return references;
+  };
+
+  /**
+   * A revision is staged whole under `revision` (its rebound edges, then its
+   * plan) before any published edge or the plan changes, so a record is never
+   * observed between an old and a new binding. A staging without a plan never
+   * became intent and is discarded; one with a plan is intent: snapshots show
+   * it applied, and the next mutation finishes it by re-applying every staged
+   * write, each idempotent, and then dropping the staging.
+   * @param {SessionRecordDirectory} record
+   * @returns {Promise<{ plan: string, references: Record<string, string> } | { aborted: true } | undefined>}
+   */
+  const readStaged = async record => {
+    const stagedId = await E(record).identify(REVISION);
+    if (stagedId === undefined) return undefined;
+    const staging = /** @type {SessionRecordDirectory} */ (
+      await E(record).lookup(REVISION)
+    );
+    const plan = await E(staging).maybeReadText('plan');
+    if (plan === undefined) return harden({ aborted: true });
+    return harden({ plan, references: await readReferences(staging) });
+  };
+
+  /**
+   * Finish a staged revision, or discard a staging that never became intent.
+   * Every mutation of a record does this first, so no published edge is
+   * replaced, released or removed around an unfinished revision.
+   * @param {SessionRecordDirectory} record
+   */
+  const settleRecord = async record => {
+    const staged = await readStaged(record);
+    if (staged === undefined) return;
+    if (!('aborted' in staged)) {
+      const entries = /** @type {SessionRecordDirectory} */ (
+        await E(record).lookup('references')
+      );
+      for (const [reference, identifier] of Object.entries(staged.references)) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(entries).storeIdentifier(reference, identifier);
+      }
+      await E(record).writeText('plan', staged.plan);
+    }
+    await E(record).remove(REVISION);
+  };
+
+  /**
    * @param {string} identifier
    * @param {SessionRecordDirectory} record
    * @returns {Promise<SessionRecord>}
    */
   const snapshot = async (identifier, record) => {
     const plan = await E(record).maybeReadText('plan');
-    /** @type {Record<string, string>} */
-    const references = {};
-    if ((await E(record).identify('references')) !== undefined) {
-      const entries = /** @type {SessionRecordDirectory} */ (
-        await E(record).lookup('references')
-      );
-      for (const name of await E(entries).list()) {
-        // Serialize reads with this session's mutations; no entry is revived.
-        // eslint-disable-next-line no-await-in-loop
-        const id = await E(entries).identify(name);
-        id !== undefined || Fail`Missing retained session reference ${name}`;
-        Object.defineProperty(references, name, {
-          value: id,
-          enumerable: true,
-        });
-      }
+    const references = await readReferences(record);
+    const staged = await readStaged(record);
+    if (staged === undefined || 'aborted' in staged) {
+      return harden({ identifier, plan, references });
     }
-    return harden({ identifier, plan, references });
+    return harden({
+      identifier,
+      plan: staged.plan,
+      references: { ...references, ...staged.references },
+      revising: true,
+    });
   };
 
   /**
@@ -130,6 +200,7 @@ export const makeSessionRecordStore = directory => {
     registry.inOrder(name, async () => {
       const found = await load(name);
       if (!found) throw Fail`Missing session record ${name}`;
+      await settleRecord(found.record);
       (await E(found.record).maybeReadText('plan')) !== undefined ||
         Fail`Session record ${name} is incomplete`;
       const entries = /** @type {SessionRecordDirectory} */ (
@@ -141,39 +212,63 @@ export const makeSessionRecordStore = directory => {
     });
 
   /**
-   * Replace the identities of a record's stable dependencies after a proven
-   * stop, for a later incarnation under other services: an execution
-   * incarnation's own `client` and `worker` are never rebound here, and the
-   * record's plan must be complete. A role the record was created without is
-   * added, since a backend's dependencies may grow; rebinding a role to the
-   * identity it already holds is a no-op. Each edge is replaced in turn, so a
-   * failed write leaves the roles before it rebound and the rest as they
-   * were, for a retry naming the same identities.
+   * Replace the plan and the identities of a record's stable dependencies as
+   * one transition, after a proven stop, for a later incarnation under other
+   * services: an execution incarnation's own `client` and `worker` are never
+   * rebound here, and the record's plan must be complete. A role the record
+   * was created without is added, since a backend's dependencies may grow; a
+   * role named with the identity it already holds keeps it, and a role not
+   * named keeps its edge. A revision that rebinds is staged whole before any
+   * published write (see `readStaged`): a failure or crash before its plan is
+   * staged leaves the previous record, and one after leaves a durable intent
+   * that snapshots show applied and the next mutation, or `settle`, finishes.
+   * A plan alone is one entry write, already one transition, and is not
+   * staged: each staging leaves directory formulas behind when collection is
+   * off.
    *
    * @param {string} name
+   * @param {string} plan
    * @param {Record<string, string>} references
    */
-  const rebind = (name, references) => {
+  const revise = (name, plan, references) => {
     const replacements = Object.entries(references);
     return registry.inOrder(name, async () => {
-      if (replacements.length === 0) return;
       const found = await load(name);
       if (!found) throw Fail`Missing session record ${name}`;
+      await settleRecord(found.record);
       (await E(found.record).maybeReadText('plan')) !== undefined ||
         Fail`Session record ${name} is incomplete`;
       for (const [reference] of replacements) {
         !['client', 'worker'].includes(reference) ||
           Fail`Session reference ${reference} is an incarnation's own, not a dependency to rebind`;
       }
-      const entries = /** @type {SessionRecordDirectory} */ (
-        await E(found.record).lookup('references')
-      );
+      if (replacements.length === 0) {
+        await E(found.record).writeText('plan', plan);
+        return;
+      }
+      const staging = await E(found.record).makeDirectory(REVISION);
+      const entries = await E(staging).makeDirectory('references');
       for (const [reference, identifier] of replacements) {
+        // Each new identity is retained by an edge before it is intent.
         // eslint-disable-next-line no-await-in-loop
         await E(entries).storeIdentifier(reference, identifier);
       }
+      // The revision is intent from this write on.
+      await E(staging).writeText('plan', plan);
+      await settleRecord(found.record);
     });
   };
+
+  /**
+   * Finish a staged revision, or discard a staging that never became intent,
+   * so an activation reads a record that is not between two bindings.
+   * @param {string} name
+   */
+  const settle = name =>
+    registry.inOrder(name, async () => {
+      const found = await load(name);
+      if (found) await settleRecord(found.record);
+    });
 
   /**
    * Release selected incarnation references after proven cleanup, retaining
@@ -199,6 +294,7 @@ export const makeSessionRecordStore = directory => {
       if (expected.length === 0) return;
       const found = await load(name);
       if (!found) return;
+      await settleRecord(found.record);
       const before = await snapshot(found.identifier, found.record);
       let remaining = false;
       for (const [reference, identifier] of expected) {
@@ -262,6 +358,7 @@ export const makeSessionRecordStore = directory => {
     registry.inOrder(name, async () => {
       const found = await load(name);
       if (!found) return;
+      await settleRecord(found.record);
       await cleanup(await snapshot(found.identifier, found.record));
       // Detect a prior external rebind. This is not atomic compare-and-delete;
       // exclusive directory ownership remains the guarantee against replacement.
@@ -270,6 +367,6 @@ export const makeSessionRecordStore = directory => {
       await E(directory).remove(name);
     });
 
-  return harden({ create, inspect, retain, rebind, release, remove });
+  return harden({ create, inspect, retain, revise, settle, release, remove });
 };
 harden(makeSessionRecordStore);

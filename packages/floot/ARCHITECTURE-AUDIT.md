@@ -103,7 +103,7 @@ No claim of complete retrospective coverage is made yet.
 | Session provisioning and factory (FA-06) | Implemented: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Deployed as generation 165 on 2026-09-22 under the wipe model; deploy with a state wipe. |
 | Execution envelope (FA-06) | Implemented: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
 | Reply fold, turn messages, transcript delta, turn evidence (FA-10) | Implemented: no new durable state. The converter changes what a completed hosted turn commits only in a case that cannot occur (an unsettled call) and what a mirrored turn commits not at all; the fold changes what a view holds only where the two copies disagreed, on the rule the daemon already applied; the delta's wire format is unchanged and the daemon still hardens what it publishes. The shared reconciliation reads the tree and the journal as before and writes neither; it changes what a restored transcript contains only where the history rule was looser than the restoration rule (a look-alike observation under another id is evidence of its own, and a settled execution answers a mirrored call the tree left unanswered), and what the projection emits only for a result no open call in its turn can take, which no writer produces. Floot 475, chat 935, space-floot 52 and hosted-agent 675 pass. | Nothing replayed or reconstructed changes for a well-formed tree; tree nodes and journal records are written as before. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
-| Rebindable session bindings (FA-08) | Implemented: no new record kind. The session record's `references` directory gains a replace-in-place write (`rebind`) for stable dependency roles, refused for the incarnation's own `client`/`worker`; the owner's `revise` writes the rebound references before the plan text, as creation does, so a plan is never published over edges that are not durable. Partial states fail closed: references rebound with the old plan, or the plan revised with the old references, leave a record the execution envelope refuses to activate (its exact grant and evidence checks compare the plan's recorded image against the live broker's evidence), and a retried rebind names the same identities and completes; a failed stop leaves the record `stopping` and unrevisable, as before. Floot 479, chat 935, space-floot 52, hosted-agent 676, Codex 308, Claude 205, OpenCode 252 and the daemon's session suites (72) pass. | The pet store overwrites a rebound name in one entry write; a daemon crash between two role writes leaves a half-rebound record that fails closed until retried. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
+| Rebindable session bindings (FA-08) | Implemented: one new record entry, `revision`, under which the store's `revise` stages a revision's rebound edges and then its plan before any published write; a staging without a plan is discarded by the next mutation, one with a plan is intent that snapshots show applied and that every mutation and the owner's `start` and `remove` finish first, so the record is never used between two bindings; a plan-only revision stays one entry write. The first design (each edge written in turn, then the plan, the mixed state left to the execution envelope) was found not crash-safe by the operator's reviewer on 2026-09-22: the envelope cannot tell a replacement service reporting the same image and account from the original and does not check storage. A failed stop leaves the record `stopping` and unrevisable, as before. Daemon session suites (79) pass. | The pet store overwrites a name in one entry write; a crash between staged writes leaves no intent, between published writes a durable intent finished before the next activation or removal. The first design deployed as generation 165 on 2026-09-22; the one-transition revision is not deployed. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -426,7 +426,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generations 160 and 161, live since) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
-| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`), though that matrix has no `rebind` case (no re-minted broker to rebind to) and the verb's evidence is the conformance and module suites; open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
+| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`), though that matrix has no `rebind` case (no re-minted broker to rebind to) and the verb's evidence is the conformance and module suites; the revision made one crash-safe transition on 2026-09-22 after the operator's reviewer found a crash between edge writes left a mixed record `start` accepted (not deployed); open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the operator deferred it on 2026-09-22 and will choose the mechanism and default bound later |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
@@ -1207,21 +1207,19 @@ closes MCP admission and reaps the sandbox), and the owner's `revise`
 refuses while a client or worker reference remains or the record is not
 `planned`/`stopped`; a failed stop leaves the record `stopping` and
 unrevisable.
-The daemon's record store gains `rebind`, a replace-in-place write of
-stable dependency roles that refuses the incarnation's own `client` and
-`worker`, requires a complete plan, allows a role the record was created
-without, and is a no-op on the identity a role already holds; the owner's
-`revise` takes the references to rebind, refuses `tools` and the
-incarnation roles, and writes the references before the plan, as creation
-does.
-Failed transitions: a revision refused or failed leaves the stopped record
-on its previous plan and references, and a retry completes it (conformance
-and daemon tests); references rebound but the plan not, or the reverse,
-leave a record whose next activation the execution envelope refuses on
-mismatched image evidence (the exact grant and evidence checks are
-untouched and stricter than before), until a retried rebind names the same
-identities; a failed start after a successful revision leaves the rebound
-record `stopped` for a retry, as any failed start does.
+The daemon's record store gains `revise`, one transition that replaces
+the plan and the stable dependency roles named, refuses the incarnation's
+own `client` and `worker`, requires a complete plan, allows a role the
+record was created without, and keeps a role's identity when named with
+it; the owner's `revise` takes the references to rebind, refuses `tools`
+and the incarnation roles, and hands both to the store.
+Failed transitions (revised 2026-09-22, below): a revision refused or
+failed before its intent is durable leaves the stopped record on its
+previous plan and references, and a retry completes it (conformance tests
+against a fake owner, and the store's retry cases below); one interrupted
+after is a durable intent the record finishes before anything else uses it; a failed start after a successful
+revision leaves the rebound record `stopped` for a retry, as any failed
+start does.
 Floot's session facet exposes the operator's `rebind(bindings)`: hosted
 sessions only, no active turn, the names checked against the bindings the
 session's own backend declares (its descriptor's `rebindableBindings`,
@@ -1245,8 +1243,8 @@ type check failing on a helper that detached the factory's JSDoc and on
 array checks the checker cannot narrow; all are corrected, and the
 per-workspace type checks CI runs (hosted-agent, daemon, Codex) are clean
 for the change, with the pre-existing test-file errors untouched.
-Tests: daemon store cases (edge replacement, a role added, the incarnation
-roles refused, a mid-way failure retried) and owner cases (refused while
+Tests: daemon store cases (superseded by those under "One transition"
+below) and owner cases (refused while
 a client is held, `tools`/`client`/`worker` refused, rebound edges read by
 a reconstructed owner and kept by a later plain revision); conformance
 cases for each adapter's rebindable bindings (refused by name, another
@@ -1265,11 +1263,60 @@ factory tests rebind through the verb, refuse a name the backend does not
 declare, an empty list and a turn in flight, prove a refused rebind
 leaves no authorization behind, and that a refusal before the incarnation
 is touched leaves it running.
-Not covered: the execution envelope refusing a half-rebound record
-(argued from its exact checks, not exercised), a daemon crash between two
-reference writes, and the verb failing after the incarnation is replaced
-but before any request is built (the authorization is voided by
-construction; the path is hard to stage).
+Not covered: the verb failing after the incarnation is replaced but
+before any request is built (the authorization is voided by construction;
+the path is hard to stage), and a crash inside the pet store's own
+single-entry write, assumed atomic as every other record write here is.
+
+### One transition — 2026-09-22
+
+The operator's reviewer (Astra) found the first design not crash-safe:
+`rebind` wrote each dependency edge in turn and the owner then wrote the
+plan, so a daemon crash between writes left a stopped record with mixed
+old and new references, which `start` accepts, and the section above
+argued the execution envelope would refuse such a record on mismatched
+evidence, which it cannot rely on: a replacement service can report the
+same image and account as the one it replaces, and the envelope does not
+check the storage dependency at all.
+Now the store publishes a revision as one transition. `revise` stages the
+rebound edges and then the plan under the record's `revision` entry before
+any published write, so each new identity is retained by an edge before it
+is intent; a staging without a plan never became intent and the next
+mutation discards it; one with a plan is intent, which every snapshot
+shows as applied (`revising: true`, the plan and references as they will
+be) and which every mutation of the record (`retain`, `revise`, `release`,
+`remove`) and the owner's `start` and `remove` finish first, by
+re-applying each staged write, each idempotent, and dropping the staging,
+before reading or changing anything else. A crash at any write therefore
+leaves either the previous record or a durable intent the next activation
+or removal completes before it constructs or cleans anything, never a
+record between two bindings; while the intent cannot be finished (a
+staged edge's publication keeps failing), start and removal fail with that
+write's error and touch nothing, not even the lifecycle, and no
+incarnation is constructed. A plan-only revision stays one entry write and
+is not staged, since each staging leaves directory formulas behind while
+collection is off. `rebind` is gone: the store's `revise` is the only
+writer of a record's plan after creation. The fix is not retroactive: a
+record the first design left mixed has no staging to finish, and none
+should exist, since no rebind has run on Tokyo.
+Tests: store cases (the plan and edges replaced as one transition, a role
+added, the incarnation roles refused, a plan-only revision keeping every
+edge and staging nothing; an interruption after intent, shown whole by
+this and a reconstructed store, refusing `retain` and `remove` while a
+staged edge's publication still fails, finished by `settle`, idempotent; a
+retry that cannot finish the intent leaving it untouched, one that can
+finishing it before staging its own, and a staging that never became
+intent discarded by the next revision; `release` finishing the intent
+before comparing its expected identities; an interruption at the plan
+publication finished before removal's cleanup reads the record; an
+interruption before intent leaving the record as it was and its staging
+discarded by the next mutation); an owner case (an interrupted revision
+shown by a reconstructed owner, removal refused until it can finish it,
+then removing under the revised plan); native owner cases (an interrupted
+revision refusing the next start without constructing anything until it
+can finish, then activating the revised plan and resolving the rebound
+dependency, never the old one; removal refused without a native call or a
+lifecycle change until it can finish, then removing). Not deployed.
 Open, from the review: a `provider` rebind moves the state provider and
 storage owner without checking that they serve the recorded session's
 state root, which the plan does not record (the roots are host
@@ -2013,6 +2060,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | FA-08: a session revision is one transition. The record store's `revise` stages the rebound edges and the plan under the record's `revision` entry before any published write, shows a staged revision as applied and finishes it before any mutation of the record or the owner's `start`; `rebind` folds into it. Found by the operator's reviewer (Astra): the first design left a crash between edge writes as a stopped record with mixed references that `start` accepted and the execution envelope cannot reject (a replacement service may report the same image and account; storage is unchecked) | Store cases: one transition, plan-only unstaged; interruption after intent shown whole, refused for `retain`/`remove` while the publication fails, finished by `settle`; a retry finishing or leaving the intent; `release` finishing it first; at the plan publication finished before removal's cleanup; before intent discarded. Owner case: removal refused until the revision finishes, then under the revised plan. Native owner cases: the next start refused without constructing until it finishes, then the revised plan activated with the rebound dependency; removal refused without a native call or lifecycle change until it finishes. Daemon session suites and type check pass; two independent adversarial review passes; not deployed |
 | 2026-09-22 | Audit: status lines corrected to the deployed state, after two adversarial review passes: FA-03/04/05 register rows and the FA-05 line record the acceptance runs that exercised them (generations 158, 160 to 161 and 165) and what FA-05 still lacks; the FA-01, FA-03 and FA-04 lines and the two subscription-pool durability rows record generation 157, the FA-04 restoration slice generation 159 (on-host conformance left open) and the construction-prompt slices generation 160; FA-11/FA-12 pending lines and register rows record generation 159; the FA-07 register row, durability rows and progress paragraph record generations 160 and 161 (picker visual state unverified); the FA-06, FA-08 and FA-10 register, durability and section lines record generation 165; sequence step 5 and the 2026-09-22 cutover paragraph split the matrix across generations 160 and 161 as the record shows; FA-08 notes the matrix has no `rebind` case; FA-09 records the operator's deferral | Documentation only; no runtime change |
 | 2026-09-22 | Deploy: app `e1ad34345` (FA-06, FA-08, FA-10, FA-09 scoped) to Tokyo as generations 164 and 165 under the wipe model; the operator recreated the six Secrets by hand (the primary Codex one renamed `codex-subscription-1`) and removed the env-token Floot provider, so Floot runs on `secrets/openrouter-auth` | Discovery gate, hosted seed/policy/cancel/inspect/cleanup on Haiku 4.5, Luna and the free route, Fae seed and cancel, restart/restore on all four backends, deletion: all passed; one incident (a recall phase during the daemon restart let the CLI start a rival daemon that killed the host on port 8921; one clean restart recovered it); endo-host `ops/hosted-cutover4-20260922.md`. Operator instruction: never wipe the Secrets manager again |
 | 2026-09-22 | FA-08: a session record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen (`rebind: [...]`), after the owner's stop and with the daemon refusing the revision while any authority is held; the record store gains `rebind` and the owner's `revise` takes references; Floot's session facet gains the operator's `rebind` | Daemon store/owner cases; conformance cases per adapter plus the provider binding; Claude/OpenCode module cases; a Floot factory case; Floot 479, chat 935, space-floot 52, hosted-agent 676, Codex 308, Claude 205, OpenCode 252, daemon session suites 72 pass; package ESLint gates clean; independent adversarial review in four passes; FA-08 completion criteria met locally; not deployed |

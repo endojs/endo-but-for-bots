@@ -5,7 +5,9 @@
 /**
  * Record directory semantics only: reference lookup would revive a formula,
  * while identify and list return stored IDs without doing so.
- * @param {{ failReference?: string, failPlan?: boolean, failRemove?: string }} [faults]
+ * A named reference or text write fails after `pass…Writes` matching writes
+ * have gone through, to interrupt a staged revision at a chosen write.
+ * @param {{ failReference?: string, passReferenceWrites?: number, failPlan?: boolean, failText?: string, passTextWrites?: number, failRemove?: string }} [faults]
  */
 export const makeDirectory = (faults = {}) => {
   let nextId = 0;
@@ -30,14 +32,22 @@ export const makeDirectory = (faults = {}) => {
         return child;
       },
       storeIdentifier: async (name, identifier) => {
-        if (faults.failReference === name)
-          throw Error('Reference write failed');
+        if (faults.failReference === name) {
+          const pass = faults.passReferenceWrites ?? 0;
+          if (pass <= 0) throw Error('Reference write failed');
+          faults.passReferenceWrites = pass - 1;
+        }
         entries.set(name, { identifier });
       },
       list: async () => [...entries.keys()],
       maybeReadText: async name => entries.get(name)?.text,
       writeText: async (name, text) => {
         if (faults.failPlan) throw Error('Plan write failed');
+        if (faults.failText === name) {
+          const pass = faults.passTextWrites ?? 0;
+          if (pass <= 0) throw Error(`Text write failed: ${name}`);
+          faults.passTextWrites = pass - 1;
+        }
         entries.set(name, { identifier: freshId(), text });
       },
       remove: async name => {

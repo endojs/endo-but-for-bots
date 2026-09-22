@@ -37,11 +37,17 @@ rebindable to what the backend holds now, only under a request that names each
 binding it authorizes (`rebind: ['image', 'provider']`), after the previous
 incarnation is stopped and its authority released, which the daemon owner
 enforces by refusing the revision while a client or worker reference remains.
-The owner's `revise` takes the references to rebind and writes them before the
-plan, as creation does; a failed write leaves a record the execution envelope
-refuses to activate on mismatched evidence until the rebind is retried. Floot's
-session facet exposes the operator's `rebind(bindings)`. Implemented and
-reviewed locally; not deployed.
+The owner's `revise` takes the references to rebind, and the record store
+publishes them with the plan as one transition: staged whole under the record's
+`revision` entry first, shown as applied once its plan is staged, and finished
+before any other mutation of the record or the next activation, so a crash
+leaves the previous record or a durable intent, never a record between two
+bindings (the first, write-in-turn design was found not crash-safe by the
+operator's reviewer on 2026-09-22: the execution envelope cannot reject a
+replacement service reporting the same image and account, and does not check
+storage). Floot's session facet exposes the operator's `rebind(bindings)`. The
+first design deployed as generation 165 (2026-09-22); the one-transition
+revision is not deployed.
 
 ### Architecture audit and remediation tracking — 2026-09-21
 
