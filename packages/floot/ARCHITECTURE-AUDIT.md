@@ -427,7 +427,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22, not deployed; completion criteria met locally, pending deployment and acceptance) |
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met locally, not deployed; open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
-| FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
+| FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the mechanism and default bound are the operator's decision |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met locally, not deployed |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 160 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 160; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
@@ -1280,6 +1280,56 @@ A larger host disk alone does not enforce per-session limits.
 Completion: the agent can install and reuse a toolchain on suitable local storage, knows
 which paths are projected/temporary/persistent, and cannot exhaust the host through an
 unbounded per-session storage grant.
+
+### Scoping — 2026-09-22
+
+Not implemented; scoped, with the host facts that decide the mechanism.
+What exists: every hosted slice gets the projected workspace at `/workspace`
+(9P, a capability filesystem), a 1 GiB tmpfs at `/tmp` and a 256 MiB tmpfs
+at `/run` (`TEMPORARY_MOUNTS` in `execution-envelope.js`), the runtime's own
+state directory under the state provider's root, and, for Codex,
+operator-declared container mounts recorded in the plan. Nothing is both
+durable and local: a toolchain installed under `/tmp` is gone at the next
+incarnation, and one installed in the workspace is projected through 9P,
+which promises no ordinary filesystem behaviour for package caches, SQLite
+or build output. The only storage bound in the app is the delegated
+runner's `storageBoundBytes`, a declaration a runner passes down and no
+backend enforces (`enforcesStorageBound` is declared by none, so the runner
+refuses a bounded session outright). The prompt describes `/workspace` and
+attached `/mnt/` disks; it does not say which paths are projected,
+temporary or persistent.
+Host facts (Tokyo, read 2026-09-22): `/var/lib/endo` is its own 100 GB
+ext4 volume (`/dev/vdb`, 27 GB used) beside a 50 GB ext4 root; `losetup`
+and `mkfs.ext4` are installed, no quota tools (`xfs_quota`, `setquota`) and
+no `prjquota` mount option; the daemon runs as `endo` and Podman is
+rootless.
+Mechanisms that bound bytes and inodes durably; each needs host privileges
+the daemon does not hold, so each is an endo-host (NixOS) change with a
+small root-owned helper the daemon speaks to, a new privileged surface to
+review:
+1. A per-session ext4 image: a sparse file of the bound's size, `mkfs.ext4`,
+   loop-mounted on the host and bind-mounted into the slice. Bytes and
+   inodes are bound by construction, removal is unmount and unlink, restart
+   is remount, and the image lives with the session's state root;
+   `losetup` and `mount` need root. Userspace `fuse2fs` would avoid root,
+   but a FUSE mount bound into a rootless container is fragile.
+2. ext4 project quotas on `/dev/vdb`: `tune2fs -O project,quota` on the
+   unmounted volume (a maintenance stop the wipe-and-recreate model already
+   takes), a project id per session directory and a `setquota -P` per
+   bound; `chattr -p` and `setquota` need root; no images to manage.
+3. A tmpfs of the bound's size: bounded and simple, RAM-backed and lost at
+   restart, which this finding rules out for toolchains.
+App-side contract, the same under 1 or 2: the plan records a local storage
+allocation (a host path under a `localRoot` beside the workspace and
+private roots, the byte and inode bounds) as placement; the envelope adds
+a `local` mount role at `/local`, or at the slice user's home so toolchains
+land there without instruction, with the bound in the attestation and in
+the hosted policy's mount accounting; the storage owner removes it with the
+session; the prompt names the three classes of path, projected
+`/workspace`, temporary `/tmp` and `/run`, persistent `/local`, with their
+bounds; the descriptor declares `enforcesStorageBound`, so a delegated
+runner's bound is honoured; a session at its bound sees `ENOSPC`, never the
+host. The operator decides the mechanism (1 or 2) and the default bound.
 
 ## FA-10 — Share representations without erasing authority distinctions
 
