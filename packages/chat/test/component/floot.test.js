@@ -6,6 +6,7 @@ import test from 'ava';
 
 /** @import { ExecutionContext } from 'ava' */
 import { Far } from '@endo/pass-style';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import {
@@ -1895,17 +1896,32 @@ test.serial(
         truncated: false,
       }),
     );
-    await waitFor(() => parent.querySelector('.floot-thought'));
-    const block = must(
-      parent.querySelector('.floot-thought'),
-      'thinking block',
+    // The thought folds into the collapsed actions group, whose closed head
+    // carries its running duration.
+    await waitFor(() => parent.querySelector('.floot-actions'));
+    const group = must(parent.querySelector('.floot-actions'), 'actions');
+    const head = must(
+      group.querySelector('.floot-actions-head'),
+      'actions head',
     );
-    t.false(block.hasAttribute('open'));
+    t.is(head.getAttribute('aria-expanded'), 'false');
+    t.regex(head.textContent || '', /Thinking… \(3m\d+s\)/);
+    t.false(
+      head.textContent?.includes('action'),
+      'a thought alone is not counted as an action',
+    );
+    t.is(parent.querySelector('.floot-action'), null);
+    head.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('.floot-action.thought'));
+    const entry = must(
+      parent.querySelector('.floot-action.thought'),
+      'thought entry',
+    );
     t.regex(
-      block.querySelector('summary')?.textContent || '',
+      entry.querySelector('.floot-action-name')?.textContent || '',
       /Thinking… \(3m\d+s\)/,
     );
-    t.is(block.querySelector('script'), null);
+    t.is(entry.querySelector('script'), null);
     turns[0].channel.push(
       harden({
         type: 'thinking',
@@ -1917,9 +1933,19 @@ test.serial(
       }),
     );
     await waitFor(
-      () => block.querySelector('summary')?.textContent === 'Thought for 3m25s',
+      () =>
+        entry.querySelector('.floot-action-name')?.textContent ===
+        'Thought for 3m25s',
     );
-    t.true(block.textContent.includes('<script>public reasoning</script>'));
+    t.true(head.textContent?.includes('Thought for 3m25s'));
+    // The reasoning itself is one more click away, escaped.
+    must(
+      entry.querySelector('.floot-action-head'),
+      'thought head',
+    ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => entry.querySelector('.floot-thought-text'));
+    t.true(entry.textContent.includes('<script>public reasoning</script>'));
+    t.is(entry.querySelector('script'), null);
     turns[0].channel.push(harden({ type: 'end' }));
   },
 );
@@ -1938,24 +1964,44 @@ test.serial(
       truncated: false,
     });
     turns[0].channel.push(thought);
-    await waitFor(() => parent.querySelector('.floot-thought'));
-    const first = must(parent.querySelector('.floot-thought'), 'first thought');
-    first.setAttribute('open', '');
+    await waitFor(() => parent.querySelector('.floot-actions-head'));
+    const open = async () => {
+      must(
+        parent.querySelector('.floot-actions-head'),
+        'actions head',
+      ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await waitFor(() => parent.querySelector('.floot-action.thought'));
+      must(
+        parent.querySelector('.floot-action.thought .floot-action-head'),
+        'thought head',
+      ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await waitFor(() => parent.querySelector('.floot-thought-text'));
+    };
+    await open();
+    const first = must(
+      parent.querySelector('.floot-action.thought'),
+      'first thought',
+    );
     turns[0].channel.push(harden({ ...thought, text: ' continued' }));
     await waitFor(() => first.textContent.includes('continued'));
-    t.true(first.hasAttribute('open'), 'streaming preserves expansion');
+    t.truthy(
+      first.querySelector('.floot-thought-text'),
+      'streaming preserves expansion',
+    );
     selectSessionRow(parent, 'Session 1');
     await tick(50);
     await send('second');
     await waitFor(() => turns.length === 2);
     turns[1].channel.push(thought);
-    await waitFor(() => parent.querySelector('.floot-thought'));
-    t.false(
+    await waitFor(() => parent.querySelector('.floot-actions-head'));
+    t.is(
       must(
-        parent.querySelector('.floot-thought'),
-        'second thought',
-      ).hasAttribute('open'),
+        parent.querySelector('.floot-actions-head'),
+        'second group',
+      ).getAttribute('aria-expanded'),
+      'false',
     );
+    t.is(parent.querySelector('.floot-action.thought'), null);
   },
 );
 
@@ -2862,5 +2908,105 @@ test.serial(
     t.is(select('Model').value, 'codex:czz');
     await pick();
     t.like(created[0], { modelId: 'czz', subscription: 'sub1' });
+  },
+);
+
+test.serial(
+  'with no sessions the space makes none on its own, and says so',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const created = [];
+    const factory = farFactory('EmptyFactory', {
+      listSessions: () => harden([]),
+      listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listModels: () => harden([]),
+      listModelCatalogs: () => harden([]),
+      createSession: options => {
+        created.push(options);
+        throw Error('not expected');
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() =>
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'No sessions yet',
+      ),
+    );
+    await tick(50);
+    // The first session is the person's to start, with the backend and
+    // model they choose; the space does not make one just so there is one.
+    t.deepEqual(created, []);
+    t.is(parent.querySelectorAll('.floot-session-item').length, 0);
+    t.truthy(parent.querySelector('[aria-label="New session"]'));
+    // Nothing is loading: there is no session to load.
+    t.falsy(parent.querySelector('.floot-loading'));
+  },
+);
+
+test.serial(
+  'a session started from another page is shown when nothing was open',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const list = makeBufferedReader();
+    const facet = farSession('OtherPageSession', {
+      getInfo: () => harden({ id: 'other', title: 'From elsewhere' }),
+      getHistory: () => harden([]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = Far('ListFactory', {
+      listSessions: () => harden([]),
+      watchSessions: () => {
+        list.push(harden({ type: 'snapshot', sessions: [] }));
+        return list.reader;
+      },
+      listPresets: () => harden([]),
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listModels: () => harden([]),
+      listModelCatalogs: () => harden([]),
+      getSession: () => facet,
+      createSession: () => {
+        throw Error('not expected');
+      },
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      list.close();
+      parent.remove();
+    });
+    await waitFor(() =>
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'No sessions yet',
+      ),
+    );
+    list.push(
+      harden({
+        type: 'session',
+        session: { id: 'other', title: 'From elsewhere', createdAt: 1 },
+      }),
+    );
+    await waitFor(() => parent.querySelectorAll('.floot-session-item').length === 1);
+    await waitFor(() =>
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').trim().startsWith('Ready.'),
+    );
+    t.false(
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
+        'No sessions yet',
+      ),
+    );
+    t.true(
+      parent.querySelector('.floot-session-item')?.classList.contains('active') ??
+        false,
+    );
   },
 );

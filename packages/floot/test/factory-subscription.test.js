@@ -14,7 +14,7 @@ import { make } from '../agent.js';
  * @param {{
  *   promptEnvironment?: object,
  *   subscriptions?: object[],
- *   listing?: (subscriptionId: string) => string[],
+ *   listing?: (subscriptionId: string) => Array<string | { id: string, title: string }>,
  * }} [options]
  */
 const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
@@ -78,14 +78,20 @@ const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
             subscriptionId: entry.id,
             state: 'current',
             observedAt: 1,
-            models: (listing ? listing(entry.id) : ['m']).map(id => ({
-              id,
-              title: `Model ${id}`,
-              description: '',
-              default: id === 'm',
-              defaultReasoningEffort: null,
-              reasoningEfforts: [],
-            })),
+            models: (listing ? listing(entry.id) : ['m']).map(entry => {
+              const { id, title } =
+                typeof entry === 'string'
+                  ? { id: entry, title: `Model ${entry}` }
+                  : entry;
+              return {
+                id,
+                title,
+                description: '',
+                default: id === 'm',
+                defaultReasoningEffort: null,
+                reasoningEfforts: [],
+              };
+            }),
           })),
       });
     },
@@ -321,4 +327,36 @@ test('a hosted pin is admitted by what the session’s account lists now; missin
     message: /Model catalog unavailable for backend "test"; no model can be admitted now/,
   });
   t.is((await E(world.factory).listSessions()).length, 2);
+});
+
+test('a backend’s rows come in the picker’s order: the marked default first, then by title, then by id', async t => {
+  t.timeout(10_000);
+  // The provider lists in an order of its own; `m` is the one it marks.
+  // Titles are not ids: `zeta` is titled first alphabetically, two models
+  // share a title and one differs from another only by case.
+  const world = makeWorld({
+    subscriptions,
+    listing: () => [
+      { id: 'zeta', title: 'Aardvark' },
+      { id: 'beta-2', title: 'Beta' },
+      'm',
+      { id: 'alpha', title: 'beta' },
+      { id: 'beta-1', title: 'Beta' },
+    ],
+  });
+  t.teardown(world.close);
+  const rows = await E(world.factory).listModels('test');
+  t.deepEqual(
+    rows.map(row => row.modelId),
+    ['m', 'zeta', 'beta-1', 'beta-2', 'alpha'],
+  );
+  t.true(rows[0].default);
+  // The flattened listing keeps each backend's order, though it marks no
+  // hosted row as the default.
+  const all = await E(world.factory).listModels();
+  t.deepEqual(
+    all.filter(row => row.backendId === 'test').map(row => row.modelId),
+    ['m', 'zeta', 'beta-1', 'beta-2', 'alpha'],
+  );
+  t.true(all.every(row => !row.default));
 });

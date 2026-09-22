@@ -746,6 +746,11 @@ export const flootComponent = (
       }
     }
   };
+  /** What "ready" says: with no session, where to start one. */
+  const readyStatus = () =>
+    sessions.length
+      ? 'Ready.'
+      : 'Ready. No sessions yet: start one with New session.';
   const setStatus = (/** @type {string} */ s) => {
     status = s;
     notify();
@@ -1101,7 +1106,8 @@ export const flootComponent = (
       busy: stoppable,
       working,
       pendingHold: session?.pending.hold?.message || '',
-      loaded: session ? session.loaded : false,
+      // No session is nothing to load: the pane says hello, not "loading".
+      loaded: session ? session.loaded : true,
       status,
       input: inputText,
       settingsOpen,
@@ -1701,6 +1707,7 @@ export const flootComponent = (
     (async () => {
       let session = selected;
       if (!session) {
+        // Sending with no session is the person's own act of starting one.
         session = await createSession();
         send.sessionId = session.id;
         openActiveSession();
@@ -1823,7 +1830,7 @@ export const flootComponent = (
       // status line was the deleted session's turn's; its end will never be
       // reported here.
       activeSessionId = sessions.length ? sessions[0].id : null;
-      status = 'Ready.';
+      status = readyStatus();
     }
     E(factory)
       .deleteSession(id)
@@ -2992,6 +2999,16 @@ export const flootComponent = (
         (wasReady || 'ready') !== (session.lifecycle || 'ready')
       ) {
         openActiveSession();
+      } else if (
+        activeSessionId === null &&
+        (!session.lifecycle || session.lifecycle === 'ready')
+      ) {
+        // Nothing was open (a fresh space, or the last session deleted): a
+        // session started from another page is the one to show, as the
+        // first listed is at load.
+        activeSessionId = session.id;
+        status = readyStatus();
+        openActiveSession();
       }
       // A circle this page painted red gives way once the daemon says better.
       if (session.activity !== 'error') sessionStatus.delete(session.id);
@@ -3002,7 +3019,7 @@ export const flootComponent = (
         sessionStatus.delete(event.id);
         if (activeSessionId === event.id) {
           activeSessionId = sessions.length ? sessions[0].id : null;
-          status = 'Ready.';
+          status = readyStatus();
           openActiveSession();
         }
       }
@@ -3190,21 +3207,21 @@ export const flootComponent = (
       const strandedCount = metas.filter(
         m => m.lifecycle && m.lifecycle !== 'ready',
       ).length;
-      if (!sessions.length) {
-        await createSession();
-      } else {
-        activeSessionId = (
-          sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
-          sessions[0]
-        ).id;
-      }
+      // No session is made just so there is one: the first is the person's
+      // to start, with the backend and model they choose.
+      activeSessionId = sessions.length
+        ? (
+            sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
+            sessions[0]
+          ).id
+        : null;
       // Say so rather than reporting a clean "Ready." over sessions the
       // factory could not revive; they are still listed by the factory and an
       // operator has to deal with them.
       setStatus(
         strandedCount > 0
           ? `Ready. ${strandedCount} session(s) could not be recovered.`
-          : 'Ready.',
+          : readyStatus(),
       );
       openActiveSession();
       void followSessionList(list);

@@ -8,6 +8,7 @@ import {
   isJsTool,
   projectTranscript,
   summarizeActions,
+  thoughtPreview,
 } from '../src/MessageList.js';
 import { tokenizeJs } from '../src/highlight.js';
 
@@ -300,4 +301,51 @@ test('escapes, exponents and character classes are scanned, not skimmed', t => {
   t.is(typeOf('f(a) / b / c', '/'), 'punctuation');
   t.is(typeOf('xs[0] / b / c', '/'), 'punctuation');
   t.is(typeOf('{a} / b / c', '/'), 'punctuation');
+});
+
+test('a run with thoughts says how long the backend thought, and counts only tools as actions', t => {
+  const now = 1_000_000;
+  const summary = summarizeActions(
+    [
+      { role: 'thinking', thinking: { startedAt: now - 65_000, endedAt: now - 3000, truncated: false } },
+      { role: 'tool', name: 'exec' },
+      { role: 'thinking', thinking: { startedAt: now - 2000, truncated: false } },
+    ],
+    now,
+  );
+  t.is(summary.total, 1);
+  t.is(summary.thought, 'Thinking… (1m4s)');
+  t.true(summary.thinking);
+  t.is(summary.label, 'Thinking… (1m4s) · 1 action');
+  t.is(summary.detail, 'exec');
+  const done = summarizeActions(
+    [{ role: 'thinking', thinking: { startedAt: 0, endedAt: 205_000, truncated: false } }],
+    now,
+  );
+  t.is(done.total, 0);
+  t.is(done.label, 'Thought for 3m25s');
+  t.false(done.thinking);
+  t.is(done.detail, '');
+});
+
+test('thoughts group with the tool calls around them, and a thought alone is a group too', t => {
+  const { rows } = projectTranscript([
+    { role: 'user', text: 'think and act' },
+    { role: 'thinking', thinking: { startedAt: 1, endedAt: 2, truncated: false } },
+    { role: 'tool', name: 'exec' },
+    { role: 'thinking', thinking: { startedAt: 3, truncated: false } },
+    { role: 'assistant', text: 'done' },
+    { role: 'thinking', thinking: { startedAt: 4, truncated: false } },
+  ]);
+  t.deepEqual(
+    rows.map(row => (row.kind === 'actions' ? row.actions.map(m => m.role) : row.kind)),
+    ['bubble', ['thinking', 'tool', 'thinking'], 'bubble', ['thinking']],
+  );
+  t.deepEqual(rows.map(row => row.index), [0, 1, 4, 5]);
+});
+
+test('a thought’s preview is its opening words, never a command read out of JSON', t => {
+  t.is(thoughtPreview('{"command":"rm -rf /"}'), '{"command":"rm -rf /"}');
+  t.is(thoughtPreview('  first\n\nsecond   line '), 'first second line');
+  t.is(thoughtPreview('x'.repeat(1000)).length, 240);
 });
