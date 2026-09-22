@@ -1896,17 +1896,32 @@ test.serial(
         truncated: false,
       }),
     );
-    await waitFor(() => parent.querySelector('.floot-thought'));
-    const block = must(
-      parent.querySelector('.floot-thought'),
-      'thinking block',
+    // The thought folds into the collapsed actions group, whose closed head
+    // carries its running duration.
+    await waitFor(() => parent.querySelector('.floot-actions'));
+    const group = must(parent.querySelector('.floot-actions'), 'actions');
+    const head = must(
+      group.querySelector('.floot-actions-head'),
+      'actions head',
     );
-    t.false(block.hasAttribute('open'));
+    t.is(head.getAttribute('aria-expanded'), 'false');
+    t.regex(head.textContent || '', /Thinking… \(3m\d+s\)/);
+    t.false(
+      head.textContent?.includes('action'),
+      'a thought alone is not counted as an action',
+    );
+    t.is(parent.querySelector('.floot-action'), null);
+    head.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.querySelector('.floot-action.thought'));
+    const entry = must(
+      parent.querySelector('.floot-action.thought'),
+      'thought entry',
+    );
     t.regex(
-      block.querySelector('summary')?.textContent || '',
+      entry.querySelector('.floot-action-name')?.textContent || '',
       /Thinking… \(3m\d+s\)/,
     );
-    t.is(block.querySelector('script'), null);
+    t.is(entry.querySelector('script'), null);
     turns[0].channel.push(
       harden({
         type: 'thinking',
@@ -1918,9 +1933,19 @@ test.serial(
       }),
     );
     await waitFor(
-      () => block.querySelector('summary')?.textContent === 'Thought for 3m25s',
+      () =>
+        entry.querySelector('.floot-action-name')?.textContent ===
+        'Thought for 3m25s',
     );
-    t.true(block.textContent.includes('<script>public reasoning</script>'));
+    t.true(head.textContent?.includes('Thought for 3m25s'));
+    // The reasoning itself is one more click away, escaped.
+    must(
+      entry.querySelector('.floot-action-head'),
+      'thought head',
+    ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => entry.querySelector('.floot-thought-text'));
+    t.true(entry.textContent.includes('<script>public reasoning</script>'));
+    t.is(entry.querySelector('script'), null);
     turns[0].channel.push(harden({ type: 'end' }));
   },
 );
@@ -1939,24 +1964,44 @@ test.serial(
       truncated: false,
     });
     turns[0].channel.push(thought);
-    await waitFor(() => parent.querySelector('.floot-thought'));
-    const first = must(parent.querySelector('.floot-thought'), 'first thought');
-    first.setAttribute('open', '');
+    await waitFor(() => parent.querySelector('.floot-actions-head'));
+    const open = async () => {
+      must(
+        parent.querySelector('.floot-actions-head'),
+        'actions head',
+      ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await waitFor(() => parent.querySelector('.floot-action.thought'));
+      must(
+        parent.querySelector('.floot-action.thought .floot-action-head'),
+        'thought head',
+      ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await waitFor(() => parent.querySelector('.floot-thought-text'));
+    };
+    await open();
+    const first = must(
+      parent.querySelector('.floot-action.thought'),
+      'first thought',
+    );
     turns[0].channel.push(harden({ ...thought, text: ' continued' }));
     await waitFor(() => first.textContent.includes('continued'));
-    t.true(first.hasAttribute('open'), 'streaming preserves expansion');
+    t.truthy(
+      first.querySelector('.floot-thought-text'),
+      'streaming preserves expansion',
+    );
     selectSessionRow(parent, 'Session 1');
     await tick(50);
     await send('second');
     await waitFor(() => turns.length === 2);
     turns[1].channel.push(thought);
-    await waitFor(() => parent.querySelector('.floot-thought'));
-    t.false(
+    await waitFor(() => parent.querySelector('.floot-actions-head'));
+    t.is(
       must(
-        parent.querySelector('.floot-thought'),
-        'second thought',
-      ).hasAttribute('open'),
+        parent.querySelector('.floot-actions-head'),
+        'second group',
+      ).getAttribute('aria-expanded'),
+      'false',
     );
+    t.is(parent.querySelector('.floot-action.thought'), null);
   },
 );
 

@@ -193,8 +193,10 @@ Notes:
 - `FlootApp.js` — shell + subscription glue; composes the pieces.
 - `SessionSidebar.js` — session list, status dots (from `streaming`/`error`),
   preset pills, new/rename/delete controls, mobile drawer.
-- `MessageList.js` — history + live turn: user/assistant/mail bubbles, tool rows
-  (call + result), streaming caret, thinking indicator, replay buttons.
+- `MessageList.js` — history + live turn: user/assistant/mail bubbles, one
+  collapsed actions group per run between replies holding the backend's
+  thoughts and its tool calls (call + result), streaming caret, thinking
+  indicator, replay buttons.
 - `ComposeBar.js` — input, send/stop button, mic + speaker toggles, VAD meter.
 - `SettingsPanel.js` — the folded-in transcription/debug surface: live transcript
   view, mic/VAD meter detail, STT/TTS object info, token totals.

@@ -102,41 +102,134 @@ export const linkify = text => {
 };
 harden(linkify);
 
-/** @param {{ msg: FlootMessage }} props */
-const ThoughtBlock = ({ msg }) => {
-  const [now, setNow] = useState(Date.now());
+// ── Thinking ─────────────────────────────────────────────────────────────────
+// A backend's public reasoning is machinery, like its tool calls: it folds
+// into the same collapsed group, with its duration on the group's header.
+
+/** @param {FlootMessage} msg */
+const isThought = msg => msg.role === 'thinking';
+
+/** @param {FlootMessage} msg */
+const thoughtRunning = msg =>
+  isThought(msg) &&
+  typeof msg.thinking?.startedAt === 'number' &&
+  msg.thinking.endedAt === undefined;
+
+/**
+ * How long a thought streamed for, as observed: until it ended, or until now.
+ *
+ * @param {FlootMessage} msg
+ * @param {number} now
+ */
+const thoughtMs = (msg, now) => {
   const startedAt = msg.thinking?.startedAt;
-  const endedAt = msg.thinking?.endedAt;
-  const running = endedAt === undefined && typeof startedAt === 'number';
+  if (typeof startedAt !== 'number') return 0;
+  return Math.max(0, (msg.thinking?.endedAt ?? now) - startedAt);
+};
+
+/**
+ * @param {FlootMessage} msg
+ * @param {number} now
+ */
+const thoughtSeconds = (msg, now) => Math.floor(thoughtMs(msg, now) / 1000);
+
+/** @param {number} seconds */
+const formatDuration = seconds =>
+  `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+
+/**
+ * "Thought for 1m2s", or "Thinking… (0m5s)" while it streams.
+ *
+ * @param {number} seconds
+ * @param {boolean} running
+ */
+export const thoughtLabel = (seconds, running) =>
+  running
+    ? `Thinking… (${formatDuration(seconds)})`
+    : `Thought for ${formatDuration(seconds)}`;
+harden(thoughtLabel);
+
+/**
+ * A clock that ticks once a second while something streams, so a live
+ * duration moves without a delta to prompt it.
+ *
+ * @param {boolean} running
+ */
+const useNow = running => {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!running) return undefined;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [running]);
-  const seconds = Math.max(
-    0,
-    Math.floor(((endedAt ?? now) - (startedAt ?? now)) / 1000),
-  );
-  const duration = `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+  return now;
+};
+
+/**
+ * The head's one-line glimpse of a thought: its opening words, bounded. Not
+ * `actionPreview`, which reads a shell command out of JSON; reasoning that
+ * happens to be JSON must not come up as a command.
+ *
+ * @param {string} text
+ */
+export const thoughtPreview = text =>
+  text.slice(0, 240).replace(/\s+/g, ' ').trim();
+harden(thoughtPreview);
+
+/**
+ * One thought inside an action group: its duration and a preview on the
+ * closed head, the reasoning itself when opened. Closed by default.
+ *
+ * @param {{ msg: FlootMessage, now: number }} props
+ * @returns {VNode}
+ */
+const ThoughtEntry = ({ msg, now }) => {
+  const [open, setOpen] = useState(false);
+  const running = thoughtRunning(msg);
+  const text = msg.text || '';
+  // Recomputed only when the text changes, not on every tick of the clock.
+  const preview = useMemo(() => thoughtPreview(text), [text]);
   return h(
-    'details',
-    { class: 'floot-thought' },
+    'div',
+    { class: `floot-action thought${open ? ' open' : ''}` },
     h(
-      'summary',
-      null,
-      running ? `Thinking… (${duration})` : `Thought for ${duration}`,
+      'button',
+      {
+        type: 'button',
+        class: 'floot-action-head',
+        'aria-expanded': open ? 'true' : 'false',
+        onClick: () => setOpen(!open),
+      },
+      h(
+        'span',
+        { class: 'floot-caret', 'aria-hidden': 'true' },
+        open ? '▾' : '▸',
+      ),
+      h(
+        'span',
+        { class: 'floot-action-name' },
+        thoughtLabel(thoughtSeconds(msg, now), running),
+      ),
+      h('span', { class: 'floot-action-preview' }, preview),
     ),
-    h(
-      'div',
-      { class: 'floot-thought-note' },
-      'Public reasoning from the backend. Duration measures the observed streaming interval.',
-    ),
-    h('pre', null, msg.text || ''),
-    msg.thinking?.truncated
+    open
       ? h(
           'div',
-          { class: 'floot-thought-note' },
-          'Reasoning preview truncated.',
+          { class: 'floot-action-body' },
+          h(
+            'div',
+            { class: 'floot-thought-note' },
+            'Public reasoning from the backend. Duration measures the observed streaming interval.',
+          ),
+          h('pre', { class: 'floot-thought-text' }, text),
+          msg.thinking?.truncated
+            ? h(
+                'div',
+                { class: 'floot-thought-note' },
+                'Reasoning preview truncated.',
+              )
+            : null,
         )
       : null,
   );
@@ -199,26 +292,46 @@ export const extractExecCode = args => {
 harden(extractExecCode);
 
 /**
- * Collapse a run of actions into the summary its closed header shows: how many
- * ran in total, and how many of each tool.
+ * Collapse a run of actions into the summary its closed header shows: how long
+ * the backend thought, how many tools ran in total, and how many of each.
+ * Thoughts are part of the run but not counted as actions.
  *
- * @param {FlootMessage[]} actions
+ * @param {FlootMessage[]} entries tool and thinking messages, in order
+ * @param {number} [now] for a thought still streaming
  * @returns {{ total: number, counts: Array<{ name: string, count: number }>,
- *   label: string, detail: string }}
+ *   thought: string, thinking: boolean, label: string, detail: string }}
  */
-export const summarizeActions = actions => {
+export const summarizeActions = (entries, now = Date.now()) => {
   /** @type {Map<string, number>} */
   const tally = new Map();
-  for (const action of actions) {
-    const name = action.name || 'tool';
-    tally.set(name, (tally.get(name) || 0) + 1);
+  let total = 0;
+  let ms = 0;
+  let thoughts = 0;
+  let thinking = false;
+  for (const entry of entries) {
+    if (isThought(entry)) {
+      thoughts += 1;
+      // Summed in milliseconds, floored once: two short thoughts still add up.
+      ms += thoughtMs(entry, now);
+      if (thoughtRunning(entry)) thinking = true;
+    } else {
+      total += 1;
+      const name = entry.name || 'tool';
+      tally.set(name, (tally.get(name) || 0) + 1);
+    }
   }
   const counts = [...tally.entries()].map(([name, count]) => ({ name, count }));
-  const total = actions.length;
+  const thought = thoughts
+    ? thoughtLabel(Math.floor(ms / 1000), thinking)
+    : '';
+  const actions = total ? `${total} action${total === 1 ? '' : 's'}` : '';
   return {
     total,
     counts,
-    label: `${total} action${total === 1 ? '' : 's'}`,
+    thought,
+    thinking,
+    // "Thought for 1m2s · 3 actions", or whichever half the run has.
+    label: [thought, actions].filter(Boolean).join(' · '),
     detail: counts
       .map(({ name, count }) => (count > 1 ? `${name} ×${count}` : name))
       .join(', '),
@@ -352,15 +465,18 @@ const ActionEntry = ({ msg }) => {
 };
 
 /**
- * Every action between two assistant replies, as one collapsible group that is
- * closed by default and summarised in its header.
+ * Everything between two assistant replies that is not a reply — the
+ * backend's thoughts and its tool calls — as one collapsible group that is
+ * closed by default and summarised in its header: how long it thought, how
+ * many tools ran. The header's duration keeps moving while a thought streams.
  *
  * @param {{ actions: FlootMessage[] }} props
  * @returns {VNode}
  */
 const ActionGroup = ({ actions }) => {
   const [open, setOpen] = useState(false);
-  const summary = summarizeActions(actions);
+  const now = useNow(actions.some(thoughtRunning));
+  const summary = summarizeActions(actions, now);
   return h(
     'div',
     { class: 'floot-msg-row assistant' },
@@ -389,8 +505,10 @@ const ActionGroup = ({ actions }) => {
         ? h(
             'div',
             { class: 'floot-actions-body' },
-            actions.map((action, index) =>
-              h(ActionEntry, { key: `action-${index}`, msg: action }),
+            actions.map((entry, index) =>
+              isThought(entry)
+                ? h(ThoughtEntry, { key: `thought-${index}`, msg: entry, now })
+                : h(ActionEntry, { key: `action-${index}`, msg: entry }),
             ),
           )
         : null,
@@ -659,8 +777,8 @@ const RawBlock = (/** @type {string} */ key, /** @type {FlootMessage} */ msg) =>
 
 /**
  * One row of the rendered transcript: a message bubble, or a run of consecutive
- * tool messages that collapses together as a single action group. `index` is
- * the row's position in the snapshot, which is what keys it.
+ * tool and thinking messages that collapses together as a single action group.
+ * `index` is the row's position in the snapshot, which is what keys it.
  *
  * @typedef {{ kind: 'bubble', index: number, msg: FlootMessage }
  *   | { kind: 'actions', index: number, actions: FlootMessage[] }} TranscriptRow
@@ -669,8 +787,8 @@ const RawBlock = (/** @type {string} */ key, /** @type {FlootMessage} */ msg) =>
 /**
  * Split the snapshot's messages into what the transcript renders in place and
  * the queued submissions, which render after the live turn instead. Consecutive
- * tool messages — one turn's worth of actions, the run between two replies —
- * are grouped so they collapse together.
+ * tool and thinking messages — one turn's worth of machinery, the run between
+ * two replies — are grouped so they collapse together.
  *
  * A row's `index` is its position in `messages`, which is what keys it. That is
  * only stable because the host appends queued submissions AFTER everything
@@ -691,10 +809,13 @@ export const projectTranscript = messages => {
     if (isPending(msg)) {
       pending.push(msg);
       i += 1;
-    } else if (msg.role === 'tool') {
+    } else if (msg.role === 'tool' || isThought(msg)) {
       const actions = [];
       let j = i;
-      while (j < messages.length && messages[j].role === 'tool') {
+      while (
+        j < messages.length &&
+        (messages[j].role === 'tool' || isThought(messages[j]))
+      ) {
         actions.push(messages[j]);
         j += 1;
       }
@@ -825,21 +946,21 @@ export const MessageList = ({ state, controller, debug = false }) => {
   // Keys are positional: the transcript is append-mostly, so an index key is
   // stable and lets Preact reuse rows across streaming re-renders.
   /** @type {VNode[]} */
+  // A group's key carries the session too: what a reader opened in one
+  // session must not come up open at the same position in another.
   const rows = projected.map(row =>
     row.kind === 'actions'
-      ? h(ActionGroup, { key: `actions-${row.index}`, actions: row.actions })
-      : row.msg.role === 'thinking'
-        ? h(ThoughtBlock, {
-            key: `${state.activeSessionId || ''}:thought-${row.index}`,
-            msg: row.msg,
-          })
-        : h(Bubble, {
-            key: `msg-${row.index}`,
-            msg: row.msg,
-            canReplay,
-            replaying: canReplay && replayingText === (row.msg.text || ''),
-            onReplay: text => controller.replayMessage(text),
-          }),
+      ? h(ActionGroup, {
+          key: `${state.activeSessionId || ''}:actions-${row.index}`,
+          actions: row.actions,
+        })
+      : h(Bubble, {
+          key: `msg-${row.index}`,
+          msg: row.msg,
+          canReplay,
+          replaying: canReplay && replayingText === (row.msg.text || ''),
+          onReplay: text => controller.replayMessage(text),
+        }),
   );
   // The in-progress assistant bubble, or a thinking indicator before any text.
   if (streamingText) {
@@ -854,7 +975,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
     thinking &&
     !messages.some(
       message =>
-        message.role === 'thinking' && message.thinking?.endedAt === undefined,
+        thoughtRunning(message),
     )
   ) {
     rows.push(h(ThinkingRow, { key: 'thinking' }));

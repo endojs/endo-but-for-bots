@@ -1024,25 +1024,26 @@
   flex-direction: column;
   gap: 0.6rem;
 }
-.floot-thought {
-  margin: 0.35rem 0;
-  padding: 0.45rem 0.65rem;
-  border: 1px solid var(--fl-border);
-  border-radius: 0.4rem;
-  color: var(--fl-text-muted);
-  font-size: 0.85rem;
+/* A thought inside an action group reads as prose, not code: the app's face
+   rather than the group's monospace, whole words, and no scroll box. */
+.floot-action.thought .floot-action-name {
+  color: #c4b5fd;
 }
-.floot-thought summary {
-  cursor: pointer;
-}
-.floot-thought pre {
+.floot-thought-text {
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: inherit;
+  word-break: normal;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--fl-text-muted);
 }
 .floot-thought-note {
-  margin-top: 0.5rem;
+  margin: 0.4rem 0;
   font-size: 0.75rem;
+  color: var(--fl-text-muted);
 }
 .floot-settings-row {
   display: flex;
