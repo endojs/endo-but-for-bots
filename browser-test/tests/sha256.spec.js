@@ -26,6 +26,11 @@ const makeBrowserBundle = async () => {
       ),
     ).href
   );
+  // A two-line entry that re-exports both arms of the package. Served from a
+  // virtual location under packages/sha256/test/ (never written to disk) so the
+  // bundle still resolves @endo/sha256 and @endo/sha256/async as package
+  // self-imports — exercising conditional export selection — without committing
+  // an extraneous file for the importer.
   const entryLocation = pathToFileURL(
     path.join(
       __dirname,
@@ -37,8 +42,14 @@ const makeBrowserBundle = async () => {
       'browser-entry.js',
     ),
   ).href;
+  const entrySource =
+    `export { sha256 } from '@endo/sha256';\n` +
+    `export { sha256Async } from '@endo/sha256/async';\n`;
   /** @param {string} location */
-  const read = location => fs.promises.readFile(new URL(location));
+  const read = location =>
+    location === entryLocation
+      ? Promise.resolve(new TextEncoder().encode(entrySource))
+      : fs.promises.readFile(new URL(location));
   return makeBundle(read, entryLocation, {
     conditions: new Set(['browser']),
   });
