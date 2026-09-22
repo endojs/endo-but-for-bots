@@ -41,7 +41,9 @@ const OwnerInterface = M.interface('SessionOwner', {
     M.recordOf(M.string(), M.string()),
   ).returns(M.any()),
   inspect: M.callWhen(M.string()).returns(M.any()),
-  revise: M.callWhen(M.string(), M.string()).returns(M.undefined()),
+  revise: M.callWhen(M.string(), M.string())
+    .optional(M.recordOf(M.string(), M.string()))
+    .returns(M.undefined()),
   start: M.callWhen(M.string()).optional(M.remotable()).returns(M.any()),
   client: M.callWhen(M.string()).returns(M.any()),
   stop: M.callWhen(M.string()).returns(M.undefined()),
@@ -567,7 +569,14 @@ export const makeSessionOwner = ({
         ),
       );
     },
-    revise: (name, plan) =>
+    // A plan revision may rebind the record's stable dependencies to other
+    // identities for the next incarnation, once the previous one has been
+    // stopped and its authority released: the references named replace the
+    // roles they name, and are written before the plan, as at creation, so
+    // a plan is never published over edges that are not durable. The
+    // incarnation's own identities and the tool authority attached at
+    // activation are not dependencies to rebind.
+    revise: (name, plan, references = harden({})) =>
       inOrder(name, async () => {
         const record = await inspect(name);
         if (!record) throw Fail`Missing session record`;
@@ -582,6 +591,11 @@ export const makeSessionOwner = ({
         !native ||
           ['planned', 'stopped'].includes(record.phase) ||
           Fail`Session cleanup must finish before revising its plan`;
+        references.tools === undefined ||
+          Fail`Session tool authority must be attached at activation`;
+        (references.client === undefined && references.worker === undefined) ||
+          Fail`Native session identities must be constructed by their owner`;
+        await records.rebind(name, references);
         await E(await recordDirectory(name)).writeText('plan', plan);
       }),
     client: name => inOrder(name, () => client(name)),

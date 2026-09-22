@@ -21,7 +21,7 @@ import { execFile } from 'node:child_process';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { promisify } from 'node:util';
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -237,6 +237,7 @@ const FlootSessionInterface = M.interface('FlootSession', {
   getJournalStatus: M.callWhen().returns(M.any()),
   getNetworkPolicy: M.callWhen().returns(M.any()),
   setNetworkPolicy: M.callWhen(M.string()).returns(M.any()),
+  rebind: M.callWhen(M.arrayOf(M.string())).returns(M.record()),
   resolveNetworkPolicyRequest: M.callWhen(
     M.string(),
     M.boolean(),
@@ -2338,6 +2339,15 @@ export const makeStreamingAgent = async (
     );
   }
 
+  // A network policy decision and a rebind both replace the incarnation, and
+  // neither may do so beneath live work.
+  const assertIdleForReplacement = () => {
+    if (turnControllers.size || executingTools.size || activeJournalTurn)
+      throw Error(
+        'Cannot replace the session incarnation while session work is active',
+      );
+  };
+
   return harden({
     converse,
     getHistory,
@@ -2352,17 +2362,9 @@ export const makeStreamingAgent = async (
     getUsage,
     startInbox,
     shutdown: shutdownAgent,
-    assertNetworkPolicyIdle: () => {
-      if (turnControllers.size || executingTools.size || activeJournalTurn)
-        throw Error(
-          'Cannot decide network policy while session work is active',
-        );
-    },
-    stopForNetworkChange: () => {
-      if (turnControllers.size || executingTools.size || activeJournalTurn)
-        throw Error(
-          'Cannot change network policy while session work is active',
-        );
+    assertIdleForReplacement,
+    stopForReplacement: () => {
+      assertIdleForReplacement();
       return shutdownAgent();
     },
   });
@@ -3307,13 +3309,20 @@ export const make = async (
     /** @type {Error | undefined} */
     let pendingReport;
 
+    // A rebind authorization is spent by the first request built from this
+    // spec; a recreate for other mounts never carries it again.
+    const { rebind: onceOnly, ...request } = spec;
+    let rebind = onceOnly;
     const createLive = async () => {
       assertSessionAdmission(id);
       if (closed) throw Error('Session mount client is closed');
       const declaring = declared;
+      const authorization = rebind;
+      rebind = undefined;
       const session = await E(backend.factory).create(
         harden({
-          ...spec,
+          ...request,
+          ...(authorization === undefined ? {} : { rebind: authorization }),
           ...(declaring.length > 0 ? { containerMounts: declaring } : {}),
         }),
         getToolSet(),
@@ -4023,7 +4032,15 @@ export const make = async (
     return executionState(id);
   };
   const networkControllers = new Map();
-  const networkChanges = new Set();
+  // Sessions whose incarnation is being replaced: a network policy change or
+  // a rebind stops the old one and provisions the next.
+  const incarnationChanges = new Set();
+  /**
+   * The bindings a session's next provisioning is authorized to change, by
+   * session, spent when the request is built.
+   * @type {Map<string, readonly string[]>}
+   */
+  const pendingRebinds = new Map();
   const networkController = id => {
     if (!networkControllers.has(id)) {
       networkControllers.set(
@@ -4041,40 +4058,50 @@ export const make = async (
                 .supportedNetworkPolicies || []
             );
           },
-          prepare: async () => {
-            const pending = agents.get(id);
-            if (pending) await (await pending).stopForNetworkChange();
-          },
-          change: async () => {
-            const mount = hostedMountClients.get(id);
-            if (mount) {
-              await mount.close();
-              hostedMountClients.delete(id);
-            }
-            const admin = backendAdmins.get(id);
-            if (admin) {
-              await E(admin).terminate();
-              backendAdmins.delete(id);
-            }
-            agents.delete(id);
-          },
+          prepare: () => stopIncarnation(id),
+          change: () => releaseIncarnation(id),
         }),
       );
     }
     return networkControllers.get(id);
   };
-  const changeNetwork = async (id, operation) => {
+  /**
+   * Stop a session's incarnation and release what the factory holds of it,
+   * so the next `getAgent` provisions afresh. A network policy change runs
+   * the two halves around its durable transition intent; a rebind runs them
+   * together.
+   * @param {string} id
+   */
+  const stopIncarnation = async id => {
+    const pending = agents.get(id);
+    if (pending) await (await pending).stopForReplacement();
+  };
+  /** @param {string} id */
+  const releaseIncarnation = async id => {
+    const mount = hostedMountClients.get(id);
+    if (mount) {
+      await mount.close();
+      hostedMountClients.delete(id);
+    }
+    const admin = backendAdmins.get(id);
+    if (admin) {
+      await E(admin).terminate();
+      backendAdmins.delete(id);
+    }
+    agents.delete(id);
+  };
+  const changeIncarnation = async (id, operation) => {
     assertSessionAdmission(id);
-    if (networkChanges.has(id))
-      throw Error('Network policy change already in progress');
-    networkChanges.add(id);
+    if (incarnationChanges.has(id))
+      throw Error('Session incarnation change already in progress');
+    incarnationChanges.add(id);
     let result;
     try {
       const pending = agents.get(id);
-      if (pending) (await pending).assertNetworkPolicyIdle();
+      if (pending) (await pending).assertIdleForReplacement();
       result = await operation(networkController(id));
     } finally {
-      networkChanges.delete(id);
+      incarnationChanges.delete(id);
       // A submission that waited out the change may run now — whether the
       // change succeeded or not: either way the session admits work again.
       void submissions.get(id)?.pump();
@@ -4087,8 +4114,8 @@ export const make = async (
     ownership.assertOpen();
     assertPublished(id);
     if (!observeOnly) assertSessionAdmission(id);
-    if (networkChanges.has(id))
-      throw Error('Network policy change in progress');
+    if (incarnationChanges.has(id))
+      throw Error('Session incarnation change in progress');
     let agentP = agents.get(id);
     if (!agentP) {
       if (observeOnly && stopFlights.has(id))
@@ -4310,6 +4337,10 @@ export const make = async (
                   `[floot-factory] session ${id} is pinned to subscription "${entry.subscription}", which backend "${entry.backendId}" no longer declares; running it on the backend's own choice`,
                 );
               }
+              // An authorization to rebind is spent by the request it is
+              // built into, whatever becomes of that request.
+              const rebind = pendingRebinds.get(id);
+              pendingRebinds.delete(id);
               const mountClient = makeHostedMountClient({
                 id,
                 backend,
@@ -4326,6 +4357,7 @@ export const make = async (
                     : {}),
                   ...(networkPolicy === undefined ? {} : { networkPolicy }),
                   ...(workspaceHostPath ? { workspaceHostPath } : {}),
+                  ...(rebind === undefined ? {} : { rebind }),
                 }),
                 getToolSet: () => toolSet,
                 dropOwnBinds: async () => {
@@ -4537,8 +4569,8 @@ export const make = async (
               registered.executionState !== 'running')
           )
             return 'Session is stopped or stopping';
-          if (networkChanges.has(id))
-            return 'Network policy change in progress';
+          if (incarnationChanges.has(id))
+            return 'Session incarnation change in progress';
           return '';
         },
         startTurn: (text, options) => {
@@ -4723,13 +4755,64 @@ export const make = async (
           await assertSessionReady(id);
           return networkController(id).get();
         },
+        async rebind(bindings) {
+          await assertSessionReady(id);
+          if (turns.getCurrent())
+            throw Error(
+              'Cancel or finish the active turn before rebinding the session',
+            );
+          const entry = (await loadRegistry()).find(item => item.id === id);
+          if (!entry?.backendId)
+            throw Error('Only a hosted session has bindings to rebind');
+          // The names this session's backend declares its reopen may be
+          // authorized to change; whether the request may change one is the
+          // provisioner's to refuse. Checked before the incarnation is
+          // touched, so a misspelling costs nothing.
+          const names = /** @type {readonly unknown[]} */ (
+            Array.isArray(bindings) ? bindings : []
+          );
+          (names.length > 0 &&
+            names.length <= 8 &&
+            names.every(
+              name => typeof name === 'string' && name.length <= 64,
+            )) ||
+            Fail`rebind names between one and eight bindings a reopen may change, each at most 64 characters`;
+          /** @type {readonly string[]} */
+          const known =
+            (await getHostedBackends()).get(entry.backendId)?.descriptor
+              .rebindableBindings ?? [];
+          known.length > 0 ||
+            Fail`Backend ${q(entry.backendId)} declares no rebindable bindings`;
+          const authorized = harden([...new Set(bindings)]);
+          authorized.every(name => known.includes(name)) ||
+            Fail`rebind names the bindings a reopen may change, from ${q([...known])}; got ${q(bindings)}`;
+          try {
+            await changeIncarnation(id, async () => {
+              // The incarnation is stopped and its authority released before
+              // the record is rebound: the backend's daemon owner refuses the
+              // revision while any of it is held. The provisioning that
+              // follows this change carries the authorization; what it may
+              // not change under it, the backend refuses by name.
+              await stopIncarnation(id);
+              await releaseIncarnation(id);
+              pendingRebinds.set(id, authorized);
+            });
+          } finally {
+            // Spent by the provisioning that followed, or void with the verb
+            // that failed before it: never left for an unrelated reopen. Only
+            // this verb's own authorization is voided.
+            if (pendingRebinds.get(id) === authorized)
+              pendingRebinds.delete(id);
+          }
+          return harden({ rebind: [...authorized] });
+        },
         async setNetworkPolicy(policy) {
           await assertSessionReady(id);
           if (turns.getCurrent())
             throw Error(
               'Cancel or finish the active turn before changing network policy',
             );
-          return changeNetwork(id, controller => controller.set(policy));
+          return changeIncarnation(id, controller => controller.set(policy));
         },
         async resolveNetworkPolicyRequest(requestId, approve, note) {
           await assertSessionReady(id);
@@ -4737,7 +4820,7 @@ export const make = async (
             throw Error(
               'Cancel or finish the active turn before deciding a network request',
             );
-          return changeNetwork(id, controller =>
+          return changeIncarnation(id, controller =>
             controller.resolve(requestId, approve, note),
           );
         },
@@ -4801,6 +4884,8 @@ export const make = async (
             return 'resume() — After completed emergency stop, explicitly permit a fresh incarnation. Never replays a prompt.';
           if (methodName === 'getNetworkPolicy')
             return 'getNetworkPolicy() — Report enforced backend support, configured off/public-internet policy, and pending requests. Null policy is not proof of off enforcement.';
+          if (methodName === 'rebind')
+            return 'rebind(bindings) — Operator-only idle-session rebind of what a hosted session was bound to when its record was created: "image" (the broker’s pinned image), "account" (Codex, whose plan records the account), "credential kind" (Claude) and "provider" (the backend’s own services: its broker, sandbox, state and storage formulas; for Claude and OpenCode the account is the broker’s own, so a broker re-minted over another Secret is a "provider" change). Stops the old incarnation and releases its authority, then the record is revised under the named bindings; a binding that changed without being named is refused by name and nothing is revised, though the incarnation was replaced. The session keeps its identity, workspace and conversation. Assumes the re-minted services keep the host’s state and storage roots.';
           if (methodName === 'setNetworkPolicy')
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')
@@ -4957,6 +5042,7 @@ export const make = async (
     }
     submissions.delete(id);
     agents.delete(id);
+    pendingRebinds.delete(id);
     facets.delete(id);
     // Whoever is still watching is told the session is gone.
     sessionWatches.get(id)?.end();
@@ -5861,7 +5947,7 @@ export const make = async (
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
       }
       const docs = {
         createSession:

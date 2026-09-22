@@ -161,6 +161,71 @@ test('cleanup refuses removal after detecting an external rebind', async t => {
   t.is(successor?.plan, 'successor');
 });
 
+test("rebind replaces stable dependency edges, adds a role, and never an incarnation's own", async t => {
+  const store = makeSessionRecordStore(makeDirectory());
+  await store.create('session-a', 'plan', { provider: 'provider-a' });
+  await store.retain('session-a', 'client', 'client-a');
+  await t.throwsAsync(store.rebind('session-a', { client: 'client-b' }), {
+    message: /incarnation's own/,
+  });
+  await t.throwsAsync(store.rebind('session-a', { worker: 'worker-b' }), {
+    message: /incarnation's own/,
+  });
+  await store.rebind('session-a', {
+    provider: 'provider-b',
+    storage: 'storage-a',
+  });
+  t.like(await store.inspect('session-a'), {
+    plan: 'plan',
+    references: {
+      provider: 'provider-b',
+      storage: 'storage-a',
+      client: 'client-a',
+    },
+  });
+  // Rebinding to the identity a role already holds changes nothing.
+  await store.rebind('session-a', { provider: 'provider-b' });
+  t.is((await store.inspect('session-a'))?.references.provider, 'provider-b');
+  await t.throwsAsync(store.rebind('absent', { provider: 'provider-b' }), {
+    message: /Missing session record/,
+  });
+  // A record whose creation never published its plan is not rebound.
+  const partial = makeSessionRecordStore(makeDirectory({ failPlan: true }));
+  await t.throwsAsync(partial.create('session-b', 'plan', { provider: 'p' }), {
+    message: /Plan write failed/,
+  });
+  await t.throwsAsync(partial.rebind('session-b', { provider: 'q' }), {
+    message: /incomplete/,
+  });
+});
+
+test('a rebind that fails mid-way leaves the roles before it rebound for a retry', async t => {
+  const faults = { failReference: 'sandbox' };
+  const store = makeSessionRecordStore(makeDirectory(faults));
+  await store.create('session-a', 'plan', {
+    provider: 'provider-a',
+    storage: 'storage-a',
+  });
+  await t.throwsAsync(
+    store.rebind('session-a', { provider: 'provider-b', sandbox: 'sandbox-b' }),
+    { message: /Reference write failed/ },
+  );
+  t.deepEqual((await store.inspect('session-a'))?.references, {
+    provider: 'provider-b',
+    storage: 'storage-a',
+  });
+  faults.failReference = '';
+  await store.rebind('session-a', {
+    provider: 'provider-b',
+    sandbox: 'sandbox-b',
+  });
+  t.deepEqual((await store.inspect('session-a'))?.references, {
+    provider: 'provider-b',
+    storage: 'storage-a',
+    sandbox: 'sandbox-b',
+  });
+});
+
 test('release keeps the approved plan and stable dependencies for a successor', async t => {
   const store = makeSessionRecordStore(makeDirectory());
   await store.create('session-a', 'approved plan', { provider: 'provider-a' });

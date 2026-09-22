@@ -206,6 +206,7 @@ test('Codex placement is recorded before directories and replacement stops befor
   const privateRoot = join(root, 'private');
   const calls = [];
   /** @type {Map<string, { plan: string }>} */
+  /** @type {Map<string, { plan: string, references?: Record<string, string> }>} */
   const records = new Map();
   const recorded = () => {
     const record = records.get('a');
@@ -227,14 +228,26 @@ test('Codex placement is recorded before directories and replacement stops befor
       await t.throwsAsync(access(privateRoot), { code: 'ENOENT' });
       t.deepEqual(identities, dependencies);
       calls.push('create');
-      records.set(id, harden({ plan: text }));
+      records.set(id, harden({ plan: text, references: identities }));
     },
     async stop() {
       calls.push('stop');
     },
-    async revise(id, text) {
+    /**
+     * @param {string} id
+     * @param {string} text
+     * @param {Record<string, string>} [references]
+     */
+    async revise(id, text, references = undefined) {
       calls.push('revise');
-      records.set(id, harden({ plan: text }));
+      const record = records.get(id);
+      records.set(
+        id,
+        harden({
+          plan: text,
+          references: { ...(record?.references ?? {}), ...(references ?? {}) },
+        }),
+      );
     },
     async start() {
       const plan = recorded();

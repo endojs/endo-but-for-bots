@@ -141,6 +141,41 @@ export const makeSessionRecordStore = directory => {
     });
 
   /**
+   * Replace the identities of a record's stable dependencies after a proven
+   * stop, for a later incarnation under other services: an execution
+   * incarnation's own `client` and `worker` are never rebound here, and the
+   * record's plan must be complete. A role the record was created without is
+   * added, since a backend's dependencies may grow; rebinding a role to the
+   * identity it already holds is a no-op. Each edge is replaced in turn, so a
+   * failed write leaves the roles before it rebound and the rest as they
+   * were, for a retry naming the same identities.
+   *
+   * @param {string} name
+   * @param {Record<string, string>} references
+   */
+  const rebind = (name, references) => {
+    const replacements = Object.entries(references);
+    return registry.inOrder(name, async () => {
+      if (replacements.length === 0) return;
+      const found = await load(name);
+      if (!found) throw Fail`Missing session record ${name}`;
+      (await E(found.record).maybeReadText('plan')) !== undefined ||
+        Fail`Session record ${name} is incomplete`;
+      for (const [reference] of replacements) {
+        !['client', 'worker'].includes(reference) ||
+          Fail`Session reference ${reference} is an incarnation's own, not a dependency to rebind`;
+      }
+      const entries = /** @type {SessionRecordDirectory} */ (
+        await E(found.record).lookup('references')
+      );
+      for (const [reference, identifier] of replacements) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(entries).storeIdentifier(reference, identifier);
+      }
+    });
+  };
+
+  /**
    * Release selected incarnation references after proven cleanup, retaining
    * the logical plan and every other dependency. Missing references count as
    * already released, including a partially completed prior removal. If all
@@ -235,6 +270,6 @@ export const makeSessionRecordStore = directory => {
       await E(directory).remove(name);
     });
 
-  return harden({ create, inspect, retain, release, remove });
+  return harden({ create, inspect, retain, rebind, release, remove });
 };
 harden(makeSessionRecordStore);

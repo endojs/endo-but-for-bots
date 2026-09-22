@@ -93,7 +93,7 @@ export const makeCodexSessionProvisioner = ({
       accountRef,
       containerMounts: request.containerMounts,
     }),
-    immutable: { imageRef: 'image', accountRef: 'account' },
+    rebindable: { imageRef: 'image', accountRef: 'account' },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });

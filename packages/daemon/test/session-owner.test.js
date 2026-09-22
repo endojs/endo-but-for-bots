@@ -135,6 +135,54 @@ test('failed stop fences the old handle and retains the exact client for retry',
   await t.throwsAsync(E(client).status(), { message: /stopped/ });
 });
 
+test("a revision rebinds stable dependencies after a stop, never an incarnation's own or the tool authority", async t => {
+  const h = makeHarness();
+  await E(h.owner).create('a', 'approved plan', h.refs);
+  await E(h.owner).client('a');
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'revised plan', { storage: 'storage-b' }),
+    { message: /Stop the client before revising/ },
+  );
+  await E(h.owner).stop('a');
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'revised plan', { tools: 'tools-id' }),
+    { message: /attached at activation/ },
+  );
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'revised plan', { client: 'client-b' }),
+    { message: /constructed by their owner/ },
+  );
+  await t.throwsAsync(
+    E(h.owner).revise('a', 'revised plan', { worker: 'worker-b' }),
+    { message: /constructed by their owner/ },
+  );
+  t.deepEqual(await E(h.owner).inspect('a'), {
+    identifier: (await E(h.owner).inspect('a'))?.identifier,
+    plan: 'approved plan',
+    references: { storage: 'storage-id' },
+    phase: 'stopped',
+  });
+  await E(h.owner).revise('a', 'revised plan', {
+    storage: 'storage-b',
+    broker: 'broker-b',
+  });
+  const revised = await E(h.owner).inspect('a');
+  t.like(revised, {
+    plan: 'revised plan',
+    references: { storage: 'storage-b', broker: 'broker-b' },
+    phase: 'stopped',
+  });
+  // The rebinding is durable: a reconstructed owner reads the new edges.
+  const recovered = makeSessionOwner(h.powers);
+  t.deepEqual(await E(recovered).inspect('a'), revised);
+  // A plain revision keeps the rebound edges.
+  await E(recovered).revise('a', 'revised again');
+  t.like(await E(recovered).inspect('a'), {
+    plan: 'revised again',
+    references: { storage: 'storage-b', broker: 'broker-b' },
+  });
+});
+
 test('failed removal persists intent across owner reconstruction', async t => {
   const h = makeHarness();
   await E(h.owner).create('a', 'original paths', h.refs);

@@ -273,6 +273,13 @@ test('Claude advertises only the network authority recorded by its broker', asyn
   );
   const factory = await make(f.host, undefined, { env: f.env });
   t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+  // What a reopen of a session here may be authorized to rebind, as the
+  // provisioner names it.
+  t.deepEqual((await E(factory).describe()).rebindableBindings, [
+    'image',
+    'credential kind',
+    'provider',
+  ]);
 });
 
 test('a recorded Claude subscription pin is revised on reopen; auto drops it', async t => {
@@ -503,7 +510,8 @@ test('a later create stops and revises a record in place and refuses a changed w
     'the factory stopped the live predecessor; the owner refused before any revision',
   );
   // A broker re-minted over a re-pinned image refuses too, as does one over
-  // a credential of another kind; the network policy may change.
+  // a credential of another kind, until a request authorizes rebinding that
+  // binding; the network policy may change.
   const repinned = `sha256:${'b'.repeat(64)}`;
   f.environments.set(
     'broker-id',
@@ -517,7 +525,10 @@ test('a later create stops and revises a record in place and refuses a changed w
   const other = await make(f.host, undefined, { env: f.env });
   await t.throwsAsync(
     E(other).create(harden({ sessionId: 'session-a' }), makeToolSet()),
-    { message: /image cannot change; destroy the session first/ },
+    {
+      message:
+        /image cannot change without a reopen that authorizes rebinding it/,
+    },
   );
   f.environments.set(
     'broker-id',
@@ -528,7 +539,47 @@ test('a later create stops and revises a record in place and refuses a changed w
   const rekeyed = await make(f.host, undefined, { env: f.env });
   await t.throwsAsync(
     E(rekeyed).create(harden({ sessionId: 'session-a' }), makeToolSet()),
-    { message: /credential kind cannot change; destroy the session first/ },
+    {
+      message:
+        /credential kind cannot change without a reopen that authorizes rebinding it/,
+    },
+  );
+  // Authorized, the record rebinds to the re-pinned image after a stop and
+  // keeps its identity and workspace; the broker it was created under is
+  // then the one refused, until the record is rebound back.
+  const rebound = f.log.length;
+  const onRepinned = await E(other).create(
+    harden({ sessionId: 'session-a', rebind: ['image'] }),
+    makeToolSet(),
+  );
+  t.deepEqual(
+    f.log
+      .slice(rebound)
+      .map(entry => entry[0])
+      .slice(-4),
+    ['inspect', 'stop', 'revise', 'start'],
+    'the owner stops the record before revising it',
+  );
+  await E(onRepinned.admin).terminate();
+  t.is(
+    JSON.parse(f.records.get('session-a')?.plan ?? '').rootfs,
+    `oci:localhost/claude@${repinned}`,
+  );
+  await t.throwsAsync(
+    E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet()),
+    {
+      message:
+        /image cannot change without a reopen that authorizes rebinding it/,
+    },
+  );
+  const back = await E(factory).create(
+    harden({ sessionId: 'session-a', rebind: ['image'] }),
+    makeToolSet(),
+  );
+  await E(back.admin).terminate();
+  t.is(
+    JSON.parse(f.records.get('session-a')?.plan ?? '').rootfs,
+    `oci:localhost/claude@${digest}`,
   );
   f.environments.set(
     'broker-id',
