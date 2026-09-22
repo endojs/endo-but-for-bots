@@ -4864,9 +4864,12 @@ test('hashline edit - guest reads anchored, edits, reads back', async t => {
   });
 
   // 1. The guest holds the mount capability and reads the document with
-  //    hashline attribution.
-  const anchored = await E(mount).readTextAnchored('notes.md');
+  //    hashline attribution through its own surface (`E(guest).readTextAnchored`,
+  //    sugar for `E(directoryRef).readTextAnchored`).
+  const anchored = await E(guest).readTextAnchored(mount, 'notes.md');
   t.regex(anchored, /^1#[0-9a-f]{2} # Today$/m);
+  // The guest sugar and the direct mount surface render identically.
+  t.is(anchored, await E(mount).readTextAnchored('notes.md'));
   const anchors = parseAnchored(anchored);
 
   // 2. The guest computes the whole-file CAS hash of what it read and

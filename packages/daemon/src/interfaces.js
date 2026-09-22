@@ -181,6 +181,8 @@ export const GuestInterface = M.interface('EndoGuest', {
   edit: M.call(M.remotable(), NameOrPathShape, M.any())
     .optional(M.any())
     .returns(M.promise()),
+  // Hash-anchored read: sugar delegating to E(directoryRef).readTextAnchored
+  readTextAnchored: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
   // Mail
   // Get the guest's mailbox handle
   handle: M.call().returns(M.remotable()),

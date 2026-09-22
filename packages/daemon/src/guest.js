@@ -396,6 +396,22 @@ export const makeGuestMaker = ({
             });
           }
         },
+        /**
+         * Read a document with hash-anchored line attribution, sugar
+         * delegating to `E(directoryRef).readTextAnchored(path)`. The
+         * companion of `edit` above: an agent holding only its guest ref
+         * reads the anchored rendering (each line prefixed `LINE#HASH`)
+         * from a directory it was given by name, authors a hashline patch
+         * from those anchors, and applies it back through `edit`. Keeping
+         * both halves on the guest surface makes the full
+         * read-attribution → edit round-trip expressible through the guest
+         * capability alone.
+         *
+         * @param {any} directoryRef
+         * @param {string | string[]} path
+         */
+        readTextAnchored: async (directoryRef, path) =>
+          E(directoryRef).readTextAnchored(path),
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {
           const iterator = guest.followLocatorNameChanges(locator);
