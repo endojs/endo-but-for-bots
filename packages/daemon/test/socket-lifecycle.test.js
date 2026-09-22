@@ -17,7 +17,8 @@ import { servePrivatePath } from '../src/serve-private-path.js';
 import { socketLockPath } from '../src/socket-lock.js';
 
 const unixTest = process.platform === 'win32' ? test.skip : test;
-const systemdTest = process.platform === 'linux' ? test : test.skip;
+const systemdTest =
+  process.platform === 'linux' ? test.serial : test.serial.skip;
 
 const systemdSocketActivationFixturePath = fileURLToPath(
   new URL('./_systemd-socket-activation.js', import.meta.url),
@@ -107,7 +108,7 @@ const waitForOutput = (stream, expected) =>
     stream.on('end', onEnd);
   });
 
-systemdTest.serial(
+systemdTest(
   'systemd socket activation accepts a connection through inherited fd 3',
   async t => {
     t.timeout(15_000);
