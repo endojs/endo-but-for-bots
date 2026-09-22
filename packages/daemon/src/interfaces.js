@@ -512,6 +512,9 @@ export const MountInterface = M.interface('EndoMount', {
   readText: M.call(PathArgShape).returns(M.promise()),
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
+  // Hashline edit round trip (see designs/cli-edit-verb.md)
+  readTextHashline: M.call(PathArgShape).returns(M.promise()),
+  edit: M.call(PathArgShape, M.any()).optional(M.any()).returns(M.promise()),
   // Mutation
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),

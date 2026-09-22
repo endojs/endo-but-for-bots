@@ -4253,6 +4253,110 @@ test('mount dot-dot navigation clamped at root', async t => {
   t.deepEqual(entries, ['inside.txt']);
 });
 
+// The acceptance criterion named in the review of PR #256
+// (designs/cli-edit-verb.md): the holder of a guest agent uses its
+// surface to read a document with hash-line attribution and then edit
+// that document with hash-line commands.
+test('hashline edit through a guest: read attribution then edit', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-hashline');
+  await createMountFixture(mountPath, {
+    'notes.txt': "# Today's notes\n\nBuy milk.\nBuy eggs.\n",
+  });
+
+  // A guest agent is handed a mount capability by name.
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  await E(host).provideMount(mountPath, 'docs');
+  await E(host).move(['docs'], ['guest-agent', 'docs']);
+
+  // The guest resolves the mount through its own surface.
+  const mount = await E(guest).lookup('docs');
+
+  // (a) READ the document with hash-line attribution.
+  const view = await E(mount).readTextHashline('notes.txt');
+  t.deepEqual(
+    view.lines.map(l => l.text),
+    ["# Today's notes", '', 'Buy milk.', 'Buy eggs.'],
+  );
+  const eggsLine = view.lines[3];
+  t.is(eggsLine.line, 4);
+
+  // (b) EDIT the document with hash-line commands built from the view:
+  // replace the "Buy eggs." line and insert a new line after it.
+  const patch = {
+    expectedFileHash: view.fileHash,
+    ops: [
+      {
+        op: 'replace',
+        anchor: { line: eggsLine.line, hash: eggsLine.hash },
+        payload: ['Buy eggs (the brown ones).'],
+      },
+      {
+        op: 'insert-after',
+        anchor: { line: eggsLine.line, hash: eggsLine.hash },
+        payload: ['Buy bread.'],
+      },
+    ],
+  };
+  const result = await E(mount).edit('notes.txt', patch);
+  t.true(result.success, 'the guest-driven edit lands');
+
+  // The edit landed correctly, observed back through the guest surface.
+  const after = await E(mount).readText('notes.txt');
+  t.is(
+    after,
+    "# Today's notes\n\nBuy milk.\nBuy eggs (the brown ones).\nBuy bread.\n",
+  );
+
+  // Cross-reference: the change is on the actual filesystem.
+  const onDisk = await fs.promises.readFile(
+    path.join(mountPath, 'notes.txt'),
+    'utf-8',
+  );
+  t.is(onDisk, after);
+
+  // The returned fileHashAfter is the file's new revision, ready to
+  // chain a follow-up edit without re-reading.
+  const reread = await E(mount).readTextHashline('notes.txt');
+  t.is(result.fileHashAfter, reread.fileHash);
+});
+
+test('hashline edit through a guest: stale read is rejected (CAS)', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-hashline-cas',
+  );
+  await createMountFixture(mountPath, { 'doc.txt': 'first\nsecond\n' });
+
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  await E(host).provideMount(mountPath, 'docs');
+  await E(host).move(['docs'], ['guest-agent', 'docs']);
+  const mount = await E(guest).lookup('docs');
+
+  const view = await E(mount).readTextHashline('doc.txt');
+
+  // The file changes out from under the agent between read and edit.
+  await E(mount).writeText(['doc.txt'], 'first\nSECOND (edited elsewhere)\n');
+
+  const result = await E(mount).edit('doc.txt', {
+    expectedFileHash: view.fileHash,
+    ops: [{ op: 'replace', anchor: view.lines[0], payload: ['FIRST'] }],
+  });
+  t.false(result.success);
+  t.is(result.failure.reason, 'file-rev-mismatch');
+  // The live hash is handed back so the agent can re-read and retry.
+  const live = await E(mount).readTextHashline('doc.txt');
+  t.is(result.failure.fileHashActual, live.fileHash);
+});
+
 test('scratch mount - create and use', async t => {
   const { host, config } = await prepareHost(t);
 
