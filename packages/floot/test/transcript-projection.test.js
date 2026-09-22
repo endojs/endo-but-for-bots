@@ -94,6 +94,38 @@ test('failed transcript recovers full executor evidence and terminal error', asy
   );
 });
 
+test('recovery settles the unanswered call of a repeated id and keeps the other answer', async t => {
+  const turn = {
+    turnId: '1',
+    state: 'failed',
+    input: 'go',
+    activity: [],
+    tools: [
+      { callId: 'h', name: 'exec', args: '{}', result: 'y', settled: true },
+    ],
+  };
+  const records = await recoverTurnTranscript(
+    [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', tool_calls: [call('c', 'exec', '{}')] },
+      { role: 'tool', tool_call_id: 'c', content: 'x' },
+      { role: 'assistant', tool_calls: [call('c', 'exec', '{}')] },
+    ],
+    turn,
+    async () => '',
+  );
+  t.deepEqual(
+    records
+      .filter(record => record.kind === 'tool-result')
+      .map(record => record.content),
+    ['x', 'y'],
+  );
+  t.deepEqual(
+    pairToolCalls(records).pairs.map(pair => pair.result?.content),
+    ['x', 'y'],
+  );
+});
+
 test('recovery matches repeated observations and executions one to one', async t => {
   const tool = { name: 'exec', args: '{}', result: 'ok', settled: true };
   const turn = {
@@ -322,6 +354,41 @@ test('a result answering no call is dropped, not emitted', t => {
   ]);
   t.deepEqual(records, [{ kind: 'message', role: 'user', content: 'go' }]);
   t.notThrows(() => pairToolCalls(records));
+});
+
+test("a second result for one call, and a result under an earlier turn's id, are dropped", t => {
+  // The pairing is per turn and one to one on both sides of the record
+  // stream; the projection emits only what that pairing can place, so a tree
+  // holding a doubled or a late result still replays and restores.
+  const records = projectTranscript([
+    { role: 'user', content: 'one' },
+    { role: 'assistant', content: '', tool_calls: [call('c1', 'read', '{}')] },
+    { role: 'tool', tool_call_id: 'c1', content: 'first' },
+    { role: 'tool', tool_call_id: 'c1', content: 'again' },
+    { role: 'user', content: 'two' },
+    { role: 'tool', tool_call_id: 'c1', content: 'late' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [call('c1', 'read', '{}'), call('c1', 'read', '{}')],
+    },
+    { role: 'tool', tool_call_id: 'c1', content: 'second turn, first call' },
+    { role: 'tool', tool_call_id: 'c1', content: 'second turn, second call' },
+    { role: 'tool', tool_call_id: 'c1', content: 'a third answer' },
+    { role: 'assistant', content: 'done' },
+  ]);
+  t.deepEqual(
+    records
+      .filter(record => record.kind === 'tool-result')
+      .map(record => record.content),
+    ['first', 'second turn, first call', 'second turn, second call'],
+  );
+  t.notThrows(() => pairToolCalls(records));
+  const replay = transcriptToProviderMessages(records);
+  t.deepEqual(
+    replay.filter(message => message.role === 'tool').map(m => m.content),
+    ['first', 'second turn, first call', 'second turn, second call'],
+  );
 });
 
 test('a compaction in the tree becomes the context boundary', t => {

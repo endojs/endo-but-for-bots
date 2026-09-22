@@ -78,7 +78,7 @@ test('a plan may pin its session to one of the provider’s subscriptions', t =>
   for (const subscription of ['not an id', '', 7, { id: 'work' }]) {
     t.throws(
       () => readCodexSessionPlan(JSON.stringify({ ...plan, subscription })),
-      { message: /subscription must be auto or a subscription id/ },
+      { message: /subscription must be a subscription id/ },
     );
   }
 });

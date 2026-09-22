@@ -19,10 +19,7 @@ import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 import { makeCodexBackendFactory } from '../src/codex-backend-factory.js';
 import { normalizeCodexModelDescriptor } from '../src/codex-models.js';
 import { adaptEndoTools } from '../src/endo-tools.js';
-import {
-  makeCodexSessionProvisioner,
-  makeSubscriptionLister,
-} from '../src/codex-backend-module.js';
+import { makeCodexSessionProvisioner } from '../src/codex-backend-module.js';
 
 const model = harden({
   id: 'model-a',
@@ -208,9 +205,10 @@ test('Codex placement is recorded before directories and replacement stops befor
   const workspaceRoot = join(root, 'workspaces');
   const privateRoot = join(root, 'private');
   const calls = [];
-  /** @type {{ plan: string } | undefined} */
-  let record;
+  /** @type {Map<string, { plan: string }>} */
+  const records = new Map();
   const recorded = () => {
+    const record = records.get('a');
     if (record === undefined) throw Error('no record');
     return JSON.parse(record.plan);
   };
@@ -222,21 +220,21 @@ test('Codex placement is recorded before directories and replacement stops befor
     storage: 'storage-id',
   });
   const owner = Far('Owner', {
-    async inspect() {
-      return record;
+    async inspect(id) {
+      return records.get(id);
     },
     async create(id, text, identities) {
       await t.throwsAsync(access(privateRoot), { code: 'ENOENT' });
       t.deepEqual(identities, dependencies);
       calls.push('create');
-      record = harden({ plan: text });
+      records.set(id, harden({ plan: text }));
     },
     async stop() {
       calls.push('stop');
     },
     async revise(id, text) {
       calls.push('revise');
-      record = harden({ plan: text });
+      records.set(id, harden({ plan: text }));
     },
     async start() {
       const plan = recorded();
@@ -305,11 +303,11 @@ test('Codex placement is recorded before directories and replacement stops befor
   await mkdir(foreign);
   await t.throwsAsync(
     provision('a', { ...request, workspaceHostPath: foreign }, tools),
-    { message: /placement cannot change/ },
+    { message: /workspace cannot change/ },
   );
   await t.throwsAsync(
     provision('b', { ...request, workspaceHostPath: privateRoot }, tools),
-    { message: /overlaps/ },
+    { message: /must be disjoint from the session storage roots/ },
   );
   const hostState = join(root, 'state');
   await mkdir(join(hostState, 'session-records'), { recursive: true });
@@ -322,7 +320,7 @@ test('Codex placement is recorded before directories and replacement stops befor
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       provision('b', { ...request, workspaceHostPath }, tools),
-      { message: /overlaps/ },
+      { message: /must be disjoint from the session storage roots/ },
     );
   }
   // An alias above a fresh session leaf must not turn owned workspace
@@ -423,42 +421,6 @@ test('a backend over one credential offers nothing to choose', async t => {
     ),
     { message: /Unknown Codex subscription/ },
   );
-});
-
-test('“could not ask” is not “none”: the broker’s list is cached, bounded and outlives an outage', async t => {
-  let clock = 0;
-  let asks = 0;
-  /** @type {() => Promise<any>} */
-  let answer = async () => [{ id: 'work', label: 'Work Pro' }];
-  const list = makeSubscriptionLister(
-    () => {
-      asks += 1;
-      return answer();
-    },
-    () => clock,
-  );
-  t.deepEqual(await list(), [{ id: 'work', label: 'Work Pro' }]);
-  // Asked again within half a minute: not a second call.
-  await list();
-  t.is(asks, 1);
-  // An outage later leaves the last answer standing.
-  clock += 31_000;
-  answer = async () => {
-    throw Error('broker worker is restarting');
-  };
-  t.deepEqual(await list(), [{ id: 'work', label: 'Work Pro' }]);
-  t.is(asks, 2);
-
-  // With no answer yet, the failure is the caller's to see.
-  const never = makeSubscriptionLister(async () => {
-    throw Error('broker worker is restarting');
-  });
-  await t.throwsAsync(never(), { message: /restarting/ });
-  // A broker from before it could say is believed: it has none.
-  const old = makeSubscriptionLister(async () => {
-    throw Error('target has no method "subscriptions", has ["provideScope"]');
-  });
-  t.deepEqual(await old(), []);
 });
 
 test('a pinned session is refused for the right reason when the broker cannot be asked', async t => {

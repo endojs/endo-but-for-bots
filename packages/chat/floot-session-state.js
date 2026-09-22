@@ -1,46 +1,10 @@
 // @ts-check
 // Pure helpers for the state a Floot session pushes through `watch()`.
-// Kept apart from the component so they can be tested without a DOM.
+// Kept apart from the component so they can be tested without a DOM. The
+// transcript delta is applied by `@endo/floot/src/transcript-delta.js`, the
+// same code the daemon publishes it with.
 
 import harden from '@endo/harden';
-
-/**
- * Apply a transcript event (`{ version, base, keep, append }`) to the
- * transcript a view holds: keep the first `keep` messages, append the rest.
- * Returns undefined when the event does not follow from what is held — one
- * was missed — which means reopen the view rather than guess.
- *
- * The mirror of `applyTranscript` in `@endo/floot`'s `src/session-watch.js`,
- * which is the authority on the wire format.
- *
- * @template T
- * @param {{ version: number, messages: readonly T[] } | null} held
- * @param {{ version: number, base: number, keep: number, append: readonly T[] }} event
- * @returns {{ version: number, messages: T[] } | undefined}
- */
-export const applyTranscriptEvent = (held, event) => {
-  if (
-    !event ||
-    typeof event.version !== 'number' ||
-    typeof event.base !== 'number' ||
-    typeof event.keep !== 'number' ||
-    !Array.isArray(event.append)
-  )
-    return undefined;
-  if (!held) {
-    if (event.base !== 0 || event.keep !== 0) return undefined;
-    return { version: event.version, messages: [...event.append] };
-  }
-  if (event.version <= held.version)
-    return { version: held.version, messages: [...held.messages] };
-  if (event.base !== held.version || event.keep > held.messages.length)
-    return undefined;
-  return {
-    version: event.version,
-    messages: [...held.messages.slice(0, event.keep), ...event.append],
-  };
-};
-harden(applyTranscriptEvent);
 
 /**
  * @typedef {{ id: string, text: string, state: string }} PendingEntry

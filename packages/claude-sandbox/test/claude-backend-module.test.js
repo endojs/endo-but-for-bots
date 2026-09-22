@@ -275,24 +275,32 @@ test('Claude advertises only the network authority recorded by its broker', asyn
   t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
 });
 
-test('a recorded Claude subscription pin cannot change on reopen', async t => {
+test('a recorded Claude subscription pin is revised on reopen; auto drops it', async t => {
   const f = await fixture(t);
   const factory = await make(f.host, undefined, { env: f.env });
   const spec = harden({ sessionId: 'pinned', subscription: 'first' });
   await E(factory).create(spec, makeToolSet());
-  t.is(JSON.parse(f.records.get('pinned').plan).subscription, 'first');
-  const revisedBefore = f.log.filter(entry => entry[0] === 'revise').length;
-  for (const subscription of ['second', 'auto']) {
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(
-      () => E(factory).create(harden({ ...spec, subscription }), makeToolSet()),
-      {
-        message: /subscription cannot change/,
-      },
-    );
-  }
-  t.is(f.log.filter(entry => entry[0] === 'revise').length, revisedBefore);
-  t.is(JSON.parse(f.records.get('pinned').plan).subscription, 'first');
+  const plan = () => JSON.parse(f.records.get('pinned')?.plan ?? '');
+  t.is(plan().subscription, 'first');
+  // The subscription is a binding of the incarnation, not of the
+  // conversation: a reopen naming another account is served from it, and
+  // one naming none is left to the pool again. Neither destroys the session.
+  const before = f.log.length;
+  await E(factory).create(
+    harden({ ...spec, subscription: 'second' }),
+    makeToolSet(),
+  );
+  t.deepEqual(
+    f.log.slice(before).map(entry => entry[0]),
+    ['stop', 'inspect', 'stop', 'revise', 'start'],
+  );
+  t.is(plan().subscription, 'second');
+  await E(factory).create(
+    harden({ ...spec, subscription: 'auto' }),
+    makeToolSet(),
+  );
+  t.false('subscription' in plan());
+  t.is(f.records.size, 1, 'the same record throughout');
 });
 
 test('resolveBackendConfig defaults nothing', t => {

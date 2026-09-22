@@ -78,11 +78,11 @@ const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
             subscriptionId: entry.id,
             state: 'current',
             observedAt: 1,
-            models: (listing ? listing(entry.id) : ['m']).map(entry => {
+            models: (listing ? listing(entry.id) : ['m']).map(model => {
               const { id, title } =
-                typeof entry === 'string'
-                  ? { id: entry, title: `Model ${entry}` }
-                  : entry;
+                typeof model === 'string'
+                  ? { id: model, title: `Model ${model}` }
+                  : model;
               return {
                 id,
                 title,
@@ -288,7 +288,10 @@ test('a hosted pin is admitted by what the session’s account lists now; missin
     subscription: 'work',
   });
   t.is((await E(onWork).getInfo()).modelId, 'w');
-  const onAny = await E(world.factory).createSession({ ...hosted, modelId: 'w' });
+  const onAny = await E(world.factory).createSession({
+    ...hosted,
+    modelId: 'w',
+  });
   t.is((await E(onAny).getInfo()).modelId, 'w');
   await t.throwsAsync(
     E(world.factory).createSession({
@@ -324,7 +327,8 @@ test('a hosted pin is admitted by what the session’s account lists now; missin
   );
   t.deepEqual(await E(world.factory).listModels('test'), []);
   await t.throwsAsync(E(world.factory).createSession(hosted), {
-    message: /Model catalog unavailable for backend "test"; no model can be admitted now/,
+    message:
+      /Model catalog unavailable for backend "test"; no model can be admitted now/,
   });
   t.is((await E(world.factory).listSessions()).length, 2);
 });

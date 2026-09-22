@@ -178,6 +178,35 @@ test('tool calls pair with their results by id, earliest unanswered first', t =>
   );
 });
 
+test('pairing per turn starts afresh at each user message', t => {
+  /** @type {readonly TranscriptRecord[]} */
+  const turns = harden([
+    { kind: 'message', role: 'user', content: 'one' },
+    { kind: 'tool-call', id: 'c', name: 'readFile', args: '{"path":"a"}' },
+    { kind: 'message', role: 'user', content: 'two' },
+    { kind: 'tool-call', id: 'c', name: 'readFile', args: '{"path":"b"}' },
+    { kind: 'tool-result', id: 'c', content: 'b' },
+  ]);
+  const answers = ({ pairs }) =>
+    pairs.map(pair => [pair.call.args, pair.result?.content]);
+  // Across turns, a result answers the earliest unanswered call of its id.
+  t.deepEqual(answers(pairToolCalls(turns)), [
+    ['{"path":"a"}', 'b'],
+    ['{"path":"b"}', undefined],
+  ]);
+  // Per turn, native ids do not reach back: the first turn's call stays
+  // unanswered and the second turn's is answered.
+  const perTurn = pairToolCalls(turns, { perTurn: true });
+  t.deepEqual(answers(perTurn), [
+    ['{"path":"a"}', undefined],
+    ['{"path":"b"}', 'b'],
+  ]);
+  t.deepEqual(
+    perTurn.unanswered.map(call => call.args),
+    ['{"path":"a"}'],
+  );
+});
+
 test('records become raw Responses API items', t => {
   const items = responsesApiItems(conversation);
   t.deepEqual(items, [

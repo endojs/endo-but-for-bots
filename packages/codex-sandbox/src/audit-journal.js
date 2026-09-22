@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 
 import { Fail, makeError, q, X } from '@endo/errors';
+import { canonicalJson } from '@endo/hosted-agent/canonical-json.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -47,59 +48,10 @@ const AuditReaderInterface = M.interface('AgentAuditReader', {
 });
 
 /**
- * Canonically encode capability-free audit data.
- *
- * Audit records deliberately accept a smaller domain than ordinary passable
- * values. This keeps their disk representation stable and rejects accidental
- * capability leakage at the trust boundary.
- *
- * @param {unknown} value
- * @param {number} [depth]
- * @returns {string}
+ * Canonically encode capability-free audit data: the shared encoder, under the
+ * name the journal's entries and their decoder below have always used.
  */
-export const canonicalAuditJson = (value, depth = 0) => {
-  depth <= MAX_DEPTH || Fail`audit data exceeded ${MAX_DEPTH} levels`;
-  if (value === null) return '["null"]';
-  if (typeof value === 'boolean') {
-    return `["boolean",${JSON.stringify(value)}]`;
-  }
-  if (typeof value === 'string') {
-    return `["string",${JSON.stringify(value)}]`;
-  }
-  if (typeof value === 'number') {
-    Number.isFinite(value) || Fail`audit data contains a non-finite number`;
-    return `["number",${JSON.stringify(
-      Object.is(value, -0) ? '-0' : `${value}`,
-    )}]`;
-  }
-  if (typeof value === 'bigint') {
-    return `["bigint",${JSON.stringify(`${value}`)}]`;
-  }
-  if (Array.isArray(value)) {
-    return `["array",[${value
-      .map(element => canonicalAuditJson(element, depth + 1))
-      .join(',')}]]`;
-  }
-  if (typeof value === 'object') {
-    const prototype = Object.getPrototypeOf(value);
-    prototype === Object.prototype ||
-      prototype === null ||
-      Fail`audit data must contain only copy records, not ${q(
-        prototype?.constructor?.name || 'an exotic object',
-      )}`;
-    return `["record",[${Object.keys(value)
-      .sort()
-      .map(
-        key =>
-          `[${JSON.stringify(key)},${canonicalAuditJson(
-            /** @type {Record<string, unknown>} */ (value)[key],
-            depth + 1,
-          )}]`,
-      )
-      .join(',')}]]`;
-  }
-  throw makeError(X`audit data cannot contain ${q(typeof value)} values`);
-};
+export const canonicalAuditJson = canonicalJson;
 harden(canonicalAuditJson);
 
 /**

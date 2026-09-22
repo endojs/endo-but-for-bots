@@ -132,7 +132,13 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
     failedHistory(
       [
         { role: 'user', content: 'long task' },
-        { role: 'tool', name: 'Write', args: '{}', result: 'wrote index.html' },
+        {
+          role: 'tool',
+          id: 'tool-1',
+          name: 'Write',
+          args: '{}',
+          result: 'wrote index.html',
+        },
         { role: 'assistant', content: 'working' },
       ],
       'cancelled',
@@ -239,9 +245,16 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
     failedHistory(
       [
         { role: 'user', content: 'build it' },
-        { role: 'tool', name: 'Write', args: '{}', result: 'wrote index.html' },
         {
           role: 'tool',
+          id: 'tool-1',
+          name: 'Write',
+          args: '{}',
+          result: 'wrote index.html',
+        },
+        {
+          role: 'tool',
+          id: 'tool-2',
           name: 'Read',
           args: '{}',
           // The mirrored partial names its own reason for the missing result

@@ -78,6 +78,7 @@ import {
 import { provideManagedCredentials } from '@endo/hosted-agent/managed-credentials.js';
 import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service.js';
 import {
+  containsPath,
   isNormalizedAbsolutePath,
   readMounterEnv,
 } from '@endo/hosted-agent/session-plan.js';
@@ -100,6 +101,7 @@ import {
   readSessionStorage,
   readSliceImageReference,
   readStateProvider,
+  resolveFuturePath,
   resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
@@ -248,8 +250,14 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   /** @type {CredentialKind} */
   let credsKind;
   let brokerOwnerId = '';
+  // The broker's directory, like the state and runtime directories, is
+  // protected storage the backend refuses to let any guest root resolve into
+  // at every provision; a retained broker's persisted directory is the
+  // effective one.
+  let effectiveBrokerDir = brokerDir;
   if (existingBroker) {
     const broker = await readBrokerService(hostAgent);
+    effectiveBrokerDir = broker.config.directory;
     (broker.config.pool === true) === (pool !== undefined) ||
       Fail`Changing Claude pool mode requires retiring the broker and its sessions first`;
     credsKind = broker.config.credentialKind;
@@ -321,6 +329,27 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // The MCP socket base must be private and symlink-free: a planted link here
   // would redirect the per-session sockets another process can then squat.
   await providePrivateDirectory('ENDO_CLAUDE_MCP_DIR', mcpDir);
+
+  isNormalizedAbsolutePath(effectiveBrokerDir) ||
+    Fail`ENDO_CLAUDE_BROKER_DIR (or the retained broker's directory) must be a normalized absolute path: ${q(effectiveBrokerDir)}`;
+  // Resolve even roots not created yet: the backend refuses a guest root
+  // that resolves into protected storage on every provision, so refuse the
+  // layout here rather than at the first session.
+  const roots = await Promise.all(
+    [
+      workspaceDir,
+      mcpDir,
+      state.stateDir,
+      effectiveBrokerDir,
+      runtime.config.directory,
+    ].map(resolveFuturePath),
+  );
+  for (const [index, root] of roots.slice(0, 2).entries()) {
+    for (const other of roots.slice(index + 1)) {
+      (!containsPath(root, other) && !containsPath(other, root)) ||
+        Fail`Claude guest roots overlap protected storage: the workspace and MCP roots must be disjoint from each other, the state directory, the broker directory and the runtime directory`;
+    }
+  }
 
   if (existingBroker) {
     console.log(

@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { makeOpencodeSessionStorage } from '../src/opencode-session-storage.js';
+import { makeSandboxSessionId } from '../src/opencode-session-plan.js';
 
 /** @param {import('ava').ExecutionContext} t */
 const fixture = async t => {
@@ -25,7 +26,7 @@ const fixture = async t => {
     workspaceDir: path.join(base, 'workspaces'),
     mcpDir: path.join(base, 'private'),
   });
-  const id = 'session-a-0123456789ab';
+  const id = makeSandboxSessionId('session-a');
   const plan = harden({
     sessionId: 'session-a',
     sandboxSessionId: id,

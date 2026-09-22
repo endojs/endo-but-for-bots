@@ -1,36 +1,47 @@
 // @ts-check
-/* global setTimeout, clearTimeout */
+
+/**
+ * The `codex-backend` caplet: a Floot hosted backend factory for the Codex
+ * app-server runtime, minted by `setup-hosted.js` with `@agent` host powers.
+ *
+ * Sessions belong to the daemon's session owner. The shared provisioner
+ * (`@endo/hosted-agent/session-provisioner.js`) writes one approved plan per
+ * Floot session and records the exact formula identities of the services it
+ * depends on; this module declares what is Codex's: the plan pins the slice
+ * image and the subscription account, neither of which a reopen may change,
+ * and carries the operator's container mounts; there is no MCP directory; a
+ * session that names no model takes the default the account's catalog marks.
+ * Host checkpoints, the runtime directory and the broker's directory are
+ * protected roots no guest storage may resolve into.
+ *
+ * Formula env (set by `setup-hosted.js`; no process fallback):
+ *   CODEX_WORKSPACE_BASE_DIR  Root of owned per-session workspaces.
+ *   CODEX_PRIVATE_DIR         Root of per-session private directories.
+ *   CODEX_MOUNTER_ENV         Optional JSON: the rootless mount settings.
+ *
+ * @module
+ */
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
-import {
-  readProvisionedEnvironment,
-  resolveFuturePath,
-} from '@endo/hosted-agent/hosted-setup.js';
-import {
-  containsPath,
-  makeSandboxSessionId,
-  readMounterEnv,
-  readRecordedPath,
-} from '@endo/hosted-agent/session-plan.js';
-import { lstat, mkdir, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readProvisionedEnvironment } from '@endo/hosted-agent/hosted-setup.js';
+import { readRecordedPath } from '@endo/hosted-agent/session-plan.js';
+import { makeSessionProvisioner } from '@endo/hosted-agent/session-provisioner.js';
+import { makeSubscriptionLister } from '@endo/hosted-agent/subscription-lister.js';
 
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
-import {
-  makeBackendCatalog,
-  recordedPinAnswers,
-  revisedPin,
-} from '@endo/hosted-agent/backend-catalog.js';
+import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 
 import { makeCodexBackendFactory } from './codex-backend-factory.js';
 import { readCodexBrokerConfig } from './codex-broker-service-agent.js';
 import { readCodexSessionPlan } from './codex-session-plan.js';
 import { assertCodexStateRoot } from './codex-state-provider.js';
+
+/** @import { makeBackendCatalog as MakeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
 
 const current = relative =>
   assertCurrentSpecifier(
@@ -42,60 +53,9 @@ export const controllerSpecifier = current('./codex-native-controller.js');
 harden(controllerSpecifier);
 
 /**
- * What the broker says a session may be pinned to, asked at most every half
- * minute and for at most five seconds.
- *
- * "Could not ask" is not "none". A broker that answers, or that is from
- * before it could (it has no such method), is believed. A broker that could
- * not be reached leaves the last answer standing, and with no answer yet the
- * failure is the caller's to handle: a descriptor then says nothing about
- * subscriptions, and a pinned session is refused for that reason and not as
- * an unknown subscription.
- *
- * @param {() => Promise<Array<{ id: string, label: string }>>} ask
- * @param {() => number} [now]
- */
-export const makeSubscriptionLister = (ask, now = Date.now) => {
-  /** @type {Array<{ id: string, label: string }> | undefined} */
-  let known;
-  let knownAt = -Infinity;
-  return async () => {
-    await null;
-    if (known !== undefined && now() - knownAt < 30_000) return known;
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let timer;
-    try {
-      const answer = await Promise.race([
-        ask(),
-        new Promise((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(Error('Codex broker did not answer in time')),
-            5000,
-          );
-        }),
-      ]);
-      known = harden(Array.isArray(answer) ? [...answer] : []);
-      knownAt = now();
-      return known;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      if (/has no method|is not a function/i.test(message)) {
-        known = harden([]);
-        knownAt = now();
-        return known;
-      }
-      if (known !== undefined) return known;
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-};
-harden(makeSubscriptionLister);
-
-/**
- * Compose session placement with one durable daemon owner. All identities
+ * Codex's declaration over the shared session provisioner. All identities
  * are captured by the operator backend, never supplied by Floot or a guest.
+ *
  * @param {object} powers
  * @param {any} powers.owner
  * @param {Record<string,string>} powers.dependencies
@@ -104,7 +64,7 @@ harden(makeSubscriptionLister);
  * @param {readonly string[]} powers.protectedRoots Host-only records and services.
  * @param {string} powers.imageRef
  * @param {string} powers.accountRef
- * @param {ReturnType<typeof makeBackendCatalog>} powers.catalog Admits a new
+ * @param {ReturnType<MakeBackendCatalog>} powers.catalog Admits a new
  *   session's pin against the accounts it may be served from.
  * @param {Record<string,string>} [powers.mounterEnv]
  */
@@ -118,126 +78,25 @@ export const makeCodexSessionProvisioner = ({
   accountRef,
   catalog,
   mounterEnv,
-}) => {
-  readRecordedPath('workspace root', workspaceRoot);
-  readRecordedPath('private root', privateRoot);
-  (!containsPath(workspaceRoot, privateRoot) &&
-    !containsPath(privateRoot, workspaceRoot)) ||
-    Fail`Codex storage roots must be disjoint`;
-  for (const root of protectedRoots) readRecordedPath('protected root', root);
-  if (mounterEnv !== undefined) readMounterEnv(mounterEnv);
-  /**
-   * @param {string} sessionId
-   * @param {Record<string,any>} request
-   * @param {any} tools
-   */
-  const provision = async (sessionId, request, tools) => {
-    const sandboxSessionId = makeSandboxSessionId(sessionId, 'codex');
-    const privateDir = join(privateRoot, sandboxSessionId);
-    const record = await E(owner).inspect(sessionId);
-    // The recorded pin is authoritative for a reopen that names it, or
-    // nothing; a new session's pin, or a changed one, is admitted by the
-    // account's catalog now, with the model's own default effort when none
-    // is chosen. Missing discovery refuses rather than substituting.
-    // An effort changed on its own keeps the recorded model.
-    const recordedPlan =
-      record?.plan === undefined
-        ? undefined
-        : readCodexSessionPlan(record.plan);
-    const pin =
-      recordedPlan !== undefined && recordedPinAnswers(recordedPlan, request)
-        ? {
-            ...(recordedPlan.model === undefined
-              ? {}
-              : { model: recordedPlan.model }),
-            ...(recordedPlan.reasoningEffort === undefined
-              ? {}
-              : { reasoningEffort: recordedPlan.reasoningEffort }),
-          }
-        : await catalog.resolve(revisedPin(recordedPlan, request));
-    const proposed = harden({
-      sessionId,
-      sandboxSessionId,
+}) =>
+  makeSessionProvisioner({
+    label: 'Codex',
+    owner,
+    dependencies,
+    workspaceRoot,
+    privateRoot,
+    protectedRoots,
+    sandboxIdFallback: 'codex',
+    readPlan: readCodexSessionPlan,
+    fields: ({ request }) => ({
       imageRef,
       accountRef,
-      networkPolicy: request.networkPolicy,
-      ...(request.workspaceHostPath === undefined
-        ? { workspaceDir: join(workspaceRoot, sandboxSessionId) }
-        : { workspaceHostPath: request.workspaceHostPath }),
-      workspaceMountPoint: join(privateDir, 'workspace'),
-      mounterSocketDir: join(privateDir, '9p'),
       containerMounts: request.containerMounts,
-      ...(mounterEnv === undefined ? {} : { mounterEnv }),
-      ...Object.fromEntries(
-        ['systemPrompt', 'subscription']
-          .filter(key => request[key] !== undefined)
-          .map(key => [key, request[key]]),
-      ),
-      ...pin,
-    });
-    const text = JSON.stringify(proposed);
-    const plan = readCodexSessionPlan(text);
-    // Resolve even roots not created yet: lexical disjointness alone admits
-    // aliases into host checkpoints or service-private state. Recheck before
-    // every activation, including owned workspaces, not just foreign ones.
-    const canonicalRoots = await Promise.all(
-      [workspaceRoot, privateRoot, ...protectedRoots].map(root =>
-        resolveFuturePath(root, 'Codex'),
-      ),
-    );
-    for (const [index, root] of canonicalRoots.slice(0, 2).entries()) {
-      for (const other of canonicalRoots.slice(index + 1)) {
-        (!containsPath(root, other) && !containsPath(other, root)) ||
-          Fail`Codex guest storage overlaps protected session storage`;
-      }
-    }
-    if (plan.workspaceHostPath !== undefined) {
-      const foreign = plan.workspaceHostPath;
-      const info = await lstat(foreign);
-      (info.isDirectory() &&
-        !info.isSymbolicLink() &&
-        (await realpath(foreign)) === foreign) ||
-        Fail`Codex operator workspace must be a canonical directory`;
-      for (const canonicalRoot of canonicalRoots) {
-        (!containsPath(canonicalRoot, foreign) &&
-          !containsPath(foreign, canonicalRoot)) ||
-          Fail`Codex operator workspace overlaps session storage`;
-      }
-    }
-    if (record === undefined) {
-      await E(owner).create(sessionId, text, harden({ ...dependencies }));
-    } else {
-      typeof record.plan === 'string' ||
-        Fail`Incomplete Codex session record; destroy it before reuse`;
-      const old = readCodexSessionPlan(record.plan);
-      for (const key of [
-        'sessionId',
-        'sandboxSessionId',
-        'imageRef',
-        'accountRef',
-        'workspaceDir',
-        'workspaceHostPath',
-        'workspaceMountPoint',
-        'mounterSocketDir',
-      ]) {
-        old[key] === plan[key] ||
-          Fail`Codex session placement cannot change; destroy it before reuse`;
-      }
-      await E(owner).stop(sessionId);
-      if (record.plan !== text) await E(owner).revise(sessionId, text);
-    }
-    for (const directory of [
-      privateDir,
-      plan.mounterSocketDir,
-      ...(plan.workspaceDir === undefined ? [] : [plan.workspaceDir]),
-    ]) {
-      // eslint-disable-next-line no-await-in-loop
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-    }
-    return E(owner).start(sessionId, tools);
-  };
-  return harden(provision);
-};
+    }),
+    immutable: { imageRef: 'image', accountRef: 'account' },
+    catalog,
+    ...(mounterEnv === undefined ? {} : { mounterEnv }),
+  });
 harden(makeCodexSessionProvisioner);
 
 /**
@@ -281,21 +140,21 @@ export const make = async (host, _context, { env = {} } = {}) => {
     harden(['codex-sandbox', 'session-records']),
     controllerSpecifier,
   );
+  const brokerService = () =>
+    E(host).lookup(['codex-sandbox', 'broker-service']);
   // What a session may be pinned to: the broker's declared subscriptions.
   // A broker over one credential, or one from before it could say, has
   // none, and there is then nothing to choose.
-  const listSubscriptions = makeSubscriptionLister(async () => {
-    const service = await E(host).lookup(['codex-sandbox', 'broker-service']);
-    return E(service).subscriptions();
-  });
+  const listSubscriptions = makeSubscriptionLister(
+    async () => E(await brokerService()).subscriptions(),
+    { label: 'Codex' },
+  );
   // What each account lists, from the ChatGPT model list under the broker's
   // credential, with the reasoning levels the provider declares.
   const catalog = makeBackendCatalog({
     label: 'Codex',
-    readCatalog: async subscriptionId => {
-      const service = await E(host).lookup(['codex-sandbox', 'broker-service']);
-      return E(service).modelCatalog(subscriptionId);
-    },
+    readCatalog: async subscriptionId =>
+      E(await brokerService()).modelCatalog(subscriptionId),
     listSubscriptions,
   });
   const provisionSession = makeCodexSessionProvisioner({

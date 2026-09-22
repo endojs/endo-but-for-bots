@@ -23,13 +23,25 @@
  * @module
  */
 
-import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
 import {
-  sameExecutedToolName,
-  sameToolArgs,
-  sameToolResult,
-} from './tool-evidence.js';
-import { UNSETTLED_TOOL_RESULT } from './hosted-turn.js';
+  assertTranscriptRecord,
+  pairToolCalls,
+} from '@endo/hosted-agent/transcript-records.js';
+
+import {
+  UNKNOWN_TOOL_OUTCOME,
+  reconcileTurnEvidence,
+} from './turn-evidence.js';
+
+/**
+ * What a restored transcript says before recovered evidence: its position
+ * relative to the streamed text is unknown, and it does not imply another
+ * execution. The restoration path also recognizes it, so a recovered turn
+ * still gets its joined output when that is all the assistant said.
+ */
+export const RECOVERY_NOTICE =
+  '[Recovered durable tool evidence. Its position relative to the streamed text is unknown; it does not imply another execution. Verify uncertain outcomes before retrying.]';
+harden(RECOVERY_NOTICE);
 
 /** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
 
@@ -51,11 +63,16 @@ const argumentText = args =>
 export const projectTranscript = path => {
   /** @type {TranscriptRecord[]} */
   const records = [];
-  // Which call ids this path has actually made. A `tool` message answering an
-  // id no call announced is dropped rather than emitted: the record stream
-  // refuses a result that answers no call, and a tree that somehow holds one
-  // should not be able to make a whole conversation unrestorable.
-  const announced = new Set();
+  // How many calls of each id this turn has made and not yet answered. A
+  // `tool` message answering no open call is dropped rather than emitted,
+  // whether its id was never announced, was already answered, or belongs to
+  // an earlier turn: the record stream pairs each result with the earliest
+  // unanswered call of its id and refuses one that answers no call, and a
+  // tree that somehow holds one should not be able to make a whole
+  // conversation unrestorable. Native ids are only meaningful within a turn,
+  // so a user message starts the pairing afresh, as the replay's does.
+  /** @type {Map<string, number>} */
+  const open = new Map();
   /** @param {any} message */
   const project = message => {
     const role = message?.role;
@@ -63,7 +80,9 @@ export const projectTranscript = path => {
       typeof message?.content === 'string' ? message.content : undefined;
     if (role === 'tool') {
       const id = message.tool_call_id;
-      if (typeof id === 'string' && announced.has(id)) {
+      const count = typeof id === 'string' ? (open.get(id) ?? 0) : 0;
+      if (count > 0) {
+        open.set(id, count - 1);
         records.push(
           assertTranscriptRecord({
             kind: 'tool-result',
@@ -85,6 +104,7 @@ export const projectTranscript = path => {
     if (role !== 'user' && role !== 'assistant') return;
     if (content !== undefined && content.trim() !== '') {
       records.push(assertTranscriptRecord({ kind: 'message', role, content }));
+      if (role === 'user') open.clear();
     }
     if (role !== 'assistant' || !Array.isArray(message.tool_calls)) return;
     const calls = message.tool_calls.filter(
@@ -92,7 +112,7 @@ export const projectTranscript = path => {
         typeof call?.id === 'string' && call.id !== '',
     );
     for (const call of calls) {
-      announced.add(call.id);
+      open.set(call.id, (open.get(call.id) ?? 0) + 1);
       records.push(
         assertTranscriptRecord({
           kind: 'tool-call',
@@ -117,36 +137,22 @@ harden(projectTranscript);
  * @param {readonly TranscriptRecord[]} records
  */
 export const transcriptToProviderMessages = records => {
-  const calls = new Map();
-  const pending = new Map();
-  for (const [index, record] of records.entries()) {
-    if (record.kind === 'message' && record.role === 'user') {
-      // Native IDs are only meaningful within a turn. An unanswered call
-      // stays unanswered when a later turn reuses its ID.
-      pending.clear();
-    } else if (record.kind === 'tool-call') {
-      const call = { record, id: `floot-history-${index}`, result: undefined };
-      calls.set(index, call);
-      const queue = pending.get(record.id) || [];
-      queue.push(call);
-      pending.set(record.id, queue);
-    } else if (record.kind === 'tool-result') {
-      const call = pending.get(record.id)?.shift();
-      if (call) call.result = record.content;
-    }
-  }
+  // Pair within each turn: an unanswered call stays unanswered when a later
+  // turn reuses its native id.
+  const { pairs } = pairToolCalls(records, { perTurn: true });
+  const resultOf = new Map(pairs.map(pair => [pair.call, pair.result]));
   const messages = [];
   for (const [index, record] of records.entries()) {
     if (record.kind === 'message') {
       messages.push({ role: record.role, content: record.content });
     } else if (record.kind === 'tool-call') {
-      const call = calls.get(index);
+      const id = `floot-history-${index}`;
       messages.push({
         role: 'assistant',
         content: '',
         tool_calls: [
           {
-            id: call.id,
+            id,
             type: 'function',
             function: { name: record.name, arguments: record.args },
           },
@@ -154,9 +160,8 @@ export const transcriptToProviderMessages = records => {
       });
       messages.push({
         role: 'tool',
-        tool_call_id: call.id,
-        content:
-          call.result ?? 'Tool outcome unknown; do not automatically retry.',
+        tool_call_id: id,
+        content: resultOf.get(record)?.content ?? UNKNOWN_TOOL_OUTCOME,
       });
     }
   }
@@ -189,120 +194,74 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
       }),
     );
   }
-  /** @type {Array<{ id: string, name: string, args: string, result: string | undefined }>} */
-  const known = [];
-  for (const record of records) {
-    if (record.kind === 'tool-call')
-      known.push({ ...record, result: undefined });
-    if (record.kind === 'tool-result') {
-      const call = known.findLast(item => item.id === record.id);
-      if (call) call.result = record.content;
-    }
-  }
-  const ids = new Set(known.map(call => call.id));
+  // One turn's records pair as a whole: a turn's node sequence carries its
+  // user message first and its tool traffic after, never a user message
+  // between a call and its result, so pairing here and the per-turn pairing
+  // of the replay place the same results.
+  const { pairs } = pairToolCalls(records);
+  const rows = await reconcileTurnEvidence({
+    turnId: turn.turnId,
+    known: pairs.map(({ call, result }) => ({
+      id: call.id,
+      name: call.name,
+      args: call.args,
+      result: result?.content,
+    })),
+    activity: turn.activity,
+    tools: turn.tools,
+    // Full journal content is required: a preview is not executable JSON.
+    read: async raw => ({
+      args: await text(raw.args, raw.argsRef),
+      result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
+    }),
+  });
   let recoveryNotice = false;
-  const addEvidence = (tool, observed) => {
+  for (const [position, row] of rows.entries()) {
+    if (row.source === 'tree') {
+      if (row.settledBy) {
+        // The rows the tree contributed come first, in the pairs' order, so
+        // the settled result replaces the record its own pair holds (a
+        // placeholder), or answers the call when the pair holds none; a
+        // repeated id in the turn keeps its other answers.
+        const result = assertTranscriptRecord({
+          kind: 'tool-result',
+          id: row.id,
+          content: row.result,
+        });
+        const previous = pairs[position].result;
+        const index = previous ? records.indexOf(previous) : -1;
+        if (index >= 0) records[index] = result;
+        else records.push(result);
+      }
+      // eslint-disable-next-line no-continue
+      continue;
+    }
     if (!recoveryNotice) {
       records.push(
         assertTranscriptRecord({
           kind: 'message',
           role: 'assistant',
-          content:
-            '[Recovered durable tool evidence. Its position relative to the streamed text is unknown; it does not imply another execution. Verify uncertain outcomes before retrying.]',
+          content: RECOVERY_NOTICE,
         }),
       );
       recoveryNotice = true;
     }
-    let id = observed ? tool.callId : `recovered:${turn.turnId}:${tool.callId}`;
-    while (ids.has(id)) id = `recovered:${id}`;
-    ids.add(id);
     records.push(
       assertTranscriptRecord({
         kind: 'tool-call',
-        id,
-        name: tool.name,
-        args: tool.args,
+        id: row.id,
+        name: row.name,
+        args: row.args,
       }),
     );
-    if (tool.settled)
+    if (row.settled) {
       records.push(
         assertTranscriptRecord({
           kind: 'tool-result',
-          id,
-          content: tool.result,
+          id: row.id,
+          content: row.result,
         }),
       );
-    return id;
-  };
-  // Observations and executor records are two views of the same operations.
-  // Match one-to-one so repeated identical executions remain visible.
-  for (const [source, observed] of [
-    [turn.activity || [], true],
-    [turn.tools || [], false],
-  ]) {
-    const unmatched = [...known];
-    for (const raw of source) {
-      const tool = {
-        ...raw,
-        // Journal reads are serialized; retain source order for matching.
-        // eslint-disable-next-line no-await-in-loop
-        args: await text(raw.args, raw.argsRef),
-        // eslint-disable-next-line no-await-in-loop
-        result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
-      };
-      const sameCall = call =>
-        sameExecutedToolName(call.name, tool.name) &&
-        sameToolArgs({ text: call.args }, { text: tool.args });
-      // Backend observations share the tree's native ID. Never substitute a
-      // look-alike call with another ID, even when its arguments are identical.
-      // Executor IDs are independent: prefer an exact settled result before
-      // considering an unanswered call with the same arguments.
-      const exact = unmatched.findIndex(call =>
-        observed
-          ? call.id === tool.callId
-          : sameCall(call) &&
-            tool.settled &&
-            sameToolResult({ text: call.result }, { text: tool.result }),
-      );
-      const match =
-        exact >= 0 || observed
-          ? exact
-          : unmatched.findIndex(
-              call =>
-                sameCall(call) &&
-                (!tool.settled ||
-                  call.result === undefined ||
-                  call.result === UNSETTLED_TOOL_RESULT ||
-                  sameToolResult({ text: call.result }, { text: tool.result })),
-            );
-      if (match >= 0) {
-        const call = unmatched[match];
-        if (
-          tool.settled &&
-          (call.result === undefined || call.result === UNSETTLED_TOOL_RESULT)
-        ) {
-          const result = assertTranscriptRecord({
-            kind: 'tool-result',
-            id: call.id,
-            content: tool.result,
-          });
-          const index = records.findIndex(
-            record => record.kind === 'tool-result' && record.id === call.id,
-          );
-          if (index >= 0) records[index] = result;
-          else records.push(result);
-          call.result = tool.result;
-        }
-        unmatched.splice(match, 1);
-      } else {
-        const id = addEvidence(tool, observed);
-        known.push({
-          id,
-          name: tool.name,
-          args: tool.args,
-          result: tool.result,
-        });
-      }
     }
   }
   if (
@@ -311,7 +270,7 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
       record =>
         record.kind === 'message' &&
         record.role === 'assistant' &&
-        !record.content.startsWith('[Recovered durable tool evidence.'),
+        record.content !== RECOVERY_NOTICE,
     )
   ) {
     records.push(
