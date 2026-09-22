@@ -129,6 +129,7 @@ export const gunzip = async bytes => {
 
 /** @import { Reader, Writer } from '@endo/stream' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
+/** @import { Server } from 'net' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
 
@@ -285,12 +286,42 @@ export const makeSocketPowers = ({ net, fsp: { access } }) => {
       erred,
     ]);
 
+  /**
+   * @param {Server} server
+   * @param {number} fd
+   * @param {Promise<never>} erred
+   */
+  const listenOnFileDescriptor = (server, fd, erred) =>
+    Promise.race([
+      new Promise(resolve => server.listen({ fd }, () => resolve(undefined))),
+      erred,
+    ]);
+
   /** @param {import('ses').Details} details */
   const addressInUse = details =>
     makeError(details, undefined, { code: 'EADDRINUSE' });
 
   /** @type {SocketPowers['servePath']} */
   const servePath = async ({ path, cancelled }) => {
+    const { LISTEN_PID: listenPid, LISTEN_FDS: listenFds } = process.env;
+    const inheritedFileDescriptorCount = Number(listenFds);
+    if (
+      listenPid !== undefined &&
+      listenFds !== undefined &&
+      Number(listenPid) === process.pid &&
+      Number.isInteger(inheritedFileDescriptorCount) &&
+      inheritedFileDescriptorCount > 0
+    ) {
+      // Match sd_listen_fds(3): inherited descriptors start at 3, and the
+      // activation environment must not leak into children of this process.
+      delete process.env.LISTEN_PID;
+      delete process.env.LISTEN_FDS;
+      return serveListener(
+        (server, erred) => listenOnFileDescriptor(server, 3, erred),
+        cancelled,
+      ).then(({ connections }) => connections);
+    }
+
     // Windows named pipes leave no filesystem pathname behind, so neither the
     // lock nor the stale-pathname recovery applies there.
     const guarded = process.platform !== 'win32';
