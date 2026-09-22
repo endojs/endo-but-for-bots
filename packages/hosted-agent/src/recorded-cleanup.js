@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * Reclaim the one host resource a lost session worker leaves behind.
+ * Reclaim a recorded 9P mount after independent native-stop proof.
  *
  * A native session controller owns its 9P mount and MCP socket locally, in the
  * worker that activated the plan. When that worker is gone — the daemon
@@ -9,10 +9,11 @@
  * recovered, and a reconstructed controller must not invent substitutes for
  * them.
  *
- * Almost everything that implies takes care of itself. The MCP listener died
- * with its process, and `startMcpSocketServer` already unlinks a stale socket
- * before binding. A slice container outlives the worker but is reconciled by
- * the driver's label sweep. The kernel 9P mount is the exception: it was
+ * The process-local MCP listener dies with its worker. Native containers and
+ * their control producers can outlive that worker: the caller must
+ * independently establish sandbox closure before invoking this mount-only
+ * cleanup. A missing JavaScript scope or an unverified label sweep is not
+ * that proof. The kernel 9P mount was
  * established by an external `mount` program, so it survives every process
  * that knew about it, and nothing else will ever take it down. Left in place
  * it fails every read of the mount point with EIO and blocks the storage owner
