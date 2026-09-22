@@ -260,10 +260,25 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
     mount => mount.role === 'codex-state',
   );
   t.is(home.kind, 'bind');
-  t.is(
-    home.source,
-    join(f.root, 'state', 'cli_homes', f.plan.sandboxSessionId),
+  // The CLI home is an inode-bound allocation under the CLI root; a repeated
+  // preparation for the same session answers the published allocation, so
+  // the bound source is exactly that directory and nothing else.
+  const cli = await f.stateProvider.prepareCliDirectory(
+    f.plan.sandboxSessionId,
   );
+  t.is(home.source, cli.directory);
+  t.true(
+    home.source.startsWith(
+      join(
+        f.root,
+        'state',
+        'cli_homes',
+        'native_allocations',
+        `${f.plan.sandboxSessionId}-`,
+      ),
+    ),
+  );
+  t.true(home.source.endsWith('/data'));
   t.false(
     options.policy.mounts.some(mount => mount.source === records.directory),
   );
