@@ -425,8 +425,8 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
-| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, and legacy registry import removed locally; private-journal migration pending |
-| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed locally; deployment verification pending |
+| FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 160 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
+| FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 160; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
@@ -1217,6 +1217,36 @@ The targeted Floot type check confirms those diagnostics are gone but still fail
 on missing `Far` declarations and other outstanding package errors.
 The full documentation gate has not been rerun after that typing correction.
 
+### Deployment verified; Tokyo's legacy state retired
+
+Every FA-11 code removal (`db12c4af4`, `c24d84d1c`, `a0911be55`, `162b9d6ef`)
+is an ancestor of the revision Tokyo has run since generation 160, and the
+2026-09-21 and 2026-09-22 acceptance matrices exercised session creation,
+restart/restore and deletion on that code.
+A read-only inventory on 2026-09-22 (endo-host
+`ops/hosted-retirement-fa11-20260922.md`) found neither legacy registry root nor
+migration marker in the host-root-reachable graph.
+What remained was state on Tokyo, not code: twenty-six persisted one-shot
+`make-unconfined` formulas from the 2026-09-16/17 experiments bound at the host
+root (their module files were stubbed on 2026-09-21 but the names were never
+unbound), the pre-shared Codex audit subtree `codex-subscription-state`, thirteen
+empty per-session scaffolds under the live Codex host directory and sixty-six
+one-shot module files at the state root.
+All of that was retired on 2026-09-22 through two reviewed one-shot helpers
+(endo-host `ops/retire-legacy-helper-formulas.mjs`, `ops/retire-legacy-state-files.sh`;
+four adversarial review rounds; results in the same note): the twenty-six names
+unbound without cancelling, resolving or looking up a formula (`cancel` would
+have evaluated the dormant module first, and collection is disabled on Tokyo,
+so the records stay in storage unreachable by name from the host root), the
+audit subtree renamed to `retired-codex-subscription-state-20260922` with all
+171 entries intact, and 79 filesystem entries moved, never deleted, into a
+root-only archive. The final inventory differs from the pre-run one only by
+those names; Secrets, pins, the four workspace archives and the operator's live
+session are unchanged, and the discovery gate passed afterwards.
+The chat's recovery controller still carries a `legacy-import` filter
+(`packages/chat/floot-recovery.js`) for synthetic turns the runtime no longer
+produces; it is inert and listed for the next code slice rather than removed here.
+
 ## FA-12 — Retire compatibility-only entrypoints
 
 Claude/OpenCode `src/managed-credentials-module.js` wrappers previously preserved
@@ -1244,6 +1274,21 @@ locally with Unix-socket permissions; restricted execution hit three `EPERM`
 socket failures before the unrestricted rerun passed.
 Package ESLint reports zero errors and 36 warnings; deployment is pending.
 Do not infer deadness for all wrappers: current controllers still use `parse-rootfs.js`.
+
+### Deployment verified
+
+Both removals (`886192baf`, `8aa1edc99`, with `7f8eee056`) have run on Tokyo since
+generation 160.
+The 2026-09-22 inventory lists 55 module formulas under the current release: the
+shared `managed-credentials-module.js` (two), `managed-renewable-credentials-module.js`
+(five), the account oracle, account source, subscription, subscription-admin and
+reset-redeemer modules, the three backend module sets and the platform caplets.
+No package-local credential wrapper, `opencode-broker-service.js`, retired factory
+or provider module appears in the host-root-reachable graph.
+Two dormant formulas, `controller-for-lal` and `controller-for-llm-provider-factory`,
+still name release `fde6c143…`, which retention has pruned; Floot's direct provider
+does not depend on them, and whether to re-mint or retire them is left with the
+operator (recorded under FA-07's ontology item, not here).
 
 Completion: retained formulas and current callers reference current entrypoints, and removed
 exports/tests no longer suggest a supported second topology.
@@ -1388,7 +1433,8 @@ their remaining work is not implied complete by this deployment sequence.
    actual tool use, cancel, restart/restore, network-policy change, and delete results.
    Verify cleanup and preserved workspace/credential identity, not just UI success.
    Record failures and unavailable accounts explicitly rather than counting them as passes.
-5. Resume FA-11/FA-12 legacy retirement/deletion, then FA-06/FA-10 extraction, FA-07/FA-08,
+5. Resume FA-11/FA-12 legacy retirement/deletion (done 2026-09-22; see "Legacy
+   retirement — 2026-09-22"), then FA-06/FA-10 extraction, FA-07/FA-08,
    FA-09 storage, and remaining bounded-context/compaction and resource-failure acceptance.
 
 ### Cutover progress — 2026-09-21
@@ -1493,6 +1539,29 @@ inventoried graph still carries legacy one-shot helper formulas
 `rmbroker-2`) and old `codex-subscription-v2/sessions` directories from
 September's first migrations: FA-11/FA-12 retirement input, not touched here.
 
+### Legacy retirement — 2026-09-22
+
+Step 5's retirement ran on generation 163 without a release change (endo-host
+`ops/hosted-retirement-fa11-20260922.md`). A fresh read-only inventory first
+reconciled the register: every FA-11/FA-12 code removal was already deployed
+and only shared entrypoints appear in the host-root-reachable graph. The
+leftovers were then retired in one approved action with Caddy offline: the
+twenty-six persisted one-shot helper formulas (the four named above plus the
+`cleanv`, `fresh2`, `m-claude`, `mountain` and `ocprobe` series) unbound by
+name, never cancelled, resolved or looked up, because the daemon evaluates a
+dormant formula before cancelling it and collection is disabled on Tokyo; the
+pre-shared Codex audit subtree renamed to
+`retired-codex-subscription-state-20260922` with its 171 entries intact; and
+79 filesystem entries (66 one-shot module files at the state root, 13 empty
+Codex session scaffolds) moved, never deleted, into a root-only archive.
+The final inventory differs from the pre-run one by exactly those names;
+Secrets, pins, the four workspace archives and the operator's live session
+are unchanged, and the discovery gate passed on every account afterwards.
+Left for a decision: `controller-for-lal` and `controller-for-llm-provider-factory`,
+dormant formulas pinned to a pruned release; the 2026-09-17 acceptance records
+and one unnamed guest still in storage; and the state root's older directories
+from earlier eras, inventoried but untouched.
+
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
 New abstractions should serve the remaining current topology, not preserve both systems.
@@ -1504,6 +1573,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 | 2026-09-22 | FA-07: bind broker model admission to each account's catalog; remove the operator model list from grants, issuers and broker configurations; Claude discovery | 24 new focused tests; hosted-agent 656, Claude 180, Codex 287, OpenCode 229 and the real-daemon catalog reconstruction test pass; independent adversarial review found 15 issues, all addressed and re-reviewed; broker retirement at cutover required; not deployed |
 | 2026-09-22 | UI follow-up from the operator: the backend's public thinking folds into the same collapsed actions group as its tool calls, with the thought's duration on the group's head (live while it streams) and the reasoning one click further in; groups are keyed by session so an open one does not come up open elsewhere | space-floot 52 and chat 935 pass; independent review found a lint error, thought text styled as scrolling monospace code, and a preview that could read reasoning as a shell command, all fixed; deployed as generation 163 (`4411c058e`), discovery gate passed |
 | 2026-09-22 | FA-07 follow-up from the operator's first look at the deployed picker: each backend's rows are listed in the picker's order (the provider's marked model first, then case-insensitively by title, then id; an OpenRouter account lists 372 in an order of its own), and the UI no longer makes a session on load when the factory lists none, since the first session is the person's to start with the backend and model they choose (sending a message with no session still starts one) | Floot 452, chat 935 and space-floot 49 pass; independent review found a lint error, a permanent loading state with no session, two wording gaps and a weak test, all fixed; deployed as generation 162 (`ca05516db`), discovery gate passed, the free router moved from position 208 to 72 |
+| 2026-09-22 | FA-11/FA-12: register reconciled against a fresh Tokyo inventory (every code removal deployed since generation 160; only shared entrypoints in the graph); Tokyo's legacy state retired through two reviewed one-shot helpers (endo-host `92002a4`): 26 persisted helper formulas unbound by name, the pre-shared Codex audit subtree renamed to an archive with all 171 entries, 79 filesystem entries moved into a root-only archive | Four adversarial review rounds addressed; 31 helper tests, 173 ops tests pass; no cancel, lookup or deletion; final inventory differs from the pre-run one only by the retired names; Secrets, pins, workspace archives and the live session unchanged; discovery gate passed; left for a decision: two dormant direct-provider formulas pinned to a pruned release, the 2026-09-17 acceptance records, older state-root directories |
 | 2026-09-22 | FA-07 cutover, second activation: `0d66bd945` evicted to #1323 (`2cfcfeb02` reverts; `b3f7bb1e0` re-applies on `codex/native-recovery-research`); generation 161 activates `2cfcfeb02` without broker retirement | Discovery gate passed again; restart/restore passed on all four backends after a graceful restart; all acceptance sessions deleted; zero native records, containers and 9p mounts; Secrets and archives unchanged |
 | 2026-09-22 | FA-07 cutover: generation 160 activates `64176d7d5` on Tokyo after retiring the three pre-catalog brokers; live discovery gate passed (Luna, free routes, every account current); create, tools, network policy, cancel and delete passed on Luna, Haiku 4.5 and the free routes | Restart/restore passed for Fae, failed for all hosted backends (`0d66bd945` fail-closed teardown, #1323); six acceptance sessions stranded; Claude acceptance pinned to Haiku 4.5 after Anthropic's first-listed `claude-fable-5-1` failed in the runtime; rollback-or-keep decision with the operator |
 | 2026-09-22 | FA-07: provider-backed model discovery end to end; static, Floot and NixOS model lists removed; per-account catalogs reach the picker; new pins admitted at plan recording, recorded pins kept; no "first listed" default; discovery re-read when the picker opens | Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231, hosted-agent 663 pass; host NixOS option and environment removed; independent adversarial review found eighteen issues, all addressed and re-reviewed; root type build clean and documentation gate at 0 errors (177 warnings) after quarantining stale generated declarations; live catalog reads, Luna and free routes are deployment gates; not deployed |
