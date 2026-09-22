@@ -297,9 +297,13 @@ not per-host).
 Adding a required field to `HostFormula` is a backward-incompatible
 formula change; pre-existing host formulas on disk lack the
 `registry` slot.
-The migration policy mirrors the precedent
+The migration departs from the `@node` precedent
 [daemon-make-archive](daemon-make-archive.md) § Phase 6 set when
-`@node` became a required `HostFormula` field: on daemon start, a
+`@node` became a required `HostFormula` field: that release purged
+existing state, and the daemon still fails fast on a host formula
+missing `nodeWorker`, so there is no `@node` upgrade pass to mirror.
+The `registry` field is instead added by an in-place upgrade rather
+than a re-initialization: on daemon start, an
 idempotent upgrade pass rewrites host formulas missing the
 `registry` field to point at a fresh formula using the daemon's default
 registry URL.

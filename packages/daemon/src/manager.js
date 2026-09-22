@@ -1452,17 +1452,27 @@ const makeDaemonCore = async (
     // `formulateHostDependencies`.
     /** @type {FormulaIdentifier[]} */
     const migratedRegistryIds = [];
-    await Promise.all(
-      entries.map(async entry => {
-        if (entry.formula.type !== 'host') {
-          return;
-        }
-        const persistedHostFormula = /** @type {PersistedHostFormula} */ (
-          entry.formula
-        );
-        if (persistedHostFormula.registry !== undefined) {
-          return;
-        }
+    // Sequential — never `Promise.all(entries.map(...))`. Each iteration awaits
+    // `formulateLazy`, which enters `withFormulaGraphLock`. That lock's
+    // reentrancy guard is a depth counter that cannot distinguish call-stack
+    // nesting (the case it must bypass to avoid self-deadlock) from
+    // event-loop-interleaved siblings, so a concurrent `.map()` fan-out would
+    // let a second migration observe the first's depth increment and skip the
+    // serial queue, mutating the formula graph out of the intended order —
+    // benign here only because each entry touches a disjoint host/registry id
+    // pair, but not a property the lock guarantees. Every other formulate
+    // chain in this file (e.g. `formulateHostDependencies`) issues its calls
+    // sequentially for exactly this reason. Sequencing also bounds a failed
+    // write to the host being migrated instead of racing partial state across
+    // siblings.
+    for (const entry of entries) {
+      const persistedHostFormula = /** @type {PersistedHostFormula} */ (
+        entry.formula
+      );
+      const needsRegistryMigration =
+        entry.formula.type === 'host' &&
+        persistedHostFormula.registry === undefined;
+      if (needsRegistryMigration) {
         const { number: hostFormulaNumber, node: hostNode } = parseId(entry.id);
         const registryFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
@@ -1489,8 +1499,8 @@ const makeDaemonCore = async (
           migratedFormula,
         );
         entry.formula = migratedFormula;
-      }),
-    );
+      }
+    }
 
     await withFormulaGraphLock(async () => {
       for (const { id, formula } of entries) {

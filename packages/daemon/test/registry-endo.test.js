@@ -224,3 +224,96 @@ test.serial(
     }
   },
 );
+
+// Concurrent-arrival coverage: a single startup can discover more than one host
+// formula missing `registry` — a daemon owns its `@agent` host plus any
+// `provideHost` children — so the migration maps over N ≥ 2 legacy hosts, not
+// exactly one.  Each must receive its OWN distinct registry formula.  This is
+// the multi-entry path that makes the migration loop's sequential ordering (over
+// `Promise.all`, see manager.js) matter: two siblings entering the formula-graph
+// lock concurrently could otherwise interleave.  See
+// designs/registry-capability.md § Migration for already-formulated hosts.
+test.serial(
+  'two host formulas persisted without registry are each migrated on startup',
+  async t => {
+    const { host, cancelled } = await prepare(t);
+    const { config } = contexts[contexts.length - 1];
+
+    // A second, child host under the same daemon, so startup discovers more
+    // than one host formula to migrate.
+    await E(host).provideHost('child-host');
+
+    await stop(config);
+
+    // Simulate every host persisted before the registry field existed by
+    // stripping the field from each host formula on disk.  Enumerate the
+    // formulas directly rather than via pet names — a `provideHost` child is
+    // reachable through a `handle`, not as a bare host id.
+    const hostNumbers = [];
+    {
+      const db = openTestDb(config.statePath);
+      try {
+        for (const { number, node } of db.listFormulas()) {
+          const { formula } = db.readFormula(number);
+          if (formula.type === 'host') {
+            t.truthy(
+              formula.registry,
+              'a freshly formulated host already carries a registry field',
+            );
+            const { registry, ...legacyFormula } = formula;
+            t.truthy(registry);
+            db.writeFormula(number, node, legacyFormula);
+            hostNumbers.push(number);
+          }
+        }
+      } finally {
+        db.close();
+      }
+    }
+    t.true(
+      hostNumbers.length >= 2,
+      'the daemon persisted at least two host formulas to migrate',
+    );
+
+    await restart(config);
+    const { getBootstrap, closed } = await makeEndoClient(
+      'client-multi-migrated',
+      config.sockPath,
+      cancelled,
+    );
+    closed.catch(() => {});
+    const hostAfter = E(getBootstrap()).host();
+
+    {
+      const db = openTestDb(config.statePath);
+      try {
+        const registryIds = new Set();
+        for (const number of hostNumbers) {
+          const { formula: migrated } = db.readFormula(number);
+          t.is(migrated.type, 'host');
+          t.truthy(
+            migrated.registry,
+            'each stale host is re-populated with a registry on startup',
+          );
+          const { number: registryNumber } = parseId(migrated.registry);
+          const { formula: registryFormula } = db.readFormula(registryNumber);
+          t.is(registryFormula.type, 'registry');
+          registryIds.add(migrated.registry);
+        }
+        t.is(
+          registryIds.size,
+          hostNumbers.length,
+          'each migrated host gets its own distinct registry formula',
+        );
+      } finally {
+        db.close();
+      }
+    }
+
+    const registryAfter = await E(hostAfter).lookup('@registry');
+    t.truthy(
+      registryAfter,
+      '@registry resolves after a concurrent multi-host migration',
+    );
+  },
+);
