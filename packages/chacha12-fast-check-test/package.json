@@ -38,7 +38,7 @@
   "dependencies": {
     "@endo/chacha12": "workspace:^",
     "@endo/harden": "workspace:^",
-    "fast-check": "^4.9.0"
+    "fast-check": "^4.10.0"
   },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",
