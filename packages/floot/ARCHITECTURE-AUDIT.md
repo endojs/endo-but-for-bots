@@ -421,7 +421,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; acceptance pending |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | Open |
-| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Open; provider-backed model discovery prioritized before further acceptance |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | Open |
@@ -1475,6 +1475,23 @@ The requested cutover matrix passed within those evidence limits.
 Forced native-store corruption recovery, immediate process termination at cancel,
 and remote provider computation/billing cancellation are not established.
 The broader audit remains open; resume deletion before abstraction next.
+
+### Cutover progress — 2026-09-22
+
+The third cutover (endo-host `ops/hosted-cutover3-20260922.md`) retired the
+three pre-catalog brokers and activated the discovery release; its first
+activation (generation 160) failed hosted restart/restore because of the
+fail-closed native teardown, which was evicted to #1323, and generations
+161 to 163 then passed the whole matrix (create, native tool use, network
+policy, cancellation, graceful restart/restore, deletion) on Luna, Haiku 4.5
+and the free routes, followed by the picker ordering, the no-session-on-load
+rule and thinking folded into the actions group. Tokyo ended each activation
+with zero native records, containers and mounts beyond the operator's own
+sessions; Secrets and the four workspace archives are unchanged. The
+inventoried graph still carries legacy one-shot helper formulas
+(`cleanup.mjs`, `cleanup2.mjs`, `cleanup4.mjs`, `fresh1.mjs`, `rmbroker-1`,
+`rmbroker-2`) and old `codex-subscription-v2/sessions` directories from
+September's first migrations: FA-11/FA-12 retirement input, not touched here.
 
 Deleting a source file or pet name does not prove that a running resource stopped.
 Do not erase generic sandbox functionality just because the retired hosted path used it.
