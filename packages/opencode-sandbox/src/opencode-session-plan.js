@@ -1,22 +1,22 @@
 // @ts-check
 
 /**
- * The OpenCode session plan: the adapter-agnostic primitives of
- * `@endo/hosted-agent/session-plan.js` composed with OpenCode's own field
- * list. The primitives are re-exported so this module remains the package's
- * one plan boundary.
+ * The OpenCode session plan: the placement every hosted session records
+ * (`@endo/hosted-agent/session-plan.js`) with OpenCode's own field, the pinned
+ * image. The primitives are re-exported so this module remains the package's
+ * one plan boundary. Nothing unknown is carried through: a field this parser
+ * does not know cannot add authority.
  *
  * @module
  */
 
-import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail, q } from '@endo/errors';
 import {
   containsPath,
   isNormalizedAbsolutePath,
   makeSandboxSessionId as makeSharedSandboxSessionId,
   readMounterEnv,
-  readRecordedPath,
+  readSessionPlacement,
 } from '@endo/hosted-agent/session-plan.js';
 
 /** @typedef {import('@endo/hosted-agent/session-plan.js').MounterEnv} MounterEnv */
@@ -49,19 +49,10 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {string} [systemPrompt]
  */
 
-/**
- * The recorded plan uses the same copy-data fields as the parsed plan.
- * @typedef {SessionPlan} RecordedSessionPlan
- */
+/** @typedef {SessionPlan} RecordedSessionPlan */
 
-const NETWORK_POLICIES = harden(['off', 'public-internet']);
-const RECORDED_PATHS = harden([
-  'workspaceMountPoint',
-  'mcpDir',
-  'mounterSocketDir',
-]);
-const OPTIONAL_PATHS = harden(['workspaceDir', 'workspaceHostPath']);
-const OPTIONAL_TEXT = harden(['model', 'systemPrompt']);
+/** OpenCode's slug when nothing of a session id survives derivation. */
+const SANDBOX_ID_FALLBACK = 'opencode';
 
 /**
  * Parse recorded plan text. The result is the only plan shape the controller
@@ -71,57 +62,17 @@ const OPTIONAL_TEXT = harden(['model', 'systemPrompt']);
  * @returns {SessionPlan}
  */
 export const readSessionPlan = text => {
-  const value = JSON.parse(text);
-  assertCopyData(harden(value));
-  (typeof value === 'object' && value !== null && !Array.isArray(value)) ||
-    Fail`Session plan must be a record`;
-  /** @type {Record<string, unknown>} */
-  const recorded = value;
-  !Object.hasOwn(recorded, 'nativeProfile') ||
-    Fail`Retired nativeProfile field; recreate this hosted session plan`;
+  const { placement, recorded } = readSessionPlacement(text, {
+    label: 'OpenCode',
+    sandboxIdFallback: SANDBOX_ID_FALLBACK,
+    privatePaths: ['mcpDir'],
+  });
   !Object.hasOwn(recorded, 'opencodeSessionId') ||
     Fail`Retired opencodeSessionId field; recreate this hosted session plan`;
-  for (const name of ['sessionId', 'sandboxSessionId', 'rootfs']) {
-    (typeof recorded[name] === 'string' && recorded[name] !== '') ||
-      Fail`Missing session plan field ${q(name)}`;
-  }
-  NETWORK_POLICIES.includes(/** @type {string} */ (recorded.networkPolicy)) ||
-    Fail`Unknown session plan network policy`;
-  for (const name of OPTIONAL_TEXT) {
-    recorded[name] === undefined ||
-      typeof recorded[name] === 'string' ||
-      Fail`Session plan field ${q(name)} must be text`;
-  }
-  /** @type {[string, string][]} */
-  const paths = [];
-  for (const name of [...RECORDED_PATHS, ...OPTIONAL_PATHS]) {
-    if (OPTIONAL_PATHS.includes(name) && recorded[name] === undefined) {
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    const nativePath = readRecordedPath(name, recorded[name]);
-    for (const [otherName, other] of paths) {
-      (!containsPath(other, nativePath) && !containsPath(nativePath, other)) ||
-        Fail`Session plan paths ${q(otherName)} and ${q(name)} must be disjoint`;
-    }
-    paths.push([name, nativePath]);
-  }
-  if (recorded.workspaceHostPath !== undefined) {
-    recorded.workspaceDir === undefined ||
-      Fail`Session plan cannot record both an owned and an operator-supplied workspace`;
-  } else {
-    recorded.workspaceDir !== undefined ||
-      Fail`Session plan must record an owned or an operator-supplied workspace`;
-  }
-  const mounterEnv =
-    recorded.mounterEnv === undefined
-      ? undefined
-      : readMounterEnv(recorded.mounterEnv);
+  (typeof recorded.rootfs === 'string' && recorded.rootfs !== '') ||
+    Fail`Missing session plan field ${q('rootfs')}`;
   return harden(
-    /** @type {SessionPlan} */ ({
-      ...recorded,
-      ...(mounterEnv === undefined ? {} : { mounterEnv }),
-    }),
+    /** @type {SessionPlan} */ ({ ...placement, rootfs: recorded.rootfs }),
   );
 };
 harden(readSessionPlan);
@@ -132,5 +83,5 @@ harden(readSessionPlan);
  * @param {string} name
  */
 export const makeSandboxSessionId = name =>
-  makeSharedSandboxSessionId(name, 'opencode');
+  makeSharedSandboxSessionId(name, SANDBOX_ID_FALLBACK);
 harden(makeSandboxSessionId);

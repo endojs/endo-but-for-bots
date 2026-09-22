@@ -13,6 +13,11 @@ import {
   makeOpencodeNativeController,
 } from '../src/opencode-native-controller.js';
 import { makeOpencodeClient } from '../src/opencode-client.js';
+import { makeSandboxSessionId } from '../src/opencode-session-plan.js';
+
+const SANDBOX_A = makeSandboxSessionId('a');
+const SANDBOX_B = makeSandboxSessionId('b');
+const SANDBOX_OLD = makeSandboxSessionId('old');
 
 /**
  * What a slice reports about itself, synthesized from the policy it was asked
@@ -79,7 +84,7 @@ const gate = () => {
 const planFor = id =>
   harden({
     sessionId: id,
-    sandboxSessionId: `sandbox-${id}`,
+    sandboxSessionId: makeSandboxSessionId(id),
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
     networkPolicy: 'off',
     workspaceDir: `/workspaces/${id}`,
@@ -157,7 +162,7 @@ const fixture = (t, { realClient = false } = {}) => {
         },
       });
       scopes.set(id, scope);
-      if (faults.lateScope === 'sandbox' && id === 'sandbox-a') {
+      if (faults.lateScope === 'sandbox' && id === `${SANDBOX_A}`) {
         scopeEntered.resolve();
         await scopeReleased.promise;
       }
@@ -215,7 +220,7 @@ const fixture = (t, { realClient = false } = {}) => {
         },
       });
       grants.set(id, scope);
-      if (faults.lateScope === 'broker' && id === 'sandbox-a') {
+      if (faults.lateScope === 'broker' && id === `${SANDBOX_A}`) {
         scopeEntered.resolve();
         await scopeReleased.promise;
       }
@@ -417,7 +422,7 @@ test('native controller construction is inert; activation uses copy paths and no
   t.is(options.env.XDG_DATA_HOME, '/tmp/opencode-home/.local/share');
   t.deepEqual(options.policy.bindRoots, [path.dirname(plan.mcpDir)]);
   t.is(options.network, 'broker-only');
-  t.is(options.policy.brokerSidecar.container, 'sandbox-a');
+  t.is(options.policy.brokerSidecar.container, `${SANDBOX_A}`);
   t.is(options.env.OPENROUTER_API_KEY, 'opencode-broker-placeholder');
   t.is(
     JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).mcp.endo.command[2],
@@ -477,11 +482,11 @@ test('scope cleanup failure retains mounts and permits sibling progress before r
     { message: /cleanup pending/ },
   );
   t.false(f.events.includes('close mounter'));
-  t.true(f.grants.has('sandbox-b'));
+  t.true(f.grants.has(`${SANDBOX_B}`));
   await E(b).send('sibling still works');
   f.faults.sandboxClose = false;
   await E(a).terminate(JSON.stringify(planFor('a')), f.resolver);
-  t.true(f.scopes.has('sandbox-b'));
+  t.true(f.scopes.has(`${SANDBOX_B}`));
   await t.throwsAsync(E(a).send('stale'), { message: /stopping/ });
   await E(b).terminate(JSON.stringify(planFor('b')), f.resolver);
 });
@@ -526,15 +531,15 @@ for (const kind of ['sandbox', 'broker']) {
     t.false(closed);
     t.true(
       kind === 'sandbox'
-        ? f.scopes.has('sandbox-a')
-        : f.grants.has('sandbox-a'),
+        ? f.scopes.has(`${SANDBOX_A}`)
+        : f.grants.has(`${SANDBOX_A}`),
     );
     f.scopeReleased.resolve();
     await Promise.all([failed, stopping]);
-    t.false(f.scopes.has('sandbox-a'));
-    t.false(f.grants.has('sandbox-a'));
-    t.true(f.scopes.has('sandbox-b'));
-    t.true(f.grants.has('sandbox-b'));
+    t.false(f.scopes.has(`${SANDBOX_A}`));
+    t.false(f.grants.has(`${SANDBOX_A}`));
+    t.true(f.scopes.has(`${SANDBOX_B}`));
+    t.true(f.grants.has(`${SANDBOX_B}`));
     await E(b).terminate(JSON.stringify(planFor('b')), f.resolver);
   });
 }
@@ -543,8 +548,8 @@ test('reconstruction uses lookup, reclaims the recorded mount, and invents nothi
   const f = fixture(t);
   const controller = f.makeController();
   await E(controller).terminate(JSON.stringify(planFor('old')), f.resolver);
-  t.true(f.events.includes('lookup sandbox sandbox-old'));
-  t.true(f.events.includes('lookup grant sandbox-old'));
+  t.true(f.events.includes(`lookup sandbox ${SANDBOX_OLD}`));
+  t.true(f.events.includes(`lookup grant ${SANDBOX_OLD}`));
   // The only structured event is the reclamation of the recorded mount: no
   // mounter, bridge or MCP socket was made to stand in for the lost ones.
   t.deepEqual(
@@ -675,7 +680,7 @@ test('terminating a session that has a live client revokes its grant', async t =
   t.is(f.grants.size, 0, 'the grant is revoked, not merely abandoned');
   t.is(f.scopes.size, 0);
   t.is(
-    f.events.filter(event => event === 'revoke sandbox-a').length,
+    f.events.filter(event => event === `revoke ${SANDBOX_A}`).length,
     1,
     'revoked exactly once',
   );

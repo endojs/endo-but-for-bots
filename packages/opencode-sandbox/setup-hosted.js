@@ -77,12 +77,14 @@ import {
   readNativeSandbox,
   readSessionStorage,
   readSliceImageReference,
+  resolveFuturePath,
   resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
 import { BROKER_OWNER_PATTERN } from './src/opencode-broker.js';
 import { readOpencodeBrokerConfig } from './src/opencode-broker-service-agent.js';
 import {
+  containsPath,
   isNormalizedAbsolutePath,
   readMounterEnv,
 } from './src/opencode-session-plan.js';
@@ -187,10 +189,15 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // creating the broker directory wait for the mint.
   const existingBroker = await E(hostAgent).has(SANDBOX_DIR, 'broker-service');
   let brokerOwnerId = '';
+  // The broker's directory, like the runtime directory, is protected storage
+  // the backend refuses to let any guest root resolve into at every
+  // provision; a retained broker's persisted directory is the effective one.
+  let effectiveBrokerDir = brokerDir;
   if (existingBroker) {
     // A retained broker keeps its pins; a changed image is refused here, not
     // silently discarded (a live broker cannot be re-pinned in place).
     const broker = await readBrokerService(hostAgent);
+    effectiveBrokerDir = broker.config.directory;
     await assertRetainedBrokerImages({
       label: 'OpenCode',
       serviceName: `${SANDBOX_DIR}/broker-service`,
@@ -235,6 +242,23 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // The MCP socket base must be private and symlink-free: a planted link here
   // would redirect the per-session sockets another process can then squat.
   await providePrivateDirectory('ENDO_OPENCODE_MCP_DIR', mcpDir);
+
+  isNormalizedAbsolutePath(effectiveBrokerDir) ||
+    Fail`ENDO_OPENCODE_BROKER_DIR (or the retained broker's directory) must be a normalized absolute path: ${q(effectiveBrokerDir)}`;
+  // Resolve even roots not created yet: the backend refuses a guest root
+  // that resolves into protected storage on every provision, so refuse the
+  // layout here rather than at the first session.
+  const roots = await Promise.all(
+    [workspaceDir, mcpDir, effectiveBrokerDir, runtime.config.directory].map(
+      resolveFuturePath,
+    ),
+  );
+  for (const [index, root] of roots.slice(0, 2).entries()) {
+    for (const other of roots.slice(index + 1)) {
+      (!containsPath(root, other) && !containsPath(other, root)) ||
+        Fail`OpenCode guest roots overlap protected storage: the workspace and MCP roots must be disjoint from each other, the broker directory and the runtime directory`;
+    }
+  }
 
   if (existingBroker) {
     console.log(

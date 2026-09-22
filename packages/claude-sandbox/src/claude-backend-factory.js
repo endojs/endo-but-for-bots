@@ -1,12 +1,10 @@
 // @ts-check
 // Claude Code as a Floot hosted backend.
 //
-// Floot discovers hosted backends through `HostedBackendFactoryInterface`
-// (@endo/hosted-agent): `describe()` names the backend, `modelCatalog()` offers
-// its catalog, and `create(spec, toolSet)` hands back one session's `run`
-// facet (the turn protocol Floot's hosted-turn consumer drives) and its
-// factory-only `admin` facet. This module is that seam for the Claude CLI
-// runtime in @endo/claude-sandbox:
+// The factory itself is the shared one (`@endo/hosted-agent/backend-factory-kit.js`):
+// it validates Floot's request, serializes operations per session, retains
+// each session's termination until the daemon owner's stop succeeds, and
+// exposes the hosted turn protocol. This module declares what is Claude's:
 //
 // - Each session is one record the daemon session owner keeps: a `claude -p`
 //   process per turn inside a rootless Podman slice over a projected
@@ -20,6 +18,9 @@
 // - Turn events are translated from the CLI's stream-json wire into the
 //   provider-neutral hosted events (src/claude-hosted-events.js), so nothing
 //   Claude-specific reaches Floot.
+// - The reasoning effort is the runtime's own axis: checked in shape here,
+//   and against the efforts the runtime drives each model at in the
+//   provisioner.
 //
 // Continuity is the CLI's own transcript: every turn resumes the conversation
 // persisted in the session's config dir, so there is no checkpoint to
@@ -27,76 +28,33 @@
 // (`continuity: 'transcript'`) so a consumer can mirror what that transcript
 // retains — a delivered prompt survives an aborted or failed turn there.
 
-import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
 import {
-  HostedBackendFactoryInterface,
-  HostedTurnBackendAdminInterface,
-  HostedTurnBackendInterface,
-} from '@endo/hosted-agent';
-import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
-import path from 'node:path';
+  isIdleInterrupt,
+  makeHostedBackendFactory,
+} from '@endo/hosted-agent/backend-factory-kit.js';
 
 import { translateClaudeTurn } from './claude-hosted-events.js';
 import { assertClaudeEffort } from './claude-effort.js';
 import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
 
 /** @import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
+/** @import { DeclaredSubscription } from '@endo/hosted-agent/subscription-lister.js' */
+
+export { NETWORK_POLICIES } from '@endo/hosted-agent/backend-factory-kit.js';
+
+/** @typedef {import('@endo/hosted-agent/session-provisioner.js').SessionRequest} SessionRequest */
 
 /** The backend id Floot pins sessions to (`claude:<model>`). */
 export const CLAUDE_BACKEND_ID = 'claude';
 harden(CLAUDE_BACKEND_ID);
-
-/** The network policies a session may request; the broker attests each. */
-export const NETWORK_POLICIES = harden(['off', 'public-internet']);
-
-/**
- * Floot session ids double as pet-name and path components on the host, so
- * they are bounded to the provisioner's namespace.
- *
- * @param {unknown} sessionId
- * @returns {string}
- */
-const assertSessionId = sessionId => {
-  (typeof sessionId === 'string' &&
-    /^[a-z0-9][a-z0-9-]{0,127}$/.test(sessionId)) ||
-    Fail`Claude sessionId must be a bounded lowercase path component`;
-  return /** @type {string} */ (sessionId);
-};
-
-/**
- * `ClaudeClient.interrupt()` refuses when nothing is in flight. For a
- * cancellation barrier that is success, not failure: the turn it would have
- * stopped has already ended (or its reader was closed first, which is what
- * kills the process).
- *
- * @param {unknown} error
- */
-const isIdleInterrupt = error =>
-  error instanceof Error &&
-  /no in-flight prompt to interrupt/.test(error.message);
-
-/**
- * What the backend records for a session, beyond its id: the network policy
- * the broker must attest, the model and persona the plan carries, and an
- * optional operator-supplied workspace.
- * @typedef {object} SessionRequest
- * @property {'off' | 'public-internet'} networkPolicy
- * @property {string} [model]
- * @property {string} [reasoningEffort]
- * @property {string} [systemPrompt]
- * @property {string} [subscription] A pinned pool member; absent means auto.
- * @property {string} [workspaceHostPath] Operator-supplied worktree; never
- *   owned, never removed.
- */
 
 /**
  * Build the trusted lifecycle owner for Claude CLI backend sessions over the
  * daemon session owner's three operations.
  *
  * @param {object} powers
- * @param {(sessionId: string, request: SessionRequest, toolSet: any) => Promise<any>} powers.provisionSession
+ * @param {(sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>} powers.provisionSession
  *   Record (or reopen) the session's plan with the daemon owner and start its
  *   native controller with the pinned tool set, returning the client facet.
  * @param {(sessionId: string) => Promise<void>} powers.stopSession
@@ -110,7 +68,7 @@ const isIdleInterrupt = error =>
  *   account of the broker lists, as the Claude Code runtime offers it; a
  *   new session's pin is admitted by it in the provisioner.
  * @param {boolean} [powers.publicInternetEnabled] Verified operator broker policy.
- * @param {() => Promise<Array<{ id: string, label: string, pinnedOnly?: boolean }>>} [powers.listSubscriptions]
+ * @param {() => Promise<DeclaredSubscription[]>} [powers.listSubscriptions]
  */
 export const makeClaudeBackendFactory = ({
   provisionSession,
@@ -119,97 +77,40 @@ export const makeClaudeBackendFactory = ({
   catalog,
   publicInternetEnabled = false,
   listSubscriptions = async () => [],
-}) => {
-  const networkPolicies = harden(
-    publicInternetEnabled ? [...NETWORK_POLICIES] : ['off'],
-  );
-
-  const sessions = makeSessionRegistry();
-
-  /**
-   * @param {Record<string, any>} spec
-   * @param {any} toolSet
-   */
-  const createSession = async (spec, toolSet) => {
-    const { sessionId } = spec;
-    const networkPolicy = spec.networkPolicy ?? 'off';
-    NETWORK_POLICIES.includes(networkPolicy) ||
-      Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
-    networkPolicies.includes(networkPolicy) ||
-      Fail`Claude broker does not permit public internet access`;
-    // Shape only: whether the account lists the model, and the effort the
-    // runtime can drive it with, is the provisioner's to admit for a new
-    // pin, against the catalog; a reopen keeps its recorded pin.
-    if (spec.model !== undefined && spec.model !== '') {
-      (typeof spec.model === 'string' && spec.model.length <= 256) ||
-        Fail`Claude model id must be a bounded string`;
-    }
-    if (spec.reasoningEffort !== undefined && spec.reasoningEffort !== '') {
-      assertClaudeEffort(spec.reasoningEffort);
-    }
-    const declaredMounts = spec.containerMounts ?? [];
-    (Array.isArray(declaredMounts) && declaredMounts.length === 0) ||
-      Fail`The Claude backend has no slice attestation for container mounts; refusing the session instead of claiming binds it does not have`;
-    let workspaceHostPath;
-    if (spec.workspaceHostPath !== undefined) {
-      workspaceHostPath = `${spec.workspaceHostPath}`;
-      (workspaceHostPath.length > 0 &&
-        workspaceHostPath.length <= 4096 &&
-        path.isAbsolute(workspaceHostPath) &&
-        path.normalize(workspaceHostPath) === workspaceHostPath &&
-        !workspaceHostPath.includes('\0')) ||
-        Fail`workspaceHostPath must be a normalized absolute host path`;
-    }
-    const subscription =
-      spec.subscription === undefined || spec.subscription === 'auto'
-        ? undefined
-        : spec.subscription;
-    if (subscription !== undefined) {
-      const declared = await listSubscriptions().catch(() => {
-        throw Fail`Claude subscriptions cannot be listed right now`;
-      });
-      declared.some(member => member.id === subscription) ||
-        Fail`Unknown Claude subscription ${q(subscription)}`;
-    }
-    // A predecessor that cannot stop refuses the successor rather than running
-    // beside it: the registry retains its failed stop and rethrows here.
-    await sessions.stop(sessionId);
-    const client = await provisionSession(
-      sessionId,
-      harden({
-        networkPolicy,
-        ...(subscription === undefined ? {} : { subscription }),
-        ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.reasoningEffort
-          ? { reasoningEffort: spec.reasoningEffort }
-          : {}),
-        ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
-        ...(workspaceHostPath ? { workspaceHostPath } : {}),
-      }),
-      toolSet,
-    );
-
-    let terminated = false;
-    /** @type {Promise<void> | undefined} */
-    let stopInFlight;
-    const terminate = () => {
-      if (terminated) return Promise.resolve();
-      if (stopInFlight) return stopInFlight;
-      stopInFlight = (async () => {
-        await null;
-        // The owner's stop is the containment barrier: it does not resolve
-        // until the controller acknowledges native cleanup. A failure retains
-        // this terminate for retry through the registry.
-        await stopSession(sessionId);
-        terminated = true;
-        sessions.release(sessionId, terminate);
-      })().finally(() => {
-        if (!terminated) stopInFlight = undefined;
-      });
-      return stopInFlight;
-    };
-
-    const run = makeExo('HostedTurnBackend', HostedTurnBackendInterface, {
+}) =>
+  makeHostedBackendFactory({
+    label: 'Claude',
+    provisionSession,
+    stopSession,
+    removeSession,
+    catalog,
+    publicInternetEnabled,
+    listSubscriptions,
+    describe: () => ({
+      id: CLAUDE_BACKEND_ID,
+      title: 'Claude Code',
+      continuity: 'transcript',
+      providerId: 'anthropic',
+      // What a system prompt must know about this place. Claude Code lists
+      // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its
+      // own shell and file tools; the hosted policy mounts the session
+      // workspace at /workspace, the CLI's working directory.
+      promptEnvironment: {
+        toolNamePrefix: `mcp__${DEFAULT_SERVER_NAME}__`,
+        toolNames: {},
+        nativeTools: true,
+        workspacePath: '/workspace',
+      },
+    }),
+    readRequest: spec => {
+      if (spec.reasoningEffort !== undefined && spec.reasoningEffort !== '') {
+        assertClaudeEffort(spec.reasoningEffort);
+      }
+      return spec.reasoningEffort
+        ? { reasoningEffort: spec.reasoningEffort }
+        : {};
+    },
+    makeRun: ({ client, spec, subscription }) => ({
       /**
        * Start one CLI turn. The session's pinned model rides every spawn and
        * the caller's system prompt (Floot's session persona) is appended to
@@ -266,84 +167,8 @@ export const makeClaudeBackendFactory = ({
         method
           ? `Hosted Claude CLI backend run method: ${method}`
           : 'Hosted Claude CLI backend: send, models, interrupt, acknowledge (no-op; the CLI transcript is the continuity), and status.',
-    });
-    const admin = makeExo(
-      'HostedTurnBackendAdmin',
-      HostedTurnBackendAdminInterface,
-      {
-        terminate,
-        help: () =>
-          'Factory-only Claude CLI lifecycle administration: terminate (the daemon owner stops the native controller and its tool bridge; keeps the workspace and transcript).',
-      },
-    );
-    sessions.retain(sessionId, terminate);
-    return harden({ run, admin });
-  };
-
-  /**
-   * @param {Record<string, any>} spec
-   * @param {any} toolSet
-   */
-  const create = async (spec, toolSet) => {
-    const sessionId = assertSessionId(spec?.sessionId);
-    return sessions.inOrder(sessionId, () => createSession(spec, toolSet));
-  };
-
-  /** @param {Record<string, any>} spec */
-  const destroy = async spec => {
-    const sessionId = assertSessionId(spec?.sessionId);
-    return sessions.inOrder(sessionId, async () => {
-      // Never underneath a running CLI.
-      await sessions.stop(sessionId);
-      await removeSession(sessionId);
-    });
-  };
-
-  return makeExo('ClaudeBackendFactory', HostedBackendFactoryInterface, {
-    async describe() {
-      // A broker that cannot be asked right now declares nothing here; the
-      // descriptor is not the place to fail.
-      /** @type {Array<{ id: string, label: string, pinnedOnly?: boolean }>} */
-      const declared = await listSubscriptions().catch(() => []);
-      const subscriptions = declared.map(({ id, label, pinnedOnly }) => ({
-        id,
-        label,
-        ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
-      }));
-      return harden({
-        id: CLAUDE_BACKEND_ID,
-        title: 'Claude Code',
-        kind: 'hosted',
-        continuity: 'transcript',
-        toolOwnership: 'endo',
-        providerId: 'anthropic',
-        ...(subscriptions.length ? { subscriptions } : {}),
-        supportedNetworkPolicies: networkPolicies,
-        // What a system prompt must know about this place. Claude Code lists
-        // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its
-        // own shell and file tools; the hosted policy mounts the session
-        // workspace at /workspace, the CLI's working directory.
-        promptEnvironment: {
-          toolNamePrefix: `mcp__${DEFAULT_SERVER_NAME}__`,
-          toolNames: {},
-          nativeTools: true,
-          workspacePath: '/workspace',
-        },
-      });
-    },
-    modelCatalog: subscriptionId => catalog.catalog(subscriptionId),
-    create,
-    async stop(spec) {
-      const sessionId = assertSessionId(spec?.sessionId);
-      return sessions.inOrder(sessionId, async () => {
-        // Reach the durable owner even when no admin survived this factory.
-        if (!(await sessions.stop(sessionId))) await stopSession(sessionId);
-      });
-    },
-    destroy,
-    help() {
-      return 'Claude CLI backend factory: describe, modelCatalog(subscriptionId?), create, stop (keeps state), and idempotent destroy.';
-    },
+    }),
+    adminHelp:
+      'Factory-only Claude CLI lifecycle administration: terminate (the daemon owner stops the native controller and its tool bridge; keeps the workspace and transcript).',
   });
-};
 harden(makeClaudeBackendFactory);

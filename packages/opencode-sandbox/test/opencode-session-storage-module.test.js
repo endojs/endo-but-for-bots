@@ -5,6 +5,7 @@ import { access, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { make } from '../src/opencode-session-storage-module.js';
+import { makeSandboxSessionId } from '../src/opencode-session-plan.js';
 
 const options = harden({
   env: {
@@ -22,15 +23,16 @@ test('null-powered storage removes the recorded private directories without a pr
     workspace: join(base, 'workspaces'),
     private: join(base, 'private'),
   };
+  const id = makeSandboxSessionId('one');
   const plan = {
     sessionId: 'one',
-    sandboxSessionId: 'one',
+    sandboxSessionId: id,
     rootfs: `oci:localhost/opencode@sha256:${'a'.repeat(64)}`,
     networkPolicy: 'off',
-    workspaceDir: join(roots.workspace, 'one'),
-    workspaceMountPoint: join(roots.private, 'one', 'workspace'),
-    mcpDir: join(roots.private, 'one', 'mcp'),
-    mounterSocketDir: join(roots.private, 'one', '9p'),
+    workspaceDir: join(roots.workspace, id),
+    workspaceMountPoint: join(roots.private, id, 'workspace'),
+    mcpDir: join(roots.private, id, 'mcp'),
+    mounterSocketDir: join(roots.private, id, '9p'),
   };
   await Promise.all(
     [
@@ -49,7 +51,7 @@ test('null-powered storage removes the recorded private directories without a pr
   await storage.remove(JSON.stringify(plan));
   await storage.remove(JSON.stringify(plan));
   await t.throwsAsync(access(plan.workspaceDir), { code: 'ENOENT' });
-  await t.throwsAsync(access(join(roots.private, 'one')), { code: 'ENOENT' });
+  await t.throwsAsync(access(join(roots.private, id)), { code: 'ENOENT' });
 });
 
 test('storage accepts promised null powers and refuses capabilities', async t => {

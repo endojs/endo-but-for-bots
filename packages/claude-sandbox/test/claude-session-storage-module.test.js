@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Far } from '@endo/far';
 
 import { make } from '../src/claude-session-storage-module.js';
+import { makeSandboxSessionId } from '../src/claude-session-plan.js';
 import { make as makeStateProvider } from '../src/claude-state-provider-module.js';
 
 const exists = async p =>
@@ -51,7 +52,7 @@ test('the storage caplet requires both roots and removes one recorded plan throu
       CLAUDE_MCP_DIR: roots.mcpDir,
     },
   });
-  const id = 'session-a-0123456789ab';
+  const id = makeSandboxSessionId('session-a');
   const plan = {
     sessionId: 'session-a',
     sandboxSessionId: id,

@@ -11,10 +11,13 @@ import { Far } from '@endo/far';
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 
 import { makeClaudeClient } from '../src/claude-client.js';
+import { makeSandboxSessionId } from '../src/claude-session-plan.js';
 import {
   make,
   makeClaudeNativeController,
 } from '../src/claude-native-controller.js';
+
+const SANDBOX_A = makeSandboxSessionId('a');
 
 /**
  * What a slice reports about itself, synthesized from the policy it was asked
@@ -84,7 +87,7 @@ const digest = `sha256:${'a'.repeat(64)}`;
 const planFor = (id, overrides = {}) =>
   harden({
     sessionId: id,
-    sandboxSessionId: `sandbox-${id}`,
+    sandboxSessionId: makeSandboxSessionId(id),
     rootfs: `oci:example@${digest}`,
     networkPolicy: 'off',
     credentialKind: 'apiKey',
@@ -427,7 +430,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
     ]),
     [
       ['workspace', 'attach', plan.workspaceMountPoint, '/workspace', 'rw'],
-      ['claude-state', 'bind', '/state/sandbox-a', '/claude-config', 'rw'],
+      ['claude-state', 'bind', `/state/${SANDBOX_A}`, '/claude-config', 'rw'],
       ['mcp', 'bind', plan.mcpDir, '/endo-mcp', 'ro'],
       ['tmp', 'tmpfs', undefined, '/tmp', undefined],
       ['run', 'tmpfs', undefined, '/run', undefined],
@@ -445,7 +448,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   // than being handed a container to join; only the listener's loopback
   // endpoint and a placeholder credential reach the slice.
   t.is(options.network, 'broker-only');
-  t.is(options.policy.brokerSidecar.container, 'sidecar-sandbox-a');
+  t.is(options.policy.brokerSidecar.container, `sidecar-${SANDBOX_A}`);
   t.is(options.cwd, '/workspace');
   t.deepEqual(options.env, {
     ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000',
@@ -465,7 +468,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   const [, grantId, spec] = f.events.find(
     event => Array.isArray(event) && event[0] === 'grant',
   );
-  t.is(grantId, 'sandbox-a');
+  t.is(grantId, `${SANDBOX_A}`);
   t.deepEqual(spec, {
     providerOrigin: 'https://api.anthropic.com',
     accountRef: 'anthropic',
@@ -503,7 +506,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   t.false(Object.hasOwn(client, 'initialPrompt'));
   t.deepEqual(
     f.events.find(event => Array.isArray(event) && event[0] === 'resume'),
-    ['resume', '/state/sandbox-a', { debug: false }],
+    ['resume', `/state/${SANDBOX_A}`, { debug: false }],
   );
   // The grant is started and its evidence checked before any local effect.
   const order = f.events.filter(
@@ -515,12 +518,12 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
     order.map(event => (Array.isArray(event) ? event[0] : event)),
     [
       'resolve sandboxService',
-      'provide sandbox sandbox-a',
+      `provide sandbox ${SANDBOX_A}`,
       'resolve brokerService',
       'grant',
-      'start grant sandbox-a',
+      `start grant ${SANDBOX_A}`,
       'resolve stateProvider',
-      'state sandbox-a',
+      `state ${SANDBOX_A}`,
       'resolve tools',
       'slice',
     ],
@@ -639,15 +642,16 @@ test('terminate releases the slice, sandbox, mounter, bridge, and broker grant, 
       'client terminate',
       'close mcp',
       'close mounter',
-      'close sandbox sandbox-a',
-      'dispose slice sandbox-a',
-      'fence grant sandbox-a',
-      'revoke sandbox-a',
+      `close sandbox ${SANDBOX_A}`,
+      `dispose slice ${SANDBOX_A}`,
+      `fence grant ${SANDBOX_A}`,
+      `revoke ${SANDBOX_A}`,
     ],
     'every owner is released exactly once',
   );
   t.true(
-    after.indexOf('close sandbox sandbox-a') < after.indexOf('close mounter'),
+    after.indexOf(`close sandbox ${SANDBOX_A}`) <
+      after.indexOf('close mounter'),
     'the mounter closes only after the sandbox acknowledges stop',
   );
   t.like(await E(controller).status(), { stopping: true, stopped: true });
@@ -671,9 +675,9 @@ test('a terminate during activation fences the acquisition and releases what was
   const termination = E(controller).terminate(text, f.resolver);
   await t.throwsAsync(activation, { message: /is stopping|mounter closed/ });
   await termination;
-  t.true(f.events.includes('close sandbox sandbox-a'));
+  t.true(f.events.includes(`close sandbox ${SANDBOX_A}`));
   t.true(f.events.includes('close mounter'));
-  t.true(f.events.includes('revoke sandbox-a'), 'the grant is revoked');
+  t.true(f.events.includes(`revoke ${SANDBOX_A}`), 'the grant is revoked');
   t.is(f.clients.length, 0, 'no client was constructed');
 });
 
@@ -689,7 +693,7 @@ test('a terminate while the broker grant is starting revokes it and refuses the 
   await f.grantEntered.promise;
   await E(controller).terminate(text, f.resolver);
   await failed;
-  t.true(f.events.includes('revoke sandbox-a'));
+  t.true(f.events.includes(`revoke ${SANDBOX_A}`));
   t.true((await E(controller).status()).stopped);
   t.false(
     f.events.some(event => Array.isArray(event) && event[0] === 'mounter'),
@@ -718,7 +722,7 @@ test('failed cleanup is retained and retried, never reported as release', async 
   await E(controller).terminate(text, f.resolver);
   t.like(await E(controller).status(), { stopped: true });
   t.is(
-    f.events.filter(e => e === 'revoke sandbox-a').length,
+    f.events.filter(e => e === `revoke ${SANDBOX_A}`).length,
     1,
     'provider removed only after sandbox close succeeds',
   );
@@ -730,15 +734,15 @@ test('reconstruction releases the shared scope and grant, and reclaims the recor
   const f = fixture(t);
   const text = JSON.stringify(planFor('a'));
   const sandbox = await E(f.resolver).get('sandboxService');
-  t.truthy(await E(sandbox).provideScope('sandbox-a'));
+  t.truthy(await E(sandbox).provideScope(`${SANDBOX_A}`));
   const broker = await E(f.resolver).get('brokerService');
-  t.truthy(await E(broker).provideScope('sandbox-a', harden({})));
+  t.truthy(await E(broker).provideScope(`${SANDBOX_A}`, harden({})));
   const revived = f.makeController();
   await E(revived).terminate(text, f.resolver);
-  t.true(f.events.includes('lookup sandbox sandbox-a'));
-  t.true(f.events.includes('lookup grant sandbox-a'));
-  t.true(f.events.includes('close sandbox sandbox-a'));
-  t.true(f.events.includes('revoke sandbox-a'));
+  t.true(f.events.includes(`lookup sandbox ${SANDBOX_A}`));
+  t.true(f.events.includes(`lookup grant ${SANDBOX_A}`));
+  t.true(f.events.includes(`close sandbox ${SANDBOX_A}`));
+  t.true(f.events.includes(`revoke ${SANDBOX_A}`));
   // The lost worker's kernel mount is the one resource no other owner will
   // take down, so cleanup is not complete until it is reclaimed. Nothing is
   // mounted or minted in its place.
@@ -833,7 +837,7 @@ test('lost daemon context fences and releases without claiming completion', asyn
     ),
     'the failed release is reported, not swallowed',
   );
-  t.true(f.events.includes('revoke sandbox-a'));
+  t.true(f.events.includes(`revoke ${SANDBOX_A}`));
   t.like(await E(controller).status(), { stopping: true, stopped: false });
 });
 
@@ -857,13 +861,14 @@ test('the real client over a resolved slice disposes it on terminate and leaves 
   t.deepEqual([...after].sort(), [
     'close mcp',
     'close mounter',
-    'close sandbox sandbox-a',
-    'dispose slice sandbox-a',
-    'fence grant sandbox-a',
-    'revoke sandbox-a',
+    `close sandbox ${SANDBOX_A}`,
+    `dispose slice ${SANDBOX_A}`,
+    `fence grant ${SANDBOX_A}`,
+    `revoke ${SANDBOX_A}`,
   ]);
   t.true(
-    after.indexOf('close sandbox sandbox-a') < after.indexOf('close mounter'),
+    after.indexOf(`close sandbox ${SANDBOX_A}`) <
+      after.indexOf('close mounter'),
   );
   t.like(await E(controller).status(), { stopped: true, terminated: true });
 });

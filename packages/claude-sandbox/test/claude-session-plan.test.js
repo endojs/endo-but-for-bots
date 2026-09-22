@@ -9,7 +9,7 @@ import {
 
 const plan = harden({
   sessionId: 'session-a',
-  sandboxSessionId: 'session-a-0123456789ab',
+  sandboxSessionId: makeSandboxSessionId('session-a'),
   rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
   networkPolicy: 'off',
   credentialKind: 'apiKey',

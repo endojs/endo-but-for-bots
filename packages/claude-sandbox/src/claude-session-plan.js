@@ -1,24 +1,23 @@
 // @ts-check
 
 /**
- * The Claude session plan: the adapter-agnostic primitives of
- * `@endo/hosted-agent/session-plan.js` composed with Claude's own field list.
- * The plan is the passive record the daemon session owner keeps for one
- * logical session; the native controller activates it and the storage owner
- * removes it, and both refuse any deviation in the recorded fields (unknown
- * fields are carried through unread).
+ * The Claude session plan: the placement every hosted session records
+ * (`@endo/hosted-agent/session-plan.js`) with Claude's own fields. The plan is
+ * the passive record the daemon session owner keeps for one logical session;
+ * the native controller activates it and the storage owner removes it, and
+ * both refuse any deviation in the recorded fields. Nothing unknown is carried
+ * through: a field this parser does not know cannot add authority.
  *
  * @module
  */
 
-import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail, q } from '@endo/errors';
 import {
   containsPath,
   isNormalizedAbsolutePath,
   makeSandboxSessionId as makeSharedSandboxSessionId,
   readMounterEnv,
-  readRecordedPath,
+  readSessionPlacement,
 } from '@endo/hosted-agent/session-plan.js';
 
 import { assertCredentialKind } from './claude-credential-kinds.js';
@@ -63,88 +62,40 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @typedef {ClaudeSessionPlan} RecordedClaudeSessionPlan
  */
 
-const NETWORK_POLICIES = harden(['off', 'public-internet']);
-const RECORDED_PATHS = harden([
-  'workspaceMountPoint',
-  'mcpDir',
-  'mounterSocketDir',
-]);
-const OPTIONAL_PATHS = harden(['workspaceDir', 'workspaceHostPath']);
-const OPTIONAL_TEXT = harden(['model', 'systemPrompt']);
+/** Claude's slug when nothing of a session id survives derivation. */
+const SANDBOX_ID_FALLBACK = 'claude';
 
 /**
  * Parse recorded plan text. The result is the only plan shape the controller
  * activates and the storage owner removes; every recorded field is checked
- * and none is defaulted, while unknown fields are carried through unread.
+ * and none is defaulted.
  * @param {string} text
  * @returns {ClaudeSessionPlan}
  */
 export const readClaudeSessionPlan = text => {
-  const value = JSON.parse(text);
-  assertCopyData(harden(value));
-  (typeof value === 'object' && value !== null && !Array.isArray(value)) ||
-    Fail`Session plan must be a record`;
-  /** @type {Record<string, unknown>} */
-  const recorded = value;
-  !Object.hasOwn(recorded, 'nativeProfile') ||
-    Fail`Retired nativeProfile field; recreate this hosted session plan`;
-  for (const name of ['sessionId', 'sandboxSessionId', 'rootfs']) {
-    (typeof recorded[name] === 'string' && recorded[name] !== '') ||
-      Fail`Missing session plan field ${q(name)}`;
-  }
-  NETWORK_POLICIES.includes(/** @type {string} */ (recorded.networkPolicy)) ||
-    Fail`Unknown session plan network policy`;
-  assertCredentialKind(recorded.credentialKind);
-  recorded.subscription === undefined ||
-    (typeof recorded.subscription === 'string' &&
-      /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(recorded.subscription) &&
-      recorded.subscription !== 'auto') ||
-    Fail`Invalid session plan subscription`;
-  for (const name of OPTIONAL_TEXT) {
-    recorded[name] === undefined ||
-      typeof recorded[name] === 'string' ||
-      Fail`Session plan field ${q(name)} must be text`;
-  }
-  if (recorded.reasoningEffort !== undefined)
-    assertClaudeEffort(recorded.reasoningEffort);
-  /** @type {[string, string][]} */
-  const paths = [];
-  for (const name of [...RECORDED_PATHS, ...OPTIONAL_PATHS]) {
-    if (OPTIONAL_PATHS.includes(name) && recorded[name] === undefined) {
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    const nativePath = readRecordedPath(name, recorded[name]);
-    for (const [otherName, other] of paths) {
-      (!containsPath(other, nativePath) && !containsPath(nativePath, other)) ||
-        Fail`Session plan paths ${q(otherName)} and ${q(name)} must be disjoint`;
-    }
-    paths.push([name, nativePath]);
-  }
-  if (recorded.workspaceHostPath !== undefined) {
-    recorded.workspaceDir === undefined ||
-      Fail`Session plan cannot record both an owned and an operator-supplied workspace`;
-  } else {
-    recorded.workspaceDir !== undefined ||
-      Fail`Session plan must record an owned or an operator-supplied workspace`;
-  }
-  const mounterEnv =
-    recorded.mounterEnv === undefined
-      ? undefined
-      : readMounterEnv(recorded.mounterEnv);
+  const { placement, recorded } = readSessionPlacement(text, {
+    label: 'Claude',
+    sandboxIdFallback: SANDBOX_ID_FALLBACK,
+    privatePaths: ['mcpDir'],
+    assertEffort: assertClaudeEffort,
+  });
+  (typeof recorded.rootfs === 'string' && recorded.rootfs !== '') ||
+    Fail`Missing session plan field ${q('rootfs')}`;
   return harden(
     /** @type {ClaudeSessionPlan} */ ({
-      ...recorded,
-      ...(mounterEnv === undefined ? {} : { mounterEnv }),
+      ...placement,
+      rootfs: recorded.rootfs,
+      credentialKind: assertCredentialKind(recorded.credentialKind),
     }),
   );
 };
 harden(readClaudeSessionPlan);
 
 /**
- * Deterministic sandbox session id with Claude's own slug fallback.
+ * Deterministic sandbox session id with Claude's own slug fallback, so ids
+ * recorded before the shared derivation existed do not change.
  * @param {string} name
  */
 export const makeSandboxSessionId = name =>
-  makeSharedSandboxSessionId(name, 'claude');
+  makeSharedSandboxSessionId(name, SANDBOX_ID_FALLBACK);
 harden(makeSandboxSessionId);
