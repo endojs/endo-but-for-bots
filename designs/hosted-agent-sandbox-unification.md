@@ -28,6 +28,21 @@ handoff checks are shared, and the raw placement and exact grant checks Codex
 alone applied now hold for every runtime. FA-06's completion criteria are met
 locally. Implemented and reviewed locally; not deployed.
 
+Durable identity and incarnation bindings (audit FA-08, 2026-09-22): a
+session's record keeps its identity, workspace, private directories and
+conversation across incarnations, and what it was bound to at creation (the
+broker's pinned image, account and credential kind in the plan; the broker,
+sandbox, state and storage formula identities in the record's references) is
+rebindable to what the backend holds now, only under a request that names each
+binding it authorizes (`rebind: ['image', 'provider']`), after the previous
+incarnation is stopped and its authority released, which the daemon owner
+enforces by refusing the revision while a client or worker reference remains.
+The owner's `revise` takes the references to rebind and writes them before the
+plan, as creation does; a failed write leaves a record the execution envelope
+refuses to activate on mismatched evidence until the rebind is retried. Floot's
+session facet exposes the operator's `rebind(bindings)`. Implemented and
+reviewed locally; not deployed.
+
 ### Architecture audit and remediation tracking — 2026-09-21
 
 The [Floot/backend architecture audit](../packages/floot/ARCHITECTURE-AUDIT.md)
@@ -399,7 +414,9 @@ New records capture exact dependency IDs, the broker's pinned image, the resourc
 and the original workspace and private directory paths before acquiring native resources.
 Backend re-mints reprovide the daemon owner by its fixed records path (unit-tested against a
 fake host; the daemon test mints one backend); a request for an existing session refuses a
-changed workspace, pinned image, or private directory layout before revising the record, stops
+changed workspace or private directory layout before revising the record, and a changed
+pinned image, account or credential kind, or other backend services, unless the request
+names that binding as one it authorizes rebinding (audit FA-08, 2026-09-22); it stops
 the record through its own cleanup before revising it in place, recreates its owned
 directories on every start, and its network policy defaults to `off`.
 An operator-supplied foreign workspace is recorded separately from an owned one: it must be an

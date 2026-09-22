@@ -103,6 +103,7 @@ No claim of complete retrospective coverage is made yet.
 | Session provisioning and factory (FA-06) | Implemented locally: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Not deployed; deploy with a state wipe. |
 | Execution envelope (FA-06) | Implemented locally: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Not deployed. |
 | Reply fold, turn messages, transcript delta, turn evidence (FA-10) | Implemented locally: no new durable state. The converter changes what a completed hosted turn commits only in a case that cannot occur (an unsettled call) and what a mirrored turn commits not at all; the fold changes what a view holds only where the two copies disagreed, on the rule the daemon already applied; the delta's wire format is unchanged and the daemon still hardens what it publishes. The shared reconciliation reads the tree and the journal as before and writes neither; it changes what a restored transcript contains only where the history rule was looser than the restoration rule (a look-alike observation under another id is evidence of its own, and a settled execution answers a mirrored call the tree left unanswered), and what the projection emits only for a result no open call in its turn can take, which no writer produces. Floot 475, chat 935, space-floot 52 and hosted-agent 675 pass. | Nothing replayed or reconstructed changes for a well-formed tree; tree nodes and journal records are written as before. Not deployed. |
+| Rebindable session bindings (FA-08) | Implemented locally: no new record kind. The session record's `references` directory gains a replace-in-place write (`rebind`) for stable dependency roles, refused for the incarnation's own `client`/`worker`; the owner's `revise` writes the rebound references before the plan text, as creation does, so a plan is never published over edges that are not durable. Partial states fail closed: references rebound with the old plan, or the plan revised with the old references, leave a record the execution envelope refuses to activate (its exact grant and evidence checks compare the plan's recorded image against the live broker's evidence), and a retried rebind names the same identities and completes; a failed stop leaves the record `stopping` and unrevisable, as before. Floot 479, chat 935, space-floot 52, hosted-agent 676, Codex 308, Claude 205, OpenCode 252 and the daemon's session suites (72) pass. | The pet store overwrites a rebound name in one entry write; a daemon crash between two role writes leaves a half-rebound record that fails closed until retried. Not deployed. |
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -425,7 +426,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; acceptance pending |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22, not deployed; completion criteria met locally, pending deployment and acceptance) |
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generation 161+) and accepted on Tokyo; open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
-| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Open |
+| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met locally, not deployed; open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met locally, not deployed |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 160 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
@@ -1158,6 +1159,112 @@ provider bindings while preserving conversation/workspace, with old authority fe
 replacement and explicit handling of failed transitions.
 Do not weaken per-incarnation image/grant checks to accomplish this.
 
+### Rebindable bindings — 2026-09-22
+
+Implemented locally and reviewed; not deployed. Completion criteria met locally.
+What was already true: a session's durable identity is incarnation-free.
+Everything keyed by a session id alone (the derived sandbox id, the owned
+workspace, the private directories, the conversation tree, the private
+journal, the guest names) survives any restart, and the model, effort,
+subscription, network policy and persona were revisable between
+incarnations through the shared provisioner. What was not: the record's
+plan copied the broker's pinned image, account and credential kind at
+creation and treated them as immutable, so a broker re-minted with any of
+them changed refused every session it had served ("destroy the session
+first"); and the record's references (the broker, sandbox and state service
+formulas and the storage owner) were written once at creation and never
+revisable, so a backend re-minted over other services orphaned every
+session even when nothing visible changed.
+Now: the provisioner takes a `rebindable` set beside `immutable` (the three
+adapters declare their image, account and credential-kind fields there;
+placement stays immutable), and a reopen whose proposed plan differs in a
+rebindable field, or whose backend dependencies differ from the record's
+references (the binding named `provider`), is refused by name unless the
+request's `rebind` list names that binding; an unknown name is refused
+rather than ignored, and a creation takes no authorization. An authorized
+reopen stops the record through the owner, then revises it, passing the
+backend's dependencies when they differ, then starts it.
+Old authority is fenced before replacement by construction: the owner's
+`stop` does not resolve until the controller acknowledges native cleanup
+(the supervisor fences admission, closes the client, fences the grant,
+closes MCP admission and reaps the sandbox), and the owner's `revise`
+refuses while a client or worker reference remains or the record is not
+`planned`/`stopped`; a failed stop leaves the record `stopping` and
+unrevisable.
+The daemon's record store gains `rebind`, a replace-in-place write of
+stable dependency roles that refuses the incarnation's own `client` and
+`worker`, requires a complete plan, allows a role the record was created
+without, and is a no-op on the identity a role already holds; the owner's
+`revise` takes the references to rebind, refuses `tools` and the
+incarnation roles, and writes the references before the plan, as creation
+does.
+Failed transitions: a revision refused or failed leaves the stopped record
+on its previous plan and references, and a retry completes it (conformance
+and daemon tests); references rebound but the plan not, or the reverse,
+leave a record whose next activation the execution envelope refuses on
+mismatched image evidence (the exact grant and evidence checks are
+untouched and stricter than before), until a retried rebind names the same
+identities; a failed start after a successful revision leaves the rebound
+record `stopped` for a retry, as any failed start does.
+Floot's session facet exposes the operator's `rebind(bindings)`: hosted
+sessions only, no active turn, the names checked against the bindings the
+session's own backend declares (its descriptor's `rebindableBindings`,
+which the factory kit reads from the provisioner's declaration) before
+the incarnation is touched; it stops the
+incarnation and releases the mount client, admin and agent (the network
+policy change's two halves, now shared), stores a one-shot authorization,
+and the re-provisioning that follows the change carries it in the backend
+request, so a refusal surfaces at the verb. The authorization is spent by
+the first request built from it (a later container-mount recreate never
+carries it) and voided with the verb when no request was built, so it
+cannot be consumed by an unrelated later reopen; deletion clears it too.
+The hosted backend factory validates the list's shape; which names exist
+is the provisioner's. The verb is not a model tool. The review found the
+first draft leaving an authorization behind when the verb failed before
+the request was built, re-sending it on every mount recreate, tearing the
+incarnation down before validating the names, and the second draft
+validating against a vocabulary copied by hand into Floot rather than
+the backend's own declaration, and the third the hosted-agent workspace
+type check failing on a helper that detached the factory's JSDoc and on
+array checks the checker cannot narrow; all are corrected, and the
+per-workspace type checks CI runs (hosted-agent, daemon, Codex) are clean
+for the change, with the pre-existing test-file errors untouched.
+Tests: daemon store cases (edge replacement, a role added, the incarnation
+roles refused, a mid-way failure retried) and owner cases (refused while
+a client is held, `tools`/`client`/`worker` refused, rebound edges read by
+a reconstructed owner and kept by a later plain revision); conformance
+cases for each adapter's rebindable bindings (refused by name, another
+binding's authorization refused, an unknown name refused, the authorized
+rebind revising after a stop with the record then answering the rebound
+broker and refusing the original) and for the `provider` binding (refused,
+a failed revision leaving the old binding, the retry rebinding the
+references without touching the plan, a creation refusing an
+authorization); the Claude and OpenCode module tests rebind an image
+through the real modules; the native owner test rebinds a dependency
+after a native stop and proves the next start resolves it; the factory
+kit refuses a malformed list before provisioning; the descriptor validator
+refuses a malformed declaration; the Claude and OpenCode module tests read
+the declared bindings from the real descriptors; Floot
+factory tests rebind through the verb, refuse a name the backend does not
+declare, an empty list and a turn in flight, prove a refused rebind
+leaves no authorization behind, and that a refusal before the incarnation
+is touched leaves it running.
+Not covered: the execution envelope refusing a half-rebound record
+(argued from its exact checks, not exercised), a daemon crash between two
+reference writes, and the verb failing after the incarnation is replaced
+but before any request is built (the authorization is voided by
+construction; the path is hard to stage).
+Open, from the review: a `provider` rebind moves the state provider and
+storage owner without checking that they serve the recorded session's
+state root, which the plan does not record (the roots are host
+configuration under the wipe-and-recreate deployment model, so a re-rooted
+state provider is a host change, not a broker re-mint; recording the state
+root as placement would refuse it); for Claude and OpenCode the account is
+the broker's own rather than a plan field, so a broker re-minted over
+another Secret is a `provider` change, which the verb's help says; and the
+verb reports the names it authorized, not what the record now carries, so
+the operator authorizes a value they cannot inspect first.
+
 ## FA-09 — Give local development storage an explicit role
 
 The projected 9P workspace is a capability filesystem, not a promise of ordinary local
@@ -1696,7 +1803,7 @@ their remaining work is not implied complete by this deployment sequence.
    Verify cleanup and preserved workspace/credential identity, not just UI success.
    Record failures and unavailable accounts explicitly rather than counting them as passes.
 5. Resume FA-11/FA-12 legacy retirement/deletion (done 2026-09-22; see "Legacy
-   retirement — 2026-09-22"), then FA-06/FA-10 extraction (done locally 2026-09-22, not deployed), FA-07/FA-08,
+   retirement — 2026-09-22"), then FA-06/FA-10 extraction (done locally 2026-09-22, not deployed), FA-07/FA-08 (FA-08 done locally 2026-09-22, not deployed),
    FA-09 storage, and remaining bounded-context/compaction and resource-failure acceptance.
 
 ### Cutover progress — 2026-09-21
@@ -1832,6 +1939,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-22 | FA-08: a session record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen (`rebind: [...]`), after the owner's stop and with the daemon refusing the revision while any authority is held; the record store gains `rebind` and the owner's `revise` takes references; Floot's session facet gains the operator's `rebind` | Daemon store/owner cases; conformance cases per adapter plus the provider binding; Claude/OpenCode module cases; a Floot factory case; Floot 479, chat 935, space-floot 52, hosted-agent 676, Codex 308, Claude 205, OpenCode 252, daemon session suites 72 pass; package ESLint gates clean; independent adversarial review in four passes; FA-08 completion criteria met locally; not deployed |
 | 2026-09-22 | FA-10: one reconciliation of a turn's tool evidence (`src/turn-evidence.js`) for history and restoration, on the restoration rules; one tool-pairing rule (`pairToolCalls` with `perTurn`); history tool rows carry the provider's call id; the tree-to-records projection emits only results an open call in the turn can take | Reducer suite (11 cases), a projection case, a restoration case and a pairing case; Floot 475, chat 935, space-floot 52, hosted-agent 675 pass; Floot and hosted-agent ESLint gates clean for the change; independent adversarial review; FA-10 completion criteria met locally; not deployed |
 | 2026-09-22 | FA-10: one reply-event fold shared by the daemon turn and the browser component, one hosted-turn message converter for both commits, one transcript-delta applier in place of chat's mirror; chat depends on Floot at runtime for the two pure modules | New fold suite proves snapshot-adopting and event-applying views converge at every cut of a corpus; Floot 462, chat 935, space-floot 52 pass; package ESLint gates clean for the change; independent adversarial review; reconciliation and tool-pairing duplication remain; not deployed |
 | 2026-09-22 | FA-06: one execution envelope in hosted-agent for the three native controllers; the provider-grant check and the canonical JSON encoder move from Codex into hosted-agent; exact grant, evidence and raw placement checks apply to every runtime | Envelope suite (10 cases); hosted-agent 674, Claude 203, Codex 306, OpenCode 250 pass; ESLint gates clean; hosted-agent types pass; independent adversarial review verified the checks against the real issuer and sandbox attestation builder and found one defect (Claude's single-token subscription sessions would have required an OAuth grant), fixed; FA-06 completion criteria met locally; not deployed |
