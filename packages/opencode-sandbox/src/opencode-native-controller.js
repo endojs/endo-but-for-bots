@@ -2,28 +2,18 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 import {
-  assertPublicNetworkEvidence,
-  makePublicNetworkEnvironment,
-} from '@endo/hosted-agent/public-network.js';
+  WORKSPACE_PATH,
+  activateExecutionEnvelope,
+  bindRootOf,
+} from '@endo/hosted-agent/execution-envelope.js';
+import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
+import { makePublicNetworkEnvironment } from '@endo/hosted-agent/public-network.js';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
-import {
-  makeDefaultMounter,
-  makeWorkspaceProjection,
-} from '@endo/hosted-agent/workspace-projection.js';
-import {
-  HOSTED_ANCHOR_ARGV,
-  HOSTED_SLICE_RESOURCES,
-  sliceWritableBytes,
-} from '@endo/hosted-agent/hosted-agent-policy.js';
-import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
-
-import path from 'node:path';
+import { makeDefaultMounter } from '@endo/hosted-agent/workspace-projection.js';
 
 import {
   assertHostedAgentPolicyV1,
@@ -45,10 +35,18 @@ import {
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 import { readSessionPlan } from './opencode-session-plan.js';
 
+/** The CLI's home on the slice's own tmpfs; its store is in memory. */
+const OPENCODE_HOME = '/tmp/opencode-home';
+
 /**
- * Inert composition for one dedicated native worker. Resolver capabilities are
- * never passed into either shared service. Each native owner is retained before
- * its first effect; failed cleanup remains available through terminate retries.
+ * Inert composition for one dedicated native worker. The shared execution
+ * envelope (`@endo/hosted-agent/execution-envelope.js`) activates the plan;
+ * what is OpenCode's here is the Endo tool bridge over a per-session MCP
+ * socket bound read-only into the slice, the CLI's environment (its database
+ * in memory, its home on tmpfs, its configuration inline), and the client run
+ * over the slice. Resolver capabilities are never passed into either shared
+ * service. Each native owner is retained before its first effect; failed
+ * cleanup remains available through terminate retries.
  *
  * The daemon calls terminate without activate when reconstructing a previously
  * started controller. Shared scopes can then be looked up, but lost local 9P/MCP
@@ -56,8 +54,6 @@ import { readSessionPlan } from './opencode-session-plan.js';
  * Fresh inert construction is cancelled by the daemon's construction kit instead.
  * The caller must pre-create and own the private mounterSocketDir and keep all
  * mount/socket paths under stable, disjoint ancestry outside guest writes.
- * Each operation requests the shared hosted policy resource settings and
- * mount table. The sandbox verifies their enforcement before handing off the slice.
  *
  * @param {object} [powers]
  * @param {typeof makeDefaultMounter} [powers.makeMounter]
@@ -96,222 +92,101 @@ export const makeOpencodeNativeController = ({
     context,
     reclaimMount,
     reportError,
-    start: async (approved, resolver, { own, assertOpen }) => {
-      const sandbox = await E(resolver).get('sandboxService');
-      assertOpen();
-      const sandboxScope = own(
-        'sandbox',
-        await E(sandbox).provideScope(approved.sandboxSessionId),
-      );
-      assertOpen();
-      const broker = await E(resolver).get('brokerService');
-      assertOpen();
-      const brokerScope = own(
-        'broker',
-        await E(broker).provideScope(
-          approved.sandboxSessionId,
-          harden({
+    start: async (approved, resolver, owner) => {
+      const envelope = await activateExecutionEnvelope(
+        approved,
+        resolver,
+        owner,
+        {
+          label: 'OpenCode',
+          env,
+          makeMounter,
+          ...(makeFilesystem ? { makeFilesystem } : {}),
+          scopeRequest: plan => ({
             providerOrigin: OPENROUTER_ORIGIN,
             accountRef: OPENCODE_BROKER_ACCOUNT,
-            networkPolicy: approved.networkPolicy,
-            ...(approved.model ? { model: parseModelRef(approved.model) } : {}),
+            networkPolicy: plan.networkPolicy,
+            ...(plan.model ? { model: parseModelRef(plan.model) } : {}),
           }),
-        ),
-      );
-      assertOpen();
-      await E(brokerScope).start();
-      assertOpen();
-      const [attestation, evidence] = await Promise.all([
-        E(brokerScope).attestation(),
-        E(brokerScope).sandboxEvidence(),
-      ]);
-      assertCopyData(harden(attestation));
-      assertCopyData(harden(evidence));
-      const rootfs = parseRootfs(approved.rootfs);
-      (rootfs.kind === 'oci' &&
-        typeof evidence.imageDigest === 'string' &&
-        /^sha256:[a-f0-9]{64}$/.test(evidence.imageDigest) &&
-        rootfs.ref.endsWith(`@${evidence.imageDigest}`) &&
-        attestation.imageDigest === evidence.imageDigest) ||
-        Fail`OpenCode rootfs must match the broker's pinned image`;
-      const publicNetwork = assertPublicNetworkEvidence(evidence.network);
-      (approved.networkPolicy === 'public-internet') ===
-        (publicNetwork !== undefined) ||
-        Fail`Broker network evidence does not match the recorded policy`;
-      assertOpen();
-      // Exactly one of the two is recorded; the parser enforces it.
-      // Retained before it is established, so a failed mount is still
-      // closed by this owner's ordinary cleanup.
-      const mounter = own(
-        'mounter',
-        makeWorkspaceProjection(
-          {
-            workspaceRootPath:
-              approved.workspaceHostPath ??
-              /** @type {string} */ (approved.workspaceDir),
-            workspaceMountPoint: approved.workspaceMountPoint,
-            mounterSocketDir: approved.mounterSocketDir,
-            ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
+          image: plan => parseRootfs(plan.rootfs),
+          authMode: () => 'api-key',
+          // The Endo tools Floot pinned reach the CLI over a per-session MCP
+          // socket this controller runs; only JSON crosses it. Its socket
+          // has to be serving before the slice can be asked for.
+          tools: async ({ plan, resolver: dependencies, own, assertOpen }) => {
+            const tools = await E(dependencies).get('tools');
+            assertOpen();
+            const bridge = await makeBridge(tools);
+            assertOpen();
+            const mcp = own('mcp', makeMcp({ socketDir: plan.mcpDir, bridge }));
+            assertOpen();
+            await mcp.start();
+            return mcp;
           },
-          { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
-        ),
-      );
-      assertOpen();
-      await mounter.mount();
-      assertOpen();
-      // The workspace is this incarnation's 9P projection. OpenCode's own
-      // database is in memory and its remaining CLI state lives on tmpfs.
-      const mounts = [
-        {
-          role: 'workspace',
-          kind: /** @type {const} */ ('attach'),
-          source: approved.workspaceMountPoint,
-          destination: '/workspace',
-          mode: /** @type {const} */ ('rw'),
-        },
-        {
-          role: 'tmp',
-          kind: /** @type {const} */ ('tmpfs'),
-          destination: '/tmp',
-          sizeBytes: 1024n ** 3n,
-        },
-        {
-          role: 'run',
-          kind: /** @type {const} */ ('tmpfs'),
-          destination: '/run',
-          sizeBytes: 256n * 1024n ** 2n,
-        },
-      ];
-      const tools = await E(resolver).get('tools');
-      assertOpen();
-      const bridge = await makeBridge(tools);
-      assertOpen();
-      const mcp = own('mcp', makeMcp({ socketDir: approved.mcpDir, bridge }));
-      assertOpen();
-      await mcp.start();
-      assertOpen();
-      // The bridge's socket and its stdio shim. Read-only: the guest connects
-      // to the socket, and nothing it does should replace the shim it runs.
-      // After the workspace, before the tmpfs roles: the table's order is the
-      // profile's, and the MCP row is added here only because its socket has
-      // to be serving before the slice can be asked for.
-      /** @type {any[]} */ (mounts).splice(1, 0, {
-        role: 'mcp',
-        kind: /** @type {const} */ ('bind'),
-        source: approved.mcpDir,
-        destination: DEFAULT_INNER_DIR,
-        mode: /** @type {const} */ ('ro'),
-      });
-      // A public-network session gets the operator's generated nameserver
-      // file as a declared mount, the way Codex does, rather than as a
-      // `generatedFiles` entry the attested table has no row for. The
-      // hosted contract expects this row whenever the policy is
-      // public-internet, so writing the file some other way would leave the
-      // handoff check looking for a mount that is not there.
-      if (publicNetwork) {
-        /** @type {any[]} */ (mounts).unshift({
-          role: /** @type {const} */ ('resolver'),
-          kind: /** @type {const} */ ('resolver'),
-          source: publicNetwork.resolverConfigPath,
-          destination: /** @type {const} */ ('/etc/resolv.conf'),
-          mode: /** @type {const} */ ('ro'),
-        });
-      }
-      const options = harden({
-        rootfs,
-        // The policy path derives the namespace from the attested sidecar
-        // rather than being handed a container to join.
-        network: 'broker-only',
-        cwd: '/workspace',
-        policy: {
-          profile: SLICE_POLICY_PROFILE,
-          imageDigest: evidence.imageDigest,
-          uid: 1000,
-          gid: 1000,
-          brokerSidecar: { container: evidence.brokerSidecar.container },
-          resources: {
-            ...HOSTED_SLICE_RESOURCES,
-            writableBytes: sliceWritableBytes(mounts),
-          },
-          mounts,
-          // The parents of this session's own directories: the roots this
-          // deployment owns and allocates under.
-          bindRoots: [path.dirname(approved.mcpDir)],
-          attestationArgv: HOSTED_ANCHOR_ARGV,
-        },
-        env: {
-          ...makePublicNetworkEnvironment(publicNetwork),
-          OPENROUTER_API_KEY: 'opencode-broker-placeholder',
-          HOME: '/tmp/opencode-home',
-          XDG_CONFIG_HOME: '/tmp/opencode-home/.config',
-          // The CLI's own store is a cache of this incarnation, not the record
-          // of the conversation: the stack holds that and restores it. An
-          // in-memory database is a configuration the fork supports outright
-          // (`Database.path()`), and it takes the SQLite/WAL constraint with
-          // it — there is no file, so there is no shared-memory index to need
-          // a local filesystem for.
-          XDG_DATA_HOME: '/tmp/opencode-home/.local/share',
-          OPENCODE_DB: ':memory:',
-          OPENCODE_CONFIG_CONTENT: JSON.stringify(
-            makeOpencodeConfig({
-              ...(approved.model ? { model: approved.model } : {}),
-              ...(approved.systemPrompt
-                ? { systemPrompt: approved.systemPrompt }
-                : {}),
-              baseUrl: `${attestation.endpoint}/api/v1`,
-              allowLoopbackHttp: true,
-              mcpServers: {
-                [DEFAULT_SERVER_NAME]: buildOpencodeMcpServer({
-                  innerDir: DEFAULT_INNER_DIR,
-                  socketName: DEFAULT_SOCKET_NAME,
-                }),
-              },
-            }),
-          ),
-          OPENCODE_AUTH_CONTENT: '{}',
-          OPENCODE_DISABLE_PROJECT_CONFIG: '1',
-          OPENCODE_PURE: '1',
-          OPENCODE_DISABLE_DEFAULT_PLUGINS: '1',
-          OPENCODE_DISABLE_AUTOUPDATE: '1',
-          OPENCODE_DISABLE_MODELS_FETCH: '1',
-          OPENCODE_BRIDGE_DIRECTORY: '/workspace',
-          OPENCODE_SERVER_PASSWORD: makePassword(),
-          OPENCODE_MCP_SERVER_NAME: DEFAULT_SERVER_NAME,
-        },
-      });
-      assertCopyData(options);
-      // `make`, not `makeResolved`: the runtime returns a slice only once its
-      // mount table verifies against the anchor's own.
-      const slice = await E(sandboxScope).make(options);
-      // Checked twice. The runtime proved the slice's confinement to itself;
-      // this proves the slice it returned is the one this session was
-      // promised — the hosted contract's controls, this profile's roles, and
-      // no mount the table did not declare. Codex has always done this at its
-      // authority handoff; the other two did not, because they had no
-      // attestation to restate.
-      assertHostedAgentPolicyV1(
-        hostedPolicyFromSlice({
-          attestation: await E(slice).policy(),
-          sessionId: approved.sandboxSessionId,
-          credentialInjection: 'broker-only',
-          brokerTransport: 'loopback-sidecar',
-          executionDomain: 'guest',
-          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
-        }),
-        {
-          imageDigest: evidence.imageDigest,
-          sessionId: approved.sandboxSessionId,
-          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+          // The bridge's socket and its stdio shim, read-only: the guest
+          // connects to the socket, and nothing it does should replace the
+          // shim it runs. OpenCode's own database is in memory and its
+          // remaining CLI state lives on tmpfs, so there is no state bind.
+          binds: ({ plan }) => [
+            {
+              role: 'mcp',
+              kind: 'bind',
+              source: plan.mcpDir,
+              destination: DEFAULT_INNER_DIR,
+              mode: 'ro',
+            },
+          ],
+          bindRoots: ({ plan }) => [bindRootOf(plan.mcpDir)],
+          sliceEnv: ({ plan, attestation, publicNetwork }) => ({
+            ...makePublicNetworkEnvironment(publicNetwork),
+            OPENROUTER_API_KEY: 'opencode-broker-placeholder',
+            HOME: OPENCODE_HOME,
+            XDG_CONFIG_HOME: `${OPENCODE_HOME}/.config`,
+            // The CLI's own store is a cache of this incarnation, not the
+            // record of the conversation: the stack holds that and restores
+            // it. An in-memory database is a configuration the fork supports
+            // outright (`Database.path()`), and it takes the SQLite/WAL
+            // constraint with it — there is no file, so there is no
+            // shared-memory index to need a local filesystem for.
+            XDG_DATA_HOME: `${OPENCODE_HOME}/.local/share`,
+            OPENCODE_DB: ':memory:',
+            OPENCODE_CONFIG_CONTENT: JSON.stringify(
+              makeOpencodeConfig({
+                ...(plan.model ? { model: plan.model } : {}),
+                ...(plan.systemPrompt
+                  ? { systemPrompt: plan.systemPrompt }
+                  : {}),
+                baseUrl: `${attestation.endpoint}/api/v1`,
+                allowLoopbackHttp: true,
+                mcpServers: {
+                  [DEFAULT_SERVER_NAME]: buildOpencodeMcpServer({
+                    innerDir: DEFAULT_INNER_DIR,
+                    socketName: DEFAULT_SOCKET_NAME,
+                  }),
+                },
+              }),
+            ),
+            OPENCODE_AUTH_CONTENT: '{}',
+            OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+            OPENCODE_PURE: '1',
+            OPENCODE_DISABLE_DEFAULT_PLUGINS: '1',
+            OPENCODE_DISABLE_AUTOUPDATE: '1',
+            OPENCODE_DISABLE_MODELS_FETCH: '1',
+            OPENCODE_BRIDGE_DIRECTORY: WORKSPACE_PATH,
+            OPENCODE_SERVER_PASSWORD: makePassword(),
+            OPENCODE_MCP_SERVER_NAME: DEFAULT_SERVER_NAME,
+          }),
+          policy: { assertHostedAgentPolicyV1, hostedPolicyFromSlice },
         },
       );
-      assertOpen();
+      const { slice, rootfs } = envelope;
       return makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
         slice,
         workspaceMountPoint: approved.workspaceMountPoint,
-        workspacePath: '/workspace',
-        statePath: '/tmp/opencode-home/.local/share',
+        workspacePath: WORKSPACE_PATH,
+        statePath: `${OPENCODE_HOME}/.local/share`,
         backend: 'podman',
         rootfsLabel: rootfsLabel(rootfs),
         model: approved.model,

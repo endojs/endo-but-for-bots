@@ -3,16 +3,19 @@
 
 /**
  * The per-session native controller the daemon session owner starts for a
- * recorded Claude session: the `client` role of the record. It activates the
- * approved plan by acquiring a scope from the native sandbox service and an
- * inference grant from the provider broker, checking the broker's evidence
- * against the recorded image and network policy, preparing the session's
- * persistent Claude config directory through the state provider, projecting
- * the recorded workspace through this session's own 9P mounter, starting the
- * Endo tool bridge, and only then running the Claude CLI client over a slice
- * that joins the broker's network namespace. The slice never holds the
- * provider credential: it sees the listener's loopback endpoint and a
- * placeholder. Construction is inert; the daemon supplies every dependency
+ * recorded Claude session: the `client` role of the record. The shared
+ * execution envelope (`@endo/hosted-agent/execution-envelope.js`) activates
+ * the approved plan: it acquires a scope from the native sandbox service and
+ * an inference grant from the provider broker, holds the grant and the
+ * broker's evidence to the recorded image, account and network policy,
+ * projects the recorded workspace through this session's own 9P mounter, and
+ * asks for a slice over the attested mount table it checks twice. What is
+ * Claude's here: the persistent config directory the state provider prepares
+ * (the conversation transcript lives there), the Endo tool bridge over a
+ * per-session MCP socket bound read-only into the slice, the CLI's
+ * environment, and the Claude CLI client run over the slice. The slice never
+ * holds the provider credential: it sees the listener's loopback endpoint and
+ * a placeholder. Construction is inert; the daemon supplies every dependency
  * by exact recorded identity through the resolver, and the guest never sees
  * a recorded path.
  *
@@ -23,32 +26,26 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { assertCopyData } from '@endo/daemon/copy-data.js';
+import { assertCopyData } from '@endo/hosted-agent/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 import {
-  assertPublicNetworkEvidence,
-  makePublicNetworkEnvironment,
-} from '@endo/hosted-agent/public-network.js';
+  WORKSPACE_PATH,
+  activateExecutionEnvelope,
+  bindRootOf,
+} from '@endo/hosted-agent/execution-envelope.js';
+import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
+import { makePublicNetworkEnvironment } from '@endo/hosted-agent/public-network.js';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
-import {
-  makeDefaultMounter,
-  makeWorkspaceProjection,
-} from '@endo/hosted-agent/workspace-projection.js';
-import {
-  HOSTED_ANCHOR_ARGV,
-  HOSTED_SLICE_RESOURCES,
-  sliceWritableBytes,
-} from '@endo/hosted-agent/hosted-agent-policy.js';
-import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
+import { makeDefaultMounter } from '@endo/hosted-agent/workspace-projection.js';
 
 import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
 import { makeClaudeClient } from './claude-client.js';
 import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
 import { readClaudeSessionPlan } from './claude-session-plan.js';
 import {
+  CONFIG_PATH,
   assertHostedAgentPolicyV1,
   hostedPolicyFromSlice,
 } from './claude-hosted-policy.js';
@@ -77,9 +74,6 @@ const transcriptSessionUuid = sandboxSessionId => {
   ].join('-');
 };
 
-/** Slice-internal paths; the recorded host paths never reach the guest. */
-const WORKSPACE_PATH = '/workspace';
-const CONFIG_PATH = '/claude-config';
 /**
  * What the CLI holds instead of a credential: it insists on one and sends it
  * to the listener, which never forwards it upstream.
@@ -140,208 +134,87 @@ export const makeClaudeNativeController = ({
     context,
     reclaimMount,
     reportError,
-    start: async (approved, resolver, { own, assertOpen }) => {
-      const sandbox = await E(resolver).get('sandboxService');
-      assertOpen();
-      const sandboxScope = own(
-        'sandbox',
-        await E(sandbox).provideScope(approved.sandboxSessionId),
-      );
-      assertOpen();
-      const broker = await E(resolver).get('brokerService');
-      assertOpen();
-      const brokerScope = own(
-        'broker',
-        await E(broker).provideScope(
-          approved.sandboxSessionId,
-          harden({
+    start: async (approved, resolver, owner) => {
+      const envelope = await activateExecutionEnvelope(
+        approved,
+        resolver,
+        owner,
+        {
+          label: 'Claude',
+          env,
+          makeMounter,
+          ...(makeFilesystem ? { makeFilesystem } : {}),
+          scopeRequest: plan => ({
             providerOrigin: ANTHROPIC_ORIGIN,
             accountRef: CLAUDE_BROKER_ACCOUNT,
-            ...(approved.subscription
-              ? { subscription: approved.subscription }
-              : {}),
-            networkPolicy: approved.networkPolicy,
-            ...(approved.model ? { model: approved.model } : {}),
+            ...(plan.subscription ? { subscription: plan.subscription } : {}),
+            networkPolicy: plan.networkPolicy,
+            ...(plan.model ? { model: plan.model } : {}),
           }),
-        ),
-      );
-      assertOpen();
-      await E(brokerScope).start();
-      assertOpen();
-      const [attestation, evidence] = await Promise.all([
-        E(brokerScope).attestation(),
-        E(brokerScope).sandboxEvidence(),
-      ]);
-      assertCopyData(harden(attestation));
-      assertCopyData(harden(evidence));
-      const rootfs = parseRootfs(approved.rootfs);
-      (rootfs.kind === 'oci' &&
-        typeof evidence.imageDigest === 'string' &&
-        /^sha256:[a-f0-9]{64}$/.test(evidence.imageDigest) &&
-        rootfs.ref.endsWith(`@${evidence.imageDigest}`) &&
-        attestation.imageDigest === evidence.imageDigest) ||
-        Fail`Claude rootfs must match the broker's pinned image`;
-      const publicNetwork = assertPublicNetworkEvidence(evidence.network);
-      (approved.networkPolicy === 'public-internet') ===
-        (publicNetwork !== undefined) ||
-        Fail`Broker network evidence does not match the recorded policy`;
-      assertOpen();
-      const stateProvider = await E(resolver).get('stateProvider');
-      assertOpen();
-      // The persistent Claude config directory: the conversation transcript
-      // lives there, apart from the workspace, and survives the incarnation.
-      const state = await E(stateProvider).prepareSessionDirectory(
-        approved.sandboxSessionId,
-      );
-      assertCopyData(harden(state));
-      assertOpen();
-      // Exactly one of the two is recorded; the parser enforces it.
-      // Retained before it is established, so a failed mount is still
-      // closed by this owner's ordinary cleanup.
-      const mounter = own(
-        'mounter',
-        makeWorkspaceProjection(
-          {
-            workspaceRootPath:
-              approved.workspaceHostPath ??
-              /** @type {string} */ (approved.workspaceDir),
-            workspaceMountPoint: approved.workspaceMountPoint,
-            mounterSocketDir: approved.mounterSocketDir,
-            ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
+          image: plan => parseRootfs(plan.rootfs),
+          // The grant's authentication mode is the broker's own: a pool
+          // renews and reports `oauth`; a single token, subscription or API
+          // key, is held as `api-key`. The plan records the credential kind
+          // for the placeholder variable, not the mode, so none is required
+          // beyond the grant check's own.
+          // The persistent Claude config directory: the conversation
+          // transcript lives there, apart from the workspace, and survives
+          // the incarnation.
+          prepare: async ({ plan, resolver: dependencies, assertOpen }) => {
+            const stateProvider = await E(dependencies).get('stateProvider');
+            assertOpen();
+            const state = await E(stateProvider).prepareSessionDirectory(
+              plan.sandboxSessionId,
+            );
+            assertCopyData(harden(state));
+            return state;
           },
-          { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
-        ),
-      );
-      assertOpen();
-      await mounter.mount();
-      assertOpen();
-      const tools = await E(resolver).get('tools');
-      assertOpen();
-      const bridge = await makeBridge(tools);
-      assertOpen();
-      const mcp = own('mcp', makeMcp({ socketDir: approved.mcpDir, bridge }));
-      await mcp.start();
-      assertOpen();
-      // The attested mount table. The workspace is the 9P projection this
-      // controller just established, so the sandbox can prove the slice sees
-      // a projection rather than host data; the CLI's own home and the MCP
-      // socket directory are binds attested as binds, each held to the
-      // deployment-owned root its session directory sits under. `/tmp` and
-      // `/run` are declared with ceilings rather than left to whatever
-      // `--read-only-tmpfs` gives, which matters because `HOME` is on `/tmp`.
-      const mounts = [
-        {
-          role: 'workspace',
-          kind: /** @type {const} */ ('attach'),
-          source: approved.workspaceMountPoint,
-          destination: WORKSPACE_PATH,
-          mode: /** @type {const} */ ('rw'),
-        },
-        {
-          role: 'claude-state',
-          kind: /** @type {const} */ ('bind'),
-          source: state.directory,
-          destination: CONFIG_PATH,
-          mode: /** @type {const} */ ('rw'),
-        },
-        {
-          role: 'mcp',
-          kind: /** @type {const} */ ('bind'),
-          source: approved.mcpDir,
-          destination: mcp.innerDir,
-          mode: /** @type {const} */ ('ro'),
-        },
-        {
-          role: 'tmp',
-          kind: /** @type {const} */ ('tmpfs'),
-          destination: '/tmp',
-          sizeBytes: 1024n ** 3n,
-        },
-        {
-          role: 'run',
-          kind: /** @type {const} */ ('tmpfs'),
-          destination: '/run',
-          sizeBytes: 256n * 1024n ** 2n,
-        },
-      ];
-      // A public-network session gets the operator's generated nameserver
-      // file as a declared mount, the way Codex does, rather than as a
-      // `generatedFiles` entry the attested table has no row for. The
-      // hosted contract expects this row whenever the policy is
-      // public-internet, so writing the file some other way would leave the
-      // handoff check looking for a mount that is not there.
-      if (publicNetwork) {
-        /** @type {any[]} */ (mounts).unshift({
-          role: /** @type {const} */ ('resolver'),
-          kind: /** @type {const} */ ('resolver'),
-          source: publicNetwork.resolverConfigPath,
-          destination: /** @type {const} */ ('/etc/resolv.conf'),
-          mode: /** @type {const} */ ('ro'),
-        });
-      }
-      const options = harden({
-        rootfs,
-        // The policy path derives the namespace from the attested sidecar
-        // rather than being handed a container to join.
-        network: 'broker-only',
-        cwd: WORKSPACE_PATH,
-        policy: {
-          profile: SLICE_POLICY_PROFILE,
-          imageDigest: evidence.imageDigest,
-          uid: 1000,
-          gid: 1000,
-          brokerSidecar: { container: evidence.brokerSidecar.container },
-          resources: {
-            ...HOSTED_SLICE_RESOURCES,
-            writableBytes: sliceWritableBytes(mounts),
+          // The Endo tools Floot pinned reach the CLI over a per-session MCP
+          // socket this controller runs; only JSON crosses it.
+          tools: async ({ plan, resolver: dependencies, own, assertOpen }) => {
+            const tools = await E(dependencies).get('tools');
+            assertOpen();
+            const bridge = await makeBridge(tools);
+            assertOpen();
+            const mcp = own('mcp', makeMcp({ socketDir: plan.mcpDir, bridge }));
+            await mcp.start();
+            return mcp;
           },
-          mounts,
-          // The parents of this session's own directories: the roots this
-          // deployment owns and allocates under. A bind outside them is
-          // refused, which is what makes the row worth attesting.
-          bindRoots: [
-            path.dirname(state.directory),
-            path.dirname(approved.mcpDir),
+          // The CLI's own home and the MCP socket directory are binds
+          // attested as binds, each held to the deployment-owned root its
+          // session directory sits under.
+          binds: ({ plan, prepared: state, tools: mcp }) => [
+            {
+              role: 'claude-state',
+              kind: 'bind',
+              source: state.directory,
+              destination: CONFIG_PATH,
+              mode: 'rw',
+            },
+            {
+              role: 'mcp',
+              kind: 'bind',
+              source: plan.mcpDir,
+              destination: mcp.innerDir,
+              mode: 'ro',
+            },
           ],
-          attestationArgv: HOSTED_ANCHOR_ARGV,
-        },
-        env: {
-          ...makePublicNetworkEnvironment(publicNetwork),
+          bindRoots: ({ plan, prepared: state }) => [
+            bindRootOf(state.directory),
+            bindRootOf(plan.mcpDir),
+          ],
           // The CLI reaches the listener's loopback endpoint and holds a
           // placeholder under the variable its credential kind reads; the
           // listener never forwards it.
-          ANTHROPIC_BASE_URL: attestation.endpoint,
-          [CREDENTIAL_ENV_VARS[approved.credentialKind]]:
-            CREDENTIAL_PLACEHOLDER,
-        },
-      });
-      assertCopyData(options);
-      // `make`, not `makeResolved`: the runtime returns a slice only once its
-      // mount table verifies against the anchor's own. Arbitrary runtime
-      // container attaches remain refused by the current backend factory.
-      const slice = await E(sandboxScope).make(options);
-      // Checked twice. The runtime proved the slice's confinement to itself;
-      // this proves the slice it returned is the one this session was
-      // promised — the hosted contract's controls, this profile's roles, and
-      // no mount the table did not declare. Codex has always done this at its
-      // authority handoff; the other two did not, because they had no
-      // attestation to restate.
-      assertHostedAgentPolicyV1(
-        hostedPolicyFromSlice({
-          attestation: await E(slice).policy(),
-          sessionId: approved.sandboxSessionId,
-          credentialInjection: 'broker-only',
-          brokerTransport: 'loopback-sidecar',
-          executionDomain: 'guest',
-          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
-        }),
-        {
-          imageDigest: evidence.imageDigest,
-          sessionId: approved.sandboxSessionId,
-          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+          sliceEnv: ({ plan, attestation, publicNetwork }) => ({
+            ...makePublicNetworkEnvironment(publicNetwork),
+            ANTHROPIC_BASE_URL: attestation.endpoint,
+            [CREDENTIAL_ENV_VARS[plan.credentialKind]]: CREDENTIAL_PLACEHOLDER,
+          }),
+          policy: { assertHostedAgentPolicyV1, hostedPolicyFromSlice },
         },
       );
-      assertOpen();
+      const { slice, rootfs, prepared: state, tools: mcp } = envelope;
       const resume = makeResume(state.directory, {
         debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),
       });

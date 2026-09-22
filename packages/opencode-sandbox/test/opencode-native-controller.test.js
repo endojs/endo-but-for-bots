@@ -50,14 +50,7 @@ const sliceAttestationFor = policy =>
       ipc: 'private',
       mount: 'private',
     },
-    limits: {
-      memoryBytes: policy.resources.memoryBytes,
-      pids: policy.resources.pids,
-      cpuCores: policy.resources.cpuCores,
-      openFiles: policy.resources.openFiles,
-      coreBytes: policy.resources.coreBytes,
-      writableBytes: policy.resources.writableBytes,
-    },
+    limits: policy.resources,
     mounts: policy.mounts.map(mount => ({
       role: mount.role,
       source:
@@ -68,7 +61,7 @@ const sliceAttestationFor = policy =>
             : `${mount.kind}:${mount.source}`,
       destination: mount.destination,
       mode: mount.mode ?? 'rw',
-      options: ['nosuid', 'nodev'],
+      options: ['nodev', 'nosuid'],
     })),
   });
 
@@ -177,6 +170,15 @@ const fixture = (t, { realClient = false } = {}) => {
     async provideScope(id, spec) {
       events.push(['grant', id, spec]);
       let closed = false;
+      const network =
+        spec.networkPolicy === 'public-internet' && !faults.missingPublic
+          ? harden({
+              policy: 'public-internet',
+              proxyUrl: 'http://127.0.0.1:9001',
+              dnsHost: '127.0.0.53',
+              resolverConfigPath: '/operator/public-resolv.conf',
+            })
+          : undefined;
       const scope = Far('Grant', {
         async start() {
           if (faults.grantWait) {
@@ -185,27 +187,36 @@ const fixture = (t, { realClient = false } = {}) => {
           }
           if (closed) throw Error('grant closed');
         },
+        // The grant and the evidence the shared issuer reports, held to the
+        // session at activation: exact, so a stub that echoed less would
+        // prove nothing.
         async attestation() {
           return harden({
-            endpoint: 'http://127.0.0.1:9000',
+            version: 'ProviderGrantV1',
+            sessionId: id,
+            grantId: `grant-${id}`,
             imageDigest: `sha256:${'a'.repeat(64)}`,
+            accountRef: 'openrouter',
+            authMode: 'api-key',
+            networkNamespaceId: id,
+            ...(network ? { network } : {}),
+            endpoint: 'http://127.0.0.1:9000',
+            providerOrigin: 'https://openrouter.ai',
+            model: spec.model ?? null,
+            modelAdmission: 'account-catalog',
           });
         },
         async sandboxEvidence() {
           return harden({
-            brokerSidecar: { container: id },
+            version: 'CodexBrokerSandboxEvidenceV1',
+            sessionId: id,
             imageDigest: `sha256:${(faults.wrongImage ? 'b' : 'a').repeat(64)}`,
-            ...(spec.networkPolicy === 'public-internet' &&
-            !faults.missingPublic
-              ? {
-                  network: {
-                    policy: 'public-internet',
-                    proxyUrl: 'http://127.0.0.1:9001',
-                    dnsHost: '127.0.0.53',
-                    resolverConfigPath: '/operator/public-resolv.conf',
-                  },
-                }
-              : {}),
+            grantId: `grant-${id}`,
+            networkNamespaceId: id,
+            brokerSidecar: { container: id },
+            credentialInjection: 'broker-only',
+            brokerTransport: 'loopback-sidecar',
+            ...(network ? { network } : {}),
             ...(faults.badEvidence ? { unexpected: foreign } : {}),
           });
         },

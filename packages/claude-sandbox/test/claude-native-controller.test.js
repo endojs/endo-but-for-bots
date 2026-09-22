@@ -50,14 +50,7 @@ const sliceAttestationFor = policy =>
       ipc: 'private',
       mount: 'private',
     },
-    limits: {
-      memoryBytes: policy.resources.memoryBytes,
-      pids: policy.resources.pids,
-      cpuCores: policy.resources.cpuCores,
-      openFiles: policy.resources.openFiles,
-      coreBytes: policy.resources.coreBytes,
-      writableBytes: policy.resources.writableBytes,
-    },
+    limits: policy.resources,
     mounts: policy.mounts.map(mount => ({
       role: mount.role,
       source:
@@ -68,7 +61,7 @@ const sliceAttestationFor = policy =>
             : `${mount.kind}:${mount.source}`,
       destination: mount.destination,
       mode: mount.mode ?? 'rw',
-      options: ['nosuid', 'nodev'],
+      options: ['nodev', 'nosuid'],
     })),
   });
 
@@ -183,6 +176,15 @@ const fixture = (t, { realClient = false } = {}) => {
     async provideScope(id, spec) {
       events.push(['grant', id, spec]);
       let closed = false;
+      const network =
+        spec.networkPolicy === 'public-internet' && !faults.missingPublic
+          ? harden({
+              policy: 'public-internet',
+              proxyUrl: 'http://127.0.0.1:9001',
+              dnsHost: '127.0.0.53',
+              resolverConfigPath: '/operator/public-resolv.conf',
+            })
+          : undefined;
       const scope = Far('Grant', {
         async start() {
           events.push(`start grant ${id}`);
@@ -192,29 +194,40 @@ const fixture = (t, { realClient = false } = {}) => {
           }
           if (closed) throw Error('grant closed');
         },
+        // The grant and the evidence the shared issuer reports, held to the
+        // session at activation: exact, so a stub that echoed less would
+        // prove nothing.
         async attestation() {
           return harden({
-            endpoint: 'http://127.0.0.1:9000',
+            version: 'ProviderGrantV1',
+            sessionId: id,
+            grantId: `grant-${id}`,
             imageDigest: digest,
+            accountRef: 'anthropic',
+            // A single-token broker, subscription or API key, holds it as
+            // `api-key`; only a pool reports `oauth`.
+            authMode: 'api-key',
+            networkNamespaceId: `sidecar-${id}`,
+            ...(network ? { network } : {}),
+            endpoint: 'http://127.0.0.1:9000',
+            providerOrigin: 'https://api.anthropic.com',
+            model: spec.model ?? null,
+            modelAdmission: 'account-catalog',
           });
         },
         async sandboxEvidence() {
           return harden({
-            brokerSidecar: { container: `sidecar-${id}` },
+            version: 'CodexBrokerSandboxEvidenceV1',
+            sessionId: id,
             imageDigest: faults.wrongImage
               ? `sha256:${'b'.repeat(64)}`
               : digest,
-            ...(spec.networkPolicy === 'public-internet' &&
-            !faults.missingPublic
-              ? {
-                  network: {
-                    policy: 'public-internet',
-                    proxyUrl: 'http://127.0.0.1:9001',
-                    dnsHost: '127.0.0.53',
-                    resolverConfigPath: '/operator/public-resolv.conf',
-                  },
-                }
-              : {}),
+            grantId: `grant-${id}`,
+            networkNamespaceId: `sidecar-${id}`,
+            brokerSidecar: { container: `sidecar-${id}` },
+            credentialInjection: 'broker-only',
+            brokerTransport: 'loopback-sidecar',
+            ...(network ? { network } : {}),
             ...(faults.badEvidence ? { unexpected: foreign } : {}),
           });
         },

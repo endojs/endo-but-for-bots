@@ -11,9 +11,10 @@
 
 import { readMountPrograms } from '@endo/9p-server/mount-caplet.js';
 import { Fail, b, q } from '@endo/errors';
-import { passStyleOf } from '@endo/pass-style';
 import { createHash } from 'node:crypto';
 import { isAbsolute, normalize } from 'node:path';
+
+import { assertCopyData } from './copy-data.js';
 
 /**
  * The operator's rootless mount settings, recorded verbatim as the subset of
@@ -142,27 +143,6 @@ export const assertSessionId = (value, label = 'Hosted') => {
 };
 harden(assertSessionId);
 
-/**
- * Recorded plan text is copy data: records, arrays and primitives, nothing
- * that carries authority. Parsed JSON is checked as such before any field is
- * read.
- * @param {unknown} value
- */
-const assertPlanData = value => {
-  passStyleOf(value);
-  const pending = [value];
-  while (pending.length !== 0) {
-    const next = pending.pop();
-    if (typeof next === 'object' && next !== null) {
-      const style = passStyleOf(next);
-      style === 'copyRecord' ||
-        style === 'copyArray' ||
-        Fail`Session plan requires copy data, not ${q(style)}`;
-      pending.push(...Object.values(next));
-    }
-  }
-};
-
 const NETWORK_POLICIES = harden(['off', 'public-internet']);
 const SUBSCRIPTION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const WORKSPACE_FIELDS = harden(['workspaceDir', 'workspaceHostPath']);
@@ -193,7 +173,7 @@ export const readSessionPlacement = (
   { label, sandboxIdFallback = 'session', privatePaths = [], assertEffort },
 ) => {
   const value = JSON.parse(text);
-  assertPlanData(harden(value));
+  assertCopyData(harden(value));
   (typeof value === 'object' && value !== null && !Array.isArray(value)) ||
     Fail`Session plan must be a record`;
   /** @type {Record<string, any>} */
