@@ -1,5 +1,7 @@
 // @ts-nocheck
 
+/** @import { DaemonDatabase } from '../src/manager-database.js' */
+
 // Integration test: the `@registry` special name is populated on every host
 // (mirroring `@node`), so `E(host).lookup('@registry')` returns the host's
 // EndoRegistry capability without the caller branching on its presence.  See
@@ -39,7 +41,7 @@ test.afterEach.always(async () => {
  * inspection and mutation, mirroring `openTestDb` in endo.test.js.
  *
  * @param {string} statePath
- * @returns {import('../src/manager-database.js').DaemonDatabase}
+ * @returns {DaemonDatabase}
  */
 const openTestDb = statePath =>
   makeDaemonDatabase({
@@ -118,7 +120,8 @@ test.serial(
   },
 );
 
-// Migration coverage: a host formula persisted before #671 required the
+// Migration coverage: a host formula persisted before
+// endojs/endo-but-for-bots#671 required the
 // `registry` field lacks it entirely.  On startup, `seedFormulaGraphFromPersistence`
 // (packages/daemon/src/manager.js) upgrades it in place with a fresh
 // daemon-default registry formula so the daemon starts successfully and
@@ -134,25 +137,35 @@ test.serial(
     const hostId = await E(host).identify('@agent');
     const { number: hostNumber, node: hostNode } = parseId(hostId);
 
-    const { formula: formulaBefore } = openTestDb(config.statePath).readFormula(
-      hostNumber,
-    );
-    t.is(formulaBefore.type, 'host');
-    t.truthy(
-      formulaBefore.registry,
-      'a freshly formulated host already carries a registry field',
-    );
-
     await stop(config);
 
-    // Simulate a pre-#671 persisted host formula by writing it back
-    // with the registry field stripped out.
-    const { registry: _registry, ...legacyFormula } = formulaBefore;
-    openTestDb(config.statePath).writeFormula(
-      hostNumber,
-      hostNode,
-      legacyFormula,
-    );
+    // Simulate a host persisted before endojs/endo-but-for-bots#671 by
+    // writing it back with the registry field stripped out.
+    let originalRegistryUrl;
+    {
+      const db = openTestDb(config.statePath);
+      try {
+        const { formula: formulaBefore } = db.readFormula(hostNumber);
+        t.is(formulaBefore.type, 'host');
+        t.truthy(
+          formulaBefore.registry,
+          'a freshly formulated host already carries a registry field',
+        );
+        const { number: originalRegistryNumber } = parseId(
+          formulaBefore.registry,
+        );
+        const { formula: originalRegistryFormula } = db.readFormula(
+          originalRegistryNumber,
+        );
+        t.is(originalRegistryFormula.type, 'registry');
+        originalRegistryUrl = originalRegistryFormula.registryUrl;
+        const { registry, ...legacyFormula } = formulaBefore;
+        t.truthy(registry);
+        db.writeFormula(hostNumber, hostNode, legacyFormula);
+      } finally {
+        db.close();
+      }
+    }
 
     await restart(config);
     const { getBootstrap, closed } = await makeEndoClient(
@@ -163,18 +176,51 @@ test.serial(
     closed.catch(() => {});
     const hostAfter = E(getBootstrap()).host();
 
-    const { formula: migratedFormula } = openTestDb(
-      config.statePath,
-    ).readFormula(hostNumber);
-    t.is(migratedFormula.type, 'host');
-    t.truthy(migratedFormula.registry, 'migration re-populates registry');
+    let migratedRegistryId;
+    {
+      const db = openTestDb(config.statePath);
+      try {
+        const { formula: migratedFormula } = db.readFormula(hostNumber);
+        t.is(migratedFormula.type, 'host');
+        t.truthy(migratedFormula.registry, 'migration re-populates registry');
+        migratedRegistryId = migratedFormula.registry;
+        const { number: migratedRegistryNumber } = parseId(migratedRegistryId);
+        const { formula: migratedRegistryFormula } = db.readFormula(
+          migratedRegistryNumber,
+        );
+        t.is(migratedRegistryFormula.type, 'registry');
+        t.is(
+          migratedRegistryFormula.registryUrl,
+          originalRegistryUrl,
+          'migration uses the same default registry URL as a fresh host',
+        );
+      } finally {
+        db.close();
+      }
+    }
 
     const registryAfter = await E(hostAfter).lookup('@registry');
     t.truthy(registryAfter, '@registry resolves for the migrated host');
     t.is(
       await E(hostAfter).identify('@registry'),
-      migratedFormula.registry,
+      migratedRegistryId,
       'the migrated registry field backs the @registry special name',
     );
+
+    await restart(config);
+    {
+      const db = openTestDb(config.statePath);
+      try {
+        const { formula: restartedFormula } = db.readFormula(hostNumber);
+        t.is(restartedFormula.type, 'host');
+        t.is(
+          restartedFormula.registry,
+          migratedRegistryId,
+          'a second startup does not replace the migrated registry',
+        );
+      } finally {
+        db.close();
+      }
+    }
   },
 );

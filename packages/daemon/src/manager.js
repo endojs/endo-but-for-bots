@@ -141,6 +141,13 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  */
 
 /**
+ * A host formula read from persistence may predate the required `registry`
+ * field. Runtime host formulas always have the field after startup migration.
+ *
+ * @typedef {Omit<HostFormula, 'registry'> & { registry?: FormulaIdentifier }} PersistedHostFormula
+ */
+
+/**
  * The daemon's filesystem content store always surfaces the optional `size` /
  * `readRange` members of the host-side `ContentStoreBlob`, so its `fetch`
  * result can be narrowed to require them.
@@ -1436,33 +1443,46 @@ const makeDaemonCore = async (
       }),
     );
 
-    // One-shot startup migration: a host formula persisted before the
+    // Idempotent startup migration: a host formula persisted before the
     // required `registry` field existed (see designs/registry-capability.md
     // § Migration for already-formulated hosts) fails fast at incarnation,
     // exactly as a missing `nodeWorker` does. Upgrade it in place with a
     // fresh registry formula pointed at the daemon's default registry URL,
     // mirroring the registry formula every new host gets in
     // `formulateHostDependencies`.
+    /** @type {FormulaIdentifier[]} */
+    const migratedRegistryIds = [];
     await Promise.all(
       entries.map(async entry => {
-        if (
-          entry.formula.type !== 'host' ||
-          /** @type {HostFormula} */ (entry.formula).registry !== undefined
-        ) {
+        if (entry.formula.type !== 'host') {
+          return;
+        }
+        const persistedHostFormula = /** @type {PersistedHostFormula} */ (
+          entry.formula
+        );
+        if (persistedHostFormula.registry !== undefined) {
           return;
         }
         const { number: hostFormulaNumber, node: hostNode } = parseId(entry.id);
         const registryFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
-        const { id: registryId } = await formulateNumberedRegistry(
+        /** @type {RegistryFormula} */
+        const registryFormula = {
+          type: 'registry',
+          registryUrl: registryDefaultUrl,
+        };
+        const registryId = await formulateLazy(
           registryFormulaNumber,
+          registryFormula,
           hostNode,
         );
-        const migratedFormula = /** @type {HostFormula} */ ({
-          .../** @type {HostFormula} */ (entry.formula),
+        pinTransient(registryId);
+        migratedRegistryIds.push(registryId);
+        const migratedFormula = {
+          ...persistedHostFormula,
           registry: registryId,
-        });
+        };
         await persistencePowers.writeFormula(
           hostFormulaNumber,
           hostNode,
@@ -1480,6 +1500,7 @@ const makeDaemonCore = async (
         formulaGraph.onFormulaAdded(id, formula);
       }
     });
+    await Promise.all(migratedRegistryIds.map(unpinTransient));
 
     const petStoreTypes = new Map([
       ['pet-store', assertPetName],
