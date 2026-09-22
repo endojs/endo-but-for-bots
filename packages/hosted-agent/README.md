@@ -149,7 +149,10 @@ the credential. See [ACCOUNT-ORACLE.md](./ACCOUNT-ORACLE.md).
 
 `makeProviderBrokerGrant` and `makeProviderBrokerGrantIssuer` grant inference until
 explicit revocation or owner/transport shutdown, independently of credential expiry.
-The host keeps credentials and refresh authority and fixes provider routes and models.
+The host keeps credentials and refresh authority and fixes provider routes.
+Models are admitted by what each account's provider lists for it, read through
+the account's own credential owner (`model-catalog.js`); there is no operator
+model list, and an account without discovery admits nothing.
 Request and response size bounds and simultaneous request slots protect host resources;
 completed requests do not exhaust a lifetime budget.
 An open stream holds its slot until upstream EOF, cancellation, or failure.

@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import { E } from '@endo/eventual-send';
 import { createProvider } from '@endo/lal/providers/index.js';
@@ -58,38 +59,152 @@ test.serial('OpenRouter factories never send an output cap', async t => {
   t.true(bodies.every(body => !('max_tokens' in body)));
 });
 
-test('configured free router appears once and remains the default', async t => {
-  const factory = make(
-    Far('FreeRouterPowers', {
+/**
+ * What OpenRouter's account-filtered catalog answers, as the reader reads it:
+ * the free router and one concrete free model, both text-in, text-out, tools.
+ *
+ * @param {string[]} keys Where each read's bearer key lands.
+ */
+const openRouterFetch = keys =>
+  /** @type {typeof globalThis.fetch} */ (
+    async (url, init) => {
+      `${url}` === 'https://openrouter.ai/api/v1/models/user' ||
+        Fail`Unexpected request ${url}`;
+      keys.push(`${new Headers(init?.headers).get('authorization')}`);
+      const model = id => ({
+        id,
+        name: `Name of ${id}`,
+        description: 'From the provider',
+        context_length: 200_000,
+        architecture: {
+          input_modalities: ['text'],
+          output_modalities: ['text'],
+        },
+        supported_parameters: ['tools'],
+      });
+      return Response.json({
+        data: [model('openrouter/free'), model('vendor/model:free')],
+      });
+    }
+  );
+
+/**
+ * @param {{ model: string }} config
+ * @param {typeof globalThis.fetch} fetch
+ */
+const openRouterFactory = (config, fetch) =>
+  make(
+    Far('OpenRouterFactoryPowers', {
       list: () => harden([]),
       has: () => false,
-      lookup: () =>
-        harden({ provider: 'openrouter', model: 'openrouter/free' }),
+      lookup: name => {
+        if (name === 'llm-provider')
+          return harden({
+            provider: 'openrouter',
+            authToken: 'or-key',
+            ...config,
+          });
+        throw Error('Unknown name');
+      },
     }),
+    undefined,
+    { fetch },
   );
-  const models = await E(factory).listModels('provider');
-  t.is(models.length, 3);
-  t.is(models.filter(m => m.id === 'openrouter/free').length, 1);
-  t.is(models.find(m => m.default)?.id, 'openrouter/free');
-});
 
-test('Floot offers the configured OpenRouter model, not Anthropic models', async t => {
-  const powers = Far('OpenRouterFactoryPowers', {
-    list: () => harden([]),
-    has: () => false,
-    lookup: name => {
-      if (name === 'llm-provider')
-        return harden({ provider: 'openrouter', model: 'vendor/model:free' });
-      throw Error('Unknown name');
-    },
-  });
-  const factory = make(powers);
+test('the direct provider offers what its OpenRouter account lists, read once and marked by the configured model', async t => {
+  /** @type {string[]} */
+  const keys = [];
+  const factory = await openRouterFactory(
+    { model: 'openrouter/free' },
+    openRouterFetch(keys),
+  );
   const backends = await E(factory).listBackends();
   t.is(backends[0].title, 'Fae');
   const models = await E(factory).listModels('provider');
-  t.is(models.length, 4);
-  t.is(models[0].modelId, 'vendor/model:free');
-  t.true(models[0].default);
-  t.true(models.some(m => m.id === 'openrouter/free'));
-  t.true(models.every(m => m.backendId === 'provider'));
+  t.deepEqual(
+    models.map(m => [m.id, m.modelId, m.backendId, m.default, m.title]),
+    [
+      [
+        'openrouter/free',
+        'openrouter/free',
+        'provider',
+        true,
+        'Name of openrouter/free',
+      ],
+      [
+        'vendor/model:free',
+        'vendor/model:free',
+        'provider',
+        false,
+        'Name of vendor/model:free',
+      ],
+    ],
+  );
+  t.deepEqual(models[0].subscriptionIds, ['default']);
+  t.deepEqual(models[0].reasoningEfforts, []);
+  // Read under Floot's own credential, and held: a second listing reads
+  // nothing again.
+  t.deepEqual(keys, ['Bearer or-key']);
+  await E(factory).listModels('provider');
+  t.deepEqual(keys, ['Bearer or-key']);
+  const [catalog] = await E(factory).listModelCatalogs();
+  t.like(catalog, {
+    backendId: 'provider',
+    accounts: [{ subscriptionId: 'default', state: 'current', modelCount: 2 }],
+  });
+  t.is(typeof catalog.accounts[0].observedAt, 'number');
+});
+
+test('a configured model the account does not list is not offered, and a pin must be listed', async t => {
+  const factory = await openRouterFactory(
+    { model: 'vendor/retired' },
+    openRouterFetch([]),
+  );
+  const models = await E(factory).listModels('provider');
+  t.deepEqual(
+    models.map(m => m.id),
+    ['openrouter/free', 'vendor/model:free'],
+  );
+  t.false(models.some(m => m.default));
+  await t.throwsAsync(
+    () =>
+      E(factory).createSession({
+        title: 'Pinned to nothing',
+        backendId: 'provider',
+        modelId: 'vendor/unknown',
+      }),
+    { message: /Unknown model "vendor\/unknown" for the provider backend/ },
+  );
+});
+
+test('failed discovery offers nothing and admits no pin; it is not a list somebody typed', async t => {
+  const factory = await openRouterFactory(
+    { model: 'openrouter/free' },
+    async () => {
+      throw Error('provider unreachable');
+    },
+  );
+  t.deepEqual(await E(factory).listModels('provider'), []);
+  t.deepEqual(await E(factory).listModelCatalogs(), [
+    {
+      backendId: 'provider',
+      accounts: [
+        {
+          subscriptionId: 'default',
+          state: 'unavailable',
+          observedAt: null,
+          modelCount: 0,
+        },
+      ],
+    },
+  ]);
+  await t.throwsAsync(
+    () =>
+      E(factory).createSession({
+        title: 'Pinned while down',
+        backendId: 'provider',
+        modelId: 'openrouter/free',
+      }),
+    { message: /Model catalog unavailable for the provider backend/ },
+  );
 });

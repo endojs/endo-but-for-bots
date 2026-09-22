@@ -2,7 +2,7 @@
 // Claude Code as a Floot hosted backend.
 //
 // Floot discovers hosted backends through `HostedBackendFactoryInterface`
-// (@endo/hosted-agent): `describe()` names the backend, `listModels()` offers
+// (@endo/hosted-agent): `describe()` names the backend, `modelCatalog()` offers
 // its catalog, and `create(spec, toolSet)` hands back one session's `run`
 // facet (the turn protocol Floot's hosted-turn consumer drives) and its
 // factory-only `admin` facet. This module is that seam for the Claude CLI
@@ -34,71 +34,19 @@ import {
   HostedBackendFactoryInterface,
   HostedTurnBackendAdminInterface,
   HostedTurnBackendInterface,
-  normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
 import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 import path from 'node:path';
 
 import { translateClaudeTurn } from './claude-hosted-events.js';
-import { CLAUDE_EFFORTS, assertClaudeEffort } from './claude-effort.js';
+import { assertClaudeEffort } from './claude-effort.js';
 import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
+
+/** @import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
 
 /** The backend id Floot pins sessions to (`claude:<model>`). */
 export const CLAUDE_BACKEND_ID = 'claude';
 harden(CLAUDE_BACKEND_ID);
-
-/**
- * The Anthropic models the CLI runtime offers, ordered faster/lighter to
- * stronger. Ids are passed verbatim to `claude --model`, so they must be valid
- * Anthropic model ids. Effort support follows Claude Code's model table:
- * https://code.claude.com/docs/en/model-config#adjust-effort-level
- */
-export const CLAUDE_CLI_MODELS = harden(
-  [
-    {
-      id: 'claude-haiku-4-5-20251001',
-      title: 'Claude Haiku 4.5',
-      description: 'Fastest and lightest — best for quick, simple turns.',
-      default: true,
-    },
-    {
-      id: 'claude-sonnet-4-6',
-      title: 'Claude Sonnet 4.6',
-      description: 'Balanced speed and capability.',
-      default: false,
-    },
-    {
-      id: 'claude-sonnet-5',
-      title: 'Claude Sonnet 5',
-      description: 'Stronger reasoning at Sonnet-class latency.',
-      default: false,
-    },
-    {
-      id: 'claude-opus-4-8',
-      title: 'Claude Opus 4.8',
-      description: 'High capability for hard reasoning and agentic work.',
-      default: false,
-    },
-    {
-      id: 'claude-opus-5',
-      title: 'Claude Opus 5',
-      description: 'Most capable — deepest reasoning and longest-horizon work.',
-      default: false,
-    },
-  ].map(model =>
-    normalizeHostedModelDescriptor({
-      ...model,
-      defaultReasoningEffort: model.id.startsWith('claude-haiku-')
-        ? null
-        : 'max',
-      reasoningEfforts: model.id.startsWith('claude-haiku-')
-        ? []
-        : model.id === 'claude-sonnet-4-6'
-          ? CLAUDE_EFFORTS.filter(effort => effort !== 'xhigh')
-          : CLAUDE_EFFORTS,
-    }),
-  ),
-);
 
 /** The network policies a session may request; the broker attests each. */
 export const NETWORK_POLICIES = harden(['off', 'public-internet']);
@@ -158,20 +106,20 @@ const isIdleInterrupt = error =>
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
  *   The owner's removal: native cleanup, then the recorded storage owner's
  *   deletion, retaining failure and refusing reuse until it succeeds.
- * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ * @param {ReturnType<typeof makeBackendCatalog>} powers.catalog What each
+ *   account of the broker lists, as the Claude Code runtime offers it; a
+ *   new session's pin is admitted by it in the provisioner.
  * @param {boolean} [powers.publicInternetEnabled] Verified operator broker policy.
- * @param {() => Promise<Array<{ id: string, label: string }>>} [powers.listSubscriptions]
+ * @param {() => Promise<Array<{ id: string, label: string, pinnedOnly?: boolean }>>} [powers.listSubscriptions]
  */
 export const makeClaudeBackendFactory = ({
   provisionSession,
   stopSession,
   removeSession,
-  models = CLAUDE_CLI_MODELS,
+  catalog,
   publicInternetEnabled = false,
   listSubscriptions = async () => [],
 }) => {
-  const catalog = harden(models.map(normalizeHostedModelDescriptor));
-  const listModels = async () => catalog;
   const networkPolicies = harden(
     publicInternetEnabled ? [...NETWORK_POLICIES] : ['off'],
   );
@@ -189,19 +137,15 @@ export const makeClaudeBackendFactory = ({
       Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
     networkPolicies.includes(networkPolicy) ||
       Fail`Claude broker does not permit public internet access`;
+    // Shape only: whether the account lists the model, and the effort the
+    // runtime can drive it with, is the provisioner's to admit for a new
+    // pin, against the catalog; a reopen keeps its recorded pin.
     if (spec.model !== undefined && spec.model !== '') {
       (typeof spec.model === 'string' && spec.model.length <= 256) ||
         Fail`Claude model id must be a bounded string`;
-      catalog.some(model => model.id === spec.model) ||
-        Fail`Unknown Claude model ${q(spec.model.slice(0, 64))}`;
     }
     if (spec.reasoningEffort !== undefined && spec.reasoningEffort !== '') {
       assertClaudeEffort(spec.reasoningEffort);
-      const model =
-        catalog.find(item => item.id === spec.model) ||
-        catalog.find(item => item.default);
-      model?.reasoningEfforts.includes(spec.reasoningEffort) ||
-        Fail`Unsupported Claude reasoning effort for selected model`;
     }
     const declaredMounts = spec.containerMounts ?? [];
     (Array.isArray(declaredMounts) && declaredMounts.length === 0) ||
@@ -296,7 +240,9 @@ export const makeClaudeBackendFactory = ({
         );
         return translateClaudeTurn(raw);
       },
-      models: listModels,
+      // What this session's account lists: the pinned one's, or any not
+      // set aside.
+      models: () => catalog.offered(subscription),
       /**
        * Kill the in-flight `claude -p`. The client serializes turns behind
        * the killed process's exit, so a prompt sent after this resolves cannot
@@ -355,9 +301,15 @@ export const makeClaudeBackendFactory = ({
 
   return makeExo('ClaudeBackendFactory', HostedBackendFactoryInterface, {
     async describe() {
-      const subscriptions = (await listSubscriptions().catch(() => [])).map(
-        ({ id, label }) => ({ id, label }),
-      );
+      // A broker that cannot be asked right now declares nothing here; the
+      // descriptor is not the place to fail.
+      /** @type {Array<{ id: string, label: string, pinnedOnly?: boolean }>} */
+      const declared = await listSubscriptions().catch(() => []);
+      const subscriptions = declared.map(({ id, label, pinnedOnly }) => ({
+        id,
+        label,
+        ...(pinnedOnly === true ? { pinnedOnly: true } : {}),
+      }));
       return harden({
         id: CLAUDE_BACKEND_ID,
         title: 'Claude Code',
@@ -379,7 +331,7 @@ export const makeClaudeBackendFactory = ({
         },
       });
     },
-    listModels,
+    modelCatalog: subscriptionId => catalog.catalog(subscriptionId),
     create,
     async stop(spec) {
       const sessionId = assertSessionId(spec?.sessionId);
@@ -390,7 +342,7 @@ export const makeClaudeBackendFactory = ({
     },
     destroy,
     help() {
-      return 'Claude CLI backend factory: describe, listModels, create, stop (keeps state), and idempotent destroy.';
+      return 'Claude CLI backend factory: describe, modelCatalog(subscriptionId?), create, stop (keeps state), and idempotent destroy.';
     },
   });
 };

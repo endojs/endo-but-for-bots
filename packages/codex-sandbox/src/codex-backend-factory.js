@@ -14,6 +14,8 @@ import { normalizeCodexModelDescriptor } from './codex-models.js';
 import { assertContainerMounts } from './codex-hosted-policy.js';
 import { CODEX_TOOL_NAMES, withEndoToolInstructions } from './endo-tools.js';
 
+/** @import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
+
 /**
  * Floot's protocol adapter over daemon-owned native sessions. No slices,
  * leases, credentials, or storage deletion authority live in this factory.
@@ -23,7 +25,9 @@ import { CODEX_TOOL_NAMES, withEndoToolInstructions } from './endo-tools.js';
  * @param {(sessionId: string, request: Record<string, any>, tools: any) => Promise<any>} powers.provisionSession
  * @param {(sessionId: string) => Promise<void>} powers.stopSession
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
- * @param {readonly any[]} powers.models
+ * @param {ReturnType<typeof makeBackendCatalog>} powers.catalog What each
+ *   account of the broker lists, from the ChatGPT model list; a new
+ *   session's pin is admitted by it in the provisioner.
  * @param {boolean} [powers.publicInternetEnabled]
  * @param {() => Promise<Array<{ id: string, label: string }>>} [powers.listSubscriptions]
  *   The provider's subscriptions a session may be pinned to; none when the
@@ -33,11 +37,10 @@ export const makeCodexBackendFactory = ({
   provisionSession,
   stopSession,
   removeSession,
-  models,
+  catalog,
   publicInternetEnabled = false,
   listSubscriptions = async () => [],
 }) => {
-  const catalog = harden(models.map(normalizeCodexModelDescriptor));
   const sessions = makeSessionRegistry();
   const policies = harden(
     publicInternetEnabled ? ['off', 'public-internet'] : ['off'],
@@ -74,31 +77,27 @@ export const makeCodexBackendFactory = ({
         Fail`Unknown Codex subscription ${q(subscription)}`;
     }
     const containerMounts = assertContainerMounts(spec.containerMounts);
-    const model =
-      spec.model === undefined
-        ? (catalog.find(entry => entry.default)?.id ?? catalog[0]?.id)
-        : spec.model;
-    const selected = catalog.find(entry => entry.id === model);
-    if (selected === undefined) throw Fail`Unknown Codex model`;
-    // Floot represents an unselected thinking option as the empty string.
-    // Resolve it here, before recording the native session's immutable plan.
+    // Shape only: whether the account lists the model, and the effort it
+    // offers, is the provisioner's to admit for a new pin against the
+    // catalog; a reopen keeps its recorded pin. Floot represents an
+    // unselected thinking option as the empty string.
     const {
+      model: requestedModel,
       reasoningEffort: requestedEffort,
       subscription: _requestedSubscription,
       ...rest
     } = spec;
-    const reasoningEffort =
-      requestedEffort === undefined || requestedEffort === ''
-        ? (selected.defaultReasoningEffort ?? undefined)
-        : requestedEffort;
-    reasoningEffort === undefined ||
-      selected.reasoningEfforts.includes(reasoningEffort) ||
-      Fail`Unsupported Codex reasoning effort`;
+    requestedModel === undefined ||
+      (typeof requestedModel === 'string' && requestedModel.length <= 256) ||
+      Fail`Codex model id must be a bounded string`;
+    requestedEffort === undefined ||
+      (typeof requestedEffort === 'string' && requestedEffort.length <= 64) ||
+      Fail`Codex reasoning effort must be a bounded string`;
     const request = harden({
       ...rest,
       ...(subscription === undefined ? {} : { subscription }),
-      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      model,
+      ...(requestedModel ? { model: requestedModel } : {}),
+      ...(requestedEffort ? { reasoningEffort: requestedEffort } : {}),
       networkPolicy,
       containerMounts,
     });
@@ -182,9 +181,7 @@ export const makeCodexBackendFactory = ({
         },
       });
     },
-    async listModels() {
-      return catalog;
-    },
+    modelCatalog: subscriptionId => catalog.catalog(subscriptionId),
     create,
     async stop(spec) {
       const sessionId = sessionIdFor(spec.sessionId);
@@ -202,7 +199,7 @@ export const makeCodexBackendFactory = ({
       });
     },
     help: () =>
-      'Codex hosted factory: describe, listModels, create, stop (keeps state), destroy.',
+      'Codex hosted factory: describe, modelCatalog(subscriptionId?), create, stop (keeps state), destroy.',
   });
 };
 harden(makeCodexBackendFactory);

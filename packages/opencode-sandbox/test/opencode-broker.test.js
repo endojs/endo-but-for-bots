@@ -3,6 +3,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
 
 import {
   OPENCODE_BROKER_ACCOUNT,
@@ -79,7 +80,8 @@ const brokerOptions = (runtime, overrides = {}) => ({
   imageRef: `localhost/opencode-sandbox@${digest}`,
   imageDigest: digest,
   listenerImageRef,
-  models,
+  // What the account's catalog lists, as the broker's discovery would say.
+  admits: admitsModels(models),
   fetch: async () => new Response('ok'),
   runtime,
   ...overrides,
@@ -89,8 +91,10 @@ const makeBroker = (runtime, overrides = {}) =>
   makeOpencodeBroker(brokerOptions(runtime, overrides));
 
 test('policy pins the OpenRouter origin, route, and strip handling', t => {
-  const policy = buildOpencodeBrokerPolicy({ models });
+  const policy = buildOpencodeBrokerPolicy();
   t.is(policy.origin, OPENROUTER_ORIGIN);
+  // No operator model list: the account's OpenRouter catalog admits models.
+  t.false(Object.hasOwn(policy, 'models'));
   t.deepEqual(policy.routes, [
     { method: 'POST', path: OPENROUTER_INFERENCE_PATH },
   ]);
@@ -100,9 +104,6 @@ test('policy pins the OpenRouter origin, route, and strip handling', t => {
   for (const removed of ['maxRequests', 'maxTotalBytes', 'maxCostMicrounits']) {
     t.false(Object.hasOwn(policy, removed));
   }
-  t.throws(() => buildOpencodeBrokerPolicy({ models: [] }), {
-    message: /nonempty list/,
-  });
 });
 
 test('leases report broker-only evidence and listener limits', async t => {
@@ -131,7 +132,9 @@ test('leases report broker-only evidence and listener limits', async t => {
     endpoint: 'http://127.0.0.1:1234',
     networkNamespaceId: 'net-1',
   });
-  t.deepEqual(attestation.modelAllowlist, models);
+  t.is(attestation.model, models[0]);
+  t.is(attestation.modelAdmission, 'account-catalog');
+  t.false(Object.hasOwn(attestation, 'modelAllowlist'));
   const evidence = await E(lease).sandboxEvidence();
   t.like(evidence, {
     brokerSidecar: { container: 'listener' },
@@ -216,7 +219,7 @@ test('refuses unpinned images and invalid operator identity', async t => {
     imageRef: `localhost/opencode-sandbox@${digest}`,
     imageDigest: digest,
     listenerImageRef,
-    models,
+    admits: admitsModels(models),
     runtime,
   };
   await t.throwsAsync(

@@ -4,14 +4,19 @@ import test from 'ava';
 
 import {
   DEFAULT_LIMITS,
-  DEFAULT_MODEL,
   OPENROUTER_NPM,
   makeOpencodeConfig,
   parseModelRef,
 } from '../src/opencode-agent-config.js';
 
+// The config builder names no model of its own: a session's plan does.
+const DEFAULT_MODEL = 'openrouter/deepseek/deepseek-v4.1-flash';
+
 test('builds the default OpenRouter config with a fixed provider list', t => {
-  const config = makeOpencodeConfig({ systemPrompt: 'You are Floot.' });
+  const config = makeOpencodeConfig({
+    model: DEFAULT_MODEL,
+    systemPrompt: 'You are Floot.',
+  });
   t.deepEqual(config, {
     share: 'disabled',
     model: DEFAULT_MODEL,
@@ -105,7 +110,7 @@ test('accepts stealth alias model ids with a leading tilde', t => {
 });
 
 test('omits prompt and mcp when they are not provided', t => {
-  const config = makeOpencodeConfig();
+  const config = makeOpencodeConfig({ model: DEFAULT_MODEL });
   t.deepEqual(config.agent.floot, { disable: false, mode: 'primary' });
   t.false('mcp' in config);
 });
@@ -114,7 +119,7 @@ test('normalizes a local mcp server map without freezing the caller input', t =>
   const mcpServers = {
     endo: { type: 'local', command: ['node', '/relay.mjs'], enabled: true },
   };
-  const config = makeOpencodeConfig({ mcpServers });
+  const config = makeOpencodeConfig({ model: DEFAULT_MODEL, mcpServers });
   t.deepEqual(config.mcp, {
     endo: {
       type: 'local',
@@ -128,6 +133,7 @@ test('normalizes a local mcp server map without freezing the caller input', t =>
 
 test('accepts a loopback http broker endpoint and rejects any other http', t => {
   const broker = makeOpencodeConfig({
+    model: DEFAULT_MODEL,
     baseUrl: 'http://127.0.0.1:41337/api/v1',
     allowLoopbackHttp: true,
   });
@@ -136,6 +142,7 @@ test('accepts a loopback http broker endpoint and rejects any other http', t => 
     'http://127.0.0.1:41337/api/v1',
   );
   const ipv6 = makeOpencodeConfig({
+    model: DEFAULT_MODEL,
     baseUrl: 'http://[::1]:41337/api/v1',
     allowLoopbackHttp: true,
   });
@@ -154,19 +161,32 @@ test('accepts a loopback http broker endpoint and rejects any other http', t => 
     'http://127.0.0.1:41337/other',
     'https://127.0.0.1:41337/api/v1',
   ]) {
-    t.throws(() => makeOpencodeConfig({ baseUrl, allowLoopbackHttp: true }), {
-      message: /baseUrl/,
-    });
+    t.throws(
+      () =>
+        makeOpencodeConfig({
+          model: DEFAULT_MODEL,
+          baseUrl,
+          allowLoopbackHttp: true,
+        }),
+      {
+        message: /baseUrl/,
+      },
+    );
   }
   // Without the explicit opt-in, loopback http is not admitted at all.
   t.throws(
-    () => makeOpencodeConfig({ baseUrl: 'http://127.0.0.1:41337/api/v1' }),
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'http://127.0.0.1:41337/api/v1',
+      }),
     { message: /must use https/ },
   );
 });
 
 test('passes through local mcp environment entries', t => {
   const config = makeOpencodeConfig({
+    model: DEFAULT_MODEL,
     mcpServers: {
       endo: {
         type: 'local',
@@ -193,58 +213,99 @@ test('rejects invalid inputs', t => {
   t.throws(() => makeOpencodeConfig({ model: 'openrouter/vendor/..' }), {
     message: /invalid model segment/,
   });
-  t.throws(() => makeOpencodeConfig({ agentName: 'Bad Name' }), {
-    message: /agentName/,
-  });
+  t.throws(
+    () => makeOpencodeConfig({ model: DEFAULT_MODEL, agentName: 'Bad Name' }),
+    {
+      message: /agentName/,
+    },
+  );
   for (const agentName of ['constructor', 'build', 'plan']) {
-    t.throws(() => makeOpencodeConfig({ agentName }), {
+    t.throws(() => makeOpencodeConfig({ model: DEFAULT_MODEL, agentName }), {
       message: /reserved/,
     });
   }
   t.throws(
-    () => makeOpencodeConfig({ baseUrl: 'http://openrouter.ai/api/v1' }),
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'http://openrouter.ai/api/v1',
+      }),
     {
       message: /must use https/,
     },
   );
   t.throws(
-    () => makeOpencodeConfig({ baseUrl: 'https://evil.example/api/v1' }),
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'https://evil.example/api/v1',
+      }),
     {
       message: /openrouter\.ai/,
     },
   );
   t.throws(
     () =>
-      makeOpencodeConfig({ baseUrl: 'https://user:pass@openrouter.ai/api/v1' }),
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'https://user:pass@openrouter.ai/api/v1',
+      }),
     { message: /credentials/ },
   );
   t.throws(
-    () => makeOpencodeConfig({ baseUrl: 'https://openrouter.ai/api/v2' }),
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'https://openrouter.ai/api/v2',
+      }),
     { message: /api\/v1/ },
   );
   t.throws(
-    () => makeOpencodeConfig({ baseUrl: 'https://openrouter.ai/api/v1?x=1' }),
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'https://openrouter.ai/api/v1?x=1',
+      }),
     { message: /query or fragment/ },
   );
   t.throws(
-    () => makeOpencodeConfig({ baseUrl: 'https://openrouter.ai:8443/api/v1' }),
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        baseUrl: 'https://openrouter.ai:8443/api/v1',
+      }),
     { message: /default https port/ },
   );
-  t.throws(() => makeOpencodeConfig({ systemPrompt: '' }), {
-    message: /must not be empty/,
-  });
   t.throws(
-    () => makeOpencodeConfig({ systemPrompt: 'x'.repeat(48 * 1024 + 1) }),
+    () => makeOpencodeConfig({ model: DEFAULT_MODEL, systemPrompt: '' }),
+    {
+      message: /must not be empty/,
+    },
+  );
+  t.throws(
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        systemPrompt: 'x'.repeat(48 * 1024 + 1),
+      }),
     { message: /too large/ },
   );
   // Multibyte text is rejected on UTF-8 bytes, not UTF-16 code units.
-  t.throws(() => makeOpencodeConfig({ systemPrompt: 'あ'.repeat(20 * 1024) }), {
-    message: /too large/,
-  });
+  t.throws(
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        systemPrompt: 'あ'.repeat(20 * 1024),
+      }),
+    {
+      message: /too large/,
+    },
+  );
   t.throws(
     () =>
       makeOpencodeConfig(
         /** @type {any} */ ({
+          model: DEFAULT_MODEL,
           models: { 'vendor/model': { limit: { context: 100, output: 100 } } },
         }),
       ),
@@ -253,7 +314,10 @@ test('rejects invalid inputs', t => {
   t.throws(
     () =>
       makeOpencodeConfig(
-        /** @type {any} */ ({ models: { 'vendor/model': { limit: null } } }),
+        /** @type {any} */ ({
+          model: DEFAULT_MODEL,
+          models: { 'vendor/model': { limit: null } },
+        }),
       ),
     { message: /must be a record/ },
   );
@@ -261,17 +325,26 @@ test('rejects invalid inputs', t => {
     () =>
       makeOpencodeConfig(
         /** @type {any} */ ({
+          model: DEFAULT_MODEL,
           models: { 'vendor/model': { unexpected: true } },
         }),
       ),
     { message: /unknown fields/ },
   );
-  t.throws(() => makeOpencodeConfig({ models: { noslash: { name: 'x' } } }), {
-    message: /must be <vendor>\/<model>/,
-  });
   t.throws(
     () =>
       makeOpencodeConfig({
+        model: DEFAULT_MODEL,
+        models: { noslash: { name: 'x' } },
+      }),
+    {
+      message: /must be <vendor>\/<model>/,
+    },
+  );
+  t.throws(
+    () =>
+      makeOpencodeConfig({
+        model: DEFAULT_MODEL,
         models: {
           'vendor/model': { name: 'a' },
           'openrouter/vendor/model': { name: 'b' },
@@ -282,13 +355,20 @@ test('rejects invalid inputs', t => {
 });
 
 test('rejects invalid mcp server maps', t => {
-  t.throws(() => makeOpencodeConfig(/** @type {any} */ ({ mcpServers: [] })), {
-    message: /must be a record/,
-  });
+  t.throws(
+    () =>
+      makeOpencodeConfig(
+        /** @type {any} */ ({ model: DEFAULT_MODEL, mcpServers: [] }),
+      ),
+    {
+      message: /must be a record/,
+    },
+  );
   t.throws(
     () =>
       makeOpencodeConfig(
         /** @type {any} */ ({
+          model: DEFAULT_MODEL,
           mcpServers: JSON.parse(
             '{"__proto__":{"type":"local","command":["node"]}}',
           ),
@@ -300,6 +380,7 @@ test('rejects invalid mcp server maps', t => {
     () =>
       makeOpencodeConfig(
         /** @type {any} */ ({
+          model: DEFAULT_MODEL,
           mcpServers: { endo: { type: 'remote', url: 'https://example.com' } },
         }),
       ),
@@ -309,6 +390,7 @@ test('rejects invalid mcp server maps', t => {
     () =>
       makeOpencodeConfig(
         /** @type {any} */ ({
+          model: DEFAULT_MODEL,
           mcpServers: { endo: { type: 'local', command: [] } },
         }),
       ),
@@ -318,6 +400,7 @@ test('rejects invalid mcp server maps', t => {
     () =>
       makeOpencodeConfig(
         /** @type {any} */ ({
+          model: DEFAULT_MODEL,
           mcpServers: { endo: { type: 'local', command: ['node'], extra: 1 } },
         }),
       ),

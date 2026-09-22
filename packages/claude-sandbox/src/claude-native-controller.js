@@ -57,6 +57,8 @@ import { makeTranscriptResume } from './claude-transcripts.js';
 import { makeMcpSocketServer } from './mcp-socket-server.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 
+/** @import { ClaudeClientArgs } from './claude-client.js' */
+
 /**
  * The conversation id a restored transcript is written under: derived from
  * the session so a retried revival reuses the same file rather than forking a

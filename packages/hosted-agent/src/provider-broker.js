@@ -23,7 +23,7 @@ export {
 
 /**
  * @typedef {{ method: string, path: string }} Route
- * @typedef {{ origin: string, routes: Route[], models: string[],
+ * @typedef {{ origin: string, routes: Route[],
  * clientAuthorization?: 'reject' | 'strip',
  * maxConcurrentRequests: number, maxRequestBytes: bigint, maxResponseBytes: bigint,
  * credentialHeader?: 'bearer' | 'x-api-key',
@@ -568,6 +568,15 @@ harden(makeBrokerOAuthCredential);
  * @property {ReturnType<typeof makeBrokerOAuthCredential>} [credential]
  * @property {ProviderRequestAdapter} [adaptRequest]
  * @property {string} [accountRef] The account an OAuth credential must name.
+ * @property {(model: string) => Promise<boolean> | boolean} [admits] Whether
+ *   this member's account may be served the named model, as its catalog
+ *   owner answers now (`model-catalog.js`). Required of every member: a
+ *   member with no discovery admits nothing. The request is tried on the
+ *   members that admit its model, in the pool's order.
+ * @property {() => string} [catalogState] How the member's catalog stands
+ *   (`current`, `stale`, `unavailable`, `unsupported`), for the audit trail
+ *   of a refusal: a model nobody lists reads differently from nobody able
+ *   to say.
  * @property {{ provide(): Promise<any>, reset(endpoint: any): void }} [wrapped]
  *   In place of `secret` and `transport`: this member is somebody else's
  *   subscription. `provide` answers an inference endpoint opened on it for
@@ -718,6 +727,14 @@ const makeScreenedBytesReader = (screened, checkLive) => {
  * Runs after route/model/body admission and before reading credentials.
  * May translate the path within the pinned origin and add non-credential
  * headers; cannot change the method, body, credential, or response bounds.
+ * @param {(model: string) => Promise<boolean> | boolean} [powers.admits]
+ * Whether the one account may be served the named model, from its catalog
+ * owner; required without a pool. There is no operator list of models: what
+ * an account is admitted is what its provider lists for it, and a request
+ * for a model no eligible account lists is refused (`Model denied`) before
+ * a slot is taken or a credential read.
+ * @param {() => string} [powers.catalogState] How the one account's catalog
+ * stands, for the audit trail of a refusal.
  * @param {BrokerGrantPool} [powers.pool]
  * Several subscriptions of one provider behind this grant, in place of
  * `secret`, `transport`, `credential` and `adaptRequest`, which describe one.
@@ -747,6 +764,8 @@ export const makeProviderBrokerGrant = (
     audit = () => {},
     credential,
     adaptRequest,
+    admits,
+    catalogState,
     pool,
     revealExhaustion = false,
   },
@@ -758,6 +777,11 @@ export const makeProviderBrokerGrant = (
   authMode === 'api-key' ||
     authMode === 'oauth' ||
     Fail`Unsupported broker authentication mode`;
+  // There is no operator model list: a policy that carries one is from
+  // before account catalogs admitted models, and is refused rather than
+  // silently ignored.
+  /** @type {any} */ (policy).models === undefined ||
+    Fail`Broker policy must not name models`;
   const credentialHeader = policy.credentialHeader ?? 'bearer';
   credentialHeader === 'bearer' ||
     credentialHeader === 'x-api-key' ||
@@ -794,7 +818,17 @@ export const makeProviderBrokerGrant = (
   /** @type {readonly BrokerGrantMember[]} */
   const members = harden(
     pool === undefined
-      ? [{ id: 'default', secret, transport, credential, adaptRequest }]
+      ? [
+          {
+            id: 'default',
+            secret,
+            transport,
+            credential,
+            adaptRequest,
+            admits,
+            ...(catalogState === undefined ? {} : { catalogState }),
+          },
+        ]
       : pool.members.map(member => ({ ...member })),
   );
   (members.length > 0 &&
@@ -803,6 +837,7 @@ export const makeProviderBrokerGrant = (
       member =>
         typeof member.id === 'string' &&
         member.id !== '' &&
+        typeof member.admits === 'function' &&
         (member.wrapped !== undefined ||
           (member.secret !== undefined && member.transport !== undefined)),
     )) ||
@@ -866,10 +901,6 @@ export const makeProviderBrokerGrant = (
     return `${method} ${path}`;
   });
   routes.length > 0 || Fail`Inference routes required`;
-  const models = [...policy.models];
-  (models.length > 0 &&
-    models.every(model => typeof model === 'string' && model.length > 0)) ||
-    Fail`Models required`;
   // Simultaneous request slots are a deployment allocation, not a usage budget.
   (Number.isInteger(maxConcurrentRequests) &&
     maxConcurrentRequests > 0 &&
@@ -1111,12 +1142,14 @@ export const makeProviderBrokerGrant = (
     } catch (_error) {
       Fail`Invalid inference JSON`;
     }
-    (data &&
-      typeof data === 'object' &&
-      !Array.isArray(data) &&
-      typeof data.model === 'string' &&
-      models.includes(data.model)) ||
+    const model = /** @type {unknown} */ (
+      data && typeof data === 'object' && !Array.isArray(data)
+        ? data.model
+        : undefined
+    );
+    (typeof model === 'string' && model !== '' && model.length <= 256) ||
       Fail`Model denied`;
+    const modelId = /** @type {string} */ (model);
     const canonicalBody = JSON.stringify(data);
     const canonicalBytes = BigInt(
       new TextEncoder().encode(canonicalBody).length,
@@ -1155,19 +1188,60 @@ export const makeProviderBrokerGrant = (
     // any other of the request's: what the pool says, a pinned id included,
     // is the operator's and not for whoever holds the endpoint.
     /** @type {BrokerGrantMember[]} */
-    let candidates;
-    let firstAdapted;
+    let selected;
     try {
-      candidates = selectOrder()
+      selected = selectOrder()
         .map(id => membersById.get(id) ?? Fail`Unknown broker subscription`)
         // Somebody else's subscription streams bytes only. A listener from
         // before the bytes stream is served by the operator's own accounts,
         // rather than have a far response started that nobody could read.
         .filter(member => bytesOk || member.wrapped === undefined);
-      if (candidates.length === 0) {
+      if (selected.length === 0) {
         record('subscriptions-exhausted');
         throw Fail`Provider subscriptions exhausted`;
       }
+    } catch (error) {
+      if (pool === undefined) throw error;
+      if (
+        revealExhaustion &&
+        error instanceof Error &&
+        error.message === 'Provider subscriptions exhausted'
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
+      return Fail`Provider request failed`;
+    }
+    // Of those, the ones whose account lists the model. Asked of all at
+    // once, kept in the pool's order, so a pinned session's one member
+    // refusing is a refusal and not a fall-through; an answer that fails is
+    // no. Nothing is reserved or read yet, and the grant may be revoked
+    // meanwhile.
+    const answers = await Promise.all(
+      selected.map(async member => {
+        try {
+          const answer =
+            await /** @type {NonNullable<typeof member.admits>} */ (
+              member.admits
+            )(modelId);
+          return answer === true;
+        } catch (_error) {
+          return false;
+        }
+      }),
+    );
+    const candidates = selected.filter((_member, index) => answers[index]);
+    if (candidates.length === 0) {
+      // A model nobody lists, or nobody able to say: the audit trail tells
+      // them apart, the slice is told neither.
+      const anyCatalog = selected.some(member => {
+        const state = member.catalogState?.();
+        return state === undefined || state === 'current' || state === 'stale';
+      });
+      record(anyCatalog ? 'model-denied' : 'catalog-unavailable');
+      throw Fail`Model denied`;
+    }
+    let firstAdapted;
+    try {
       firstAdapted = adaptFor(candidates[0]);
     } catch (error) {
       if (pool === undefined) throw error;
@@ -1682,6 +1756,22 @@ export const makeProviderBrokerGrant = (
           tellPool('served', member.id);
           return result;
         } catch (error) {
+          // A far subscription admits by its own accounts' catalogs, of
+          // which its holder's answer was the union: one of them refusing
+          // the model is not this request's failure, and the next member,
+          // an account of the operator's own that lists it, may serve.
+          if (
+            pool !== undefined &&
+            member.wrapped !== undefined &&
+            error instanceof Error &&
+            error.message === 'Model denied'
+          ) {
+            checkLive();
+            refusal = error;
+            record('model-denied');
+            // eslint-disable-next-line no-continue
+            continue;
+          }
           // A subscription that is used up refuses at admission, before any
           // response byte, so the same request can go to the next one. Any
           // other failure is the request's, and is not tried elsewhere.

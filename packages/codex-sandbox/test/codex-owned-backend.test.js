@@ -15,7 +15,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
+import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 import { makeCodexBackendFactory } from '../src/codex-backend-factory.js';
+import { normalizeCodexModelDescriptor } from '../src/codex-models.js';
 import { adaptEndoTools } from '../src/endo-tools.js';
 import {
   makeCodexSessionProvisioner,
@@ -28,8 +30,36 @@ const model = harden({
   description: '',
   isDefault: true,
   defaultReasoningEffort: 'low',
-  supportedReasoningEfforts: [{ reasoningEffort: 'low' }],
+  supportedReasoningEfforts: [
+    { reasoningEffort: 'low' },
+    { reasoningEffort: 'high' },
+  ],
 });
+/**
+ * What the broker's account lists, as its discovery reads it. `answer` can
+ * be changed to script an outage after a session is recorded.
+ */
+const scriptedCatalog = () => {
+  const state = { answer: true };
+  const catalog = makeBackendCatalog({
+    label: 'Codex',
+    readCatalog: async () => {
+      if (!state.answer) throw Error('provider catalog down');
+      return harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: [normalizeCodexModelDescriptor(model)],
+          },
+        ],
+      });
+    },
+  });
+  return { catalog, state };
+};
+const testCatalog = scriptedCatalog().catalog;
 
 test('Codex factory delegates checkpoint operations and retains failed native stop for retry', async t => {
   const calls = [];
@@ -43,7 +73,7 @@ test('Codex factory delegates checkpoint operations and retains failed native st
     },
   });
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     async provisionSession(id, spec, tools) {
       calls.push(['start', id, spec.model, tools]);
       return client;
@@ -60,7 +90,9 @@ test('Codex factory delegates checkpoint operations and retains failed native st
   const { run } = await E(factory).create(harden({ sessionId: 'a' }), tools);
   await E(run).acknowledge('checkpoint-a');
   t.deepEqual(calls.slice(0, 2), [
-    ['start', 'a', 'model-a', tools],
+    // No model named: the provisioner admits and records one; the factory
+    // hands the request on as it came.
+    ['start', 'a', undefined, tools],
     ['ack', 'checkpoint-a'],
   ]);
   t.is((await E(run).models())[0].id, 'model-a');
@@ -74,9 +106,10 @@ test('Codex factory delegates checkpoint operations and retains failed native st
     ['stop', 'a'],
     ['remove', 'a'],
   ]);
+  // An effort a model does not offer is the provisioner's to refuse against
+  // the catalog; the factory refuses what no account could make right.
   for (const bad of [
-    { model: 'unknown' },
-    { reasoningEffort: 'unknown' },
+    { reasoningEffort: 'x'.repeat(65) },
     { networkPolicy: 'public-internet' },
   ]) {
     // eslint-disable-next-line no-await-in-loop
@@ -90,7 +123,7 @@ test('Codex factory stop reaches absent and failed owners without removing state
   const calls = [];
   let fails = true;
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     async provisionSession(id) {
       calls.push(['start', id]);
       return Far('Client', {});
@@ -127,10 +160,10 @@ test('Codex factory stop reaches absent and failed owners without removing state
   t.false(calls.some(([operation]) => operation === 'remove'));
 });
 
-test('Codex factory resolves Floot empty thinking selection before provisioning', async t => {
+test('Codex factory hands a thinking selection to the provisioner unresolved; Floot’s empty selection is absent', async t => {
   const requests = [];
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     async provisionSession(id, request) {
       requests.push(request);
       return Far('Client', {});
@@ -139,27 +172,32 @@ test('Codex factory resolves Floot empty thinking selection before provisioning'
     removeSession: async () => undefined,
   });
   const tools = Far('Tools', {});
-  for (const spec of [
-    {},
-    { reasoningEffort: '' },
-    { reasoningEffort: 'low' },
+  for (const [spec, expected] of [
+    [{}, undefined],
+    [{ reasoningEffort: '' }, undefined],
+    [{ reasoningEffort: 'low' }, 'low'],
+    [{ model: '' }, undefined],
   ]) {
     // eslint-disable-next-line no-await-in-loop
     const { admin } = await E(factory).create(
       harden({ sessionId: 'default-effort', ...spec }),
       tools,
     );
-    t.is(requests.at(-1).reasoningEffort, 'low');
+    t.is(requests.at(-1).reasoningEffort, expected);
+    t.false('model' in requests.at(-1));
     // eslint-disable-next-line no-await-in-loop
     await E(admin).terminate();
   }
+  // Only the shape is the factory's: what the account lists, and the
+  // efforts a model takes, are the provisioner's to admit against the
+  // catalog when it records the plan.
   const count = requests.length;
   await t.throwsAsync(
     E(factory).create(
-      harden({ sessionId: 'invalid-effort', reasoningEffort: 'unknown' }),
+      harden({ sessionId: 'bad-shape', reasoningEffort: 'x'.repeat(65) }),
       tools,
     ),
-    { message: /Unsupported Codex reasoning effort/ },
+    { message: /bounded string/ },
   );
   t.is(requests.length, count, 'invalid selection cannot provision resources');
 });
@@ -170,7 +208,12 @@ test('Codex placement is recorded before directories and replacement stops befor
   const workspaceRoot = join(root, 'workspaces');
   const privateRoot = join(root, 'private');
   const calls = [];
+  /** @type {{ plan: string } | undefined} */
   let record;
+  const recorded = () => {
+    if (record === undefined) throw Error('no record');
+    return JSON.parse(record.plan);
+  };
   const client = Far('Client', {});
   const dependencies = harden({
     sandboxService: 'sandbox-id',
@@ -196,13 +239,14 @@ test('Codex placement is recorded before directories and replacement stops befor
       record = harden({ plan: text });
     },
     async start() {
-      const plan = JSON.parse(record.plan);
+      const plan = recorded();
       await access(plan.mounterSocketDir);
       await access(plan.workspaceDir);
       calls.push('start');
       return client;
     },
   });
+  const scripted = scriptedCatalog();
   const provision = makeCodexSessionProvisioner({
     owner,
     dependencies,
@@ -211,6 +255,7 @@ test('Codex placement is recorded before directories and replacement stops befor
     protectedRoots: [join(root, 'state')],
     imageRef: `example@sha256:${'a'.repeat(64)}`,
     accountRef: 'account-a',
+    catalog: scripted.catalog,
   });
   const tools = Far('Tools', {});
   const request = harden({
@@ -218,10 +263,44 @@ test('Codex placement is recorded before directories and replacement stops befor
     containerMounts: [],
     model: 'model-a',
   });
+  // A new pin is admitted by the catalog, with the model's default effort.
+  await t.throwsAsync(
+    () => provision('a', { ...request, model: 'model-z' }, tools),
+    { message: /Unknown "Codex" model "model-z"/ },
+  );
+  await t.throwsAsync(
+    () => provision('a', { ...request, reasoningEffort: 'ultra' }, tools),
+    { message: /Unsupported "Codex" reasoning effort/ },
+  );
+  t.deepEqual(calls, [], 'a refused pin records nothing');
   t.is(await provision('a', request, tools), client);
   t.deepEqual(calls, ['create', 'start']);
-  await provision('a', { ...request, reasoningEffort: 'low' }, tools);
+  t.like(recorded(), { model: 'model-a', reasoningEffort: 'low' });
+  // A reopen that names the recorded pin, or nothing, keeps it without
+  // asking the catalog: the provider being down does not keep a recorded
+  // session from starting, and no other model is put in its place.
+  scripted.state.answer = false;
+  await provision('a', { ...request, model: '', reasoningEffort: '' }, tools);
+  t.deepEqual(calls.slice(-2), ['stop', 'start']);
+  t.like(recorded(), { model: 'model-a', reasoningEffort: 'low' });
+  await t.throwsAsync(
+    () => provision('a', { ...request, reasoningEffort: 'high' }, tools),
+    { message: /"Codex" model catalog is unavailable/ },
+  );
+  scripted.state.answer = true;
+  // A changed pin is a new pin, admitted and revised in place.
+  await provision('a', { ...request, reasoningEffort: 'high' }, tools);
   t.deepEqual(calls.slice(-3), ['stop', 'revise', 'start']);
+  t.like(recorded(), {
+    model: 'model-a',
+    reasoningEffort: 'high',
+  });
+  // An effort changed on its own keeps the recorded model: the catalog is
+  // asked about that model, and no other is put in its place.
+  const { model: _named, ...unnamed } = request;
+  await provision('a', { ...unnamed, reasoningEffort: 'low' }, tools);
+  t.deepEqual(calls.slice(-3), ['stop', 'revise', 'start']);
+  t.like(recorded(), { model: 'model-a', reasoningEffort: 'low' });
   const foreign = join(root, 'foreign');
   await mkdir(foreign);
   await t.throwsAsync(
@@ -258,7 +337,7 @@ test('Codex placement is recorded before directories and replacement stops befor
 
 test('the descriptor says what a system prompt must know about Codex', async t => {
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     provisionSession: async () => Far('Client', {}),
     stopSession: async () => undefined,
     removeSession: async () => undefined,
@@ -288,7 +367,7 @@ test('a backend over several subscriptions says which, and pins a session only t
   /** @type {any[]} */
   const requests = [];
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     provisionSession: async (_id, request) => {
       requests.push(request);
       return Far('Client', {});
@@ -329,7 +408,7 @@ test('a backend over several subscriptions says which, and pins a session only t
 
 test('a backend over one credential offers nothing to choose', async t => {
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     provisionSession: async () => Far('Client', {}),
     stopSession: async () => undefined,
     removeSession: async () => undefined,
@@ -384,7 +463,7 @@ test('“could not ask” is not “none”: the broker’s list is cached, boun
 
 test('a pinned session is refused for the right reason when the broker cannot be asked', async t => {
   const factory = makeCodexBackendFactory({
-    models: [model],
+    catalog: testCatalog,
     provisionSession: async () => Far('Client', {}),
     stopSession: async () => undefined,
     removeSession: async () => undefined,

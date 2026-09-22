@@ -761,15 +761,10 @@ test('a mount that cannot be reclaimed keeps the session stoppable, not stopped'
   // session stays retryable rather than being reported as released.
   const f = fixture(t);
   const text = JSON.stringify(planFor('a'));
-  await E(await E(f.resolver).get('sandboxService')).provideScope('sandbox-a');
-  await E(await E(f.resolver).get('brokerService')).provideScope(
-    'sandbox-a',
-    harden({}),
-  );
   f.faults.reclaimFail = true;
   const revived = f.makeController();
   await t.throwsAsync(E(revived).terminate(text, f.resolver), {
-    message: /Original native cleanup proof is unavailable/,
+    message: /Original local 9P\/MCP cleanup ownership is unavailable/,
   });
   t.false((await E(revived).status()).stopped);
   f.faults.reclaimFail = false;
@@ -777,18 +772,23 @@ test('a mount that cannot be reclaimed keeps the session stoppable, not stopped'
   t.true((await E(revived).status()).stopped);
 });
 
-test('a shared service that cannot be revived blocks native cleanup acknowledgement', async t => {
+test('a shared service that cannot be revived no longer blocks cleanup', async t => {
+  // Finding 16 in the Tokyo trial: a superseded native-sandbox formula
+  // refused to revive (its ownerId was already held), the lookup rejected,
+  // and the session could never be stopped again. A service that has to be
+  // revived to answer holds no scopes from the lost incarnation anyway, so
+  // its failure is reported, not raised.
   const f = fixture(t);
   const text = JSON.stringify(planFor('a'));
   f.faults.resolverFail = 'sandboxService';
   const revived = f.makeController();
-  await t.throwsAsync(E(revived).terminate(text, f.resolver), {
-    message: /native cleanup proof/,
-  });
-  t.false((await E(revived).status()).stopped);
-  t.false(
-    f.events.some(event => Array.isArray(event) && event[0] === 'reclaim'),
-    'unknown sandbox state does not authorize mount reclamation',
+  await E(revived).terminate(text, f.resolver);
+  t.true((await E(revived).status()).stopped);
+  t.true(
+    f.events.some(
+      event => Array.isArray(event) && event[0] === 'cleanup error',
+    ),
+    'the refusal is reported to the host, not swallowed',
   );
 });
 

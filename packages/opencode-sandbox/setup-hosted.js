@@ -80,8 +80,6 @@ import {
   resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
-import { parseModelRef } from './src/opencode-agent-config.js';
-import { OPENCODE_MODELS } from './src/opencode-backend-factory.js';
 import { BROKER_OWNER_PATTERN } from './src/opencode-broker.js';
 import { readOpencodeBrokerConfig } from './src/opencode-broker-service-agent.js';
 import {
@@ -251,9 +249,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       imageRef,
       imageDigest,
       listenerImageRef,
-      // The broker admits the provider-scoped ids opencode's request bodies
-      // carry, not Floot's `openrouter/...` selection refs.
-      models: OPENCODE_MODELS.map(model => parseModelRef(model.id)),
       ...(publicInternet ? { publicInternet: true } : {}),
       ...(diagnostics ? { diagnostics: true } : {}),
     });

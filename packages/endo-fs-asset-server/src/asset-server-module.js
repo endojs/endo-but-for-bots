@@ -52,7 +52,16 @@ import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeAssetServerKit } from './asset-server.js';
 import { makeEndoAssetStore } from './endo-store.js';
 
-const STORE_METHODS = ['provideSubMount', 'storeValue', 'lookup', 'list', 'has', 'remove'];
+/** @import { ERef } from '@endo/eventual-send' */
+
+const STORE_METHODS = [
+  'provideSubMount',
+  'storeValue',
+  'lookup',
+  'list',
+  'has',
+  'remove',
+];
 
 /**
  * @param {unknown} powers  the server's own Endo host agent (pass its pet
@@ -97,7 +106,11 @@ export const make = async (powers, _context, opts = {}) => {
   let methods = [];
   try {
     // eslint-disable-next-line no-underscore-dangle
-    methods = await E(powers).__getMethodNames__();
+    methods = await E(
+      // This is a capability probe, not a claim that arbitrary powers support
+      // introspection: an unsupported object rejects and selects memory mode.
+      /** @type {ERef<{__getMethodNames__(): string[]}>} */ (powers),
+    ).__getMethodNames__();
   } catch (_cause) {
     methods = [];
   }
@@ -123,7 +136,9 @@ export const make = async (powers, _context, opts = {}) => {
     port,
     host,
     publicBase,
-    ...(durable ? { store: makeEndoAssetStore(/** @type {object} */ (powers)) } : {}),
+    ...(durable
+      ? { store: makeEndoAssetStore(/** @type {object} */ (powers)) }
+      : {}),
   });
   return root;
 };

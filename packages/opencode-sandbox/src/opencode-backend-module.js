@@ -38,21 +38,28 @@ import path from 'node:path';
 import { assertPetNames } from '@endo/daemon/pet-name.js';
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import {
+  makeBackendCatalog,
+  recordedPinAnswers,
+  revisedPin,
+} from '@endo/hosted-agent/backend-catalog.js';
 
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
 import {
+  SANDBOX_DIR,
   readBrokerService,
   readNativeSandbox,
   readSessionStorage,
   resolveFuturePath,
 } from './hosted-runtime-setup.js';
 import {
-  makeOpencodeBackendFactory,
-  OPENCODE_MODELS,
-} from './opencode-backend-factory.js';
+  OPENROUTER_PROVIDER_ID,
+  parseModelRef,
+} from './opencode-agent-config.js';
+import { makeOpencodeBackendFactory } from './opencode-backend-factory.js';
 import {
   containsPath,
   isNormalizedAbsolutePath,
@@ -66,10 +73,7 @@ import {
 /** @import { RecordedSessionPlan } from './opencode-session-plan.js' */
 
 /** The host-private records directory the session owner is configured on. */
-export const SESSION_RECORDS_PATH = harden([
-  'opencode-sandbox',
-  'session-records',
-]);
+export const SESSION_RECORDS_PATH = harden([SANDBOX_DIR, 'session-records']);
 
 export const controllerSpecifier = assertCurrentSpecifier(
   toCurrentSpecifier(
@@ -232,8 +236,26 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
    * @param {any} toolSet
    */
   const provisionSession = async (sessionId, request, toolSet) => {
-    const { plan, text, privateDir } = makePlan(sessionId, request);
     const record = await E(owner).inspect(sessionId);
+    // The recorded pin is authoritative for a reopen that names it, or
+    // nothing; a new session's pin, or a changed one, is admitted by the
+    // account's catalog now, and missing discovery refuses rather than
+    // substituting. The runtime cannot run without a model, so a record
+    // from before pins were required is a new pin too, asked for as such.
+    const recordedPlan =
+      record?.plan === undefined ? undefined : readSessionPlan(record.plan);
+    const pin =
+      recordedPlan?.model !== undefined &&
+      recordedPinAnswers(recordedPlan, request)
+        ? { model: recordedPlan.model }
+        : {
+            model: (await catalog.resolve(revisedPin(recordedPlan, request)))
+              .model,
+          };
+    const { plan, text, privateDir } = makePlan(
+      sessionId,
+      harden({ ...request, ...pin }),
+    );
     if (record === undefined) {
       await assertForeignWorkspace(plan);
       await E(owner).create(
@@ -289,9 +311,36 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
     return E(owner).start(sessionId, toolSet);
   };
 
+  // What the OpenRouter account lists, as opencode routes it: under the
+  // `openrouter/` provider prefix its config names, and with no effort,
+  // which the runtime has no setting for.
+  const catalog = makeBackendCatalog({
+    label: 'OpenCode',
+    readCatalog: subscriptionId =>
+      E(
+        /** @type {Promise<{ modelCatalog(subscriptionId?: string): Promise<any> }>} */ (
+          E(hostAgent).lookup([SANDBOX_DIR, 'broker-service'])
+        ),
+      ).modelCatalog(subscriptionId),
+    project: model => {
+      const id = `${OPENROUTER_PROVIDER_ID}/${model.id}`;
+      // A provider id opencode's config could not name is not offered.
+      try {
+        parseModelRef(id);
+      } catch (_error) {
+        return undefined;
+      }
+      return {
+        ...model,
+        id,
+        reasoningEfforts: [],
+        defaultReasoningEffort: null,
+      };
+    },
+  });
   return makeOpencodeBackendFactory({
     publicInternetEnabled: broker.config.publicInternet === true,
-    models: OPENCODE_MODELS,
+    catalog,
     provisionSession,
     stopSession: sessionId => E(owner).stop(sessionId),
     removeSession: sessionId => E(owner).remove(sessionId),

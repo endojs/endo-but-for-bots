@@ -541,14 +541,6 @@ for (const kind of ['sandbox', 'broker']) {
 
 test('reconstruction uses lookup, reclaims the recorded mount, and invents nothing', async t => {
   const f = fixture(t);
-  await E(await E(f.resolver).get('sandboxService')).provideScope(
-    'sandbox-old',
-  );
-  await E(await E(f.resolver).get('brokerService')).provideScope(
-    'sandbox-old',
-    harden({}),
-  );
-  f.events.length = 0;
   const controller = f.makeController();
   await E(controller).terminate(JSON.stringify(planFor('old')), f.resolver);
   t.true(f.events.includes('lookup sandbox sandbox-old'));
@@ -565,17 +557,10 @@ test('reconstruction uses lookup, reclaims the recorded mount, and invents nothi
 test('a mount that cannot be reclaimed keeps the session stoppable, not stopped', async t => {
   const f = fixture(t);
   const text = JSON.stringify(planFor('old'));
-  await E(await E(f.resolver).get('sandboxService')).provideScope(
-    'sandbox-old',
-  );
-  await E(await E(f.resolver).get('brokerService')).provideScope(
-    'sandbox-old',
-    harden({}),
-  );
   f.faults.reclaimFail = true;
   const controller = f.makeController();
   await t.throwsAsync(E(controller).terminate(text, f.resolver), {
-    message: /Original native cleanup proof is unavailable/,
+    message: /Original local 9P\/MCP cleanup ownership is unavailable/,
   });
   t.false((await E(controller).status()).stopped);
   f.faults.reclaimFail = false;
@@ -583,17 +568,16 @@ test('a mount that cannot be reclaimed keeps the session stoppable, not stopped'
   t.true((await E(controller).status()).stopped);
 });
 
-test('a shared service that cannot be revived blocks native cleanup acknowledgement', async t => {
+test('a shared service that cannot be revived no longer blocks cleanup', async t => {
   const f = fixture(t);
   f.faults.resolverFail = 'sandboxService';
   const controller = f.makeController();
-  await t.throwsAsync(
-    E(controller).terminate(JSON.stringify(planFor('old')), f.resolver),
-    { message: /native cleanup proof/ },
-  );
-  t.false((await E(controller).status()).stopped);
-  t.false(
-    f.events.some(event => Array.isArray(event) && event[0] === 'reclaim'),
+  await E(controller).terminate(JSON.stringify(planFor('old')), f.resolver);
+  t.true((await E(controller).status()).stopped);
+  t.true(
+    f.events.some(
+      event => Array.isArray(event) && event[0] === 'cleanup error',
+    ),
   );
 });
 

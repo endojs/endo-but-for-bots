@@ -43,7 +43,6 @@ const brokerConfig = (overrides = {}) =>
     imageRef,
     imageDigest: digest,
     listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
-    models: ['claude-sonnet-4-6'],
     publicInternet: true,
     credentialKind: 'oauthToken',
     ...overrides,
@@ -66,7 +65,7 @@ const makeFakeOwner = () => {
   /** @type {any[][]} */
   const log = [];
   /** @type {{ createError: Error | undefined }} */
-  const knobs = { createError: undefined };
+  const knobs = { createError: undefined, catalogDown: false };
   const facet = harden({
     async send() {
       return harden({});
@@ -197,6 +196,34 @@ const fixture = async t => {
                 { id: 'first', label: 'First' },
                 { id: 'second', label: 'Second' },
               ]),
+            // What each account lists, as the broker reads it from Anthropic;
+            // an outage is scripted by the test.
+            modelCatalog: async subscriptionId => {
+              if (knobs.catalogDown) throw Error('provider catalog down');
+              return harden({
+                accounts: ['first', 'second']
+                  .filter(
+                    id => subscriptionId === undefined || id === subscriptionId,
+                  )
+                  .map(id => ({
+                    subscriptionId: id,
+                    state: 'current',
+                    observedAt: 1,
+                    models: [
+                      'claude-sonnet-4-6',
+                      'claude-haiku-4-5-20251001',
+                      'claude-opus-5',
+                    ].map(model => ({
+                      id: model,
+                      title: model,
+                      description: '',
+                      default: false,
+                      defaultReasoningEffort: null,
+                      reasoningEfforts: [],
+                    })),
+                  })),
+              });
+            },
           });
         },
         async diagnostics() {
@@ -567,4 +594,145 @@ test('recorded mounter settings reach every plan', async t => {
   await E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet());
   const [, , planText] = f.log.find(([kind]) => kind === 'create') ?? [];
   t.deepEqual(JSON.parse(planText).mounterEnv, mounterEnv);
+});
+
+test('a recorded pin is kept when the provider cannot be read; a new pin is refused then, and admitted against the catalog otherwise', async t => {
+  const f = await fixture(t);
+  const factory = await make(f.host, undefined, { env: f.env });
+  const first = await E(factory).create(
+    harden({
+      sessionId: 'session-a',
+      model: 'claude-sonnet-4-6',
+      reasoningEffort: 'high',
+    }),
+    makeToolSet(),
+  );
+  await E(first.admin).terminate();
+  const plan = () => JSON.parse(f.records.get('session-a')?.plan ?? '');
+  t.like(plan(), { model: 'claude-sonnet-4-6', reasoningEffort: 'high' });
+  f.knobs.catalogDown = true;
+  // Floot's reopen names the persisted pin, or its empty spelling; either
+  // keeps the record, without asking the provider.
+  for (const spec of [
+    { model: 'claude-sonnet-4-6', reasoningEffort: 'high' },
+    { model: '', reasoningEffort: '' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const again = await E(factory).create(
+      harden({ sessionId: 'session-a', ...spec }),
+      makeToolSet(),
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await E(again.admin).terminate();
+    t.like(plan(), { model: 'claude-sonnet-4-6', reasoningEffort: 'high' });
+  }
+  // A changed pin, or a new session, is a new pin: refused while the
+  // catalog cannot be read, and no other model is put in its place.
+  for (const spec of [
+    { sessionId: 'session-a', model: 'claude-opus-5' },
+    { sessionId: 'session-b', model: 'claude-sonnet-4-6' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(factory).create(harden(spec), makeToolSet()), {
+      message: /"Claude" model catalog is unavailable/,
+    });
+  }
+  t.like(plan(), { model: 'claude-sonnet-4-6', reasoningEffort: 'high' });
+  t.false(f.records.has('session-b'));
+  f.knobs.catalogDown = false;
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'session-b', model: 'claude-zzz' }),
+      makeToolSet(),
+    ),
+    { message: /Unknown "Claude" model "claude-zzz"/ },
+  );
+  // The runtime drives Haiku at no effort: an effort with it is refused
+  // against the catalog's projection, not by a table in the factory.
+  await t.throwsAsync(
+    E(factory).create(
+      harden({
+        sessionId: 'session-b',
+        model: 'claude-haiku-4-5-20251001',
+        reasoningEffort: 'high',
+      }),
+      makeToolSet(),
+    ),
+    { message: /Unsupported "Claude" reasoning effort/ },
+  );
+  t.false(f.records.has('session-b'));
+  const named = await E(factory).create(
+    harden({ sessionId: 'session-b', model: 'claude-opus-5' }),
+    makeToolSet(),
+  );
+  await E(named.admin).terminate();
+  // An unnamed effort is the model's default from the runtime's table.
+  const planB = () => JSON.parse(f.records.get('session-b')?.plan ?? '');
+  t.like(planB(), { model: 'claude-opus-5', reasoningEffort: 'max' });
+  // An effort changed on its own keeps the recorded model: it is admitted
+  // against that model's efforts, and no other model is put in its place.
+  const lowered = await E(factory).create(
+    harden({ sessionId: 'session-b', reasoningEffort: 'low' }),
+    makeToolSet(),
+  );
+  await E(lowered.admin).terminate();
+  t.like(planB(), { model: 'claude-opus-5', reasoningEffort: 'low' });
+  // Sonnet 4.6 takes every effort but `xhigh`, by the runtime's table.
+  await t.throwsAsync(
+    E(factory).create(
+      harden({
+        sessionId: 'session-c',
+        model: 'claude-sonnet-4-6',
+        reasoningEffort: 'xhigh',
+      }),
+      makeToolSet(),
+    ),
+    { message: /Unsupported "Claude" reasoning effort "xhigh"/ },
+  );
+  t.false(f.records.has('session-c'));
+});
+
+test('a session that names no model runs the runtime’s own default, unpinned; nobody picks one from the list', async t => {
+  const f = await fixture(t);
+  const factory = await make(f.host, undefined, { env: f.env });
+  // The catalog is not consulted for it, so it starts through an outage.
+  f.knobs.catalogDown = true;
+  const plain = await E(factory).create(
+    harden({ sessionId: 'session-a' }),
+    makeToolSet(),
+  );
+  await E(plain.admin).terminate();
+  const plan = () => JSON.parse(f.records.get('session-a')?.plan ?? '');
+  t.false('model' in plan());
+  t.false('reasoningEffort' in plan());
+  // An effort without a model is the runtime's own axis, checked as such.
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'session-a', reasoningEffort: 'ultra' }),
+      makeToolSet(),
+    ),
+    { message: /Unsupported Claude reasoning effort "ultra"/ },
+  );
+  const effortful = await E(factory).create(
+    harden({ sessionId: 'session-a', reasoningEffort: 'high' }),
+    makeToolSet(),
+  );
+  await E(effortful.admin).terminate();
+  t.false('model' in plan());
+  t.is(plan().reasoningEffort, 'high');
+  // Naming a model later is a new pin, admitted by the catalog.
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'session-a', model: 'claude-opus-5' }),
+      makeToolSet(),
+    ),
+    { message: /"Claude" model catalog is unavailable/ },
+  );
+  f.knobs.catalogDown = false;
+  const pinned = await E(factory).create(
+    harden({ sessionId: 'session-a', model: 'claude-opus-5' }),
+    makeToolSet(),
+  );
+  await E(pinned.admin).terminate();
+  t.like(plan(), { model: 'claude-opus-5', reasoningEffort: 'max' });
 });

@@ -21,6 +21,22 @@ import {
 
 const encode = text => new TextEncoder().encode(text);
 
+/** What an account's catalog read says when it lists these models. */
+const listing =
+  (...ids) =>
+  async () =>
+    harden({
+      observedAt: 1,
+      models: ids.map(id => ({
+        id,
+        title: id,
+        description: '',
+        default: false,
+        defaultReasoningEffort: null,
+        reasoningEfforts: [],
+      })),
+    });
+
 test('listener diagnostics are the worker lines and nothing else on the stream', t => {
   t.deepEqual(
     listenerDiagnostics(
@@ -196,7 +212,6 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
     policy: /** @type {any} */ ({
       origin: 'https://api.example.test',
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: ['allowed'],
       maxConcurrentRequests: 4,
       maxRequestBytes: 1024n,
       maxResponseBytes: 1024n,
@@ -251,6 +266,7 @@ test('a broker over several subscriptions reads its set, hands over, keeps its s
         Far(`${member.id} secret`, {
           readBase64: async () => btoa(`${member.secretName}-key`),
         }),
+      modelReadOf: () => listing('allowed'),
       resetRedeemOf:
         ({ member }) =>
         async request => {
@@ -649,7 +665,9 @@ test('catalog discovery retains account boundaries and isolates failed readings'
   t.false(JSON.stringify(catalog).includes('SECRET'));
   await E(kit.service).modelCatalog('work');
   t.is(owners.length, 2, 'discovery reuses existing credential owners');
-  t.deepEqual(reads, ['work', 'home', 'work']);
+  // A catalog read within its lifetime is answered from what is held; the
+  // account that could not be read is not asked again at once either.
+  t.deepEqual(reads, ['work', 'home']);
   await t.throwsAsync(() => E(kit.service).modelCatalog('missing'), {
     message: /Unknown provider subscription/,
   });
@@ -1110,7 +1128,7 @@ test('failed authoritative identity write prevents owned-pool credential constru
       }),
     makePolicy: () =>
       /** @type {any} */ ({
-        policy: { origin: 'https://provider.test', models: ['model'] },
+        policy: { origin: 'https://provider.test' },
         accountRef: 'pool',
       }),
     makeCredential: () => {
@@ -1210,7 +1228,6 @@ test('a pool member that is somebody else’s share is served through its endpoi
     policy: /** @type {any} */ ({
       origin: 'https://api.example.test',
       routes: [{ method: 'POST', path: '/v1/responses' }],
-      models: ['allowed'],
       maxConcurrentRequests: 4,
       maxRequestBytes: 1024n,
       maxResponseBytes: 1024n,
@@ -1263,6 +1280,7 @@ test('a pool member that is somebody else’s share is served through its endpoi
         Far(`${member.id} secret`, {
           readBase64: async () => btoa(`${member.secretName}-key`),
         }),
+      modelReadOf: () => listing('allowed'),
       subscriptionOf: member => {
         t.is(member.subscriptionName, 'share-friend');
         return share;
@@ -1433,7 +1451,6 @@ for (const pinnedOnly of [true, false]) {
       policy: /** @type {any} */ ({
         origin: 'https://api.example.test',
         routes: [{ method: 'POST', path: '/v1/responses' }],
-        models: ['allowed'],
         maxConcurrentRequests: 4,
         maxRequestBytes: 1024n,
         maxResponseBytes: 1024n,
@@ -1489,3 +1506,270 @@ for (const pinnedOnly of [true, false]) {
     await kit.close();
   });
 }
+
+test('a catalog is current, then stale when the provider stops answering, then unavailable, and unsupported without discovery', async t => {
+  let clock = 1_000_000;
+  const LIFETIME = 60_000;
+  const MAX_AGE = 600_000;
+  let answer = true;
+  const kit = pooledKit(
+    'd',
+    'owner-catalog-states',
+    {
+      readSet: async () => ({
+        members: [{ id: 'work' }, { id: 'quiet', subscriptionName: 'share' }],
+      }),
+      secretOf: () => Far('secret', { readBase64: async () => '' }),
+      subscriptionOf: () =>
+        Far('share', {
+          describe: async () => harden({ providerId: 'test', models: ['x'] }),
+          getStatus: async () => harden({ available: true }),
+          watchStatus: async () => makeLatestTopic().watch(),
+        }),
+      modelReadOf: () => async () => {
+        if (!answer) throw Error('provider catalog down');
+        return listing('allowed')();
+      },
+    },
+    { now: () => clock, catalog: { lifetimeMs: LIFETIME, maxAgeMs: MAX_AGE } },
+  );
+  t.teardown(() => kit.close());
+  const states = async () =>
+    (await E(kit.service).modelCatalog()).accounts.map(account => [
+      account.subscriptionId,
+      account.state,
+      account.models.map(model => model.id),
+    ]);
+  t.deepEqual(await states(), [
+    ['work', 'current', ['allowed']],
+    // A share in the pool lists what its grantor says of it.
+    ['quiet', 'current', ['x']],
+  ]);
+  answer = false;
+  clock += LIFETIME;
+  t.deepEqual(await states(), [
+    ['work', 'stale', ['allowed']],
+    ['quiet', 'current', ['x']],
+  ]);
+  clock += MAX_AGE;
+  t.deepEqual(await states(), [
+    ['work', 'unavailable', []],
+    ['quiet', 'current', ['x']],
+  ]);
+  answer = true;
+  clock += LIFETIME;
+  t.deepEqual((await states())[0], ['work', 'current', ['allowed']]);
+  const bare = pooledKit('e', 'owner-catalog-unsupported', {
+    readSet: async () => ({ members: [{ id: 'work' }] }),
+    secretOf: () => Far('secret', { readBase64: async () => '' }),
+  });
+  t.teardown(() => bare.close());
+  t.deepEqual(await E(bare.service).modelCatalog(), {
+    accounts: [
+      {
+        subscriptionId: 'work',
+        state: 'unsupported',
+        observedAt: null,
+        models: [],
+      },
+    ],
+  });
+});
+
+test('a request goes to the subscription whose account lists its model, and a retired account admits nothing', async t => {
+  const digest = `sha256:${'f'.repeat(64)}`;
+  /** @type {any} */
+  let storedSet = { members: [{ id: 'work' }, { id: 'home' }] };
+  /** @type {string[]} */
+  const used = [];
+  /** @type {any} */
+  let endpoint;
+  const kit = makeProviderBrokerServiceKit({
+    label: 'Test',
+    policy: /** @type {any} */ ({
+      origin: 'https://api.example.test',
+      routes: [{ method: 'POST', path: '/v1/responses' }],
+      maxConcurrentRequests: 4,
+      maxRequestBytes: 1024n,
+      maxResponseBytes: 1024n,
+    }),
+    accountRef: 'pool',
+    secret: undefined,
+    ownerId: 'owner-disjoint',
+    directory: '/tmp/unused',
+    imageRef: `localhost/slice@${digest}`,
+    imageDigest: digest,
+    listenerImageRef: `localhost/listener@${digest}`,
+    runtime: /** @type {any} */ ({
+      dispose: async () => {},
+      startKit(input) {
+        endpoint = input.endpoint;
+        const value = Promise.resolve({
+          observe: async () =>
+            harden({
+              endpoint: 'http://127.0.0.1:1',
+              containerName: 'listener',
+              networkNamespaceId: 'net',
+              listenerImageDigest: digest,
+            }),
+          stop: async () => {},
+          closed: new Promise(() => {}),
+        });
+        return { value, stop: async () => {} };
+      },
+    }),
+    fetch: /** @type {any} */ (
+      async (_url, init) => {
+        used.push(init.headers.authorization);
+        return new Response('{"ok":true}');
+      }
+    ),
+    subscriptions: {
+      readSet: async () => storedSet,
+      secretOf: member =>
+        Far(`${member.id} secret`, {
+          readBase64: async () => btoa(`${member.secretName}-key`),
+        }),
+      // Disjoint catalogs: each account lists a model of its own.
+      modelReadOf: ({ member }) =>
+        listing(member.id === 'work' ? 'model-w' : 'model-h'),
+    },
+  });
+  t.teardown(() => kit.close());
+  const scope = await E(kit.service).provideScope(
+    'disjoint',
+    harden({ providerOrigin: 'https://api.example.test', accountRef: 'pool' }),
+  );
+  await E(scope).start();
+  /** @param {string} model */
+  const ask = model =>
+    E(endpoint).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: JSON.stringify({ model }),
+      }),
+    );
+  t.is((await ask('model-h')).body, '{"ok":true}');
+  t.is((await ask('model-w')).body, '{"ok":true}');
+  // Declared order would try `work` first; only the account that lists the
+  // model is asked.
+  t.deepEqual(used, ['Bearer home-key', 'Bearer work-key']);
+  await t.throwsAsync(() => ask('model-x'), { message: /Model denied/ });
+  // The broker as a Subscription describes the union of what its accounts
+  // list.
+  const subscription = await E(kit.service).subscription();
+  t.deepEqual((await E(subscription).describe()).models, [
+    'model-w',
+    'model-h',
+  ]);
+  // `home` leaves the set: its catalog is closed with it, and the grant
+  // that took the set as it was cannot be served from it any more.
+  storedSet = { members: [{ id: 'work' }] };
+  await E(kit.service).subscriptions();
+  await t.throwsAsync(() => ask('model-h'), { message: /Model denied/ });
+  t.deepEqual(used, ['Bearer home-key', 'Bearer work-key']);
+  t.deepEqual(
+    (await E(kit.service).modelCatalog()).accounts.map(account => [
+      account.subscriptionId,
+      account.state,
+    ]),
+    [['work', 'current']],
+  );
+});
+
+test('a retired member’s catalog admits nothing, even to a grant that still holds it', async t => {
+  /** @type {any} */
+  let storedSet = { members: [{ id: 'work' }, { id: 'home' }] };
+  /** @type {any} */
+  let pool;
+  const kit = pooledKit(
+    '1',
+    'owner-retired-admission',
+    {
+      readSet: async () => storedSet,
+      secretOf: () => Far('secret', { readBase64: async () => '' }),
+      modelReadOf: ({ member }) =>
+        listing(member.id === 'work' ? 'model-w' : 'model-h'),
+    },
+    {
+      makeIssuer: options => {
+        pool = options.pool;
+        return {
+          openEndpoint: async () => Far('UnusedEndpoint', {}),
+          dispose: async () => {},
+        };
+      },
+    },
+  );
+  t.teardown(() => kit.close());
+  // Issuance holds the set as it was: the grant made now keeps `home`.
+  const subscription = await E(kit.service).subscription();
+  await E(subscription).openEndpoint({ sessionId: 'retire-test' });
+  const members = await pool.members();
+  const home = members.find(
+    (/** @type {any} */ member) => member.id === 'home',
+  );
+  t.true(await home.admits('model-h'));
+  t.is(home.catalogState(), 'current');
+  storedSet = { members: [{ id: 'work' }] };
+  await E(kit.service).subscriptions();
+  // The grant took the set as it was; the member it holds is retired, and
+  // its catalog closed with it.
+  t.false(await home.admits('model-h'));
+  t.is(home.catalogState(), 'unavailable');
+});
+
+test('a share in the pool lists only what its grantor’s limits allow', async t => {
+  const carol = Far('carol subscription', {
+    describe: async () =>
+      harden({ providerId: 'test', models: ['allowed', 'other'] }),
+    getStatus: async () =>
+      harden({ available: true, blockedUntil: '', remainingFraction: 0.9 }),
+    watchStatus: async () => makeLatestTopic().watch(),
+    openEndpoint: async () => {
+      throw Error('unused');
+    },
+  });
+  /** @type {any[]} */
+  const shareStore = [];
+  const { share } = makeSubscriptionShare({
+    shareId: 'narrow',
+    provideUnderlying: async () => carol,
+    provideLimits: async () => ({
+      createdAt: new Date(Date.now() - 1000).toISOString(),
+      budget: { tokens: 50_000, periodSeconds: 86_400 },
+      models: ['allowed', 'not-beneath'],
+    }),
+    journal: {
+      read: async () => shareStore.at(-1),
+      write: async record => {
+        shareStore.push(record);
+      },
+    },
+  });
+  const kit = pooledKit('2', 'owner-share-catalog', {
+    readSet: async () => ({
+      members: [
+        { id: 'own', label: 'Ours' },
+        { id: 'friend', label: 'Carol’s', subscriptionName: 'share-narrow' },
+      ],
+    }),
+    secretOf: () => Far('secret', { readBase64: async () => '' }),
+    subscriptionOf: () => share,
+    modelReadOf: () => listing('allowed', 'own-only'),
+  });
+  t.teardown(() => kit.close());
+  t.deepEqual(
+    (await E(kit.service).modelCatalog()).accounts.map(account => [
+      account.subscriptionId,
+      account.state,
+      account.models.map(model => model.id),
+    ]),
+    [
+      ['own', 'current', ['allowed', 'own-only']],
+      // The share's narrowing, intersected with what is beneath it.
+      ['friend', 'current', ['allowed']],
+    ],
+  );
+});

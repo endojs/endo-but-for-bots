@@ -9,13 +9,17 @@
  *
  * Formula env (set by `setup-hosted.js`):
  *   CLAUDE_BROKER_CONFIG  JSON: ownerId, directory, imageRef, imageDigest,
- *                         listenerImageRef, models, credentialKind, and
- *                         optional anthropicBeta, maxSessions, publicInternet.
+ *                         listenerImageRef, credentialKind, and optional
+ *                         anthropicBeta, maxSessions, publicInternet. No model
+ *                         list: the account's catalog, read from Anthropic,
+ *                         admits models.
  *
  * @module
  */
 
 import { Fail, q } from '@endo/errors';
+import { E } from '@endo/eventual-send';
+import { makeAnthropicModelRead } from '@endo/hosted-agent/anthropic-model-read.js';
 import {
   makeOwnedProviderBrokerService,
   makeProviderBrokerServiceKit,
@@ -29,6 +33,7 @@ import {
 import {
   ANTHROPIC_BETA_PATTERN,
   CLAUDE_BROKER_ACCOUNT,
+  DEFAULT_OAUTH_BETA,
   buildClaudeBrokerPolicy,
 } from './claude-broker.js';
 import {
@@ -43,7 +48,6 @@ const ConfigShape = M.splitRecord(
     imageRef: M.string(),
     imageDigest: M.string(),
     listenerImageRef: M.string(),
-    models: M.arrayOf(M.string()),
     credentialKind: M.or(...CREDENTIAL_KINDS),
   },
   {
@@ -69,6 +73,11 @@ export const readClaudeBrokerConfig = env => {
   typeof text === 'string' || Fail`Missing CLAUDE_BROKER_CONFIG`;
   /** @type {unknown} */
   const config = harden(JSON.parse(text));
+  // A profile from before account catalogs admitted models carries an
+  // operator model list; it is refused with the way out, not as a shape
+  // error, since the broker it belongs to must be retired deliberately.
+  !(config && typeof config === 'object' && Object.hasOwn(config, 'models')) ||
+    Fail`Retained Claude broker configuration names models, which this release no longer reads (models are admitted by the account's own catalog): retire that broker and the sessions bound to it deliberately, then rerun setup`;
   if (!matches(config, ConfigShape))
     throw Fail`Invalid Claude broker configuration`;
   config.pool !== true ||
@@ -96,11 +105,13 @@ harden(readClaudeBrokerConfig);
  * @param {object} [powers]
  * @param {typeof makeProviderBrokerServiceKit} [powers.makeServiceKit]
  * @param {typeof makeClaudeSubscriptionCredential} [powers.makeCredential]
+ * @param {typeof globalThis.fetch} [powers.fetch]
  * @param {(error: unknown) => void} [powers.reportError]
  */
 export const makeOwnedClaudeBrokerService = ({
   makeServiceKit = makeProviderBrokerServiceKit,
   makeCredential = makeClaudeSubscriptionCredential,
+  fetch = globalThis.fetch,
   reportError = error => console.error('Claude broker cleanup pending', error),
 } = {}) =>
   makeOwnedProviderBrokerService({
@@ -109,7 +120,6 @@ export const makeOwnedClaudeBrokerService = ({
     makePolicy: config => ({
       policy: {
         ...buildClaudeBrokerPolicy({
-          models: config.models,
           credentialKind: config.credentialKind,
           ...(config.anthropicBeta === undefined
             ? {}
@@ -137,6 +147,27 @@ export const makeOwnedClaudeBrokerService = ({
             throw Fail`Claude usage requires a subscription pool credential`;
           }
         : makeClaudeAccountRead({ credential, fetch: globalThis.fetch }),
+    // What the account may be served, from Anthropic's model list, under the
+    // same credential the broker sends inference with: the pool member's
+    // renewing OAuth credential, or the one API key or subscription token.
+    // Nothing here starts a conversation or a runtime.
+    makeModelRead: ({ config, secret, credential }) =>
+      makeAnthropicModelRead({
+        readAuthorization: async () => {
+          if (credential !== undefined) {
+            const { state } = await credential.current();
+            return harden({ header: 'bearer', token: state.accessToken });
+          }
+          const token = globalThis.atob(await E(secret).readBase64());
+          return harden({
+            header:
+              config.credentialKind === 'oauthToken' ? 'bearer' : 'x-api-key',
+            token,
+          });
+        },
+        fetch,
+        anthropicBeta: config.anthropicBeta ?? DEFAULT_OAUTH_BETA,
+      }),
     makeServiceKit,
     reportError,
   });

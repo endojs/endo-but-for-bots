@@ -100,8 +100,23 @@ const fixture = () => {
     imageDigest: digest,
     listenerImageRef: `localhost/endo-provider@${digest}`,
     label: 'OpenCode',
-    policy: buildOpencodeBrokerPolicy({ models: [model] }),
+    policy: buildOpencodeBrokerPolicy(),
     accountRef: OPENCODE_BROKER_ACCOUNT,
+    // What the account's OpenRouter catalog lists, as its discovery reads it.
+    modelRead: async () =>
+      harden({
+        observedAt: 1,
+        models: [
+          {
+            id: model,
+            title: model,
+            description: '',
+            default: false,
+            defaultReasoningEffort: null,
+            reasoningEfforts: [],
+          },
+        ],
+      }),
     fetch: async () => new Response('ok'),
     runtime,
   };

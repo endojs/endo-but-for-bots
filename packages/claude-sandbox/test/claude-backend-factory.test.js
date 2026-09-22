@@ -6,11 +6,11 @@ import { makeExo } from '@endo/exo';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
+import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 
-import {
-  CLAUDE_CLI_MODELS,
-  makeClaudeBackendFactory,
-} from '../src/claude-backend-factory.js';
+import { claudeEffortsFor } from '../src/claude-effort.js';
+
+import { makeClaudeBackendFactory } from '../src/claude-backend-factory.js';
 
 const drain = async reader => {
   const events = [];
@@ -80,6 +80,7 @@ const makeHarness = () => {
   let failingStop;
   let provisionFails = false;
   const factory = makeClaudeBackendFactory({
+    catalog: testCatalog,
     publicInternetEnabled: true,
     provisionSession: async (sessionId, request, toolSet) => {
       log.push(['provision', sessionId, request, await E(toolSet).describe()]);
@@ -111,9 +112,47 @@ const makeHarness = () => {
   };
 };
 
+/**
+ * What the broker's one account lists, as its discovery reads it, projected
+ * as the Claude Code runtime offers it: with the efforts it can drive.
+ * @param {string[]} ids
+ */
+const catalogOf = ids =>
+  makeBackendCatalog({
+    label: 'Claude',
+    readCatalog: async () =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: ids.map(id => ({
+              id,
+              title: id,
+              description: '',
+              default: false,
+              defaultReasoningEffort: null,
+              reasoningEfforts: [],
+            })),
+          },
+        ],
+      }),
+    project: model => ({ ...model, ...claudeEffortsFor(model.id) }),
+  });
+const CATALOG_IDS = harden([
+  'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-6',
+  'claude-sonnet-5',
+  'claude-opus-4-8',
+  'claude-opus-5',
+]);
+const testCatalog = catalogOf(CATALOG_IDS);
+
 test('broker-only Claude rejects public access before stopping an existing session', async t => {
   const log = [];
   const factory = makeClaudeBackendFactory({
+    catalog: testCatalog,
     provisionSession: async () => {
       log.push('provision');
       return makeFakeSession().facet;
@@ -138,7 +177,7 @@ test('broker-only Claude rejects public access before stopping an existing sessi
   t.deepEqual(log, []);
 });
 
-test('describe() and listModels() present Claude Code as a hosted backend', async t => {
+test('describe() and modelCatalog() present Claude Code as a hosted backend', async t => {
   const { factory } = makeHarness();
   t.deepEqual(await E(factory).describe(), {
     id: 'claude',
@@ -156,10 +195,19 @@ test('describe() and listModels() present Claude Code as a hosted backend', asyn
       workspacePath: '/workspace',
     },
   });
-  const models = await E(factory).listModels();
-  t.deepEqual(models, CLAUDE_CLI_MODELS);
-  t.is(models.filter(model => model.default).length, 1);
+  // What the account lists, with the efforts the pinned runtime can drive
+  // each model at; nothing is marked default by the provider.
+  const { accounts } = await E(factory).modelCatalog();
+  t.is(accounts.length, 1);
+  t.like(accounts[0], { subscriptionId: 'default', state: 'current' });
+  const { models } = accounts[0];
+  t.deepEqual(
+    models.map(model => model.id),
+    [...CATALOG_IDS],
+  );
+  t.false(models.some(model => model.default));
   t.deepEqual(models[0].reasoningEfforts, []);
+  t.is(models[0].defaultReasoningEffort, null);
   t.deepEqual(
     models.find(model => model.id === 'claude-sonnet-4-6').reasoningEfforts,
     ['low', 'medium', 'high', 'max'],
@@ -168,12 +216,17 @@ test('describe() and listModels() present Claude Code as a hosted backend', asyn
     models.find(model => model.id === 'claude-opus-5').reasoningEfforts,
     ['low', 'medium', 'high', 'xhigh', 'max'],
   );
+  t.is(
+    models.find(model => model.id === 'claude-opus-5').defaultReasoningEffort,
+    'max',
+  );
 });
 
 test('subscription selection is advertised, validated and forwarded without credentials', async t => {
   const requests = [];
   let unavailable = false;
   const factory = makeClaudeBackendFactory({
+    catalog: testCatalog,
     listSubscriptions: async () => {
       if (unavailable) throw Error('offline');
       return harden([
@@ -264,19 +317,13 @@ test('create() hands the validated request and the pinned tool set to the owner'
   t.deepEqual(log[1][2], { networkPolicy: 'off' });
 });
 
-test('create() refuses an unknown model, a network policy, a reasoning effort, declared container mounts, and a bad workspace path', async t => {
+test('create() refuses a network policy, an effort the runtime has no setting for, declared container mounts, and a bad workspace path', async t => {
   const { factory, log } = makeHarness();
+  // Whether the account lists a model, and which efforts that model takes,
+  // is admitted in the provisioner against the catalog (see the module
+  // tests); the factory refuses only what no account could make right.
   /** @type {[Record<string, unknown>, RegExp][]} */
   const refused = [
-    [{ sessionId: 'session-a', model: 'gpt-9' }, /Unknown Claude model/],
-    [
-      {
-        sessionId: 'session-a',
-        model: 'claude-sonnet-4-6',
-        reasoningEffort: 'xhigh',
-      },
-      /Unsupported Claude reasoning effort/,
-    ],
     [
       {
         sessionId: 'session-a',
@@ -285,13 +332,10 @@ test('create() refuses an unknown model, a network policy, a reasoning effort, d
       },
       /Unsupported Claude reasoning effort/,
     ],
+    [{ sessionId: 'session-a', model: 'x'.repeat(257) }, /bounded string/],
     [
       { sessionId: 'session-a', networkPolicy: 'host' },
       /Unknown network policy "host"/,
-    ],
-    [
-      { sessionId: 'session-a', reasoningEffort: 'high' },
-      /Unsupported Claude reasoning effort/,
     ],
     [{ sessionId: '../x' }, /bounded lowercase path component/],
     [

@@ -46,7 +46,10 @@ export const HostedBackendFactoryInterface = M.interface(
   'HostedBackendFactory',
   {
     describe: M.call().returns(M.promise()),
-    listModels: M.call().returns(M.promise()),
+    // What each account of the backend's provider lists now, per account
+    // (`backend-catalog.js`): `{ accounts: [{ subscriptionId, label?,
+    // pinnedOnly?, state, observedAt, models }] }`, or the one account named.
+    modelCatalog: M.call().optional(M.string()).returns(M.promise()),
     create: M.call(M.record(), M.remotable('HostedToolSet')).returns(
       M.promise(),
     ),
@@ -304,6 +307,19 @@ export const assertHostedBackendDescriptor = descriptor => {
 };
 harden(assertHostedBackendDescriptor);
 
+const MODEL_DESCRIPTOR_KEYS = harden([
+  'default',
+  'defaultReasoningEffort',
+  'description',
+  'id',
+  'reasoningEfforts',
+  'title',
+]);
+// The provider's context window in tokens, where it says. Optional: a
+// runtime whose provider does not publish it carries no number, and a
+// consumer must not read a missing window as a small one.
+const MODEL_DESCRIPTOR_OPTIONAL_KEYS = harden(['contextLength']);
+
 /**
  * Validate and project Floot's exact capability-free model catalog DTO.
  *
@@ -311,23 +327,27 @@ harden(assertHostedBackendDescriptor);
  * this record before it crosses the backend seam.
  *
  * @param {any} candidate
+ * @returns {{ id: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[], contextLength?: number }}
  */
 export const normalizeHostedModelDescriptor = candidate => {
   (candidate &&
     typeof candidate === 'object' &&
-    Object.keys(candidate).sort().join(',') ===
-      'default,defaultReasoningEffort,description,id,reasoningEfforts,title') ||
+    !Array.isArray(candidate) &&
+    MODEL_DESCRIPTOR_KEYS.every(key => Object.hasOwn(candidate, key)) &&
+    Object.keys(candidate).every(
+      key =>
+        MODEL_DESCRIPTOR_KEYS.includes(key) ||
+        MODEL_DESCRIPTOR_OPTIONAL_KEYS.includes(key),
+    )) ||
     Fail`Hosted model descriptor must be a record`;
   const id = /** @type {unknown} */ (candidate.id);
   (typeof id === 'string' && id !== '' && id.length <= 256) ||
     Fail`Hosted model descriptor has an invalid id`;
-  const title = candidate.title;
+  const { title, description, reasoningEfforts: rawEfforts } = candidate;
   (typeof title === 'string' && title !== '' && title.length <= 1024) ||
     Fail`Hosted model descriptor has an invalid title`;
-  const description = candidate.description;
   (typeof description === 'string' && description.length <= 16_384) ||
     Fail`Hosted model descriptor has an invalid description`;
-  const rawEfforts = candidate.reasoningEfforts;
   (Array.isArray(rawEfforts) &&
     rawEfforts.length <= 64 &&
     rawEfforts.every(
@@ -336,20 +356,34 @@ export const normalizeHostedModelDescriptor = candidate => {
     ) &&
     new Set(rawEfforts).size === rawEfforts.length) ||
     Fail`Hosted model descriptor has invalid reasoning efforts`;
+  /** @type {string[]} */
+  const reasoningEfforts = [...rawEfforts];
   typeof candidate.default === 'boolean' ||
     Fail`Hosted model descriptor has an invalid default marker`;
-  const defaultReasoningEffort = candidate.defaultReasoningEffort;
+  const { defaultReasoningEffort, contextLength } = candidate;
   defaultReasoningEffort === null ||
     (typeof defaultReasoningEffort === 'string' &&
-      rawEfforts.includes(defaultReasoningEffort)) ||
+      reasoningEfforts.includes(defaultReasoningEffort)) ||
     Fail`Hosted model descriptor has an invalid default reasoning effort`;
+  contextLength === undefined ||
+    contextLength === null ||
+    (typeof contextLength === 'number' &&
+      Number.isInteger(contextLength) &&
+      contextLength > 0 &&
+      contextLength <= 0xffff_ffff) ||
+    Fail`Hosted model descriptor has an invalid context length`;
   return harden({
-    id,
-    title,
-    description,
-    default: candidate.default,
-    defaultReasoningEffort,
-    reasoningEfforts: harden([...rawEfforts]),
+    id: /** @type {string} */ (id),
+    title: /** @type {string} */ (title),
+    description: /** @type {string} */ (description),
+    default: /** @type {boolean} */ (candidate.default),
+    defaultReasoningEffort: /** @type {string | null} */ (
+      defaultReasoningEffort
+    ),
+    reasoningEfforts: harden(reasoningEfforts),
+    ...(typeof contextLength === 'number'
+      ? { contextLength: /** @type {number} */ (contextLength) }
+      : {}),
   });
 };
 harden(normalizeHostedModelDescriptor);

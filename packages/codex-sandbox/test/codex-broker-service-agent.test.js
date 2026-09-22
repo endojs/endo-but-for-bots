@@ -20,7 +20,6 @@ const config = harden({
   imageDigest: digest,
   listenerImageRef: `localhost/provider@${digest}`,
   accountRef: 'account-a',
-  models: ['model-a'],
 });
 const env = harden({ CODEX_BROKER_CONFIG: JSON.stringify(config) });
 
@@ -31,7 +30,18 @@ test('Codex catalog uses retained credential and the packaged CLI version withou
   const manifest = JSON.parse(
     await readFile(new URL('../oci/package.json', import.meta.url), 'utf8'),
   );
+  // The catalog's own clock: within an observation's lifetime a second
+  // catalog request is answered from what is held; past it, the provider is
+  // read again under the credential as it is then.
+  let clock = 1_000_000;
+  const lifetimeMs = 60_000;
   const make = makeOwnedCodexBrokerService({
+    makeServiceKit: options =>
+      makeProviderBrokerServiceKit({
+        ...options,
+        now: () => clock,
+        catalog: { lifetimeMs },
+      }),
     makeCredential: () => {
       constructions += 1;
       return harden({
@@ -89,8 +99,15 @@ test('Codex catalog uses retained credential and the packaged CLI version withou
   t.is(reads, 0);
   t.is(requests, 0);
   const first = await E(service).modelCatalog();
+  t.is(first.accounts[0].state, 'current');
+  t.is(typeof first.accounts[0].observedAt, 'number');
   await E(service).modelCatalog();
   t.is(constructions, 1);
+  t.is(reads, 1);
+  t.is(requests, 1);
+  clock += lifetimeMs;
+  t.like((await E(service).modelCatalog()).accounts[0], { state: 'current' });
+  t.is(constructions, 1, 'discovery reuses the one credential owner');
   t.is(reads, 2);
   t.is(requests, 2);
   t.is(first.accounts[0].models[0].id, 'advertised-model');
@@ -98,6 +115,16 @@ test('Codex catalog uses retained credential and the packaged CLI version withou
 
 test('Codex broker configuration refuses authority injection and unbound accounts', t => {
   t.deepEqual(readCodexBrokerConfig(env), config);
+  // An operator model list is not configuration any more: the account's own
+  // catalog admits models, so a retained profile carrying one says how to
+  // retire it rather than failing as a shape error.
+  t.throws(
+    () =>
+      readCodexBrokerConfig({
+        CODEX_BROKER_CONFIG: JSON.stringify({ ...config, models: ['model-a'] }),
+      }),
+    { message: /names models.*retire that broker/ },
+  );
   t.throws(() => readCodexBrokerConfig({}), {
     message: /Missing CODEX_BROKER_CONFIG/,
   });
@@ -106,8 +133,6 @@ test('Codex broker configuration refuses authority injection and unbound account
     { fetch: 'override' },
     { origin: 'https://elsewhere.test' },
     { accountRef: '' },
-    { models: [] },
-    { models: ['invalid model'] },
   ]) {
     t.throws(() =>
       readCodexBrokerConfig({
