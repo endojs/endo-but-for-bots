@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 458 application entries and 80 host entries still need explicit ledger
+The other 453 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -120,6 +120,24 @@ scopes was corrected to describe the retained implementation.
 Later shared-supervisor and generation-165 acceptance evidence remains separate;
 it is not retroactively attributed to these initial helper extractions.
 
+### Network and runtime-boundary changes
+
+These five source/diff reviews map the next application changes without treating
+historical test counts as proof of current kernel isolation or daemon reconstruction.
+Fresh local runs: shared worker/egress/DNS/listener/network **62** tests, Claude MCP
+cleanup **3**, OpenCode MCP cleanup **7**, Codex policy/runtime-verifier **13**.
+
+| Commit | Owner / boundary and evidence | Disposition and limit |
+|---|---|---|
+| `ba4cdbb3e` | Session-owned MCP listener/socket retains failed close for retry and latches successful close. Real Unix-socket tests exercise failures, coalescing and successor preservation | Retained in shared mcp-server; old adapter implementations replaced. Local filesystem/lifecycle evidence, not restart proof |
+| `6747bf5b0` | Existing egress authority and credential-free worker moved to hosted-agent; separate capability activates ephemeral listeners | Retained shared modules; source/bundled worker subprocess tests cover inference and ungranted activation refusal. Not Linux namespace containment or daemon replay proof |
+| `9f2a754aa` | Codex CLI and tools share the outer guest authority; externalSandbox per turn, danger-full-access process/thread baseline, inner managed proxy disabled | Retained through client/transport/native controller; former factory composition replaced. Does not isolate commands from native state or inference. Local configuration/probe tests are not pinned CLI live acceptance |
+| `c162186ed` | Removes synthetic address and NET_ADMIN helper; fixed loopback in shared unrouted namespace, existing runtime owns resolver/lock cleanup | Retained privilege removal; operator enablement and session egress grant remain required. Mocked Podman plus real worker checks do not prove kernel namespace restrictions |
+| `d9a0f3106` | Pure network evidence validation/environment projection; existing grants own optional public egress | Shared by all three current adapters and execution envelope. Validation is not namespace attestation. Original OpenCode integration gap was closed by later work, not this commit |
+
+The design's stale statement that OpenCode still awaits shared-network integration
+is corrected to name the retained controller and execution-envelope path.
+
 ### Initial host configuration and preservation changes
 
 These 13 host commits were compared with their diffs and retained implementations.
@@ -145,9 +163,36 @@ below; counts do not describe the unmodified historical builder.
 | `11ed01d` | Attempted exclusive-primary-group admission for holder storage | Superseded by private recovery directory in e2e6f65 after live group membership disproved exclusivity; not the retained authorization rule |
 | `e2e6f65` | Separates private holder records from shared deployment spool; fresh manifest identity/metadata captured before creates | Retained owner boundary; tests cover order and failed intent, not power-loss injection or hostile-directory races |
 
+### Old-release retirement and restoration harness changes
+
+Seven more host diffs/current implementations are mapped below.
+Fresh local tests across six retirement/inventory/restoration suites: **44 pass**,
+including the names-only legacy correction described in the main audit.
+Mock preservation checks are not live cleanup acknowledgements.
+
+| Commit | Owner / boundary and evidence | Disposition and limit |
+|---|---|---|
+| `9e062aa` | Exact historical six-session retirement via existing Floot/native owners; preserved Secrets/guest roots; separate stop/remove with operator external proof | Old-release topology and exclusive maintenance required. A test proof object cannot establish real container/mount absence |
+| `a180f0a` | Candidate app/image pins and restoration ledger, no new runtime owner | Historical preparation, later pins supersede it; no acceptance inferred from candidate metadata |
+| `1fa90d9` | Broker reference inventory over exact approved namespace identities without resolving custom members | Built-in workers may revive; nonmatching references do not prove global independence; current validation evolved |
+| `ed57f5b` | Two approved legacy guest namespaces inspected without custom-member resolution | Built-in worker revival possible; not backup, global dependency discovery or cleanup |
+| `88c5114` | Broker alias detachment with preserved credentials/archive identity checks | Original cancel-before-remove superseded by later names-only correction; held capabilities still require verified old-owner shutdown |
+| `f502c87` | Requested backend/manifest/result coverage validation | **Open defect:** createSession precedes plain manifest write; unrecorded creation/truncation possible, retries abandon unfinished IDs. Current cutover4 seed runner still uses it. Not a durable acquisition/cleanup ledger and not safe for automatic reuse without remediation |
+| `e303296` | Four obsolete aliases targeted with exact metadata and preservation checks | Review found cancel could construct dormant code despite the helper comment. Corrected to names-only detachment; no producer shutdown/global revocation claim. Completed retries may fail safely after GC removes target metadata; no recovery redesign supplied |
+
 ### Post-snapshot changes
 
 - Application `1aa668820`: documentation-only inventory and audit links, no runtime owner.
+- Application `294121320`: documentation-only ownership mappings and design correction.
+- Host `c98eb5d`: legacy detachment no longer calls host cancellation, which can
+  construct dormant custom modules. Exact target identities and preservation
+  checks remain; live holders still require old-daemon shutdown. Tests forbid
+  cancellation, inject removal failure/reappearance, and distinguish effectful
+  failure shutdown instructions from dry-run errors. Three prior cases fail on
+  the old implementation; all 44 related helper tests pass after the fix.
+  Independently reviewed and pushed, not executed on Tokyo.
+  This changes maintenance actions, not daemon cancellation semantics or native
+  recovery. A completed retry may still fail safely if GC removed old metadata.
 - Host [`4e2a574`](https://github.com/kumavis/endo-host/commit/4e2a574fb57b3e32aa29ad60e0cbfd0f8990bb5b):
   candidate manifest publication now flushes file, renames, then flushes its
   directory before success. Three added cases distinguish ordering, failed file

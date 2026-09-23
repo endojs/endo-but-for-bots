@@ -86,13 +86,36 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest six application changes, plus the first 13 host
+not. The newest 15 and earliest 11 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
 coverage and matching triage counts in both repositories.
 Earlier retained infrastructure and subsequent changes remain in scope.
 No claim of complete retrospective durability coverage is made yet.
+
+Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
+the four-formula legacy helper. Host cancellation calls `provideController`, so
+the old implementation could construct dormant legacy modules during retirement.
+The helper now detaches only exact approved names, preserves existing identity
+checks, and explicitly requires old-daemon shutdown after effectful success or
+failure. Tests forbid cancellation and exercise actual removal failure/retry,
+reappearance and the entrypoint error instructions; three fail before the fix.
+All 44 related host helper tests pass after independent review. Pushed, not run on
+Tokyo. Name detachment is not global revocation or proof that native producers
+stopped. Historical completed retries can still fail safely after metadata GC.
+
+Old restoration acceptance runner — newly identified open boundary (2026-09-24):
+`endo-host/ops/verify-restoration.mjs` verifies requested backend coverage, but its
+seed path creates a session and obtains its ID before writing the manifest with
+ordinary `writeFile`. A lost create response can leave an unrecorded session;
+replacement writes can truncate; retry replaces unfinished session IDs, losing
+their cleanup references. `run-cutover4-restoration.sh` still invokes this seed
+path. Coverage tests do not establish a durable acquisition/cleanup ledger.
+Do not automatically reuse that runner until its acquisition and manifest protocol
+is corrected or the obsolete path is retired in favor of a verified replacement.
+Existing historical acceptance observations are not erased, but do not prove this
+failure boundary safe. This remains open rather than folded into native #1323.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for
@@ -3704,6 +3727,14 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Mapped five more application network/runtime changes and seven host
+retirement/acceptance changes. Found and fixed legacy cancellation-triggered
+revival in host `c98eb5d`; 44 helper tests pass. Fresh network/MCP/policy checks
+pass (62 shared, 3 Claude, 7 OpenCode, 13 Codex). Corrected stale design text about
+OpenCode network integration. Opened the old restoration runner's unrecorded-create,
+manifest replacement and abandoned-ID boundary explicitly; not yet remedied.
+No Tokyo runtime or Secret changes.
 
 2026-09-24 — Initial host durability mapping found a missing candidate-manifest
 directory flush. Corrected in host `4e2a574` after regression reproduction and

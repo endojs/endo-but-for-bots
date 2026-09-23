@@ -889,8 +889,10 @@ An operator boolean enables public networking availability, and each session
 still requires its own separately revocable public-egress capability.
 Pinned app-server native-command acceptance remains outstanding.
 The network evidence and proxy environment contract now lives in `@endo/hosted-agent`.
-OpenCode's broker can issue separately revocable public-egress grants; its hosted
-factory still uses the previous public path until resolver/runtime integration lands.
+OpenCode's broker issues separately revocable public-egress grants.
+Its native controller now uses the shared public-network environment builder, and
+the shared execution envelope validates its network evidence; the earlier pending
+resolver/runtime integration is no longer the current implementation.
 
 The shared sandbox request now carries literal generated-file records and validates
 canonical destinations, overlapping mounts, and exact-policy exclusions before acquisition.
