@@ -26,6 +26,40 @@ const listing = ids =>
   });
 
 const LIFETIME = 1000;
+
+test('descriptor output metadata is optional positive uint32 without a context relation', t => {
+  const base = listing(['route']).models[0];
+  for (const output of [1, 4096, 0xffff_ffff]) {
+    const normalized = normalizeCatalogObservation({
+      observedAt: 5,
+      models: [{ ...base, contextLength: 1, maxOutputTokens: output }],
+    });
+    t.is(normalized.models[0].maxOutputTokens, output);
+  }
+  t.false(
+    Object.hasOwn(
+      normalizeCatalogObservation(listing(['route'])).models[0],
+      'maxOutputTokens',
+    ),
+  );
+  t.false(
+    Object.hasOwn(
+      normalizeCatalogObservation({
+        observedAt: 5,
+        models: [{ ...base, maxOutputTokens: null }],
+      }).models[0],
+      'maxOutputTokens',
+    ),
+  );
+  for (const output of [0, -1, 1.5, '4096', 0x1_0000_0000]) {
+    t.throws(() =>
+      normalizeCatalogObservation({
+        observedAt: 5,
+        models: [{ ...base, maxOutputTokens: output }],
+      }),
+    );
+  }
+});
 const MAX_AGE = 10_000;
 const RETRY = 100;
 

@@ -29,6 +29,14 @@ HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 OPENCODE_REPO=${OPENCODE_REPO:-https://github.com/kumavis/opencode.git}
 OPENCODE_REF=${OPENCODE_REF:-codex/compaction-checkpoint}
 OPENCODE_COMMIT=${OPENCODE_COMMIT:-}
+# The default source includes checkpoint publication and partial model limits.
+# Keep its immutable pin in sync with Containerfile.source. Explicit alternate
+# repo/ref selections retain discovery unless the caller supplies a commit.
+if [ -z "$OPENCODE_COMMIT" ] \
+  && [ "$OPENCODE_REPO" = https://github.com/kumavis/opencode.git ] \
+  && [ "$OPENCODE_REF" = codex/compaction-checkpoint ]; then
+  OPENCODE_COMMIT=9c41a9e8650fff42d22a0ba8f8aaef64094438a3
+fi
 if [ -z "$OPENCODE_COMMIT" ] && command -v git >/dev/null 2>&1; then
   OPENCODE_COMMIT=$(git ls-remote "$OPENCODE_REPO" "$OPENCODE_REF" 2>/dev/null | cut -f1)
 fi

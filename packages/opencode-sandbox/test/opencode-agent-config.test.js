@@ -321,16 +321,6 @@ test('rejects invalid inputs', t => {
       makeOpencodeConfig(
         /** @type {any} */ ({
           model: DEFAULT_MODEL,
-          models: { 'vendor/model': { limit: { context: 100, output: 100 } } },
-        }),
-      ),
-    { message: /context must exceed output/ },
-  );
-  t.throws(
-    () =>
-      makeOpencodeConfig(
-        /** @type {any} */ ({
-          model: DEFAULT_MODEL,
           models: { 'vendor/model': { limit: null } },
         }),
       ),
@@ -367,6 +357,39 @@ test('rejects invalid inputs', t => {
       }),
     { message: /duplicate entry/ },
   );
+});
+
+test('partial observed limits remain independent without fabricated fields or ordering', t => {
+  for (const limit of [
+    { output: 4096 },
+    { context: 100, output: 100 },
+    { context: 1, output: 4096 },
+  ]) {
+    const config = makeOpencodeConfig({
+      model: DEFAULT_MODEL,
+      models: { 'vendor/model': { limit } },
+    });
+    t.deepEqual(config.provider.openrouter.models['vendor/model'].limit, limit);
+  }
+  for (const limit of [
+    {},
+    { output: 0 },
+    { output: -1 },
+    { output: 1.5 },
+    { output: 0x1_0000_0000 },
+    { output: '4096' },
+    { output: null },
+    { output: 4096, unknown: 1 },
+  ]) {
+    t.throws(() =>
+      makeOpencodeConfig(
+        /** @type {any} */ ({
+          model: DEFAULT_MODEL,
+          models: { 'vendor/model': { limit } },
+        }),
+      ),
+    );
+  }
 });
 
 test('rejects invalid mcp server maps', t => {

@@ -213,26 +213,21 @@ const normalizeAgentName = (agentName, label) => {
  * @param {string} label
  */
 const normalizeLimits = (limits, label) => {
-  const { context, output } = assertPlainRecord(limits, label);
-  if (!(
-    typeof context === 'number' &&
-    Number.isSafeInteger(context) &&
-    context > 0
-  )) {
-    Fail`${q(label)} context must be a positive integer`;
+  const record = assertPlainRecord(limits, label);
+  const entries = Object.entries(record);
+  (entries.length > 0 &&
+    entries.every(([key]) => key === 'context' || key === 'output')) ||
+    Fail`${q(label)} must contain context or output limits only`;
+  // Observations are independent; missing fields retain native catalog data.
+  // This configuration profile supports up to uint32 tokens per limit.
+  for (const [key, value] of entries) {
+    (typeof value === 'number' &&
+      Number.isInteger(value) &&
+      value > 0 &&
+      value <= 0xffff_ffff) ||
+      Fail`${q(label)} ${q(key)} must be a positive uint32 token count`;
   }
-  if (
-    output !== undefined &&
-    !(typeof output === 'number' && Number.isSafeInteger(output) && output > 0)
-  ) {
-    Fail`${q(label)} output must be a positive integer`;
-  }
-  const ctx = /** @type {number} */ (context);
-  if (typeof output === 'number') {
-    ctx > output || Fail`${q(label)} context must exceed output`;
-    return harden({ context: ctx, output });
-  }
-  return harden({ context: ctx });
+  return harden(Object.fromEntries(entries));
 };
 
 /**
@@ -351,7 +346,7 @@ const normalizeMcpServers = (servers, label) => {
  * @param {string} [options.smallModel] ref used for titles/summaries; defaults to `model`
  * @param {string} [options.agentName]
  * @param {string} [options.systemPrompt]
- * @param {Record<string, { name?: string, limit?: { context: number, output?: number } }>} [options.models]
+ * @param {Record<string, { name?: string, limit?: { context?: number, output?: number } }>} [options.models]
  * @param {string} [options.baseUrl]
  * @param {boolean} [options.allowLoopbackHttp] - Permit the broker-only
  *   loopback endpoint form. Only the broker transport sets this.

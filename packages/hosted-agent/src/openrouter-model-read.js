@@ -51,6 +51,18 @@ const normalizeModel = model => {
       contextLength > 0 &&
       contextLength <= 0xffff_ffff) ||
     Fail`Invalid OpenRouter model context length`;
+  model.top_provider == null ||
+    (typeof model.top_provider === 'object' &&
+      !Array.isArray(model.top_provider)) ||
+    Fail`Invalid OpenRouter top provider metadata`;
+  // A top-provider observation, not a guarantee for every routed endpoint.
+  const maxOutputTokens = model.top_provider?.max_completion_tokens ?? null;
+  maxOutputTokens === null ||
+    (typeof maxOutputTokens === 'number' &&
+      Number.isInteger(maxOutputTokens) &&
+      maxOutputTokens > 0 &&
+      maxOutputTokens <= 0xffff_ffff) ||
+    Fail`Invalid OpenRouter model output token limit`;
   let reasoning = null;
   if (model.reasoning != null) {
     const raw = model.reasoning;
@@ -82,6 +94,7 @@ const normalizeModel = model => {
     title: text(model.name, 1024),
     description: text(model.description ?? '', 16_384),
     contextLength,
+    maxOutputTokens,
     inputModalities: identifiers(model.architecture?.input_modalities),
     outputModalities: identifiers(model.architecture?.output_modalities),
     supportedParameters: identifiers(model.supported_parameters),
@@ -183,6 +196,9 @@ export const modelsFromOpenRouterCatalog = models =>
           ...(model.contextLength === null
             ? {}
             : { contextLength: model.contextLength }),
+          ...(model.maxOutputTokens === null
+            ? {}
+            : { maxOutputTokens: model.maxOutputTokens }),
         });
       }),
   );

@@ -1940,6 +1940,47 @@ budgets of 8192, 4096, and 8192 for model output limits of 0, 4096, and 64000
 respectively with the explicit 8192 runtime budget. Independent adversarial
 review approved the source, tests, and durability classification.
 
+Output-metadata and native compatibility remediation (2026-09-24, local, not
+deployed): the account-filtered OpenRouter reader now preserves optional
+`top_provider.max_completion_tokens` as `maxOutputTokens` in the shared model
+descriptor. The selected route's context and output observations independently
+reach OpenCode configuration; absent/null metadata stays unknown rather than
+becoming an invented default. These fields are positive uint32 token counts in
+this configuration profile, not a claim about the provider protocol's maximum.
+The [OpenRouter account-filtered model API](https://openrouter.ai/docs/api/api-reference/models/list-models-filtered-by-user-provider-preferences-privacy-settings-and-guardrails)
+documents the field. A top-provider observation is not a guarantee for every
+endpoint selected by the free auto route. The explicit 8192 runtime output
+budget remains unchanged; observed smaller limits can reduce it.
+
+Native validation exposed a compatibility bug in the preceding context-only
+slice: pinned OpenCode required both limit fields even though model merging
+defaults them independently. Native commit `9c41a9e8650fff42d22a0ba8f8aaef64094438a3`
+on `kumavis/opencode` branch `codex/compaction-checkpoint` is committed and pushed.
+It accepts partial limits, preserves absent fields through V1-to-V2 migration,
+and merges partial remote overrides without dropping existing limits.
+The Endo image builder and source Containerfile pin that commit.
+Deployment requires a newly built native binary with its digest recorded:
+the prebuilt-binary wrapper cannot prove that an arbitrary supplied binary came
+from its source pin. The previous `f6492ac3f9` image is not sufficient.
+Raw Containerfile callers overriding the repository/ref must also override the
+commit; the wrapper resolves an explicitly different repository/ref as before.
+
+Durability remains reconstructible catalog observation under the existing
+broker owner, re-read on native activation; no new formula, credential owner,
+renewal operation, durable policy, or model/account pin is introduced.
+Tests cover changed observations on reconstruction, current/stale/unknown
+catalogs, malformed metadata, output-only configuration, independent limits,
+and preservation of the execution budget. Full hosted-agent tests pass (697,
+one skipped), as do all 289 OpenCode sandbox tests. Both package lints have
+zero errors. All 663 Floot regressions and formatting pass.
+The root documentation gate passes after quarantining stale ignored generated
+hosted-agent declarations and rebuilding them from source.
+Native schema/migration/merge tests pass (47), and both native
+core and OpenCode typechecks pass. Independent adversarial review approved
+the source, tests, pins, and durability classification.
+Actual native effective input limits, dynamic-route guarantees, live compaction,
+and coordinated deployment/restart acceptance remain open.
+
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
 Identify the durable formula owner and dependencies, what is replayed on daemon

@@ -97,6 +97,7 @@ const fixture = (t, { realClient = false } = {}) => {
   const faults = {
     catalogState: 'unavailable',
     catalogContext: 65_536,
+    catalogOutput: undefined,
     catalogFail: false,
     catalogMissing: false,
     catalogWait: false,
@@ -204,6 +205,9 @@ const fixture = (t, { realClient = false } = {}) => {
                     ...(faults.catalogNoContext
                       ? {}
                       : { contextLength: faults.catalogContext }),
+                    ...(faults.catalogOutput === undefined
+                      ? {}
+                      : { maxOutputTokens: faults.catalogOutput }),
                   },
                 ],
           },
@@ -519,6 +523,7 @@ test('activation observes exact provider context while retaining a separate outp
   for (const state of ['current', 'stale', 'unavailable', 'unsupported']) {
     const f = fixture(t);
     f.faults.catalogState = state;
+    f.faults.catalogOutput = 4096;
     const controller = f.makeController();
     // eslint-disable-next-line no-await-in-loop
     await E(controller).activate(JSON.stringify(planFor('a')), f.resolver);
@@ -528,7 +533,9 @@ test('activation observes exact provider context while retaining a separate outp
     const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
     t.deepEqual(
       config.provider.openrouter.models['anthropic/claude-sonnet-4'].limit,
-      ['current', 'stale'].includes(state) ? { context: 65_536 } : undefined,
+      ['current', 'stale'].includes(state)
+        ? { context: 65_536, output: 4096 }
+        : undefined,
     );
     t.is(options.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX, '8192');
   }
@@ -567,6 +574,7 @@ test('catalog metadata is exact, optional, and reobserved for each incarnation',
   const text = JSON.stringify(planFor('a'));
   for (const context of [65_536, 131_072]) {
     f.faults.catalogContext = context;
+    f.faults.catalogOutput = context / 16;
     const controller = f.makeController();
     // eslint-disable-next-line no-await-in-loop
     await E(controller).activate(text, f.resolver);
@@ -577,6 +585,11 @@ test('catalog metadata is exact, optional, and reobserved for each incarnation',
       JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).provider.openrouter
         .models['anthropic/claude-sonnet-4'].limit.context,
       context,
+    );
+    t.is(
+      JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).provider.openrouter
+        .models['anthropic/claude-sonnet-4'].limit.output,
+      context / 16,
     );
     // eslint-disable-next-line no-await-in-loop
     await E(controller).terminate(text, f.resolver);
@@ -606,6 +619,9 @@ test('malformed catalog facts and unexpected accounts cannot start a slice', asy
     { catalogContext: 0 },
     { catalogContext: -1 },
     { catalogContext: 0x1_0000_0000 },
+    { catalogOutput: 0 },
+    { catalogOutput: -1 },
+    { catalogOutput: 0x1_0000_0000 },
     { catalogAccount: 'other' },
     { catalogDuplicate: true },
   ]) {
@@ -619,6 +635,48 @@ test('malformed catalog facts and unexpected accounts cannot start a slice', asy
       f.events.some(event => Array.isArray(event) && event[0] === 'slice'),
     );
   }
+});
+
+test('output-only observation configures only the exact selected route and retains execution budget', async t => {
+  const f = fixture(t);
+  f.faults.catalogState = 'current';
+  f.faults.catalogNoContext = true;
+  f.faults.catalogOutput = 16_384;
+  await E(f.makeController()).activate(
+    JSON.stringify(planFor('a')),
+    f.resolver,
+  );
+  const [, , options] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'slice',
+  );
+  const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+  t.deepEqual(
+    config.provider.openrouter.models['anthropic/claude-sonnet-4'].limit,
+    { output: 16_384 },
+  );
+  t.is(options.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX, '8192');
+});
+
+test('null output and absent context leave model limits unspecified', async t => {
+  const f = fixture(t);
+  f.faults.catalogState = 'current';
+  f.faults.catalogNoContext = true;
+  f.faults.catalogOutput = null;
+  await E(f.makeController()).activate(
+    JSON.stringify(planFor('a')),
+    f.resolver,
+  );
+  const [, , options] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'slice',
+  );
+  const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+  t.false(
+    Object.hasOwn(
+      config.provider.openrouter.models['anthropic/claude-sonnet-4'],
+      'limit',
+    ),
+  );
+  t.is(options.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX, '8192');
 });
 
 test('late catalog completion after termination cannot create native effects', async t => {

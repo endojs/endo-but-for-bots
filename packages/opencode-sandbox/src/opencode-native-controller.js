@@ -128,12 +128,20 @@ export const makeOpencodeNativeController = ({
             const model = ['current', 'stale'].includes(account.state)
               ? account.models.find(row => row.id === modelId)
               : undefined;
+            const limit = {
+              ...(model?.contextLength === undefined
+                ? {}
+                : { context: model.contextLength }),
+              ...(model?.maxOutputTokens === undefined
+                ? {}
+                : { output: model.maxOutputTokens }),
+            };
             return harden({
               models:
-                model?.contextLength === undefined
+                Object.keys(limit).length === 0
                   ? {}
                   : {
-                      [modelId]: { limit: { context: model.contextLength } },
+                      [modelId]: { limit },
                     },
             });
           },
