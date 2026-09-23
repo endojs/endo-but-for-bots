@@ -3,10 +3,41 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-09-14 |
+| **Updated** | 2026-09-23 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
+
+**SQLite open trusts the maintained edge index (2026-09-23,
+[#1330](https://github.com/endojs/endo-but-for-bots/issues/1330)).**
+`SqliteHeapStore::open` no longer rebuilds `edge_pairs` from `page_edges` at every open.
+Each commit records its epoch in a `meta` row, `edge_pairs_epoch`, in the transaction that
+maintains the pairs.
+Open trusts the stored index when that marker names the manifest's epoch, so reopening a store
+whose last commit came from this build reads one marker row instead of rebuilding, and writes
+nothing.
+A missing or different marker means no marker-keeping commit wrote the current rows: the store
+predates the table or the marker, or its last commit came from a build that does not keep the
+marker (an older build maintains the pairs without attesting them).
+Open rebuilds such a store as every open used to, but never writes the marker itself: only a
+commit attests the index, so a store the caller then refuses (an incompatible boot layout or
+signature) is left exactly as the previous build's open left it, and a crash mid-rebuild leaves
+the marker stale for the next open to rebuild again.
+Open also takes the database's exclusive lock explicitly, with an empty `BEGIN IMMEDIATE`
+transaction, and refuses a read-only database, where that transaction takes no lock.
+The per-open rebuild used to take that lock, and refuse a read-only database, as a side effect;
+without it, a second connection could open and write a store another connection had just opened.
+This retires the review-wave-2 stance that open never trusts the derived index, and narrows the
+partial-tampering defense to match (§ Named integrity limitations, item 3).
+An at-rest edit that drops or moves a pair while leaving the marker in place is no longer
+repaired: the partial and generational collectors can trust it and free live objects, and the
+next checkpoint seals the result as a valid epoch.
+Nothing in production reads the index yet: the host's scheduled and explicit collection is
+`full_collect`, and only tests and benches call the partial and generational collectors.
+The decision rests on the store's trust class: the heap database is daemon-private state, like
+`endo.sqlite`, so the derived index alone goes unverified rather than cost an O(edges) write
+transaction on every open.
+The sealed rows, `page_edges` included, keep their tamper-evidence.
 
 **F043 section storage increment (schema 28, 2026-09-09).**
 The small-state root now binds 32 stable section identities through a fixed tree.
@@ -394,7 +425,10 @@ Landed as infrastructure and instruments:
   reachability), so open never trusts the derived index at all —
   wiped-index and moved-pair recovery are both locked by test, and
   the geometry delete mirrors the sealed rows' normalization verbatim
-  (the divergent `OR target >=` disjunct is gone). The
+  (the divergent `OR target >=` disjunct is gone). (Superseded
+  2026-09-23 by [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330):
+  open now trusts an index its epoch marker attests and rebuilds only
+  a stale one; see the entry at the top.) The
   `summary_page_count` override checks contiguity, not just COUNT
   (gap + phantom row fails closed, locked), and both overrides report
   `Empty` on an uncommitted store exactly like the dense defaults.
@@ -500,7 +534,10 @@ the cleared set is kept so the negatives are on the record too.
   trusted forever and silently shrank reachability, the class the v5
   sealing exists to refuse. Fixed: open rebuilds `edge_pairs` from
   the sealed rows unconditionally; locked by
-  `edge_pairs_rebuilt_after_count_preserving_desync`.
+  `edge_pairs_rebuilt_after_count_preserving_desync`. (Superseded
+  2026-09-23 by [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330):
+  that test now covers only stores whose epoch marker is stale; see
+  the entry at the top.)
 - **Geometry-delete normalization divergence**: the commit-side
   `DELETE … OR target >= ?1` disjunct differed from the rebuild's
   normalization (dead code on honest histories; a crafted shrink
@@ -719,9 +756,10 @@ fallback if that envelope later tightens. The bench is an
 workload yet), not an automated gate; an attached-mode workload and a
 wake-latency benchmark remain open.
 
-**Named integrity limitations (review findings, accepted and scoped —
-these bound Requirement 6 and Design Decision 7 to *structural*
-validation):**
+**Named integrity limitations (accepted and scoped — items 1 and 2,
+review findings, bound Requirement 6 and Design Decision 7 to
+*structural* validation; item 3, a maintainer decision, is an exception
+to them):**
 
 1. ~~Row content is not checksummed.~~ **Discharged 2026-08-11 by
    phase 5** (store schema v3): every row has a stored leaf hash, the
@@ -752,6 +790,28 @@ validation):**
    crashed crank, not a wrong answer, but not the structured
    open-time error either. Decoding every record at open would defeat
    lazy resume; the panic path is the accepted trade.
+3. **The SQLite edge index is trusted at open** (2026-09-23,
+   [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330)).
+   `edge_pairs` is derived from the sealed summaries but sits outside the root, and open trusts it
+   whenever `meta.edge_pairs_epoch` names the committed epoch, instead of re-deriving it.
+   An at-rest edit that drops or moves a pair while leaving the marker in place can therefore
+   make the partial and generational collectors free live objects, and the next checkpoint seals
+   the result as a valid epoch: the reachability loss item 1's v5 completion refuses for the
+   summaries themselves.
+   Damage SQLite cannot see (storage that ignores write ordering on power loss, a main file copied
+   without its WAL) has the same effect, and a bug in commit-time index maintenance persists across
+   reopens instead of being repaired at the next one.
+   Deleting the marker from a closed store forces the next open to rebuild the index.
+   The exposure is latent today: nothing in production reads the index, since the host's scheduled
+   and explicit collection is `full_collect` and only tests and benches call the partial and
+   generational collectors.
+   Wiring either of them into the host makes this limitation live and should revisit it.
+   Accepted by decision: the heap database is daemon-private state, in the same trust class as
+   `endo.sqlite`, so the derived index alone goes unverified rather than cost an O(edges) write
+   transaction on every open.
+   Unlike items 1 and 2, this admits a wrong answer rather than a refusal or a crashed crank: it
+   is an exception to Requirement 6 and Design Decision 7, not a narrowing of them to structural
+   validation.
 
 **Supervisor wiring, first cut (2026-08-18).** The daemon gains the
 store seam's supervisor-side option: `HeapStoreOptions { path,
@@ -4024,10 +4084,18 @@ CREATE TABLE free_segs   (seg  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
 
 - `PRAGMA journal_mode=WAL`; one connection, owned by the worker's
   thread (machines are `!Send`; the store rides the same pinning).
-- `commit(batch)` is one transaction: upsert dirty pages/extents,
-  replace small state, bump `meta.epoch`.
+- `commit(batch)` is one transaction: upsert dirty pages/extents and
+  their metadata, write the batch's small-state sections, and store
+  the batch's manifest (the next epoch).
   A torn checkpoint is impossible by SQLite's atomicity; a resume
   reads a consistent epoch or fails closed.
+- Open refuses a read-only database, takes the database's exclusive
+  lock (an empty `BEGIN IMMEDIATE` under `locking_mode=EXCLUSIVE`, held
+  until close), and trusts the derived `edge_pairs` index when
+  `meta.edge_pairs_epoch`, which every commit rewrites beside the
+  pairs, names the committed epoch.
+  It rebuilds the index from `page_edges` only when that marker is
+  missing or stale, and never writes the marker itself.
 - Full close before any state-directory suspension or handoff, per the
   shutdown-checkpoint contract, after which the worker-heap DB is a
   single self-contained file.
