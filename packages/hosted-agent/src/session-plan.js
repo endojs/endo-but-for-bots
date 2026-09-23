@@ -15,6 +15,8 @@ import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 import { createHash } from 'node:crypto';
 import { isAbsolute, normalize } from 'node:path';
 
+import { assertAccountAuthority } from './account-authority.js';
+
 import { assertCopyData } from './copy-data.js';
 
 /**
@@ -152,6 +154,7 @@ const SHARED_FIELDS = harden([
   'sessionId',
   'sandboxSessionId',
   'rootfs',
+  'accountRef',
   'networkPolicy',
   ...WORKSPACE_FIELDS,
   'workspaceMountPoint',
@@ -199,7 +202,7 @@ harden(readPinnedRootfs);
 /**
  * The placement every hosted session plan records, read the same way at
  * creation, activation and deletion: the identities, the pinned image, the
- * network policy, the recorded paths (each a normalized absolute path,
+ * account authority, the network policy, the recorded paths (each a normalized absolute path,
  * pairwise disjoint), exactly one owned or operator-supplied workspace, the
  * pin, the persona, the pinned subscription and the mounter settings. Nothing
  * is defaulted, and nothing unknown is admitted: a plan with a field neither
@@ -298,10 +301,15 @@ export const readSessionPlacement = (
       ? undefined
       : readMounterEnv(recorded.mounterEnv);
   const { rootfs } = readPinnedRootfs(recorded.rootfs, label);
+  // The account authority the session is bound to (`account-authority.js`).
+  recorded.accountRef !== undefined ||
+    Fail`Missing session plan field ${q('accountRef')}`;
+  const accountRef = assertAccountAuthority(recorded.accountRef, label);
   const placement = harden({
     sessionId: recorded.sessionId,
     sandboxSessionId: recorded.sandboxSessionId,
     rootfs,
+    accountRef,
     networkPolicy: recorded.networkPolicy,
     ...Object.fromEntries(paths),
     ...Object.fromEntries(

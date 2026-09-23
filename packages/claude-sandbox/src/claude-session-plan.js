@@ -36,6 +36,8 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
+ * @property {string} accountRef The account authority the session is bound
+ *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {'apiKey' | 'oauthToken'} credentialKind The broker's credential
  *   kind, recorded so the controller places the CLI's placeholder under the

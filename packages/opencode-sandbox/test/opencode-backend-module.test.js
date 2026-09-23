@@ -147,6 +147,7 @@ const fixture = async t => {
       imageRef: `localhost/opencode@${digest}`,
       imageDigest: digest,
       listenerImageRef: `localhost/listener@${digest}`,
+      accountAuthority: 'openrouter-main',
       publicInternet: true,
     }),
   });
@@ -348,6 +349,7 @@ test('create() records the plan under the sandbox id with exact dependencies, th
     sessionId: 'session-a',
     sandboxSessionId: sid,
     rootfs: `oci:localhost/opencode@${digest}`,
+    accountRef: 'openrouter-main',
     networkPolicy: 'public-internet',
     workspaceDir: path.join(f.roots.workspaceDir, sid),
     workspaceMountPoint: path.join(f.roots.mcpDir, sid, 'workspace'),
@@ -545,6 +547,7 @@ test('a broker re-pinned to a different image refuses an existing session until 
   const second = await make(f.host, undefined, { env: f.env });
   t.deepEqual((await E(second).describe()).rebindableBindings, [
     'image',
+    'account',
     'provider',
   ]);
   const before = f.log.length;

@@ -28,6 +28,7 @@ test('null-powered storage removes the recorded private directories without a pr
     sessionId: 'one',
     sandboxSessionId: id,
     rootfs: `oci:localhost/opencode@sha256:${'a'.repeat(64)}`,
+    accountRef: 'openrouter-main',
     networkPolicy: 'off',
     workspaceDir: join(roots.workspace, id),
     workspaceMountPoint: join(roots.private, id, 'workspace'),

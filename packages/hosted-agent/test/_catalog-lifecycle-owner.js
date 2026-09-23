@@ -16,7 +16,7 @@ const construct = makeOwnedProviderBrokerService({
     imageDigest: digest,
     listenerImageRef: `localhost/fixture@${digest}`,
   }),
-  makePolicy: () => ({ policy: {}, accountRef: 'fixture' }),
+  makePolicy: () => ({ policy: {}, accountAuthority: 'fixture' }),
   makeCredential: (_config, control) => {
     void E(control).note('construct');
     return harden({ current: () => E(control).renew() });

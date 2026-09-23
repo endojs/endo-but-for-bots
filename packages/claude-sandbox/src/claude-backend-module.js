@@ -110,6 +110,8 @@ harden(resolveBackendConfig);
  * @param {string} powers.privateRoot
  * @param {readonly string[]} powers.protectedRoots
  * @param {string} powers.rootfs The broker's pinned image, as `oci:<ref>`.
+ * @param {string} powers.accountRef The account authority the broker serves,
+ *   recorded into every plan (`@endo/hosted-agent/account-authority.js`).
  * @param {'apiKey' | 'oauthToken'} powers.credentialKind
  * @param {ReturnType<MakeBackendCatalog>} powers.catalog
  * @param {Record<string, string>} [powers.mounterEnv]
@@ -121,6 +123,7 @@ export const makeClaudeSessionProvisioner = ({
   privateRoot,
   protectedRoots,
   rootfs,
+  accountRef,
   credentialKind,
   catalog,
   mounterEnv,
@@ -139,8 +142,10 @@ export const makeClaudeSessionProvisioner = ({
     // controller later refuses a broker whose evidence names another digest,
     // and a session reopens under a broker re-minted over another image or
     // credential kind only when the request authorizes that rebind.
-    fields: () => ({ rootfs, credentialKind }),
-    rebindable: { rootfs: 'image', credentialKind: 'credential kind' },
+    fields: () => ({ rootfs, accountRef, credentialKind }),
+    // The credential's kind is a property of the account authority's
+    // credential, so it sits under `account`.
+    rebindable: { credentialKind: 'account' },
     pin: { unpinned: 'runtime-default', assertEffort: assertClaudeEffort },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
@@ -189,6 +194,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   // efforts it can drive each model at.
   const catalog = makeBackendCatalog({
     label: 'Claude',
+    authority: broker.config.accountAuthority,
     readCatalog: async subscriptionId =>
       E(await brokerService()).modelCatalog(subscriptionId),
     listSubscriptions,
@@ -212,6 +218,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       broker.config.directory,
     ]),
     rootfs: `oci:${broker.config.imageRef}`,
+    accountRef: broker.config.accountAuthority,
     credentialKind: broker.config.credentialKind,
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),

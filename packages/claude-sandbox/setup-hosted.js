@@ -74,6 +74,7 @@ import {
   providePrivateDirectory,
   publishAccountOracle,
   publishBrokerSubscription,
+  readAccountAuthority,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedCredentials } from '@endo/hosted-agent/managed-credentials.js';
 import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service.js';
@@ -136,6 +137,14 @@ harden(inferCredentialKind);
 export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
   const { env } = process;
+  // The account authority this broker serves: the pool's id, or the single
+  // account's, as the operator declared it. Every plan records it, and a
+  // pool's set carries it as its id.
+  const accountAuthority = readAccountAuthority(
+    env,
+    'ENDO_CLAUDE_ACCOUNT_AUTHORITY',
+    'Claude',
+  );
   const pool = readClaudePool(env);
 
   const credsName = env.ENDO_CLAUDE_CREDS_NAME || 'claude-creds';
@@ -260,6 +269,8 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     effectiveBrokerDir = broker.config.directory;
     (broker.config.pool === true) === (pool !== undefined) ||
       Fail`Changing Claude pool mode requires retiring the broker and its sessions first`;
+    broker.config.accountAuthority === accountAuthority ||
+      Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} serves account authority ${q(broker.config.accountAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
     credsKind = broker.config.credentialKind;
     if (requestedKind !== undefined && requestedKind !== credsKind) {
       throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} reads a ${q(credsKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
@@ -365,6 +376,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       imageDigest,
       listenerImageRef,
       credentialKind: credsKind,
+      accountAuthority,
       ...(pool ? { pool: true } : {}),
       ...(anthropicBeta ? { anthropicBeta } : {}),
       ...(publicInternet ? { publicInternet: true } : {}),

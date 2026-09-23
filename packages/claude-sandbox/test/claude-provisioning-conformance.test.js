@@ -14,6 +14,7 @@ testProvisioningConformance({
     makeClaudeSessionProvisioner({
       ...powers,
       rootfs: `oci:localhost/claude@${digest}`,
+      accountRef: 'claude-main',
       credentialKind: 'oauthToken',
     }),
   makeFactory: makeClaudeBackendFactory,
@@ -24,16 +25,20 @@ testProvisioningConformance({
         makeClaudeSessionProvisioner({
           ...powers,
           rootfs: `oci:localhost/claude@sha256:${'b'.repeat(64)}`,
+          accountRef: 'claude-main',
           credentialKind: 'oauthToken',
         }),
     },
     {
-      what: 'credential kind',
+      // Another account authority, or the same one's credential of another
+      // kind, is an `account` change: the module test covers the kind.
+      what: 'account',
       makeProvisioner: powers =>
         makeClaudeSessionProvisioner({
           ...powers,
           rootfs: `oci:localhost/claude@${digest}`,
-          credentialKind: 'apiKey',
+          accountRef: 'claude-other',
+          credentialKind: 'oauthToken',
         }),
     },
   ],

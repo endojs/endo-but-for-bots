@@ -322,17 +322,24 @@ test('a pin to an account the broker does not declare is refused as unknown, not
   await t.throwsAsync(() => catalog.catalog('nobody'), {
     message: /Unknown "Test" subscription/,
   });
-  await t.throwsAsync(() => catalog.resolve({ model: 'a', subscription: 'nobody' }), {
-    message: /Unknown "Test" subscription/,
-  });
+  await t.throwsAsync(
+    () => catalog.resolve({ model: 'a', subscription: 'nobody' }),
+    {
+      message: /Unknown "Test" subscription/,
+    },
+  );
   // A declared one that cannot be read is the outage it is.
-  await t.throwsAsync(() => catalog.resolve({ model: 'a', subscription: 'work' }), {
-    message: /"Test" model catalog is unavailable/,
-  });
+  await t.throwsAsync(
+    () => catalog.resolve({ model: 'a', subscription: 'work' }),
+    {
+      message: /"Test" model catalog is unavailable/,
+    },
+  );
   // Over one credential the only account is `default`.
   const single = makeBackendCatalog({
     label: 'Test',
-    readCatalog: async () => harden({ accounts: [account('default', [model('a')])] }),
+    readCatalog: async () =>
+      harden({ accounts: [account('default', [model('a')])] }),
   });
   await t.throwsAsync(() => single.catalog('work'), {
     message: /Unknown "Test" subscription/,
@@ -365,7 +372,9 @@ test('a model the runtime cannot spell is left out; the rest of the account’s 
     },
   });
   t.deepEqual(
-    (await catalog.catalog()).accounts.map(entry => entry.models.map(m => m.id)),
+    (await catalog.catalog()).accounts.map(entry =>
+      entry.models.map(m => m.id),
+    ),
     [['a']],
   );
   await t.throwsAsync(() => catalog.resolve({ model: 'odd+id' }), {
@@ -429,11 +438,13 @@ test('what a backend answers is validated before Floot believes it, labels and l
     ],
   };
   t.deepEqual(
-    normalizeBackendCatalog(good).map(({ subscriptionId, label, pinnedOnly }) => ({
-      subscriptionId,
-      label,
-      pinnedOnly,
-    })),
+    normalizeBackendCatalog(good).map(
+      ({ subscriptionId, label, pinnedOnly }) => ({
+        subscriptionId,
+        label,
+        pinnedOnly,
+      }),
+    ),
     [
       { subscriptionId: 'work', label: 'Work', pinnedOnly: undefined },
       { subscriptionId: 'lane', label: 'Lane', pinnedOnly: true },
@@ -448,17 +459,24 @@ test('what a backend answers is validated before Floot believes it, labels and l
   });
   for (const label of ['', 'x'.repeat(129), 7]) {
     t.throws(
-      () => normalizeBackendCatalog({ accounts: [{ ...account('a', []), label }] }),
+      () =>
+        normalizeBackendCatalog({ accounts: [{ ...account('a', []), label }] }),
       { message: /Invalid backend model catalog label/ },
     );
   }
   t.throws(
-    () => normalizeBackendCatalog({ accounts: [{ ...account('a', []), pinnedOnly: 'yes' }] }),
+    () =>
+      normalizeBackendCatalog({
+        accounts: [{ ...account('a', []), pinnedOnly: 'yes' }],
+      }),
     { message: /Invalid backend model catalog lane marking/ },
   );
   // The broker's own rules still apply beneath the labels.
   t.throws(
-    () => normalizeBackendCatalog({ accounts: [{ ...account('a b', []), label: 'X' }] }),
+    () =>
+      normalizeBackendCatalog({
+        accounts: [{ ...account('a b', []), label: 'X' }],
+      }),
     { message: /Invalid broker model catalog account/ },
   );
 });
@@ -516,5 +534,28 @@ test('the read says which accounts are lanes, so an `auto` pin is refused a lane
         accounts: [{ ...account('a', []), pinnedOnly: 'yes' }],
       }),
     { message: /Invalid broker model catalog account/ },
+  );
+});
+
+test('a catalog carries the account authority its broker serves beside the pinnable accounts', async t => {
+  const catalog = makeBackendCatalog({
+    label: 'Test',
+    authority: 'authority-a',
+    readCatalog: async () => harden({ accounts: [account('default', [])] }),
+  });
+  const snapshot = await catalog.catalog();
+  t.is(snapshot.authority, 'authority-a');
+  t.deepEqual(
+    snapshot.accounts.map(entry => entry.subscriptionId),
+    ['default'],
+  );
+  t.throws(
+    () =>
+      makeBackendCatalog({
+        label: 'Test',
+        authority: 'not an id',
+        readCatalog: async () => harden({ accounts: [] }),
+      }),
+    { message: /Test account authority must be an id/ },
   );
 });

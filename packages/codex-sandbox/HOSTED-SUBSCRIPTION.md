@@ -93,9 +93,11 @@ runs on `auto` from then on, and says so in the daemon's log.
 The broker then holds a namespace instead of a credential, so setup refuses
 until `codex-sandbox/broker-service` has been retired deliberately, and it
 refuses before it mints anything.
-Existing Codex sessions do not carry over: a session's plan records the
-account its broker was bound to, that record cannot change, and a pooled
-broker's is the label `pool`. Their transcripts stay in Floot.
+Existing Codex sessions do not carry over unless rebound: a session's plan
+records the account authority its broker serves (`ENDO_CODEX_ACCOUNT_AUTHORITY`,
+the pool's id or the single account's), and a reopen under another authority
+is refused unless the request authorizes rebinding `account`. Their
+transcripts stay in Floot either way.
 Use a `credsName` other than the single subscription's, so that two credential
 formulas never renew one secret record.
 
@@ -228,6 +230,10 @@ The broker uses its `broker` subdirectory.
 Guest roots, including external workspaces, must not overlap protected state,
 native runtime, or broker storage, including through symlinks.
 
+`ENDO_CODEX_ACCOUNT_AUTHORITY` is required: the id of the account authority
+the broker serves, a pool or a single account, as the operator names it; every
+session plan records it and every grant reports it, and changing it retires
+the broker.
 Other options include `ENDO_CODEX_CREDS_NAME`, `ENDO_CODEX_ACCOUNT_REF`,
 `ENDO_CODEX_SUBSCRIPTIONS`, `ENDO_CODEX_CACHE_LIFETIME_SECONDS`,
 `ENDO_CODEX_MAX_SESSIONS`, `ENDO_CODEX_PUBLIC_INTERNET=1`, and

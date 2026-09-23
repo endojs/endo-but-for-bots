@@ -29,6 +29,7 @@
     "./codex-model-read.js": "./src/codex-model-read.js",
     "./anthropic-model-read.js": "./src/anthropic-model-read.js",
     "./model-catalog.js": "./src/model-catalog.js",
+    "./account-authority.js": "./src/account-authority.js",
     "./backend-catalog.js": "./src/backend-catalog.js",
     "./bounded-json.js": "./src/bounded-json.js",
     "./subscription-pool.js": "./src/subscription-pool.js",

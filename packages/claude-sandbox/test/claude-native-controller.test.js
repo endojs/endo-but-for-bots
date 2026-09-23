@@ -82,6 +82,7 @@ const planFor = (id, overrides = {}) =>
     sessionId: id,
     sandboxSessionId: makeSandboxSessionId(id),
     rootfs: `oci:example@${digest}`,
+    accountRef: 'claude-main',
     networkPolicy: 'off',
     credentialKind: 'apiKey',
     workspaceDir: `/workspaces/${id}`,
@@ -203,7 +204,7 @@ const fixture = (t, { realClient = false } = {}) => {
             sessionId: id,
             grantId: `grant-${id}`,
             imageDigest: digest,
-            accountRef: 'anthropic',
+            accountRef: 'claude-main',
             // A single-token broker, subscription or API key, holds it as
             // `api-key`; only a pool reports `oauth`.
             authMode: 'api-key',
@@ -484,7 +485,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   t.is(grantId, `${SANDBOX_A}`);
   t.deepEqual(spec, {
     providerOrigin: 'https://api.anthropic.com',
-    accountRef: 'anthropic',
+    accountRef: 'claude-main',
     networkPolicy: 'off',
     model: 'claude-sonnet-4',
   });

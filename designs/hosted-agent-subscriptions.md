@@ -323,10 +323,14 @@ Where that differs from the design below:
   derives the stored value from `ENDO_CODEX_SUBSCRIPTIONS` at every start, so
   an edit of the stored value itself does not survive a restart. Adding a
   member is still a write and a secret, with no retirement.
-- **A pooled broker's account, in its configuration, its grants' attestation
-  and its sessions' plans, is the label `pool`.** Moving a deployment from one
-  subscription to several is therefore a retirement that its existing
-  sessions do not survive; setup refuses it before minting anything.
+- **A broker's account authority, in its configuration, its grants'
+  attestation and its sessions' plans, is the id the operator declares
+  (`ENDO_CODEX_ACCOUNT_AUTHORITY`): the pool's, or the single account's.**
+  (Until 2026-09-23 a pooled broker's was the label `pool`.) Moving a
+  deployment from one subscription to several is therefore a retirement;
+  its existing sessions reopen under the new broker only through a request
+  that authorizes rebinding `account`, and setup refuses the change before
+  minting anything.
 - **An account change under an existing id is refused by setup**; removed
   members are not reaped.
 - **A pin cannot be changed**, and a session pinned to a subscription that has

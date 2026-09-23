@@ -13,10 +13,8 @@ import {
   makeProviderBrokerServiceKit,
 } from '@endo/hosted-agent/provider-broker-service.js';
 
-import {
-  OPENCODE_BROKER_ACCOUNT,
-  buildOpencodeBrokerPolicy,
-} from './opencode-broker.js';
+import { assertAccountAuthority } from '@endo/hosted-agent/account-authority.js';
+import { buildOpencodeBrokerPolicy } from './opencode-broker.js';
 
 const ConfigShape = M.splitRecord(
   {
@@ -25,6 +23,9 @@ const ConfigShape = M.splitRecord(
     imageRef: M.string(),
     imageDigest: M.string(),
     listenerImageRef: M.string(),
+    // The account authority this broker serves (`account-authority.js`):
+    // the id every plan records and every grant reports.
+    accountAuthority: M.string(),
   },
   {
     maxSessions: M.number(),
@@ -51,8 +52,26 @@ export const readOpencodeBrokerConfig = env => {
   // error, since the broker it belongs to must be retired deliberately.
   !(config && typeof config === 'object' && Object.hasOwn(config, 'models')) ||
     Fail`Retained OpenCode broker configuration names models, which this release no longer reads (models are admitted by the account's own catalog): retire that broker and the sessions bound to it deliberately, then rerun setup`;
+  // A profile from before plans recorded the account authority names none;
+  // it is refused with the way out, not as a shape error, since the broker
+  // it belongs to must be retired deliberately. Only a profile that is
+  // otherwise whole reads as one from before; anything less is a shape error.
+  !(
+    config &&
+    typeof config === 'object' &&
+    [
+      'ownerId',
+      'directory',
+      'imageRef',
+      'imageDigest',
+      'listenerImageRef',
+    ].every(name => Object.hasOwn(config, name)) &&
+    !Object.hasOwn(config, 'accountAuthority')
+  ) ||
+    Fail`Retained OpenCode broker configuration names no account authority, which this release records into every session plan; retire that broker deliberately and set ENDO_OPENCODE_ACCOUNT_AUTHORITY for the next mint`;
   if (!matches(config, ConfigShape))
     throw Fail`Invalid OpenCode broker configuration`;
+  assertAccountAuthority(config.accountAuthority, 'OpenCode');
   return config;
 };
 harden(readOpencodeBrokerConfig);
@@ -75,9 +94,9 @@ export const makeOwnedOpencodeBrokerService = ({
   makeOwnedProviderBrokerService({
     label: 'OpenCode',
     readConfig: readOpencodeBrokerConfig,
-    makePolicy: () => ({
+    makePolicy: config => ({
       policy: buildOpencodeBrokerPolicy({}),
-      accountRef: OPENCODE_BROKER_ACCOUNT,
+      accountAuthority: config.accountAuthority,
     }),
     // For an account oracle's refresh(): OpenRouter says nothing about the
     // account on inference responses, so this read is its only source.

@@ -30,6 +30,7 @@ import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from './current-specifier.js';
+import { assertAccountAuthority } from './account-authority.js';
 
 /**
  * Read one immutable formula by the ID captured from its current binding.
@@ -1005,6 +1006,22 @@ export const publishAccountOracle = async (
   }
 };
 harden(publishAccountOracle);
+
+/**
+ * The account authority a hosted backend's broker serves, from the host
+ * configuration (`ENDO_<BACKEND>_ACCOUNT_AUTHORITY`): required, since the
+ * literal a catalog lists for one credential identifies nothing.
+ * @param {Record<string, string | undefined>} env
+ * @param {string} name The variable's name.
+ * @param {string} label
+ */
+export const readAccountAuthority = (env, name, label) => {
+  const value = env[name] || '';
+  value !== '' ||
+    Fail`${b(name)} is required: the account authority this ${b(label)} broker serves, a pool or a single account, by the id the operator declared`;
+  return assertAccountAuthority(value, label);
+};
+harden(readAccountAuthority);
 
 /**
  * The spelling checks of a configured slice image that need no Podman — the

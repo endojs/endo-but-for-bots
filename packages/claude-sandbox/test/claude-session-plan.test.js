@@ -11,6 +11,7 @@ const plan = harden({
   sessionId: 'session-a',
   sandboxSessionId: makeSandboxSessionId('session-a'),
   rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
+  accountRef: 'claude-main',
   networkPolicy: 'off',
   credentialKind: 'apiKey',
   workspaceDir: '/workspaces/session-a-0123456789ab',

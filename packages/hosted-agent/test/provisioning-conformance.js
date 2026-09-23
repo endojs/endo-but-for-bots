@@ -788,6 +788,13 @@ export const testProvisioningConformance = ({
     t.deepEqual(await E(run).status(), {});
     // A reopen stops the retained incarnation, then the owner's stop again
     // before the revised plan starts.
+    // What a reopen may be authorized to rebind is the same vocabulary for
+    // every backend: the image, the account authority, the services.
+    t.deepEqual((await E(factory).describe()).rebindableBindings, [
+      'image',
+      'account',
+      'provider',
+    ]);
     await E(factory).create(
       harden({ ...spec, systemPrompt: 'persona' }),
       makeToolSet(),

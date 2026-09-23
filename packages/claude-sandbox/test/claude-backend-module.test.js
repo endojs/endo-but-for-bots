@@ -43,6 +43,7 @@ const brokerConfig = (overrides = {}) =>
     imageRef,
     imageDigest: digest,
     listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+    accountAuthority: 'claude-main',
     publicInternet: true,
     credentialKind: 'oauthToken',
     ...overrides,
@@ -277,7 +278,7 @@ test('Claude advertises only the network authority recorded by its broker', asyn
   // provisioner names it.
   t.deepEqual((await E(factory).describe()).rebindableBindings, [
     'image',
-    'credential kind',
+    'account',
     'provider',
   ]);
 });
@@ -400,6 +401,7 @@ test('create() records the plan under the sandbox id with exact dependencies, th
     sessionId: 'session-a',
     sandboxSessionId: sid,
     rootfs,
+    accountRef: 'claude-main',
     networkPolicy: 'off',
     credentialKind: 'oauthToken',
     workspaceDir: path.join(f.roots.workspaceDir, sid),
@@ -541,7 +543,7 @@ test('a later create stops and revises a record in place and refuses a changed w
     E(rekeyed).create(harden({ sessionId: 'session-a' }), makeToolSet()),
     {
       message:
-        /credential kind cannot change without a reopen that authorizes rebinding it/,
+        /account cannot change without a reopen that authorizes rebinding it/,
     },
   );
   // Authorized, the record rebinds to the re-pinned image after a stop and

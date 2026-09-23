@@ -61,7 +61,7 @@ test('unknown fields are refused, so none can add storage cleanup authority', t 
 /** @type {readonly [Record<string, unknown>, RegExp][]} */
 const refused = harden([
   [{ sandboxSessionId: 'another-session' }, /must derive/],
-  [{ accountRef: '' }, /pin its subscription/],
+  [{ accountRef: '' }, /account authority must be an id/],
   [{ rootfs: 'oci:example:latest' }, /pinned to a digest/],
   [{ rootfs: `example@sha256:${'a'.repeat(64)}` }, /oci:/],
   [

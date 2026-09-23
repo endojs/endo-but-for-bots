@@ -114,6 +114,8 @@ harden(resolveBackendConfig);
  * @param {string} powers.privateRoot
  * @param {readonly string[]} powers.protectedRoots
  * @param {string} powers.rootfs The broker's pinned image, as `oci:<ref>`.
+ * @param {string} powers.accountRef The account authority the broker serves,
+ *   recorded into every plan (`@endo/hosted-agent/account-authority.js`).
  * @param {ReturnType<MakeBackendCatalog>} powers.catalog
  * @param {Record<string, string>} [powers.mounterEnv]
  */
@@ -124,6 +126,7 @@ export const makeOpencodeSessionProvisioner = ({
   privateRoot,
   protectedRoots,
   rootfs,
+  accountRef,
   catalog,
   mounterEnv,
 }) =>
@@ -141,8 +144,7 @@ export const makeOpencodeSessionProvisioner = ({
     // the broker's evidence against this reference at activation, and a
     // session reopens under a broker that now pins a different image only
     // when the request authorizes that rebind.
-    fields: () => ({ rootfs }),
-    rebindable: { rootfs: 'image' },
+    fields: () => ({ rootfs, accountRef }),
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });
@@ -180,6 +182,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   // which the runtime has no setting for.
   const catalog = makeBackendCatalog({
     label: 'OpenCode',
+    authority: broker.config.accountAuthority,
     readCatalog: subscriptionId =>
       E(
         /** @type {Promise<{ modelCatalog(subscriptionId?: string): Promise<any> }>} */ (
@@ -215,6 +218,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
     // resolve into them.
     protectedRoots: harden([sandbox.config.directory, broker.config.directory]),
     rootfs: `oci:${broker.config.imageRef}`,
+    accountRef: broker.config.accountAuthority,
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });

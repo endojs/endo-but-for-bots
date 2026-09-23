@@ -21,10 +21,7 @@ import {
 } from './opencode-hosted-policy.js';
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
-import {
-  OPENCODE_BROKER_ACCOUNT,
-  OPENROUTER_ORIGIN,
-} from './opencode-broker.js';
+import { OPENROUTER_ORIGIN } from './opencode-broker.js';
 import {
   buildOpencodeMcpServer,
   DEFAULT_INNER_DIR,
@@ -104,7 +101,9 @@ export const makeOpencodeNativeController = ({
           ...(makeFilesystem ? { makeFilesystem } : {}),
           scopeRequest: plan => ({
             providerOrigin: OPENROUTER_ORIGIN,
-            accountRef: OPENCODE_BROKER_ACCOUNT,
+            // The account authority the plan is bound to, which the grant
+            // must report.
+            accountRef: plan.accountRef,
             networkPolicy: plan.networkPolicy,
             ...(plan.model ? { model: parseModelRef(plan.model) } : {}),
           }),

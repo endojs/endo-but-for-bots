@@ -61,6 +61,7 @@ import {
   providePrivateDirectory,
   publishAccountOracle,
   publishBrokerSubscription,
+  readAccountAuthority,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { Fail, q } from '@endo/errors';
 
@@ -107,6 +108,13 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const { env } = process;
 
   const credsName = env.ENDO_OPENCODE_CREDS_NAME || 'openrouter-auth';
+  // The account authority this broker serves, the OpenRouter account's id
+  // as the operator declared it. Every plan records it.
+  const accountAuthority = readAccountAuthority(
+    env,
+    'ENDO_OPENCODE_ACCOUNT_AUTHORITY',
+    'OpenCode',
+  );
   const backendName = env.ENDO_OPENCODE_BACKEND_NAME || 'opencode-backend';
   if (backendName !== 'opencode-backend') {
     console.warn(
@@ -198,6 +206,8 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     // silently discarded (a live broker cannot be re-pinned in place).
     const broker = await readBrokerService(hostAgent);
     effectiveBrokerDir = broker.config.directory;
+    broker.config.accountAuthority === accountAuthority ||
+      Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} serves account authority ${q(broker.config.accountAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
     await assertRetainedBrokerImages({
       label: 'OpenCode',
       serviceName: `${SANDBOX_DIR}/broker-service`,
@@ -273,6 +283,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       imageRef,
       imageDigest,
       listenerImageRef,
+      accountAuthority,
       ...(publicInternet ? { publicInternet: true } : {}),
       ...(diagnostics ? { diagnostics: true } : {}),
     });

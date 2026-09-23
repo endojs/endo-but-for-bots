@@ -35,11 +35,9 @@ export const ANTHROPIC_MESSAGES_PATH = '/v1/messages';
  */
 export const ANTHROPIC_MESSAGES_BETA_PATH = `${ANTHROPIC_MESSAGES_PATH}?beta=true`;
 export const ANTHROPIC_VERSION = '2023-06-01';
-export const CLAUDE_BROKER_ACCOUNT = 'anthropic';
 harden(ANTHROPIC_ORIGIN);
 harden(ANTHROPIC_MESSAGES_PATH);
 harden(ANTHROPIC_VERSION);
-harden(CLAUDE_BROKER_ACCOUNT);
 
 /**
  * The beta capabilities the Claude CLI's subscription tokens are accepted
@@ -123,7 +121,9 @@ export const buildClaudeBrokerPolicy = ({
 harden(buildClaudeBrokerPolicy);
 
 /**
- * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { credentialKind: string, anthropicBeta?: string }} ClaudeBrokerOptions
+ * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { credentialKind: string, anthropicBeta?: string, accountAuthority: string }
+ *   `accountAuthority` is the account authority the broker serves, the id
+ *   its grants report (`@endo/hosted-agent/account-authority.js`).} ClaudeBrokerOptions
  */
 
 /**
@@ -133,13 +133,14 @@ harden(buildClaudeBrokerPolicy);
 export const makeClaudeBrokerKit = ({
   credentialKind,
   anthropicBeta,
+  accountAuthority,
   ...options
 }) =>
   makeProviderBrokerKit({
     ...options,
     label: 'Claude',
     policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
-    accountRef: CLAUDE_BROKER_ACCOUNT,
+    accountRef: accountAuthority,
   });
 harden(makeClaudeBrokerKit);
 
@@ -151,12 +152,13 @@ harden(makeClaudeBrokerKit);
 export const makeClaudeBrokerServiceKit = ({
   credentialKind,
   anthropicBeta,
+  accountAuthority,
   ...options
 }) =>
   makeProviderBrokerServiceKit({
     ...options,
     label: 'Claude',
     policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
-    accountRef: CLAUDE_BROKER_ACCOUNT,
+    accountRef: accountAuthority,
   });
 harden(makeClaudeBrokerServiceKit);

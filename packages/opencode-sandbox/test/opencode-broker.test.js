@@ -6,7 +6,6 @@ import { Far } from '@endo/far';
 import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
 
 import {
-  OPENCODE_BROKER_ACCOUNT,
   OPENROUTER_INFERENCE_PATH,
   OPENROUTER_ORIGIN,
   buildOpencodeBrokerPolicy,
@@ -69,7 +68,11 @@ const makeFakeRuntime = () => {
   };
 };
 
+// The account authority the fixture broker serves: the id its grants report.
+const OPENCODE_BROKER_ACCOUNT = 'openrouter-main';
+
 const brokerOptions = (runtime, overrides = {}) => ({
+  accountAuthority: OPENCODE_BROKER_ACCOUNT,
   secret: Far('secret', {
     async readBase64() {
       return btoa('openrouter-key');

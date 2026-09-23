@@ -47,8 +47,10 @@ export const HostedBackendFactoryInterface = M.interface(
   {
     describe: M.call().returns(M.promise()),
     // What each account of the backend's provider lists now, per account
-    // (`backend-catalog.js`): `{ accounts: [{ subscriptionId, label?,
-    // pinnedOnly?, state, observedAt, models }] }`, or the one account named.
+    // (`backend-catalog.js`): `{ authority?, accounts: [{ subscriptionId,
+    // label?, pinnedOnly?, state, observedAt, models }] }`, or the one
+    // account named; `authority` is the account authority the broker serves.
+
     modelCatalog: M.call().optional(M.string()).returns(M.promise()),
     create: M.call(M.record(), M.remotable('HostedToolSet')).returns(
       M.promise(),

@@ -165,6 +165,7 @@ const baseEnv = async t => {
     ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
     ENDO_OPENCODE_MCP_DIR: path.join(base, 'mcp'),
     ENDO_OPENCODE_CREDS_NAME: 'test-auth',
+    ENDO_OPENCODE_ACCOUNT_AUTHORITY: 'openrouter-main',
     ENDO_OPENROUTER_API_KEY: 'seed-token',
     ENDO_FLOOT_DIR: 'floot',
     // Daemon-owned sessions require the broker; resource policy is shared.
@@ -417,6 +418,7 @@ test.serial(
       imageRef: `localhost/opencode@${digest}`,
       imageDigest: digest,
       listenerImageRef,
+      accountAuthority: 'openrouter-main',
       publicInternet: true,
     });
     // No operator model list is persisted: the account's OpenRouter catalog
@@ -472,6 +474,7 @@ test.serial(
         imageRef: `localhost/opencode@${digest}`,
         imageDigest: digest,
         listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+        accountAuthority: 'openrouter-main',
       }),
     });
     fake.environments.set('broker-service-id', brokerEnv);
@@ -547,6 +550,7 @@ test.serial(
           imageRef: `localhost/opencode@${digest}`,
           imageDigest: digest,
           listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+          accountAuthority: 'openrouter-main',
           ...overrides,
         }),
       });

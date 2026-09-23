@@ -227,6 +227,7 @@ const baseEnv = async t => {
     ENDO_CLAUDE_WORKSPACE_DIR: path.join(base, 'workspaces'),
     ENDO_CLAUDE_MCP_DIR: path.join(base, 'mcp'),
     ENDO_CLAUDE_CREDS_NAME: 'test-creds',
+    ENDO_CLAUDE_ACCOUNT_AUTHORITY: 'claude-main',
     ENDO_CLAUDE_SUBSCRIPTIONS: undefined,
     ENDO_CLAUDE_CACHE_LIFETIME_SECONDS: undefined,
     CLAUDE_CREDS_NAME: undefined,
@@ -274,6 +275,7 @@ const retainedBrokerConfig = (overrides = {}) => ({
   imageDigest: digest,
   listenerImageRef,
   credentialKind: 'apiKey',
+  accountAuthority: 'claude-main',
   ...overrides,
 });
 
@@ -590,6 +592,7 @@ test.serial(
       imageDigest: digest,
       listenerImageRef,
       credentialKind: 'apiKey',
+      accountAuthority: 'claude-main',
       publicInternet: true,
     });
     // eslint-disable-next-line no-bitwise

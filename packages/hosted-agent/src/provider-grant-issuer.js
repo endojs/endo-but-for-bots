@@ -160,12 +160,10 @@ export const makeProviderBrokerGrantIssuer = ({
     requestTimeoutMs > 0 &&
     requestTimeoutMs <= 600_000) ||
     Fail`Invalid provider request deadline`;
-  // The issuer's selected account is the binding, so an operator policy may
-  // agree with it but never name a different one. The broker then refuses any
-  // credential — including a refreshed one — that belongs elsewhere.
-  policy.accountRef === undefined ||
-    policy.accountRef === accountRef ||
-    Fail`Invalid provider grant issuer policy`;
+  // `accountRef` is the account authority the grant reports and admits
+  // sessions under; `policy.accountRef`, where the adapter sets it, is the
+  // provider account a credential must be bound to. They are different ids
+  // for a pool, whose members each name their own account.
   const authMode = policy.authMode ?? 'api-key';
   // The credential arrives already built and already bound to an account, so
   // this checks that it is one this issuer's grants can actually use: bound to
@@ -175,7 +173,7 @@ export const makeProviderBrokerGrantIssuer = ({
   // A pool's members are checked one by one when a grant is made over them.
   if (authMode === 'oauth' && pool === undefined) {
     credential !== undefined || Fail`Invalid provider grant issuer policy`;
-    credential.accountRef === accountRef ||
+    credential.accountRef === (policy.accountRef ?? accountRef) ||
       Fail`Invalid provider grant issuer policy`;
     typeof credential.current === 'function' ||
       Fail`Unprovisioned broker OAuth mode`;
@@ -187,7 +185,6 @@ export const makeProviderBrokerGrantIssuer = ({
     Fail`Invalid provider grant issuer policy`;
   const configuredPolicy = harden({
     ...policy,
-    accountRef,
     routes: policy.routes.map(route => ({ ...route })),
   });
   /**

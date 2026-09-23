@@ -13,7 +13,7 @@
  * Retained service changes require explicit retirement, never live replacement.
  * @module
  */
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import {
   mintWithPowersPath,
@@ -21,6 +21,7 @@ import {
   publishAccountOracle,
   publishBrokerSubscription,
   republishDelegatedRunners,
+  readAccountAuthority,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedRenewableCredentials } from '@endo/hosted-agent/managed-renewable-credentials.js';
 import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.js';
@@ -206,6 +207,13 @@ export const main = async (host, { exec } = {}) => {
       declaredSubscriptions.length > 0) ||
     Fail`ENDO_CODEX_SUBSCRIPTIONS must be a nonempty list`;
   const pooled = declaredSubscriptions !== undefined;
+  // The account authority this broker serves: the pool's id, or the single
+  // account's, as the operator declared it. Every plan records it.
+  const accountAuthority = readAccountAuthority(
+    env,
+    'ENDO_CODEX_ACCOUNT_AUTHORITY',
+    'Codex',
+  );
   const brokerPowersPath = pooled
     ? [SANDBOX_DIR, 'broker-powers']
     : [SANDBOX_DIR, 'credential'];
@@ -222,6 +230,32 @@ export const main = async (host, { exec } = {}) => {
     !(await E(host).has(...brokerPowersPath))
   ) {
     throw Fail`The retained Codex broker holds one credential. Declaring several subscriptions changes what it holds: retire it deliberately first. Its sessions are bound to that account and do not carry over.`;
+  }
+  // A retained broker serves the authority it was minted over. A changed
+  // declaration is a retirement, refused here before any set or credential
+  // is written, as a change of pool mode is; the byte-for-byte comparison of
+  // the retained service further down would catch it too, but only after the
+  // stored set had been rewritten under the new id.
+  if (await E(host).has(SANDBOX_DIR, 'broker-service')) {
+    const retained = await readProvisionedEnvironment(
+      host,
+      'broker-service',
+      brokerSpecifier,
+    );
+    /** @type {unknown} */
+    let retainedAuthority;
+    try {
+      retainedAuthority = JSON.parse(
+        retained.env.CODEX_BROKER_CONFIG ?? '{}',
+      ).accountAuthority;
+    } catch {
+      retainedAuthority = undefined;
+    }
+    if (retainedAuthority === undefined) {
+      throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} names no account authority, which this release records into every session plan; retire it deliberately`;
+    }
+    retainedAuthority === accountAuthority ||
+      Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} serves account authority ${q(retainedAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
   }
   if (pooled) {
     // What the set said before this run, to refuse an account change under
@@ -316,6 +350,7 @@ export const main = async (host, { exec } = {}) => {
     }
     const set = normalizeSubscriptionSet(
       {
+        id: accountAuthority,
         members,
         ...(env.ENDO_CODEX_CACHE_LIFETIME_SECONDS
           ? {
@@ -349,7 +384,6 @@ export const main = async (host, { exec } = {}) => {
     // over the old one, never removed first: setup runs at every start, which
     // is also when sessions are restored and the broker reads this.
     await E(powers).storeValue(set, 'subscriptions');
-    accountRef = 'pool';
     subscriptionIds = set.members.map(member => member.id);
   } else {
     accountRef = await provideSubscriptionCredential(
@@ -365,7 +399,8 @@ export const main = async (host, { exec } = {}) => {
       imageRef,
       imageDigest,
       listenerImageRef,
-      accountRef,
+      accountAuthority,
+      ...(accountRef === undefined ? {} : { accountRef }),
       ...(env.ENDO_CODEX_MAX_SESSIONS
         ? { maxSessions: Number(env.ENDO_CODEX_MAX_SESSIONS) }
         : {}),

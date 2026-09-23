@@ -60,8 +60,23 @@ envelope reads the plan's image itself and the per-adapter hook is gone;
 every plan reader refuses a field it does not know, the shared reader taking
 each adapter's declared fields (`fields`) beside its private paths, and the
 two retired-name checks fold into that rule; Codex's plan field `imageRef` is
-gone. Slice 2, the declared account authority, and slice 3, the shared
-descriptor vocabulary, follow.
+gone. Slices 2 and 3 (2026-09-23, local): every plan records `accountRef`, the
+operator-declared id of the account authority the broker serves, read by the
+shared placement reader; the host configuration declares it as
+`accountAuthority` per backend (`ENDO_<BACKEND>_ACCOUNT_AUTHORITY`, required),
+setup writes it into the broker's profile and refuses a retained broker that
+serves another, a pool set carries it as its `id`, the catalog snapshot
+carries it as `authority`, the grant reports it, and the controllers ask for
+it from the plan; the provider-name constants and the Codex `pool` label are
+gone, Codex's `accountRef` profile field is the verified provider account and
+only for a single credential, and the grant issuer no longer ties the id it
+reports to the policy's provider account. The provisioner owns the vocabulary:
+every backend binds `rootfs` under `image`, `accountRef` under `account` and
+its dependencies under `provider`, an adapter adding only extra fields under
+those names (Claude's `credentialKind` under `account`), so every descriptor
+lists `['image', 'account', 'provider']`. Not deployed: the deploy needs the
+three `accountAuthority` values in the host configuration and the three
+brokers retired, since their profiles change.
 
 Terms, as FA-07's axes name them. A *provider* is an inference endpoint
 (Anthropic, OpenRouter, OpenAI). An *account* is one credential-bearing identity
@@ -260,8 +275,9 @@ makes and deletes.
 
 Verification when it lands: the shared conformance suite's rebind cases run
 once per binding on every adapter, where today each adapter's vocabulary
-differs; the module tests rebind an image and an account authority through the
-real modules; the envelope's grant check is asserted against an authority id;
+differs, and rebind an account authority on every adapter; the module tests
+rebind an image and, for Claude, the credential kind through the real modules;
+the envelope's grant check is asserted against an authority id;
 the audit's FA-07 completion criterion and the FA-08 account item close. The
 state root as placement and the verb
 reporting the new bindings stay open.

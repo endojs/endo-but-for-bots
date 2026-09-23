@@ -10,7 +10,6 @@ import {
   ANTHROPIC_MESSAGES_PATH,
   ANTHROPIC_ORIGIN,
   ANTHROPIC_VERSION,
-  CLAUDE_BROKER_ACCOUNT,
   DEFAULT_OAUTH_BETA,
   buildClaudeBrokerPolicy,
   makeClaudeBrokerKit,
@@ -136,6 +135,7 @@ test('owned Claude pool injects refreshed access token, never login JSON', async
           imageDigest: digest,
           listenerImageRef,
           credentialKind: 'oauthToken',
+          accountAuthority: CLAUDE_BROKER_ACCOUNT,
           pool: true,
         }),
       },
@@ -237,6 +237,7 @@ test('Claude pool hands recognized exhaustion to a second secret but never moves
           imageDigest: digest,
           listenerImageRef,
           credentialKind: 'oauthToken',
+          accountAuthority: CLAUDE_BROKER_ACCOUNT,
           pool: true,
         }),
       },
@@ -312,7 +313,11 @@ const makeFakeRuntime = () => {
   };
 };
 
+// The account authority the fixture broker serves: the id its grants report.
+const CLAUDE_BROKER_ACCOUNT = 'claude-main';
+
 const brokerOptions = (runtime, overrides = {}) => ({
+  accountAuthority: CLAUDE_BROKER_ACCOUNT,
   secret: Far('secret', {
     async readBase64() {
       return btoa('sk-ant-api03-key');
@@ -353,6 +358,23 @@ test('a retained broker configuration naming models is refused with the way out'
         }),
       }),
     { message: /names models.*retire that broker/ },
+  );
+});
+
+test('a profile from before account authorities is refused with the way out', t => {
+  t.throws(
+    () =>
+      readClaudeBrokerConfig({
+        CLAUDE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'o',
+          directory: '/srv/broker',
+          imageRef: `localhost/claude@${digest}`,
+          imageDigest: digest,
+          listenerImageRef: `localhost/listener@${digest}`,
+          credentialKind: 'oauthToken',
+        }),
+      }),
+    { message: /names no account authority.*retire that broker deliberately/ },
   );
 });
 

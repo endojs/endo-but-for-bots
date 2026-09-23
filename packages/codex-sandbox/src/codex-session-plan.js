@@ -12,7 +12,6 @@
  * @module
  */
 
-import { Fail } from '@endo/errors';
 import { readSessionPlacement } from '@endo/hosted-agent/session-plan.js';
 
 import { assertContainerMounts } from './codex-hosted-policy.js';
@@ -22,7 +21,8 @@ import { assertContainerMounts } from './codex-hosted-policy.js';
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs The pinned slice image, `oci:<image>@<digest>`.
- * @property {string} accountRef
+ * @property {string} accountRef The account authority the session is bound
+ *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {string} workspaceMountPoint
  * @property {string} mounterSocketDir
@@ -46,15 +46,11 @@ export const readCodexSessionPlan = text => {
   const { placement, recorded } = readSessionPlacement(text, {
     label: 'Codex',
     sandboxIdFallback: 'codex',
-    fields: ['accountRef', 'containerMounts'],
+    fields: ['containerMounts'],
   });
-  (typeof recorded.accountRef === 'string' &&
-    /^[A-Za-z0-9_-]{1,256}$/.test(recorded.accountRef)) ||
-    Fail`Codex plan must pin its subscription account`;
   return harden(
     /** @type {CodexSessionPlan} */ ({
       ...placement,
-      accountRef: recorded.accountRef,
       containerMounts: assertContainerMounts(recorded.containerMounts),
     }),
   );

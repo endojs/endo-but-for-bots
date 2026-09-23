@@ -46,6 +46,7 @@ import {
   normalizeSubscriptionSet,
 } from './subscription-pool.js';
 import { makePublicEgress } from './public-egress.js';
+import { assertAccountAuthority } from './account-authority.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
 
@@ -319,7 +320,11 @@ const lazyModelRead = makeRead => {
  * @param {ReturnType<typeof makeModelCatalogOwner>} catalog
  * @param {boolean} [pinnedOnly]
  */
-const readCatalogAccount = async (subscriptionId, catalog, pinnedOnly = false) =>
+const readCatalogAccount = async (
+  subscriptionId,
+  catalog,
+  pinnedOnly = false,
+) =>
   harden({
     subscriptionId,
     ...(pinnedOnly ? { pinnedOnly: true } : {}),
@@ -1215,8 +1220,11 @@ const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
  * @param {string} options.label
  * @param {(env: Record<string, string>) => Config} options.readConfig The
  *   adapter's persisted operator profile reader.
- * @param {(config: Config) => { policy: BrokerPolicy, accountRef: string, adaptRequest?: Parameters<typeof makeProviderBrokerGrantIssuer>[0]['adaptRequest'] }} options.makePolicy
- *   The adapter's policy for a profile.
+ * @param {(config: Config) => { policy: BrokerPolicy, accountAuthority: string, adaptRequest?: Parameters<typeof makeProviderBrokerGrantIssuer>[0]['adaptRequest'] }} options.makePolicy
+ *   The adapter's policy for a profile, and the account authority the
+ *   profile serves (`account-authority.js`): the id the grant reports and
+ *   every plan records. The provider account a credential is bound to, where
+ *   there is one, is the policy's own `accountRef`.
  * @param {(config: Config, secret: any) => Parameters<typeof makeProviderBrokerGrantIssuer>[0]['credential']} [options.makeCredential]
  *   Synchronous, inert adapter credential construction, once per owned service.
  *   The secret may include renewal CAS authority, never exposed to sessions.
@@ -1256,7 +1264,15 @@ export const makeOwnedProviderBrokerService = ({
   const makeKit = (config, secret, env) => {
     // This setup flag is not the issuer's runtime pool capability.
     const { pool: pooled, ...serviceConfig } = config;
-    const { policy, accountRef, adaptRequest } = makePolicy(config);
+    const { policy, accountAuthority, adaptRequest } = makePolicy(config);
+    const accountRef = assertAccountAuthority(accountAuthority, label);
+    // The provider account the adapter's reads and redemptions address: a
+    // member's own, else the profile's, else the authority itself for a
+    // provider whose account has no id of its own.
+    const providerAccountOf = (/** @type {{ accountRef?: string }} */ member) =>
+      member.accountRef ??
+      /** @type {{ accountRef?: string }} */ (config).accountRef ??
+      accountRef;
     // Runtime hooks are not configuration fields, and the failure hooks are
     // not optional. An upstream failure reaches the slice as a bare 502 —
     // provider-http.js deliberately refuses to echo the cause — so these
@@ -1356,7 +1372,7 @@ export const makeOwnedProviderBrokerService = ({
                     config: forMember(member),
                     secret: memberSecret,
                     credential: memberCredential,
-                    accountRef: member.accountRef ?? accountRef,
+                    accountRef: providerAccountOf(member),
                   }),
               }),
           ...(makeActiveAccountRead === undefined
@@ -1371,7 +1387,7 @@ export const makeOwnedProviderBrokerService = ({
                     config: forMember(member),
                     secret: memberSecret,
                     credential: memberCredential,
-                    accountRef: member.accountRef ?? accountRef,
+                    accountRef: providerAccountOf(member),
                   }),
               }),
           ...(makeResetRedeem === undefined
@@ -1386,7 +1402,7 @@ export const makeOwnedProviderBrokerService = ({
                     config: forMember(member),
                     secret: memberSecret,
                     credential: memberCredential,
-                    accountRef: member.accountRef ?? accountRef,
+                    accountRef: providerAccountOf(member),
                   }),
               }),
           readState: async () => {
@@ -1454,7 +1470,7 @@ export const makeOwnedProviderBrokerService = ({
                 config,
                 secret,
                 credential,
-                accountRef,
+                accountRef: providerAccountOf({}),
               }),
             ),
           }),
@@ -1465,7 +1481,7 @@ export const makeOwnedProviderBrokerService = ({
               config,
               secret,
               credential,
-              accountRef,
+              accountRef: providerAccountOf({}),
             }),
           }),
       ...(makeResetRedeem === undefined
@@ -1475,7 +1491,7 @@ export const makeOwnedProviderBrokerService = ({
               config,
               secret,
               credential,
-              accountRef,
+              accountRef: providerAccountOf({}),
             }),
           }),
       env,

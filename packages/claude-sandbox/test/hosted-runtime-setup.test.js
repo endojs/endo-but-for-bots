@@ -143,6 +143,7 @@ test('the broker service is read by its verified entrypoint with its persisted p
     ownerId: 'claude-broker',
     directory: '/srv/broker',
     imageRef: `localhost/claude@${digest}`,
+    accountAuthority: 'claude-main',
     imageDigest: digest,
     listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
     credentialKind: 'oauthToken',

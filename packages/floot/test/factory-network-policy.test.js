@@ -78,7 +78,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
         continuity: 'explicit',
         toolOwnership: 'endo',
         supportedNetworkPolicies: ['off', 'public-internet'],
-        rebindableBindings: ['image', 'provider'],
+        rebindableBindings: ['image', 'account', 'provider'],
       }),
     modelCatalog: () =>
       harden({
@@ -690,8 +690,8 @@ test('rebind stops the incarnation and reopens it under the named bindings, once
   await t.throwsAsync(E(world.session).rebind(['imgae']), {
     message: /rebind names the bindings a reopen may change/,
   });
-  await t.throwsAsync(E(world.session).rebind(['account']), {
-    message: /from \["image","provider"\]/,
+  await t.throwsAsync(E(world.session).rebind(['persona']), {
+    message: /from \["image","account","provider"\]/,
   });
   await t.throwsAsync(E(world.session).rebind([]), {
     message: /between one and eight/,

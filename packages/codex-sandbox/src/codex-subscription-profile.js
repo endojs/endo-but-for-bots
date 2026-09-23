@@ -9,16 +9,33 @@ import { Fail } from '@endo/errors';
  * credential mechanism; this adapter, not the shared broker, owns the
  * subscription endpoint and account headers.
  * No origin, path, or header override comes from operator JSON or the guest.
+ * The provider account, where the profile names one (a broker over one
+ * credential, or a pool's member), is the policy's `accountRef`, which the
+ * credential must be bound to, and the request header; a pool's own profile
+ * names none, and each member's request goes out under its own.
  *
- * @param {{accountRef: string}} config
- * @returns {{accountRef: string, policy: BrokerPolicy, adaptRequest: ProviderRequestAdapter}}
+ * @param {{accountRef?: string}} config
+ * @returns {{policy: BrokerPolicy, adaptRequest?: ProviderRequestAdapter}}
  */
 export const makeCodexSubscriptionProfile = ({ accountRef }) => {
-  /^[A-Za-z0-9_-]{1,256}$/.test(accountRef) ||
+  accountRef === undefined ||
+    /^[A-Za-z0-9_-]{1,256}$/.test(accountRef) ||
     Fail`Invalid Codex subscription account`;
+  if (accountRef === undefined) {
+    return harden({
+      policy: {
+        origin: 'https://chatgpt.com',
+        authMode: 'oauth',
+        routes: [{ method: 'POST', path: '/v1/responses' }],
+        maxConcurrentRequests: 4,
+        maxRequestBytes: 8n * 1024n ** 2n,
+        maxResponseBytes: 16n * 1024n ** 2n,
+      },
+    });
+  }
   return harden({
-    accountRef,
     policy: {
+      accountRef,
       origin: 'https://chatgpt.com',
       authMode: 'oauth',
       routes: [{ method: 'POST', path: '/v1/responses' }],

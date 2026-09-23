@@ -31,6 +31,8 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
+ * @property {string} accountRef The account authority the session is bound
+ *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
  * @property {string} [workspaceDir] Owned backing storage the workspace
  *   filesystem serves; absent when the workspace is an operator-supplied host

@@ -16,6 +16,7 @@ const plan = harden({
   sessionId: 'session-a',
   sandboxSessionId: makeSandboxSessionId('session-a'),
   rootfs: `oci:example@${digest}`,
+  accountRef: 'authority-a',
   networkPolicy: 'off',
   workspaceDir: '/workspaces/a',
   workspaceMountPoint: '/private/a/workspace',
@@ -78,6 +79,22 @@ test('the shared placement reads the pinned image and refuses any field no reade
     () => readSessionPlacement(JSON.stringify(unpinned), { label: 'Test' }),
     { message: /Missing session plan field "rootfs"/ },
   );
+  // The account authority is recorded by every plan, in its id form.
+  t.is(placement.accountRef, 'authority-a');
+  const { accountRef: __, ...unbound } = plan;
+  t.throws(
+    () => readSessionPlacement(JSON.stringify(unbound), { label: 'Test' }),
+    { message: /Missing session plan field "accountRef"/ },
+  );
+  for (const accountRef of ['', 'not an id', 'a'.repeat(257), 7]) {
+    t.throws(
+      () =>
+        readSessionPlacement(JSON.stringify({ ...plan, accountRef }), {
+          label: 'Test',
+        }),
+      { message: /Test account authority must be an id/ },
+    );
+  }
 });
 
 test('recorded paths are normalized, absolute, non-root, and NUL-free', t => {

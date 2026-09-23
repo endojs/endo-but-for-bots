@@ -40,7 +40,7 @@ import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervis
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
 import { makeDefaultMounter } from '@endo/hosted-agent/workspace-projection.js';
 
-import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
+import { ANTHROPIC_ORIGIN } from './claude-broker.js';
 import { makeClaudeClient } from './claude-client.js';
 import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
 import { readClaudeSessionPlan } from './claude-session-plan.js';
@@ -146,7 +146,9 @@ export const makeClaudeNativeController = ({
           ...(makeFilesystem ? { makeFilesystem } : {}),
           scopeRequest: plan => ({
             providerOrigin: ANTHROPIC_ORIGIN,
-            accountRef: CLAUDE_BROKER_ACCOUNT,
+            // The account authority the plan is bound to, which the grant
+            // must report.
+            accountRef: plan.accountRef,
             ...(plan.subscription ? { subscription: plan.subscription } : {}),
             networkPolicy: plan.networkPolicy,
             ...(plan.model ? { model: plan.model } : {}),
