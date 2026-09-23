@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 66 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 71 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -68,6 +68,10 @@ Three cancellation/tool-authority mappings add 37 focused passing tests and two
 real-daemon checks: pending-constructor stop with sibling preservation, and tools
 remaining transient across graceful restart. Only their socket fixture names were
 shortened for macOS; assertions and timeouts are unchanged.
+Five per-request preparation/issuance and shared-service-scope changes are now
+mapped too: 234 focused tests pass across sandbox and hosted-agent suites.
+The evidence covers live-owner retry and sibling isolation, not recovery of
+ephemeral scope maps after process loss or live Podman descendant quiescence.
 
 ### Native recovery — separate research follow-up
 
@@ -102,7 +106,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 51 application changes, plus the first 20 host
+not. The newest 15 and earliest 56 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA

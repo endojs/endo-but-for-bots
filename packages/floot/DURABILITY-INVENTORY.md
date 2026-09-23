@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 413 application entries and 73 host entries still need explicit ledger
+The other 408 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -338,6 +338,24 @@ until explicitly reattached. These are not native process-loss recovery tests.
 | `dbc7e71e7` | Context cancellation fences later formula loading/evaluation and powers acquisition; cancelled dependency registration cannot revive missing controllers | Held formula-read/worker tests verify no late execution. Fence belongs to an incarnation, not durable revocation or cancellation of every already-admitted operation |
 | `0ad523414` | Host construction retains original worker/client contexts; boxed formulation completion is distinct from constructor value; stop drains formulation then cancels without revival | Injected failures and real pending-constructor test cover no premature worker cancellation, no replacement acquisition and sibling preservation. Hung persistence may hold cleanup; abrupt loss remains separate |
 | `d64ce9532` | Tool authority belongs to one activation, never persisted session references; replacement requires stop, and cleanup/reconstruction has no implicit tools | Unit and real graceful-restart tests cover identical/replacement tools, old resolver fencing and refusal of persisted tools role. Resolver fencing prevents new delivery, not revocation of a capability already handed out; controller/tool lifecycle must fence such authority |
+
+### Per-request preparation and shared-service scopes
+
+Five more changes are mapped to current preparation/issuance and service owners.
+Fresh provider-scopes tests pass 12 cases; sandbox native-factory/owned-agent/runtime
+suites pass 41. They use injected native effects and local ownership files, not
+live Podman or daemon-loss recovery. Scope maps are deliberately ephemeral;
+missing lookup after service loss is not evidence that native resources are gone.
+Independent fresh runs pass 124 sandbox factory-owner/Podman-cleanup/Podman-policy
+tests and 57 hosted-agent provider-grant-issuer/provider-listener-runtime tests.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `9391a5a6b` | Factory retains each Podman preparation kit before awaiting its value; failed preparation remains independently closeable | Per-preparation cancellation/late acquisition/sibling cleanup tests; legacy drivers without kits still transfer only on successful preparation. No process-loss ownership recovery |
+| `9bf9f3856` | Each provider issue kit owns listener acquisition and revocation independently of the shared issuer/runtime | Failed issuance and cleanup remain addressable without closing sibling grants. Later runtime/recovery composition is not attributable to this original change; no live namespace release proof |
+| `c7a741462` | Runtime exposes per-session native factory scopes over one driver/storage owner; failed scope close retains lookup and successful close removes only that exact owner | Tests cover late acquisition, sibling progress, shared allocation budget and failed operator shutdown. Shared copy-data checks reject imported authority in native inputs; ephemeral scope lookup is not a durable recovery ledger |
+| `6ec0c08ac` | Provider scopes are inert until start and retain issue kits before acquisition; revoke drains observations and shared opening without owning operator shutdown | 12 tests cover failed cleanup, replacement, stale handles, sibling use and catalog read fencing. Supervisor must serialize replacement; hung admitted calls can block cleanup and absence after service loss is not release proof |
+| `ec7929c92` | Native service constructor accepts null powers only; explicit-path host-only factory avoids importing daemon scratch authority | Tests reject non-null powers/imported capabilities and preserve cancellation through pending powers. Current owned-agent uses refusing makeNoHostScratch authority rather than granting a host provider; null construction does not make trusted host paths guest-safe |
 
 ### Post-snapshot changes
 
