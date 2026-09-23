@@ -105,17 +105,30 @@ All 44 related host helper tests pass after independent review. Pushed, not run 
 Tokyo. Name detachment is not global revocation or proof that native producers
 stopped. Historical completed retries can still fail safely after metadata GC.
 
-Old restoration acceptance runner — newly identified open boundary (2026-09-24):
-`endo-host/ops/verify-restoration.mjs` verifies requested backend coverage, but its
-seed path creates a session and obtains its ID before writing the manifest with
+Old restoration acceptance runner — identified boundary (2026-09-24):
+`endo-host/ops/verify-restoration.mjs` verified requested backend coverage, but its
+old seed path created a session and obtained its ID before writing the manifest with
 ordinary `writeFile`. A lost create response can leave an unrecorded session;
 replacement writes can truncate; retry replaces unfinished session IDs, losing
-their cleanup references. `run-cutover4-restoration.sh` still invokes this seed
-path. Coverage tests do not establish a durable acquisition/cleanup ledger.
-Do not automatically reuse that runner until its acquisition and manifest protocol
-is corrected or the obsolete path is retired in favor of a verified replacement.
+their cleanup references. `run-cutover4-restoration.sh` invoked this seed path.
+Coverage tests alone did not establish a durable acquisition/cleanup ledger.
 Existing historical acceptance observations are not erased, but do not prove this
-failure boundary safe. This remains open rather than folded into native #1323.
+failure boundary safe. This is separate from native #1323.
+
+Restoration acceptance remediation (host `f922568`, 2026-09-24, not deployed):
+the host runner now records version-two intent before create, seed, and recall;
+uncertain acknowledgements stop the phase without replacing IDs or retrying sends.
+Private manifests use exclusive locks and file-sync/rename/parent-sync publication.
+Cleanup holds both locks in stable order through deletion and requires exact
+model/title identity and the completed seed/recall pair; extra turns prevent cleanup.
+Unknown-ID creation attempts remain inspectable by their unique recorded title.
+All 53 focused tests pass, independently rerun during adversarial review, including
+reopened-state publication failures and actual-filesystem lock exclusion.
+Four inert shell-wrapper tests pass; this is not live inference or power-loss proof.
+Old manifests require manual inspection, not automatic migration or replay.
+Locks exclude cooperating runners, not UI activity or hostile same-UID processes;
+exclusive operator use and trusted private directory ancestry remain prerequisites.
+The local runner defect is addressed; deployment/live acceptance remain open.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for

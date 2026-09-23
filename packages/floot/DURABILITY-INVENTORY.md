@@ -177,10 +177,20 @@ Mock preservation checks are not live cleanup acknowledgements.
 | `1fa90d9` | Broker reference inventory over exact approved namespace identities without resolving custom members | Built-in workers may revive; nonmatching references do not prove global independence; current validation evolved |
 | `ed57f5b` | Two approved legacy guest namespaces inspected without custom-member resolution | Built-in worker revival possible; not backup, global dependency discovery or cleanup |
 | `88c5114` | Broker alias detachment with preserved credentials/archive identity checks | Original cancel-before-remove superseded by later names-only correction; held capabilities still require verified old-owner shutdown |
-| `f502c87` | Requested backend/manifest/result coverage validation | **Open defect:** createSession precedes plain manifest write; unrecorded creation/truncation possible, retries abandon unfinished IDs. Current cutover4 seed runner still uses it. Not a durable acquisition/cleanup ledger and not safe for automatic reuse without remediation |
+| `f502c87` | Requested backend/manifest/result coverage validation | Original create-before-write and ID replacement defect corrected locally by the version-two intent ledger described below; historical coverage tests alone did not establish durability. Deployment/live acceptance remain open |
 | `e303296` | Four obsolete aliases targeted with exact metadata and preservation checks | Review found cancel could construct dormant code despite the helper comment. Corrected to names-only detachment; no producer shutdown/global revocation claim. Completed retries may fail safely after GC removes target metadata; no recovery redesign supplied |
 
 ### Post-snapshot changes
+
+- Host `f922568` restoration-ledger correction (2026-09-24): persist intent before remote
+  create/seed/recall, refuse uncertain retries, preserve IDs, and atomically flush
+  private manifests under exclusive phase locks. Cleanup holds both locks through
+  deletion and validates complete version-two ledgers and exact two-turn evidence.
+  Unknown-ID creation attempts remain inspectable. All 53 focused tests pass,
+  independently rerun by the adversarial reviewer; four inert wrapper tests pass.
+  This is local protocol/fault evidence, not live acceptance or power-loss proof.
+  Legacy manifests require manual inspection; private ancestry and exclusive
+  operator use are trusted. No exactly-once creation or UI exclusion is promised.
 
 - Application `1aa668820`: documentation-only inventory and audit links, no runtime owner.
 - Application `294121320`: documentation-only ownership mappings and design correction.
