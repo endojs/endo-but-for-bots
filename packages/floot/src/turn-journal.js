@@ -15,7 +15,7 @@ const PREFIX = 'floot-turn-event-';
 const CONTENT_PREFIX = 'floot-turn-content-';
 const SNAPSHOT_PREFIX = 'floot-turn-snapshot-';
 const ARCHIVE_PREFIX = 'floot-turn-archive-';
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 2;
 
 /**
  * Bounds, and what each one protects.
@@ -229,6 +229,8 @@ export const makeTurnJournal = powers => {
   let sinceSnapshot = 0;
   let archivedTurns = 0;
   let archiveChunks = 0;
+  /** @type {{ turnId: string, ordinal: string, sequence: string, chunk: string } | null} */
+  let archivedCheckpoint = null;
   /** @type {Set<string>} */
   let names = new Set();
   let initialized = false;
@@ -480,6 +482,27 @@ export const makeTurnJournal = powers => {
     next = through + 1n;
     archivedTurns = data.archivedTurns;
     archiveChunks = data.archiveChunks;
+    const checkpoint = data.archivedCheckpoint;
+    if (checkpoint !== null) {
+      (checkpoint &&
+        typeof checkpoint === 'object' &&
+        Object.keys(checkpoint).length === 4 &&
+        ['turnId', 'sequence'].every(
+          key =>
+            typeof checkpoint[key] === 'string' &&
+            /^[1-9][0-9]*$/.test(checkpoint[key]),
+        ) &&
+        typeof checkpoint.chunk === 'string' &&
+        /^(0|[1-9][0-9]*)$/.test(checkpoint.chunk) &&
+        typeof checkpoint.ordinal === 'string' &&
+        /^(0|[1-9][0-9]{0,4})$/.test(checkpoint.ordinal) &&
+        Number(checkpoint.ordinal) < 65_536 &&
+        BigInt(checkpoint.chunk) < BigInt(archiveChunks) &&
+        BigInt(checkpoint.turnId) < BigInt(checkpoint.sequence) &&
+        BigInt(checkpoint.sequence) <= through) ||
+        Fail`Invalid archived checkpoint index`;
+    }
+    archivedCheckpoint = checkpoint;
   };
 
   const initialize = async () => {
@@ -533,6 +556,18 @@ export const makeTurnJournal = powers => {
           record.transcriptEndSequence === undefined ||
             Fail`Unexpected transcript completion position`;
         }
+      }
+      if (archivedCheckpoint !== null) {
+        const checkpoint = archivedCheckpoint;
+        const chunk = await readArchiveChunk(BigInt(checkpoint.chunk), true);
+        const turn = chunk.find(record => record.turnId === checkpoint.turnId);
+        const entry = turn?.transcript?.[Number(checkpoint.ordinal)];
+        (turn !== undefined &&
+          archivable(turn) &&
+          entry?.kind === 'compaction' &&
+          entry.ordinal === checkpoint.ordinal &&
+          entry.sequence === checkpoint.sequence) ||
+          Fail`Archived checkpoint index does not match archive`;
       }
     }
     const journalNames = [...names]
@@ -646,7 +681,25 @@ export const makeTurnJournal = powers => {
       }),
       name,
     );
-    for (const record of excess) records.delete(record.turnId);
+    for (const record of excess) {
+      for (const entry of record.transcript ?? []) {
+        if (
+          entry.kind === 'compaction' &&
+          (archivedCheckpoint === null ||
+            BigInt(record.turnId) > BigInt(archivedCheckpoint.turnId) ||
+            (record.turnId === archivedCheckpoint.turnId &&
+              Number(entry.ordinal) > Number(archivedCheckpoint.ordinal)))
+        ) {
+          archivedCheckpoint = {
+            turnId: record.turnId,
+            ordinal: entry.ordinal,
+            sequence: entry.sequence,
+            chunk: `${archiveChunks}`,
+          };
+        }
+      }
+      records.delete(record.turnId);
+    }
     archiveChunks += 1;
     archivedTurns += excess.length;
     return true;
@@ -669,6 +722,7 @@ export const makeTurnJournal = powers => {
         records: JSON.parse(JSON.stringify([...records.values()])),
         archivedTurns,
         archiveChunks,
+        archivedCheckpoint,
       }),
       name,
     );
@@ -731,8 +785,8 @@ export const makeTurnJournal = powers => {
     if (sinceSnapshot >= SNAPSHOT_EVERY) await snapshot();
   };
 
-  /** @param {bigint | number} index */
-  const readArchiveChunk = async index => {
+  /** @param {bigint | number} index @param {boolean} [metadataOnly] */
+  const readArchiveChunk = async (index, metadataOnly = false) => {
     const chunk = copyData(
       await E(powers).lookup(`${ARCHIVE_PREFIX}${pad(index)}`),
     );
@@ -745,8 +799,10 @@ export const makeTurnJournal = powers => {
     for (const record of chunkRecords) {
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
-      // eslint-disable-next-line no-await-in-loop
-      await validatePresentation(record);
+      if (!metadataOnly) {
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation(record);
+      }
       for (const entry of record.transcript ?? []) {
         // eslint-disable-next-line no-await-in-loop
         await validateTranscriptPayload(entry, true);
@@ -942,6 +998,8 @@ export const makeTurnJournal = powers => {
           retained: JSON.parse(JSON.stringify([...records.values()])),
           archivedTurns,
           archiveCursor: `0:${archiveChunks}`,
+          archivedCheckpoint:
+            archivedCheckpoint === null ? null : { ...archivedCheckpoint },
         }),
       ),
     /**

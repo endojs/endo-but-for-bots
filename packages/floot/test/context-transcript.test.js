@@ -278,7 +278,7 @@ test('real journal late old-turn settlement survives subsequent archive publicat
   t.deepEqual(await readContextTranscript(revived), projected);
 });
 
-test('paged reader pins one cut across publication and late settlement between passes', async t => {
+test('indexed reader pins one cut across publication and late settlement during its single archive pass', async t => {
   const old = turn(1, [call('unsettled', 'exec')]);
   const boundary = turn(10, [checkpoint('old summary')]);
   const after = turn(20, [message('after checkpoint')]);
@@ -309,6 +309,9 @@ test('paged reader pins one cut across publication and late settlement between p
             : old,
         ]),
         archiveCursor: published ? '0:3' : '0:2',
+        archivedCheckpoint: published
+          ? { turnId: '30', ordinal: '0', sequence: '31', chunk: '2' }
+          : { turnId: '10', ordinal: '0', sequence: '11', chunk: '1' },
       };
     },
     listArchivedPage: async cursor => {
@@ -326,14 +329,14 @@ test('paged reader pins one cut across publication and late settlement between p
   };
   const first = await readContextTranscript(journal);
   t.is(views, 1);
-  t.deepEqual(cursors, ['0:2', '1:2', '0:2', '1:2']);
+  t.deepEqual(cursors, ['0:2', '1:2']);
   t.is(first[0].summary, 'old summary');
   t.true(first.some(record => record.content === 'after checkpoint'));
   t.regex(pairToolCalls(first).pairs[0].result.content, /outcome unknown/);
   t.false(JSON.stringify(first).includes('new settlement'));
   const second = await readContextTranscript(journal);
   t.is(views, 2);
-  t.deepEqual(cursors.slice(4), ['0:3', '1:3', '2:3', '0:3', '1:3', '2:3']);
+  t.deepEqual(cursors.slice(2), ['0:3', '1:3', '2:3']);
   t.is(second[0].summary, 'new summary');
   t.is(pairToolCalls(second).pairs[0].result.content, 'new settlement');
   t.false(second.some(record => record.content === 'after checkpoint'));
@@ -349,6 +352,12 @@ for (const failingPass of [1, 2]) {
         return {
           retained: [turn(20, [message('not partial output')])],
           archiveCursor: '0:1',
+          archivedCheckpoint: {
+            turnId: '99',
+            ordinal: '0',
+            sequence: '100',
+            chunk: '0',
+          },
         };
       },
       listArchivedPage: async cursor => {
@@ -359,7 +368,7 @@ for (const failingPass of [1, 2]) {
       },
       readContent: noRead,
     };
-    await t.throwsAsync(readContextTranscript(journal), {
+    await t.throwsAsync(readContextTranscript(journal, '99'), {
       message: 'Archive unavailable',
     });
     t.is(views, 1);
@@ -368,7 +377,7 @@ for (const failingPass of [1, 2]) {
 }
 
 for (const corruption of ['missing', 'sequence', 'kind', 'ordinal']) {
-  test(`paged reader rejects ${corruption} checkpoint on second pass`, async t => {
+  test(`indexed reader rejects ${corruption} checkpoint during archive pass`, async t => {
     let visits = 0;
     const original = turn(1, [checkpoint('summary')]);
     const changed = structuredClone(original);
@@ -376,16 +385,20 @@ for (const corruption of ['missing', 'sequence', 'kind', 'ordinal']) {
     if (corruption === 'kind') changed.transcript[0].kind = 'message';
     if (corruption === 'ordinal') changed.transcript[0].ordinal = '1';
     const journal = {
-      readView: async () => ({ retained: [], archiveCursor: '0:1' }),
+      readView: async () => ({
+        retained: [],
+        archiveCursor: '0:1',
+        archivedCheckpoint: {
+          turnId: '1',
+          ordinal: '0',
+          sequence: '2',
+          chunk: '0',
+        },
+      }),
       listArchivedPage: async () => {
         visits += 1;
         return {
-          records:
-            visits === 1
-              ? [original]
-              : corruption === 'missing'
-                ? []
-                : [changed],
+          records: corruption === 'missing' ? [] : [changed],
           next: null,
         };
       },
@@ -394,6 +407,42 @@ for (const corruption of ['missing', 'sequence', 'kind', 'ordinal']) {
     await t.throwsAsync(readContextTranscript(journal), {
       message: /Context checkpoint (changed|missing)/,
     });
-    t.is(visits, 2);
+    t.is(visits, 1);
   });
 }
+
+test('excluding archived maximum falls back to two pinned passes and selects previous checkpoint', async t => {
+  const cursors = [];
+  let views = 0;
+  const journal = {
+    readView: async () => {
+      views += 1;
+      return {
+        retained: [],
+        archiveCursor: '0:1',
+        archivedCheckpoint: {
+          turnId: '10',
+          ordinal: '0',
+          sequence: '11',
+          chunk: '0',
+        },
+      };
+    },
+    listArchivedPage: async cursor => {
+      cursors.push(cursor);
+      return {
+        records: [
+          turn(10, [checkpoint('excluded')]),
+          turn(1, [checkpoint('previous')]),
+        ],
+        next: null,
+      };
+    },
+    readContent: noRead,
+  };
+  t.deepEqual(await readContextTranscript(journal, '10'), [
+    { kind: 'compaction', summary: 'previous' },
+  ]);
+  t.is(views, 1);
+  t.deepEqual(cursors, ['0:1', '0:1']);
+});

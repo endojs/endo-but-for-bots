@@ -820,6 +820,32 @@ Scoped lint has zero errors (57 warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass. Independent adversarial review approved,
 including the explicit optional-checkpoint narrowing fix caught by docs.
 
+Archived checkpoint lookup (2026-09-24, locally verified, not deployed):
+snapshots now retain a constant-size derived archived checkpoint index (or null).
+The writer selects the maximum numeric dispatch/ordinal while archiving, so an
+old checkpoint archived late cannot replace a newer checkpoint.
+Archive storage precedes the snapshot that publishes its counter and index
+together; ambiguous writes poison the incarnation before another read can expose
+an uncommitted candidate. No second formula or independently published owner exists.
+Startup validates index shape/ranges and the referenced chunk/entry using metadata
+only. This proves the referenced checkpoint is valid; maximality comes from the
+writer's derivation, not a startup rescan of all archives.
+Context selection compares this candidate with the pinned retained snapshot,
+normally removing the first full archive scan. If the caller excludes the indexed
+archived turn, selection falls back to the paged scan for the previous candidate.
+Projection still verifies the selected tuple and scans history for exceptions.
+Snapshot/archive version 2 refuses older snapshot/archive formats; event-only
+journals with current transcript fields can still replay. Retire affected sessions
+before deploy rather than relying on this as a universal legacy-format detector.
+Historical tool hydration and the remaining archive pass are still open costs.
+All 614 Floot tests and four real-daemon journal/lifecycle tests pass.
+Coverage includes exact before/after archive and snapshot failure cuts, poisoned
+writer reads, recovery after orphan publication, late archival ordering, excluded
+maximum fallback, malformed/mismatched pointers, and a large external checkpoint
+whose startup validation reads one archive page and no content values.
+Scoped lint has zero errors (25 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one
