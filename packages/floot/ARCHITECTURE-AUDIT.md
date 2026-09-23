@@ -1329,6 +1329,29 @@ another Secret is a `provider` change, which the verb's help says; and the
 verb reports the names it authorized, not what the record now carries, so
 the operator authorizes a value they cannot inspect first.
 
+### Revision persistence verification — 2026-09-23
+
+Review of `c3669475f` found a lower-level violation of its retry assumption:
+`pet-store.js` changed its in-memory name mapping before the synchronous
+database write. If publishing a staged edge failed, retry could take the
+same-identifier no-op path without persisting that edge. Settlement could then
+publish the plan and discard the revision intent, leaving the old edge on
+reconstruction. The directory interruption mock failed before updating its
+mapping and did not expose this case.
+
+Corrected: `storeIdentifier` now writes the database before changing either
+mapping or publishing notifications. Two regressions exercise the real pet
+store with an injected database failure, for initial and replacement writes;
+they verify unchanged forward/reverse mappings, no phantom notification,
+successful same-ID retry, fresh-store reconstruction, and successful-write
+idempotence. Both fail against the previous implementation. Together with
+subscription cancellation and the four session suites, 82 tests pass.
+
+This is local failure-injection and reconstruction evidence, not a physical
+power-loss test or a live Tokyo rebind acceptance test. The staged protocol
+still assumes atomic individual database entries. Native producer cleanup
+after process loss remains the separate #1323 investigation. Not deployed.
+
 ## FA-09 — Give local development storage an explicit role
 
 The projected 9P workspace is a capability filesystem, not a promise of ordinary local
