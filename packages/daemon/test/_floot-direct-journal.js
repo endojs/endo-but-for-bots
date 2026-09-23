@@ -55,7 +55,10 @@ export const make = async host => {
   const agent = await makeStreamingAgent(
     host,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     {
       journalPowers: journal,

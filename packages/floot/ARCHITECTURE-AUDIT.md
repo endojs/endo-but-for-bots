@@ -917,8 +917,25 @@ Adversarial review approved after tightening whitespace validation and removing
 the delegation fallback. A dedicated direct-provider delegation regression remains
 useful follow-up coverage; hosted delegation and direct creation are covered.
 Scoped lint has no errors; documentation generation has no errors (179 warnings).
-Streaming configuration discrimination remains the next slice, not implemented by
-this change. Tokyo still runs the previous release.
+Tokyo still runs the previous release.
+
+FA-07 runtime discrimination slice (2026-09-24, locally verified, not deployed):
+streaming-agent construction now requires exactly one explicit runtime variant:
+`provider` with a provider thunk, `hosted` with a tool-catalog-aware client thunk,
+or `records-only` with no constructor. Static injected objects and raw provider
+credentials are no longer alternative constructor shapes. Ambiguous, unknown,
+inherited-discriminant and legacy configurations fail before guest access.
+Provider lookup remains dynamic for credential rotation; hosted construction still
+follows journal validation and tool catalog construction. Records-only instances
+can inspect history but refuse turns before dispatch and never start inbox work.
+This is incarnation-local configuration, not new persisted state or a new owner.
+All 643 Floot tests and the real-daemon two-cold-start direct journal test pass.
+Runtime boundary tests cover invalid shapes and records-only non-execution; the
+existing credential-rotation regression passes with the new provider variant.
+Adversarial review approved after the own-discriminant correction; the final
+14-test boundary/hosted/rotation rerun passes. Scoped lint has no errors
+(53 warnings), and documentation generation has no errors (180 warnings,
+including the internal runtime type referenced by the public constructor).
 
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields

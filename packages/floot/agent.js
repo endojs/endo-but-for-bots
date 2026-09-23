@@ -53,6 +53,7 @@ import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
+import { assertRuntimeConfig } from './src/runtime-config.js';
 import {
   assertSessionIdentity,
   isHostedSession,
@@ -508,33 +509,6 @@ const provisionPresetObjects = async (
 };
 
 /**
- * @typedef {object} ProviderConstructorConfig
- * @property {string} host
- * @property {string} model
- * @property {string} authToken
- */
-
-/**
- * @typedef {object} InjectedProviderConfig
- * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal, onUsage?: (usage: Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>) => void) => Promise<any> }} provider
- */
-
-/**
- * @typedef {object} LateProviderConfig
- * @property {() => Promise<any>} provideProvider - Resolved once per turn
- *   rather than held, so dropping a cached provider (`refreshCredentials`)
- *   reaches a session that is already open.
- */
-
-/**
- * @typedef {object} ClaudeClientConfig
- * @property
- *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
- *   events. Turns bypass the provider tool loop — the CLI runs its own tools
- *   in the sandbox and keeps its own conversation continuity.
- */
-
-/**
  * Build a streaming agent over a guest's powers. The returned object exposes
  * `converse(input, writer)`, which journals dialogue and tool evidence, streams the
  * model's reply through `writer` (src/stream.js), and persists the assistant
@@ -555,7 +529,7 @@ const provisionPresetObjects = async (
  *
  * @param {any} powers - Guest powers (petstore for conversation history)
  * @param {Promise<object> | object | undefined} _context
- * @param {ProviderConstructorConfig | InjectedProviderConfig | LateProviderConfig | ClaudeClientConfig | { hostedClient: any } | { provideHostedClient: (snapshot: any) => Promise<any> }} providerConfig
+ * @param {import('./src/runtime-config.js').RuntimeConfig} runtime
  * @param {string} [systemPrompt]
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
@@ -605,7 +579,7 @@ const provisionPresetObjects = async (
 export const makeStreamingAgent = async (
   powers,
   _context,
-  providerConfig,
+  runtime,
   systemPrompt,
   {
     spawner,
@@ -620,6 +594,13 @@ export const makeStreamingAgent = async (
     onChange,
   } = {},
 ) => {
+  assertRuntimeConfig(runtime);
+  const runtimeKind = runtime.kind;
+  const provideProvider =
+    runtime.kind === 'provider' ? runtime.provideProvider : undefined;
+  const provideHostedClient =
+    runtime.kind === 'hosted' ? runtime.provideHostedClient : undefined;
+  const recordsOnly = runtimeKind === 'records-only';
   // No implicit migration: reject legacy branches before recovery or backend startup.
   const existingNames = await E(powers).list();
   if (
@@ -644,20 +625,8 @@ export const makeStreamingAgent = async (
       console.error('[floot-agent] change observer failed:', error);
     }
   };
-  let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
-  const provideHostedClient = /** @type {any} */ (providerConfig)
-    .provideHostedClient;
-  const provideProvider = /** @type {any} */ (providerConfig).provideProvider;
   /** @type {any} */
-  const staticProvider =
-    hostedClient || provideHostedClient || provideProvider
-      ? null
-      : /** @type {any} */ (providerConfig).provider ||
-        createStreamingProvider({
-          LAL_HOST: /** @type {any} */ (providerConfig).host,
-          LAL_MODEL: /** @type {any} */ (providerConfig).model,
-          LAL_AUTH_TOKEN: /** @type {any} */ (providerConfig).authToken,
-        });
+  let hostedClient;
 
   /**
    * The provider this turn runs on.
@@ -668,8 +637,10 @@ export const makeStreamingAgent = async (
    * `refreshCredentials()` drops the factory's cache, and the next turn asks
    * for it again.
    */
-  const currentProvider = async () =>
-    provideProvider ? provideProvider() : staticProvider;
+  const currentProvider = async () => {
+    if (!provideProvider) throw Error('This runtime is not a direct provider');
+    return provideProvider();
+  };
 
   // An agent built with no prompt at all was not opened by the Floot space,
   // so nothing reads its replies aloud.
@@ -961,7 +932,7 @@ export const makeStreamingAgent = async (
       writer.end();
     };
 
-    if (hostedClient) {
+    if (runtimeKind === 'hosted') {
       writer.setPhase('thinking');
       let hosted;
       try {
@@ -1309,7 +1280,7 @@ export const makeStreamingAgent = async (
     }
     const turnId = await turnJournal.begin({
       input: text,
-      backendId: backendId || (hostedClient ? 'hosted' : 'provider'),
+      backendId: backendId || runtimeKind,
       modelId: modelId || '',
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
@@ -1422,6 +1393,11 @@ export const makeStreamingAgent = async (
   };
 
   const converse = (input, writer, meta, signal, onStart, onBegun) => {
+    if (recordsOnly) {
+      const error = Error('Records-only session cannot run turns');
+      writer.abort(error.message);
+      return Promise.reject(error);
+    }
     if (stopped || quarantineError) {
       const error =
         quarantineError || Error('Floot session agent is shutting down');
@@ -1516,6 +1492,7 @@ export const makeStreamingAgent = async (
   /** Wakes the mail worker; rebound when a pump starts. */
   let wakeMailWorker = () => {};
   const startInbox = () => {
+    if (recordsOnly) return;
     if (inboxStarted || stopped) return;
     inboxStarted = true;
     inboxLoop = (async () => {
@@ -2015,6 +1992,7 @@ export const makeStreamingAgent = async (
     hostedClient = await provideHostedClient(
       journalSnapshot(await toolRegistry.snapshot()),
     );
+    if (!hostedClient) throw Error('Hosted runtime did not provide a client');
   }
 
   // A network policy decision and a rebind both replace the incarnation, and
@@ -3952,15 +3930,11 @@ export const make = async (
         }
         // Build (or reuse) the backend for this session's pinned model; an
         // unpinned session follows the factory's configured default.
-        // Persisted legacy CLI sessions fail instead of bypassing admission.
+        /** @type {import('./src/runtime-config.js').RuntimeConfig} */
         let agentConfig;
         if (suspended) {
           // Construct a records-only observer, never a backend or inbox.
-          agentConfig = {
-            provideProvider: () => {
-              throw Error('Session is stopped');
-            },
-          };
+          agentConfig = { kind: 'records-only' };
         } else if (isHostedSession(entry)) {
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) {
@@ -3995,6 +3969,7 @@ export const make = async (
               )
             : undefined;
           agentConfig = {
+            kind: 'hosted',
             provideHostedClient: async snapshot => {
               assertSessionAdmission(id);
               const toolSet = makeEndoToolSet(
@@ -4065,7 +4040,10 @@ export const make = async (
           // the factory's cache, and a session that had captured its provider
           // would keep using the token that provider was built with — the
           // rotation or revocation would reach only sessions opened after it.
-          agentConfig = { provideProvider: () => getProvider(entry.modelId) };
+          agentConfig = {
+            kind: 'provider',
+            provideProvider: () => getProvider(entry.modelId),
+          };
         }
         // A session may delegate only while its own depth leaves room. The
         // spawner is rebuilt on every revival rather than persisted, so the

@@ -86,7 +86,10 @@ test('a turn ends on the tool-step fallback at the configured ceiling', async t 
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
-    { provider: insatiable.provider },
+    {
+      kind: 'provider',
+      provideProvider: () => insatiable.provider,
+    },
     'test prompt',
     harden({ maxToolRounds: 3 }),
   );
@@ -109,7 +112,10 @@ test('the ceiling defaults to a coding-sized budget, not a voice-sized one', asy
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
-    { provider: insatiable.provider },
+    {
+      kind: 'provider',
+      provideProvider: () => insatiable.provider,
+    },
     'test prompt',
   );
   await say(agent, 'loop forever');

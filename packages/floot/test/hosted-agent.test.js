@@ -73,7 +73,7 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
   );
   const { writer, reader } = makeReplyChannel();
@@ -174,7 +174,7 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   const revived = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
   );
   t.deepEqual(
@@ -204,7 +204,7 @@ test('failed hosted turns revive before later successful history', async t => {
   const first = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: failedClient },
+    { kind: 'hosted', provideHostedClient: () => failedClient },
     'test prompt',
   );
   const failedReply = makeReplyChannel();
@@ -225,7 +225,7 @@ test('failed hosted turns revive before later successful history', async t => {
   const revived = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: successfulClient },
+    { kind: 'hosted', provideHostedClient: () => successfulClient },
     'test prompt',
   );
   const successfulReply = makeReplyChannel();
@@ -267,7 +267,7 @@ test('failed transcript-backed turns keep text/tool interleaving in history', as
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: failedClient },
+    { kind: 'hosted', provideHostedClient: () => failedClient },
     'test prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -309,7 +309,7 @@ test('a leading backend refusal fails cleanly without fencing the next turn', as
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: refusing },
+    { kind: 'hosted', provideHostedClient: () => refusing },
     'test prompt',
   );
   await t.throwsAsync(
@@ -338,7 +338,7 @@ test('a leading backend refusal fails cleanly without fencing the next turn', as
   const revived = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: accepting },
+    { kind: 'hosted', provideHostedClient: () => accepting },
     'test prompt',
   );
   const reply = makeReplyChannel();
@@ -384,7 +384,7 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
   );
   const reply = makeReplyChannel();
@@ -430,7 +430,7 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
   );
   const active = agent.converse('mutate', makeReplyChannel().writer);
@@ -461,16 +461,18 @@ test('failed containment after EOF quarantines without an abort signal, includin
     makeFakePowers(),
     undefined,
     {
-      hostedClient: harden({
-        async send() {
-          sends += 1;
-          sent.notify();
-          return channel.reader;
-        },
-        async interrupt() {
-          throw Error('producer remains active');
-        },
-      }),
+      kind: 'hosted',
+      provideHostedClient: () =>
+        harden({
+          async send() {
+            sends += 1;
+            sent.notify();
+            return channel.reader;
+          },
+          async interrupt() {
+            throw Error('producer remains active');
+          },
+        }),
     },
     'test prompt',
   );
@@ -511,7 +513,10 @@ test('shutdown cancels inbox startup delayed before iterator creation', async t 
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   agent.startInbox();
@@ -548,7 +553,10 @@ test('failed provider tool loops revive their known tool effects', async t => {
   const first = await makeStreamingAgent(
     powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   const reply = makeReplyChannel();
@@ -559,7 +567,10 @@ test('failed provider tool loops revive their known tool effects', async t => {
   const revived = await makeStreamingAgent(
     powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   const history = await revived.getHistory();
@@ -580,6 +591,7 @@ test('hosted provisioning receives the session delegation and account catalog', 
     powers,
     undefined,
     {
+      kind: 'hosted',
       provideHostedClient: async snapshot => {
         supplied = snapshot;
         await t.throwsAsync(snapshot.execute('accountStatus', harden({})), {

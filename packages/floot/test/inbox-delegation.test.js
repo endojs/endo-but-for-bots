@@ -312,7 +312,10 @@ test('a mail turn blocked on askSubagent still observes the reply', async t => {
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
     harden({ spawner: stubSpawner, timers: inertTimers }),
   );
@@ -357,7 +360,10 @@ test('a partial message does not swallow its settled revision', async t => {
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
     harden({ timers: inertTimers }),
   );
@@ -415,7 +421,10 @@ test('poisoned journal preserves queued mail and shutdown releases its readiness
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test',
     harden({ timers: inertTimers, journalPowers }),
   );
@@ -472,7 +481,7 @@ test('unrelated queued mail proceeds after UI uncertainty without resolving or r
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test',
     { timers: inertTimers },
   );
@@ -535,7 +544,7 @@ test('acknowledging an admitted mail turn with unknown effects never replays it'
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test',
     { timers: inertTimers },
   );
@@ -582,7 +591,10 @@ test('a backlog larger than any bound is answered, not declined', async t => {
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
     harden({ timers: inertTimers }),
   );
@@ -628,7 +640,10 @@ test('a completed turn is answered even if shutdown starts mid-drain', async t =
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
     harden({ timers: inertTimers }),
   );
@@ -669,7 +684,10 @@ test('a session with a quiet inbox shuts down without waiting for it', async t =
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
     harden({ timers: inertTimers }),
   );
@@ -721,7 +739,10 @@ test('workflow requests reach Floot as tasks and settle with typed verdicts', as
   const agent = await makeStreamingAgent(
     mailbox.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Reviewer',
     harden({ timers: inertTimers }),
   );
@@ -778,7 +799,13 @@ for (const acknowledge of [false, true]) {
     const agent = await makeStreamingAgent(
       mailbox.powers,
       undefined,
-      { provider: makeScriptedProvider(acknowledge ? [answer, fail] : [fail]) },
+      {
+        kind: 'provider',
+        provideProvider: (
+          value => () =>
+            value
+        )(makeScriptedProvider(acknowledge ? [answer, fail] : [fail])),
+      },
       'Originating conversation',
       harden({ timers: inertTimers }),
     );
@@ -812,10 +839,17 @@ for (const acknowledge of [false, true]) {
         mailbox.powers,
         undefined,
         {
-          provider: makeScriptedProvider([
-            answer,
-            () => harden({ message: { role: 'assistant', content: 'Ready.' } }),
-          ]),
+          kind: 'provider',
+          provideProvider: (
+            value => () =>
+              value
+          )(
+            makeScriptedProvider([
+              answer,
+              () =>
+                harden({ message: { role: 'assistant', content: 'Ready.' } }),
+            ]),
+          ),
         },
         'Originating conversation',
         harden({ timers: inertTimers }),
