@@ -1132,14 +1132,44 @@ descriptors each; a subagent delegated during a catalog outage is a new pin
 and is refused then; the direct provider's `lal` OpenRouter adapter still reads
 the public model list itself for context windows; retired-catalog subscription
 ids reach `resolve` only through a factory's own thirty-second listing cache.
-Follow-up outside this slice: Floot reopens a session pinned to a subscription
+Follow-up discovered outside this slice: Floot reopened a session pinned to a subscription
 the backend no longer declares by dropping the pin, but the Claude module's
 subscription-immutability check refuses that reopen, so such a Claude session
 never runs again until it is recreated (pre-existing; Codex has no such
-check).
+check). The silent fallback is removed by the 2026-09-23 correction below.
 The root type build passed after quarantining stale generated declarations
 (which had also produced the earlier documentation-gate errors); the
 documentation gate's result is recorded in the change log.
+
+### Preserve subscription selection on restoration — 2026-09-23
+
+Floot no longer drops a saved subscription pin when a backend descriptor stops
+listing it. The original pin always reaches backend admission; missing catalog
+membership cannot authorize automatic selection of another account. The shared
+backend factory refuses unknown subscriptions before provisioning, and the pool
+chooser never falls through from an explicit pin. Sessions intentionally created
+with `auto` remain automatic. Changing or removing a pin still requires an
+explicit operator operation; no automatic migration is added.
+
+Durability: no new formula or storage schema, and no mutation of the saved
+registry entry. Reconstruction reads the same persisted `subscription` and
+forwards it rather than changing its meaning according to transient discovery.
+Factory regressions rebuild over stored registry data, exercise removed-member
+and no-subscription descriptors, and require the backend refusal to reach the
+turn status while session metadata keeps the original pin. These are in-memory
+host reconstruction tests, not proof of real daemon process-loss recovery.
+Verification: all 481 Floot tests pass, including admission succeeding despite
+an incomplete discovery descriptor. Scoped lint has zero errors; docs has zero
+errors and 176 warnings. Full Floot typechecking remains failing on test-file
+errors, including unchanged optional `find()` results in this fixture; it is
+not claimed clean. Independent adversarial review found no production blocker.
+Not deployed; live acceptance remains pending Tokyo connectivity.
+
+The separate Claude runtime-model concern remains unproven: the live record
+contains exit code 1 and a stdin warning, not a diagnostic establishing that
+`claude-fable-5-1` is unsupported. Do not invent a runtime allowlist from this
+single failure. Inspect structured CLI errors and compare pinned runtime
+capabilities before filtering provider-discovered routes.
 
 Model these independently:
 
@@ -2236,6 +2266,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | FA-07: preserve saved subscription pins on restoration rather than silently falling back to automatic account selection | Removed-member and missing-descriptor factory regressions; backend admission remains authoritative; no new durable state; not deployed |
 | 2026-09-23 | Prepare exact-binding live rebind harness in endo-host: refusal, explicit authorization, preserved history/workspace tool evidence, guarded cleanup | Local fake-facet tests and adversarial review; pending intents are not replayed; Tokyo run blocked by SSH connectivity |
 | 2026-09-23 | FA-08: pin Claude/Codex native state roots in durable session plans and refuse relocation before rebind; automatically protect roots from guest placement | Parser and adapter conformance regressions; adversarial review; old-release retirement required before deploy; live acceptance pending |
 | 2026-09-23 | FA-08: require Claude/Codex deletion owner to capture the same state provider used for activation; Claude setup also refuses mismatched retained storage | 52 focused tests; no new durable state; immutable native state-root pin still open; not deployed |

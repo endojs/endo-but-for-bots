@@ -4320,24 +4320,13 @@ export const make = async (
                   },
                 }),
               );
-              // A session pinned to a subscription its operator has since
-              // removed would otherwise never run again, and Floot has no way
-              // to unpin it. It runs on the backend's own choice instead, and
-              // says so where an operator reads.
-              const declaredSubscriptions =
-                backend.descriptor.subscriptions || [];
+              // Preserve the durable account selection even when discovery
+              // no longer lists it. The backend owns admission; absence from
+              // a catalog is not permission to spend another account.
               const pinnedSubscription =
-                entry.subscription &&
-                declaredSubscriptions.some(
-                  declared => declared.id === entry.subscription,
-                )
+                entry.subscription && entry.subscription !== 'auto'
                   ? entry.subscription
                   : undefined;
-              if (entry.subscription && !pinnedSubscription) {
-                console.error(
-                  `[floot-factory] session ${id} is pinned to subscription "${entry.subscription}", which backend "${entry.backendId}" no longer declares; running it on the backend's own choice`,
-                );
-              }
               // An authorization to rebind is spent by the request it is
               // built into, whatever becomes of that request.
               const rebind = pendingRebinds.get(id);
@@ -4350,9 +4339,7 @@ export const make = async (
                   model: entry.modelId || '',
                   reasoningEffort: entry.reasoningEffort || '',
                   systemPrompt: sessionPrompt,
-                  // Only when pinned, and only to a subscription the backend
-                  // still declares: a backend with nothing to choose from is
-                  // never sent the field.
+                  // Never silently widen a saved pin to automatic routing.
                   ...(pinnedSubscription
                     ? { subscription: pinnedSubscription }
                     : {}),
