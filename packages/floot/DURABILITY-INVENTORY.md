@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 447 application entries and 73 host entries still need explicit ledger
+The other 442 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -203,6 +203,23 @@ not real Podman/kernel or daemon-crash acceptance.
 | `a887b2115` | `generated-files.js` validates literal destination/content records before resource acquisition; no persistent owner added | Exact shape, canonical path and mount-overlap checks; production Podman also rejects additions to exact policy mounts. Tests cover rejection before probing/resolving mounts. Validation does not prove mounted filesystem isolation |
 | `ea50a5e7c` | `generated-file-storage.js` owns an exclusively created private root and per-stage files; in-memory registry retains byte/entry charges until deletion succeeds | Filesystem tests cover partial writes, failed deletion/retry, concurrent reservations, held-write release/shutdown, writable aliases, and refusal of existing roots. Shared private-directory validation supersedes inline checks. No fsync publication/restart replay claim: root reuse is refused, and stale storage requires verified owner/container retirement |
 | `3eb95cd26` | Podman slice owns a lazy generated stage; teardown drains operation removal and policy anchor cleanup before releasing files | Current `drivers/podman.js` retains the stage on any removal failure; runtime closes driver before allocator. Tests cover read-only mount encoding, lazy reuse, failed container removal, and staging/teardown races. The ownership registry is process-local; daemon-loss reconciliation remains #1323, not proven by retry tests |
+
+### Factory and native-command ownership continuation
+
+Five more adjacent application changes are mapped to retained implementation.
+Fresh child-process, factory-owner, podman-policy, and podman suites pass **131
+tests** with exit zero; podman-cleanup passed in the preceding 74/107-test runs.
+The direct Node child test observes real closure; injected Podman tests do not
+establish native Linux behavior. Optional Podman checks can return early when the
+binary/runtime is unavailable, so the aggregate pass count is not live acceptance.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `e0f07b1ea` | Host-only factory kit fences admission, drains acquisitions and retains failed cleanup independently of public factory authority | Factory-owner tests cover late contexts, failed construction, sibling cleanup and cancellation. Later `9391a5a6b` retains `prepareSliceKit` before awaiting preparation; legacy drivers still transfer ownership only after successful preparation. Registry remains ephemeral |
+| `9ce27aafb` | `startControlCommand` separates result settlement from direct-child/stdio closure; abort does not release ownership, and exited child identities are not signalled | Tests cover timeout, cancellation, errors, failed kill, inherited pipes and a real Node child. `spawnAndCollect` exposes only result and must not own creating effects. Direct closure is not descendant/engine quiescence or restart recovery |
+| `a85f04772` | Every Podman invocation uses local-engine selection plus a local-ABI flag; no new persisted owner | Current `podmanArgs` prefixes probes, creates, starts and removals. Fixtures assert prefixes; optional configured-remote refusal test does not prove current Tokyo engine behavior. Locality cannot establish descendant termination |
+| `9ba226e4b` | Podman preparation retains anchor/seccomp resources before acquisition, then transfers ownership without discarding failed rollback | Policy/cleanup tests cover held producers, failed anchor commands, seccomp cleanup and scoped sibling preservation. Later per-scope preparation supersedes driver-wide-only recovery; native closure/removal does not resolve uncertain producer effects |
+| `e280c0ab8` | Producer scope and operation removal retain admission capacity/configuration until closure, producer completion and container cleanup are established | Tests distinguish no-child failure from uncertain/interrupted creation and delayed closure. Later full-ID and startup-witness changes strengthen the path. Retried cleanup may remain permanently refused on uncertainty; #1323 remains separate |
 
 ### Post-snapshot changes
 
