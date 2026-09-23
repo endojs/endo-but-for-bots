@@ -335,10 +335,12 @@ const MODEL_DESCRIPTOR_KEYS = harden([
   'reasoningEfforts',
   'title',
 ]);
-// The provider's context window in tokens, where it says. Optional: a
-// runtime whose provider does not publish it carries no number, and a
-// consumer must not read a missing window as a small one.
-const MODEL_DESCRIPTOR_OPTIONAL_KEYS = harden(['contextLength']);
+// Provider-observed token limits, not execution budgets or guarantees for
+// every endpoint behind a dynamic route. Missing metadata stays unknown.
+const MODEL_DESCRIPTOR_OPTIONAL_KEYS = harden([
+  'contextLength',
+  'maxOutputTokens',
+]);
 
 /**
  * Validate and project Floot's exact capability-free model catalog DTO.
@@ -347,7 +349,7 @@ const MODEL_DESCRIPTOR_OPTIONAL_KEYS = harden(['contextLength']);
  * this record before it crosses the backend seam.
  *
  * @param {any} candidate
- * @returns {{ id: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[], contextLength?: number }}
+ * @returns {{ id: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[], contextLength?: number, maxOutputTokens?: number }}
  */
 export const normalizeHostedModelDescriptor = candidate => {
   (candidate &&
@@ -380,7 +382,7 @@ export const normalizeHostedModelDescriptor = candidate => {
   const reasoningEfforts = [...rawEfforts];
   typeof candidate.default === 'boolean' ||
     Fail`Hosted model descriptor has an invalid default marker`;
-  const { defaultReasoningEffort, contextLength } = candidate;
+  const { defaultReasoningEffort, contextLength, maxOutputTokens } = candidate;
   defaultReasoningEffort === null ||
     (typeof defaultReasoningEffort === 'string' &&
       reasoningEfforts.includes(defaultReasoningEffort)) ||
@@ -392,6 +394,13 @@ export const normalizeHostedModelDescriptor = candidate => {
       contextLength > 0 &&
       contextLength <= 0xffff_ffff) ||
     Fail`Hosted model descriptor has an invalid context length`;
+  maxOutputTokens === undefined ||
+    maxOutputTokens === null ||
+    (typeof maxOutputTokens === 'number' &&
+      Number.isInteger(maxOutputTokens) &&
+      maxOutputTokens > 0 &&
+      maxOutputTokens <= 0xffff_ffff) ||
+    Fail`Hosted model descriptor has an invalid output token limit`;
   return harden({
     id: /** @type {string} */ (id),
     title: /** @type {string} */ (title),
@@ -403,6 +412,9 @@ export const normalizeHostedModelDescriptor = candidate => {
     reasoningEfforts: harden(reasoningEfforts),
     ...(typeof contextLength === 'number'
       ? { contextLength: /** @type {number} */ (contextLength) }
+      : {}),
+    ...(typeof maxOutputTokens === 'number'
+      ? { maxOutputTokens: /** @type {number} */ (maxOutputTokens) }
       : {}),
   });
 };

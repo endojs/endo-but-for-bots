@@ -2,6 +2,7 @@
 import '@endo/init';
 
 import test from 'ava';
+import { assert } from '@endo/errors';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -406,7 +407,7 @@ test.serial('public internet and diagnostics are opt-in', async t => {
  */
 const makePooledHost = accounts => {
   const fake = makeFakeHost();
-  /** @type {Map<string, Map<string, unknown>>} */
+  /** @type {Map<string, Map<string, unknown> & { removals: string[] }>} */
   const guests = new Map();
   const credentialFor = account =>
     harden({
@@ -544,6 +545,7 @@ test.serial(
     t.false(Object.hasOwn(config, 'accountRef'));
     const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
     t.truthy(powers);
+    assert(powers);
     // Each member's credential under its secret name, and the set, with the
     // account each credential itself names.
     // Never under a name of the operator's choosing: the namespace also holds
@@ -700,12 +702,16 @@ test.serial(
     fake.bindings.set(key('from-carol'), 'carols-share-id');
     await main(fake.host, { exec: noExec });
     const powers = fake.guests.get(key('codex-sandbox', 'broker-powers'));
+    assert(powers);
     t.deepEqual([...powers.keys()].sort(), [
       'secret-work',
       'share-friend',
       'subscriptions',
     ]);
-    t.deepEqual(powers.get('subscriptions').members, [
+    const subscriptions = powers.get('subscriptions');
+    assert(subscriptions && typeof subscriptions === 'object');
+    assert('members' in subscriptions);
+    t.deepEqual(subscriptions.members, [
       {
         id: 'work',
         label: 'work',

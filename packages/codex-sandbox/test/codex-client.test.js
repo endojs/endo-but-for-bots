@@ -1236,6 +1236,75 @@ test('thread persistence failure prevents a turn from starting', async t => {
   });
 });
 
+for (const early of [false, true]) {
+  for (const failure of [
+    Error('checkpoint directory sync failed'),
+    false,
+    undefined,
+  ]) {
+    const reason = failure instanceof Error ? failure.message : String(failure);
+    test(`completed checkpoint persistence failure delivers a terminal abort (${early ? 'before' : 'after'} turn/start reply; ${reason})`, async t => {
+      t.timeout(5000);
+      const completedWrites = [];
+      const fixture = makeFixture({
+        beforeTurnResponse: early
+          ? [
+              {
+                method: 'turn/completed',
+                params: {
+                  threadId: 'thread-new',
+                  turn: { id: 'turn-1', status: 'completed' },
+                },
+              },
+            ]
+          : [],
+        clientOptions: {
+          saveThreadState: async state => {
+            if (state.recovery?.status === 'completed') {
+              completedWrites.push(state);
+              return Promise.reject(failure);
+            }
+            return undefined;
+          },
+        },
+      });
+      t.teardown(() => fixture.client.terminate().catch(() => undefined));
+      const reader = await fixture.client.send('checkpoint failure');
+      fixture.push({
+        method: 'turn/completed',
+        params: {
+          threadId: fixture.activeThreadId(),
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      });
+      fixture.push({
+        method: 'turn/completed',
+        params: {
+          threadId: fixture.activeThreadId(),
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      });
+      const events = await drain(reader);
+      t.is(events.at(-1).type, 'abort');
+      t.is(events.at(-1).reason, reason);
+      t.false(events.some(event => event.type === 'end'));
+      t.is(events.filter(event => event.type === 'abort').length, 1);
+      await t.throwsAsync(() => fixture.client.send('must remain fenced'), {
+        message: 'Codex session terminated',
+      });
+      await t.throwsAsync(() => fixture.client.terminate(), {
+        message: reason,
+      });
+      t.is(
+        completedWrites.length,
+        1,
+        'uncertain completed publication is not retried',
+      );
+      t.true(fixture.isClosed());
+    });
+  }
+}
+
 test('concurrent turn is rejected and consumer close interrupts', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const first = fixture.client.send('first');

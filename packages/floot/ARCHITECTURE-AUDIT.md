@@ -85,6 +85,111 @@ The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, incl
 changes that still need classification rather than an assumption of relevance.
 No claim of complete retrospective coverage is made yet.
 
+Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
+the stderr excerpt reader limited decoded characters but could wait forever for
+the next chunk or iterator closure, withholding the turn's abort. It now uses a
+one-second total asynchronous-read deadline, retains diagnostics collected so
+far, fences late results from further decoding/pulls, and requests iterator
+closure without awaiting it. Invalid deadline options are refused at client
+construction before diagnostic work can start. Limits are documented as UTF-16
+code units, matching the existing decoder/string implementation rather than
+claiming a byte limit. This is ephemeral diagnostic handling with no new formula,
+durable state, renewal owner, or retry behavior. It does not cancel a hung remote
+operation, preempt synchronous adapter code, or prove process retirement.
+Six regression tests cover invalid deadlines, stalled initial/partial reads,
+late rejection/resolution, and stalled iterator closure. All 225 Claude sandbox
+tests pass; package lint has zero errors (56 warnings), formatting passes, and
+root documentation generation has zero errors (176 warnings). Independent adversarial
+review approved after constructor validation and test teardown corrections.
+
+Claude exit-observation follow-up (2026-09-24, local, not deployed):
+the raw client swallowed a rejected process `wait()` and reported `end`, allowing
+an unverified outcome to be recorded as a successful turn. The rejection now
+reaches the existing abort path, which attempts a kill before reading stderr and
+preserves partial streamed events and diagnostics. Three regressions reproduce
+the old false success with Error, false, and undefined rejections and require
+exactly the partial event followed by an abort after the fix. All 219 Claude
+sandbox tests pass, package lint has zero errors (57 warnings), formatting passes,
+and root documentation generation has zero errors (176 warnings).
+Independent adversarial review approved the narrow change.
+This changes outcome reporting, not durable schemas, credential ownership, or
+retry policy. A rejected exit observation does not prove process retirement;
+the existing best-effort kill and native process-loss limitations remain open.
+
+Adjacent OpenCode terminal audit (2026-09-24): source review found no analogous
+host-side checkpoint settlement latch. Uncertain transcript import fences later
+sends; native checkpoint publication failure shuts down the bridge before idle.
+The existing client and actual-bridge compaction suites were rerun: 35 tests pass,
+including native-error, conflict, malformed checkpoint, EOF, timeout, interruption,
+and lost import acknowledgement. The bridge blocks native dispatch during fatal
+shutdown, although the client can still write a queued prompt before observing EOF.
+These injected transport/bridge checks are not live-provider or daemon-crash evidence.
+No OpenCode production change was needed for this bounded comparison.
+
+Session-watcher retirement follow-up (2026-09-24, local, not deployed):
+`makeSessionWatch.end()` previously ended existing streams but still allowed
+late subscriptions to read sources, and held reads could publish/cache values
+or schedule retries after termination. Watchers now reject late subscriptions,
+fence queued source invocations and late results, cancel scheduled retry timers,
+and release the cached transcript on end. Existing streams still receive their
+terminal event. Eight new regressions cover held success/failure across
+transcript/network/usage, scheduled retries, and end before source microtasks.
+The existing late-subscription test now requires rejection rather than a fresh
+snapshot from the ended watcher.
+
+Durability classification: these watchers are deliberately ephemeral, owned by
+the factory incarnation/session; deletion and factory disposal already end them.
+No formula, durable record, inference request, or replay policy is added.
+The factory's existing admission checks remain authoritative; this change makes
+the local watcher obey its own lifecycle rather than relying on those outer
+checks. Consumer deadlines do not cancel underlying reads: already-started hung
+source operations may remain retained. Local race tests establish no late
+publication or retry, not reclamation of those operations or process-loss proof.
+Validation: all 671 Floot tests pass, including 34 watcher tests; three adjacent
+real-daemon factory-disposal tests pass. Those daemon tests cover the enclosing
+owner's disposal/admission boundary, not these exact held-read races.
+Floot lint has zero errors (245 warnings); adversarial source/test review approved.
+
+Codex checkpoint-failure notification follow-up (2026-09-24, local, not deployed):
+the ledger latches a terminal outcome before persisting it. A rejected completed
+checkpoint write previously left the event reader open: the fallback failure
+settlement lost the latch and never delivered a terminal event. The client now
+emits one abort for the exact active turn, synchronously fences further sends,
+retains the persistence error for shutdown, and rethrows it. It does not retry
+the uncertain publication, rewrite the ledger winner, or report success.
+Review found a second timing path: completion replayed before the turn-start
+reply could deliver an abort but let shutdown report success. The error is now
+retained at settlement itself, independently of the transport message pump.
+Non-Error rejections are normalized before retention, so falsy rejection reasons
+cannot make shutdown appear successful. Regressions cover Error, false, and
+undefined in both timing paths.
+
+Durability classification: existing checkpoint owner, schema, first-winner latch,
+and write ordering are unchanged. A failed write remains uncertain and the
+session remains fenced; transient reader closure is not a durable commit claim.
+Early/late completion regressions inject checkpoint-save failure, duplicate the
+notification, and require one abort, no success event, one completed write,
+refusal of another send, and a shutdown rejection carrying the persistence error.
+This tests normal-operation storage failure through the real client with an
+injected persistence boundary, not daemon/process-loss or physical-disk recovery.
+All 322 Codex sandbox tests pass, including 94 client tests; scoped lint has
+zero errors (10 warnings), and formatting passes. Independent adversarial review
+approved after the early-notification and falsy-rejection corrections.
+At that checkpoint, full-package lint failed on 32 TypeScript errors in six unchanged test
+fixtures (broker-service-agent, native-controller, owned-backend, state-provider,
+subscription-profile, and setup-hosted).
+
+Follow-up (2026-09-24): those six fixtures now satisfy their current contracts.
+The subscription profile fixture uses `policy.accountRef`, instead of overwriting
+that binding with a removed top-level field; the catalog credential returns the
+complete OAuth observation shape. Directory, environment, object, and namespace
+lookups are narrowed with runtime assertions, and the namespace mock declares its
+existing removal log. No production code, formula, persisted schema, or credential
+owner changes. All 322 Codex tests and full package lint pass (zero errors,
+63 warnings); formatting and root documentation generation pass (zero errors,
+176 warnings). Independent adversarial review found no blockers.
+These are local checks, not Tokyo deployment or live acceptance.
+
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Deployed since generation 157 (2026-09-21). |
@@ -1940,6 +2045,98 @@ budgets of 8192, 4096, and 8192 for model output limits of 0, 4096, and 64000
 respectively with the explicit 8192 runtime budget. Independent adversarial
 review approved the source, tests, and durability classification.
 
+Output-metadata and native compatibility remediation (2026-09-24, local, not
+deployed): the account-filtered OpenRouter reader now preserves optional
+`top_provider.max_completion_tokens` as `maxOutputTokens` in the shared model
+descriptor. The selected route's context and output observations independently
+reach OpenCode configuration; absent/null metadata stays unknown rather than
+becoming an invented default. These fields are positive uint32 token counts in
+this configuration profile, not a claim about the provider protocol's maximum.
+The [OpenRouter account-filtered model API](https://openrouter.ai/docs/api/api-reference/models/list-models-filtered-by-user-provider-preferences-privacy-settings-and-guardrails)
+documents the field. A top-provider observation is not a guarantee for every
+endpoint selected by the free auto route. The explicit 8192 runtime output
+budget remains unchanged; observed smaller limits can reduce it.
+
+Native validation exposed a compatibility bug in the preceding context-only
+slice: pinned OpenCode required both limit fields even though model merging
+defaults them independently. Native commit `9c41a9e8650fff42d22a0ba8f8aaef64094438a3`
+on `kumavis/opencode` branch `codex/compaction-checkpoint` is committed and pushed.
+It accepts partial limits, preserves absent fields through V1-to-V2 migration,
+and merges partial remote overrides without dropping existing limits.
+The Endo image builder and source Containerfile pin that commit.
+Deployment requires a newly built native binary with its digest recorded:
+the prebuilt-binary wrapper cannot prove that an arbitrary supplied binary came
+from its source pin. The previous `f6492ac3f9` image is not sufficient.
+Raw Containerfile callers overriding the repository/ref must also override the
+commit; the wrapper resolves an explicitly different repository/ref as before.
+
+Durability remains reconstructible catalog observation under the existing
+broker owner, re-read on native activation; no new formula, credential owner,
+renewal operation, durable policy, or model/account pin is introduced.
+Tests cover changed observations on reconstruction, current/stale/unknown
+catalogs, malformed metadata, output-only configuration, independent limits,
+and preservation of the execution budget. Full hosted-agent tests pass (697,
+one skipped), as do all 289 OpenCode sandbox tests. Both package lints have
+zero errors. All 663 Floot regressions and formatting pass.
+The root documentation gate passes after quarantining stale ignored generated
+hosted-agent declarations and rebuilding them from source.
+Native schema/migration/merge tests pass (47), and both native
+core and OpenCode typechecks pass. Independent adversarial review approved
+the source, tests, pins, and durability classification.
+Actual native effective input limits, dynamic-route guarantees, live compaction,
+and coordinated deployment/restart acceptance remain open.
+
+Tokyo preparation (2026-09-24, not activated): app `ab8d804ae` and native
+`9c41a9e865` were rebuilt successfully; host `9636e419` pins the resulting
+OpenCode image `sha256:21d529895cd3e68faee9d773cf5ae7039c5b3d02be92969f606284441daa94ce`.
+The source-build and extraction logs agree with the manifest's binary digest.
+All four exact candidate image pins are available as Linux amd64, the temporary
+source-export container is gone, and paired NixOS preparation passed.
+The restoration ledger correctly remains `candidate`, not verified.
+Generation 169/app `819aa18c8` still runs; no session, workspace, Secret, or
+renewal owner was retired or migrated. Fresh preservation/retirement approval
+and cross-backend live acceptance remain pending. Full provenance, build times,
+and the 24-hour candidate lease are recorded in endo-host's
+`ops/native-checkpoint-deployment-20260923.md`; revalidate protection before
+delayed activation.
+
+Native-window follow-up (2026-09-24): an offline probe of the actual candidate
+CLI using `models openrouter --verbose`, the free route, no network, no mounts,
+zero capabilities, and a dummy credential confirmed that context-only
+configuration now passes native startup. It also reproduced the remaining
+input-limit mismatch: context `123456` retained bundled input `200000` and
+output `8000`. The native compaction helper therefore used `192000`, ignoring
+the smaller context observation; the correct context/output bound is `115456`.
+The disposable probe container was removed; no inference or Secret access took
+place. This is compiled-CLI configuration evidence plus source-level threshold
+analysis, not a live compaction test.
+
+Native fix `af032b9fbc293cd19283e16f6a7f8effe296c065` is committed and pushed.
+The helper now takes the stricter of context-minus-effective-output-budget and
+input-minus-reservation, clamped at zero. Smaller input windows still constrain
+the result; no input limit is fabricated or removed. Unknown context and disabled
+automatic compaction retain their existing behavior. No new durable state,
+credential authority, or policy is introduced. All 62 native compaction tests
+pass (one skipped), including four new regressions for exact boundaries,
+independent windows, custom/zero reservation, unknown output, and zero-clamping.
+Native typechecking and formatting pass; scoped lint has zero errors (14 warnings).
+Adversarial review approved the fix. Both Endo source-build pins now name it.
+The prepared `9c41a9e865` candidate above is superseded for deployment: rebuild
+the native binary/images and prepare the matching host pins before activation.
+Live compaction/restart and dynamic-route guarantees remain open.
+
+Corrected candidate preparation (2026-09-24): app `d5d943d33`, native `af032b9fbc`,
+and host `95e0d881` are pushed and prepared on Tokyo. The source-built OpenCode
+image is `sha256:890dfa961da8f1f2555ec956e927340a1e634a803c02d9565528ab8bcae48ef0`;
+manifest and extraction/overlay logs agree on binary SHA256
+`387d4eda7026092b318a479ba316d3253ea60803f4d79ecd76b098abe2c759ef`.
+All four image pins are available as Linux amd64, the container inventory is
+empty, and paired Nix preparation passed. The corrected image remains an
+unverified restoration candidate; no activation, retirement, or inference was
+performed. The prior `9c41a9e865` candidate is not the intended deployment target.
+See the host deployment record for exact build evidence and lease expiry;
+preservation approval and live cross-backend acceptance remain pending.
+
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
 Identify the durable formula owner and dependencies, what is replayed on daemon
@@ -3487,6 +3684,22 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Claude diagnostic reads no longer hold turn failures behind stalled
+stderr reads or iterator closure. Partial excerpts survive the read deadline and
+late completions cannot resume pulls. Six regressions and all 225 package tests
+pass after independent review; no durable schema or native retirement change.
+Not deployed.
+
+2026-09-24 — Claude no longer reports success when process exit observation
+rejects. Three reproduced regressions and all 219 package tests pass; lint,
+formatting and docs pass after independent review. Adjacent OpenCode client and
+bridge failure paths were audited and 35 existing tests rerun successfully.
+This is truthful outcome reporting, not native retirement proof. Not deployed.
+
+2026-09-24 — Codex fixture contracts corrected in `5d419544e`, pushed to both
+remotes after independent review. All 322 tests, full package lint, formatting,
+and docs pass. No production or durable-state change.
 
 2026-09-24 — Failed setup now retains acquisition exclusion until agent/native
 rollback and exact journal closure acknowledge completion. Failed constructions

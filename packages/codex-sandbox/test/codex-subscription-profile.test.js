@@ -1,6 +1,7 @@
 // @ts-check
 import '@endo/init';
 import test from 'ava';
+import { assert } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
@@ -11,42 +12,41 @@ import { readCodexBrokerConfig } from '../src/codex-broker-service-agent.js';
 
 const setup = t => {
   const profile = makeCodexSubscriptionProfile({ accountRef: 'account-1' });
+  const { accountRef } = profile.policy;
+  assert.typeof(accountRef, 'string');
   const calls = [];
   let reads = 0;
-  const grant = makeProviderBrokerGrant(
-    { ...profile.policy, accountRef: profile.accountRef },
-    {
-      adaptRequest: profile.adaptRequest,
-      admits: admitsModels(['allowed']),
-      secret: Far('UnusedSecret', {
-        async readBase64() {
-          throw Error('unused');
-        },
-      }),
-      credential: {
-        accountRef: profile.accountRef,
-        async current() {
-          reads += 1;
-          return harden({
-            outcome: 'unchanged',
-            state: {
-              version: 'BrokerOAuthStateV1',
-              accessToken: 'access-canary',
-              refreshToken: 'refresh-canary',
-              accountId: profile.accountRef,
-              expiresAt: Date.now() + 60_000,
-            },
-          });
-        },
+  const grant = makeProviderBrokerGrant(profile.policy, {
+    adaptRequest: profile.adaptRequest,
+    admits: admitsModels(['allowed']),
+    secret: Far('UnusedSecret', {
+      async readBase64() {
+        throw Error('unused');
       },
-      transport: Far('Transport', {
-        async request(request) {
-          calls.push(request);
-          return harden({ status: 200, body: 'ok' });
-        },
-      }),
+    }),
+    credential: {
+      accountRef,
+      async current() {
+        reads += 1;
+        return harden({
+          outcome: 'unchanged',
+          state: {
+            version: 'BrokerOAuthStateV1',
+            accessToken: 'access-canary',
+            refreshToken: 'refresh-canary',
+            accountId: accountRef,
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+      },
     },
-  );
+    transport: Far('Transport', {
+      async request(request) {
+        calls.push(request);
+        return harden({ status: 200, body: 'ok' });
+      },
+    }),
+  });
   t.teardown(() => E(grant.admin).revoke());
   return { ...grant, profile, calls, reads: () => reads };
 };
@@ -101,24 +101,21 @@ test('Codex subscription rejects storage, nonstreaming, model and account routes
 });
 
 test('Codex subscription requires shared renewing OAuth authority', t => {
-  const { policy, accountRef, adaptRequest } = makeCodexSubscriptionProfile({
+  const { policy, adaptRequest } = makeCodexSubscriptionProfile({
     accountRef: 'account-1',
   });
   t.throws(
     () =>
-      makeProviderBrokerGrant(
-        { ...policy, accountRef },
-        {
-          secret: Far('Secret', {
-            async readBase64() {
-              throw Error('unused');
-            },
-          }),
-          transport: /** @type {any} */ ({}),
-          adaptRequest,
-          admits: admitsModels(['allowed']),
-        },
-      ),
+      makeProviderBrokerGrant(policy, {
+        secret: Far('Secret', {
+          async readBase64() {
+            throw Error('unused');
+          },
+        }),
+        transport: /** @type {any} */ ({}),
+        adaptRequest,
+        admits: admitsModels(['allowed']),
+      }),
     { message: /Unprovisioned broker OAuth mode/ },
   );
   t.throws(

@@ -215,6 +215,8 @@ test('Codex factory hands a thinking selection to the provisioner unresolved; Fl
     [{ reasoningEffort: 'low' }, 'low'],
     [{ model: '' }, undefined],
   ]) {
+    if (spec === null || typeof spec !== 'object')
+      throw Error('Expected session spec');
     // eslint-disable-next-line no-await-in-loop
     const { admin } = await E(factory).create(
       harden({ sessionId: 'default-effort', ...spec }),
@@ -397,6 +399,8 @@ test('the descriptor says what a system prompt must know about Codex', async t =
   const described = await E(factory).describe();
   // It passes the contract Floot validates every backend against...
   const { promptEnvironment } = assertHostedBackendDescriptor(described);
+  if (promptEnvironment === undefined)
+    throw Error('Expected Codex prompt environment');
   t.deepEqual(promptEnvironment, {
     toolNamePrefix: '',
     toolNames: { exec: 'endo_exec' },

@@ -109,6 +109,7 @@ test('reads only the account-filtered catalog and refreshes credentials per call
         title: model.name,
         description: model.description,
         contextLength: null,
+        maxOutputTokens: null,
         inputModalities: ['text'],
         outputModalities: ['text'],
         supportedParameters: ['tools'],
@@ -118,6 +119,59 @@ test('reads only the account-filtered catalog and refreshes credentials per call
   });
   t.true(Object.isFrozen(result.models[0]));
 });
+
+test('output observations are independent and free-route metadata is not a guaranteed window', async t => {
+  let output = 4096;
+  const read = makeOpenRouterModelRead({
+    readKey: async () => 'test-key',
+    fetch: async () =>
+      Response.json({
+        data: [{ ...model, top_provider: { max_completion_tokens: output } }],
+      }),
+  });
+  const first = modelsFromOpenRouterCatalog((await read()).models)[0];
+  t.is(first.id, 'openrouter/free');
+  t.is(first.maxOutputTokens, 4096);
+  t.false(Object.hasOwn(first, 'contextLength'));
+  output = 2048;
+  t.is(
+    modelsFromOpenRouterCatalog((await read()).models)[0].maxOutputTokens,
+    2048,
+  );
+});
+
+for (const topProvider of [
+  undefined,
+  null,
+  {},
+  { max_completion_tokens: null },
+]) {
+  test(`missing output metadata stays unknown: ${JSON.stringify(topProvider)}`, async t => {
+    const read = makeOpenRouterModelRead({
+      readKey: async () => 'test-key',
+      fetch: async () =>
+        Response.json({ data: [{ ...model, top_provider: topProvider }] }),
+    });
+    const raw = (await read()).models;
+    t.is(raw[0].maxOutputTokens, null);
+    t.false(
+      Object.hasOwn(modelsFromOpenRouterCatalog(raw)[0], 'maxOutputTokens'),
+    );
+  });
+}
+
+for (const output of [0, -1, 1.5, '4096', 0x1_0000_0000]) {
+  test(`rejects invalid provider output metadata ${output}`, async t => {
+    const read = makeOpenRouterModelRead({
+      readKey: async () => 'test-key',
+      fetch: async () =>
+        Response.json({
+          data: [{ ...model, top_provider: { max_completion_tokens: output } }],
+        }),
+    });
+    await t.throwsAsync(read, { message: 'OpenRouter model discovery failed' });
+  });
+}
 
 test('retains advertised reasoning metadata without inventing effort choices', async t => {
   const read = makeOpenRouterModelRead({

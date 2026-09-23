@@ -63,9 +63,16 @@ test('Codex catalog uses retained credential and the packaged CLI version withou
         accountRef: 'account-a',
         current: async () => {
           reads += 1;
-          return {
-            state: { accessToken: `token-${reads}`, accountId: 'account-a' },
-          };
+          return harden({
+            outcome: 'unchanged',
+            state: {
+              version: 'BrokerOAuthStateV1',
+              accessToken: `token-${reads}`,
+              refreshToken: 'refresh-canary',
+              accountId: 'account-a',
+              expiresAt: clock + lifetimeMs,
+            },
+          });
         },
       });
     },
@@ -94,6 +101,7 @@ test('Codex catalog uses retained credential and the packaged CLI version withou
     },
   });
   let cancel = () => {};
+  /** @type {Promise<never>} */
   const cancelled = new Promise((_resolve, reject) => {
     cancel = () => reject(Error('done'));
   });
