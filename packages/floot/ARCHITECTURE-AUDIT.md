@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 75 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 77 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -114,7 +114,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 60 application changes, plus the first 20 host
+not. The newest 15 and earliest 62 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -2068,6 +2068,21 @@ Tokyo (generations 158, 160 to 161 and 165) exercised native Linux execution
 these macOS tests could not. Still open on the host: no Tokyo run asserted a
 slice's effective limits, and the obsolete field was never presented to the
 parsers because old plans were retired before activation.
+
+Retained-code follow-up (2026-09-24): the separate lower-level `nativeProfile`
+option and its Podman startup-gate/profile/mount-observer branch still exist in
+`@endo/sandbox`, including an exported profile validator and native scope guard.
+Current production JavaScript references are confined to sandbox internals;
+the shared hosted execution envelope uses the attested policy path instead.
+This is a removal candidate, not proof of unreachable code: exported native
+scopes accept the option and retained external formulas may call them.
+Before deletion, trace those public entrypoints and retained callers, and separate
+this branch from helpers still required by the active attested-policy path.
+Do not restore the unused hosted setting merely to justify retaining the branch.
+Fresh startup-gate/profile/mount/operation suites pass 72 tests, native runtime
+passes 20, and OpenCode plan parsing passes 17 (including obsolete-field refusal).
+These establish local protocol and injected-observation behavior, not current
+hosted kernel isolation, live resource limits, or daemon-loss recovery.
 
 ## FA-06 — One session provisioner and execution envelope
 

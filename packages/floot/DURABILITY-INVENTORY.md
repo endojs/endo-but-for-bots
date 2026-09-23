@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 404 application entries and 73 host entries still need explicit ledger
+The other 402 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -372,6 +372,21 @@ These are local and injected-process checks, not live Podman or daemon-loss reco
 | `cf9fdce82` | Broker agent uses makeOwnedNativeService to retain an inert service kit before opening; configuration comes from the formula environment and credential capabilities arrive through formula powers | Tests cover cancellation during powers acquisition, failed predecessor cleanup, duplicate live owners and replacement. Module owner registry is incarnation-local; independent workers require separate native exclusion. Later account-pool/catalog behavior is not attributed to this commit |
 | `ae19ef2f9` | Podman driver/listener capture trusted operator engine environment once and reuse it for startup and cleanup; guest environment remains separate | Environment/policy/runtime tests verify restricted inheritance and local-engine controls. Later `dd705e037` supplies fresh copies to child processes. Operator configuration/default credential files remain trusted authority; allowlisting is not complete isolation or durable process ownership |
 | `9a487b956` | Provider runtime drains stderr without giving log volume authority to close the inference pipe; diagnostics are optional observations | Runtime tests exercise repeated oversized chunks with diagnostics on/off. Later `96b32da43` replaces the original lifetime diagnostic ceiling with a copied 4096-byte prefix per chunk. No total log-volume bound, durable diagnostic journal or process-loss recovery is implied |
+
+### Native startup gate and retired hosted profile
+
+Two further changes are mapped, with a distinction between the retained generic
+sandbox API and the current hosted execution envelope.
+Fresh sandbox startup-gate/native-podman-profile/native-podman-mounts/
+native-podman-operation suites pass 72 tests; runtime passes 20 and OpenCode
+session-plan passes 17.
+Shell protocol tests run local processes; procfs/cgroup/container observations
+are injected and do not establish live Linux or Tokyo behavior.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `aaca97706` | Explicit native-profile Podman operations retain an inert trusted gate until identity, resource, mount and network observations succeed; ordinary operation owner retains failed removal and uncertain execution | Gate/operation tests cover held reads, cancellation before and after release issuance, first stdin, uncaptured stdout and failed-cleanup capacity. Current synchronous release and uncertainty semantics include later fixes. Image no-alias and trusted procfs/cgroupfs visibility remain host preconditions; seccomp mode does not prove filter contents. This branch is not used by the current hosted envelope |
+| `3a95b12d7` | Original OpenCode recorded-profile parsing/request was removed by `1366b2e31`; current hosted plans reject the obsolete field. Generic sandbox export and native-scope profile guard remain | Current plan tests verify refusal; runtime tests verify exact profile shape before driver acquisition. FA-05 records the lower-level branch as a removal candidate pending public/retained-caller tracing. Historical controller tests do not prove current hosted limits or restart behavior |
 
 ### Post-snapshot changes
 
