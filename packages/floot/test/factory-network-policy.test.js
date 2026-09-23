@@ -42,6 +42,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   let stopBarrier = Promise.resolve();
   let createBarrier = Promise.resolve();
   let createFails = false;
+  let terminateFailures = 0;
   let writeFails = false;
   let journalWriteFails = false;
   let poisonedCleanup = false;
@@ -141,6 +142,11 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
         admin: Far('NetworkAdmin', {
           terminate: () => {
             events.push(`terminate:${generation}`);
+            if (terminateFailures > 0) {
+              terminateFailures -= 1;
+              throw Error('termination temporarily unavailable');
+            }
+            events.push(`terminated:${generation}`);
           },
         }),
       });
@@ -196,10 +202,14 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
       if (journalWriteFails && name.includes('-floot-turn-event-'))
         throw Error('journal write uncertain');
       hostStore.set(name, value);
-      if (name.startsWith('floot-sessions-v1-'))
+      if (name.startsWith('floot-sessions-v1-')) {
         storedExecutionState = value.sessions.find(
           entry => entry.id === 'one',
         )?.executionState;
+        events.push(
+          `registry:${value.sessions.find(entry => entry.id === 'one')?.lifecycle || 'absent'}`,
+        );
+      }
     },
     remove: name => hostStore.delete(name),
     provideGuest: (_name, { agentName }) => {
@@ -280,6 +290,9 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     },
     failCreate: value => {
       createFails = value;
+    },
+    failTerminateAttempts: count => {
+      terminateFailures = count;
     },
     failWrite: value => {
       writeFails = value;
@@ -609,6 +622,100 @@ test('fresh stopped factory resumes without a prior journal observer', async t =
   await E(await E(session).startTurn('fresh resume')).whenFinished();
   t.is((await E(session).getTurns()).at(-1).state, 'completed');
   await E(session).emergencyStop();
+});
+
+test('failed stopped-observer guest lookup retries without losing journal history', async t => {
+  const world = await makeWorld(t);
+  const reply = `${'Persisted before setup failure '.repeat(500)}RETAINED-END`;
+  world.setReply(reply);
+  await E(await E(world.session).startTurn('durable seed')).whenFinished();
+  const before = await E(world.session).getHistory();
+  await E(world.session).emergencyStop();
+  let failGuestLookup = true;
+  world.beforeLookup(name => {
+    if (failGuestLookup && name === 'session-agent-one')
+      return Promise.reject(Error('guest lookup temporarily unavailable'));
+    return Promise.resolve();
+  });
+  const revived = make(world.host);
+  const session = await E(revived).getSession('one');
+  await t.throwsAsync(E(session).getHistory(), {
+    message: /guest lookup temporarily unavailable/,
+  });
+  t.is(world.creates.length, 1);
+  failGuestLookup = false;
+  t.deepEqual(await E(session).getHistory(), before);
+  t.is(world.creates.length, 1, 'records-only retry acquires no sandbox');
+  await E(session).resume();
+  await E(await E(session).startTurn('after setup retry')).whenFinished();
+  t.is(world.creates.length, 2);
+  t.is((await E(session).getTurns()).at(-1).state, 'completed');
+  t.deepEqual((await E(session).getHistory()).slice(0, before.length), before);
+  await E(session).emergencyStop();
+});
+
+test('disposal retries termination after late acquisition and failed setup rollback', async t => {
+  const world = await makeWorld(t, { executionState: 'stopped' });
+  const release = makePromiseKit();
+  t.teardown(() => release.resolve(undefined));
+  world.blockCreate(release.promise);
+  world.failTerminateAttempts(2);
+  const resumed = E(world.session).resume();
+  void resumed.catch(() => {});
+  await until(() => world.creates.length === 1);
+  const disposed = world.dispose();
+  void disposed.catch(() => {});
+  await t.throwsAsync(E(world.factory).listSessions(), { message: /closed/ });
+  release.resolve(undefined);
+  await t.throwsAsync(resumed, {
+    message: /setup and hosted-backend rollback failed/,
+  });
+  await t.throwsAsync(disposed, { message: /Floot factory disposal failed/ });
+  t.true(world.events.filter(event => event === 'terminate:1').length >= 3);
+  t.true(
+    world.events.includes('terminated:1'),
+    'disposal retries the retained exact native owner',
+  );
+  t.is(world.creates.length, 1);
+  t.is(world.sends.length, 0);
+});
+
+test('admitted deletion retries classified setup cleanup but preserves journal on disposal conflict', async t => {
+  const world = await makeWorld(t, { executionState: 'stopped' });
+  const release = makePromiseKit();
+  t.teardown(() => release.resolve(undefined));
+  world.blockCreate(release.promise);
+  world.failTerminateAttempts(2);
+  const resumed = E(world.session).resume();
+  void resumed.catch(() => {});
+  await until(() => world.creates.length === 1);
+  const deleted = E(world.factory).deleteSession('one');
+  void deleted.catch(() => {});
+  await until(() => world.events.includes('registry:deleting'));
+  const disposed = world.dispose();
+  void disposed.catch(() => {});
+  await t.throwsAsync(E(world.factory).listSessions(), { message: /closed/ });
+  release.resolve(undefined);
+  await t.throwsAsync(resumed, {
+    message: /setup and hosted-backend rollback failed/,
+  });
+  const deletionError = await t.throwsAsync(deleted, {
+    instanceOf: AggregateError,
+    message: 'Floot session one resources did not fully clean up',
+  });
+  t.deepEqual(
+    deletionError.errors.map(error => error.message),
+    ['Floot submissions incarnation is closed'],
+  );
+  await t.throwsAsync(disposed, { message: /Floot factory disposal failed/ });
+  t.true(world.events.includes('terminated:1'));
+  t.is(world.events.filter(event => event === 'terminate:1').length, 3);
+  t.true(world.events.includes('registry:error'));
+  t.false(world.events.includes('registry:absent'));
+  const names = await E(world.host).list();
+  t.true(names.includes('floot-private-turn-3-one-schema'));
+  t.is(world.creates.length, 1);
+  t.is(world.sends.length, 0);
 });
 
 test('failed resume publication stays fenced until explicit emergency stop', async t => {

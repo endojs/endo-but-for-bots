@@ -173,17 +173,35 @@ keeps the stop fence because the write may have committed.
 An emergency stop can supersede resume; exact token checks and a fixed snapshot
 of old facets prevent stale cleanup from closing a later incarnation.
 Factory disposal also prevents resume from publishing running after closure.
-Failed-construction reclamation remains open.
-In particular, setup rollback currently drops its cached promise before async
-cleanup; changing that requires distinguishing construction failure from a live
-agent's failed shutdown so terminal deletion can still retry cleanup.
+Failed setup now retains its cached construction through rollback, shuts down
+any returned agent, drains the mount and backend admin, then closes only its
+captured journal facet. Successful rollback releases the cache for retry.
+Failed rollback keeps the rejected construction and exact owners; ordinary
+reads, resume and rebind cannot use that rejection to install another writer.
+A weak, incarnation-local registry distinguishes known construction rejection
+from agent shutdown failure. Terminal deletion, emergency stop and factory
+disposal can retry the captured agent/resource cleanup without swallowing a
+real shutdown error. Explicit deletion is the recovery path for a retained
+failed construction; emergency stop alone does not reopen it.
 Source inspection did not identify an ordinary open-factory post-acquisition
 failure seam; disposal-raced failures have an independent admission fence.
-Do not claim that a synthetic rollback test proves a reachable overlap.
+Regression coverage uses real guest-lookup failure and disposal-raced late
+creation/termination failures, not an artificial returned-agent failure hook.
+An already-admitted deletion also retries the failed construction's exact native
+owner; concurrent disposal then closes submissions, so deletion deliberately
+refuses, keeps the schema, and records lifecycle error. That regression proves
+safe partial cleanup, not successful retirement or bypass of failed disposal.
+Exact-facet reclamation and ordinary acquisition fencing are also source-reviewed;
+the disposal regression alone does not prove the latter because disposal has
+its own fence. No measured heap bound or fabricated reachable overlap is claimed.
 Durability boundary for replacement: the schema and all recorded values stay
 unchanged, and the fresh facet reconstructs its name inventory from the host.
 Only ephemeral capabilities are closed; no new persistent owner, migration,
 replay action, or native process-loss recovery protocol is introduced.
+The failed-construction registry is likewise ephemeral: successful formula
+disposal still drains native owners and journals; failed admitted work retains
+the existing daemon disposal barrier. It is not cross-worker exclusion or
+permission to reconstruct a formula after failed disposal.
 This change is local and not activated on Tokyo.
 The held-read regression verifies drain, rejection rather than truncated old
 history, and complete history/new turns across repeated rebinds.
@@ -3469,6 +3487,15 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Failed setup now retains acquisition exclusion until agent/native
+rollback and exact journal closure acknowledge completion. Failed constructions
+remain available to explicit cleanup instead of blocking it on a stale rejected
+promise. Three realistic failure regressions and all 663 Floot tests pass;
+lint/format/docs pass with existing warnings after adversarial review.
+Seven adjacent real-daemon lifecycle and journal-retirement regressions also
+pass, including failed disposal barriers and retirement across cold restarts.
+Coverage limits and concurrent-disposal refusal are recorded above. Not deployed.
 
 2026-09-24 — Stop/resume now closes old journal handles before publishing running,
 with records-only acquisition fenced and stale/disposed resume continuations

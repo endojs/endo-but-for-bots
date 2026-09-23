@@ -3566,6 +3566,19 @@ export const make = async (
   // session guest and revives an existing one after a restart.
   /** @type {Map<string, Promise<any>>} */
   const agents = new Map();
+  /**
+   * A rejected construction is not evidence that no agent was returned: its
+   * final shutdown may have failed. Cleanup can retry that exact agent, while
+   * ordinary acquisition continues to receive the cached rejection.
+   * @type {WeakMap<Promise<any>, { agent: Awaited<ReturnType<typeof makeStreamingAgent>> | undefined }>}
+   */
+  const failedConstructions = new WeakMap();
+  /** @param {Promise<any>} pending */
+  const agentForCleanup = pending =>
+    pending.catch(error => {
+      if (!failedConstructions.has(pending)) throw error;
+      return failedConstructions.get(pending)?.agent;
+    });
   const stopFences = new Set();
   const stopFlights = new Map();
   const resumeTokens = new Map();
@@ -3651,7 +3664,9 @@ export const make = async (
       // Persistence failure must not prevent withdrawing live authority.
       const intent = attempt(() => setExecutionState(id, 'stopping'));
       const pending = agents.get(id);
-      const shutdown = pending?.then(agent => agent.shutdown(true));
+      const shutdown = pending
+        ? agentForCleanup(pending).then(agent => agent?.shutdown(true))
+        : undefined;
       // Final shutdown retries after native stop releases blocked readers.
       void shutdown?.catch(() => undefined);
       const mount = hostedMountClients.get(id);
@@ -3665,7 +3680,7 @@ export const make = async (
       await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
       // Observe late acquisition before claiming completion. The admission
       // fence prevents new acquisitions and the second stop covers late ones.
-      const agent = pending ? await pending.catch(() => undefined) : undefined;
+      const agent = pending ? await agentForCleanup(pending) : undefined;
       const lateMount = hostedMountClients.get(id);
       if (lateMount) await attempt(() => lateMount.close());
       await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
@@ -3860,9 +3875,13 @@ export const make = async (
         );
       /** @type {{ input: string, from?: string } | undefined} */
       let runningTurn;
+      /** @type {Awaited<ReturnType<typeof providePrivateTurnStorage>> | undefined} */
+      let journalPowers;
+      /** @type {Awaited<ReturnType<typeof makeStreamingAgent>> | undefined} */
+      let constructedAgent;
       agentP = (async () => {
         const host = getHost();
-        const journalPowers = await providePrivateTurnStorage(host, id);
+        journalPowers = await providePrivateTurnStorage(host, id);
         privateJournals.set(journalPowers, id);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
@@ -4169,6 +4188,7 @@ export const make = async (
               : {}),
           }),
         );
+        constructedAgent = agent;
         // Each session is addressable by mail: start following its inbox.
         if (ownership.isClosed() || suspended || stopFences.has(id))
           await agent.shutdown(true);
@@ -4177,7 +4197,9 @@ export const make = async (
         void refreshLastTurn(id, agent);
         return agent;
       })().catch(async error => {
-        agents.delete(id);
+        // Keep this construction cached through rollback so another request
+        // cannot open a successor while its old resources are still closing.
+        failedConstructions.set(agentP, { agent: constructedAgent });
         workingSessions.delete(id);
         if (!observeOnly) {
           revivalFailures.add(id);
@@ -4187,27 +4209,35 @@ export const make = async (
         // the window before the retry re-arms would have it create a
         // successor this rollback does not know about — a live backend
         // session reachable through nothing.
-        const failedMountClient = hostedMountClients.get(id);
-        if (failedMountClient) {
-          hostedMountClients.delete(id);
-          await failedMountClient.close().catch(() => undefined);
-        }
-        const admin = backendAdmins.get(id);
-        if (admin) {
-          // A stop, not a deletion: the backend keeps the session's durable
-          // workspace and state, so a revival that failed past this point —
-          // an oracle lookup, say — can be revived again with them intact.
-          try {
-            await E(admin).terminate();
-            backendAdmins.delete(id);
-          } catch (cleanupError) {
-            throw new AggregateError(
-              [error, cleanupError],
-              `Floot session ${id} setup and hosted-backend rollback failed`,
-              { cause: cleanupError },
-            );
+        try {
+          if (constructedAgent) await constructedAgent.shutdown(true);
+          const failedMountClient = hostedMountClients.get(id);
+          if (failedMountClient) {
+            await failedMountClient.close();
+            if (hostedMountClients.get(id) === failedMountClient)
+              hostedMountClients.delete(id);
           }
+          const admin = backendAdmins.get(id);
+          // A stop, not a deletion: the backend keeps the session's durable
+          // workspace and state intact for a later reconstruction.
+          if (admin) {
+            await E(admin).terminate();
+            if (backendAdmins.get(id) === admin) backendAdmins.delete(id);
+          }
+          if (journalPowers) {
+            await E(journalPowers).close();
+            privateJournals.delete(journalPowers);
+          }
+        } catch (cleanupError) {
+          // Retain the failed promise and exact owners. Explicit cleanup can
+          // retry them; an ordinary observation must not install a new writer.
+          throw new AggregateError(
+            [error, cleanupError],
+            `Floot session ${id} setup and hosted-backend rollback failed`,
+            { cause: cleanupError },
+          );
         }
+        if (agents.get(id) === agentP) agents.delete(id);
         throw error;
       });
       agents.set(id, ownership.track(agentP));
@@ -4667,11 +4697,11 @@ export const make = async (
     const agentP = agents.get(id);
     if (agentP) {
       try {
-        const agent = await agentP;
+        const agent = await agentForCleanup(agentP);
         // A hosted backend's admin/factory termination below is the
         // authoritative barrier for a quarantined native turn. Allow cleanup
         // to reach it; provider-only sessions still fail closed here.
-        await agent.shutdown(isHostedSession(entry));
+        if (agent) await agent.shutdown(isHostedSession(entry));
       } catch (error) {
         // Do not tear down the guest beneath live turn or inbox activity.
         throw new AggregateError(
@@ -5395,8 +5425,8 @@ export const make = async (
         Promise.all([
           ...[...agents.values()].map(pending =>
             attempt(async () => {
-              const agent = await pending;
-              await agent.shutdown();
+              const agent = await agentForCleanup(pending);
+              if (agent) await agent.shutdown();
             }),
           ),
           ...[...hostedMountClients.values()].map(client =>
