@@ -1384,11 +1384,30 @@ Floot checks read-only inspection and the returned result snapshot; delegated
 runner coverage checks refusal without forwarding. Hosted-agent: 681 passed,
 one skipped; adapter conformance: 23 per backend; Floot: 479 passed.
 Hosted-agent type checking passes, scoped ESLint has no errors. Floot's type
-check still reports errors in unchanged test files. The documentation gate
-fails with ten errors, including the prior account-authority change's malformed
-Claude broker JSDoc and resulting missing profile types; fix that gate before
-merge rather than treating the new inspection tests as whole-branch proof.
+check still reports errors in unchanged test files. The first documentation
+run failed with ten errors; the source defects and stale local declarations
+were corrected as recorded below. Passing inspection tests are not whole-branch
+type-checking proof.
 Not deployed.
+
+### Public type verification — 2026-09-23
+
+Corrected two source defects introduced during binding vocabulary work:
+`ClaudeBrokerOptions` placed explanatory prose inside its JSDoc type expression,
+so its required `accountAuthority` declaration did not parse; the shared
+execution envelope widened its literal OCI kind to `string`, incompatible with
+the controller's parsed-rootfs type. The JSDoc expression is now well formed
+and the actual literal is narrowed with a const annotation, not a broader cast.
+No runtime behavior, formula schema, persistent state, or replay changes.
+
+The worktree also held ignored generated Claude broker-service and runtime-setup
+declarations embedding the old profile without `accountAuthority`. Those two
+declarations and their source maps were moved to a recoverable temporary backup;
+no checked-in declaration was removed. This repairs local source validation,
+not repository-wide stale-build hygiene. Afterward `yarn docs` passes with zero
+errors (176 warnings), Claude production and hosted-agent type checks pass,
+scoped lint has no errors, and 25 Claude broker/controller plus ten shared
+execution-envelope tests pass. Full test-file type cleanup remains open.
 
 ## FA-09 — Give local development storage an explicit role
 
@@ -2140,6 +2159,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Repair Claude broker public JSDoc type and shared OCI literal inference from binding-vocabulary refactor; quarantine stale local generated profile declarations | Docs passes, zero errors; Claude production and hosted-agent types pass; 35 focused tests; no runtime/durability change |
 | 2026-09-23 | FA-08: read-only recorded/proposed binding inspection and actual binding snapshot in rebind replies; delegated runners refuse operator identity disclosure | Three adapter conformance suites and Floot regression tests; durability boundary documented; live rebind and state-root placement remain open |
 | 2026-09-23 | Acceptance runners preserve driver failures and stop before later phases, restart, or session deletion; remove transient copies even on setup failure | Four local test methods, 36 scenarios; shell syntax checks pass; no daemon-state change; Tokyo acceptance pending connectivity |
 | 2026-09-23 | One binding vocabulary, slices 2 and 3: every hosted plan records `accountRef`, the operator-declared id of the account authority the broker serves (`account-authority.js`; host option `accountAuthority`, required), read by the shared reader; setup writes it into the broker's profile and refuses a retained broker serving another; a pool set carries it as `id`, the catalog snapshot as `authority`, the grant reports it, the controllers ask for it from the plan; the provider-name constants and Codex's `pool` label are gone, Codex's profile `accountRef` is the verified provider account for a single credential only, and the issuer no longer ties the id it reports to the policy's provider account; the provisioner owns the vocabulary (`rootfs` under `image`, `accountRef` under `account`, dependencies under `provider`, Claude's `credentialKind` under `account`), so every descriptor lists `['image', 'account', 'provider']` | hosted-agent 680, Codex 311, Claude 207, OpenCode 255 and the Floot factory suites pass; the shared conformance suite proves the vocabulary on every adapter over the real provisioner and rebinds `account` on Claude and OpenCode; new cases for the authority id on plans, catalogs and the issuer's split, for a profile from before (refused with the way out, all three readers) and for the Codex module's binding to the authority rather than the provider account; lint and formatting clean, the hosted-agent and Claude type checks clean, Codex's source clean with its pre-existing test-file errors; independent adversarial review, whose findings (the retained-broker message, the Codex set written before the retained comparison, the untested Codex binding, three stale documents) are fixed; not deployed (needs the three host values and the brokers retired) |

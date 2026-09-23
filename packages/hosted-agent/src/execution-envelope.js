@@ -222,7 +222,10 @@ export const activateExecutionEnvelope = async (
   // The slice runs the exact image the broker pinned: the recorded reference
   // names the digest the broker's evidence and grant both carry.
   const pinned = readPinnedRootfs(plan.rootfs, label);
-  const rootfs = harden({ kind: 'oci', ref: pinned.imageRef });
+  const rootfs = harden({
+    kind: /** @type {const} */ ('oci'),
+    ref: pinned.imageRef,
+  });
   (typeof evidence.imageDigest === 'string' &&
     /^sha256:[a-f0-9]{64}$/.test(evidence.imageDigest) &&
     pinned.imageDigest === evidence.imageDigest) ||

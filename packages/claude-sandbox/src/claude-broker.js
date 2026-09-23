@@ -121,9 +121,9 @@ export const buildClaudeBrokerPolicy = ({
 harden(buildClaudeBrokerPolicy);
 
 /**
- * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { credentialKind: string, anthropicBeta?: string, accountAuthority: string }
- *   `accountAuthority` is the account authority the broker serves, the id
- *   its grants report (`@endo/hosted-agent/account-authority.js`).} ClaudeBrokerOptions
+ * `accountAuthority` is the account authority the broker serves, the id
+ * its grants report (`@endo/hosted-agent/account-authority.js`).
+ * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { credentialKind: string, anthropicBeta?: string, accountAuthority: string }} ClaudeBrokerOptions
  */
 
 /**
