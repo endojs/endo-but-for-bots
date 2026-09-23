@@ -3771,6 +3771,16 @@ export const make = async (
       await E(admin).terminate();
       backendAdmins.delete(id);
     }
+    // changeIncarnation fences all acquisition while the old agent and native
+    // resources drain. Close its storage before dropping that agent: failed
+    // or uncertain closure must not admit a fresh writer. This releases only
+    // in-memory handles, not the durable namespace needed by the replacement.
+    for (const [journal, sessionId] of privateJournals) {
+      if (sessionId === id) {
+        await E(journal).close();
+        privateJournals.delete(journal);
+      }
+    }
     agents.delete(id);
   };
   const changeIncarnation = async (id, operation) => {

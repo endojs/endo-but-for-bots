@@ -160,8 +160,28 @@ It does not grant the closed factory a new reader or revive its canonical writer
 Terminal journal retirement implemented locally on 2026-09-23. The factory
 tracks each journal facet's session and drops it only after successful close
 during terminal deletion. Failed/uncertain close retains its owner and blocks
-retirement. Ordinary incarnation changes still retain their old journal facets
-until terminal deletion or factory disposal; earlier reclamation remains open.
+retirement. Network-policy changes and explicit rebind now close and drop old
+journal facets after agent/backend drain, before opening the replacement.
+The existing incarnation-change fence excludes new acquisitions throughout;
+failed closure retains the stopped agent and failed facet, blocking a new writer.
+This is in-memory handle reclamation, not durable namespace retirement.
+Emergency-stop/resume and failed-construction reclamation remain open.
+In particular, setup rollback currently drops its cached promise before async
+cleanup; changing that requires distinguishing construction failure from a live
+agent's failed shutdown so terminal deletion can still retry cleanup.
+Source inspection did not identify an ordinary open-factory post-acquisition
+failure seam; disposal-raced failures have an independent admission fence.
+Do not claim that a synthetic rollback test proves a reachable overlap.
+Durability boundary for replacement: the schema and all recorded values stay
+unchanged, and the fresh facet reconstructs its name inventory from the host.
+Only ephemeral capabilities are closed; no new persistent owner, migration,
+replay action, or native process-loss recovery protocol is introduced.
+This change is local and not activated on Tokyo.
+The held-read regression verifies drain, rejection rather than truncated old
+history, and complete history/new turns across repeated rebinds.
+A poisoned-storage regression verifies repeated replacement attempts cannot
+acquire another writer. These are factory/storage lifecycle tests, not a heap
+measurement or new process-loss recovery evidence.
 `finishSessionDeletion` requires acknowledged terminal intent before namespace
 retirement, including creation rollback after an earlier failed registry write.
 It attempts that write before ordinary cleanup; a failed acknowledgement does
@@ -3435,6 +3455,13 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Normal network/rebind replacement now closes and releases old
+private journal facets after agent/backend drain, preserving durable history.
+654 Floot tests pass; package lint has no errors, and root docs reports no
+errors (180 existing warnings). Adversarial review approved the bounded change.
+Emergency-stop/resume and failed-construction reclamation remain open.
+Not deployed.
 
 2026-09-24 — Usage totals and context readings now project from terminal journal
 evidence; tree totals and the completed-total cache are removed. Optional totals

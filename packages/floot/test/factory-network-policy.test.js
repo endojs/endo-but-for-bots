@@ -6,6 +6,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { makePromiseKit } from './_promise-kit.js';
 
 const self = `endo://${'a'.repeat(64)}/${'b'.repeat(64)}?type=handle`;
 const sender = `endo://${'a'.repeat(64)}/${'c'.repeat(64)}?type=handle`;
@@ -42,6 +43,11 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   let createBarrier = Promise.resolve();
   let createFails = false;
   let writeFails = false;
+  let journalWriteFails = false;
+  let poisonedCleanup = false;
+  let replyText = 'done';
+  /** @type {(name: string) => Promise<void>} */
+  let beforeLookup = () => Promise.resolve();
   let tools;
   const key = name => (Array.isArray(name) ? name.join('/') : name);
   const guestStore = new Map([['user', harden({})]]);
@@ -124,7 +130,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
                 }),
               );
             }
-            stream.push({ type: 'text-delta', text: 'done' });
+            stream.push({ type: 'text-delta', text: replyText });
             stream.push({ type: 'end' });
             return stream.reader;
           },
@@ -178,11 +184,16 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   );
   const host = Far('NetworkHost', {
     has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
+    lookup: async name => {
+      await beforeLookup(name);
+      return hostStore.get(name);
+    },
     list: () => harden([...hostStore.keys()]),
     storeValue: (value, name) => {
       if (writeFails && name.startsWith('floot-sessions-v1-'))
         throw Error('registry write failed');
+      if (journalWriteFails && name.includes('-floot-turn-event-'))
+        throw Error('journal write uncertain');
       hostStore.set(name, value);
     },
     remove: name => hostStore.delete(name),
@@ -196,8 +207,24 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     for (const inbox of inboxes) inbox.close();
     stopFails = false;
     writeFails = false;
-    if ((await E(factory).listSessions()).some(entry => entry.id === 'one'))
-      await E(factory).deleteSession('one');
+    if ((await E(factory).listSessions()).some(entry => entry.id === 'one')) {
+      if (poisonedCleanup) {
+        let refused = false;
+        try {
+          await E(factory).deleteSession('one');
+        } catch (error) {
+          if (
+            !/Private journal unavailable after uncertain storage/.test(
+              `${error}`,
+            )
+          )
+            throw error;
+          refused = true;
+        }
+        if (!refused)
+          throw Error('Poisoned fixture deletion unexpectedly succeeded');
+      } else await E(factory).deleteSession('one');
+    }
   });
   const session = await E(factory).getSession('one');
   await E(session).getTurns();
@@ -215,6 +242,12 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     setMode: value => {
       mode = value;
     },
+    setReply: value => {
+      replyText = value;
+    },
+    beforeLookup: callback => {
+      beforeLookup = callback;
+    },
     failStop: value => {
       stopFails = value;
     },
@@ -229,6 +262,10 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     },
     failWrite: value => {
       writeFails = value;
+    },
+    failJournalWrite: value => {
+      journalWriteFails = value;
+      poisonedCleanup = true;
     },
     tools: () => tools,
     finish: () => {
@@ -715,6 +752,83 @@ test('rebind stops the incarnation and reopens it under the named bindings, once
   world.finish();
   await E(held).whenFinished();
   t.is(world.creates.length, 2);
+});
+
+test('rebind drains an admitted journal read and fences the retired storage facet', async t => {
+  const world = await makeWorld(t);
+  const firstText = `${'First payload '.repeat(800)}FIRST-END`;
+  const secondText = `${'Second payload '.repeat(800)}SECOND-END`;
+  world.setReply(firstText);
+  await E(await E(world.session).startTurn('first')).whenFinished();
+  world.setReply(secondText);
+  await E(await E(world.session).startTurn('second')).whenFinished();
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let held = false;
+  world.beforeLookup(name => {
+    if (!held && name.includes('-floot-turn-content-')) {
+      held = true;
+      entered.resolve(undefined);
+      return release.promise;
+    }
+    return Promise.resolve();
+  });
+  t.teardown(() => release.resolve(undefined));
+  const oldHistory = E(world.session).getHistory();
+  void oldHistory.catch(() => {});
+  await entered.promise;
+  let completed = false;
+  const replacement = E(world.session)
+    .rebind(['provider'])
+    .then(value => {
+      completed = true;
+      return value;
+    });
+  void replacement.catch(() => {});
+  await until(() => world.events.includes('terminate:1'));
+  t.false(completed);
+  t.is(world.creates.length, 1);
+  release.resolve(undefined);
+  await t.throwsAsync(oldHistory, {
+    message: /Private journal incarnation is closed/,
+  });
+  await replacement;
+  t.is(world.creates.length, 2);
+  const history = await E(world.session).getHistory();
+  t.deepEqual(
+    history.filter(row => row.role === 'assistant').map(row => row.content),
+    [firstText, secondText],
+  );
+  const next = await E(world.session).startTurn('after rebind');
+  await E(next).whenFinished();
+  t.is((await E(world.session).getTurns()).at(-1).state, 'completed');
+  await E(world.session).rebind(['provider']);
+  t.is(world.creates.length, 3);
+  t.deepEqual(
+    (await E(world.session).getHistory()).slice(0, history.length),
+    history,
+  );
+});
+
+test('uncertain private journal closure refuses replacement acquisition', async t => {
+  const world = await makeWorld(t);
+  world.failJournalWrite(true);
+  const turn = await E(world.session).startTurn(
+    'storage fails before inference',
+  );
+  await E(turn).whenFinished();
+  world.failJournalWrite(false);
+  t.truthy((await E(turn).getStatus()).error);
+  t.is(world.sends.length, 0);
+  await t.throwsAsync(E(world.session).rebind(['provider']), {
+    message: /Private journal unavailable after uncertain storage/,
+  });
+  t.is(world.creates.length, 1);
+  t.true(world.events.includes('terminate:1'));
+  await t.throwsAsync(E(world.session).rebind(['provider']), {
+    message: /Private journal unavailable after uncertain storage/,
+  });
+  t.is(world.creates.length, 1);
 });
 
 test('a rebind the backend refuses leaves no authorization behind for a later reopen', async t => {
