@@ -3697,18 +3697,52 @@ export const make = async (
     )
       throw Error('Finish emergency stop before resuming');
     if (entry.executionState !== 'stopped') return executionState(id);
-    // Fence while publishing permission to start a fresh incarnation.
+    // Fence both execution and records-only acquisition while retiring the
+    // stopped observer. Do not publish permission to run until its storage
+    // has acknowledged closure.
+    // Even an unobserved session needs a cached records-only agent here: after
+    // failed closure it remains the admission barrier to a fresh journal.
+    const observer = agents.get(id) || getAgent(id, { observeOnly: true });
     const token = harden({});
     resumeTokens.set(id, token);
     stopFences.add(id);
-    await setExecutionState(id, 'running');
-    const observer = agents.get(id);
-    if (observer) await observer.catch(() => undefined);
-    if (resumeTokens.get(id) !== token)
-      throw Error('Resume superseded by emergency stop');
-    resumeTokens.delete(id);
-    agents.delete(id);
-    stopFences.delete(id);
+    const assertCurrentResume = () => {
+      ownership.assertOpen();
+      if (resumeTokens.get(id) !== token)
+        throw Error('Resume superseded by emergency stop');
+    };
+    let publishing = false;
+    try {
+      const agent = await observer;
+      assertCurrentResume();
+      await agent.shutdown(true);
+      assertCurrentResume();
+      // Snapshot exact facets, not a live Map iterator. A superseding stop
+      // and later resume must not let this continuation close their successor.
+      const journals = [...privateJournals].filter(([, owner]) => owner === id);
+      for (const [journal] of journals) {
+        await E(journal).close();
+        privateJournals.delete(journal);
+        assertCurrentResume();
+      }
+      assertCurrentResume();
+      publishing = true;
+      await setExecutionState(id, 'running');
+      assertCurrentResume();
+      resumeTokens.delete(id);
+      if (agents.get(id) === observer) agents.delete(id);
+      stopFences.delete(id);
+    } catch (error) {
+      if (resumeTokens.get(id) === token) {
+        resumeTokens.delete(id);
+        // Before publication the durable state remains stopped. A failed
+        // publication may have committed: keep its stop fence for explicit
+        // emergency-stop recovery instead of guessing that it did not.
+        if (!publishing) stopFences.delete(id);
+        touchSession(id);
+      }
+      throw error;
+    }
     touchSession(id, 'transcript');
     await getAgent(id);
     void submissions.get(id)?.pump();
@@ -3815,6 +3849,7 @@ export const make = async (
         `Session "${id}" cannot open an incarnation during or after deletion`,
       );
     if (!observeOnly) assertSessionAdmission(id);
+    if (resumeTokens.has(id)) throw Error('Session resume in progress');
     if (incarnationChanges.has(id))
       throw Error('Session incarnation change in progress');
     let agentP = agents.get(id);

@@ -165,7 +165,15 @@ journal facets after agent/backend drain, before opening the replacement.
 The existing incarnation-change fence excludes new acquisitions throughout;
 failed closure retains the stopped agent and failed facet, blocking a new writer.
 This is in-memory handle reclamation, not durable namespace retirement.
-Emergency-stop/resume and failed-construction reclamation remain open.
+Resume now reconstructs/retains a stopped records-only observer, shuts it down,
+and closes its journal facets before publishing permission to run.
+Both execution and records-only acquisition are fenced during that transition.
+Failed close leaves the stopped observer cached; failed running-state publication
+keeps the stop fence because the write may have committed.
+An emergency stop can supersede resume; exact token checks and a fixed snapshot
+of old facets prevent stale cleanup from closing a later incarnation.
+Factory disposal also prevents resume from publishing running after closure.
+Failed-construction reclamation remains open.
 In particular, setup rollback currently drops its cached promise before async
 cleanup; changing that requires distinguishing construction failure from a live
 agent's failed shutdown so terminal deletion can still retry cleanup.
@@ -182,6 +190,12 @@ history, and complete history/new turns across repeated rebinds.
 A poisoned-storage regression verifies repeated replacement attempts cannot
 acquire another writer. These are factory/storage lifecycle tests, not a heap
 measurement or new process-loss recovery evidence.
+Six additional resume regressions cover held reads/history restoration,
+uncertain close, superseding emergency stop with an overlapping successor
+resume, factory disposal, a fresh stopped factory without a UI observer, and
+failed running-state publication followed by explicit stop/retry.
+The persisted state remains stopped until old handles close; this changes the
+ordering of the existing execution-state write, not its schema or replay policy.
 `finishSessionDeletion` requires acknowledged terminal intent before namespace
 retirement, including creation rollback after an earlier failed registry write.
 It attempts that write before ordinary cleanup; a failed acknowledgement does
@@ -3455,6 +3469,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Stop/resume now closes old journal handles before publishing running,
+with records-only acquisition fenced and stale/disposed resume continuations
+prevented from granting execution. Six new lifecycle regressions pass alongside
+the full 660-test Floot suite; lint/format/docs pass with existing warnings after
+adversarial review. Failed-construction reclamation remains open. Not deployed.
 
 2026-09-24 — Normal network/rebind replacement now closes and releases old
 private journal facets after agent/backend drain, preserving durable history.

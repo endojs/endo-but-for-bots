@@ -45,6 +45,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   let writeFails = false;
   let journalWriteFails = false;
   let poisonedCleanup = false;
+  let storedExecutionState = executionState;
   let replyText = 'done';
   /** @type {(name: string) => Promise<void>} */
   let beforeLookup = () => Promise.resolve();
@@ -195,18 +196,32 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
       if (journalWriteFails && name.includes('-floot-turn-event-'))
         throw Error('journal write uncertain');
       hostStore.set(name, value);
+      if (name.startsWith('floot-sessions-v1-'))
+        storedExecutionState = value.sessions.find(
+          entry => entry.id === 'one',
+        )?.executionState;
     },
     remove: name => hostStore.delete(name),
     provideGuest: (_name, { agentName }) => {
       hostStore.set(agentName, guest);
     },
   });
-  const factory = make(host);
+  let disposalHook;
+  let disposed = false;
+  const factory = make(
+    host,
+    Far('NetworkFactoryContext', {
+      addDisposalHook: hook => {
+        disposalHook = hook;
+      },
+    }),
+  );
   t.teardown(async () => {
     for (const stream of streams) stream.push({ type: 'end' });
     for (const inbox of inboxes) inbox.close();
     stopFails = false;
     writeFails = false;
+    if (disposed) return;
     if ((await E(factory).listSessions()).some(entry => entry.id === 'one')) {
       if (poisonedCleanup) {
         let refused = false;
@@ -233,6 +248,12 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     session,
     factory,
     host,
+    dispose: async () => {
+      await factory;
+      disposed = true;
+      await E(disposalHook)();
+    },
+    storedExecutionState: () => storedExecutionState,
     creates,
     events,
     sends,
@@ -342,6 +363,187 @@ test('emergency stop fences active turns, waits for cleanup, and requires explic
   t.is(world.sends.length, 1, 'resume does not replay a prompt');
 });
 
+test('resume drains retired journal reads and preserves history across repeated stops', async t => {
+  const world = await makeWorld(t);
+  const firstText = `${'Before stop '.repeat(900)}FIRST-END`;
+  const secondText = `${'Before resume '.repeat(900)}SECOND-END`;
+  world.setReply(firstText);
+  await E(await E(world.session).startTurn('first')).whenFinished();
+  world.setReply(secondText);
+  await E(await E(world.session).startTurn('second')).whenFinished();
+  await E(world.session).emergencyStop();
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let held = false;
+  world.beforeLookup(name => {
+    if (!held && name.includes('-floot-turn-content-')) {
+      held = true;
+      entered.resolve(undefined);
+      return release.promise;
+    }
+    return Promise.resolve();
+  });
+  t.teardown(() => release.resolve(undefined));
+  const oldHistory = E(world.session).getHistory();
+  void oldHistory.catch(() => {});
+  await entered.promise;
+  let completed = false;
+  const resumed = E(world.session)
+    .resume()
+    .then(value => {
+      completed = true;
+      return value;
+    });
+  void resumed.catch(() => {});
+  // Observe the factory after resume admission without releasing the storage read.
+  await E(world.session).getExecutionState();
+  await t.throwsAsync(E(world.session).getTurns(), {
+    message: /resum|stopped or stopping/i,
+  });
+  t.false(completed);
+  t.is(world.creates.length, 1);
+  release.resolve(undefined);
+  await t.throwsAsync(oldHistory, {
+    message: /Private journal incarnation is closed/,
+  });
+  await resumed;
+  t.is(world.creates.length, 2);
+  const history = await E(world.session).getHistory();
+  t.deepEqual(
+    history.filter(row => row.role === 'assistant').map(row => row.content),
+    [firstText, secondText],
+  );
+  await E(await E(world.session).startTurn('after resume')).whenFinished();
+  t.is((await E(world.session).getTurns()).at(-1).state, 'completed');
+  await E(world.session).emergencyStop();
+  await E(world.session).resume();
+  t.is(world.creates.length, 3);
+  t.deepEqual(
+    (await E(world.session).getHistory()).slice(0, history.length),
+    history,
+  );
+});
+
+test('emergency stop supersedes resume while its journal closure drains', async t => {
+  const world = await makeWorld(t);
+  world.setReply('Retained response '.repeat(800));
+  await E(await E(world.session).startTurn('first')).whenFinished();
+  await E(await E(world.session).startTurn('second')).whenFinished();
+  await E(world.session).emergencyStop();
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let held = false;
+  world.beforeLookup(name => {
+    if (!held && name.includes('-floot-turn-content-')) {
+      held = true;
+      entered.resolve(undefined);
+      return release.promise;
+    }
+    return Promise.resolve();
+  });
+  t.teardown(() => release.resolve(undefined));
+  const history = E(world.session).getHistory();
+  void history.catch(() => {});
+  await entered.promise;
+  const resumed = E(world.session).resume();
+  void resumed.catch(() => {});
+  await E(world.session).getExecutionState();
+  await t.throwsAsync(E(world.session).getTurns(), {
+    message: /resum|stopped or stopping/i,
+  });
+  const stopped = E(world.session).emergencyStop();
+  void stopped.catch(() => {});
+  t.is((await stopped).state, 'stopped');
+  // Start a successor while the old resume still waits on the same close.
+  const successor = E(world.session).resume();
+  void successor.catch(() => {});
+  await E(world.session).getExecutionState();
+  await t.throwsAsync(E(world.session).getTurns(), {
+    message: /resum|stopped or stopping/i,
+  });
+  t.is(world.creates.length, 1);
+  release.resolve(undefined);
+  await t.throwsAsync(history, {
+    message: /Private journal incarnation is closed/,
+  });
+  await t.throwsAsync(resumed, { message: /Resume superseded/ });
+  await successor;
+  t.is(world.creates.length, 2);
+  t.is((await E(world.session).getTurns()).length, 2);
+});
+
+test('factory disposal fences resume while its journal closure drains', async t => {
+  const world = await makeWorld(t);
+  world.setReply('Retained response '.repeat(800));
+  await E(await E(world.session).startTurn('first')).whenFinished();
+  await E(await E(world.session).startTurn('second')).whenFinished();
+  await E(world.session).emergencyStop();
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let held = false;
+  world.beforeLookup(name => {
+    if (!held && name.includes('-floot-turn-content-')) {
+      held = true;
+      entered.resolve(undefined);
+      return release.promise;
+    }
+    return Promise.resolve();
+  });
+  t.teardown(() => release.resolve(undefined));
+  const history = E(world.session).getHistory();
+  void history.catch(() => {});
+  await entered.promise;
+  const resumed = E(world.session).resume();
+  void resumed.catch(() => {});
+  await E(world.session).getExecutionState();
+  await t.throwsAsync(E(world.session).getTurns(), {
+    message: /resum|stopped or stopping/i,
+  });
+  const disposed = world.dispose();
+  void disposed.catch(() => {});
+  await t.throwsAsync(E(world.factory).listSessions(), {
+    message: /disposed|closed/i,
+  });
+  release.resolve(undefined);
+  await t.throwsAsync(history, {
+    message: /Private journal incarnation is closed/,
+  });
+  await t.throwsAsync(resumed, { message: /disposed|closed/i });
+  const disposalError = await t.throwsAsync(disposed, {
+    instanceOf: AggregateError,
+    message: 'Floot factory disposal failed',
+  });
+  t.true(
+    disposalError.errors.some(
+      error =>
+        error.message === 'Floot factory admitted work failed during disposal',
+    ),
+  );
+  t.is(world.creates.length, 1);
+  t.is(world.storedExecutionState(), 'stopped');
+});
+
+test('uncertain journal closure leaves resume stopped without new acquisition', async t => {
+  const world = await makeWorld(t);
+  world.failJournalWrite(true);
+  const turn = await E(world.session).startTurn('fails before inference');
+  await E(turn).whenFinished();
+  world.failJournalWrite(false);
+  t.truthy((await E(turn).getStatus()).error);
+  await E(world.session).emergencyStop();
+  await t.throwsAsync(E(world.session).resume(), {
+    message: /Private journal unavailable after uncertain storage/,
+  });
+  t.is((await E(world.session).getExecutionState()).state, 'stopped');
+  t.is(world.creates.length, 1);
+  t.is(world.sends.length, 0);
+  await t.throwsAsync(E(world.session).resume(), {
+    message: /Private journal unavailable after uncertain storage/,
+  });
+  t.is((await E(world.session).getExecutionState()).state, 'stopped');
+  t.is(world.creates.length, 1);
+});
+
 test('failed stop remains fenced and retryable without deleting records', async t => {
   const world = await makeWorld(t);
   world.failStop(true);
@@ -395,6 +597,37 @@ test('incomplete stop is retried on factory revival without starting a sandbox',
   // Joining the recovered stop observes its completion, not a new incarnation.
   t.is((await E(session).emergencyStop()).state, 'stopped');
   t.is(world.creates.length, count);
+});
+
+test('fresh stopped factory resumes without a prior journal observer', async t => {
+  const world = await makeWorld(t, { executionState: 'stopped' });
+  const revived = make(world.host);
+  const session = await E(revived).getSession('one');
+  t.is(world.creates.length, 0);
+  await E(session).resume();
+  t.is(world.creates.length, 1);
+  await E(await E(session).startTurn('fresh resume')).whenFinished();
+  t.is((await E(session).getTurns()).at(-1).state, 'completed');
+  await E(session).emergencyStop();
+});
+
+test('failed resume publication stays fenced until explicit emergency stop', async t => {
+  const world = await makeWorld(t, { executionState: 'stopped' });
+  world.failWrite(true);
+  await t.throwsAsync(E(world.session).resume(), {
+    message: /registry write failed/,
+  });
+  t.is(world.creates.length, 0);
+  await t.throwsAsync(E(world.session).resume(), {
+    message: /Finish emergency stop/,
+  });
+  await t.throwsAsync(E(world.session).startTurn('blocked'), {
+    message: /stopped or stopping/,
+  });
+  world.failWrite(false);
+  await E(world.session).emergencyStop();
+  await E(world.session).resume();
+  t.is(world.creates.length, 1);
 });
 
 test('emergency stop fences resume and reaps its late acquisition before completion', async t => {
