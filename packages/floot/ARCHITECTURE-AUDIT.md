@@ -565,11 +565,78 @@ and filters successful turns to the selected branch.
 Reading retained records first avoids losing a turn during concurrent archival.
 Tests cross the archive boundary with 290 turns and cover hosted revival.
 This does not add a lifetime resident cache, but full-history requests still materialize
-all records: archive pagination and explicit bounded context selection remain open.
+all records: bounded context selection remains open; local archive paging is
+recorded below.
 Deployed since generation 157 (2026-09-21); not yet tested against a long-lived
 Tokyo session.
 
+Archive paging slice (2026-09-23, local, not deployed):
+`getArchivedTurnsPage(cursor?)` reads one committed archive chunk, returning
+`{ records, next }`; the continuation pins the archive boundary across appends
+and daemon reconstruction.
+Pages are in publication order, not global turn-ID order: a late-resolved old
+turn can be archived after newer settled turns.
+Journal readers capture retained records and the archive boundary in one
+serialized read, so turns moved into a newer archive during paging are not lost.
+Usage tallying folds pages instead of materializing the full archive, retaining
+only the aggregate cached for that captured boundary.
+Full-history/transcript APIs still materialize all requested records, and
+unresolved retained records can grow; this does not close bounded model context
+or compaction, nor promise a byte bound for a chunk's tool evidence.
+
+Durability: no new stored value, formula, renewal owner, or schema migration.
+The cursor is inert copy data interpreted only by the already-authorized journal;
+it has no storage path or independent authority and does not survive journal
+replacement/deletion.
+Only committed chunks are visible; an uncertain snapshot write poisons reads
+until reconstruction from stored evidence.
+Tests cover fixed-boundary paging during archive growth, reconstruction,
+late resolution, invalid/future cursors, oversized chunks, and an uncounted
+archive left by a failed snapshot write.
+The full Floot suite passes 496 tests; bounded context selection remains open.
+Package ESLint has zero errors; type checking still reports pre-existing test
+errors, with no errors in changed production files.
+
 ## FA-02 — Model context must not be built from UI previews
+
+Deployment reconciliation (generation 169, 2026-09-23): app `819aa18c8` now
+runs the archive read-view/paging, Fae/OpenCode recorded-compaction replay,
+and failed-response usage/retry fixes described below.
+Four-backend seed, actual daemon restart, recall and scoped deletion passed
+on OpenCode/Fae automatic free routes, Codex Luna, and Claude Haiku.
+Reconstructed session facets all expose the new archive-page method; empty
+terminal pages were checked, not a live archive boundary.
+All six Secret identities, controller host and credential namespace bindings
+were preserved; two unrelated sessions remain, with zero native records,
+containers or 9p mounts after test cleanup.
+The host evidence is `endo-host/ops/hosted-cutover5-20260923.md`, generation 169.
+This supersedes the earlier local/not-deployed checkpoints below, but does not
+prove native compaction capture, large archives, provider-error fault injection
+on Tokyo, or process-loss recovery.
+
+OpenCode import correction (2026-09-23, not deployed): the pinned fork
+`kumavis/opencode@870a58b973a2892d93c04e5db6e49757ad8237b9` uses
+`packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts` for
+`POST /session/:id/message/import`.
+It writes legacy message/part tables and represents imported compaction as
+synthetic user text, not a native boundary.
+The parallel core history implementation is not the context reader for this route.
+The adapter now selects the latest compaction and active span before import;
+Floot's full transcript remains unchanged.
+The payload round-trip decoder no longer filters its input, which previously
+hid the adapter's transmission of superseded history.
+Tests assert the exact submitted payload, repeated tool IDs, and refusal of a
+result whose call lies before the boundary.
+This is a pure replay transformation: no new durable state or formula schema.
+Native compaction capture remains open: the legacy CLI can retain a recent tail
+outside the summary, and interrupted-turn persistence must preserve the correct
+boundary and tail rather than recording a summary alone.
+Payload conformance does not prove native database/model-context behavior;
+live acceptance remains pending.
+Verification: 259 OpenCode tests pass; package lint has zero errors (37 warnings),
+documentation generation has zero errors (176 warnings), and formatting passes.
+Independent adversarial review verified the pinned route and reran all 11
+transcript conformance tests with no blockers.
 
 The direct-provider loop reconstructs input from `getHistory()` (baseline `agent.js:1321`).
 Journal fallback fields in that presentation view can be 8,192-character previews.
@@ -598,6 +665,29 @@ Explicit compaction/context selection remains open: this converter does not impl
 a compaction policy, and the full-history replay can grow without a context bound.
 The full-content fix is now deployed; bounded context remains open.
 
+Recorded-compaction replay correction (2026-09-23, local, not deployed):
+the direct-provider converter ignored canonical compaction records, replaying
+superseded messages and omitting the summary.
+It now uses the shared last-compaction split, emits the summary as an assistant
+message (never a system instruction), and pairs tool evidence only in the active
+span.
+A result whose call lies before the boundary is refused as malformed context,
+not silently dropped or paired to a different effect.
+Original transcript records remain unchanged and readable.
+Tests cover multiple boundaries, repeated tool IDs, unknown outcomes, malformed
+cross-boundary results, and a hosted compaction persisted through reconstruction
+into an actual direct-provider dispatch.
+No new persisted state, summarization call, or compaction trigger is introduced.
+
+Native capture remains open: the current OpenCode bridge explicitly suppresses
+summary-message text and emits no `compaction` event from those records
+(`makeMessageRegistry`/`mapSseEvent` in `opencode-bridge.mjs`).
+The existing synthetic compaction round-trip tests prove representation and
+restoration, not that this bridge captures a live CLI boundary.
+Complete capture and interrupted-turn durability must be verified before
+claiming end-to-end compaction; bounded context selection and automatic
+summarization policy remain open as well.
+
 Generation 166 acceptance found a separate direct-provider failure: after a
 daemon restart the seed history survived, but OpenRouter's free route returned
 an empty recall answer recorded as completed. The three hosted recall cases
@@ -608,9 +698,30 @@ identify the failure without exposing response bodies or reasoning.
 No new durable state or formula is introduced: the existing failed-turn journal
 path records the error. A reconstruction regression preserves that failure and
 its history without another request. This uses an in-memory persistent-powers
-fixture, not process-loss proof. Reported usage on rejected replies is currently
-lost, as on other provider validation errors; exact failed-response accounting
-remains a follow-up. The fix is deployed as generation 167; one fresh live Fae
+fixture, not process-loss proof.
+Failed-response usage correction (2026-09-23, not deployed): OpenRouter now
+notifies Floot of validated, normalized usage before validating the assistant
+answer. Empty, filtered, malformed, or truncated replies can therefore retain
+their reported counts in the existing failed-turn finish record.
+The optional provider notification carries increments before settlement;
+Floot uses returned usage only when no notification was sent, avoiding double
+counting. Tests cover failed-turn reconstruction, invalid usage refusal,
+observer failure without replay, and multiple increments plus a returned total.
+No formula or persisted schema changes: notification state is ephemeral until
+the existing finish write; abrupt loss before that write is not covered.
+Error-response accounting correction (2026-09-23, not deployed): parsed HTTP,
+API and finish-error responses now report validated usage through the same
+notification before failure. A response reporting positive token consumption
+is never automatically retried, even without an observer; free models also
+consume tokens, so this is not a claim about billing.
+Transient errors with absent or zero usage retain the existing retry policy.
+Non-2xx bodies use the shared bounded JSON reader (64 KiB maximum, under the
+request abort signal); unreadable/oversized bodies retain the HTTP diagnosis.
+Malformed token totals are refused, including fractional counts that could
+otherwise round to zero and incorrectly permit replay.
+Missing, invalid, unreadable, or unreported usage cannot be inferred; exact
+accounting across transport failures and process loss remains open.
+The empty-answer fix is deployed as generation 167; one fresh live Fae
 seed/restart/recall case passed on the free route. The original failed case
 remains recorded. This is not proof that every free-route model answers, nor
 live evidence of the new negative-response path (covered by local tests).
@@ -2421,6 +2532,9 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Deploy archive paging, recorded-compaction replay and provider accounting fixes as generation 169 (app `819aa18c8`, host `7dbf7c3`) | Four-backend seed/restart/recall/delete passed; reconstructed archive API checked; Secrets, host and credential bindings preserved; no native resources left. Live archive-boundary and compaction/error-path injection remain open; see host cutover record. |
+| 2026-09-23 | Preserve usage on OpenRouter HTTP/API/finish errors and stop automatic replay when token consumption is reported | 94 Lal tests (one skip), 501 Floot tests, production declarations, formatting and composite consistency pass; scoped lint has zero errors and docs have zero errors (178 warnings). Independent review found a swallowed error-body timeout; fixed and regression-tested with native-style AbortError and exactly two attempts. Tests also cover observer/no-observer behavior, zero-usage retries, fractional refusal, bounded error bodies and failed HTTP turn reconstruction. Reuses hosted-agent's bounded JSON reader rather than duplicating it; no new formula/schema. Not deployed. |
+| 2026-09-23 | Preserve reported OpenRouter usage when assistant validation rejects a response, using an optional pre-settlement incremental provider notification and the existing turn finish journal | 500 Floot and 82 Lal tests pass (one Lal skip), including failed-turn reconstruction and no double counting; independently reviewed; changed-file ESLint has zero errors and docs have zero errors. Whole Lal lint still has eight project-service errors in unchanged files. No new durable schema; process loss before finish and API-error/retry usage remain open. Not deployed. |
 | 2026-09-23 | Preservation-safe paired cutover activated as generation 166 | App `4b425552f` with host `d696a88`; zero sessions/runs, slot-free workflow startup records verified. Detached 24 old Floot/provider aliases with repeated Secret/host/credential/pool identity checks, then proved old-daemon shutdown and no containers/9p. No database wipe. Hosted setup, all-account discovery and hosted create/shell/policy-tool seed passed, including Luna/free routes; post-activation Secret and controller-host identities unchanged. Remaining cross-backend acceptance and live rebind are pending. See endo-host `ops/hosted-cutover5-20260923.md` |
 | 2026-09-23 | Repair retirement helper's dormant-formula hazard and verify the durable empty registry | Host helper now detaches names without cancellation, validates capability-free registry sequence/data, preserves credential/pool/host state, and fences changed/reappearing aliases. Reviewed tests cover partial removal, collected metadata and empty-registry guards; Tokyo dry run passed for 22 provider plus two Floot bindings. No effectful retirement; startup-dependency check, quiescence, old-worker shutdown, activation and acceptance remain required |
 | 2026-09-23 | Resume preservation-safe coordinated deployment preparation after SSH recovery | App `4b425552f` mirrored to Forgejo and prebuilt; paired host `5827da0` NixOS build passed without activation. Fresh inventories: six Secrets, no native session records/containers/9p/Floot guest roots, 22 broker/dependent bindings including three broker roots. No retirement or state wipe; guarded alias detachment, activation and full acceptance still pending. See endo-host `ops/hosted-cutover5-20260923.md` |

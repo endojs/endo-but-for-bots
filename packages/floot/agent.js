@@ -235,6 +235,7 @@ const FlootSessionInterface = M.interface('FlootSession', {
   getTranscript: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
   getArchivedTurns: M.callWhen().returns(M.any()),
+  getArchivedTurnsPage: M.callWhen().optional(M.string()).returns(M.record()),
   getTurnContent: M.callWhen(M.record()).returns(M.string()),
   getJournalStatus: M.callWhen().returns(M.any()),
   getNetworkPolicy: M.callWhen().returns(M.any()),
@@ -518,7 +519,7 @@ const provisionPresetObjects = async (
 
 /**
  * @typedef {object} InjectedProviderConfig
- * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal) => Promise<any> }} provider
+ * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal, onUsage?: (usage: Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>) => void) => Promise<any> }} provider
  */
 
 /**
@@ -601,6 +602,7 @@ const provisionPresetObjects = async (
  *   getTranscript: () => Promise<Array<Record<string, any>>>,
  *   getTurns: () => Promise<Array<Record<string, any>>>,
  *   getArchivedTurns: () => Promise<Array<Record<string, any>>>,
+ *   getArchivedTurnsPage: (cursor?: string) => Promise<{records: any[], next: string | null}>,
  *   getTurnContent: (ref: { name: string, chars: number }) => Promise<string>,
  *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
@@ -1187,6 +1189,7 @@ export const makeStreamingAgent = async (
           `[floot] round ${round}: ${context.length} messages, ${tools.providerSchemas.length} tools`,
         );
         let streamed = '';
+        let usageReported = false;
         const provider = await currentProvider();
         let answer;
         try {
@@ -1198,6 +1201,13 @@ export const makeStreamingAgent = async (
               writer.delta(delta);
             },
             signal,
+            roundUsage => {
+              // Providers can report usage before rejecting an unusable reply.
+              // Notifications are incremental; a returned total is fallback only.
+              usageReported = true;
+              turnUsage = addUsage(turnUsage, roundUsage);
+              activeJournalUsage = turnUsage;
+            },
           );
         } catch (error) {
           // The turn's failure reaches the journal and the view, but this log
@@ -1227,7 +1237,7 @@ export const makeStreamingAgent = async (
             activeJournalServedBy = [...activeJournalServedBy, served];
           }
         }
-        if (roundUsage) {
+        if (roundUsage && !usageReported) {
           // Counts add across rounds; the context reading is the last
           // round's, which is what the window holds now.
           turnUsage = addUsage(turnUsage, roundUsage);
@@ -1997,18 +2007,27 @@ export const makeStreamingAgent = async (
   // request rather than growing the journal's bounded resident record map.
   // Unresolved old turns may remain retained after newer turns are archived.
   const readAllTurns = async () => {
-    // Capture retained records first: a concurrent snapshot may archive one
-    // before the second read. Deduplicate that overlap rather than losing it
-    // between an archive-first read and a retained read.
-    const retained = await turnJournal.list();
-    const archived = await turnJournal.listArchived();
-    const byId = new Map(
-      [...archived, ...retained].map(turn => [turn.turnId, turn]),
-    );
+    const { retained, archiveCursor } = await turnJournal.readView();
+    const byId = new Map(retained.map(turn => [turn.turnId, turn]));
+    await visitArchivedPages(archiveCursor, page => {
+      for (const turn of page) byId.set(turn.turnId, turn);
+    });
     return [...byId.values()].sort((left, right) => {
       if (left.turnId === right.turnId) return 0;
       return BigInt(left.turnId) < BigInt(right.turnId) ? -1 : 1;
     });
+  };
+
+  /** @param {string} first @param {(records: any[]) => void} visit */
+  const visitArchivedPages = async (first, visit) => {
+    /** @type {string | null} */
+    let cursor = first;
+    while (cursor !== null) {
+      // eslint-disable-next-line no-await-in-loop
+      const page = await turnJournal.listArchivedPage(cursor);
+      visit(page.records);
+      cursor = page.next;
+    }
   };
 
   const getTranscript = async (excludeTurnId = undefined) => {
@@ -2229,6 +2248,8 @@ export const makeStreamingAgent = async (
   };
   const getTurns = () => turnJournal.list();
   const getArchivedTurns = () => turnJournal.listArchived();
+  /** @param {string} [cursor] */
+  const getArchivedTurnsPage = cursor => turnJournal.listArchivedPage(cursor);
   const getTurnContent = ref => turnJournal.readContent(ref);
   const getJournalStatus = async () =>
     harden({
@@ -2271,14 +2292,27 @@ export const makeStreamingAgent = async (
     const completed = await loadUsage();
     // Archived turns never change, and reading them costs a lookup per
     // chunk; read them again only when there are more of them.
-    const { archivedTurns } = await turnJournal.status();
-    if (!archivedIncomplete || archivedIncomplete.archived !== archivedTurns) {
-      archivedIncomplete = {
+    const {
+      archivedTurns,
+      archiveCursor,
+      retained: retainedTurns,
+    } = await turnJournal.readView();
+    let incomplete = archivedIncomplete;
+    if (!incomplete || incomplete.archived !== archivedTurns) {
+      let archiveUsage = projectUsage(undefined);
+      let turns = 0;
+      await visitArchivedPages(archiveCursor, page => {
+        const part = tally(page);
+        archiveUsage = addUsage(archiveUsage, part.usage);
+        turns += part.turns;
+      });
+      incomplete = {
         archived: archivedTurns,
-        ...tally(await turnJournal.listArchived()),
+        usage: archiveUsage,
+        turns,
       };
+      archivedIncomplete = incomplete;
     }
-    const retainedTurns = await turnJournal.list();
     const retained = tally(retainedTurns);
     // How full the window is now: the newest reading any turn left, whether
     // or not that turn completed. The completed totals hold the last reading
@@ -2293,13 +2327,10 @@ export const makeStreamingAgent = async (
       context = mergeContext(context, projectUsage(turn.usage).context);
     }
     return harden({
-      ...addUsage(
-        addUsage(completed, archivedIncomplete.usage),
-        retained.usage,
-      ),
+      ...addUsage(addUsage(completed, incomplete.usage), retained.usage),
       ...(context === undefined ? {} : { context }),
       turns: completed.turns,
-      incompleteTurns: archivedIncomplete.turns + retained.turns,
+      incompleteTurns: incomplete.turns + retained.turns,
     });
   };
 
@@ -2358,6 +2389,7 @@ export const makeStreamingAgent = async (
     getTranscript,
     getTurns,
     getArchivedTurns,
+    getArchivedTurnsPage,
     getTurnContent,
     getJournalStatus,
     resolveTurn,
@@ -4738,6 +4770,12 @@ export const make = async (
           await assertSessionReady(id);
           return (await getAgent(id, { observeOnly: true })).getArchivedTurns();
         },
+        async getArchivedTurnsPage(cursor) {
+          await assertSessionReady(id);
+          return (
+            await getAgent(id, { observeOnly: true })
+          ).getArchivedTurnsPage(cursor);
+        },
         async getTurnContent(ref) {
           await assertSessionReady(id);
           return (await getAgent(id, { observeOnly: true })).getTurnContent(
@@ -4919,7 +4957,9 @@ export const make = async (
           if (methodName === 'getTurns')
             return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, `servedBy` (the models a routing provider reports having served the turn’s rounds), errors, and explicit resolutions. Text fields longer than a preview carry a `<field>Ref` for getTurnContent. Settled turns beyond the retained window are in getArchivedTurns.';
           if (methodName === 'getArchivedTurns')
-            return 'getArchivedTurns() — Settled turn records beyond the retained window, oldest first, read from storage on request.';
+            return 'getArchivedTurns() — All archived settled turn records in archive publication order; materializes the full archive. Prefer getArchivedTurnsPage() for bounded chunk reads.';
+          if (methodName === 'getArchivedTurnsPage')
+            return 'getArchivedTurnsPage(cursor?) — One committed archive chunk, { records, next }; pass next unchanged until null. Omit cursor to capture a fresh archive boundary. Pages are in publication order, not necessarily turn-ID order. Cursors survive reconstruction of this journal, not deletion/replacement; they confer no authority. Reads do not hydrate full text references. A chunk bounds turn count, not total bytes or lifetime model context.';
           if (methodName === 'getTurnContent')
             return 'getTurnContent(ref) — The full text a turn record refers to by a `<field>Ref` ({ name, chars }).';
           if (methodName === 'getJournalStatus')

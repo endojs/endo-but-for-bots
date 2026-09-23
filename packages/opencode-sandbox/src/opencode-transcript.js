@@ -3,12 +3,10 @@
 /**
  * Transcript records as the turns opencode's import route takes, and back.
  *
- * The route (`POST /session/:id/messages/import`, in the pinned fork) records
- * each turn as its own message: a user turn as a `synthetic` message so it
- * describes a turn without provoking one, an assistant turn as text, a tool
- * turn as a tool message carrying both the call and its result, and a
- * compaction as the boundary message opencode's own history assembly selects
- * from. The translation lives here rather than in the client so the
+ * The route (`POST /session/:id/message/import`, in the pinned fork) records
+ * each turn without provoking a prompt. A compaction becomes synthetic user
+ * text, not a native compaction boundary. The adapter must select the active
+ * context before importing it. The translation lives here so the
  * round-trip conformance can judge it without a bridge.
  *
  * @module
@@ -18,6 +16,7 @@ import { Fail, q } from '@endo/errors';
 import {
   assertTranscriptRecord,
   pairToolCalls,
+  splitAtLastCompaction,
 } from '@endo/hosted-agent/transcript-records.js';
 
 /** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
@@ -37,21 +36,21 @@ import {
  * turn never settled still gets an output saying so, so an interrupted turn
  * restores as interrupted rather than as a message that never returned.
  *
- * Every record is sent, including the span before a compaction: opencode keeps
- * the whole history and assembles the model's context from the latest
- * compaction message onward (`packages/core/src/session/history.ts`), so the
- * boundary is restored as the row the CLI selects on rather than by the stack
- * trimming what it sends.
+ * The pinned fork's HTTP route writes the legacy MessageTable/PartTable,
+ * not the parallel core history store. It does not filter superseded records.
+ * Import only the last summary and its active span; Floot retains the full
+ * transcript. Pair only that span so a result cannot cross the boundary.
  *
  * @param {readonly TranscriptRecord[]} records
  * @returns {ImportedTurn[]}
  */
 export const importedTurnsFor = records => {
-  const { pairs } = pairToolCalls(records);
+  const { active } = splitAtLastCompaction(records);
+  const { pairs } = pairToolCalls(active);
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
   /** @type {ImportedTurn[]} */
   const turns = [];
-  for (const record of records) {
+  for (const record of active) {
     if (record.kind === 'message') {
       turns.push({ kind: record.role, text: record.content });
     } else if (record.kind === 'compaction') {
@@ -86,14 +85,12 @@ export const importedTurnsFor = records => {
 harden(importedTurnsFor);
 
 /**
- * Read imported turns back as the records opencode would carry as the
- * session's active context: the inverse of `importedTurnsFor`, for the
- * round-trip conformance.
+ * Decode the submitted import payload for adapter round-trip conformance.
  *
- * This reads the turns the way opencode's history assembly does — everything
- * from the latest compaction onward — because that is what the model is shown
- * after a revival, and it is the property the compaction round trip has to
- * judge. A turn kind the route does not define is refused rather than skipped,
+ * This is not native database read-back: a compaction payload is represented
+ * here as a canonical record, though the route stores synthetic user text.
+ * Nothing is filtered here; otherwise the test could hide an adapter that
+ * sends superseded context. A turn kind the route does not define is refused,
  * since a kind this module did not write is a kind the route would not accept.
  *
  * @param {readonly any[]} turns
@@ -101,12 +98,8 @@ harden(importedTurnsFor);
  */
 export const readImportedTurns = turns => {
   Array.isArray(turns) || Fail`imported turns must be an array`;
-  let boundary = -1;
-  for (const [index, turn] of turns.entries()) {
-    if (turn?.kind === 'compaction') boundary = index;
-  }
   const records = [];
-  for (const turn of turns.slice(boundary < 0 ? 0 : boundary)) {
+  for (const turn of turns) {
     if (turn?.kind === 'user' || turn?.kind === 'assistant') {
       records.push({ kind: 'message', role: turn.kind, content: turn.text });
     } else if (turn?.kind === 'compaction') {

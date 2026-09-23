@@ -85,44 +85,37 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
-test('empty OpenRouter completion remains a failed turn after reconstruction', async t => {
+test('recorded compaction survives reconstruction into direct-provider context', async t => {
   t.timeout(10_000);
   const f = fixture();
-  let requests = 0;
-  const provider = makeOpenRouterProvider({
-    apiKey: 'test-not-a-key',
-    model: 'openrouter/free',
-    fetchImpl: async url => {
-      if (String(url).endsWith('/models')) return Response.json({ data: [] });
-      requests += 1;
-      return Response.json({
-        choices: [
-          {
-            finish_reason: 'stop',
-            message: {
-              role: 'assistant',
-              content: '',
-            },
-          },
-        ],
-      });
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      channel.push({ type: 'text-delta', text: 'superseded answer' });
+      channel.push({ type: 'compaction', summary: 'retained summary' });
+      channel.push({ type: 'text-delta', text: 'after boundary' });
+      channel.push({ type: 'end' });
+      return channel.reader;
     },
   });
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    { hostedClient },
     'Test',
   );
   t.teardown(() => agent.shutdown());
-  await t.throwsAsync(
-    agent.converse('Recall the saved word', makeReplyChannel().writer),
-    { message: /empty assistant response/ },
-  );
-  const before = await agent.getTurns();
-  t.is(before.length, 1);
-  t.is(before[0].state, 'failed');
+  await agent.converse('superseded request', makeReplyChannel().writer);
+  const transcript = await agent.getTranscript();
+  t.true(transcript.some(record => record.kind === 'compaction'));
   await agent.shutdown();
+  const contexts = [];
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      return completed();
+    },
+  });
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
@@ -130,13 +123,115 @@ test('empty OpenRouter completion remains a failed turn after reconstruction', a
     'Test',
   );
   t.teardown(() => revived.shutdown());
-  t.deepEqual(await revived.getTurns(), before);
-  t.true(
-    (await revived.getHistory()).some(row =>
-      String(row.content).includes('empty assistant response'),
-    ),
+  t.deepEqual(await revived.getTranscript(), transcript);
+  await revived.converse('continue now', makeReplyChannel().writer);
+  const replay = contexts[0].filter(message => message.role !== 'system');
+  t.deepEqual(replay, [
+    { role: 'assistant', content: 'retained summary' },
+    { role: 'assistant', content: 'after boundary' },
+    { role: 'user', content: 'continue now' },
+  ]);
+  t.deepEqual(
+    (await revived.getTranscript()).slice(0, transcript.length),
+    transcript,
   );
-  t.is(requests, 1);
+});
+
+for (const failure of ['empty', 'HTTP 503']) {
+  test(`OpenRouter ${failure} remains a failed turn with usage after reconstruction`, async t => {
+    t.timeout(10_000);
+    const f = fixture();
+    let requests = 0;
+    const provider = makeOpenRouterProvider({
+      apiKey: 'test-not-a-key',
+      model: 'openrouter/free',
+      fetchImpl: async url => {
+        if (String(url).endsWith('/models')) return Response.json({ data: [] });
+        requests += 1;
+        return Response.json(
+          {
+            usage: { prompt_tokens: 10, completion_tokens: 3 },
+            choices: [
+              {
+                finish_reason: 'stop',
+                message: {
+                  role: 'assistant',
+                  content: '',
+                },
+              },
+            ],
+          },
+          { status: failure === 'empty' ? 200 : 503 },
+        );
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { provider },
+      'Test',
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(
+      agent.converse('Recall the saved word', makeReplyChannel().writer),
+      {
+        message: failure === 'empty' ? /empty assistant response/ : /HTTP 503/,
+      },
+    );
+    const before = await agent.getTurns();
+    t.is(before.length, 1);
+    t.is(before[0].state, 'failed');
+    t.is(before[0].usage.inputTokens, 10);
+    t.is(before[0].usage.outputTokens, 3);
+    const usage = await agent.getUsage();
+    t.is(usage.inputTokens, 10);
+    t.is(usage.outputTokens, 3);
+    t.is(usage.turns, 0);
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { provider },
+      'Test',
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getTurns(), before);
+    t.deepEqual(await revived.getUsage(), usage);
+    t.true(
+      (await revived.getHistory()).some(row =>
+        String(row.content).includes(
+          failure === 'empty' ? 'empty assistant response' : 'HTTP 503',
+        ),
+      ),
+    );
+    t.is(requests, 1);
+  });
+}
+
+test('provider usage notifications and returned totals are not double counted', async t => {
+  const f = fixture();
+  const roundUsage = usageCounts({ inputTokens: 11, outputTokens: 3 });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provider: {
+        async chatStream(_messages, _tools, _onToken, _signal, onUsage) {
+          onUsage?.(usageCounts({ inputTokens: 5, outputTokens: 1 }));
+          onUsage?.(usageCounts({ inputTokens: 6, outputTokens: 2 }));
+          return {
+            message: { role: 'assistant', content: 'Done' },
+            usage: roundUsage,
+          };
+        },
+      },
+    },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Hello', makeReplyChannel().writer);
+  t.is((await agent.getUsage()).inputTokens, 11);
+  t.is((await agent.getUsage()).outputTokens, 3);
 });
 
 for (const backend of ['provider', 'hosted']) {
@@ -230,6 +325,12 @@ test('archived failures remain in UI history and direct-provider context', async
       turn => turn.input === 'Preserve this failed request',
     ),
   );
+  t.true(
+    (await agent.getArchivedTurnsPage()).records.some(
+      turn => turn.input === 'Preserve this failed request',
+    ),
+  );
+  t.is((await agent.getUsage()).incompleteTurns, 1);
   t.true(
     (await agent.getHistory()).some(
       message => message.content === 'Preserve this failed request',

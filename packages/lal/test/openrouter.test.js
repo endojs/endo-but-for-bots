@@ -253,6 +253,47 @@ const ok = (content = 'Done', extra = {}) =>
     }),
   );
 
+test('OpenRouter never publishes invalid usage to the observer', async t => {
+  const provider = makeOpenRouterProvider({
+    ...options,
+    fetchImpl: withCatalog(async () =>
+      ok('Done', {
+        usage: { prompt_tokens: -1, completion_tokens: 3 },
+      }),
+    ),
+  });
+  await t.throwsAsync(
+    provider.chatStream([], [], undefined, undefined, () =>
+      t.fail('Invalid usage must not be reported'),
+    ),
+    { message: /invalid token usage/ },
+  );
+});
+
+test('OpenRouter observer failure neither retries nor delivers an answer', async t => {
+  let requests = 0;
+  const provider = makeOpenRouterProvider({
+    ...options,
+    fetchImpl: withCatalog(async () => {
+      requests += 1;
+      return ok();
+    }),
+  });
+  await t.throwsAsync(
+    provider.chatStream(
+      [],
+      [],
+      () => t.fail('No output after observer failure'),
+      undefined,
+      () => {
+        throw Error('Observer failed');
+      },
+    ),
+    { message: 'Observer failed' },
+  );
+  t.is(requests, 1);
+});
+
 for (const content of [undefined, null, '', ' \n\t']) {
   test(`OpenRouter refuses empty answer ${JSON.stringify(content)} without replay`, async t => {
     let requests = 0;
@@ -282,14 +323,24 @@ for (const content of [undefined, null, '', ' \n\t']) {
         );
       }),
     });
+    const readings = [];
     const error = await t.throwsAsync(
-      provider.chatStream([], [], () => t.fail('No empty output delivery')),
+      provider.chatStream(
+        [],
+        [],
+        () => t.fail('No empty output delivery'),
+        undefined,
+        usage => readings.push(usage),
+      ),
       {
         message:
           /empty assistant response.*finish_reason stop.*served by vendor\/free-model/,
       },
     );
     t.false(error.message.includes('PRIVATE_REASONING'));
+    t.is(readings.length, 1);
+    t.is(readings[0].inputTokens, 10);
+    t.is(readings[0].outputTokens, 3);
     t.is(requests, 1);
   });
 }
@@ -358,6 +409,138 @@ test('it gives up after three attempts and says how many it made', async t => {
   const error = await t.throwsAsync(() => world.provider.chat([], []));
   t.is(error.message, 'OpenRouter request failed (HTTP 502), after 3 attempts');
   t.is(world.requests(), 3);
+});
+
+for (const kind of ['HTTP 429', 'HTTP 503', 'API', 'finish']) {
+  for (const observe of [false, true]) {
+    test(`reported usage prevents replay for ${kind}, observer ${observe}`, async t => {
+      const readings = [];
+      const world = scripted([
+        () =>
+          Response.json(
+            {
+              usage: { prompt_tokens: 10, completion_tokens: 3 },
+              ...(kind === 'API'
+                ? { error: { code: 503, message: 'PRIVATE' } }
+                : {}),
+              ...(kind === 'finish'
+                ? { choices: [{ finish_reason: 'error' }] }
+                : {}),
+            },
+            { status: kind.startsWith('HTTP') ? Number(kind.slice(5)) : 200 },
+          ),
+      ]);
+      const error = await t.throwsAsync(
+        world.provider.chatStream(
+          [],
+          [],
+          undefined,
+          undefined,
+          observe ? usage => readings.push(usage) : undefined,
+        ),
+      );
+      t.is(world.requests(), 1);
+      t.deepEqual(world.waits, []);
+      t.false(error.message.includes('PRIVATE'));
+      t.regex(
+        error.message,
+        kind.startsWith('HTTP')
+          ? /HTTP/
+          : kind === 'API'
+            ? /API error/
+            : /no successful assistant/,
+      );
+      t.is(readings.length, observe ? 1 : 0);
+      if (observe) {
+        t.is(readings[0].inputTokens, 10);
+        t.is(readings[0].outputTokens, 3);
+      }
+    });
+  }
+}
+
+test('zero reported usage permits a transient retry without inflating totals', async t => {
+  const world = scripted([
+    () =>
+      Response.json(
+        { usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        { status: 503 },
+      ),
+    () => ok(),
+  ]);
+  const readings = [];
+  const result = await world.provider.chatStream(
+    [],
+    [],
+    undefined,
+    undefined,
+    usage => readings.push(usage),
+  );
+  t.is(world.requests(), 2);
+  t.is(readings.length, 2);
+  t.is(readings[0].inputTokens, 0);
+  t.is(result.usage?.inputTokens, 1);
+});
+
+test('fractional reported usage is refused instead of rounded down and replayed', async t => {
+  const world = scripted([
+    () =>
+      Response.json(
+        {
+          usage: { prompt_tokens: 0.5, completion_tokens: 0 },
+        },
+        { status: 503 },
+      ),
+  ]);
+  await t.throwsAsync(world.provider.chat([], []), {
+    message: /invalid token usage/,
+  });
+  t.is(world.requests(), 1);
+});
+
+test('oversized HTTP error body is cancelled without exposing its contents', async t => {
+  let cancelled = false;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(65_537));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const world = scripted([() => new Response(body, { status: 403 })]);
+  await t.throwsAsync(world.provider.chat([], []), { message: /HTTP 403/ });
+  t.true(cancelled);
+  t.is(world.requests(), 1);
+});
+
+test('a stalled HTTP error body keeps its cause and permits only one timeout retry', async t => {
+  t.timeout(2000);
+  let requests = 0;
+  const provider = makeOpenRouterProvider({
+    ...options,
+    requestTimeoutMs: 10,
+    sleep: async () => {},
+    log: () => {},
+    fetchImpl: withCatalog(async (_url, init) => {
+      requests += 1;
+      const body = new ReadableStream({
+        start(controller) {
+          init.signal.addEventListener(
+            'abort',
+            () =>
+              controller.error(new DOMException('Aborted body', 'AbortError')),
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { status: 503 });
+    }),
+  });
+  await t.throwsAsync(provider.chat([], []), {
+    message: 'OpenRouter request failed (HTTP 503), after 2 attempts',
+  });
+  t.is(requests, 2);
 });
 
 test('a request the API refused for cause is not repeated', async t => {
