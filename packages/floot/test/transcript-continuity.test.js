@@ -94,7 +94,7 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -160,7 +160,7 @@ test('a failed turn on a transcript backend keeps the delivered prompt', async t
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -219,7 +219,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -299,7 +299,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
   const restored = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -316,7 +316,7 @@ test('a leading backend refusal remains a durable failed dispatch', async t => {
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -342,7 +342,7 @@ test('a checkpoint-reconciled backend retains a cancelled turn in the journal', 
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
     { hostedContinuity: 'opaque-reconciled' },
   );
@@ -380,7 +380,7 @@ test('public thinking persists after failure and restart but is absent from mode
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'prompt',
     { hostedContinuity: 'transcript' },
   );
@@ -401,7 +401,7 @@ test('public thinking persists after failure and restart but is absent from mode
   const restored = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'prompt',
     { hostedContinuity: 'transcript' },
   );

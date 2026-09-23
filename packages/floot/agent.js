@@ -53,6 +53,11 @@ import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
+import { assertRuntimeConfig } from './src/runtime-config.js';
+import {
+  assertSessionIdentity,
+  isHostedSession,
+} from './src/session-identity.js';
 import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
@@ -383,8 +388,6 @@ harden(refreshPresetEntry);
 // (`modelCatalog`). Nothing here names a model. A session that does not pin
 // one follows the factory's configured default model (the `model` in the
 // `llm-provider` config, or the provider's own fallback).
-// Recognize persisted legacy sessions so revival refuses them explicitly.
-const CLAUDE_CLI_MODEL_ID = 'claude-cli';
 const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
 
 /**
@@ -506,33 +509,6 @@ const provisionPresetObjects = async (
 };
 
 /**
- * @typedef {object} ProviderConstructorConfig
- * @property {string} host
- * @property {string} model
- * @property {string} authToken
- */
-
-/**
- * @typedef {object} InjectedProviderConfig
- * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal, onUsage?: (usage: Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>) => void) => Promise<any> }} provider
- */
-
-/**
- * @typedef {object} LateProviderConfig
- * @property {() => Promise<any>} provideProvider - Resolved once per turn
- *   rather than held, so dropping a cached provider (`refreshCredentials`)
- *   reaches a session that is already open.
- */
-
-/**
- * @typedef {object} ClaudeClientConfig
- * @property
- *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
- *   events. Turns bypass the provider tool loop — the CLI runs its own tools
- *   in the sandbox and keeps its own conversation continuity.
- */
-
-/**
  * Build a streaming agent over a guest's powers. The returned object exposes
  * `converse(input, writer)`, which journals dialogue and tool evidence, streams the
  * model's reply through `writer` (src/stream.js), and persists the assistant
@@ -553,7 +529,7 @@ const provisionPresetObjects = async (
  *
  * @param {any} powers - Guest powers (petstore for conversation history)
  * @param {Promise<object> | object | undefined} _context
- * @param {ProviderConstructorConfig | InjectedProviderConfig | LateProviderConfig | ClaudeClientConfig | { hostedClient: any } | { provideHostedClient: (snapshot: any) => Promise<any> }} providerConfig
+ * @param {import('./src/runtime-config.js').RuntimeConfig} runtime
  * @param {string} [systemPrompt]
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
@@ -603,7 +579,7 @@ const provisionPresetObjects = async (
 export const makeStreamingAgent = async (
   powers,
   _context,
-  providerConfig,
+  runtime,
   systemPrompt,
   {
     spawner,
@@ -618,6 +594,13 @@ export const makeStreamingAgent = async (
     onChange,
   } = {},
 ) => {
+  assertRuntimeConfig(runtime);
+  const runtimeKind = runtime.kind;
+  const provideProvider =
+    runtime.kind === 'provider' ? runtime.provideProvider : undefined;
+  const provideHostedClient =
+    runtime.kind === 'hosted' ? runtime.provideHostedClient : undefined;
+  const recordsOnly = runtimeKind === 'records-only';
   // No implicit migration: reject legacy branches before recovery or backend startup.
   const existingNames = await E(powers).list();
   if (
@@ -642,20 +625,8 @@ export const makeStreamingAgent = async (
       console.error('[floot-agent] change observer failed:', error);
     }
   };
-  let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
-  const provideHostedClient = /** @type {any} */ (providerConfig)
-    .provideHostedClient;
-  const provideProvider = /** @type {any} */ (providerConfig).provideProvider;
   /** @type {any} */
-  const staticProvider =
-    hostedClient || provideHostedClient || provideProvider
-      ? null
-      : /** @type {any} */ (providerConfig).provider ||
-        createStreamingProvider({
-          LAL_HOST: /** @type {any} */ (providerConfig).host,
-          LAL_MODEL: /** @type {any} */ (providerConfig).model,
-          LAL_AUTH_TOKEN: /** @type {any} */ (providerConfig).authToken,
-        });
+  let hostedClient;
 
   /**
    * The provider this turn runs on.
@@ -666,8 +637,10 @@ export const makeStreamingAgent = async (
    * `refreshCredentials()` drops the factory's cache, and the next turn asks
    * for it again.
    */
-  const currentProvider = async () =>
-    provideProvider ? provideProvider() : staticProvider;
+  const currentProvider = async () => {
+    if (!provideProvider) throw Error('This runtime is not a direct provider');
+    return provideProvider();
+  };
 
   // An agent built with no prompt at all was not opened by the Floot space,
   // so nothing reads its replies aloud.
@@ -959,7 +932,7 @@ export const makeStreamingAgent = async (
       writer.end();
     };
 
-    if (hostedClient) {
+    if (runtimeKind === 'hosted') {
       writer.setPhase('thinking');
       let hosted;
       try {
@@ -1307,7 +1280,7 @@ export const makeStreamingAgent = async (
     }
     const turnId = await turnJournal.begin({
       input: text,
-      backendId: backendId || (hostedClient ? 'hosted' : 'provider'),
+      backendId: backendId || runtimeKind,
       modelId: modelId || '',
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
@@ -1420,6 +1393,11 @@ export const makeStreamingAgent = async (
   };
 
   const converse = (input, writer, meta, signal, onStart, onBegun) => {
+    if (recordsOnly) {
+      const error = Error('Records-only session cannot run turns');
+      writer.abort(error.message);
+      return Promise.reject(error);
+    }
     if (stopped || quarantineError) {
       const error =
         quarantineError || Error('Floot session agent is shutting down');
@@ -1514,6 +1492,7 @@ export const makeStreamingAgent = async (
   /** Wakes the mail worker; rebound when a pump starts. */
   let wakeMailWorker = () => {};
   const startInbox = () => {
+    if (recordsOnly) return;
     if (inboxStarted || stopped) return;
     inboxStarted = true;
     inboxLoop = (async () => {
@@ -2013,6 +1992,7 @@ export const makeStreamingAgent = async (
     hostedClient = await provideHostedClient(
       journalSnapshot(await toolRegistry.snapshot()),
     );
+    if (!hostedClient) throw Error('Hosted runtime did not provide a client');
   }
 
   // A network policy decision and a rebind both replace the incarnation, and
@@ -2260,14 +2240,18 @@ export const make = async (
   // the `llm-provider` capability handle. Resolve it once and cache it; every
   // per-model provider is built from it.
   let providerConfigP;
+  // A refresh starts a new cache incarnation. Already-admitted reads may finish
+  // using their captured configuration, but cannot repopulate the new cache.
+  let providerEpoch = harden({});
   const getProviderConfig = () => {
     if (!providerConfigP) {
-      providerConfigP = E(powers)
+      const pending = E(powers)
         .lookup('llm-provider')
         .catch(error => {
-          providerConfigP = undefined;
+          if (providerConfigP === pending) providerConfigP = undefined;
           throw error;
         });
+      providerConfigP = pending;
     }
     return providerConfigP;
   };
@@ -2280,9 +2264,22 @@ export const make = async (
   // nothing, rather than a list somebody typed.
   /** @type {Promise<ReturnType<typeof makeModelCatalogOwner>> | undefined} */
   let providerCatalogP;
+  /** Catalog construction/retirement remains owned until close settles. */
+  const providerCatalogs = new Set();
+  const closeProviderCatalog = async pending => {
+    try {
+      const owner = await pending;
+      await owner.close();
+    } finally {
+      providerCatalogs.delete(pending);
+    }
+  };
   const getProviderCatalog = () => {
-    providerCatalogP ??= (async () => {
+    ownership.assertOpen();
+    if (providerCatalogP !== undefined) return providerCatalogP;
+    const pending = (async () => {
       const cfg = await getProviderConfig();
+      ownership.assertOpen();
       const kind = cfg?.provider || 'anthropic';
       const readKey = () => resolveAuthToken({ powers, config: cfg });
       /** @type {(() => Promise<any>) | undefined} */
@@ -2308,10 +2305,13 @@ export const make = async (
       }
       return makeModelCatalogOwner({ read });
     })().catch(error => {
-      providerCatalogP = undefined;
+      if (providerCatalogP === pending) providerCatalogP = undefined;
+      providerCatalogs.delete(pending);
       throw error;
     });
-    return providerCatalogP;
+    providerCatalogP = pending;
+    providerCatalogs.add(pending);
+    return pending;
   };
 
   /** What last went wrong reading each hosted backend's catalog, by id. */
@@ -2343,7 +2343,7 @@ export const make = async (
     let pending = catalogReads.get(key);
     if (pending === undefined) {
       pending = readCatalogsNow(backendId).finally(() => {
-        catalogReads.delete(key);
+        if (catalogReads.get(key) === pending) catalogReads.delete(key);
       });
       catalogReads.set(key, pending);
     }
@@ -2896,7 +2896,7 @@ export const make = async (
    * The model id a session's usage is priced against.
    *
    * An unpinned session — the default — records no model and follows the
-   * factory's configured one, so asking `entry.model` alone yields `''` and
+   * factory's configured one, so asking `entry.modelId` alone yields `''` and
    * nothing can be priced. Both the `accountStatus` tool and the session
    * facet's `getAccount` must answer the same way, or a user gets a cost from
    * the model and a blank from the UI panel beside it.
@@ -2905,10 +2905,10 @@ export const make = async (
    * @returns {Promise<string>}
    */
   const sessionModelId = async entry => {
-    if (entry?.backendId) {
-      return hostedModelId(entry.backendId, entry.modelId || '');
+    if (isHostedSession(entry)) {
+      return hostedModelId(entry.backendId, entry.modelId);
     }
-    if (entry?.model) return `${entry.model}`;
+    if (entry?.modelId) return entry.modelId;
     try {
       return `${(await getProviderConfig()).model || ''}`;
     } catch {
@@ -3198,31 +3198,34 @@ export const make = async (
   /** @type {Map<string, { token: string, providerP: Promise<any> }>} */
   const providersByModel = new Map();
   const getProvider = async model => {
+    const epoch = providerEpoch;
     const key = model || '';
     const cfg = await getProviderConfig();
     // A revoked secret rejects here, which fails the turn rather than letting
     // a cached provider answer it.
     const token = await resolveAuthToken({ powers, config: cfg });
     const cached = providersByModel.get(key);
-    if (cached && cached.token === token) return cached.providerP;
+    if (epoch === providerEpoch && cached && cached.token === token)
+      return cached.providerP;
     const providerP = (async () =>
       createStreamingProvider({
         FLOOT_PROVIDER: cfg.provider,
         FLOOT_MODEL: model || cfg.model,
         FLOOT_AUTH_TOKEN: token,
       }))().catch(error => {
-      if (providersByModel.get(key)?.token === token) {
+      if (providersByModel.get(key)?.providerP === providerP) {
         providersByModel.delete(key);
       }
       throw error;
     });
-    providersByModel.set(key, { token, providerP });
+    if (epoch === providerEpoch)
+      providersByModel.set(key, { token, providerP });
     return providerP;
   };
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3251,6 +3254,7 @@ export const make = async (
           ) {
             throw Error('Floot lifecycle registry journal is corrupt');
           }
+          for (const entry of stored.sessions) assertSessionIdentity(entry);
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
         } else if (
@@ -3482,7 +3486,6 @@ export const make = async (
       title,
       createdAt,
       presetId,
-      model,
       backendId,
       modelId,
       reasoningEffort,
@@ -3495,12 +3498,15 @@ export const make = async (
       title,
       createdAt,
       presetId: presetId || DEFAULT_PRESET_ID,
-      model: backendId ? hostedModelId(backendId, modelId || '') : model || '',
-      backendId: backendId || 'provider',
-      modelId: modelId || model || '',
+      model: isHostedSession(entry)
+        ? hostedModelId(backendId, modelId)
+        : modelId,
+      backendId,
+      modelId,
       // What the session runs, pinned or not: an unpinned provider session
       // resolves to the configured model at each turn, so this is as of now.
-      effectiveModelId: modelId || model || (backendId ? '' : providerModel),
+      effectiveModelId:
+        modelId || (isHostedSession(entry) ? '' : providerModel),
       reasoningEffort: reasoningEffort || '',
       // Which of its backend's subscriptions the session uses: `auto`, or the
       // id it was pinned to when it was created.
@@ -3560,6 +3566,19 @@ export const make = async (
   // session guest and revives an existing one after a restart.
   /** @type {Map<string, Promise<any>>} */
   const agents = new Map();
+  /**
+   * A rejected construction is not evidence that no agent was returned: its
+   * final shutdown may have failed. Cleanup can retry that exact agent, while
+   * ordinary acquisition continues to receive the cached rejection.
+   * @type {WeakMap<Promise<any>, { agent: Awaited<ReturnType<typeof makeStreamingAgent>> | undefined }>}
+   */
+  const failedConstructions = new WeakMap();
+  /** @param {Promise<any>} pending */
+  const agentForCleanup = pending =>
+    pending.catch(error => {
+      if (!failedConstructions.has(pending)) throw error;
+      return failedConstructions.get(pending)?.agent;
+    });
   const stopFences = new Set();
   const stopFlights = new Map();
   const resumeTokens = new Map();
@@ -3601,7 +3620,7 @@ export const make = async (
    * disagree.
    *
    * @param {string} id
-   * @param {{ executionState?: string, backendId?: string } | undefined} entry
+   * @param {{ executionState?: string, backendId: string } | undefined} entry
    */
   const projectExecution = (id, entry) => {
     // A resume fences the session while it publishes permission to run, so
@@ -3610,7 +3629,7 @@ export const make = async (
     let state = entry?.executionState || 'running';
     if (resumeTokens.has(id)) state = 'stopped';
     else if (stopFences.has(id)) state = 'stopping';
-    return harden({ state, supported: Boolean(entry?.backendId) });
+    return harden({ state, supported: isHostedSession(entry) });
   };
   const executionState = async id =>
     projectExecution(id, await assertSessionReady(id));
@@ -3630,7 +3649,7 @@ export const make = async (
       });
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
-      if (!entry.backendId) {
+      if (!isHostedSession(entry)) {
         stopFences.delete(id);
         throw Error('This backend has no hosted sandbox to stop');
       }
@@ -3645,7 +3664,9 @@ export const make = async (
       // Persistence failure must not prevent withdrawing live authority.
       const intent = attempt(() => setExecutionState(id, 'stopping'));
       const pending = agents.get(id);
-      const shutdown = pending?.then(agent => agent.shutdown(true));
+      const shutdown = pending
+        ? agentForCleanup(pending).then(agent => agent?.shutdown(true))
+        : undefined;
       // Final shutdown retries after native stop releases blocked readers.
       void shutdown?.catch(() => undefined);
       const mount = hostedMountClients.get(id);
@@ -3659,7 +3680,7 @@ export const make = async (
       await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
       // Observe late acquisition before claiming completion. The admission
       // fence prevents new acquisitions and the second stop covers late ones.
-      const agent = pending ? await pending.catch(() => undefined) : undefined;
+      const agent = pending ? await agentForCleanup(pending) : undefined;
       const lateMount = hostedMountClients.get(id);
       if (lateMount) await attempt(() => lateMount.close());
       await attempt(() => E(backend.factory).stop(harden({ sessionId: id })));
@@ -3691,18 +3712,52 @@ export const make = async (
     )
       throw Error('Finish emergency stop before resuming');
     if (entry.executionState !== 'stopped') return executionState(id);
-    // Fence while publishing permission to start a fresh incarnation.
+    // Fence both execution and records-only acquisition while retiring the
+    // stopped observer. Do not publish permission to run until its storage
+    // has acknowledged closure.
+    // Even an unobserved session needs a cached records-only agent here: after
+    // failed closure it remains the admission barrier to a fresh journal.
+    const observer = agents.get(id) || getAgent(id, { observeOnly: true });
     const token = harden({});
     resumeTokens.set(id, token);
     stopFences.add(id);
-    await setExecutionState(id, 'running');
-    const observer = agents.get(id);
-    if (observer) await observer.catch(() => undefined);
-    if (resumeTokens.get(id) !== token)
-      throw Error('Resume superseded by emergency stop');
-    resumeTokens.delete(id);
-    agents.delete(id);
-    stopFences.delete(id);
+    const assertCurrentResume = () => {
+      ownership.assertOpen();
+      if (resumeTokens.get(id) !== token)
+        throw Error('Resume superseded by emergency stop');
+    };
+    let publishing = false;
+    try {
+      const agent = await observer;
+      assertCurrentResume();
+      await agent.shutdown(true);
+      assertCurrentResume();
+      // Snapshot exact facets, not a live Map iterator. A superseding stop
+      // and later resume must not let this continuation close their successor.
+      const journals = [...privateJournals].filter(([, owner]) => owner === id);
+      for (const [journal] of journals) {
+        await E(journal).close();
+        privateJournals.delete(journal);
+        assertCurrentResume();
+      }
+      assertCurrentResume();
+      publishing = true;
+      await setExecutionState(id, 'running');
+      assertCurrentResume();
+      resumeTokens.delete(id);
+      if (agents.get(id) === observer) agents.delete(id);
+      stopFences.delete(id);
+    } catch (error) {
+      if (resumeTokens.get(id) === token) {
+        resumeTokens.delete(id);
+        // Before publication the durable state remains stopped. A failed
+        // publication may have committed: keep its stop fence for explicit
+        // emergency-stop recovery instead of guessing that it did not.
+        if (!publishing) stopFences.delete(id);
+        touchSession(id);
+      }
+      throw error;
+    }
     touchSession(id, 'transcript');
     await getAgent(id);
     void submissions.get(id)?.pump();
@@ -3729,7 +3784,7 @@ export const make = async (
           supported: async () => {
             const entry = (await loadRegistry()).find(item => item.id === id);
             if (!entry) throw Error('Unknown Floot session');
-            if (!entry.backendId) return [];
+            if (!isHostedSession(entry)) return [];
             return (
               (await getHostedBackends()).get(entry.backendId)?.descriptor
                 .supportedNetworkPolicies || []
@@ -3765,6 +3820,16 @@ export const make = async (
       await E(admin).terminate();
       backendAdmins.delete(id);
     }
+    // changeIncarnation fences all acquisition while the old agent and native
+    // resources drain. Close its storage before dropping that agent: failed
+    // or uncertain closure must not admit a fresh writer. This releases only
+    // in-memory handles, not the durable namespace needed by the replacement.
+    for (const [journal, sessionId] of privateJournals) {
+      if (sessionId === id) {
+        await E(journal).close();
+        privateJournals.delete(journal);
+      }
+    }
     agents.delete(id);
   };
   const changeIncarnation = async (id, operation) => {
@@ -3799,6 +3864,7 @@ export const make = async (
         `Session "${id}" cannot open an incarnation during or after deletion`,
       );
     if (!observeOnly) assertSessionAdmission(id);
+    if (resumeTokens.has(id)) throw Error('Session resume in progress');
     if (incarnationChanges.has(id))
       throw Error('Session incarnation change in progress');
     let agentP = agents.get(id);
@@ -3809,9 +3875,13 @@ export const make = async (
         );
       /** @type {{ input: string, from?: string } | undefined} */
       let runningTurn;
+      /** @type {Awaited<ReturnType<typeof providePrivateTurnStorage>> | undefined} */
+      let journalPowers;
+      /** @type {Awaited<ReturnType<typeof makeStreamingAgent>> | undefined} */
+      let constructedAgent;
       agentP = (async () => {
         const host = getHost();
-        const journalPowers = await providePrivateTurnStorage(host, id);
+        journalPowers = await providePrivateTurnStorage(host, id);
         privateJournals.set(journalPowers, id);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
@@ -3947,16 +4017,12 @@ export const make = async (
         }
         // Build (or reuse) the backend for this session's pinned model; an
         // unpinned session follows the factory's configured default.
-        // Persisted legacy CLI sessions fail instead of bypassing admission.
+        /** @type {import('./src/runtime-config.js').RuntimeConfig} */
         let agentConfig;
         if (suspended) {
           // Construct a records-only observer, never a backend or inbox.
-          agentConfig = {
-            provideProvider: () => {
-              throw Error('Session is stopped');
-            },
-          };
-        } else if (entry?.backendId) {
+          agentConfig = { kind: 'records-only' };
+        } else if (isHostedSession(entry)) {
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
@@ -3990,6 +4056,7 @@ export const make = async (
               )
             : undefined;
           agentConfig = {
+            kind: 'hosted',
             provideHostedClient: async snapshot => {
               assertSessionAdmission(id);
               const toolSet = makeEndoToolSet(
@@ -4055,14 +4122,15 @@ export const make = async (
               return makeSendOnlyClient(mountClient.run);
             },
           };
-        } else if (entry?.model === CLAUDE_CLI_MODEL_ID) {
-          Fail`Legacy Claude CLI sessions are unavailable: provision an attested hosted backend with brokered credentials and verified tool isolation`;
         } else {
           // A thunk, not a resolved provider: `refreshCredentials()` clears
           // the factory's cache, and a session that had captured its provider
           // would keep using the token that provider was built with — the
           // rotation or revocation would reach only sessions opened after it.
-          agentConfig = { provideProvider: () => getProvider(entry?.model) };
+          agentConfig = {
+            kind: 'provider',
+            provideProvider: () => getProvider(entry.modelId),
+          };
         }
         // A session may delegate only while its own depth leaves room. The
         // spawner is rebuilt on every revival rather than persisted, so the
@@ -4077,7 +4145,7 @@ export const make = async (
           harden({
             maxToolRounds,
             journalPowers,
-            backendId: entry?.backendId || 'provider',
+            backendId: entry.backendId,
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
             onChange: (kind, detail) => {
@@ -4120,6 +4188,7 @@ export const make = async (
               : {}),
           }),
         );
+        constructedAgent = agent;
         // Each session is addressable by mail: start following its inbox.
         if (ownership.isClosed() || suspended || stopFences.has(id))
           await agent.shutdown(true);
@@ -4128,7 +4197,9 @@ export const make = async (
         void refreshLastTurn(id, agent);
         return agent;
       })().catch(async error => {
-        agents.delete(id);
+        // Keep this construction cached through rollback so another request
+        // cannot open a successor while its old resources are still closing.
+        failedConstructions.set(agentP, { agent: constructedAgent });
         workingSessions.delete(id);
         if (!observeOnly) {
           revivalFailures.add(id);
@@ -4138,27 +4209,35 @@ export const make = async (
         // the window before the retry re-arms would have it create a
         // successor this rollback does not know about — a live backend
         // session reachable through nothing.
-        const failedMountClient = hostedMountClients.get(id);
-        if (failedMountClient) {
-          hostedMountClients.delete(id);
-          await failedMountClient.close().catch(() => undefined);
-        }
-        const admin = backendAdmins.get(id);
-        if (admin) {
-          // A stop, not a deletion: the backend keeps the session's durable
-          // workspace and state, so a revival that failed past this point —
-          // an oracle lookup, say — can be revived again with them intact.
-          try {
-            await E(admin).terminate();
-            backendAdmins.delete(id);
-          } catch (cleanupError) {
-            throw new AggregateError(
-              [error, cleanupError],
-              `Floot session ${id} setup and hosted-backend rollback failed`,
-              { cause: cleanupError },
-            );
+        try {
+          if (constructedAgent) await constructedAgent.shutdown(true);
+          const failedMountClient = hostedMountClients.get(id);
+          if (failedMountClient) {
+            await failedMountClient.close();
+            if (hostedMountClients.get(id) === failedMountClient)
+              hostedMountClients.delete(id);
           }
+          const admin = backendAdmins.get(id);
+          // A stop, not a deletion: the backend keeps the session's durable
+          // workspace and state intact for a later reconstruction.
+          if (admin) {
+            await E(admin).terminate();
+            if (backendAdmins.get(id) === admin) backendAdmins.delete(id);
+          }
+          if (journalPowers) {
+            await E(journalPowers).close();
+            privateJournals.delete(journalPowers);
+          }
+        } catch (cleanupError) {
+          // Retain the failed promise and exact owners. Explicit cleanup can
+          // retry them; an ordinary observation must not install a new writer.
+          throw new AggregateError(
+            [error, cleanupError],
+            `Floot session ${id} setup and hosted-backend rollback failed`,
+            { cause: cleanupError },
+          );
         }
+        if (agents.get(id) === agentP) agents.delete(id);
         throw error;
       });
       agents.set(id, ownership.track(agentP));
@@ -4293,15 +4372,14 @@ export const make = async (
             title: entry?.title || '',
             createdAt: entry?.createdAt || 0,
             presetId: entry?.presetId || DEFAULT_PRESET_ID,
-            model: entry?.backendId
-              ? hostedModelId(entry.backendId, entry.modelId || '')
-              : entry?.model || '',
-            backendId: entry?.backendId || 'provider',
-            modelId: entry?.modelId || entry?.model || '',
+            model: isHostedSession(entry)
+              ? hostedModelId(entry.backendId, entry.modelId)
+              : entry.modelId,
+            backendId: entry.backendId,
+            modelId: entry.modelId,
             effectiveModelId:
-              entry?.modelId ||
-              entry?.model ||
-              (entry?.backendId ? '' : await configuredProviderModel()),
+              entry.modelId ||
+              (isHostedSession(entry) ? '' : await configuredProviderModel()),
             reasoningEffort: entry?.reasoningEffort || '',
             subscription: entry?.subscription || 'auto',
             lifecycle: entry?.lifecycle || 'ready',
@@ -4432,7 +4510,7 @@ export const make = async (
         async getBindings() {
           await assertSessionReady(id);
           const entry = (await loadRegistry()).find(item => item.id === id);
-          if (!entry?.backendId)
+          if (!isHostedSession(entry))
             throw Error('Only a hosted session has bindings to inspect');
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) throw Error('Session backend is unavailable');
@@ -4445,7 +4523,7 @@ export const make = async (
               'Cancel or finish the active turn before rebinding the session',
             );
           const entry = (await loadRegistry()).find(item => item.id === id);
-          if (!entry?.backendId)
+          if (!isHostedSession(entry))
             throw Error('Only a hosted session has bindings to rebind');
           // The names this session's backend declares its reopen may be
           // authorized to change; whether the request may change one is the
@@ -4619,11 +4697,11 @@ export const make = async (
     const agentP = agents.get(id);
     if (agentP) {
       try {
-        const agent = await agentP;
+        const agent = await agentForCleanup(agentP);
         // A hosted backend's admin/factory termination below is the
         // authoritative barrier for a quarantined native turn. Allow cleanup
         // to reach it; provider-only sessions still fail closed here.
-        await agent.shutdown(Boolean(entry.backendId));
+        if (agent) await agent.shutdown(isHostedSession(entry));
       } catch (error) {
         // Do not tear down the guest beneath live turn or inbox activity.
         throw new AggregateError(
@@ -4649,7 +4727,7 @@ export const make = async (
         failures.push(error);
       }
     }
-    if (entry.backendId) {
+    if (isHostedSession(entry)) {
       // Termination is a stop: it releases the slice, the mount, and the
       // lease and keeps the workspace and Codex state. Deletion removes those
       // through the factory's idempotent destroy, which first stops any
@@ -4817,9 +4895,9 @@ export const make = async (
             subagentName: `${subagentName}`,
             subagentDepth: Number(subagentDepth),
           };
-    let backendId;
-    let modelId;
     const selectedModel = options.modelId || options.model || '';
+    let backendId = 'provider';
+    let modelId = selectedModel;
     const providerConfig = await getProviderConfig().catch(() => undefined);
     const openRouter = providerConfig?.provider === 'openrouter';
     if (options.backendId && options.backendId !== 'provider') {
@@ -4834,7 +4912,7 @@ export const make = async (
       [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
     }
     if (
-      !backendId &&
+      backendId === 'provider' &&
       openRouter &&
       selectedModel &&
       (typeof selectedModel !== 'string' || !selectedModel.includes('/'))
@@ -4843,7 +4921,7 @@ export const make = async (
     }
     /** @type {import('@endo/hosted-agent').PromptEnvironment} */
     let promptEnvironment = PROVIDER_PROMPT_ENVIRONMENT;
-    if (backendId) {
+    if (backendId !== 'provider') {
       const backend = (await getHostedBackends()).get(backendId);
       if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
       if (
@@ -4932,7 +5010,7 @@ export const make = async (
         );
       }
     }
-    if (!backendId && options.networkPolicy !== undefined) {
+    if (backendId === 'provider' && options.networkPolicy !== undefined) {
       throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
@@ -4950,7 +5028,7 @@ export const make = async (
     const promptContext = normalizePromptContext({
       environment: promptEnvironment,
       spoken: !delegated && options.spoken === true,
-      containerMounts: Boolean(backendId),
+      containerMounts: backendId !== 'provider',
     });
     const sessionPrompt = composeSessionSystemPrompt({
       presetPrompt: composePresetPrompt({
@@ -4982,10 +5060,10 @@ export const make = async (
         : {}),
       lifecycle: 'creating',
       ...delegationFields,
-      ...(backendId
+      backendId,
+      modelId,
+      ...(backendId !== 'provider'
         ? {
-            backendId,
-            modelId,
             ...(options.reasoningEffort
               ? { reasoningEffort: `${options.reasoningEffort}` }
               : {}),
@@ -4993,10 +5071,9 @@ export const make = async (
               ? { subscription: `${options.subscription}` }
               : {}),
           }
-        : selectedModel
-          ? { model: selectedModel }
-          : {}),
+        : {}),
     });
+    assertSessionIdentity(entry);
     // Claim the ID before asynchronous namespace checks. Petstore writes are
     // not compare-and-swap, so random IDs alone cannot serialize collisions.
     if (creatingIds.has(id) || (registry || []).some(item => item.id === id))
@@ -5075,13 +5152,7 @@ export const make = async (
       throw error;
     }
     console.error(
-      `[floot-factory] Created session "${id}" (preset "${preset.id}"${
-        entry.backendId
-          ? `, backend "${entry.backendId}", model "${entry.modelId}"`
-          : entry.model
-            ? `, model "${entry.model}"`
-            : ''
-      })`,
+      `[floot-factory] Created session "${id}" (preset "${preset.id}", backend "${entry.backendId}", model "${entry.modelId}")`,
     );
     return id;
   };
@@ -5197,25 +5268,20 @@ export const make = async (
         const parent = (registry || []).find(
           session => session.id === parentId,
         );
+        if (!parent) throw Error('Parent session no longer exists');
         // A subagent runs on the same backend and model as its parent: it is
         // extra context, not a way to reach a backend this session was not
         // provisioned for.
-        const inheritedModel = parent?.backendId
-          ? {
-              backendId: parent.backendId,
-              modelId: parent.modelId,
-              ...(parent.reasoningEffort
-                ? { reasoningEffort: parent.reasoningEffort }
-                : {}),
-              // And on the same subscription: a session pinned to one must
-              // not have its delegates drain another.
-              ...(parent.subscription
-                ? { subscription: parent.subscription }
-                : {}),
-            }
-          : parent?.model
-            ? { model: parent.model }
-            : {};
+        const inheritedModel = {
+          backendId: parent.backendId,
+          modelId: parent.modelId,
+          ...(parent.reasoningEffort
+            ? { reasoningEffort: parent.reasoningEffort }
+            : {}),
+          // And on the same subscription: a session pinned to one must
+          // not have its delegates drain another.
+          ...(parent.subscription ? { subscription: parent.subscription } : {}),
+        };
         const childId = await provisionSession({
           title: `${parent?.title || 'Session'} / ${name}`,
           presetId: parent?.presetId,
@@ -5359,8 +5425,8 @@ export const make = async (
         Promise.all([
           ...[...agents.values()].map(pending =>
             attempt(async () => {
-              const agent = await pending;
-              await agent.shutdown();
+              const agent = await agentForCleanup(pending);
+              if (agent) await agent.shutdown();
             }),
           ),
           ...[...hostedMountClients.values()].map(client =>
@@ -5373,6 +5439,15 @@ export const make = async (
       // Interrupt consumers before waiting for callers which depend on them.
       await stopResources();
       await attempt(() => ownership.drain());
+      // Admitted catalog construction is settled before this final snapshot.
+      // Retired owners stay tracked while their already-admitted reads drain.
+      await Promise.all(
+        [...providerCatalogs].map(pending =>
+          attempt(() => closeProviderCatalog(pending)),
+        ),
+      );
+      providerCatalogP = undefined;
+      catalogReads.clear();
       // Admitted construction can acquire a resource after the first snapshot.
       await stopResources();
       await Promise.all(
@@ -5603,13 +5678,16 @@ export const make = async (
      * their credentials belong to the backend, not to Floot.
      */
     async refreshCredentials() {
+      providerEpoch = harden({});
       providersByModel.clear();
       providerConfigP = undefined;
       // The direct provider's catalog was read under that config too: let
       // the owner go and read again under the next.
       const catalog = providerCatalogP;
       providerCatalogP = undefined;
-      if (catalog) void catalog.then(owner => owner.close()).catch(() => {});
+      catalogReads.delete('provider');
+      catalogReads.delete(undefined);
+      if (catalog) void closeProviderCatalog(catalog).catch(() => {});
       // An unpinned session's `effectiveModelId` is read from that config.
       touchSessionList();
       console.error(

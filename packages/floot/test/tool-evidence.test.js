@@ -186,7 +186,10 @@ test('a completed turn shows each tool call once, however the provider wrote it'
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   await say(agent, 'do three things');
@@ -237,7 +240,10 @@ test('a failed turn’s tokens are counted, and it records what served it', asyn
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   await t.throwsAsync(say(agent, 'fail on the second round'));
@@ -283,7 +289,10 @@ test('a call whose arguments never parsed is still shown once', async t => {
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   await say(agent, 'two malformed calls');
@@ -308,7 +317,10 @@ test('the usage a view is told is the usage the session reports', async t => {
   const agent = await makeStreamingAgent(
     makeFakePowers(),
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'test prompt',
   );
   await t.throwsAsync(say(agent, 'this one fails'));

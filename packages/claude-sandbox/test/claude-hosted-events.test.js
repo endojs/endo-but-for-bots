@@ -393,6 +393,71 @@ test('an in-band abort from the client passes through with its reason', async t 
   t.deepEqual(events, [{ type: 'abort', reason: 'claude exited with code 1' }]);
 });
 
+for (const terminal of ['end', 'abort']) {
+  test(`structured Claude errors survive ${terminal}`, async t => {
+    const { push, reader } = makeBufferedReader();
+    const hosted = translateClaudeTurn(reader);
+    push({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: [
+        'Model access refused',
+        null,
+        { private: 'do not stringify' },
+        '',
+        'Account diagnostic',
+      ],
+    });
+    push({ type: terminal, reason: 'claude exited with code 1' });
+    t.deepEqual(await drain(hosted), [
+      {
+        type: 'abort',
+        reason: `claude turn failed: Model access refused\nAccount diagnostic${terminal === 'abort' ? '\nclaude exited with code 1' : ''}`,
+      },
+    ]);
+  });
+}
+
+test('result text and structured errors are both preserved', t => {
+  const translator = makeClaudeHostedTranslator();
+  translator.handle({
+    type: 'result',
+    is_error: true,
+    result: 'Summary',
+    errors: ['Detail'],
+  });
+  t.deepEqual(translator.finish('transport failed'), [
+    {
+      type: 'abort',
+      reason: 'claude turn failed: Summary\nDetail\ntransport failed',
+    },
+  ]);
+});
+
+test('structured error remains visible when raw producer closes without terminal', async t => {
+  t.timeout(5000);
+  const { push, reader, close } = makeBufferedReader();
+  const iterator = iterateReader(translateClaudeTurn(reader));
+  push({
+    type: 'result',
+    is_error: true,
+    errors: ['Provider refused model'],
+    usage: {},
+  });
+  t.is((await iterator.next()).value.type, 'usage');
+  close();
+  const remaining = [];
+  for await (const event of iterator) remaining.push(event);
+  t.deepEqual(remaining, [
+    {
+      type: 'abort',
+      reason:
+        'claude turn failed: Provider refused model\nclaude turn ended without a terminal event',
+    },
+  ]);
+});
+
 test('closing the hosted reader closes the raw reader (kills the turn)', async t => {
   let killed = 0;
   const { push, reader, setOnClose } = makeBufferedReader();

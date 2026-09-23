@@ -104,10 +104,6 @@ export const makeFlootRecovery = ({ notify, isBusy }) => {
     getState() {
       return harden({
         ...state,
-        blocked: state.turns.some(
-          (/** @type {any} */ turn) =>
-            turn.turnId === 'legacy-import' && !turn.resolution,
-        ),
         resolving,
         canResolve:
           canResolve && !isBusy() && !resolving && state.status === 'ready',

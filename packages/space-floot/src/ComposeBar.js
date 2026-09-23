@@ -99,8 +99,7 @@ export const ComposeBar = ({ state, controller }) => {
           state.unavailable ||
           state.network?.changing ||
           state.network?.blocked ||
-          state.recovery?.resolving ||
-          state.recovery?.blocked,
+          state.recovery?.resolving,
         placeholder: 'Message Floot…',
         value: input || '',
         onInput: (/** @type {FlootSafeEvent} */ e) =>
@@ -119,8 +118,7 @@ export const ComposeBar = ({ state, controller }) => {
             (state.unavailable ||
               state.network?.changing ||
               state.network?.blocked ||
-              state.recovery?.resolving ||
-              state.recovery?.blocked),
+              state.recovery?.resolving),
           'aria-label': busy ? 'Stop' : 'Send',
           onClick: () => (busy ? controller.stop() : controller.send()),
         },

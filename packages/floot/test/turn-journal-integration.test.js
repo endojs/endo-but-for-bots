@@ -118,7 +118,10 @@ for (const fault of ['beforeStore', 'afterStore']) {
     const agent = await makeStreamingAgent(
       f.powers,
       undefined,
-      { provider },
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
       'Test',
     );
     t.teardown(() => agent.shutdown());
@@ -135,7 +138,10 @@ for (const fault of ['beforeStore', 'afterStore']) {
     const revived = await makeStreamingAgent(
       f.powers,
       undefined,
-      { provider },
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
       'Test',
     );
     t.teardown(() => revived.shutdown());
@@ -167,7 +173,7 @@ test('oversized backend token is refused before successful journal settlement or
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -203,7 +209,7 @@ test('cancelled hosted thinking is journaled after the interrupt barrier', async
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -224,7 +230,7 @@ test('cancelled hosted thinking is journaled after the interrupt barrier', async
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => revived.shutdown());
@@ -269,7 +275,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'abort']) {
     const agent = await makeStreamingAgent(
       f.powers,
       undefined,
-      { hostedClient },
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
     );
     t.teardown(() => agent.shutdown());
@@ -281,7 +287,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'abort']) {
     const revived = await makeStreamingAgent(
       f.powers,
       undefined,
-      { hostedClient },
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
     );
     t.teardown(() => revived.shutdown());
@@ -330,7 +336,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
     const agent = await makeStreamingAgent(
       f.powers,
       undefined,
-      { hostedClient },
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
     );
     t.teardown(() => agent.shutdown());
@@ -352,7 +358,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
     const revived = await makeStreamingAgent(
       f.powers,
       undefined,
-      { hostedClient },
+      { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
     );
     t.teardown(() => revived.shutdown());
@@ -394,7 +400,15 @@ for (const treeName of ['ct-leaf', 'ct-root', 'ct-obsolete-node']) {
       },
     });
     await t.throwsAsync(
-      makeStreamingAgent(f.powers, undefined, { provider }, 'Test'),
+      makeStreamingAgent(
+        f.powers,
+        undefined,
+        {
+          kind: 'provider',
+          provideProvider: () => provider,
+        },
+        'Test',
+      ),
       {
         message:
           'Legacy Floot conversation tree requires retirement or export before journal-only recovery',
@@ -426,7 +440,7 @@ test('journal checkpoint survives a later partial turn without conversation tree
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -438,7 +452,7 @@ test('journal checkpoint survives a later partial turn without conversation tree
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => revived.shutdown());
@@ -493,7 +507,7 @@ test('checkpoint recovery orders archived evidence by turn rather than publicati
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -514,7 +528,10 @@ test('cancellation during transcript sealing does not commit a successful turn',
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -539,7 +556,10 @@ test('cancellation during transcript sealing does not commit a successful turn',
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
   );
   t.teardown(() => revived.shutdown());
@@ -589,7 +609,10 @@ test('parallel identical calls keep distinct results after partial transcript pu
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     {
       extraTools: new Map([
@@ -625,7 +648,10 @@ test('parallel identical calls keep distinct results after partial transcript pu
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
   );
   t.teardown(() => revived.shutdown());
@@ -670,7 +696,10 @@ for (const missingId of [false, true]) {
     const agent = await makeStreamingAgent(
       f.powers,
       undefined,
-      { provider },
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
       'Test',
       {
         extraTools: new Map([
@@ -701,7 +730,10 @@ for (const missingId of [false, true]) {
     const revived = await makeStreamingAgent(
       f.powers,
       undefined,
-      { provider },
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
       'Test',
     );
     t.teardown(() => revived.shutdown());
@@ -744,7 +776,10 @@ for (const phase of ['beforeStore', 'afterStore']) {
       const agent = await makeStreamingAgent(
         f.powers,
         undefined,
-        { provider },
+        {
+          kind: 'provider',
+          provideProvider: () => provider,
+        },
         'Test',
         {
           extraTools: new Map([
@@ -768,7 +803,10 @@ for (const phase of ['beforeStore', 'afterStore']) {
       const revived = await makeStreamingAgent(
         f.powers,
         undefined,
-        { provider },
+        {
+          kind: 'provider',
+          provideProvider: () => provider,
+        },
         'Test',
       );
       t.teardown(() => revived.shutdown());
@@ -817,11 +855,17 @@ for (const boundary of ['transcript-record', 'tool-intent']) {
       f.powers,
       undefined,
       {
-        provider: harden({
-          async chatStream() {
-            return callEffect();
-          },
-        }),
+        kind: 'provider',
+        provideProvider: (
+          value => () =>
+            value
+        )(
+          harden({
+            async chatStream() {
+              return callEffect();
+            },
+          }),
+        ),
       },
       'Test',
       {
@@ -867,20 +911,26 @@ test('direct dialogue prefix survives a later provider failure and reconstructio
     f.powers,
     undefined,
     {
-      provider: harden({
-        async chatStream(_context, _tools, onDelta) {
-          calls += 1;
-          if (calls === 1)
-            return harden({
-              message: {
-                ...callEffect().message,
-                content: 'I will change it once.',
-              },
-            });
-          onDelta('The change succeeded, but');
-          throw Error('Disconnected');
-        },
-      }),
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          async chatStream(_context, _tools, onDelta) {
+            calls += 1;
+            if (calls === 1)
+              return harden({
+                message: {
+                  ...callEffect().message,
+                  content: 'I will change it once.',
+                },
+              });
+            onDelta('The change succeeded, but');
+            throw Error('Disconnected');
+          },
+        }),
+      ),
     },
     'Test',
     {
@@ -913,11 +963,17 @@ test('direct dialogue prefix survives a later provider failure and reconstructio
     f.powers,
     undefined,
     {
-      provider: harden({
-        async chatStream() {
-          return completed();
-        },
-      }),
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          async chatStream() {
+            return completed();
+          },
+        }),
+      ),
     },
     'Test',
   );
@@ -948,12 +1004,18 @@ test('direct provider refuses effects when its dialogue cannot be journaled', as
     f.powers,
     undefined,
     {
-      provider: harden({
-        async chatStream() {
-          f.refuse('transcript-record');
-          return callEffect();
-        },
-      }),
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          async chatStream() {
+            f.refuse('transcript-record');
+            return callEffect();
+          },
+        }),
+      ),
     },
     'Test',
     {
@@ -1004,7 +1066,7 @@ test('recorded compaction survives reconstruction into direct-provider context',
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -1027,7 +1089,10 @@ test('recorded compaction survives reconstruction into direct-provider context',
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
   );
   t.teardown(() => revived.shutdown());
@@ -1093,7 +1158,10 @@ for (const failure of ['empty', 'HTTP 503']) {
     const agent = await makeStreamingAgent(
       f.powers,
       undefined,
-      { provider },
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
       'Test',
     );
     t.teardown(() => agent.shutdown());
@@ -1116,7 +1184,10 @@ for (const failure of ['empty', 'HTTP 503']) {
     const revived = await makeStreamingAgent(
       f.powers,
       undefined,
-      { provider },
+      {
+        kind: 'provider',
+        provideProvider: () => provider,
+      },
       'Test',
     );
     t.teardown(() => revived.shutdown());
@@ -1140,7 +1211,11 @@ test('provider usage notifications and returned totals are not double counted', 
     f.powers,
     undefined,
     {
-      provider: {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )({
         async chatStream(_messages, _tools, _onToken, _signal, onUsage) {
           onUsage?.(usageCounts({ inputTokens: 5, outputTokens: 1 }));
           onUsage?.(usageCounts({ inputTokens: 6, outputTokens: 2 }));
@@ -1149,7 +1224,7 @@ test('provider usage notifications and returned totals are not double counted', 
             usage: roundUsage,
           };
         },
-      },
+      }),
     },
     'Test',
   );
@@ -1186,7 +1261,13 @@ test('usage context follows dispatch order across late archive publication', asy
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider: harden({ chatStream: async () => completed() }) },
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(harden({ chatStream: async () => completed() })),
+    },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -1222,20 +1303,28 @@ for (const backend of ['provider', 'hosted']) {
       const config =
         backend === 'provider'
           ? {
-              provider: harden({
-                chatStream: async () =>
-                  harden({ ...completed(), usage: perTurn }),
-              }),
+              kind: 'provider',
+              provideProvider: (
+                value => () =>
+                  value
+              )(
+                harden({
+                  chatStream: async () =>
+                    harden({ ...completed(), usage: perTurn }),
+                }),
+              ),
             }
           : {
-              hostedClient: harden({
-                async send() {
-                  const channel = makeBufferedReader();
-                  channel.push({ type: 'usage', ...perTurn });
-                  channel.push({ type: 'end' });
-                  return channel.reader;
-                },
-              }),
+              kind: 'hosted',
+              provideHostedClient: () =>
+                harden({
+                  async send() {
+                    const channel = makeBufferedReader();
+                    channel.push({ type: 'usage', ...perTurn });
+                    channel.push({ type: 'end' });
+                    return channel.reader;
+                  },
+                }),
             };
       f.beforeStore(value => {
         if (fault === 'before-finish' && value.type === 'finish')
@@ -1297,10 +1386,16 @@ test('usage projection failure cannot undo successful journal settlement', async
     f.powers,
     undefined,
     {
-      provider: harden({
-        chatStream: async () =>
-          harden({ ...completed(), usage: usageCounts({ inputTokens: 11 }) }),
-      }),
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(
+        harden({
+          chatStream: async () =>
+            harden({ ...completed(), usage: usageCounts({ inputTokens: 11 }) }),
+        }),
+      ),
     },
     'Test',
   );
@@ -1331,22 +1426,30 @@ for (const backend of ['provider', 'hosted']) {
     const config =
       backend === 'provider'
         ? {
-            provider: harden({
-              async chatStream() {
-                return harden({ ...completed(), usage: perTurn });
-              },
-            }),
+            kind: 'provider',
+            provideProvider: (
+              value => () =>
+                value
+            )(
+              harden({
+                async chatStream() {
+                  return harden({ ...completed(), usage: perTurn });
+                },
+              }),
+            ),
           }
         : {
-            hostedClient: harden({
-              async send() {
-                const channel = makeBufferedReader();
-                channel.push({ type: 'usage', ...perTurn });
-                channel.push({ type: 'text-delta', text: 'Done' });
-                channel.push({ type: 'end' });
-                return channel.reader;
-              },
-            }),
+            kind: 'hosted',
+            provideHostedClient: () =>
+              harden({
+                async send() {
+                  const channel = makeBufferedReader();
+                  channel.push({ type: 'usage', ...perTurn });
+                  channel.push({ type: 'text-delta', text: 'Done' });
+                  channel.push({ type: 'end' });
+                  return channel.reader;
+                },
+              }),
           };
     const agent = await makeStreamingAgent(f.powers, undefined, config, 'Test');
     t.teardown(() => agent.shutdown());
@@ -1403,7 +1506,10 @@ test('archived failures remain in UI history and direct-provider context', async
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
   );
   t.teardown(() => agent.shutdown());
@@ -1450,7 +1556,7 @@ test('archived failures remain in UI history and direct-provider context', async
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   t.teardown(() => revived.shutdown());
@@ -1495,7 +1601,10 @@ test('direct-provider recovery hydrates full input and tool evidence, not UI pre
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     {
       extraTools: new Map([['effect', effectTool(async () => result)]]),
@@ -1553,7 +1662,10 @@ test('direct tools persist intent before effects and failed effects remain in la
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -1599,7 +1711,10 @@ test('direct tools persist intent before effects and failed effects remain in la
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -1633,7 +1748,7 @@ test('failed hosted turn preserves reported partial usage across revival without
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   await t.throwsAsync(
@@ -1643,7 +1758,7 @@ test('failed hosted turn preserves reported partial usage across revival without
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   const [turn] = await revived.getTurns();
@@ -1683,6 +1798,7 @@ test('hosted snapshot tools durably authorize effects and preserve failures with
     f.powers,
     undefined,
     {
+      kind: 'hosted',
       provideHostedClient: async snapshot =>
         harden({
           async interrupt() {
@@ -1757,6 +1873,7 @@ test('aliased backend observations retain distinct execution evidence without cl
     f.powers,
     undefined,
     {
+      kind: 'hosted',
       provideHostedClient: async snapshot =>
         harden({
           async send() {
@@ -1833,7 +1950,10 @@ test('failed mail turns restore journaled receipt and tool evidence after reviva
   const first = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -1856,7 +1976,10 @@ test('failed mail turns restore journaled receipt and tool evidence after reviva
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -1918,7 +2041,10 @@ test('repeated typed receipt hides only duplicate display input, not new admissi
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -1965,7 +2091,10 @@ test('repeated typed receipt hides only duplicate display input, not new admissi
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -2005,7 +2134,10 @@ test('lost result writes poison dispatch; revival permits unrelated work without
   const first = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider },
+    {
+      kind: 'provider',
+      provideProvider: () => provider,
+    },
     'Test',
     { extraTools },
   );
@@ -2035,7 +2167,10 @@ test('lost result writes poison dispatch; revival permits unrelated work without
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider: safeProvider },
+    {
+      kind: 'provider',
+      provideProvider: () => safeProvider,
+    },
     'Test',
     { extraTools },
   );
@@ -2074,7 +2209,13 @@ test('failed intent persistence never dispatches the actual Endo tool', async t 
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { provider: harden({ chatStream: async () => callEffect() }) },
+    {
+      kind: 'provider',
+      provideProvider: (
+        value => () =>
+          value
+      )(harden({ chatStream: async () => callEffect() })),
+    },
     'Test',
     { extraTools },
   );
@@ -2119,7 +2260,7 @@ test('native activity without result remains unknown while unrelated later work 
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   await t.throwsAsync(
@@ -2174,6 +2315,7 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
     f.powers,
     undefined,
     {
+      kind: 'hosted',
       provideHostedClient: async snapshot => {
         tools = snapshot;
         return harden({
@@ -2293,7 +2435,7 @@ test('a turn stopped before its backend sized the window keeps the size already 
   const agent = await makeStreamingAgent(
     f.powers,
     undefined,
-    { hostedClient },
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
   );
   await agent.converse('first', makeReplyChannel().writer);

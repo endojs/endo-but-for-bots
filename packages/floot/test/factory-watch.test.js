@@ -312,8 +312,20 @@ test('a session being made or removed is working, not in error', async t => {
       ...registry,
       sessions: [
         ...registry.sessions,
-        { id: 'pinned', title: 'P', createdAt: 2, model: 'vendor/m' },
-        { id: 'unpinned', title: 'U', createdAt: 3 },
+        {
+          id: 'pinned',
+          title: 'P',
+          createdAt: 2,
+          backendId: 'provider',
+          modelId: 'vendor/m',
+        },
+        {
+          id: 'unpinned',
+          title: 'U',
+          createdAt: 3,
+          backendId: 'provider',
+          modelId: '',
+        },
       ],
     }),
   );
