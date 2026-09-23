@@ -148,6 +148,7 @@ test('empty OpenRouter completion remains a failed turn after reconstruction', a
       if (String(url).endsWith('/models')) return Response.json({ data: [] });
       requests += 1;
       return Response.json({
+        usage: { prompt_tokens: 10, completion_tokens: 3 },
         choices: [
           {
             finish_reason: 'stop',
@@ -174,6 +175,12 @@ test('empty OpenRouter completion remains a failed turn after reconstruction', a
   const before = await agent.getTurns();
   t.is(before.length, 1);
   t.is(before[0].state, 'failed');
+  t.is(before[0].usage.inputTokens, 10);
+  t.is(before[0].usage.outputTokens, 3);
+  const usage = await agent.getUsage();
+  t.is(usage.inputTokens, 10);
+  t.is(usage.outputTokens, 3);
+  t.is(usage.turns, 0);
   await agent.shutdown();
   const revived = await makeStreamingAgent(
     f.powers,
@@ -183,12 +190,39 @@ test('empty OpenRouter completion remains a failed turn after reconstruction', a
   );
   t.teardown(() => revived.shutdown());
   t.deepEqual(await revived.getTurns(), before);
+  t.deepEqual(await revived.getUsage(), usage);
   t.true(
     (await revived.getHistory()).some(row =>
       String(row.content).includes('empty assistant response'),
     ),
   );
   t.is(requests, 1);
+});
+
+test('provider usage notifications and returned totals are not double counted', async t => {
+  const f = fixture();
+  const roundUsage = usageCounts({ inputTokens: 11, outputTokens: 3 });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provider: {
+        async chatStream(_messages, _tools, _onToken, _signal, onUsage) {
+          onUsage?.(usageCounts({ inputTokens: 5, outputTokens: 1 }));
+          onUsage?.(usageCounts({ inputTokens: 6, outputTokens: 2 }));
+          return {
+            message: { role: 'assistant', content: 'Done' },
+            usage: roundUsage,
+          };
+        },
+      },
+    },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Hello', makeReplyChannel().writer);
+  t.is((await agent.getUsage()).inputTokens, 11);
+  t.is((await agent.getUsage()).outputTokens, 3);
 });
 
 for (const backend of ['provider', 'hosted']) {

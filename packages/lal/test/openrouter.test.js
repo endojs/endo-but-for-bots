@@ -253,6 +253,47 @@ const ok = (content = 'Done', extra = {}) =>
     }),
   );
 
+test('OpenRouter never publishes invalid usage to the observer', async t => {
+  const provider = makeOpenRouterProvider({
+    ...options,
+    fetchImpl: withCatalog(async () =>
+      ok('Done', {
+        usage: { prompt_tokens: -1, completion_tokens: 3 },
+      }),
+    ),
+  });
+  await t.throwsAsync(
+    provider.chatStream([], [], undefined, undefined, () =>
+      t.fail('Invalid usage must not be reported'),
+    ),
+    { message: /invalid token usage/ },
+  );
+});
+
+test('OpenRouter observer failure neither retries nor delivers an answer', async t => {
+  let requests = 0;
+  const provider = makeOpenRouterProvider({
+    ...options,
+    fetchImpl: withCatalog(async () => {
+      requests += 1;
+      return ok();
+    }),
+  });
+  await t.throwsAsync(
+    provider.chatStream(
+      [],
+      [],
+      () => t.fail('No output after observer failure'),
+      undefined,
+      () => {
+        throw Error('Observer failed');
+      },
+    ),
+    { message: 'Observer failed' },
+  );
+  t.is(requests, 1);
+});
+
 for (const content of [undefined, null, '', ' \n\t']) {
   test(`OpenRouter refuses empty answer ${JSON.stringify(content)} without replay`, async t => {
     let requests = 0;
@@ -282,14 +323,24 @@ for (const content of [undefined, null, '', ' \n\t']) {
         );
       }),
     });
+    const readings = [];
     const error = await t.throwsAsync(
-      provider.chatStream([], [], () => t.fail('No empty output delivery')),
+      provider.chatStream(
+        [],
+        [],
+        () => t.fail('No empty output delivery'),
+        undefined,
+        usage => readings.push(usage),
+      ),
       {
         message:
           /empty assistant response.*finish_reason stop.*served by vendor\/free-model/,
       },
     );
     t.false(error.message.includes('PRIVATE_REASONING'));
+    t.is(readings.length, 1);
+    t.is(readings[0].inputTokens, 10);
+    t.is(readings[0].outputTokens, 3);
     t.is(requests, 1);
   });
 }

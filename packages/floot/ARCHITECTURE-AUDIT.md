@@ -683,9 +683,20 @@ identify the failure without exposing response bodies or reasoning.
 No new durable state or formula is introduced: the existing failed-turn journal
 path records the error. A reconstruction regression preserves that failure and
 its history without another request. This uses an in-memory persistent-powers
-fixture, not process-loss proof. Reported usage on rejected replies is currently
-lost, as on other provider validation errors; exact failed-response accounting
-remains a follow-up. The fix is deployed as generation 167; one fresh live Fae
+fixture, not process-loss proof.
+Failed-response usage correction (2026-09-23, not deployed): OpenRouter now
+notifies Floot of validated, normalized usage before validating the assistant
+answer. Empty, filtered, malformed, or truncated replies can therefore retain
+their reported counts in the existing failed-turn finish record.
+The optional provider notification carries increments before settlement;
+Floot uses returned usage only when no notification was sent, avoiding double
+counting. Tests cover failed-turn reconstruction, invalid usage refusal,
+observer failure without replay, and multiple increments plus a returned total.
+No formula or persisted schema changes: notification state is ephemeral until
+the existing finish write; abrupt loss before that write is not covered.
+Usage on retried/API-error responses still needs accounting, and missing or
+invalid usage cannot be inferred. Exact failed-response accounting remains open.
+The empty-answer fix is deployed as generation 167; one fresh live Fae
 seed/restart/recall case passed on the free route. The original failed case
 remains recorded. This is not proof that every free-route model answers, nor
 live evidence of the new negative-response path (covered by local tests).
@@ -2496,6 +2507,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Preserve reported OpenRouter usage when assistant validation rejects a response, using an optional pre-settlement incremental provider notification and the existing turn finish journal | 500 Floot and 82 Lal tests pass (one Lal skip), including failed-turn reconstruction and no double counting; independently reviewed; changed-file ESLint has zero errors and docs have zero errors. Whole Lal lint still has eight project-service errors in unchanged files. No new durable schema; process loss before finish and API-error/retry usage remain open. Not deployed. |
 | 2026-09-23 | Preservation-safe paired cutover activated as generation 166 | App `4b425552f` with host `d696a88`; zero sessions/runs, slot-free workflow startup records verified. Detached 24 old Floot/provider aliases with repeated Secret/host/credential/pool identity checks, then proved old-daemon shutdown and no containers/9p. No database wipe. Hosted setup, all-account discovery and hosted create/shell/policy-tool seed passed, including Luna/free routes; post-activation Secret and controller-host identities unchanged. Remaining cross-backend acceptance and live rebind are pending. See endo-host `ops/hosted-cutover5-20260923.md` |
 | 2026-09-23 | Repair retirement helper's dormant-formula hazard and verify the durable empty registry | Host helper now detaches names without cancellation, validates capability-free registry sequence/data, preserves credential/pool/host state, and fences changed/reappearing aliases. Reviewed tests cover partial removal, collected metadata and empty-registry guards; Tokyo dry run passed for 22 provider plus two Floot bindings. No effectful retirement; startup-dependency check, quiescence, old-worker shutdown, activation and acceptance remain required |
 | 2026-09-23 | Resume preservation-safe coordinated deployment preparation after SSH recovery | App `4b425552f` mirrored to Forgejo and prebuilt; paired host `5827da0` NixOS build passed without activation. Fresh inventories: six Secrets, no native session records/containers/9p/Floot guest roots, 22 broker/dependent bindings including three broker roots. No retirement or state wipe; guarded alias detachment, activation and full acceptance still pending. See endo-host `ops/hosted-cutover5-20260923.md` |

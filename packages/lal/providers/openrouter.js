@@ -366,8 +366,9 @@ export const makeOpenRouterProvider = ({
    * @param {any[]} messages
    * @param {any[]} tools
    * @param {AbortSignal} [signal]
+   * @param {(usage: ReturnType<typeof usageFromOpenRouter>) => void} [onUsage]
    */
-  const chat = async (messages, tools, signal) => {
+  const chat = async (messages, tools, signal, onUsage) => {
     // Beside the request, not after it, so the first reply does not wait on
     // a second round trip. Its failures are its own and already handled.
     void loadCatalog();
@@ -401,6 +402,21 @@ export const makeOpenRouterProvider = ({
         signal,
       );
     }
+    if (
+      result.usage &&
+      ![result.usage.prompt_tokens, result.usage.completion_tokens].every(
+        count =>
+          typeof count === 'number' && Number.isFinite(count) && count >= 0,
+      )
+    ) {
+      throw Error('OpenRouter returned invalid token usage');
+    }
+    // Usage belongs to the request, even when the answer cannot be delivered.
+    // Notify before validation; the caller can record it with a failed turn.
+    const usage = result.usage
+      ? usageFromOpenRouter(result.usage, await contextWindowOf(result.model))
+      : undefined;
+    if (usage) onUsage?.(harden(usage));
     const choice = result.choices[0];
     const served = describe([
       ['served by', 'model', result.model],
@@ -452,15 +468,6 @@ export const makeOpenRouterProvider = ({
         ])}${served}`,
       );
     }
-    if (
-      result.usage &&
-      ![result.usage.prompt_tokens, result.usage.completion_tokens].every(
-        count =>
-          typeof count === 'number' && Number.isFinite(count) && count >= 0,
-      )
-    ) {
-      throw Error('OpenRouter returned invalid token usage');
-    }
     const servedBy = {
       ...(shown('model', result.model)
         ? { model: shown('model', result.model) }
@@ -477,14 +484,7 @@ export const makeOpenRouterProvider = ({
           : message.content || '',
       },
       ...(Object.keys(servedBy).length ? { servedBy } : {}),
-      ...(result.usage
-        ? {
-            usage: usageFromOpenRouter(
-              result.usage,
-              await contextWindowOf(result.model),
-            ),
-          }
-        : {}),
+      ...(usage ? { usage } : {}),
     });
   };
   return harden({
@@ -494,9 +494,10 @@ export const makeOpenRouterProvider = ({
      * @param {any[]} tools
      * @param {(text: string) => void} [onToken]
      * @param {AbortSignal} [signal]
+     * @param {(usage: ReturnType<typeof usageFromOpenRouter>) => void} [onUsage]
      */
-    async chatStream(messages, tools, onToken, signal) {
-      const result = await chat(messages, tools, signal);
+    async chatStream(messages, tools, onToken, signal, onUsage) {
+      const result = await chat(messages, tools, signal, onUsage);
       if (result.message.content) onToken?.(result.message.content);
       return result;
     },

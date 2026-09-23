@@ -519,7 +519,7 @@ const provisionPresetObjects = async (
 
 /**
  * @typedef {object} InjectedProviderConfig
- * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal) => Promise<any> }} provider
+ * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal, onUsage?: (usage: Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>) => void) => Promise<any> }} provider
  */
 
 /**
@@ -1189,6 +1189,7 @@ export const makeStreamingAgent = async (
           `[floot] round ${round}: ${context.length} messages, ${tools.providerSchemas.length} tools`,
         );
         let streamed = '';
+        let usageReported = false;
         const provider = await currentProvider();
         let answer;
         try {
@@ -1200,6 +1201,13 @@ export const makeStreamingAgent = async (
               writer.delta(delta);
             },
             signal,
+            roundUsage => {
+              // Providers can report usage before rejecting an unusable reply.
+              // Notifications are incremental; a returned total is fallback only.
+              usageReported = true;
+              turnUsage = addUsage(turnUsage, roundUsage);
+              activeJournalUsage = turnUsage;
+            },
           );
         } catch (error) {
           // The turn's failure reaches the journal and the view, but this log
@@ -1229,7 +1237,7 @@ export const makeStreamingAgent = async (
             activeJournalServedBy = [...activeJournalServedBy, served];
           }
         }
-        if (roundUsage) {
+        if (roundUsage && !usageReported) {
           // Counts add across rounds; the context reading is the last
           // round's, which is what the window holds now.
           turnUsage = addUsage(turnUsage, roundUsage);
