@@ -46,6 +46,132 @@ const options = harden({
   modelId: 'sol',
 });
 
+// These fixtures deliberately serialize journal transitions and publication.
+/* eslint-disable no-await-in-loop */
+test('backend checkpoint survives event replay, snapshots and archival', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  await journal.append(id, {
+    type: 'finish',
+    state: 'completed',
+    backendCheckpoint: 'native-turn-1',
+  });
+  t.is(
+    (await makeTurnJournal(f.powers).get(id)).backendCheckpoint,
+    'native-turn-1',
+  );
+  for (let index = 0; index < 290; index += 1) {
+    const next = await journal.begin(options);
+    await journal.append(next, { type: 'finish', state: 'completed' });
+  }
+  const revived = makeTurnJournal(f.powers);
+  const archived = await revived.listArchived();
+  t.is(
+    archived.find(turn => turn.turnId === id).backendCheckpoint,
+    'native-turn-1',
+  );
+});
+
+for (const location of ['snapshot', 'archive']) {
+  for (const collection of ['tools', 'activity']) {
+    test(`checkpoint ${location} refuses unsettled ${collection}`, async t => {
+      const f = fixture();
+      const journal = makeTurnJournal(f.powers);
+      const id = await journal.begin(options);
+      await journal.append(id, {
+        type: 'finish',
+        state: 'completed',
+        backendCheckpoint: 'native-turn-1',
+      });
+      for (
+        let index = 0;
+        index < (location === 'snapshot' ? 34 : 290);
+        index += 1
+      ) {
+        const next = await journal.begin(options);
+        await journal.append(next, { type: 'finish', state: 'completed' });
+      }
+      const key = [...f.store.keys()]
+        .filter(name => name.startsWith(`floot-turn-${location}-`))
+        .sort()
+        .at(location === 'snapshot' ? -1 : 0);
+      const data = JSON.parse(JSON.stringify(f.store.get(key)));
+      const record = data.records.find(turn => turn.turnId === id);
+      t.truthy(record);
+      record[collection].push({
+        callId: 'unsettled',
+        name: 'effect',
+        args: '{}',
+      });
+      f.store.set(key, harden(data));
+      const revived = makeTurnJournal(f.powers);
+      await t.throwsAsync(
+        location === 'snapshot' ? revived.list() : revived.listArchived(),
+        { message: /settled tool evidence/ },
+      );
+    });
+  }
+}
+
+test('backend checkpoints require bounded text and a truly completed turn', async t => {
+  for (const value of ['', 'x'.repeat(8193), null, 42, {}]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin(options);
+    await t.throwsAsync(
+      journal.append(id, {
+        type: 'finish',
+        state: 'completed',
+        backendCheckpoint: value,
+      }),
+    );
+    t.is(f.store.size, 1);
+    t.is((await journal.get(id)).state, 'pending');
+  }
+  for (const state of ['failed', 'cancelled', 'outcome-unknown', 'unsettled']) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin(options);
+    if (state === 'unsettled')
+      await journal.append(id, {
+        type: 'tool-intent',
+        callId: 'a',
+        name: 'effect',
+        args: '{}',
+      });
+    await t.throwsAsync(
+      journal.append(id, {
+        type: 'finish',
+        state: state === 'unsettled' ? 'completed' : state,
+        backendCheckpoint: 'native-turn-1',
+      }),
+      { message: /requires a completed/ },
+    );
+  }
+});
+
+test('lost checkpoint finish acknowledgement replays the durable completed token', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  f.fail();
+  await t.throwsAsync(
+    journal.append(id, {
+      type: 'finish',
+      state: 'completed',
+      backendCheckpoint: 'native-turn-1',
+    }),
+    { message: /Lost acknowledgement/ },
+  );
+  await t.throwsAsync(journal.get(id), { message: /uncertain storage/ });
+  const restored = await makeTurnJournal(f.powers).get(id);
+  t.is(restored.state, 'completed');
+  t.is(restored.backendCheckpoint, 'native-turn-1');
+});
+
+/* eslint-enable no-await-in-loop */
+
 test('targeted reads are detached snapshots and invalid transitions leave evidence unchanged', async t => {
   const { powers, store } = fixture();
   const journal = makeTurnJournal(powers);

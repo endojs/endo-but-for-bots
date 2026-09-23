@@ -95,6 +95,98 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
+test('oversized backend token is refused before success tree publication or acknowledgement', async t => {
+  const f = fixture();
+  let acknowledgements = 0;
+  const hostedClient = harden({
+    async send() {
+      const stream = makeBufferedReader();
+      stream.push({ type: 'text-delta', text: 'Done' });
+      stream.push({ type: 'end', checkpoint: 'x'.repeat(8193) });
+      return stream.reader;
+    },
+    async acknowledge() {
+      acknowledgements += 1;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Hello', makeReplyChannel().writer), {
+    message: /Invalid turn journal text/,
+  });
+  t.is(acknowledgements, 0);
+  t.false(
+    [...f.store.values()].some(
+      value =>
+        value.metadata?.turnId !== undefined && Array.isArray(value.messages),
+    ),
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'failed');
+  t.is(turn.backendCheckpoint, undefined);
+});
+
+for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
+  test(`hosted acknowledgement follows checkpoint journal publication: ${fault}`, async t => {
+    const f = fixture();
+    let acknowledges = 0;
+    if (fault === 'beforeStore' || fault === 'afterStore') {
+      f[fault](value => {
+        if (value.type === 'finish') throw Error('Lost finish');
+      });
+    }
+    const hostedClient = harden({
+      async send() {
+        const stream = makeBufferedReader();
+        stream.push({ type: 'text-delta', text: 'Done' });
+        stream.push({ type: 'end', checkpoint: 'native-turn-1' });
+        return stream.reader;
+      },
+      async acknowledge(checkpoint) {
+        acknowledges += 1;
+        t.is(checkpoint, 'native-turn-1');
+        const finish = f.events().find(event => event.type === 'finish');
+        t.is(finish.backendCheckpoint, checkpoint);
+        t.is(finish.state, 'completed');
+        if (fault === 'ack') throw Error('Acknowledgement transport failed');
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { hostedClient },
+      'Test',
+    );
+    t.teardown(() => agent.shutdown());
+    const result = agent.converse('Hello', makeReplyChannel().writer);
+    if (fault === 'beforeStore' || fault === 'afterStore') {
+      await t.throwsAsync(result, { message: /uncertain storage/ });
+      t.is(acknowledges, 0);
+    } else {
+      await result;
+      t.is(acknowledges, 1);
+    }
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { hostedClient },
+      'Test',
+    );
+    t.teardown(() => revived.shutdown());
+    const [turn] = await revived.getTurns();
+    t.is(
+      turn.backendCheckpoint,
+      fault === 'beforeStore' ? undefined : 'native-turn-1',
+    );
+  });
+}
+
 test('cancellation during transcript sealing does not commit a successful turn', async t => {
   const f = fixture();
   const abort = new AbortController();

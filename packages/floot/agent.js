@@ -77,7 +77,10 @@ import {
   normalizePromptContext,
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
-import { makeTurnJournal } from './src/turn-journal.js';
+import {
+  assertBackendCheckpoint,
+  makeTurnJournal,
+} from './src/turn-journal.js';
 import {
   projectTranscript,
   recoverTurnTranscript,
@@ -989,6 +992,8 @@ export const makeStreamingAgent = async (
       toolCalls = [],
       segments = undefined,
     ) => {
+      if (backendCheckpoint !== undefined)
+        assertBackendCheckpoint(backendCheckpoint);
       await assertTurnToolsSettled(turnId);
       const current = await loadUsage();
       const nextUsage = totalsWithTurn(current, turnUsage);
@@ -1018,6 +1023,7 @@ export const makeStreamingAgent = async (
         output: replyText,
         usage: turnUsage,
         conversationNodeId: finalNode.id,
+        ...(backendCheckpoint ? { backendCheckpoint } : {}),
       });
       completedJournalTurn = turnId;
       if (backendCheckpoint && hostedClient) {

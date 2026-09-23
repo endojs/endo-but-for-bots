@@ -654,6 +654,24 @@ cost/trigger/unknown-window policy; neither a byte cutoff nor a tree-cache
 optimization substitutes for that policy. Native producer recovery stays in
 #1323 and is not part of this storage deletion sequence.
 
+Checkpoint prerequisite (2026-09-24, local, not deployed): successful hosted
+`finish` records now retain `backendCheckpoint` before native acknowledgement.
+The opaque text token is validated before the tree write and bounded to 8192
+characters as a journal storage profile, not as a provider protocol limit.
+Token-bearing events, snapshots and archives require a terminal completed turn
+and settled host/observed tool evidence. A failed or unacknowledged journal write
+never permits the native acknowledgement; a lost acknowledgement preserves the
+completed token. The tree remains the current checkpoint recovery source until
+the projection cutover; its removal is not claimed by this prerequisite.
+No new formula or credential owner is introduced, and old records lacking the
+optional token do not acquire an invented checkpoint.
+Tests cover replay, snapshot/archive reconstruction, lost write replies, invalid
+tokens/states, corrupted unsettled checkpoint records, and actual hosted ordering
+including token rejection before tree publication. All 559 Floot tests pass.
+Scoped lint has zero errors (76 warnings), formatting/diff checks pass, and
+root documentation has zero errors (179 warnings). Independent adversarial
+review approved after the loaded-record validation gap was fixed.
+
 ## FA-02 — Model context must not be built from UI previews
 
 Deployment reconciliation (generation 169, 2026-09-23): app `819aa18c8` now
@@ -2927,6 +2945,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Tree-retirement prerequisite: hosted successful finish journals its
+backend checkpoint before native acknowledgement, with bounded token and settled
+state validation on write/replay/snapshot/archive. 559 Floot tests and lint/docs/
+format gates pass after adversarial review. Tree-based recovery remains for now;
+no deployment or completed tree retirement claimed.
 
 2026-09-24 — FA-01/02 bounded-context investigation reproduces eager full-tree
 payload loading independently of journal paging. Record the remaining tree

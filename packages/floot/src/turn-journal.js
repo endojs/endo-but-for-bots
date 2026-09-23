@@ -114,6 +114,30 @@ const assertText = (value, limit = 1024, allowEmpty = false) => {
     Fail`Invalid turn journal text field`;
 };
 
+/**
+ * Opaque backend acknowledgement token, not model context or a capability.
+ * The 8192-character limit is a journal storage profile, not a provider limit.
+ * @param {unknown} value
+ */
+export const assertBackendCheckpoint = value => {
+  assertText(value, PREVIEW_CHARS);
+};
+harden(assertBackendCheckpoint);
+
+/** @param {any} record */
+const assertCheckpointState = record => {
+  (record !== null && typeof record === 'object') ||
+    Fail`Invalid turn journal checkpoint record`;
+  if (record.backendCheckpoint === undefined) return;
+  assertBackendCheckpoint(record.backendCheckpoint);
+  (record.terminal === true && record.state === 'completed') ||
+    Fail`Backend checkpoint requires a completed turn`;
+  [record.tools, record.activity].every(
+    calls =>
+      Array.isArray(calls) && calls.every(call => call?.settled === true),
+  ) || Fail`Backend checkpoint requires settled tool evidence`;
+};
+
 /** @param {bigint | number} sequence */
 const pad = sequence => `${sequence}`.padStart(20, '0');
 
@@ -312,6 +336,13 @@ export const makeTurnJournal = powers => {
         record.activity.some(tool => !tool.settled)
           ? 'outcome-unknown'
           : event.state;
+      assertCheckpointState({
+        ...event,
+        terminal: true,
+        state,
+        tools: record.tools,
+        activity: record.activity,
+      });
       return () => {
         record.terminal = true;
         record.state = state;
@@ -324,6 +355,7 @@ export const makeTurnJournal = powers => {
           'usage',
           'servedBy',
           'conversationNodeId',
+          'backendCheckpoint',
         ]) {
           if (event[key] !== undefined) {
             // Usage is kept as the five disjoint counts and the last context
@@ -378,6 +410,7 @@ export const makeTurnJournal = powers => {
         /^\d+$/.test(record.turnId) &&
         !records.has(record.turnId)) ||
         Fail`Invalid turn journal snapshot record`;
+      assertCheckpointState(record);
       // A turn the snapshotting incarnation still had in flight is one this
       // incarnation cannot finish; a later event may still settle it.
       if (record.state === 'pending') record.state = 'outcome-unknown';
@@ -639,6 +672,7 @@ export const makeTurnJournal = powers => {
       chunkRecords.length > 0 &&
       chunkRecords.length <= ARCHIVE_CHUNK_TURNS) ||
       Fail`Invalid turn journal archive chunk`;
+    for (const record of chunkRecords) assertCheckpointState(record);
     return chunkRecords;
   };
 
