@@ -1465,6 +1465,27 @@ old release before switching parsers. Old plans without `stateRoot` are refused,
 including by storage deletion. Preserve Secrets, renewal credentials and
 workspaces. This change is not deployed.
 
+### Live rebind acceptance harness — 2026-09-23
+
+Prepared in endo-host `ops/verify-rebind.mjs`, with the operator procedure in
+`ops/rebind-acceptance.md`. Separate disposable OpenCode runs test provider-only
+and image-plus-provider replacement, always using the free auto route. The
+driver requires exact recorded/proposed changes, a normal unauthorized reopen
+refusal, explicit authorization, matching returned/read-back bindings, preserved
+seed history, and a native shell read of a workspace marker after rebind. It
+deletes only a verified run's exact session identity. Native cleanup inspection
+remains a separate operator gate, not inferred from Floot deletion.
+
+Durability: this is a one-shot operator harness, never a persistent formula.
+Private manifests record pending phases before effects, flush file and parent
+directory updates, and refuse automatic replay of uncertain phases. An exclusive
+local manifest lock prevents overlapping invocations; it is not a distributed
+lease. No credential or daemon-state schema changes. Adversarial review caught
+and corrected an API mismatch: `whenFinished()` resolves on failure, so the
+driver also reads the final turn status. Fake-facet regressions validate the
+harness, not daemon restart or real inference. Not run on Tokyo: SSH still times
+out before authentication. FA-08 live acceptance remains open.
+
 ## FA-09 — Give local development storage an explicit role
 
 The projected 9P workspace is a capability filesystem, not a promise of ordinary local
@@ -2215,6 +2236,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Prepare exact-binding live rebind harness in endo-host: refusal, explicit authorization, preserved history/workspace tool evidence, guarded cleanup | Local fake-facet tests and adversarial review; pending intents are not replayed; Tokyo run blocked by SSH connectivity |
 | 2026-09-23 | FA-08: pin Claude/Codex native state roots in durable session plans and refuse relocation before rebind; automatically protect roots from guest placement | Parser and adapter conformance regressions; adversarial review; old-release retirement required before deploy; live acceptance pending |
 | 2026-09-23 | FA-08: require Claude/Codex deletion owner to capture the same state provider used for activation; Claude setup also refuses mismatched retained storage | 52 focused tests; no new durable state; immutable native state-root pin still open; not deployed |
 | 2026-09-23 | Repair Claude broker public JSDoc type and shared OCI literal inference from binding-vocabulary refactor; quarantine stale local generated profile declarations | Docs passes, zero errors; Claude production and hosted-agent types pass; 35 focused tests; no runtime/durability change |
