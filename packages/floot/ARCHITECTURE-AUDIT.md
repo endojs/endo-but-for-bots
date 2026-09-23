@@ -771,6 +771,40 @@ Stream/recovery validation: 529 Floot tests pass; touched lint and docs pass wit
 warnings, and source typechecking reports no errors. Adversarial review approved.
 Native capture remains disabled; native boundary identity/frontier reconciliation,
 live compaction and real-daemon restart acceptance remain open.
+
+Native checkpoint producer preparation (2026-09-23, local fork, not deployed):
+the pinned OpenCode fork's import endpoint inserts legacy message/part rows
+directly without publishing their corresponding events.
+An SSE-only context mirror would therefore omit imported retained history.
+The isolated `kumavis/opencode` branch `codex/compaction-checkpoint`
+(producer commit `f6492ac3f9`), based on
+`870a58b973a2892d93c04e5db6e49757ad8237b9`, instead reads the authoritative
+store and applies native `filterCompacted` when publishing `session.compacted`.
+Its optional version-1 checkpoint includes the summary identity and ordered
+native messages, after continuation creation and before the normal prompt loop
+can start another model step.
+This is not an atomic snapshot against unrelated concurrent native writers.
+The checkpoint is bounded to 16 MiB of encoded UTF-8; overflow stops processing
+rather than silently truncating context or continuing without the checkpoint.
+The size check bounds publication, not the preceding database read or encoding
+allocation, and is separate from Floot's aggregate retained-turn profile.
+Native message records still need canonical conversion, including ignored text,
+pruned tool output, and explicit refusal of unsupported media.
+The bridge must align its frame bounds, validate boundary identity and duplicate
+payloads, and prove actual SSE ordering before this producer is enabled.
+Checkpoint preparation failure publishes a sanitized session error before
+returning `stop`; relying on the outer HTTP error handler would allow the
+runner's earlier idle event to incorrectly seal a successful Floot turn.
+The service-level regression verifies error publication before process return.
+Stopping this turn does not undo native compaction or prevent later prompts.
+Before enabling capture, the bridge must fence continuity after checkpoint
+failure, or reconcile the same authoritative boundary before accepting a prompt.
+Focused validation: 58 native compaction tests pass (one skip), three schema
+tests pass, and both package typechecks pass; legacy SDK generation completed.
+The existing event-manifest suite also fails on fixed inventory counts/order;
+no new event type was added, and this is not counted as a passing gate.
+There is no app image pin change, daemon deployment, or live compaction claim.
+
 Validation at the storage-foundation checkpoint: 515 Floot tests passed,
 including snapshot corruption, canonical payload
 checks, conflicting duplicate suffixes and failed content/event acknowledgement.
