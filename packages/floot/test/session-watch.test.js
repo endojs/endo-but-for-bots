@@ -532,16 +532,96 @@ test('two viewers each get a snapshot, and both hear the change after it', async
   await b.return();
 });
 
-test('ending the watch ends every view, and a late viewer is told at once', async t => {
-  const { watch } = makeSources();
+test('ending the watch ends every view and refuses late reads', async t => {
+  const { watch, state } = makeSources();
   const view = await open(watch);
   await next(view);
   watch.end();
   t.deepEqual(await next(view), { type: 'end' });
   t.true((await view.next()).done);
-  const late = await open(watch);
-  t.is((await next(late)).type, 'snapshot');
-  t.deepEqual(await next(late), { type: 'end' });
+  const reads = state.transcriptReads;
+  await t.throwsAsync(watch.watch(), { message: /closed/ });
+  watch.touch('transcript');
+  await turns();
+  t.is(state.transcriptReads, reads);
+  t.is(state.timers.length, 0);
+});
+
+for (const source of ['transcript', 'network', 'usage']) {
+  for (const fails of [false, true]) {
+    test(`session watch end invalidates held ${source}, fails=${fails}`, async t => {
+      t.timeout(5000);
+      const entered = makePromiseKit();
+      const pending = makePromiseKit();
+      const timers = new Set();
+      let reads = 0;
+      const load = async name => {
+        reads += 1;
+        if (name !== source) return name === 'transcript' ? harden([]) : null;
+        entered.resolve(undefined);
+        return pending.promise;
+      };
+      const watch = makeSessionWatch({
+        loadTranscript: () => load('transcript'),
+        loadNetwork: () => load('network'),
+        loadUsage: () => load('usage'),
+        readTurn: () => null,
+        readRunning: () => null,
+        readPending: () => null,
+        readExecution: () => null,
+        timers: {
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms };
+            timers.add(timer);
+            return timer;
+          },
+          clearTimeout: timer => timers.delete(timer),
+        },
+      });
+      t.teardown(() => watch.end());
+      const opening = watch.watch();
+      void opening.catch(() => {});
+      await entered.promise;
+      watch.end();
+      const before = reads;
+      if (fails) pending.reject(Error('late read failed'));
+      else pending.resolve(source === 'transcript' ? harden([]) : null);
+      await t.throwsAsync(opening, { message: /closed/ });
+      await turns();
+      t.is(reads, before);
+      t.is(watch.viewers(), 0);
+      t.is(timers.size, 0);
+      await t.throwsAsync(watch.watch(), { message: /closed/ });
+    });
+  }
+}
+
+test('ending a session watch cancels a scheduled retry', async t => {
+  const { watch, state, fire } = makeSources();
+  t.teardown(() => watch.end());
+  state.failTranscript = 'unavailable';
+  const view = await open(watch);
+  t.teardown(() => view.return?.());
+  await next(view);
+  t.true(state.timers.some(timer => timer.ms === 2000));
+  watch.end();
+  const before = state.transcriptReads;
+  fire(2000);
+  await turns();
+  t.is(state.transcriptReads, before);
+  t.is(state.timers.length, 0);
+});
+
+test('ending before admitted source microtasks run prevents their reads', async t => {
+  t.timeout(5000);
+  const { watch, state } = makeSources();
+  state.gateNetwork = true;
+  const opening = watch.watch();
+  watch.end();
+  await t.throwsAsync(opening, { message: /closed/ });
+  t.is(state.networkGates.length, 0);
+  t.is(state.transcriptReads, 0);
+  t.is(state.timers.length, 0);
 });
 
 test('the session list reports additions, changes and removals', async t => {

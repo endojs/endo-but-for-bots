@@ -293,6 +293,9 @@ export const makeSessionWatch = ({
     if (!watched()) dropTranscript();
   });
   const active = () => viewers.size() > 0 || watched();
+  const assertOpen = () => {
+    if (viewers.isEnded()) throw Error('Session watch is closed');
+  };
 
   /** @type {{ schedule: () => void, run: <T>(step: () => Promise<T> | T) => Promise<T> }} */
   // eslint-disable-next-line prefer-const
@@ -300,9 +303,10 @@ export const makeSessionWatch = ({
   /** @type {Array<() => void>} */
   const resumptions = [];
   const scheduleRetry = () => {
-    if (retryHandle !== undefined) return;
+    if (viewers.isEnded() || retryHandle !== undefined) return;
     retryHandle = timers.setTimeout(() => {
       retryHandle = undefined;
+      if (viewers.isEnded()) return;
       transcriptSuspended = false;
       transcriptHung = false;
       for (const resume of resumptions) resume();
@@ -330,18 +334,23 @@ export const makeSessionWatch = ({
     /** @type {Promise<void> | null} */
     let inFlight = null;
     const start = () => {
-      if (inFlight || suspended || !isDirty || !active()) return;
+      if (viewers.isEnded() || inFlight || suspended || !isDirty || !active())
+        return;
       // Cleared before the read: a touch during it sets it again, and the
       // read is run once more when this one returns.
       isDirty = false;
       inFlight = within(
-        Promise.resolve().then(load),
+        Promise.resolve().then(() => {
+          assertOpen();
+          return load();
+        }),
         SMALL_LOAD_MS,
         what,
         timers,
       )
         .then(
           next => {
+            if (viewers.isEnded()) return;
             wireEvent(next);
             retryMs = RETRY_FIRST_MS;
             if (!loaded || !sameData(next, value)) {
@@ -351,12 +360,14 @@ export const makeSessionWatch = ({
             }
           },
           () => {
+            if (viewers.isEnded()) return;
             isDirty = true;
             suspended = true;
             scheduleRetry();
           },
         )
         .catch(error => {
+          if (viewers.isEnded()) return;
           isDirty = true;
           suspended = true;
           scheduleRetry();
@@ -420,6 +431,7 @@ export const makeSessionWatch = ({
   };
 
   const refresh = async () => {
+    if (viewers.isEnded()) return;
     publishUnordered();
     if ((transcriptDirty || !transcript) && !transcriptSuspended) {
       // Cleared before the read, not after: a change that lands while the
@@ -428,11 +440,15 @@ export const makeSessionWatch = ({
       transcriptDirty = false;
       try {
         const messages = await within(
-          Promise.resolve().then(loadTranscript),
+          Promise.resolve().then(() => {
+            assertOpen();
+            return loadTranscript();
+          }),
           TRANSCRIPT_LOAD_MS,
           'The transcript',
           timers,
         );
+        if (viewers.isEnded()) return;
         wireEvent(messages);
         const previous = transcript;
         const delta = diffTranscript(
@@ -459,6 +475,7 @@ export const makeSessionWatch = ({
         transcriptError = '';
         retryMs = RETRY_FIRST_MS;
       } catch (error) {
+        if (viewers.isEnded()) return;
         transcriptDirty = true;
         transcriptSuspended = true;
         transcriptHung = deadlineErrors.has(/** @type {object} */ (error));
@@ -510,6 +527,7 @@ export const makeSessionWatch = ({
      * @param {'transcript' | 'network' | 'usage' | 'journal'} [kind]
      */
     touch(kind) {
+      if (viewers.isEnded()) return;
       if (kind === 'network') {
         networkValue.touch();
         return;
@@ -529,6 +547,8 @@ export const makeSessionWatch = ({
     },
     /** @returns {Promise<object>} a Far StreamReader */
     watch: () => {
+      if (viewers.isEnded())
+        return Promise.reject(Error('Session watch is closed'));
       opening += 1;
       // A first viewer waits for the small values (to their deadline at most)
       // before it takes its place on the chain, so that wait holds up nobody
@@ -536,7 +556,9 @@ export const makeSessionWatch = ({
       return Promise.all([networkValue.firstLoad(), usageValue.firstLoad()])
         .then(() =>
           chain.run(async () => {
+            assertOpen();
             await refresh();
+            assertOpen();
             // No await between reading the state and registering the view.
             return viewers.open({
               type: 'snapshot',
@@ -564,7 +586,12 @@ export const makeSessionWatch = ({
           if (!active()) dropTranscript();
         });
     },
-    end: () => viewers.end(),
+    end: () => {
+      viewers.end();
+      timers.clearTimeout(retryHandle);
+      retryHandle = undefined;
+      dropTranscript();
+    },
     viewers: () => viewers.size(),
   });
 };

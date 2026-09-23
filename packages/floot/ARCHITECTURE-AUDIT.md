@@ -85,6 +85,30 @@ The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, incl
 changes that still need classification rather than an assumption of relevance.
 No claim of complete retrospective coverage is made yet.
 
+Session-watcher retirement follow-up (2026-09-24, local, not deployed):
+`makeSessionWatch.end()` previously ended existing streams but still allowed
+late subscriptions to read sources, and held reads could publish/cache values
+or schedule retries after termination. Watchers now reject late subscriptions,
+fence queued source invocations and late results, cancel scheduled retry timers,
+and release the cached transcript on end. Existing streams still receive their
+terminal event. Eight new regressions cover held success/failure across
+transcript/network/usage, scheduled retries, and end before source microtasks.
+The existing late-subscription test now requires rejection rather than a fresh
+snapshot from the ended watcher.
+
+Durability classification: these watchers are deliberately ephemeral, owned by
+the factory incarnation/session; deletion and factory disposal already end them.
+No formula, durable record, inference request, or replay policy is added.
+The factory's existing admission checks remain authoritative; this change makes
+the local watcher obey its own lifecycle rather than relying on those outer
+checks. Consumer deadlines do not cancel underlying reads: already-started hung
+source operations may remain retained. Local race tests establish no late
+publication or retry, not reclamation of those operations or process-loss proof.
+Validation: all 671 Floot tests pass, including 34 watcher tests; three adjacent
+real-daemon factory-disposal tests pass. Those daemon tests cover the enclosing
+owner's disposal/admission boundary, not these exact held-read races.
+Floot lint has zero errors (245 warnings); adversarial source/test review approved.
+
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Deployed since generation 157 (2026-09-21). |
