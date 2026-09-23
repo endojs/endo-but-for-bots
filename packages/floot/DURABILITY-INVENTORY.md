@@ -390,6 +390,11 @@ are injected and do not establish live Linux or Tokyo behavior.
 
 ### Post-snapshot changes
 
+- Collection draining now attempts queued siblings after a callback rejects,
+  retaining all errors until the drain ends. A guest-construction regression
+  reproduces stranded mailbox cleanup before the fix; a second variant checks
+  multiple failed callbacks followed by successful cleanup. Failed callbacks
+  are still not retained for retry; no global quiescence or recovery claim.
 - Collection cancellation failures now reject before storage deletion, retaining
   original causes and reconstruction fences. A new injected-worker regression
   fails before the fix; 28 barrier/context/worker tests pass afterward.

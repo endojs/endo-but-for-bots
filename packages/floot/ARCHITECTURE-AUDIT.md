@@ -263,9 +263,10 @@ retirement or failed collection retry defects.
 
 Collection retry ownership — reproduced, unresolved (2026-09-24):
 `drainCollectionCleanup` shifts each callback before running it.
-Cancellation or formula/store deletion failures can resolve the callback while
-retaining a failed collection fence; reclamation can throw after the callback
-has already been removed. Neither outcome retains the callback for retry.
+At reproduction, cancellation or formula/store deletion failures could resolve
+the callback while retaining a failed collection fence; reclamation could throw
+after the callback had already been removed. Neither outcome retained the
+callback for retry. Subsequent error-reporting fixes below do not restore it.
 Extended `collection-disposal-barrier.test.js` clears the injected deletion or
 scratch reclamation failure, creates and removes an unrelated directory to drain
 fresh graph work, and verifies the original cleanup attempt count does not change.
@@ -315,6 +316,22 @@ The barrier/context/native-worker-lifecycle suites pass 28 tests.
 This closes the cancellation-reporting item above, not disconnection reporting
 or retained retry ownership. The worker failure in the new case is injected;
 adjacent real-child closure tests do not turn it into a process-loss recovery test.
+
+Sibling cleanup draining (2026-09-24): a rejected collection callback no longer
+aborts the queue before other admitted callbacks are attempted.
+The drain preserves a single original failure or aggregates multiple failures
+after draining, without retrying failed callbacks or adding a shared-flight lock.
+A real-persistence guest-construction regression fails before the fix: a handle
+deletion failure strands the separately queued mailbox cleanup until another
+graph operation. With the fix, sibling cleanup is observed directly in storage
+before the original construction rejection returns.
+A second variant checks two failed callbacks and a later successful cleanup,
+preserving both deletion errors and the original construction error.
+Both new cases and 60 adjacent collection/construction/publication cases pass,
+including graceful daemon publication restart. Only the first new case was run
+against the pre-fix implementation; the second was added afterward.
+This does not establish global quiescence across concurrent/reentrant drains,
+nor fix the failed callback's missing retry ownership.
 
 Agent identity-key retention — reproduced, unresolved (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`

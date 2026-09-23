@@ -1274,11 +1274,22 @@ const makeDaemonCore = async (
    * (controller cancellation, worker termination) completes.
    */
   const drainCollectionCleanup = async () => {
+    const failures = [];
     while (pendingCollectionCleanup.length > 0) {
       const cleanup = /** @type {() => Promise<void>} */ (
         pendingCollectionCleanup.shift()
       );
-      await cleanup();
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    // Failure of one owner must not strand already-queued sibling cleanup.
+    // This drains admitted work, not retries: failed owners remain fenced.
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Collection cleanup failures');
     }
   };
 
