@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 442 application entries and 73 host entries still need explicit ledger
+The other 436 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -220,6 +220,33 @@ binary/runtime is unavailable, so the aggregate pass count is not live acceptanc
 | `a85f04772` | Every Podman invocation uses local-engine selection plus a local-ABI flag; no new persisted owner | Current `podmanArgs` prefixes probes, creates, starts and removals. Fixtures assert prefixes; optional configured-remote refusal test does not prove current Tokyo engine behavior. Locality cannot establish descendant termination |
 | `9ba226e4b` | Podman preparation retains anchor/seccomp resources before acquisition, then transfers ownership without discarding failed rollback | Policy/cleanup tests cover held producers, failed anchor commands, seccomp cleanup and scoped sibling preservation. Later per-scope preparation supersedes driver-wide-only recovery; native closure/removal does not resolve uncertain producer effects |
 | `e280c0ab8` | Producer scope and operation removal retain admission capacity/configuration until closure, producer completion and container cleanup are established | Tests distinguish no-child failure from uncertain/interrupted creation and delayed closure. Later full-ID and startup-witness changes strengthen the path. Retried cleanup may remain permanently refused on uncertainty; #1323 remains separate |
+
+### Container identity and native closure
+
+Three subsequent driver changes are mapped to current Podman source.
+The current podman-cleanup, podman-policy, runtime, runtime-ownership-durability,
+and owned-agent suites pass **153 tests**. This combines injected engine behavior
+with real filesystem operations; it is not live Podman or daemon-loss acceptance.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `f5813d27d` | Operation cleanup starts with its reserved unique name, then switches permanently to an inspected full 64-character container ID | Regression replaces the name mapping after lookup and verifies start, signal and removal retries keep the original ID. Malformed lookup and cancellation are covered. Before successful lookup, name-based cleanup still relies on exclusive owner/name authority |
+| `3960357ce` | Removal records a positive startup witness before erasing engine state; missing witness retains ownership even after successful removal | Tests verify positive witness, failed observation, retry before successful removal and refusal to invent evidence after removal. Current trusted startup gate also supplies a witness. Persistent uncertainty is deliberate refusal, not recoverability or proof that descendants stopped |
+| `bb8c7fd55` | Driver tracks direct native closures across observers, producers, cleanup and attached processes; close fences ordinary commands before sealing all admission | Existing tests cover delayed closure, failed signaling, no late handle signals and immutable orphan IDs. Observer abort does not abort healthy producers; closure accounting is in-memory and does not survive daemon loss. #1323 remains the separate recovery gate |
+
+### Runtime composition and host configuration inspection
+
+Three following changes were independently mapped to retained source.
+Runtime/ownership/owned-agent tests are included in the fresh 153-test run above.
+The real-daemon failed-startup environment test passes after shortening its socket
+fixture name for macOS; other environment-exposure tests were inspected but not
+freshly rerun in this slice. None of this is a daemon crash/restart test.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `c87ff8260` | Runtime owns marker, generated storage, driver, factory and native scopes; successful native cleanup precedes storage/marker release | Tests cover acquisition cancellation, failed cleanup, exclusion and late controllers. Later `64b1de584` strengthens marker flushing. Existing markers/stale storage refuse reconstruction; no automatic crash recovery |
+| `905cd44c2` | Owned-agent delegates to shared owned-native-service; module registry retains inert owner before open, closes the exact invocation and retries predecessor cleanup before replacement | Tests cover concurrent callers, cancellation, reconstruction races and successor protection. Later `cf9fdce82` extracts shared owner. Registry is ephemeral; independent workers rely on filesystem exclusion, not shared in-memory state |
+| `bedcc52b8` | Host-only environment inspection reads local persisted caplet metadata without constructing it; no new schema or durable owner | Failed-startup test passes with real daemon. Source/tests isolate credential-bearing environment from ordinary formula records, diagnostics and guests and reject cross-peer inspection. No fresh full exposure-suite or restart evidence claimed |
 
 ### Post-snapshot changes
 

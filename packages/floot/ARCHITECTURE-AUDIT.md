@@ -86,7 +86,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 22 application changes, plus the first 20 host
+not. The newest 15 and earliest 28 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -108,6 +108,15 @@ Five subsequent factory/control-command/local-engine changes are also mapped;
 Unavailable optional native checks are not live acceptance evidence.
 An uncertain producer can remain retained even after container removal succeeds;
 this deliberate refusal is not automatic recovery or proof of quiescence.
+The next three driver changes bind controls to full container IDs, retain missing
+startup witnesses, and account separately for native command closure.
+Their mappings cite 153 focused sandbox tests; filesystem and injected-engine
+evidence does not establish live Podman behavior or daemon-loss recovery.
+The persisted-environment daemon regression initially failed before assertions
+because its 120-character socket path exceeded the macOS limit.
+A short fixture name fixes the test path; the unchanged assertion now passes
+against a real daemon after intentional caplet startup failure.
+This verifies stored environment retrieval, not restart or process-loss recovery.
 
 Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
 the four-formula legacy helper. Host cancellation calls `provideController`, so

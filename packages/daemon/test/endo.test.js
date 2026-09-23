@@ -4582,7 +4582,7 @@ testNeedsNodeWorker(
 test.serial(
   'getFormulaEnvironment reads persisted environment after startup failure',
   async t => {
-    const { host } = await prepareHost(t);
+    const { host } = await prepareHost(t, 'env');
     const missing = path.join(
       dirname,
       'test',
