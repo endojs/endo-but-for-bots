@@ -27,6 +27,15 @@ import { XattrsInterface } from '../type-guards.js';
 /** @import { Xattrs } from '../types.js' */
 
 /**
+ * Per-frame byte bound for the `set(name)` writer sink.
+ * Matches Linux `XATTR_SIZE_MAX` (64 KiB), the largest value a single
+ * extended attribute may hold, so no legitimate frame exceeds it.
+ * Without an explicit bound `bytesWriterFromIterator` admits frames up to
+ * `Number.MAX_SAFE_INTEGER` bytes.
+ */
+const XATTR_FRAME_BYTE_LENGTH_LIMIT = 64 * 1024;
+
+/**
  * @param {object} opts
  * @param {Map<string, Map<string, Uint8Array>>} opts.xattrTable
  * @param {(path: string[], event: { kind: string, name?: string }) => void} opts.fireLocal
@@ -96,7 +105,9 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
           return sink;
         },
       };
-      return bytesWriterFromIterator(sink);
+      return bytesWriterFromIterator(sink, {
+        byteLengthLimit: XATTR_FRAME_BYTE_LENGTH_LIMIT,
+      });
     },
     async list() {
       const m = xattrTable.get(key);

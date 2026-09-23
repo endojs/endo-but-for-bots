@@ -53,6 +53,19 @@ import { makeNodeWatcherExo } from './shared/watcher-exo.js';
 import { makeFilesystem } from './posture.js';
 
 /**
+ * Per-frame byte bound for the `PassableBytesWriter` sinks this module
+ * returns (`OpenFile.write`, `File.write`).
+ * Without an explicit bound `bytesWriterFromIterator` admits frames up to
+ * `Number.MAX_SAFE_INTEGER` bytes, so one oversized frame from a remote
+ * initiator would be fully marshalled into the responder's heap.
+ * 16 MiB is well above any frame the in-tree initiators send (for example
+ * `layer.js` emits 1 MiB chunks).
+ * The cumulative size across frames is buffered until `return()` and remains
+ * bounded only by the write authority of the capability holder.
+ */
+const WRITE_FRAME_BYTE_LENGTH_LIMIT = 16 * 1024 * 1024;
+
+/**
  * @import { FsBackend } from './backend-types.js'
  * @import {
  *   Directory,
@@ -500,7 +513,9 @@ export const wrapBackend = (backend, opts = {}) => {
             return sinkIterator;
           },
         };
-        return bytesWriterFromIterator(sinkIterator);
+        return bytesWriterFromIterator(sinkIterator, {
+          byteLengthLimit: WRITE_FRAME_BYTE_LENGTH_LIMIT,
+        });
       },
       async truncate(size) {
         requireOpen('truncate');
@@ -765,7 +780,9 @@ export const wrapBackend = (backend, opts = {}) => {
             return sinkIterator;
           },
         };
-        return bytesWriterFromIterator(sinkIterator);
+        return bytesWriterFromIterator(sinkIterator, {
+          byteLengthLimit: WRITE_FRAME_BYTE_LENGTH_LIMIT,
+        });
       },
       async snapshot() {
         const k = await backend.kind(path);
