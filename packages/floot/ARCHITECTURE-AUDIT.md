@@ -533,7 +533,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
 | FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission deployed and accepted. Generation 166 adds the operator-declared account authority in plans, profiles, catalogs and grants, replacing provider-name constants and the Codex `pool` label. All-account discovery and hosted seed/policy checks pass. Open: runtime support for Claude's discovered models and the absent-backend orchestration special case |
-| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Generation 166 deploys atomic revision intent, the shared `image`/`account`/`provider` vocabulary, recorded/proposed binding inspection and returned binding snapshots, exact state-provider ownership checks, and immutable Claude/Codex state-root placement. Local crash/reconstruction and adapter conformance evidence is recorded below. Live provider-only and image-plus-provider authorized rebind preservation cases remain unverified; earlier general acceptance did not exercise the rebind verb |
+| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Generation 166 deploys atomic revision intent, the shared `image`/`account`/`provider` vocabulary, recorded/proposed binding inspection and returned binding snapshots, exact state-provider ownership checks, and immutable Claude/Codex state-root placement. Local crash/reconstruction and adapter conformance evidence is recorded below. Generations 167 and 168 pass live provider-only and image-plus-provider authorized rebind with history/workspace preservation, respectively |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the operator deferred it on 2026-09-22 and will choose the mechanism and default bound later |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
@@ -597,6 +597,23 @@ The full Floot suite passes 407 tests; package ESLint has no errors; formatting 
 Explicit compaction/context selection remains open: this converter does not implement
 a compaction policy, and the full-history replay can grow without a context bound.
 The full-content fix is now deployed; bounded context remains open.
+
+Generation 166 acceptance found a separate direct-provider failure: after a
+daemon restart the seed history survived, but OpenRouter's free route returned
+an empty recall answer recorded as completed. The three hosted recall cases
+passed. Empty-response validation now rejects absent, null, empty or whitespace
+answers without tool calls, without replaying a potentially billed request.
+Valid tool-only replies are preserved; sanitized finish/model/provider fields
+identify the failure without exposing response bodies or reasoning.
+No new durable state or formula is introduced: the existing failed-turn journal
+path records the error. A reconstruction regression preserves that failure and
+its history without another request. This uses an in-memory persistent-powers
+fixture, not process-loss proof. Reported usage on rejected replies is currently
+lost, as on other provider validation errors; exact failed-response accounting
+remains a follow-up. The fix is deployed as generation 167; one fresh live Fae
+seed/restart/recall case passed on the free route. The original failed case
+remains recorded. This is not proof that every free-route model answers, nor
+live evidence of the new negative-response path (covered by local tests).
 
 ## FA-03 — Retire the live Claude form topology
 
@@ -1624,8 +1641,32 @@ lease. No credential or daemon-state schema changes. Adversarial review caught
 and corrected an API mismatch: `whenFinished()` resolves on failure, so the
 driver also reads the final turn status. Fake-facet regressions validate the
 harness, not daemon restart or real inference. SSH connectivity is restored and
-generation 166 is deployed. The two live rebind cases have not run; FA-08 live
-acceptance remains open.
+generation 167 is deployed.
+The provider-only case passed on Tokyo using OpenCode's automatic free route:
+normal reopen refused the replacement, explicit provider authorization matched
+the inspected proposal and returned/read-back bindings, and native shell evidence
+proved the original workspace marker survived with the seed transcript intact.
+The disposable session was deleted; separate inspection found zero native records,
+containers and 9p mounts, with all six Secret identities and the controller-host
+identity unchanged.
+The retirement helper initially rejected normal stop's release of transient
+client/worker references; reviewed correction requires their absence plus the
+native-closed acknowledgement while preserving stable references.
+Stop was not replayed.
+See endo-host `ops/hosted-cutover5-20260923.md` for the run and evidence.
+Generation 168 also passed the separate image-plus-provider case after a guarded
+rebuild changed only the OpenCode overlay digest among the configured images.
+Normal reopen refused exactly those two changed axes; explicit authorization
+matched the inspected proposal and read-back bindings, and Podman confirmed
+the new image was running.
+Native shell evidence verified the original workspace marker with seed history
+intact; guarded cleanup deleted the test session.
+These close the two live rebind cases, not process-loss recovery or universal
+revocation of old capabilities.
+The new image also passed independent restart/recall conformance on the automatic
+free route: two completed turns and four transcript messages after daemon restart.
+The exact verified session was deleted; separate inspection found no containers
+or 9p mounts remaining.
 
 ## FA-09 — Give local development storage an explicit role
 
