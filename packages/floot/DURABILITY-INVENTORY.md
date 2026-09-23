@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 436 application entries and 73 host entries still need explicit ledger
+The other 429 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -247,6 +247,26 @@ freshly rerun in this slice. None of this is a daemon crash/restart test.
 | `c87ff8260` | Runtime owns marker, generated storage, driver, factory and native scopes; successful native cleanup precedes storage/marker release | Tests cover acquisition cancellation, failed cleanup, exclusion and late controllers. Later `64b1de584` strengthens marker flushing. Existing markers/stale storage refuse reconstruction; no automatic crash recovery |
 | `905cd44c2` | Owned-agent delegates to shared owned-native-service; module registry retains inert owner before open, closes the exact invocation and retries predecessor cleanup before replacement | Tests cover concurrent callers, cancellation, reconstruction races and successor protection. Later `cf9fdce82` extracts shared owner. Registry is ephemeral; independent workers rely on filesystem exclusion, not shared in-memory state |
 | `bedcc52b8` | Host-only environment inspection reads local persisted caplet metadata without constructing it; no new schema or durable owner | Failed-startup test passes with real daemon. Source/tests isolate credential-bearing environment from ordinary formula records, diagnostics and guests and reject cross-peer inspection. No fresh full exposure-suite or restart evidence claimed |
+
+### Provisioning, passive records and formula identities
+
+Seven further application changes are mapped to current source and removals.
+Fresh OpenCode setup/hosted-setup/runtime-setup/client/backend-factory suites pass
+**74 tests**; daemon imported-reference/resource-registry/session-record-store/
+directory suites pass **34 tests**. The real-daemon serial test `session records
+retain exact references without activating clients` also passes after shortening
+its socket fixture name. It checks graceful restart, passive inspection, retained
+reference edges and exact-provider cleanup, not native process-loss recovery.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `6c8d83928` | Setup validates the captured formula ID and reads its persisted environment; shared logic now in hosted-agent/hosted-setup | Tests cover retained roots/entrypoints and placement. Original state-provider topology is superseded by native sandbox, broker and storage owners; not deployed cleanup evidence |
+| `1a91a0fd4` | Passive opaque plans and exact dependency edges now live in daemon session-record-store/session-owner | Unit and real-daemon restart tests retain partial records and dependencies without activating clients. Single-store ownership required; check-before-remove is not atomic compare-and-delete |
+| `bf62142db` | Client fences termination and retains failed containment/unmount/state cleanup; late acquisitions drain without guest readiness | Current tests cover failed disposal and late provisioning. Old client-module/provisioner paths were superseded by daemon provisioning and deleted; cancellation alone is not cleanup proof |
+| `31fa9f011` | Import registrar associates only root peer-provide results with formula IDs, scoped to the exact importing context | Four tests cover late cancelled result, same-presence successor, preserved aliases and no inferred nested identities. Maps are ephemeral and reconstructed through peer provision; fresh multiplayer restart test not run here |
+| `e16d21b07` | Historical static session-powers module deleted by `495486723` with legacy Claude client/form topology | File/export absent and deletion diff inspected. No retained module or new runtime owner to certify; stored historical formulas still require explicit operator retirement, not inferred graph absence |
+| `9df03e624` | Daemon owns passive record implementation; sandbox re-exports shared in-memory cleanup registry | Record tests cover partial publication and failed cleanup; registry tests cover local serialization, stale release and shutdown. Durable directory edges are distinct from ephemeral cleanup callbacks. Later staged revision logic is not attributed to this original move |
+| `e41697f63` | Directory formulation transfers one pin under graph lock; publication releases it in awaited finally, and host/guest construction adopts rather than duplicates it | Two directory regressions exercise concurrent publication and failed-publication collection. Source confirms current transfer contract; no fresh comprehensive host/guest bootstrap failure or crash proof |
 
 ### Post-snapshot changes
 

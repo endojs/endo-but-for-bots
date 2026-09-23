@@ -609,7 +609,10 @@ test.serial(
   'session records retain exact references without activating clients',
   async t => {
     t.timeout(30_000);
-    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { cancelled, config } = await prepareConfig(t, {
+      gcEnabled: true,
+      configName: 'rec',
+    });
     const plan = '{"sessionId":"session-a"}';
     let references;
     let recordId;

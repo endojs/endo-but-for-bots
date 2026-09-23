@@ -86,7 +86,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 28 application changes, plus the first 20 host
+not. The newest 15 and earliest 35 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -117,6 +117,12 @@ because its 120-character socket path exceeded the macOS limit.
 A short fixture name fixes the test path; the unchanged assertion now passes
 against a real daemon after intentional caplet startup failure.
 This verifies stored environment retrieval, not restart or process-loss recovery.
+Seven subsequent provisioning/record/identity changes now have explicit mappings,
+including the deleted static session-powers module's disposition.
+Fresh OpenCode suites pass 74 tests and focused daemon suites pass 34 tests.
+The real-daemon passive-record test also passes across graceful restart after a
+short socket fixture name is supplied; it verifies retained reference edges and
+nonactivation, not native process-loss recovery or cross-owner exclusion.
 
 Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
 the four-formula legacy helper. Host cancellation calls `provideController`, so
