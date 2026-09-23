@@ -261,6 +261,30 @@ file); formatting and root documentation generation pass (176 documentation
 warnings). This removes one unused construction path, not the remaining key
 retirement or failed collection retry defects.
 
+Collection retry ownership — reproduced, unresolved (2026-09-24):
+`drainCollectionCleanup` shifts each callback before running it.
+Cancellation or formula/store deletion failures can resolve the callback while
+retaining a failed collection fence; reclamation can throw after the callback
+has already been removed. Neither outcome retains the callback for retry.
+Extended `collection-disposal-barrier.test.js` clears the injected deletion or
+scratch reclamation failure, creates and removes an unrelated directory to drain
+fresh graph work, and verifies the original cleanup attempt count does not change.
+The original formula or scratch bytes remain; lookup still refuses resurrection.
+All four barrier cases pass, characterizing an open defect rather than recovery.
+Replace the no-retry assertions with successful reclamation assertions when fixed.
+
+The next bounded implementation should separate acknowledged-stopped storage
+cleanup from failed cancellation, retain per-stage progress and original metadata,
+and exclude in-flight records from reentrant drains.
+Keeping a failed callback at the queue head or awaiting one shared drain promise
+can deadlock when an awaited cleanup callback reenters a graph operation.
+`context.cancel()` caches its disposal promise, including rejection: rerunning the
+same cancellation cannot be assumed to retry failed hooks.
+Automatic native disposal recovery is not authorized by this finding or solved by
+a queue change; it remains distinct from retrying storage after proven cancellation.
+Formula deletion preceding failed storage reclamation also means in-memory retry
+ownership alone would not prove restart recovery.
+
 Agent identity-key retention — reproduced, unresolved (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
 record despite having no persisted formulas left under its node. The four direct

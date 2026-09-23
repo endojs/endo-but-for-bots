@@ -390,6 +390,11 @@ are injected and do not establish live Linux or Tokyo behavior.
 
 ### Post-snapshot changes
 
+- Collection barrier tests now characterize lost retry ownership after a
+  transient formula deletion or scratch reclamation failure clears: later graph
+  work succeeds but does not retry the original cleanup. Four cases pass.
+  This is an unresolved defect, not recovery evidence; the main audit records
+  reentrancy, cancellation and per-stage ownership constraints for the fix.
 - Removed unused `formulateDirectoryForStore` and its internal type/host wiring
   after whole-repository caller and facet tracing; active directory construction
   and replay are unchanged. The 55 construction/directory/marshal tests, daemon

@@ -45,6 +45,9 @@ for (const mode of [
     /** @type {any} */
     let retainedMount;
     let reclaimAttempted = false;
+    let injectFailure = true;
+    let deletionAttempts = 0;
+    let reclamationAttempts = 0;
     const files = makeFilePowers({ fs, path });
     const powers = await makeDaemonicPowers({
       config: {
@@ -65,11 +68,12 @@ for (const mode of [
             directory ===
               path.join(temporary, 'state', 'mounts', heldNumber || '')
           ) {
+            reclamationAttempts += 1;
             reclaimAttempted = true;
             await t.throwsAsync(E(retainedMount).readText('proof.txt'), {
               message: /revok|cancel/i,
             });
-            throw Error('Injected reclamation failure');
+            if (injectFailure) throw Error('Injected reclamation failure');
           }
           return files.removeDirectory(directory);
         },
@@ -110,9 +114,10 @@ for (const mode of [
           },
           deleteFormula: async number => {
             if (number === heldNumber) {
+              deletionAttempts += 1;
               entered.resolve(undefined);
               await release.promise;
-              if (failDeletion)
+              if (failDeletion && injectFailure)
                 throw Error('Injected formula deletion failure');
             }
             return powers.persistence.deleteFormula(number);
@@ -196,6 +201,34 @@ for (const mode of [
         ),
         'live mount',
       );
+    }
+    if (failDeletion || mode === 'reclaim-failure') {
+      // Characterize the open retry-ownership defect, not desired behavior:
+      // clearing the external failure and draining subsequent graph changes
+      // does not retry the cleanup removed from pendingCollectionCleanup.
+      // Replace these assertions with reclamation checks when retry ownership
+      // is implemented; retaining a reconstruction fence is not cleanup.
+      injectFailure = false;
+      const attempts = { deletionAttempts, reclamationAttempts };
+      const sibling = await E(host).makeDirectory('after-failure');
+      t.deepEqual(await E(sibling).list(), []);
+      await E(host).remove('after-failure');
+      t.deepEqual({ deletionAttempts, reclamationAttempts }, attempts);
+      await t.throwsAsync(E(host).lookupById(id), {
+        message: /disposal|collect/i,
+      });
+      if (failDeletion) {
+        const stored = await powers.persistence.readFormula(parseId(id).number);
+        t.is(stored.formula.type, 'directory');
+      } else {
+        t.is(
+          await fs.promises.readFile(
+            path.join(temporary, 'state', 'mounts', heldNumber, 'proof.txt'),
+            'utf8',
+          ),
+          'live mount',
+        );
+      }
     }
   });
 }
