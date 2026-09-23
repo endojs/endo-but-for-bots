@@ -301,6 +301,11 @@ test('slice image references are checked without Podman and pinned through it', 
     imageRef: `localhost/x@${digest}`,
     imageDigest: digest,
   });
+  // A pin the operator wrote with the tag still on it is refused at setup.
+  await t.throwsAsync(
+    resolvePinnedImageRef(`oci:localhost/x:v1@${digest}`, exec),
+    { message: /native runtime will accept/ },
+  );
   t.is(inspected.length, 3, 'a pinned reference is not resolved again');
   await t.throwsAsync(
     resolvePinnedImageRef(

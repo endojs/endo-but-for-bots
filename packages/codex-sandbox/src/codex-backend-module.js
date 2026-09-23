@@ -89,11 +89,11 @@ export const makeCodexSessionProvisioner = ({
     sandboxIdFallback: 'codex',
     readPlan: readCodexSessionPlan,
     fields: ({ request }) => ({
-      imageRef,
+      rootfs: `oci:${imageRef}`,
       accountRef,
       containerMounts: request.containerMounts,
     }),
-    rebindable: { imageRef: 'image', accountRef: 'account' },
+    rebindable: { rootfs: 'image', accountRef: 'account' },
     catalog,
     ...(mounterEnv === undefined ? {} : { mounterEnv }),
   });

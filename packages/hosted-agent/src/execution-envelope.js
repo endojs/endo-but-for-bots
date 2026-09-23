@@ -38,6 +38,7 @@ import {
 } from './hosted-agent-policy.js';
 import { assertProviderGrantV1 } from './provider-grant.js';
 import { assertPublicNetworkEvidence } from './public-network.js';
+import { readPinnedRootfs } from './session-plan.js';
 import {
   makeDefaultMounter,
   makeWorkspaceProjection,
@@ -145,8 +146,6 @@ const expectedAttestation = ({ imageDigest, networkNamespaceId, mounts }) =>
  * @property {(rootPath: string) => object} [makeFilesystem]
  * @property {(plan: Record<string, any>) => { providerOrigin: string, accountRef: string, networkPolicy: string, model?: string, subscription?: string }} scopeRequest
  *   What the broker scope is asked for; the grant is then held to it.
- * @property {(plan: Record<string, any>) => { kind: 'oci', ref: string }} image
- *   The pinned image the plan records.
  * @property {(plan: Record<string, any>) => 'api-key' | 'oauth' | undefined} [authMode]
  *   The authentication mode the grant must report, when the plan fixes one.
  * @property {(context: { plan: Record<string, any>, resolver: any, assertOpen: () => void }) => Promise<any>} [prepare]
@@ -187,7 +186,6 @@ export const activateExecutionEnvelope = async (
     makeMounter = makeDefaultMounter,
     makeFilesystem,
     scopeRequest,
-    image,
     authMode = () => undefined,
     prepare = async () => undefined,
     tools: prepareTools = async () => undefined,
@@ -223,11 +221,11 @@ export const activateExecutionEnvelope = async (
   assertCopyData(harden(evidence));
   // The slice runs the exact image the broker pinned: the recorded reference
   // names the digest the broker's evidence and grant both carry.
-  const rootfs = image(plan);
-  (rootfs.kind === 'oci' &&
-    typeof evidence.imageDigest === 'string' &&
+  const pinned = readPinnedRootfs(plan.rootfs, label);
+  const rootfs = harden({ kind: 'oci', ref: pinned.imageRef });
+  (typeof evidence.imageDigest === 'string' &&
     /^sha256:[a-f0-9]{64}$/.test(evidence.imageDigest) &&
-    rootfs.ref.endsWith(`@${evidence.imageDigest}`)) ||
+    pinned.imageDigest === evidence.imageDigest) ||
     Fail`${b(label)} rootfs must match the broker's pinned image`;
   const { imageDigest } = evidence;
   const mode = authMode(plan);

@@ -11,6 +11,7 @@
 
 import { readMountPrograms } from '@endo/9p-server/mount-caplet.js';
 import { Fail, b, q } from '@endo/errors';
+import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 import { createHash } from 'node:crypto';
 import { isAbsolute, normalize } from 'node:path';
 
@@ -146,16 +147,66 @@ harden(assertSessionId);
 const NETWORK_POLICIES = harden(['off', 'public-internet']);
 const SUBSCRIPTION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const WORKSPACE_FIELDS = harden(['workspaceDir', 'workspaceHostPath']);
+/** The fields every hosted session plan records, whatever its runtime. */
+const SHARED_FIELDS = harden([
+  'sessionId',
+  'sandboxSessionId',
+  'rootfs',
+  'networkPolicy',
+  ...WORKSPACE_FIELDS,
+  'workspaceMountPoint',
+  'mounterSocketDir',
+  'mounterEnv',
+  'model',
+  'reasoningEffort',
+  'systemPrompt',
+  'subscription',
+]);
+const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
+
+/**
+ * The one image field of every hosted session plan: the `oci:` reference of
+ * the image the broker pinned, digest included, in the spelling the native
+ * runtime admits (a registry port, no tag). A plan never selects a rootfs
+ * keyword and never leaves the image to a default; the execution envelope
+ * later holds the broker's evidence to this digest.
+ * @param {unknown} value The recorded `rootfs`.
+ * @param {string} [label] The adapter's name for messages.
+ * @returns {{ rootfs: string, imageRef: string, imageDigest: string }}
+ */
+export const readPinnedRootfs = (value, label = 'Hosted') => {
+  if (value === undefined) {
+    throw Fail`Missing session plan field ${q('rootfs')}`;
+  }
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith('oci:') ||
+    value.length <= 4
+  ) {
+    throw Fail`${b(label)} plan rootfs must be an ${q('oci:<image>@<digest>')} reference`;
+  }
+  const imageRef = value.slice(4);
+  const at = imageRef.indexOf('@');
+  const imageDigest = at === -1 ? '' : imageRef.slice(at + 1);
+  IMAGE_DIGEST.test(imageDigest) ||
+    Fail`${b(label)} plan rootfs must be pinned to a digest, got ${q(imageRef)}`;
+  PINNED_IMAGE_REFERENCE_PATTERN.test(imageRef) ||
+    Fail`${b(label)} plan rootfs ${q(imageRef)} is not a pinned reference the native runtime will accept; drop the tag it was reached by and keep the digest`;
+  return harden({ rootfs: value, imageRef, imageDigest });
+};
+harden(readPinnedRootfs);
 
 /**
  * The placement every hosted session plan records, read the same way at
- * creation, activation and deletion: the identities, the network policy, the
- * recorded paths (each a normalized absolute path, pairwise disjoint), exactly
- * one owned or operator-supplied workspace, the pin, the persona, the pinned
- * subscription and the mounter settings. Nothing is defaulted, and nothing
- * unknown is carried: a field this reader does not know cannot add storage or
- * cleanup authority. An adapter reads its own fields from `recorded` and adds
- * them to `placement`.
+ * creation, activation and deletion: the identities, the pinned image, the
+ * network policy, the recorded paths (each a normalized absolute path,
+ * pairwise disjoint), exactly one owned or operator-supplied workspace, the
+ * pin, the persona, the pinned subscription and the mounter settings. Nothing
+ * is defaulted, and nothing unknown is admitted: a plan with a field neither
+ * this reader nor the adapter knows is refused, so a stale or misspelled
+ * field cannot add storage or cleanup authority, and is recreated rather than
+ * read around. An adapter reads its own fields from `recorded` and adds them
+ * to `placement`.
  *
  * @param {string} text
  * @param {object} options
@@ -164,13 +215,21 @@ const WORKSPACE_FIELDS = harden(['workspaceDir', 'workspaceHostPath']);
  *   id derivation.
  * @param {readonly string[]} [options.privatePaths] Further recorded private
  *   paths beyond the mount point and the 9P socket directory.
+ * @param {readonly string[]} [options.fields] The adapter's own recorded
+ *   fields; any other field is refused.
  * @param {(effort: string) => unknown} [options.assertEffort] The runtime's
  *   own check of a recorded effort, when it has such an axis.
  * @returns {{ placement: Record<string, any>, recorded: Record<string, any> }}
  */
 export const readSessionPlacement = (
   text,
-  { label, sandboxIdFallback = 'session', privatePaths = [], assertEffort },
+  {
+    label,
+    sandboxIdFallback = 'session',
+    privatePaths = [],
+    fields = [],
+    assertEffort,
+  },
 ) => {
   const value = JSON.parse(text);
   assertCopyData(harden(value));
@@ -178,8 +237,11 @@ export const readSessionPlacement = (
     Fail`Session plan must be a record`;
   /** @type {Record<string, any>} */
   const recorded = value;
-  !Object.hasOwn(recorded, 'nativeProfile') ||
-    Fail`Retired nativeProfile field; recreate this hosted session plan`;
+  const known = new Set([...SHARED_FIELDS, ...privatePaths, ...fields]);
+  for (const name of Object.keys(recorded)) {
+    known.has(name) ||
+      Fail`Unknown session plan field ${q(name)}; recreate this hosted session plan`;
+  }
   for (const name of ['sessionId', 'sandboxSessionId']) {
     (typeof recorded[name] === 'string' && recorded[name] !== '') ||
       Fail`Missing session plan field ${q(name)}`;
@@ -235,9 +297,11 @@ export const readSessionPlacement = (
     recorded.mounterEnv === undefined
       ? undefined
       : readMounterEnv(recorded.mounterEnv);
+  const { rootfs } = readPinnedRootfs(recorded.rootfs, label);
   const placement = harden({
     sessionId: recorded.sessionId,
     sandboxSessionId: recorded.sandboxSessionId,
+    rootfs,
     networkPolicy: recorded.networkPolicy,
     ...Object.fromEntries(paths),
     ...Object.fromEntries(

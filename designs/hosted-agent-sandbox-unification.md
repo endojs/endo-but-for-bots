@@ -51,8 +51,17 @@ revision is not deployed.
 
 ### One binding vocabulary — planned 2026-09-23
 
-Planned, not implemented. It lands before the next deploy and before the live
-rebind cases, so those exercise the final vocabulary and the deploy happens once.
+Planned; landing in slices before the next deploy and before the live rebind
+cases, so those exercise the final vocabulary and the deploy happens once.
+Slice 1 (2026-09-23, local): `rootfs` is the one image field, read and pinned
+by the shared placement reader (`readPinnedRootfs`: `oci:`, a digest, the
+runtime's pinned-reference pattern) for all three backends, so the execution
+envelope reads the plan's image itself and the per-adapter hook is gone;
+every plan reader refuses a field it does not know, the shared reader taking
+each adapter's declared fields (`fields`) beside its private paths, and the
+two retired-name checks fold into that rule; Codex's plan field `imageRef` is
+gone. Slice 2, the declared account authority, and slice 3, the shared
+descriptor vocabulary, follow.
 
 Terms, as FA-07's axes name them. A *provider* is an inference endpoint
 (Anthropic, OpenRouter, OpenAI). An *account* is one credential-bearing identity

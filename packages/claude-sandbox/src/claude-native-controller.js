@@ -52,7 +52,7 @@ import {
 import { writeClaudeTranscript } from './claude-transcript-writer.js';
 import { makeTranscriptResume } from './claude-transcripts.js';
 import { makeMcpSocketServer } from './mcp-socket-server.js';
-import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+import { rootfsLabel } from './parse-rootfs.js';
 
 /** @import { ClaudeClientArgs } from './claude-client.js' */
 
@@ -151,7 +151,6 @@ export const makeClaudeNativeController = ({
             networkPolicy: plan.networkPolicy,
             ...(plan.model ? { model: plan.model } : {}),
           }),
-          image: plan => parseRootfs(plan.rootfs),
           // The grant's authentication mode is the broker's own: a pool
           // renews and reports `oauth`; a single token, subscription or API
           // key, is held as `api-key`. The plan records the credential kind

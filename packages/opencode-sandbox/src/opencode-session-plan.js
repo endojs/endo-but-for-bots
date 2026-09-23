@@ -10,7 +10,6 @@
  * @module
  */
 
-import { Fail, q } from '@endo/errors';
 import {
   containsPath,
   isNormalizedAbsolutePath,
@@ -62,18 +61,12 @@ const SANDBOX_ID_FALLBACK = 'opencode';
  * @returns {SessionPlan}
  */
 export const readSessionPlan = text => {
-  const { placement, recorded } = readSessionPlacement(text, {
+  const { placement } = readSessionPlacement(text, {
     label: 'OpenCode',
     sandboxIdFallback: SANDBOX_ID_FALLBACK,
     privatePaths: ['mcpDir'],
   });
-  !Object.hasOwn(recorded, 'opencodeSessionId') ||
-    Fail`Retired opencodeSessionId field; recreate this hosted session plan`;
-  (typeof recorded.rootfs === 'string' && recorded.rootfs !== '') ||
-    Fail`Missing session plan field ${q('rootfs')}`;
-  return harden(
-    /** @type {SessionPlan} */ ({ ...placement, rootfs: recorded.rootfs }),
-  );
+  return harden(/** @type {SessionPlan} */ ({ ...placement }));
 };
 harden(readSessionPlan);
 

@@ -8,7 +8,7 @@ import { readCodexSessionPlan } from '../src/codex-session-plan.js';
 const plan = harden({
   sessionId: 'session-a',
   sandboxSessionId: makeSandboxSessionId('session-a', 'codex'),
-  imageRef: `example@sha256:${'a'.repeat(64)}`,
+  rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
   accountRef: 'subscription-a',
   networkPolicy: 'off',
   workspaceDir: '/workspaces/a',
@@ -31,24 +31,43 @@ test('Codex records placement without a volume lease or an MCP directory', t => 
   );
 });
 
-test('unknown fields cannot add storage cleanup authority', t => {
-  const parsed = readCodexSessionPlan(
-    JSON.stringify({
-      ...plan,
-      mcpDir: '/private/a',
-      stateDirectory: '/host/records',
-    }),
+test('unknown fields are refused, so none can add storage cleanup authority', t => {
+  t.throws(
+    () =>
+      readCodexSessionPlan(JSON.stringify({ ...plan, mcpDir: '/private/a' })),
+    { message: /Unknown session plan field "mcpDir"; recreate/ },
   );
-  t.false('mcpDir' in parsed);
-  t.false('stateDirectory' in parsed);
-  t.deepEqual(parsed, readCodexSessionPlan(JSON.stringify(plan)));
+  t.throws(
+    () =>
+      readCodexSessionPlan(
+        JSON.stringify({ ...plan, stateDirectory: '/host/records' }),
+      ),
+    { message: /Unknown session plan field "stateDirectory"/ },
+  );
+  // The retired spelling of the image is unknown too.
+  const { rootfs: _, ...unpinned } = plan;
+  t.throws(
+    () =>
+      readCodexSessionPlan(
+        JSON.stringify({
+          ...unpinned,
+          imageRef: `example@sha256:${'a'.repeat(64)}`,
+        }),
+      ),
+    { message: /Unknown session plan field "imageRef"/ },
+  );
 });
 
 /** @type {readonly [Record<string, unknown>, RegExp][]} */
 const refused = harden([
   [{ sandboxSessionId: 'another-session' }, /must derive/],
   [{ accountRef: '' }, /pin its subscription/],
-  [{ imageRef: 'example:latest' }, /pinned/],
+  [{ rootfs: 'oci:example:latest' }, /pinned to a digest/],
+  [{ rootfs: `example@sha256:${'a'.repeat(64)}` }, /oci:/],
+  [
+    { rootfs: `oci:example:tag@sha256:${'a'.repeat(64)}` },
+    /native runtime will accept/,
+  ],
   [{ networkPolicy: 'host' }, /network policy/],
   [{ workspaceHostPath: '/operator/repo' }, /exactly one/],
   [{ workspaceDir: undefined }, /exactly one/],
@@ -87,7 +106,7 @@ test('retired per-session native profiles are refused rather than ignored', t =>
   t.throws(
     () => readCodexSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
     {
-      message: /Retired nativeProfile field/,
+      message: /Unknown session plan field "nativeProfile"/,
     },
   );
 });

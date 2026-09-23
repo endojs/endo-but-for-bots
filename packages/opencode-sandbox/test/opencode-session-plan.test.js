@@ -157,7 +157,7 @@ test('retired per-session native profiles are refused rather than ignored', t =>
   t.throws(
     () => readSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
     {
-      message: /Retired nativeProfile field/,
+      message: /Unknown session plan field "nativeProfile"/,
     },
   );
 });
@@ -166,7 +166,19 @@ test('retired native session resume IDs are refused rather than ignored', t => {
   for (const opencodeSessionId of ['', 'ses_old', null]) {
     t.throws(
       () => readSessionPlan(JSON.stringify({ ...plan, opencodeSessionId })),
-      { message: /Retired opencodeSessionId field/ },
+      { message: /Unknown session plan field "opencodeSessionId"/ },
     );
+  }
+});
+
+test('unknown fields are refused rather than dropped', t => {
+  for (const [name, mutated] of [
+    ['stateDirectory', { ...plan, stateDirectory: '/host/records' }],
+    ['imageRef', { ...plan, imageRef: 'x' }],
+    ['credentialKind', { ...plan, credentialKind: 'apiKey' }],
+  ]) {
+    t.throws(() => readSessionPlan(JSON.stringify(mutated)), {
+      message: new RegExp(`Unknown session plan field "${name}"; recreate`),
+    });
   }
 });

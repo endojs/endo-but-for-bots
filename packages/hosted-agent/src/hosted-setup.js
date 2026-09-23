@@ -1046,6 +1046,10 @@ export const resolvePinnedImageRef = async (
 ) => {
   const { image, imageDigest: pinned } = readSliceImageReference(rootfs, label);
   if (pinned !== undefined) {
+    // An operator's own pin gets the same runtime rule as a resolved one, here
+    // rather than at every session creation.
+    PINNED_IMAGE_REFERENCE_PATTERN.test(image) ||
+      Fail`Pinned ${b(label)} sandbox image ${q(image)} is not a pinned reference the native runtime will accept; drop the tag it was reached by and keep the digest`;
     return harden({ imageRef: image, imageDigest: pinned });
   }
   const { stdout } = await exec('podman', [

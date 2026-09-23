@@ -76,6 +76,7 @@ const planFor = (overrides = {}) =>
   harden({
     sessionId: 'a',
     sandboxSessionId: 'a-sandbox',
+    rootfs: `oci:example@${digest}`,
     networkPolicy: 'off',
     workspaceDir: '/workspaces/a',
     workspaceMountPoint: '/private/a/workspace',
@@ -221,7 +222,6 @@ const fixture = ({
       networkPolicy: plan.networkPolicy,
       ...(plan.model ? { model: plan.model } : {}),
     }),
-    image: () => ({ kind: 'oci', ref: `example@${digest}` }),
     authMode: () => 'api-key',
     prepare: async () => {
       events.push('prepare');

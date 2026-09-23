@@ -85,7 +85,6 @@ const planFor = id =>
     mcpDir: `/private/${id}/mcp`,
     mounterSocketDir: `/private/${id}/9p`,
     model: 'openrouter/anthropic/claude-sonnet-4',
-    initialPrompt: 'must never run',
   });
 
 const fixture = (t, { realClient = false } = {}) => {
@@ -668,7 +667,7 @@ test('retired native session resume plan acquires no resources', async t => {
     opencodeSessionId: 'ses_old',
   });
   await t.throwsAsync(E(controller).activate(text, f.resolver), {
-    message: /Retired opencodeSessionId field/,
+    message: /Unknown session plan field "opencodeSessionId"/,
   });
   t.deepEqual(f.events, []);
 });

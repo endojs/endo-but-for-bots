@@ -32,7 +32,7 @@ import {
   DEFAULT_SOCKET_NAME,
   makeMcpSocketServer,
 } from './mcp-socket-server.js';
-import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+import { rootfsLabel } from './parse-rootfs.js';
 import { readSessionPlan } from './opencode-session-plan.js';
 
 /** The CLI's home on the slice's own tmpfs; its store is in memory. */
@@ -108,7 +108,6 @@ export const makeOpencodeNativeController = ({
             networkPolicy: plan.networkPolicy,
             ...(plan.model ? { model: parseModelRef(plan.model) } : {}),
           }),
-          image: plan => parseRootfs(plan.rootfs),
           authMode: () => 'api-key',
           // The Endo tools Floot pinned reach the CLI over a per-session MCP
           // socket this controller runs; only JSON crosses it. Its socket

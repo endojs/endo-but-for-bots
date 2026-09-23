@@ -6,8 +6,79 @@ import {
   isNormalizedAbsolutePath,
   makeSandboxSessionId,
   readMounterEnv,
+  readPinnedRootfs,
   readRecordedPath,
+  readSessionPlacement,
 } from '../src/session-plan.js';
+
+const digest = `sha256:${'a'.repeat(64)}`;
+const plan = harden({
+  sessionId: 'session-a',
+  sandboxSessionId: makeSandboxSessionId('session-a'),
+  rootfs: `oci:example@${digest}`,
+  networkPolicy: 'off',
+  workspaceDir: '/workspaces/a',
+  workspaceMountPoint: '/private/a/workspace',
+  mounterSocketDir: '/private/a/9p',
+});
+
+test('the pinned image is the one shared image field, in the spelling the runtime admits', t => {
+  t.deepEqual(readPinnedRootfs(`oci:example@${digest}`, 'Test'), {
+    rootfs: `oci:example@${digest}`,
+    imageRef: `example@${digest}`,
+    imageDigest: digest,
+  });
+  t.deepEqual(readPinnedRootfs(`oci:localhost:5000/a/b@${digest}`), {
+    rootfs: `oci:localhost:5000/a/b@${digest}`,
+    imageRef: `localhost:5000/a/b@${digest}`,
+    imageDigest: digest,
+  });
+  /** @type {[unknown, RegExp][]} */
+  const refused = [
+    [undefined, /Missing session plan field "rootfs"/],
+    ['', /must be an "oci:<image>@<digest>" reference/],
+    [`example@${digest}`, /must be an "oci:<image>@<digest>" reference/],
+    ['oci:', /must be an "oci:<image>@<digest>" reference/],
+    ['oci:host-bind', /pinned to a digest/],
+    ['oci:example:latest', /pinned to a digest/],
+    ['oci:example@sha256:abc', /pinned to a digest/],
+    [`oci:example:tag@${digest}`, /native runtime will accept/],
+    [7, /must be an "oci:<image>@<digest>" reference/],
+  ];
+  for (const [value, message] of refused) {
+    t.throws(() => readPinnedRootfs(value, 'Test'), { message });
+  }
+});
+
+test('the shared placement reads the pinned image and refuses any field no reader knows', t => {
+  const { placement, recorded } = readSessionPlacement(JSON.stringify(plan), {
+    label: 'Test',
+  });
+  t.is(placement.rootfs, plan.rootfs);
+  t.is(recorded.rootfs, plan.rootfs);
+  // An adapter's own fields and private paths are known by declaration.
+  const own = readSessionPlacement(
+    JSON.stringify({ ...plan, mcpDir: '/private/a/mcp', kind: 'x' }),
+    { label: 'Test', privatePaths: ['mcpDir'], fields: ['kind'] },
+  );
+  t.is(own.placement.mcpDir, '/private/a/mcp');
+  t.is(own.recorded.kind, 'x');
+  for (const [name, text] of [
+    ['nativeProfile', JSON.stringify({ ...plan, nativeProfile: {} })],
+    ['imageRef', JSON.stringify({ ...plan, imageRef: 'x' })],
+    ['mcpDir', JSON.stringify({ ...plan, mcpDir: '/private/a/mcp' })],
+    ['kind', JSON.stringify({ ...plan, kind: 'x' })],
+  ]) {
+    t.throws(() => readSessionPlacement(text, { label: 'Test' }), {
+      message: new RegExp(`Unknown session plan field "${name}"; recreate`),
+    });
+  }
+  const { rootfs: _, ...unpinned } = plan;
+  t.throws(
+    () => readSessionPlacement(JSON.stringify(unpinned), { label: 'Test' }),
+    { message: /Missing session plan field "rootfs"/ },
+  );
+});
 
 test('recorded paths are normalized, absolute, non-root, and NUL-free', t => {
   for (const good of ['/a', '/a/b', '/private/var/x']) {

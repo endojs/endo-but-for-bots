@@ -130,7 +130,19 @@ test('retired per-session native profiles are refused rather than ignored', t =>
   t.throws(
     () => readClaudeSessionPlan(JSON.stringify({ ...plan, nativeProfile: {} })),
     {
-      message: /Retired nativeProfile field/,
+      message: /Unknown session plan field "nativeProfile"/,
     },
   );
+});
+
+test('unknown fields are refused rather than dropped', t => {
+  for (const [name, mutated] of [
+    ['stateDirectory', { ...plan, stateDirectory: '/host/records' }],
+    ['imageRef', { ...plan, imageRef: 'x' }],
+    ['containerMounts', { ...plan, containerMounts: [] }],
+  ]) {
+    t.throws(() => readClaudeSessionPlan(JSON.stringify(mutated)), {
+      message: new RegExp(`Unknown session plan field "${name}"; recreate`),
+    });
+  }
 });

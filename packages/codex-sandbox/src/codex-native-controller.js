@@ -23,7 +23,6 @@ import {
   assertHostedAgentPolicyV1,
   hostedPolicyFromSlice,
 } from './codex-hosted-policy.js';
-import { readPinnedSliceImage } from './codex-image-reference.js';
 import { readCodexSessionPlan } from './codex-session-plan.js';
 import { makeCodexSessionState } from './codex-session-store.js';
 import { adaptEndoTools } from './endo-tools.js';
@@ -86,10 +85,6 @@ export const makeCodexNativeController = ({
           ...(approved.subscription
             ? { subscription: approved.subscription }
             : {}),
-        }),
-        image: approved => ({
-          kind: 'oci',
-          ref: readPinnedSliceImage(approved.imageRef).imageRef,
         }),
         authMode: () => 'oauth',
         // Host checkpoints and the writable CLI home, on separate binds; the

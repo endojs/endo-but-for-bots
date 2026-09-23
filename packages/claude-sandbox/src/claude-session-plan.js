@@ -5,13 +5,12 @@
  * (`@endo/hosted-agent/session-plan.js`) with Claude's own fields. The plan is
  * the passive record the daemon session owner keeps for one logical session;
  * the native controller activates it and the storage owner removes it, and
- * both refuse any deviation in the recorded fields. Nothing unknown is carried
- * through: a field this parser does not know cannot add authority.
+ * both refuse any deviation in the recorded fields. Nothing unknown is
+ * admitted: a plan with a field this parser does not know is refused.
  *
  * @module
  */
 
-import { Fail, q } from '@endo/errors';
 import {
   containsPath,
   isNormalizedAbsolutePath,
@@ -77,14 +76,12 @@ export const readClaudeSessionPlan = text => {
     label: 'Claude',
     sandboxIdFallback: SANDBOX_ID_FALLBACK,
     privatePaths: ['mcpDir'],
+    fields: ['credentialKind'],
     assertEffort: assertClaudeEffort,
   });
-  (typeof recorded.rootfs === 'string' && recorded.rootfs !== '') ||
-    Fail`Missing session plan field ${q('rootfs')}`;
   return harden(
     /** @type {ClaudeSessionPlan} */ ({
       ...placement,
-      rootfs: recorded.rootfs,
       credentialKind: assertCredentialKind(recorded.credentialKind),
     }),
   );
