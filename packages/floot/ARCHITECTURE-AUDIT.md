@@ -770,6 +770,31 @@ Scoped lint has zero errors (19 warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass; independent adversarial review found no
 durability blocker.
 
+Active-context projection (2026-09-24, locally verified, not deployed):
+Fae and hosted sends use a separate model-context projection; public transcript
+and UI history APIs retain full-history semantics. Shared recovery also preserves
+an unresolved canonical call before a checkpoint in the same turn.
+The selector uses the latest compaction in numeric dispatch/ordinal order from
+the pinned journal view, excluding pending/current turns, never archive order.
+Superseded dialogue payloads and the boundary turn's input are not hydrated.
+Tool payloads still undergo exact reconciliation before context selection.
+Prior-turn unmatched evidence, unresolved calls, host-recovered answers and
+results published after the checkpoint remain labeled exceptions after the
+active context, with collision-safe paired IDs; they are not new executions.
+Late-result comparisons use the checkpoint's global event sequence, not its
+turn ID. A summary alone is not evidence that an unmatched effect was observed
+or an uncertain outcome resolved.
+This stage still reads all archive metadata and historical tool payloads.
+It is not bounded-startup or bounded-archive completion; durable coverage/index
+work and automatic compaction policy remain separate open tasks.
+All 599 Floot tests and four real-daemon journal/lifecycle tests pass.
+Dedicated regressions cover skipped superseded payload reads, retained-tail
+expansion, excluded/pending checkpoints, mixed settled/unresolved pairs, late
+archived results across revival, repeated native IDs, exception ID collisions,
+and same-turn unresolved calls across a checkpoint.
+Scoped lint has zero errors (59 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one

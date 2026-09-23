@@ -1,20 +1,9 @@
 // @ts-check
 
 /**
- * Project Floot's own tree into the stack's transcript record stream.
- *
- * Floot stores a conversation in chat-completions shape: `user`, `assistant`
- * and `tool` messages, with an assistant's `tool_calls` carrying ids and each
- * `tool` message answering one of them by `tool_call_id`. That shape is
- * faithful. What was lossy is the next step: `projectHistory` flattens a call
- * and its result into one pseudo-message for the UI, and the old
- * `makeHostedContinuityOptions` serialized that flattening into a prompt. A
- * conversation restored from either reads as prose describing tool use rather
- * than as tool use.
- *
- * This projection keeps the ids, so a restored tool call is a tool call with
- * its result — the property the UI projection was never trying to preserve
- * and an adapter cannot reconstruct afterwards.
+ * Convert direct-provider messages and recover canonical journal transcripts.
+ * Keep tool calls and their results structured: the UI's combined tool rows
+ * are presentation, not a source from which to rebuild model context.
  *
  * The system prompt is deliberately dropped. It is the harness's, supplied
  * fresh for the incarnation that is about to run, so replaying a stale one
@@ -64,7 +53,7 @@ const argumentText = args =>
   typeof args === 'string' ? args : JSON.stringify(args ?? {});
 
 /**
- * @param {Iterable<any>} path A linear message path from Floot's tree.
+ * @param {Iterable<any>} path Direct-provider messages in conversation order.
  * @returns {readonly TranscriptRecord[]}
  */
 export const projectTranscript = path => {
@@ -188,7 +177,7 @@ export const transcriptToProviderMessages = records => {
 harden(transcriptToProviderMessages);
 
 /**
- * Supplement a settled turn's mirrored transcript with durable execution
+ * Supplement a settled turn's journal transcript with durable execution
  * evidence. The stream may fail before reporting an executed tool. Keep that
  * evidence distinct from backend observations, and never claim it ran twice.
  * Full journal content is required: a preview is not executable JSON.
@@ -196,8 +185,14 @@ harden(transcriptToProviderMessages);
  * @param {Iterable<any>} messages
  * @param {any} turn
  * @param {(ref: any) => Promise<string>} readContent
+ * @param {{ startOrdinal?: number, evidenceAfter?: string }} [selection]
  */
-export const recoverTurnTranscript = async (messages, turn, readContent) => {
+export const recoverTurnTranscript = async (
+  messages,
+  turn,
+  readContent,
+  selection = {},
+) => {
   const ordered =
     turn.transcript !== undefined || turn.transcriptComplete === true;
   /** @type {TranscriptRecord[]} */
@@ -221,12 +216,24 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
   };
   if (ordered) {
     let previous = positionOf(turn.turnId);
-    for (const [index, entry] of (turn.transcript ?? []).entries()) {
+    /** @type {any[]} */
+    const transcript = turn.transcript ?? [];
+    for (const [index, entry] of transcript.entries()) {
       transcriptIndex(entry.ordinal, index) === index ||
         Fail`Invalid recovered transcript ordinal`;
       const sequence = positionOf(entry.sequence);
       sequence > previous || Fail`Invalid recovered transcript order`;
       previous = sequence;
+      if (
+        (selection.evidenceAfter !== undefined ||
+          index < (selection.startOrdinal ?? 0)) &&
+        !['tool-call', 'tool-result'].includes(entry.kind)
+      ) {
+        // Selection uses journal-validated kind metadata. Keep tool payloads
+        // for exact reconciliation, but do not hydrate superseded prose.
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       // Full immutable content, never its UI preview; works for archived turns too.
       const payload = entry.payloadRef
         ? // eslint-disable-next-line no-await-in-loop
@@ -241,6 +248,8 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
   const text = async (value, ref) =>
     ref ? readContent(ref) : argumentText(value);
   if (
+    selection.evidenceAfter === undefined &&
+    selection.startOrdinal === undefined &&
     !records.some(record => record.kind === 'message' && record.role === 'user')
   ) {
     const input = assertTranscriptRecord({
@@ -272,6 +281,51 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
       result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
     }),
   });
+  if (selection.evidenceAfter !== undefined) {
+    const after = positionOf(selection.evidenceAfter);
+    const evidence = [];
+    for (const [index, row] of rows.entries()) {
+      const canonicalResult = pairs[index]?.result;
+      const lateResult =
+        (row.resultSequence !== undefined &&
+          positionOf(row.resultSequence) > after) ||
+        (canonicalResult !== undefined &&
+          recordedPosition(canonicalResult) > after);
+      if (
+        row.source !== 'tree' ||
+        !row.settled ||
+        row.settledBy === 'host' ||
+        lateResult
+      ) {
+        const id = `recovered-context:${turn.turnId}:${index}`;
+        evidence.push(
+          assertTranscriptRecord({
+            kind: 'tool-call',
+            id,
+            name: row.name,
+            args: row.args,
+          }),
+          assertTranscriptRecord({
+            kind: 'tool-result',
+            id,
+            content: row.result ?? UNKNOWN_TOOL_OUTCOME,
+          }),
+        );
+      }
+    }
+    return harden(
+      evidence.length
+        ? [
+            assertTranscriptRecord({
+              kind: 'message',
+              role: 'assistant',
+              content: RECOVERY_NOTICE,
+            }),
+            ...evidence,
+          ]
+        : [],
+    );
+  }
   /** @type {TranscriptRecord[]} */
   const supplemental = [];
   const knownIds = new Set(pairs.map(pair => pair.call.id));
@@ -313,6 +367,13 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
   let recoveryNotice = false;
   for (const [position, row] of rows.entries()) {
     if (row.source === 'tree') {
+      if (
+        !row.settled &&
+        boundaryPosition !== undefined &&
+        recordedPosition(pairs[position].call) < boundaryPosition
+      ) {
+        supplement(row);
+      }
       if (row.settledBy) {
         // The rows the tree contributed come first, in the pairs' order, so
         // the settled result replaces the record its own pair holds (a

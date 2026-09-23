@@ -52,6 +52,7 @@ import {
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
+import { projectContextTranscript } from './src/context-transcript.js';
 import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
@@ -972,7 +973,7 @@ export const makeStreamingAgent = async (
           // The stack owns the transcript: hand the backend this
           // conversation as records it can rebuild its CLI's native store
           // from, keeping tool calls as tool calls with their results.
-          transcript: await getTranscript(),
+          transcript: await getContextTranscript(turnId),
           recordToolEvent: event => turnJournal.append(turnId, event),
           recordTranscript: (ordinal, record) =>
             turnJournal.recordTranscript(turnId, ordinal, record),
@@ -1068,7 +1069,7 @@ export const makeStreamingAgent = async (
         // successful turns. The active turn's staging stays separate.
         // Model context is not a UI history projection: the latter deliberately
         // carries previews. Hydrate the same full transcript hosted runners use.
-        const transcript = await getTranscript(turnId);
+        const transcript = await getContextTranscript(turnId);
         const path = transcriptToProviderMessages(transcript);
         return [
           { role: 'system', content: effectivePrompt },
@@ -1908,6 +1909,13 @@ export const makeStreamingAgent = async (
     }
     return harden(records);
   };
+
+  const getContextTranscript = async excludeTurnId =>
+    projectContextTranscript(
+      await readAllTurns(),
+      ref => turnJournal.readContent(ref),
+      excludeTurnId,
+    );
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const out = [];

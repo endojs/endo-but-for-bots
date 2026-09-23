@@ -7,6 +7,7 @@ import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 
 import { runHostedTurn, UNSETTLED_TOOL_RESULT } from '../src/hosted-turn.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
+import { projectContextTranscript } from '../src/context-transcript.js';
 import {
   recoverTurnTranscript,
   transcriptToProviderMessages,
@@ -80,6 +81,35 @@ const clientFor = (items, interrupt = async () => {}) =>
       ),
     interrupt,
   });
+
+test('context selection preserves an unresolved canonical call before its same-turn checkpoint', async t => {
+  const f = await fixture();
+  await f.journal.recordTranscript(f.id, '0', {
+    kind: 'tool-call',
+    id: 'unsettled',
+    name: 'effect',
+    args: '{}',
+  });
+  await f.journal.recordTranscript(f.id, '1', {
+    kind: 'compaction',
+    summary: 'Summary does not settle a call',
+  });
+  await f.journal.append(f.id, { type: 'finish', state: 'failed' });
+  const turns = await f.journal.list();
+  const context = await projectContextTranscript(turns, ref =>
+    f.journal.readContent(ref),
+  );
+  const messages = transcriptToProviderMessages(context);
+  t.true(
+    messages.some(
+      message =>
+        message.role === 'tool' && /unknown|unsettled/i.test(message.content),
+    ),
+  );
+  t.is(context.filter(record => record.kind === 'tool-call').length, 1);
+  t.is(context[0].kind, 'compaction');
+  t.is((await f.recover())[0].kind, 'message');
+});
 
 for (const placeholder of [false, true]) {
   test(`recovered host result remains active across compaction (placeholder=${placeholder})`, async t => {
