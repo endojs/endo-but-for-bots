@@ -1,10 +1,9 @@
 // @ts-check
 
 /**
- * The shared `@endo/hosted-agent` setup helpers bound to this package's label,
- * and the one image reader Codex needs that the other adapters do not: Codex
- * takes its slice image from formula configuration rather than from a setup
- * environment variable, so the reference it is handed must already be pinned.
+ * The shared `@endo/hosted-agent` setup helpers bound to this package's label.
+ * Image pinning uses the shared setup resolver; recorded session plans use
+ * the shared placement reader.
  *
  * @module
  */
@@ -24,8 +23,6 @@ import {
   toCurrentSpecifier,
 } from '@endo/hosted-agent/current-specifier.js';
 import { assertCodexStateRoot } from './codex-state-provider.js';
-
-export { readPinnedSliceImage } from './codex-image-reference.js';
 
 const LABEL = 'Codex';
 

@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 362 application entries and 73 host entries still need explicit ledger
+The other 354 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -511,8 +511,31 @@ Recorded-cleanup/supervisor tests pass 16 local/injected cases. The preceding
 | `c08a3c177` | Original tool-side publication projection now preflight only | Daemon-minted workspace goes to asset server for durable retention; session stores publication intent/id/url, sharing serialization across tool incarnations. 20 tool tests pass; derived views are not treated as durable owners |
 | `f76cedd1a` | Recorded-path mount reclamation retained through shared supervisor | 16 cleanup/supervisor tests pass; socket absence and missing scope observations do not prove producer quiescence. Header overclaim corrected; unresolved independent shutdown/recovery remains #1323 |
 
+### Image pins, Codex setup and renewable credential identity
+
+Eight more historical changes are mapped below. Fresh shared setup/HTTP checks
+pass 30 tests; Codex image/setup-plan checks pass 18 and shared plan checks five.
+Independent Codex setup/store/state/journal checks pass 60 tests. Renewable
+credential/rotator/broker checks pass 105 tests, but they did not cover the
+confirmed mutable-path reconstruction defect described in FA-08.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `6a84419d1` | Accepted-query listener test retains disposal; other changes are fixture typing/formatting and source catch typing | 30 shared setup/HTTP tests pass; preceding publication/asset/controller evidence remains applicable. No new runtime owner or lifetime guarantee |
+| `c811a84a9` | Shared image resolver strips tag, preserves registry port, validates resulting digest pin against runtime pattern | Injected Podman inspector tests and active plan-reader round trip pass; pin checks do not prove local image availability or build reproducibility |
+| `40ba08d3b` | Early pinned-image refusal retained through shared setup/plan readers; old hosted-subscription path removed | Unused Codex-specific reader/re-export now deleted after caller checks; current plan rejection tests and shared-resolver round trip retained. No daemon entrypoint was removed |
+| `39fd686ab` | Original Codex host configuration/quota observer/custom native agent | Removed by `812f10b47`; shared scoped runtime now owns native operations. Current exact runtime/state/store dependencies are recorded by daemon owner, not obsolete module topology |
+| `06f745f78` | Managed renewable wrapper formula retains host powers and a secret path; Secrets owns credential bytes/generations | 105 tests pass but independent reproduction confirms same wrapper configuration resolves a different Secret after pet-name rebind/reconstruction. Separate catalog/read lookup can mix identities; open FA-08 defect, not durable identity proof |
+| `fb641a860` | Split state/runtime and canonical journal storage survive, three-capability backend construction superseded | Current backend is a replaceable shared-provisioner shell with exact dependencies recorded by daemon; later sync/unique-allocation work strengthens original rename-only storage. 60 local tests, no native restart proof |
+| `26287567a` | Refusing noScratch workaround for custom Codex native agent | Removed with custom agent by `812f10b47`; do not attribute that capability-construction behavior to the shared runtime |
+| `4a4749a56` | Original retained backend strategy superseded by retained broker/runtime/state and replaceable backend shell | Current setup checks exact broker powers/environment, publishes backend-next only after preparation. 60 local tests include repeat setup; no live listener or credential renewal exercised |
+
 ### Post-snapshot changes
 
+- Removed unused Codex-specific pinned-image reader and its setup-helper re-export.
+  It had no current production callers or formula entrypoint. The retained test
+  now checks the shared resolver against the actual shared session-plan reader;
+  active plan rejection tests remain. Corrected stale OpenCode state-owner comment.
 - Failed startup orphan cleanup in the durable asset store now returns an
   unreadable entry through the existing administrator listing path instead of
   silently hiding the uncertain target. Existing retained names remain the owner;

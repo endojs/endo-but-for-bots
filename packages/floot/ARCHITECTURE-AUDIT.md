@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 117 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 125 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -96,6 +96,16 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Image/Codex/renewable mapping (2026-09-24): eight more entries bring coverage to
+125 application commits (newest 15 plus earliest 110). Shared setup/HTTP checks
+pass 30 tests; active Codex resolver/plan checks pass 18 and shared plan checks five;
+independent Codex setup/store/state/journal checks pass 60. The unused Codex image
+reader and re-export were removed after source/caller checks; current shared pin
+validation and its rejection tests remain. No formula entrypoint was removed.
+Renewable wrapper tests pass 105 cases but missed mutable-path identity drift;
+the newly confirmed FA-08 gap below remains open and blocks claiming credential
+reconstruction correctness. No live credential access or renewal was performed.
 
 Header/publication/reclamation mapping (2026-09-24): ten more entries bring
 coverage to 117 application commits (newest 15 plus earliest 102).
@@ -203,7 +213,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 102 application changes, plus the first 20 host
+not. The newest 15 and earliest 110 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -2994,6 +3004,31 @@ not depend on runtime; route selection and model capabilities have a single proj
 
 ## FA-08 — Separate durable identity from incarnation pins
 
+### Open: renewable wrapper reconstructs through a mutable Secret name
+
+Confirmed 2026-09-24 while mapping `06f745f78`: the managed renewable credential
+formula stores host powers and `CREDENTIAL_SECRET_PATH`. Its `make()` looks up
+the catalog/admin and read facet again on each incarnation. An independent
+injected-host reproduction called the production entrypoint twice with identical
+configuration, rebinding the path between calls; the second wrapper read the
+replacement Secret. No real credential or network operation was used.
+This pins a Secret only within one incarnation, not across formula reconstruction.
+The catalog listing and read lookup are also separate awaits and can observe
+different bindings. A stable wrapper formula ID does not establish stable
+credential identity for a pool's authority journal.
+Claude setup's original-blob identity check partially guards later setup, but
+does not fix wrapper reconstruction; Codex account checks do not distinguish two
+Secrets for the same account. Existing 105 passing wrapper/rotator/broker tests
+do not exercise this rebind/revival boundary.
+
+Required fix: capture the matching read/administration capabilities as actual
+durable formula dependencies at provisioning, not merely mutable names or IDs
+stored in an environment string. Reconstruct from those exact dependencies;
+refuse old path-only formulas until explicitly retired/replaced. Add deterministic
+rebinding and catalog/read-race tests plus a real daemon reconstruction test.
+Preserve Secrets and renewal owners during any deployment; do not rotate, copy,
+or overwrite live credentials to repair wrapper topology. Implementation pending.
+
 Broker configuration pins the guest image along with provider authority.
 Backend plans derive the image from that broker and treat several image/account fields
 as immutable for the recorded session.
@@ -4135,6 +4170,10 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Map eight image/Codex/renewable changes; remove unused image reader
+while retaining active shared validation tests. Confirm and open renewable-wrapper
+mutable-name identity defect in FA-08; no live credentials touched or deployed.
 
 2026-09-24 — Map ten header/publication/reclamation changes; surface failed asset
 orphan cleanup for explicit release, remove request-data echoes from header-check
