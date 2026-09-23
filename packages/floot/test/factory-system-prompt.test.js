@@ -3,6 +3,8 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
+import { encodeAuthToken } from '@endo/fae/src/credentials.js';
+import { makePromiseKit } from './_promise-kit.js';
 
 import { make } from '../agent.js';
 
@@ -18,9 +20,9 @@ const sandboxed = harden({
  * spec of every session it is asked to create: `spec.systemPrompt` is the
  * prompt a hosted model actually runs under.
  *
- * @param {{ promptEnvironment?: object, fetch?: typeof globalThis.fetch }} [options]
+ * @param {{ promptEnvironment?: object, fetch?: typeof globalThis.fetch, lookupProvider?: () => unknown }} [options]
  */
-const makeWorld = ({ promptEnvironment, fetch } = {}) => {
+const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const inboxes = [];
   /** @type {Array<Record<string, any>>} */
@@ -113,7 +115,10 @@ const makeWorld = ({ promptEnvironment, fetch } = {}) => {
   const host = Far('PromptHost', {
     list: () => harden([...hostStore.keys()]),
     has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
+    lookup: name =>
+      name === 'llm-provider' && lookupProvider
+        ? lookupProvider()
+        : hostStore.get(name),
     locate: name => `locator:${name}`,
     copy: () => undefined,
     provideGuest: (_name, { agentName }) => {
@@ -389,6 +394,128 @@ const registryOf = hostStore => {
     .sort();
   return /** @type {any} */ (hostStore.get(names.at(-1))).sessions;
 };
+
+test.serial(
+  'credential refresh prevents an admitted old-config secret read from poisoning the current provider cache',
+  async t => {
+    t.timeout(10_000);
+    const originalFetch = globalThis.fetch;
+    const entered = makePromiseKit();
+    const release = makePromiseKit();
+    const models = [];
+    const fetch = async (url, init) => {
+      if (`${url}`.endsWith('/models')) return Response.json({ data: [] });
+      t.is(`${url}`, 'https://openrouter.ai/api/v1/chat/completions');
+      const request = JSON.parse(init.body);
+      models.push(request.model);
+      return Response.json({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: 'Done.' },
+          },
+        ],
+      });
+    };
+    globalThis.fetch = fetch;
+    const world = makeWorld({ fetch });
+    t.teardown(async () => {
+      release.resolve(undefined);
+      try {
+        await world.close();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+    let held = true;
+    world.hostStore.set(
+      'llm-auth-secret',
+      Far('HeldSecret', {
+        readBase64: async () => {
+          if (held) {
+            held = false;
+            entered.resolve(undefined);
+            await release.promise;
+          }
+          return encodeAuthToken('same-test-only-key');
+        },
+      }),
+    );
+    world.hostStore.set(
+      'llm-provider',
+      harden({ provider: 'openrouter', model: 'vendor/old-default' }),
+    );
+    const session = await E(world.factory).createSession({
+      title: 'Refresh race',
+      backendId: 'provider',
+      modelId: '',
+    });
+    const first = await E(session).startTurn('First');
+    await entered.promise;
+    world.hostStore.set(
+      'llm-provider',
+      harden({ provider: 'openrouter', model: 'vendor/new-default' }),
+    );
+    await E(world.factory).refreshCredentials();
+    release.resolve(undefined);
+    await E(first).whenFinished();
+    t.falsy((await E(first).getStatus()).error);
+    const second = await E(session).startTurn('Second');
+    await E(second).whenFinished();
+    t.falsy((await E(second).getStatus()).error);
+    t.deepEqual(models, ['vendor/old-default', 'vendor/new-default']);
+    const third = await E(session).startTurn('Third');
+    await E(third).whenFinished();
+    t.deepEqual(models, [
+      'vendor/old-default',
+      'vendor/new-default',
+      'vendor/new-default',
+    ]);
+  },
+);
+
+test('old configuration rejection cannot clear the replacement configuration promise', async t => {
+  t.timeout(10_000);
+  const entered = makePromiseKit();
+  const old = makePromiseKit();
+  void old.promise.catch(() => {});
+  let lookups = 0;
+  const world = makeWorld({
+    lookupProvider: () => {
+      lookups += 1;
+      if (lookups === 1) {
+        entered.resolve(undefined);
+        return old.promise;
+      }
+      return harden({
+        provider: 'unsupported-test-provider',
+        model: 'new-default',
+      });
+    },
+    fetch: async () => {
+      throw Error('Unexpected network request');
+    },
+  });
+  const staleRead = E(world.factory).listModels('provider');
+  void staleRead.catch(() => {});
+  t.teardown(async () => {
+    old.reject(Error('Test cleanup releases old config lookup'));
+    await staleRead.catch(() => {});
+    await world.close();
+  });
+  await entered.promise;
+  await E(world.factory).refreshCredentials();
+  const session = await E(world.factory).createSession({
+    title: 'Current config',
+    backendId: 'provider',
+    modelId: '',
+  });
+  t.is(lookups, 2);
+  old.reject(Error('Old config lookup failed'));
+  await staleRead;
+  t.like(await E(session).getInfo(), { effectiveModelId: 'new-default' });
+  t.is(lookups, 2);
+});
 
 for (const pinned of [false, true]) {
   test.serial(

@@ -2240,14 +2240,18 @@ export const make = async (
   // the `llm-provider` capability handle. Resolve it once and cache it; every
   // per-model provider is built from it.
   let providerConfigP;
+  // A refresh starts a new cache incarnation. Already-admitted reads may finish
+  // using their captured configuration, but cannot repopulate the new cache.
+  let providerEpoch = harden({});
   const getProviderConfig = () => {
     if (!providerConfigP) {
-      providerConfigP = E(powers)
+      const pending = E(powers)
         .lookup('llm-provider')
         .catch(error => {
-          providerConfigP = undefined;
+          if (providerConfigP === pending) providerConfigP = undefined;
           throw error;
         });
+      providerConfigP = pending;
     }
     return providerConfigP;
   };
@@ -3178,25 +3182,28 @@ export const make = async (
   /** @type {Map<string, { token: string, providerP: Promise<any> }>} */
   const providersByModel = new Map();
   const getProvider = async model => {
+    const epoch = providerEpoch;
     const key = model || '';
     const cfg = await getProviderConfig();
     // A revoked secret rejects here, which fails the turn rather than letting
     // a cached provider answer it.
     const token = await resolveAuthToken({ powers, config: cfg });
     const cached = providersByModel.get(key);
-    if (cached && cached.token === token) return cached.providerP;
+    if (epoch === providerEpoch && cached && cached.token === token)
+      return cached.providerP;
     const providerP = (async () =>
       createStreamingProvider({
         FLOOT_PROVIDER: cfg.provider,
         FLOOT_MODEL: model || cfg.model,
         FLOOT_AUTH_TOKEN: token,
       }))().catch(error => {
-      if (providersByModel.get(key)?.token === token) {
+      if (providersByModel.get(key)?.providerP === providerP) {
         providersByModel.delete(key);
       }
       throw error;
     });
-    providersByModel.set(key, { token, providerP });
+    if (epoch === providerEpoch)
+      providersByModel.set(key, { token, providerP });
     return providerP;
   };
 
@@ -5571,6 +5578,7 @@ export const make = async (
      * their credentials belong to the backend, not to Floot.
      */
     async refreshCredentials() {
+      providerEpoch = harden({});
       providersByModel.clear();
       providerConfigP = undefined;
       // The direct provider's catalog was read under that config too: let

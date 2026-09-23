@@ -2183,6 +2183,31 @@ gate has no errors (180 warnings) after correcting the translator signature.
 Adversarial review approved the implementation and EOF regression.
 A fresh failing runtime turn remains a deployment gate.
 
+### Direct-provider refresh boundary — 2026-09-24
+
+Independent review found that a provider lookup admitted before credential refresh
+could finish afterward and repopulate the cleared cache with its old configuration.
+When the token and model cache key were unchanged, later turns reused the old
+configured default despite refresh.
+An ephemeral cache incarnation now fences both reuse and publication; already
+admitted reads may finish with their captured configuration but cannot populate
+the replacement cache.
+Configuration and provider rejection handlers clear only their exact promise,
+never a replacement installed while the old request was pending.
+This introduces no durable record, formula, credential owner, or renewal operation.
+Reconstruction creates a fresh empty cache under the existing factory boundary.
+
+Two actual-factory regressions hold a Secret read across refresh with an unchanged
+token, and reject an old configuration lookup after a replacement is installed.
+The full Floot suite passes 647 tests; the focused factory suite passes 17.
+Adversarial source review approved the refresh boundary and regressions; its
+failure-cleanup correction releases test-held gates before factory disposal.
+The documentation gate passes with no errors (180 warnings).
+Package ESLint passes with no errors (242 warnings); changed-source formatting passes.
+Changes are not deployed.
+Catalog promise invalidation and draining catalog owners at factory disposal are
+a separate remaining lifecycle check; this fix does not claim to close them.
+
 Model these independently:
 
 | Concept | Responsibility |
