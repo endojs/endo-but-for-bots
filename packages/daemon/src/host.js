@@ -2288,15 +2288,111 @@ export const makeHostMaker = ({
     /** @type {EndoHost['adoptFromLocator']} */
     const adoptFromLocator = async (locator, petNameOrPath) => {
       const { namePath } = petNamePathFrom(petNameOrPath);
-      const { id, hints } = internalizeLocator(locator);
-      if (hints.length > 0) {
-        const { node: nodeNumber } = parseId(id);
-        /** @type {PeerInfo} */
-        const peerInfo = {
-          node: nodeNumber,
-          addresses: hints,
-        };
-        await addPeerInfo(peerInfo);
+      // A locator is a bearer capability: keep it, and its formula
+      // number, out of any error this method reports.
+      /** @param {string} message @param {string[]} secrets */
+      const redact = (message, secrets) =>
+        secrets.reduce(
+          (text, secret) => text.split(secret).join('<redacted>'),
+          message,
+        );
+      /** @type {ReturnType<typeof internalizeLocator>} */
+      let internal;
+      try {
+        internal = internalizeLocator(locator);
+      } catch (error) {
+        throw makeError(
+          redact(/** @type {Error} */ (error).message, [
+            String(q(locator)),
+            locator,
+          ]),
+        );
+      }
+      const { id, hints } = internal;
+      const { node: nodeNumber, number } = parseId(id);
+      if (isLocalKey(nodeNumber)) {
+        await E(directory).storeIdentifier(namePath, id);
+        return;
+      }
+      if (hints.length === 0) {
+        throw makeError(
+          X`Cannot adopt a remote locator without connection hints: the locator names node ${q(nodeNumber.slice(0, 16))}... but offers no route to it`,
+        );
+      }
+      // Every hint whose protocol no installed network supports is
+      // skipped; the adoption proceeds on any hint that one does, and
+      // fails clearly when there is none, rather than storing a name
+      // that could never resolve.
+      const protocolOf = hint => {
+        try {
+          return new URL(hint).protocol;
+        } catch {
+          return undefined;
+        }
+      };
+      const networksDirectory = await provide(networksDirectoryId, 'directory');
+      const networks = await Promise.all(
+        (await E(networksDirectory).listIdentifiers()).map(networkId =>
+          provide(/** @type {FormulaIdentifier} */ (networkId)),
+        ),
+      );
+      const offered = [...new Set(hints.map(protocolOf))];
+      const supported = await Promise.all(
+        offered.map(async protocol =>
+          protocol === undefined
+            ? false
+            : (
+                await Promise.all(
+                  networks.map(network =>
+                    E(/** @type {any} */ (network))
+                      .supports(protocol)
+                      .catch(() => false),
+                  ),
+                )
+              ).some(Boolean),
+        ),
+      );
+      if (!supported.some(Boolean)) {
+        throw makeError(
+          X`No mutually supported route: the locator offers ${q(
+            offered.map(protocol => protocol ?? '(malformed)'),
+          )} and no installed network supports any of them`,
+        );
+      }
+      /** @param {unknown} error */
+      const describe = error =>
+        redact(/** @type {Error} */ (error).message, [locator, id, number]);
+      // Resolve the formula through the peer before committing the name:
+      // an adoption succeeds only once the remote daemon, authenticated
+      // against the identity its hint names, has actually provided the
+      // value. A wrong key, an unreachable route, or a formula the peer
+      // does not host rejects here and leaves no pet name behind.
+      //
+      // A peer this daemon already knows keeps its recorded route when
+      // that route still provides the value, and gets it back when the
+      // locator's hints fail, so a bad or tampered locator can neither
+      // leave a name behind nor redirect an existing peer.
+      const knownPeers = /** @type {PeerInfo[]} */ (await listKnownPeers());
+      const known = knownPeers.find(peer => peer.node === nodeNumber);
+      if (known !== undefined) {
+        try {
+          await provide(/** @type {FormulaIdentifier} */ (id));
+          await E(directory).storeIdentifier(namePath, id);
+          return;
+        } catch {
+          // Fall through to the locator's own hints.
+        }
+      }
+      await addPeerInfo({ node: nodeNumber, addresses: hints });
+      try {
+        await provide(/** @type {FormulaIdentifier} */ (id));
+      } catch (error) {
+        if (known !== undefined) {
+          await addPeerInfo({ node: nodeNumber, addresses: known.addresses });
+        }
+        throw makeError(
+          `Cannot adopt the locator: its peer did not provide the value: ${describe(error)}`,
+        );
       }
       await E(directory).storeIdentifier(namePath, id);
     };

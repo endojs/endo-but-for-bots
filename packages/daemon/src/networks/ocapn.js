@@ -11,6 +11,7 @@ import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
 import { concatBytes } from '@endo/bytes/concat.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { fromHex, toHex } from '../hex.js';
+import { makeFormulaNonceLocator } from './formula-nonce-locator.js';
 
 /**
  * OCapN-Noise transport for daemon-to-daemon (peer) connections.
@@ -175,6 +176,37 @@ const EndoPeerEntryInterface = M.interface('EndoPeerEntry', {
   help: M.call().returns(M.string()),
 });
 
+/**
+ * Compose an OCapN endpoint's per-session incoming locator: a fixed
+ * table of well-known swissnums (such as the peer entry) answered first,
+ * and every other presentation delegated to a formula nonce locator's
+ * bounded, non-oracular per-session `get`. A well-known hit never counts
+ * as a miss. The formula locator deliberately refuses every well-known
+ * word, so an endpoint that keeps one must compose like this rather than
+ * install the formula locator alone.
+ *
+ * Reusable by any embedder that serves the daemon's formulas on a public
+ * OCapN endpoint.
+ *
+ * @param {Map<string, unknown>} wellKnown
+ * @param {import('./formula-nonce-locator.js').FormulaNonceLocator} formulaLocator
+ * @returns {import('./formula-nonce-locator.js').MakeSessionFormulaLocator}
+ */
+export const makeWellKnownLocatorForSession =
+  (wellKnown, formulaLocator) => context => {
+    const sessionLocator = formulaLocator.makeLocatorForSession(context);
+    return harden({
+      /** @param {string | Uint8Array} secret */
+      get: async secret => {
+        if (typeof secret === 'string' && wellKnown.has(secret)) {
+          return wellKnown.get(secret);
+        }
+        return sessionLocator.get(secret);
+      },
+    });
+  };
+harden(makeWellKnownLocatorForSession);
+
 export const make = async (powers, context) => {
   const cancelled = /** @type {Promise<never>} */ (E(context).whenCancelled());
 
@@ -259,6 +291,27 @@ export const make = async (powers, context) => {
   const locator = new Map();
   locator.set(PEER_ENTRY_SWISSNUM, peerEntry);
 
+  // Incoming `bootstrap.fetch` also redeems bearer formula identifiers
+  // directly, so a peer that holds a shared `endo://` locator (for
+  // example, a guest's) can fetch that formula's capability on this same
+  // daemon without first running the greeter handshake. The formula
+  // locator is composed *behind* the well-known peer entry rather than
+  // replacing it, so existing peer traffic is unchanged
+  // (`designs/daemon-ocapn-external-connectivity.md` § 2, "Compose").
+  // The gateway already confines `provide` to formulas this daemon hosts
+  // under its own or one of its agents' keys, and throws, without
+  // dialing, for anything else; the formula locator folds that throw into
+  // its uniform miss, and its per-session hook bounds a session's misses.
+  const formulaLocator = makeFormulaNonceLocator({
+    provideLocalFormula: id => E(localGateway).provide(id),
+    localNodeNumber: /** @type {any} */ (localNodeId),
+    isLocalNode: () => true,
+  });
+  const makeLocatorForSession = makeWellKnownLocatorForSession(
+    locator,
+    formulaLocator,
+  );
+
   const tcpTransport = makeTcpTransport({ host, port });
   await network.addTransport(tcpTransport);
 
@@ -270,6 +323,7 @@ export const make = async (powers, context) => {
     // eslint-disable-next-line object-shorthand
     network: /** @type {any} */ (network),
     locator,
+    makeLocatorForSession,
     debugLabel: `endo-peer-${String(localNodeId).slice(0, 8)}`,
   });
 
