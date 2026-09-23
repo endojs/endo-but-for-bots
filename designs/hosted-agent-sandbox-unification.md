@@ -152,6 +152,96 @@ Rules:
   refuses any other key, so a stale or misspelled field fails at creation,
   activation and deletion alike.
 
+Schemas. The vocabulary of this section, for the reader who arrives here first:
+a *session* is one conversation with one workspace, created by Floot under a
+session id; a *backend* is the code for one runtime (Claude, Codex, OpenCode);
+a *broker* is the host service that holds the credential and forwards
+inference requests, minted by setup, with a formula id and a persisted
+*profile*; a *record* is the daemon's stored data for one session; a *plan* is
+the JSON text in the record that says how to run it; the *references* are the
+formula ids of the services the session uses, by role; an *incarnation* is one
+run of the session's container; the *envelope* is the shared code that starts
+an incarnation and checks the broker's *grant* against the plan; the *catalog*
+is the list of accounts a backend can serve, with their models, which the UI
+picker reads and a session may pin as its `subscription`; the *provisioner* is
+the shared code that makes the plan from a request and the record and calls the
+*owner*, the daemon's session owner; a *reopen* provisions a record that
+already exists, and a *rebind* is an authorized change of a binding at reopen.
+The *operator* is the person who runs the host and writes its configuration.
+
+The record, one directory per session id under the owner's records directory:
+
+| Entry | Content |
+|---|---|
+| `plan` | the plan JSON |
+| `lifecycle` | `planned`, `constructing`, `starting`, `ready`, `aborting`, `stopping`, `stopped`, `removing` or `removing-unstarted` |
+| `references/<role>` | one formula id per role: `brokerService`, `sandboxService`, `storage` always; `stateProvider` where the runtime keeps native state (Claude, Codex); `client` and `worker` while an incarnation runs |
+| `revision/` | present only while a revision is staged: `references/<role>` and `plan` for the revision |
+
+The plan's shared fields, read by `readSessionPlacement` for every backend:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sessionId` | string | the Floot session id |
+| `sandboxSessionId` | string | derived from `sessionId`; names storage and the slice |
+| `networkPolicy` | `off` or `public-internet` | egress policy |
+| `workspaceDir` or `workspaceHostPath` | path | an owned workspace the storage owner removes, or an operator-supplied one it never touches; exactly one |
+| `workspaceMountPoint` | path | where the workspace is mounted |
+| `mounterSocketDir` | path | the 9P socket directory |
+| `mounterEnv` | record, optional | the rootless mount settings |
+| `model`, `reasoningEffort` | string, optional | the pin |
+| `systemPrompt` | string, optional | the persona |
+| `subscription` | string, optional | the pinned catalog entry, or absent for `auto` |
+
+The plan's backend fields, today and planned:
+
+| Field | Today | Planned | Meaning |
+|---|---|---|---|
+| `imageRef` | Codex | gone | the image, bare reference |
+| `rootfs` | Claude, OpenCode | all three | the image, `oci:` reference with digest |
+| `accountRef` | Codex: `pool`, or a verified account id for a single credential | all three: the declared account authority id | the account authority |
+| `credentialKind` | Claude: `apiKey` or `oauthToken` | Claude, unchanged | selects the placeholder variable the slice receives |
+| `mcpDir` | Claude, OpenCode | unchanged | the private MCP socket directory |
+| `containerMounts` | Codex | unchanged | operator-declared container mounts |
+
+The broker profile's fields that matter here:
+
+| Field | Today | Planned |
+|---|---|---|
+| image pin | reference and digest | unchanged |
+| `credentialKind` | Claude | unchanged |
+| `accountRef` | Codex: the verified account id, or `pool`; Claude and OpenCode: absent, the constants `anthropic` and `openrouter` stand in | Codex keeps it as the verified account the credential must match; the constants go |
+| `accountAuthority` | absent | the declared authority id, all three; the host option of the same name, and a pool set's new `id` field, supply it |
+
+The grant (`ProviderGrantV1`) carries `version`, `grantId`, `sessionId`,
+`imageDigest`, `networkNamespaceId`, `providerOrigin`, `endpoint`,
+`accountRef`, `authMode` (`api-key` or `oauth`), `model`, `modelAdmission`, and
+`network` for `public-internet` only. The envelope requires `sessionId`,
+`imageDigest`, `networkNamespaceId`, `providerOrigin` and `accountRef` to equal
+the plan's values, `authMode` to be one of its two values and, where the
+backend supplies the hook, equal to the backend's. Planned: `accountRef` carries
+the authority id, so a pool and a single account differ at activation too.
+
+The catalog snapshot is `{ accounts: [{ subscriptionId, label?, pinnedOnly?,
+models, ...status }] }`; planned, `{ authority, accounts }`, the single
+credential's entry keeping `subscriptionId: 'default'` for pinning.
+
+Interfaces. The owner: `create(name, plan, references)`; `inspect(name)`, passive,
+returning `{ identifier, plan, references, phase, revising? }`;
+`revise(name, plan, references?)`, one transition, refused while a client or
+worker reference exists; `start(name, tools?)`, which finishes a staged revision
+first; `client(name)`; `stop(name)`; `remove(name)`, which finishes a staged
+revision first. The provisioner request is the session fields above plus an
+optional `rebind: string[]`; a reopen that changes a binding the request does
+not name is refused with `Session "x" <binding> cannot change without a reopen
+that authorizes rebinding it; destroy the session, or reopen it with rebind:
+["<binding>"]`. The backend descriptor's `rebindableBindings: string[]` is today
+per backend and becomes `['image', 'account', 'provider']` for all three.
+Floot's session facet: `rebind(bindings: string[])` returns
+`{ rebind: string[] }`; hosted sessions only, no active turn, one to eight
+names each in the descriptor's list; it stops the incarnation and stores the
+authorization the next message's reopen carries.
+
 Records change shape. A Codex record carrying `imageRef` is refused as an
 unknown field, and a record without `rootfs` or without `accountRef` is refused
 for the missing field; both are recreated, not migrated, as the audit's request
