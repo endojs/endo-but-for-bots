@@ -4,6 +4,10 @@ import { createServer } from 'node:http';
 import { appendFileSync } from 'node:fs';
 import process from 'node:process';
 
+if (process.env.OPENCODE_DISABLE_PRUNE !== '1') {
+  throw new Error('Hosted bridge must disable unrecorded background pruning');
+}
+
 const streams = new Set();
 const emit = (type, properties) => {
   for (const stream of streams) stream.write(`data: ${JSON.stringify({ type, properties })}\n\n`);

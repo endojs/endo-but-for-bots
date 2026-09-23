@@ -870,8 +870,11 @@ sets old tool parts' `time.compacted` flags through ordinary part updates,
 without a new summary checkpoint. The bridge suppresses repeated completed-tool
 updates, so a later restoration could reintroduce output pruned after the last
 checkpoint. Pruning normally stops at the latest summary, but an older background
-prune can race a newer snapshot. The pinned fork defaults pruning to false;
-verify that the effective hosted configuration keeps it disabled before deployment.
+prune can race a newer snapshot. The pinned fork defaults pruning to false.
+The hosted bridge now additionally sets `OPENCODE_DISABLE_PRUNE=1` on its child;
+the pinned native config applies this override after merging configuration sources.
+Process fixtures require that override through the normal bridge startup path.
+This disables an optional unrecorded mutation, not summary compaction.
 Supporting this optional mutation needs a separately identified context revision
 and safe publication boundary, not a changed payload under the existing summary ID.
 The current summary-checkpoint wiring does not claim to capture these revisions.

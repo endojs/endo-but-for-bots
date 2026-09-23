@@ -746,7 +746,14 @@ const main = async () => {
     ['serve', '--hostname', '127.0.0.1', '--port', '0'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+      env: {
+        ...process.env,
+        OPENCODE_SERVER_PASSWORD: password,
+        // Background pruning has no durable context-revision event. Keep it
+        // off even if another native configuration source requests it; normal
+        // summary compaction uses the authoritative checkpoint protocol.
+        OPENCODE_DISABLE_PRUNE: '1',
+      },
     },
   );
   activeChild = child;
