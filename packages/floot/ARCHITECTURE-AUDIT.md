@@ -1995,6 +1995,31 @@ and the 24-hour candidate lease are recorded in endo-host's
 `ops/native-checkpoint-deployment-20260923.md`; revalidate protection before
 delayed activation.
 
+Native-window follow-up (2026-09-24): an offline probe of the actual candidate
+CLI using `models openrouter --verbose`, the free route, no network, no mounts,
+zero capabilities, and a dummy credential confirmed that context-only
+configuration now passes native startup. It also reproduced the remaining
+input-limit mismatch: context `123456` retained bundled input `200000` and
+output `8000`. The native compaction helper therefore used `192000`, ignoring
+the smaller context observation; the correct context/output bound is `115456`.
+The disposable probe container was removed; no inference or Secret access took
+place. This is compiled-CLI configuration evidence plus source-level threshold
+analysis, not a live compaction test.
+
+Native fix `af032b9fbc293cd19283e16f6a7f8effe296c065` is committed and pushed.
+The helper now takes the stricter of context-minus-effective-output-budget and
+input-minus-reservation, clamped at zero. Smaller input windows still constrain
+the result; no input limit is fabricated or removed. Unknown context and disabled
+automatic compaction retain their existing behavior. No new durable state,
+credential authority, or policy is introduced. All 62 native compaction tests
+pass (one skipped), including four new regressions for exact boundaries,
+independent windows, custom/zero reservation, unknown output, and zero-clamping.
+Native typechecking and formatting pass; scoped lint has zero errors (14 warnings).
+Adversarial review approved the fix. Both Endo source-build pins now name it.
+The prepared `9c41a9e865` candidate above is superseded for deployment: rebuild
+the native binary/images and prepare the matching host pins before activation.
+Live compaction/restart and dynamic-route guarantees remain open.
+
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
 Identify the durable formula owner and dependencies, what is replayed on daemon
