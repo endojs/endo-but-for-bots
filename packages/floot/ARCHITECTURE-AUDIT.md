@@ -86,13 +86,24 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 11 application changes, plus the first 20 host
+not. The newest 15 and earliest 14 application changes, plus three generated-file
+ownership changes and the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
 coverage and matching triage counts in both repositories.
 Earlier retained infrastructure and subsequent changes remain in scope.
 No claim of complete retrospective durability coverage is made yet.
+
+Generated-file ownership mapping (2026-09-24): three additional implementation
+diffs are traced to current literal validation, exclusive private staging, and
+Podman teardown ownership. All 74 focused sandbox tests pass.
+Failed removal retains files and reservations; existing roots are not reused.
+This is local filesystem/injected-process evidence, not live kernel isolation or
+daemon-loss recovery. The remaining crash-reconciliation boundary stays in #1323.
+Three adjacent Podman/bwrap/factory cleanup changes also have explicit owner and
+limitation mappings; their focused suites pass 107 tests after an authorized
+cache-write rerun. Their retryable ownership registries remain process-local.
 
 Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
 the four-formula legacy helper. Host cancellation calls `provideController`, so

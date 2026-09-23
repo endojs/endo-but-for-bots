@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 453 application entries and 73 host entries still need explicit ledger
+The other 447 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -179,6 +179,30 @@ Mock preservation checks are not live cleanup acknowledgements.
 | `88c5114` | Broker alias detachment with preserved credentials/archive identity checks | Original cancel-before-remove superseded by later names-only correction; held capabilities still require verified old-owner shutdown |
 | `f502c87` | Requested backend/manifest/result coverage validation | Original create-before-write and ID replacement defect corrected locally by the version-two intent ledger described below; historical coverage tests alone did not establish durability. Deployment/live acceptance remain open |
 | `e303296` | Four obsolete aliases targeted with exact metadata and preservation checks | Review found cancel could construct dormant code despite the helper comment. Corrected to names-only detachment; no producer shutdown/global revocation claim. Completed retries may fail safely after GC removes target metadata; no recovery redesign supplied |
+
+### Generated configuration ownership chain
+
+Three adjacent cleanup changes were independently traced to retained source.
+Fresh podman-cleanup, bwrap, and lifecycle suites pass **107 tests** with exit zero
+after rerunning with AVA cache-write permission. This is mock/local-process
+evidence, not Linux isolation acceptance or reconstruction after daemon loss.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `9e79f1f68` | Podman acquire/remove/teardown retains operations and capacity through failed removal, fences acquisitions, and keeps configuration until release | Tests cover delayed creation, failed removal, sibling cleanup, capacity and attach closure. Later full-ID binding and uncertain native-producer witnesses strengthen the path; ownership remains process-local and does not resolve daemon-loss uncertainty |
+| `f2658b4d6` | bwrap retains child stop/teardown ownership until `close`, not merely error or exit; bounded cleanup failure remains retryable | Tests cover close-after-error, delayed close, coalescing and sibling cleanup. No Linux namespace or restarted-owner proof follows from the stubbed macOS tests |
+| `d38de219d` | Factory reap/dispose permanently fences admission while disposal remains retryable; driver teardown and mount cleanup precede release | Lifecycle tests cover delayed admission, rejected wait, SIGKILL without reap, retries and cancellation. Current shared slice registry supersedes the original handle set, but remains ephemeral; #1323 is still open |
+
+Three further application changes are mapped to current source (2026-09-24).
+Fresh `@endo/sandbox` generated-files, generated-file-storage, and podman-cleanup
+suites pass **74 tests**. These are local filesystem and injected-process tests,
+not real Podman/kernel or daemon-crash acceptance.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `a887b2115` | `generated-files.js` validates literal destination/content records before resource acquisition; no persistent owner added | Exact shape, canonical path and mount-overlap checks; production Podman also rejects additions to exact policy mounts. Tests cover rejection before probing/resolving mounts. Validation does not prove mounted filesystem isolation |
+| `ea50a5e7c` | `generated-file-storage.js` owns an exclusively created private root and per-stage files; in-memory registry retains byte/entry charges until deletion succeeds | Filesystem tests cover partial writes, failed deletion/retry, concurrent reservations, held-write release/shutdown, writable aliases, and refusal of existing roots. Shared private-directory validation supersedes inline checks. No fsync publication/restart replay claim: root reuse is refused, and stale storage requires verified owner/container retirement |
+| `3eb95cd26` | Podman slice owns a lazy generated stage; teardown drains operation removal and policy anchor cleanup before releasing files | Current `drivers/podman.js` retains the stage on any removal failure; runtime closes driver before allocator. Tests cover read-only mount encoding, lazy reuse, failed container removal, and staging/teardown races. The ownership registry is process-local; daemon-loss reconciliation remains #1323, not proven by retry tests |
 
 ### Post-snapshot changes
 
