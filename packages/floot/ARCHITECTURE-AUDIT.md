@@ -109,6 +109,35 @@ real-daemon factory-disposal tests pass. Those daemon tests cover the enclosing
 owner's disposal/admission boundary, not these exact held-read races.
 Floot lint has zero errors (245 warnings); adversarial source/test review approved.
 
+Codex checkpoint-failure notification follow-up (2026-09-24, local, not deployed):
+the ledger latches a terminal outcome before persisting it. A rejected completed
+checkpoint write previously left the event reader open: the fallback failure
+settlement lost the latch and never delivered a terminal event. The client now
+emits one abort for the exact active turn, synchronously fences further sends,
+retains the persistence error for shutdown, and rethrows it. It does not retry
+the uncertain publication, rewrite the ledger winner, or report success.
+Review found a second timing path: completion replayed before the turn-start
+reply could deliver an abort but let shutdown report success. The error is now
+retained at settlement itself, independently of the transport message pump.
+Non-Error rejections are normalized before retention, so falsy rejection reasons
+cannot make shutdown appear successful. Regressions cover Error, false, and
+undefined in both timing paths.
+
+Durability classification: existing checkpoint owner, schema, first-winner latch,
+and write ordering are unchanged. A failed write remains uncertain and the
+session remains fenced; transient reader closure is not a durable commit claim.
+Early/late completion regressions inject checkpoint-save failure, duplicate the
+notification, and require one abort, no success event, one completed write,
+refusal of another send, and a shutdown rejection carrying the persistence error.
+This tests normal-operation storage failure through the real client with an
+injected persistence boundary, not daemon/process-loss or physical-disk recovery.
+All 322 Codex sandbox tests pass, including 94 client tests; scoped lint has
+zero errors (10 warnings), and formatting passes. Independent adversarial review
+approved after the early-notification and falsy-rejection corrections.
+Full-package lint currently fails on 32 TypeScript errors in six unchanged test
+fixtures (broker-service-agent, native-controller, owned-backend, state-provider,
+subscription-profile, and setup-hosted); this gate is not claimed passed.
+
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
 | Catalog reads and renewal owner | Broker integration drains admitted metadata reads. Independent tests pass, including actual formula cancellation/reconstruction with renewal held open and an independently retained old facet. | Process-loss/external renewal transaction recovery remains unverified; broader pool/Secret ownership findings below remain open. Deployed since generation 157 (2026-09-21). |

@@ -445,7 +445,28 @@ export const makeCodexClient = ({
     if (!turn) return false;
     let accepted = true;
     if (turn.ledgerTurn) {
-      ({ accepted } = await turn.ledgerTurn.settle(outcome));
+      try {
+        ({ accepted } = await turn.ledgerTurn.settle(outcome));
+      } catch (error) {
+        // The ledger has already latched its winner. A failed checkpoint
+        // write is uncertain, so do not retry settlement or report success.
+        // Release this reader even though a later failure settlement cannot
+        // win the latch; fence admission before the consumer can send again.
+        // Early notifications are replayed by send(), outside the transport
+        // pump's catch. Retain the write failure for shutdown on both paths.
+        const failure = error instanceof Error ? error : Error(String(error));
+        messageFailure ||= failure;
+        if (active === turn) {
+          endActive(
+            harden({
+              type: 'abort',
+              reason: failure.message,
+            }),
+          );
+        }
+        failSession(failure);
+        throw failure;
+      }
     }
     if (!accepted || active !== turn) return false;
     endActive(
