@@ -66,11 +66,12 @@ was created, inspected, renewed, stopped, or retired to generate it.
 
 The 15 commits in `2deaf4f55..a3a239f80` were individually compared with their
 source/test diffs and the main audit's evidence records by an independent reviewer.
-Suites were not rerun for this documentation pass; the counts below are the
-recorded runs, not fresh verification. These commits introduce no new durable
+The following 15-commit table cites previously recorded suite runs, not fresh
+verification. Later sections identify their fresh runs separately.
+These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 464 application entries and 93 host entries still need explicit ledger
+The other 458 application entries and 80 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -96,6 +97,67 @@ The main audit records these implementations as not activated on Tokyo.
 Build preparation retained generation 169 / app `819aa18c8` as the active release.
 This ledger pass does not re-query the machine or claim that historical observation
 is a fresh live-state check.
+
+### Initial session grant, transport and cleanup changes
+
+These six diffs were compared with retained implementations and tests.
+None adds a durable formula owner or exact daemon-restart proof.
+Fresh local runs cover 63 hosted-agent grant/MCP/cleanup cases and four resource
+registry cases; the latter are unit tests despite living in the daemon package.
+The exact interrupted-turn admission regression also passes (one Floot test).
+
+| Commit | Owner / boundary and evidence | Disposition and limit |
+|---|---|---|
+| `c6eb481a2` | Ephemeral session inference grant belongs to issuer/runtime; renewal remains a separate existing owner. Tests cover repeated requests, disconnect/revocation, acquisition/disposal, cleanup retry and account binding | Retained but evolved; original Codex factory/renewing wrapper removed. Not a durable session or renewal/restart proof |
+| `c311b2f98` | Shared MCP socket/server/peers belong to session cleanup. Tests cover call drain, close-before-start, same-tick start/close, late acquisition and failed-close retry | Retained transport; original nondraining close superseded by `18de3ccc4`. Per-frame limits do not bound aggregate connections/queues/bytes |
+| `ae9dcd3c8` | Ephemeral pinned tool catalog and synchronous admission counter; durable tool effects/evidence remain Floot journal responsibility. Tests cover catalog reuse, invalid/batch tools, admission bounds and release on failure | Retained bridge. Admission count does not cancel accepted effects or bound transport memory; no new replay policy |
+| `6457a0c6e` | Abort signal closes new tool admission immediately; accepted effects retain original turn ID. Exact journal integration regression covers withheld interrupt acknowledgement and next-turn reuse | Retained. Previously admitted effects may finish intentionally; fake persistent powers are not cold-restart proof |
+| `c29a9ebf1` | In-memory reverse-order cleanup scope retains failed releases and removes successful ones. Tests cover independent failures, single-flight retry and process-before-mount dependency | Helper retained; original three adapter integrations superseded. Current direct production consumer is OpenCode client mount cleanup. Scope cannot reconstruct process-loss ownership |
+| `eacf0a30c` | Ephemeral per-session serialization/owner registry; durable session records remain separate. Tests cover serialization, stale release, retained failures and shutdown/acquisition fences | Retained through hosted aliases to daemon resource registry, consumed by shared factory kit. Registry unit tests do not establish daemon reconstruction |
+
+The unification design's obsolete claim that all three adapters still use cleanup
+scopes was corrected to describe the retained implementation.
+Later shared-supervisor and generation-165 acceptance evidence remains separate;
+it is not retroactively attributed to these initial helper extractions.
+
+### Initial host configuration and preservation changes
+
+These 13 host commits were compared with their diffs and retained implementations.
+Historical deployment evidence is in FA-03/04/05/13 and the cutover records, not
+a new live-machine check. Fresh local tests in this pass: inventory/host/archive
+helpers **20**, image builder/checker **10**, holder recovery **9**, storage
+maintenance **13**. The image tests include the new directory-flush correction
+below; counts do not describe the unmodified historical builder.
+
+| Commit | Owner / boundary and evidence | Disposition and limit |
+|---|---|---|
+| `3f5045f` | Removes legacy Claude setup-peer bootstrap; existing Secrets and hosted setup remain owners | Retained deletion; changing bootstrap does not retire already minted formulas; later cutover evidence is required |
+| `c515378` | Removes unused OpenCode state option/environment; transcript continuity remains Floot-owned | Retained deletion; does not delete old state or establish CLI restore correctness |
+| `d68f72c` | One-shot named-formula metadata inspector; no runtime-service lookup | Despite its docs subject, this adds executable code; incomplete fixed-name inventory, no native cleanup or archival proof |
+| `be0803e` | Removes ignored native-profile Nix options/environment; effective policy controls slices | Retained deletion; old plans still require old-owner retirement, not migration or weakened parsing |
+| `2bfebce` | Explicit storage-admitted all-image build; candidate manifest/lease and startup immutable-pin checker; fresh image/storage suites | Missing directory flush discovered and fixed below; candidate lease is not activation, and local mocked builds are not real OCI verification |
+| `7402350` | Read-only formula metadata inventory verifies directory/blob identities before lookup; five original safety cases | Non-atomic root-reachable view, not complete dynamic membership or cleanup proof |
+| `e0233ec` | Passive-directory traversal adds identity deduplication, binding budget and Secret-alias exclusions; nine current cases | Does not traverse guest stores or inspect native resources; budget is not a time/byte bound |
+| `9d8f4a7` | Runbook-only coordinated cutover and lock/holder/preservation gates | Instructions are not execution evidence; later records supply actual cutover results |
+| `8d4e918` | Approved built-in Floot host identity maps guest/handle references without resolving them; four cases | Can revive two built-in host workers; snapshot is not archive or cleanup |
+| `f8b8589` | Operator-owned private recovery records retain holder-create intent and exact container/image IDs; nine current holder cases | Superseded permission handling corrected by subsequent commits; no automatic replay or destructive cleanup; lost create reply needs exact-name inspection |
+| `0b0715f` | Existing daemon storage retains exact guest IDs in archive directory; identity/conflict/retry checks, seven current cases | Exclusive maintenance required: no CAS. Capability roots, not content backup. Historical snapshot reader still uses ordinary unbounded readFile |
+| `11ed01d` | Attempted exclusive-primary-group admission for holder storage | Superseded by private recovery directory in e2e6f65 after live group membership disproved exclusivity; not the retained authorization rule |
+| `e2e6f65` | Separates private holder records from shared deployment spool; fresh manifest identity/metadata captured before creates | Retained owner boundary; tests cover order and failed intent, not power-loss injection or hostile-directory races |
+
+### Post-snapshot changes
+
+- Application `1aa668820`: documentation-only inventory and audit links, no runtime owner.
+- Host [`4e2a574`](https://github.com/kumavis/endo-host/commit/4e2a574fb57b3e32aa29ad60e0cbfd0f8990bb5b):
+  candidate manifest publication now flushes file, renames, then flushes its
+  directory before success. Three added cases distinguish ordering, failed file
+  flush preserving the old manifest, and failed directory flush retaining an
+  uncertain visible replacement while propagating failure and closing the fd.
+  Two cases failed before the fix. All 32 image/holder/storage tests now pass.
+  Independently reviewed and pushed to GitHub/Forgejo, not deployed.
+  No new formula, authority, retention period, activation, or renewal behavior.
+  This verifies publication ordering and injected I/O failures, not physical
+  power-loss durability or adversarial mutation of the operator's directories.
 
 ## Reproduction
 

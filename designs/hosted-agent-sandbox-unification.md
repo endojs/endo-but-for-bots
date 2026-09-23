@@ -625,18 +625,17 @@ interrupted, including while backend cancellation is awaiting acknowledgement.
 Previously admitted operations retain their original turn ID for result recording.
 A subsequent turn reuses the same hosted tool capability with its own active context.
 
-All three adapters now share retryable cleanup scopes for acquired resources
-and a session registry for replacement ordering and cleanup ownership.
-Claude retains failed-start cleanup ownership and retries it before replacing or deleting
-the same session; OpenCode now delegates that ownership to the daemon session owner, and
-unrelated session admission remains independent.
-Independent release stages are attempted after a failure, and successful stages are
-not repeated on retry.
-Codex retains its process-before-workspace-release dependency check.
-Its shutdown uses the shared registry to fence queued and future acquisitions,
-wait for already-running acquisitions, and attempt every retained owner.
-These scopes do not yet provide the shared supervisor's stop-during-start, immediate
-revocation, process-reaping, or hung-cleanup semantics.
+The early adapters shared retryable cleanup scopes and a session registry for
+replacement ordering, but their per-adapter factory wrappers have since been replaced.
+As of 2026-09-24, the direct production consumer of `makeCleanupScope` is OpenCode's
+client mount cleanup, not all three adapters.
+It attempts independent release stages after failure and retains failed stages for
+retry without repeating successful releases.
+The shared backend factory uses the resource registry for per-session serialization
+and cleanup ownership; durable session records remain a separate authority.
+Neither the cleanup scope nor the registry reconstructs lost process-local ownership.
+Supervisor and native process-loss guarantees must be evaluated at their own boundaries,
+not inferred from these earlier helper extractions.
 
 OpenCode's lazy provisioning module and its inner-client lifecycle wrappers are deleted.
 The daemon session owner now retains partial acquisitions, drains failed cleanup before

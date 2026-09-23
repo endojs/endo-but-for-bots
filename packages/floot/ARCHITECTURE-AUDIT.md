@@ -86,8 +86,9 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 application changes have individual owner/evidence/limitation
-entries based on source and test-diff review; older entries still need mapping to
+not. The newest 15 and earliest six application changes, plus the first 13 host
+changes, have individual owner/evidence/limitation entries based on source and
+test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
 coverage and matching triage counts in both repositories.
 Earlier retained infrastructure and subsequent changes remain in scope.
@@ -3395,6 +3396,17 @@ exports/tests no longer suggest a supported second topology.
 
 ## FA-13 — Align host image provisioning with the new builder
 
+Retrospective publication follow-up (2026-09-24): host `4e2a574` adds the missing
+parent-directory flush after atomically replacing the candidate image manifest.
+The command cannot acknowledge a successful candidate lease before that flush.
+A failed file flush preserves the old manifest; a failed directory flush reports
+failure while retaining the uncertain visible replacement, without rollback or
+deletion. Three new tests verify ordering, both failure boundaries, temporary-file
+cleanup, and descriptor closure; two failed before the fix. All 32 current
+image/holder/storage tests pass after independent review. Pushed to both remotes,
+not deployed. No new formula, credential owner, lease period, or automatic activation.
+This is injected-I/O evidence, not a physical power-loss test.
+
 In endo-host, `modules/endo-daemon.nix:309` builds the Claude image directly with Podman.
 It does not pass the `ENDO_DEV_IMAGE` argument required by the new
 `packages/claude-sandbox/oci/Containerfile`.
@@ -3692,6 +3704,15 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Initial host durability mapping found a missing candidate-manifest
+directory flush. Corrected in host `4e2a574` after regression reproduction and
+independent review; 32 image/holder/storage tests pass. Thirteen early host commits
+now have owner/disposition/limitation mappings; 20 inventory/archive helper tests
+also pass. The first six application commits are mapped to their retained grant,
+MCP, cleanup and registry boundaries; superseded factory integrations are not
+counted as current evidence. The design's stale three-adapter cleanup-scope claim
+is corrected. No remote runtime state changed and no deployment occurred.
 
 2026-09-24 — Added the retrospective change ledger: 479 application and 93 host
 commits enumerated, including upstream and reverted work. Path-based triage is
