@@ -108,6 +108,11 @@ No claim of complete retrospective coverage is made yet.
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
+Deployment reconciliation (generation 166, 2026-09-23): the atomic revision,
+account-authority vocabulary, provider-ownership checks and immutable state-root
+plans are now deployed. Their earlier "not deployed" evidence below describes
+the pre-cutover checkpoint, not the current host. This does not close the broader
+durability audit or substitute for live authorized rebind acceptance.
 Full supervisor/storage, journal/restoration, broker/credential, publication,
 network/image, and host deployment coverage is being inventoried separately.
 Existing Tokyo evidence is retained: generation 159 / app `81f3428e3` passed
@@ -527,8 +532,8 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; cross-backend acceptance including OpenCode restart/restore passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
-| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generations 160 and 161, live since) and accepted on Tokyo; the completion criterion that account identity not depend on runtime is met locally (2026-09-23): every plan records the operator-declared account authority id, every grant reports it, and the provider-name constants and the Codex `pool` label are gone (not deployed); open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
-| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`), though that matrix has no `rebind` case (no re-minted broker to rebind to) and the verb's evidence is the conformance and module suites; the revision made one crash-safe transition on 2026-09-22 after the operator's reviewer found a crash between edge writes left a mixed record `start` accepted (not deployed); one binding vocabulary (`image`, `account`, `provider`) for every backend is implemented locally (2026-09-23, not deployed), closing the account item; open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission deployed and accepted. Generation 166 adds the operator-declared account authority in plans, profiles, catalogs and grants, replacing provider-name constants and the Codex `pool` label. All-account discovery and hosted seed/policy checks pass. Open: runtime support for Claude's discovered models and the absent-backend orchestration special case |
+| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Generation 166 deploys atomic revision intent, the shared `image`/`account`/`provider` vocabulary, recorded/proposed binding inspection and returned binding snapshots, exact state-provider ownership checks, and immutable Claude/Codex state-root placement. Local crash/reconstruction and adapter conformance evidence is recorded below. Live provider-only and image-plus-provider authorized rebind preservation cases remain unverified; earlier general acceptance did not exercise the rebind verb |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the operator deferred it on 2026-09-22 and will choose the mechanism and default bound later |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
@@ -1264,7 +1269,8 @@ an incomplete discovery descriptor. Scoped lint has zero errors; docs has zero
 errors and 176 warnings. Full Floot typechecking remains failing on test-file
 errors, including unchanged optional `find()` results in this fixture; it is
 not claimed clean. Independent adversarial review found no production blocker.
-Not deployed; live acceptance remains pending Tokyo connectivity.
+Deployed as generation 166. The focused live removed-subscription refusal case
+is still unverified; general acceptance does not prove that case.
 
 The separate Claude runtime-model concern remains unproven: the live record
 contains exit code 1 and a stdin warning, not a diagnostic establishing that
@@ -1448,8 +1454,9 @@ then removing under the revised plan); native owner cases (an interrupted
 revision refusing the next start without constructing anything until it
 can finish, then activating the revised plan and resolving the rebound
 dependency, never the old one; removal refused without a native call or a
-lifecycle change until it can finish, then removing). Not deployed.
-Open, from the review: a `provider` rebind moves the state provider and
+lifecycle change until it can finish, then removing). Deployed as generation 166.
+Historical findings from that review, addressed by the account-authority,
+binding-inspection and immutable-state-root changes below: a `provider` rebind moved the state provider and
 storage owner without checking that they serve the recorded session's
 state root, which the plan does not record (the roots are host
 configuration under the wipe-and-recreate deployment model, so a re-rooted
@@ -1565,7 +1572,7 @@ Durability: no schema or stored-state change. Each backend reconstruction repeat
 the exact-formula check; existing records keep their own captured dependencies.
 No native resources or credentials are acquired by the check. This does not
 prove old resources have stopped and does not retire mismatched owners itself.
-Not deployed. The root-placement follow-up is implemented below. OpenCode has no
+Deployed as generation 166. The root-placement follow-up is implemented below. OpenCode has no
 separate durable native state provider; its private placement is already recorded.
 
 ### Immutable native state root — 2026-09-23
@@ -1594,7 +1601,9 @@ blocking issue.
 Breaking deployment gate: retire affected old Claude/Codex sessions using the
 old release before switching parsers. Old plans without `stateRoot` are refused,
 including by storage deletion. Preserve Secrets, renewal credentials and
-workspaces. This change is not deployed.
+workspaces. Deployed as generation 166 after verifying no old native session
+records or Floot sessions remained; this is retirement evidence, not migration
+compatibility or live rebind proof.
 
 ### Live rebind acceptance harness — 2026-09-23
 
@@ -1614,8 +1623,9 @@ local manifest lock prevents overlapping invocations; it is not a distributed
 lease. No credential or daemon-state schema changes. Adversarial review caught
 and corrected an API mismatch: `whenFinished()` resolves on failure, so the
 driver also reads the final turn status. Fake-facet regressions validate the
-harness, not daemon restart or real inference. Not run on Tokyo: SSH still times
-out before authentication. FA-08 live acceptance remains open.
+harness, not daemon restart or real inference. SSH connectivity is restored and
+generation 166 is deployed. The two live rebind cases have not run; FA-08 live
+acceptance remains open.
 
 ## FA-09 — Give local development storage an explicit role
 
@@ -2217,7 +2227,7 @@ their remaining work is not implied complete by this deployment sequence.
 
 ### Acceptance runner correction — 2026-09-23
 
-Current acceptance-runner correction (2026-09-23, not deployed): the host's
+Acceptance-runner correction (2026-09-23): the host's
 `run-cutover4-*` scripts now preserve driver exit codes, stop before subsequent
 phases after a failure, and refuse restart after failed seeding or recall after
 failed restart. Hosted acceptance no longer unconditionally runs the
@@ -2228,10 +2238,13 @@ or sessions. Four local test methods cover 23 injected phase failures, four
 empty-output successes, eight setup failures, and a failed restart using inert
 host substitutes.
 This changes only the one-shot operator harness, not daemon formula state or
-replay. Live cross-backend and rebind acceptance remain pending; SSH to Tokyo
-timed out before authentication during preparation. Both GitHub branches are
-pushed through app `5b8674613` and host `338d594`; no new Tokyo activation is
-claimed.
+replay. SSH connectivity is restored. Generation 166 uses the corrected phase
+drivers through individual supervised invocations, preserving exit status and
+not advancing after failures. Hosted create/tool, policy and cancellation phases
+passed; restart/restore and live rebind acceptance remain pending. The cancel
+result is deliberately limited to admitted turns with observed native calls,
+not native-process termination proof. See the current cutover record in
+endo-host `ops/hosted-cutover5-20260923.md`.
 
 ### Cutover progress — 2026-09-21
 
