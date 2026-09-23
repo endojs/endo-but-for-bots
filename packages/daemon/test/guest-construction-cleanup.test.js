@@ -20,18 +20,30 @@ import {
 import { makeDaemon } from '../src/manager.js';
 import { parseId } from '../src/formula-identifier.js';
 
-for (const automatic of [false, true]) {
-  for (const stage of [
-    'handle',
-    'mailbox-store',
-    'mail-hub',
-    'pet-store',
-    'worker',
-    'guest',
-  ]) {
+for (const automatic of [false, true, 'directory']) {
+  /** @type {[string, number, number][]} */
+  const cases =
+    automatic === 'directory'
+      ? [
+          ['pet-store', 1, 0],
+          ['directory', 1, 1],
+        ]
+      : [
+          ['handle', 1, 0],
+          ['mailbox-store', 1, 1],
+          ['mail-hub', 1, 2],
+          ['pet-store', 1, 3],
+          ['worker', 1, 4],
+          ['guest', 1, 9],
+          ['pet-store', 2, 5],
+          ['directory', 1, 6],
+          ['pet-store', 3, 7],
+          ['directory', 2, 8],
+        ];
+  for (const [stage, occurrence, expectedAcquired] of cases) {
     for (const afterWrite of [false, true]) {
       test.serial(
-        `guest construction releases acquired pins: automatic=${automatic}, stage=${stage}, afterWrite=${afterWrite}`,
+        `guest construction releases acquired pins: automatic=${automatic}, stage=${stage}, occurrence=${occurrence}, afterWrite=${afterWrite}`,
         async t => {
           t.timeout(15_000);
           const temporary = await mkdtemp(
@@ -64,6 +76,7 @@ for (const automatic of [false, true]) {
           await powers.persistence.initializePersistence();
           let armed = false;
           let injected = false;
+          let seen = 0;
           /** @type {FormulaNumber | undefined} */
           let failedNumber;
           /** @type {FormulaNumber[]} */
@@ -96,7 +109,12 @@ for (const automatic of [false, true]) {
               persistence: harden({
                 ...powers.persistence,
                 writeFormula: async (number, node, formula) => {
-                  const fail = armed && !injected && formula.type === stage;
+                  if (armed && !injected && formula.type === stage) seen += 1;
+                  const fail =
+                    armed &&
+                    !injected &&
+                    formula.type === stage &&
+                    seen === occurrence;
                   if (fail) {
                     injected = true;
                     failedNumber = number;
@@ -129,17 +147,29 @@ for (const automatic of [false, true]) {
           const controlWorkers = new Set(workers);
           t.true(controlWorkers.size > 0);
           armed = true;
-          const creating = automatic
-            ? E(host).makeUnconfined('failed-worker', 'test:never-reached', {
-                powersName: 'failed-powers',
-                resultName: 'failed-client',
-              })
-            : E(host).provideGuest('failed-guest');
+          const creating =
+            automatic === 'directory'
+              ? E(host).makeDirectory('failed-directory')
+              : automatic
+                ? E(host).makeUnconfined(
+                    'failed-worker',
+                    'test:never-reached',
+                    {
+                      powersName: 'failed-powers',
+                      resultName: 'failed-client',
+                    },
+                  )
+                : E(host).provideGuest('failed-guest');
           await t.throwsAsync(creating, {
             message: /Injected guest construction failure/,
           });
           t.true(injected);
-          if (stage === 'guest') {
+          if (
+            automatic !== 'directory' &&
+            (stage === 'guest' ||
+              stage === 'directory' ||
+              (stage === 'pet-store' && occurrence !== 1))
+          ) {
             t.true(workers.has(failedGuestWorker));
             t.true(stoppedWorkers.has(failedGuestWorker));
           }
@@ -148,19 +178,12 @@ for (const automatic of [false, true]) {
           await t.throwsAsync(powers.persistence.readFormula(failedNumber), {
             message: /No formula exists for number/,
           });
-          const expectedAcquired = {
-            handle: 0,
-            'mailbox-store': 1,
-            'mail-hub': 2,
-            'pet-store': 3,
-            worker: 4,
-            guest: 9,
-          };
-          t.is(acquired.length, expectedAcquired[stage]);
+          t.is(acquired.length, expectedAcquired);
           // No public name may refer to a guest whose formula write failed,
           // including a write whose acknowledgement was lost.
           t.is(await E(host).identify('failed-guest'), undefined);
           t.is(await E(host).identify('failed-powers'), undefined);
+          t.is(await E(host).identify('failed-directory'), undefined);
           for (const number of acquired) {
             // eslint-disable-next-line no-await-in-loop
             await t.throwsAsync(powers.persistence.readFormula(number), {
@@ -170,6 +193,25 @@ for (const automatic of [false, true]) {
           t.is(await E(host).identify('control'), controlId);
           await powers.persistence.readFormula(parseId(controlId).number);
           armed = false;
+          if (automatic === 'directory') {
+            const directory = await E(host).makeDirectory(
+              'successful-directory',
+            );
+            t.deepEqual(await E(directory).list(), []);
+            const directoryId = await E(host).identify('successful-directory');
+            if (!directoryId) throw Error('Missing successful directory');
+            const { formula } = await powers.persistence.readFormula(
+              parseId(directoryId).number,
+            );
+            if (formula.type !== 'directory') throw Error('Expected directory');
+            await E(host).remove('successful-directory');
+            await t.throwsAsync(
+              powers.persistence.readFormula(parseId(directoryId).number),
+            );
+            await t.throwsAsync(
+              powers.persistence.readFormula(parseId(formula.petStore).number),
+            );
+          }
           const successful = await E(host).provideGuest('successful');
           t.true((await E(successful).list()).some(name => name === '@self'));
           // A partial publication is different: the successfully stored handle

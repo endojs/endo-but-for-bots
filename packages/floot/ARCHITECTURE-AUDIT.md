@@ -205,6 +205,24 @@ The worker witness observes the control protocol, not real process termination.
 Nested directory acquisition, agent-key retirement, failed cleanup retries and
 abrupt process loss are not solved by this reservation change.
 
+Nested directory follow-up (2026-09-24, local, not deployed):
+`formulateDirectory` now reserves both the directory and its backing-store IDs
+before either persistence operation. Failure releases both reservations; success
+transfers only the directory pin, whose registered dependency edge retains the
+store. This keeps the existing caller publication/cleanup contract unchanged.
+The 40-case guest matrix reproduced 12 failures before this fix at the first or
+second nested store/directory write, including lost acknowledgements.
+All 44 expanded cases pass afterward: the guest cases plus four direct-directory
+write failures. Direct-directory cases were added after implementation, so they
+are not claimed as before/after reproductions. Successful direct publication and
+removal reclaim both directory and store; nested failures retain the unrelated
+guest and settle the injected failed guest worker cancellation.
+Adjacent directory and marshal suites, daemon typechecking and formatting pass;
+changed-file lint reports no errors. Adversarial source and test review passed.
+These are actual persistence/in-process daemon tests with injected worker control,
+not native termination or crash-recovery proof. `formulateDirectoryForStore`,
+agent-key retirement and failed collection retry ownership remain separate checks.
+
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.
 The oracle fixture imports its sibling implementation explicitly without adding

@@ -5354,21 +5354,35 @@ const makeDaemonCore = async (
   const formulateDirectory = async (nodeNumber = localNodeNumber) => {
     return /** @type {FormulateResult<EndoDirectory>} */ (
       withFormulaGraphLock(async () => {
-        const { id: petStoreId } = await formulateNumberedPetStore(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          nodeNumber,
-        );
+        const storeNumber = /** @type {FormulaNumber} */ (await randomHex256());
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
-        /** @type {DirectoryFormula} */
-        const formula = {
-          type: 'directory',
-          petStore: petStoreId,
-        };
-        const result = await formulate(formulaNumber, formula, nodeNumber);
-        pinTransient(result.id);
-        return result;
+        const storeId = formatId({ number: storeNumber, node: nodeNumber });
+        const directoryId = formatId({
+          number: formulaNumber,
+          node: nodeNumber,
+        });
+        // Reserve both identities before writes can lose acknowledgements.
+        pinTransient(storeId);
+        pinTransient(directoryId);
+        let transferred = false;
+        try {
+          await formulateNumberedPetStore(storeNumber, nodeNumber);
+          /** @type {DirectoryFormula} */
+          const formula = { type: 'directory', petStore: storeId };
+          const result = await formulate(formulaNumber, formula, nodeNumber);
+          transferred = true;
+          return result;
+        } finally {
+          // On success the directory edge retains its store; only its pin is
+          // transferred to the caller. Failed construction retains neither.
+          await Promise.all(
+            (transferred ? [storeId] : [storeId, directoryId]).map(
+              unpinTransient,
+            ),
+          );
+        }
       })
     );
   };
