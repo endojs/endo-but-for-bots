@@ -262,11 +262,14 @@ const defaultStderrIterable = proc =>
  *   - Adapter from a `ProcessHandle` to its stderr byte stream, read
  *   best-effort to enrich an `abort` reason. Injectable for tests;
  *   defaults to the `@endo/exo-stream` reader.
- * @property {number} [stderrReadLimit] - Maximum bytes to read from the
- *   captured stderr stream before stopping. Defaults to 16384.
- * @property {number} [stderrTailLength] - Maximum byte length of the
+ * @property {number} [stderrReadLimit] - Stop after at least this many decoded
+ *   UTF-16 code units from captured stderr. Defaults to 16384.
+ * @property {number} [stderrTailLength] - Maximum UTF-16 code unit length of the
  *   trailing stderr excerpt included in the `abort` reason. Defaults
  *   to 2000.
+ * @property {number} [stderrReadTimeoutMs] - Total diagnostic read deadline.
+ *   Defaults to 1000ms. Expiry preserves the excerpt collected so far; it
+ *   does not prove the underlying stream or process has stopped.
  */
 
 /**
@@ -297,30 +300,58 @@ export const makeClaudeClient = ({
   makeStderrIterable = defaultStderrIterable,
   stderrReadLimit = 16_384,
   stderrTailLength = 2000,
+  stderrReadTimeoutMs = 1000,
 }) => {
+  // Node timers accept delays only through the signed 32-bit millisecond
+  // range. Validate before starting any asynchronous diagnostic work.
+  if (
+    !Number.isFinite(stderrReadTimeoutMs) ||
+    stderrReadTimeoutMs <= 0 ||
+    stderrReadTimeoutMs > 2 ** 31 - 1
+  ) {
+    throw makeError(X`Invalid Claude stderr diagnostic deadline`);
+  }
   /**
-   * Best-effort read of a process's captured stderr, bounded so a chatty
-   * or never-closing stream can't stall teardown. The caller kills the
-   * process first so the captured stream EOFs. Returns the trailing slice
-   * (where the actual error usually is), or '' on any failure (for example,
-   * a proc with no stderr surface).
+   * Best-effort diagnostic excerpt. Neither a stalled read nor iterator
+   * closure may delay turn failure indefinitely. A deadline stops further
+   * pulls and requests closure, but cannot reclaim a hung remote operation.
    *
    * @param {ProcessHandle} proc
    * @returns {Promise<string>}
    */
   const readStderrBrief = async proc => {
-    try {
-      const decoder = new TextDecoder();
-      let text = '';
-      for await (const chunk of makeStderrIterable(proc)) {
-        text += decoder.decode(chunk, { stream: true });
+    const decoder = new TextDecoder();
+    let text = '';
+    let stopped = false;
+    /** @type {AsyncIterator<Uint8Array> | undefined} */
+    let iterator;
+    const reading = (async () => {
+      await null;
+      iterator = makeStderrIterable(proc)[Symbol.asyncIterator]();
+      while (!stopped) {
+        const result = await iterator.next();
+        if (stopped || result.done) break;
+        text += decoder.decode(result.value, { stream: true });
         if (text.length >= stderrReadLimit) break;
       }
-      text += decoder.decode();
-      return text.trim().slice(-stderrTailLength);
+    })();
+    try {
+      await awaitBarrier(reading, {
+        deadlineMs: stderrReadTimeoutMs,
+        makeFailure: () => Error('Claude stderr diagnostic deadline exceeded'),
+      });
     } catch {
-      return '';
+      // Diagnostics cannot replace or indefinitely postpone the turn error.
+    } finally {
+      stopped = true;
+      // An async generator may queue return() behind a hung next(). Observe
+      // any rejection without making turn completion depend on that closure.
+      void Promise.resolve()
+        .then(() => iterator?.return?.())
+        .catch(() => {});
     }
+    text += decoder.decode();
+    return text.trim().slice(-stderrTailLength);
   };
   let terminated = false;
   // `--continue` resumes the most recent conversation persisted in the

@@ -450,6 +450,127 @@ test('a stream-error abort folds claude stderr into the reason', async t => {
   t.true(procKilled.get(fake.spawned[0]));
 });
 
+test('invalid stderr deadline is refused before process or diagnostic acquisition', t => {
+  const fake = makeFakeSlice();
+  let reads = 0;
+  for (const stderrReadTimeoutMs of [0, -1, NaN, Infinity, 2 ** 31]) {
+    t.throws(
+      () =>
+        makeClaudeClient(
+          baseArgs(fake, makeFakeMount(), {
+            stderrReadTimeoutMs,
+            makeStderrIterable: () => {
+              reads += 1;
+              return bytesIterable([]);
+            },
+          }),
+        ),
+      { message: /stderr/i },
+    );
+  }
+  t.is(fake.spawned.length, 0);
+  t.is(reads, 0);
+});
+
+for (const partial of [false, true]) {
+  for (const lateFailure of [false, true]) {
+    test(`stderr deadline ends abort (${partial ? 'partial diagnostic' : 'first read'}, late ${lateFailure ? 'rejection' : 'chunk'})`, async t => {
+      t.timeout(5000);
+      let resolveRead;
+      let rejectRead;
+      const stalled = new Promise((resolve, reject) => {
+        resolveRead = resolve;
+        rejectRead = reject;
+      });
+      t.teardown(() => resolveRead({ done: true }));
+      let pulls = 0;
+      let returns = 0;
+      const fake = makeFakeSlice([[enc.encode('not json\n')]]);
+      const client = makeClaudeClient(
+        baseArgs(fake, makeFakeMount(), {
+          stderrReadTimeoutMs: 20,
+          makeStderrIterable: () =>
+            harden({
+              [Symbol.asyncIterator]() {
+                return this;
+              },
+              next() {
+                pulls += 1;
+                if (partial && pulls === 1)
+                  return Promise.resolve({
+                    done: false,
+                    value: enc.encode('partial diagnostic'),
+                  });
+                return stalled;
+              },
+              return() {
+                returns += 1;
+                return Promise.resolve({ done: true });
+              },
+            }),
+        }),
+      );
+      t.teardown(() => client.terminate());
+      const events = await drain(await client.send('x'));
+      t.is(events.length, 1);
+      t.is(events[0].type, 'abort');
+      t.regex(events[0].reason, /malformed stream-json line/);
+      if (partial) t.regex(events[0].reason, /partial diagnostic/);
+      t.true(procKilled.get(fake.spawned[0]));
+      const completed = JSON.stringify(events);
+      if (lateFailure) rejectRead(Error('late stderr failure'));
+      else resolveRead({ done: false, value: enc.encode('must not append') });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      t.is(pulls, partial ? 2 : 1, 'a timed-out read cannot pull again');
+      t.is(returns, 1, 'the iterator receives one cleanup request');
+      t.is(JSON.stringify(events), completed);
+    });
+  }
+}
+
+test('stderr deadline bounds a stalled iterator return after its size cutoff', async t => {
+  t.timeout(5000);
+  let releaseReturn;
+  const stalledReturn = new Promise(resolve => {
+    releaseReturn = resolve;
+  });
+  t.teardown(() => releaseReturn({ done: true }));
+  let pulls = 0;
+  let returns = 0;
+  const fake = makeFakeSlice([[enc.encode('not json\n')]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      stderrReadTimeoutMs: 20,
+      stderrReadLimit: 8,
+      makeStderrIterable: () =>
+        harden({
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          next() {
+            pulls += 1;
+            return Promise.resolve({
+              done: false,
+              value: enc.encode('diagnostic cutoff'),
+            });
+          },
+          return() {
+            returns += 1;
+            return stalledReturn;
+          },
+        }),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('x'));
+  t.is(events.length, 1);
+  t.is(events[0].type, 'abort');
+  t.regex(events[0].reason, /diagnostic cutoff/);
+  t.is(pulls, 1);
+  t.is(returns, 1);
+  t.true(procKilled.get(fake.spawned[0]));
+});
+
 for (const [label, failure] of [
   ['error', Error('exit status unavailable')],
   ['false', false],

@@ -85,6 +85,23 @@ The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, incl
 changes that still need classification rather than an assumption of relevance.
 No claim of complete retrospective coverage is made yet.
 
+Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
+the stderr excerpt reader limited decoded characters but could wait forever for
+the next chunk or iterator closure, withholding the turn's abort. It now uses a
+one-second total asynchronous-read deadline, retains diagnostics collected so
+far, fences late results from further decoding/pulls, and requests iterator
+closure without awaiting it. Invalid deadline options are refused at client
+construction before diagnostic work can start. Limits are documented as UTF-16
+code units, matching the existing decoder/string implementation rather than
+claiming a byte limit. This is ephemeral diagnostic handling with no new formula,
+durable state, renewal owner, or retry behavior. It does not cancel a hung remote
+operation, preempt synchronous adapter code, or prove process retirement.
+Six regression tests cover invalid deadlines, stalled initial/partial reads,
+late rejection/resolution, and stalled iterator closure. All 225 Claude sandbox
+tests pass; package lint has zero errors (56 warnings), formatting passes, and
+root documentation generation has zero errors (176 warnings). Independent adversarial
+review approved after constructor validation and test teardown corrections.
+
 Claude exit-observation follow-up (2026-09-24, local, not deployed):
 the raw client swallowed a rejected process `wait()` and reported `end`, allowing
 an unverified outcome to be recorded as a successful turn. The rejection now
@@ -3667,6 +3684,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Claude diagnostic reads no longer hold turn failures behind stalled
+stderr reads or iterator closure. Partial excerpts survive the read deadline and
+late completions cannot resume pulls. Six regressions and all 225 package tests
+pass after independent review; no durable schema or native retirement change.
+Not deployed.
 
 2026-09-24 — Claude no longer reports success when process exit observation
 rejects. Three reproduced regressions and all 219 package tests pass; lint,
