@@ -184,9 +184,26 @@ changed-file formatting pass, with no changed-file ESLint errors.
 of `await` is not a defect. Releasing known pins does not by itself establish
 ownership of partial formulas whose identifiers never returned, nested directory
 construction rollback, or agent-key retirement; those remain separate checks.
-In particular, the after-write mail-hub case explicitly demonstrates an unreturned
-formula still on disk. This remains an open orphan-reclamation finding, not a
-successful cleanup claim for every failed acquisition.
+At `12d79432a`, the after-write mail-hub case explicitly demonstrated an unreturned
+formula still on disk; that commit did not solve every failed acquisition.
+
+Numbered guest dependency follow-up (2026-09-24, local, not deployed):
+expanded failure injection covers handle, mailbox-store, mail-hub, pet-store,
+worker and guest writes, before and after persistence, for both direct creation
+and automatic powers. The 24-case baseline has ten failures: every numbered
+dependency's written-then-rejected case on both paths.
+The builder now reserves and pins each exact dependency ID before the write,
+not after its result returns. Existing graph collection deletes those IDs even
+when the rejected acknowledgement prevented graph registration; rejected writes
+have not yet entered formula evaluation and cannot have started native effects.
+Successfully registered workers still use ordinary controller cancellation.
+All 24 cases now pass, including an injected-worker witness that cancellation
+settles before guest-write failure returns while control workers stay live.
+Four adjacent publication regressions, daemon typechecking and formatting pass;
+changed-file ESLint reports zero errors. Independent adversarial review passed.
+The worker witness observes the control protocol, not real process termination.
+Nested directory acquisition, agent-key retirement, failed cleanup retries and
+abrupt process loss are not solved by this reservation change.
 
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.

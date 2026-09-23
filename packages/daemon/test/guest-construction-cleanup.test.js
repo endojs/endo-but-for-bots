@@ -21,7 +21,14 @@ import { makeDaemon } from '../src/manager.js';
 import { parseId } from '../src/formula-identifier.js';
 
 for (const automatic of [false, true]) {
-  for (const stage of ['mail-hub', 'guest']) {
+  for (const stage of [
+    'handle',
+    'mailbox-store',
+    'mail-hub',
+    'pet-store',
+    'worker',
+    'guest',
+  ]) {
     for (const afterWrite of [false, true]) {
       test.serial(
         `guest construction releases acquired pins: automatic=${automatic}, stage=${stage}, afterWrite=${afterWrite}`,
@@ -61,22 +68,28 @@ for (const automatic of [false, true]) {
           let failedNumber;
           /** @type {FormulaNumber[]} */
           const acquired = [];
+          const workers = new Set();
+          const stoppedWorkers = new Set();
+          let failedGuestWorker;
           const daemon = await makeDaemon(
             {
               ...powers,
               control: /** @type {any} */ ({
                 makeWorker: async (
-                  _id,
+                  id,
                   _facet,
                   workerCancelled,
                   forceCancelled,
                 ) => {
                   void forceCancelled.catch(() => {});
+                  workers.add(id);
                   return {
                     workerDaemonFacet: Far('UnusedWorker', {
                       terminate: () => {},
                     }),
-                    workerTerminated: workerCancelled.catch(() => {}),
+                    workerTerminated: workerCancelled.catch(() => {
+                      stoppedWorkers.add(id);
+                    }),
                   };
                 },
               }),
@@ -97,6 +110,8 @@ for (const automatic of [false, true]) {
                   }
                   await powers.persistence.writeFormula(number, node, formula);
                   if (armed && !injected) acquired.push(number);
+                  if (armed && !injected && formula.type === 'worker')
+                    failedGuestWorker = number;
                 },
               }),
             },
@@ -111,6 +126,8 @@ for (const automatic of [false, true]) {
           await E(host).provideGuest('control');
           const controlId = await E(host).identify('control');
           if (!controlId) throw Error('Missing control');
+          const controlWorkers = new Set(workers);
+          t.true(controlWorkers.size > 0);
           armed = true;
           const creating = automatic
             ? E(host).makeUnconfined('failed-worker', 'test:never-reached', {
@@ -122,20 +139,24 @@ for (const automatic of [false, true]) {
             message: /Injected guest construction failure/,
           });
           t.true(injected);
-          if (!failedNumber) throw Error('Missing failed formula number');
-          if (stage === 'guest' || !afterWrite) {
-            await t.throwsAsync(powers.persistence.readFormula(failedNumber), {
-              message: /No formula exists for number/,
-            });
-          } else {
-            // This write rejected before returning an ID to the builder. Its
-            // orphan is outside acquired-pin rollback, not proof of full cleanup.
-            t.is(
-              (await powers.persistence.readFormula(failedNumber)).formula.type,
-              'mail-hub',
-            );
+          if (stage === 'guest') {
+            t.true(workers.has(failedGuestWorker));
+            t.true(stoppedWorkers.has(failedGuestWorker));
           }
-          t.true(acquired.length >= 2);
+          for (const id of controlWorkers) t.false(stoppedWorkers.has(id));
+          if (!failedNumber) throw Error('Missing failed formula number');
+          await t.throwsAsync(powers.persistence.readFormula(failedNumber), {
+            message: /No formula exists for number/,
+          });
+          const expectedAcquired = {
+            handle: 0,
+            'mailbox-store': 1,
+            'mail-hub': 2,
+            'pet-store': 3,
+            worker: 4,
+            guest: 9,
+          };
+          t.is(acquired.length, expectedAcquired[stage]);
           // No public name may refer to a guest whose formula write failed,
           // including a write whose acknowledgement was lost.
           t.is(await E(host).identify('failed-guest'), undefined);

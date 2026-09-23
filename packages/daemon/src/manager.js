@@ -5699,46 +5699,35 @@ const makeDaemonCore = async (
         guestId,
       );
 
-      const handleId = pin(
-        await formulateNumberedHandle(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          guestId,
-          agentNodeNumber,
-        ),
+      // Retain each exact identity before persistence can succeed and lose its
+      // acknowledgement. Rollback can then collect even an unregistered formula.
+      const reserveNumber = async () => {
+        const number = /** @type {FormulaNumber} */ (await randomHex256());
+        pin(formatId({ number, node: agentNodeNumber }));
+        return number;
+      };
+      const handleId = await formulateNumberedHandle(
+        await reserveNumber(),
+        guestId,
+        agentNodeNumber,
       );
-      const mailboxStoreId = pin(
-        (
-          await formulateNumberedMailboxStore(
-            /** @type {FormulaNumber} */ (await randomHex256()),
-            agentNodeNumber,
-          )
-        ).id,
+      const { id: mailboxStoreId } = await formulateNumberedMailboxStore(
+        await reserveNumber(),
+        agentNodeNumber,
       );
-      const mailHubId = pin(
-        (
-          await formulateNumberedMailHub(
-            /** @type {FormulaNumber} */ (await randomHex256()),
-            mailboxStoreId,
-            agentNodeNumber,
-          )
-        ).id,
+      const { id: mailHubId } = await formulateNumberedMailHub(
+        await reserveNumber(),
+        mailboxStoreId,
+        agentNodeNumber,
       );
 
-      const storeId = pin(
-        (
-          await formulateNumberedPetStore(
-            /** @type {FormulaNumber} */ (await randomHex256()),
-            agentNodeNumber,
-          )
-        ).id,
+      const { id: storeId } = await formulateNumberedPetStore(
+        await reserveNumber(),
+        agentNodeNumber,
       );
-      const workerId = pin(
-        (
-          await formulateNumberedWorker(
-            /** @type {FormulaNumber} */ (await randomHex256()),
-            { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
-          )
-        ).id,
+      const { id: workerId } = await formulateNumberedWorker(
+        await reserveNumber(),
+        { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
       );
       // Each guest gets its own (initially empty) networks directory that
       // controls which connection hints appear in locators it produces.
