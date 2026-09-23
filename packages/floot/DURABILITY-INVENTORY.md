@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 429 application entries and 73 host entries still need explicit ledger
+The other 424 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -267,6 +267,24 @@ reference edges and exact-provider cleanup, not native process-loss recovery.
 | `e16d21b07` | Historical static session-powers module deleted by `495486723` with legacy Claude client/form topology | File/export absent and deletion diff inspected. No retained module or new runtime owner to certify; stored historical formulas still require explicit operator retirement, not inferred graph absence |
 | `9df03e624` | Daemon owns passive record implementation; sandbox re-exports shared in-memory cleanup registry | Record tests cover partial publication and failed cleanup; registry tests cover local serialization, stale release and shutdown. Durable directory edges are distinct from ephemeral cleanup callbacks. Later staged revision logic is not attributed to this original move |
 | `e41697f63` | Directory formulation transfers one pin under graph lock; publication releases it in awaited finally, and host/guest construction adopts rather than duplicates it | Two directory regressions exercise concurrent publication and failed-publication collection. Source confirms current transfer contract; no fresh comprehensive host/guest bootstrap failure or crash proof |
+
+### Session forwarding, native paths and endpoint cleanup
+
+Five subsequent changes were traced to current source or explicit replacement.
+Fresh daemon session-owner/session-protocol/native-session-owner, sandbox
+native-factory/factory, hosted-agent session-state-storage/session-storage,
+exo-stream endpoint-close and 9p-server mount-caplet suites all exit successfully.
+The storage run reports 19 tests and the mounter run 34 tests.
+These runs use local/injected authority and CapTP loopback; no new live native or
+real-daemon restart result is claimed for this slice.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `6b1f06680` | Daemon session-owner uses passive records and fenced forwarding facets; failed cleanup retains exact identities before reference release | Owner/protocol tests cover failed stop/removal, reconstruction objects, delayed capability resolution and capability-free events. Native construction/native-closed acknowledgement are later strengthening; durable records alone do not establish crash recovery |
+| `0cc29f1fd` | Host-only makeResolved accepts explicit paths and shares factory admission/cleanup; mounts are static and no daemon scratch is implicitly acquired | Native-factory tests cover cancellation and cleanup retention. Later checks reject imported capabilities; arbitrary host paths remain privileged authority, not guest-safe inputs or live isolation evidence |
+| `190d1aa28` | OpenCode state primitive extracted to shared storage by `c91c3b8c6`; obsolete OpenCode provider removed by `d2959f834` | Shared descendants remain used by Claude/Codex. Original fixed-directory ownership was replaced by inode-bound unique allocation in `baecab949`; current fault tests cannot be credited to the old format. Native stop still requires independent proof |
+| `a2cb55d81` | Mounter construction preserves cancellation promise inside a record instead of assimilating it; cancellation initiates registry shutdown | Tests cover local/presence/promised contexts, later cancellation and held mount admission. Awaited host close proves cleanup; formula cancellation or worker death alone does not. Real privileged mount/umount behavior is not exercised |
+| `4c498b1bc` | Stream endpoint owns source lifecycle separately from stream outcome; explicit close fences admission, drains pulls and retries failed return | Reader/writer/bytes cases and CapTP loopback exercise failure vs cleanup, repeated close and done:false refusal. Later intrinsic promise adoption protects retained pulls. Hung source operations still require source-specific interruption; no persisted endpoint or restart recovery is introduced |
 
 ### Post-snapshot changes
 

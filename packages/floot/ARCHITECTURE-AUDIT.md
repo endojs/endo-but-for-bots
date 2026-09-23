@@ -86,7 +86,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 35 application changes, plus the first 20 host
+not. The newest 15 and earliest 40 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -123,6 +123,10 @@ Fresh OpenCode suites pass 74 tests and focused daemon suites pass 34 tests.
 The real-daemon passive-record test also passes across graceful restart after a
 short socket fixture name is supplied; it verifies retained reference edges and
 nonactivation, not native process-loss recovery or cross-owner exclusion.
+Five following session-forwarding/native-path/state-storage/mounter/stream changes
+are mapped, including superseded storage formats and removed OpenCode entrypoints.
+All focused owner, factory, storage, endpoint and mounter suites pass locally;
+in-process reconstruction and CapTP loopback are not daemon-loss recovery evidence.
 
 Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
 the four-formula legacy helper. Host cancellation calls `provideController`, so
