@@ -29,6 +29,7 @@ import {
   splitAtLastCompaction,
 } from '@endo/hosted-agent/transcript-records.js';
 
+import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
 import {
   UNKNOWN_TOOL_OUTCOME,
   reconcileTurnEvidence,
@@ -96,7 +97,13 @@ export const projectTranscript = path => {
     }
     if (role === 'compaction') {
       records.push(
-        assertTranscriptRecord({ kind: 'compaction', summary: content ?? '' }),
+        assertCompactionCheckpoint({
+          kind: 'compaction',
+          summary: content ?? '',
+          ...(Object.hasOwn(message, 'retainedTail')
+            ? { retainedTail: message.retainedTail }
+            : {}),
+        }),
       );
       return;
     }

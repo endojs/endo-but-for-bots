@@ -708,8 +708,17 @@ the context snapshot without replacing full historical tool evidence.
 Shared conformance covers the three hosted adapters; direct-provider replay
 has a separate exact-message regression.
 
+Tree/event propagation now carries this field through successful turns and
+failed-stream partial segments, without expanding it into displayed history,
+tool activity or execution accounting (local, not deployed).
+The complete encoded checkpoint counts against the retained-turn memory bound.
+A reconstruction test restores the exact pruned context into a direct provider.
+Admission currently requires a self-contained tail with settled tool pairs;
+incomplete calls or orphan results are refused, not silently dropped.
+The canonical format remains more general, but supporting results arriving
+after a checkpoint requires the ordered-journal reconciliation below.
 This is representation/replay only: there is no new native producer or journal
-writer, and the current tree-message projection does not yet carry this field.
+writer, and stream interruption before tree publication is still not covered.
 No formula is created and no existing stored record is rewritten.
 Do not enable native capture until the following ordered work is complete:
 

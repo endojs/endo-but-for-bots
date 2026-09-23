@@ -92,7 +92,19 @@ test('recorded compaction survives reconstruction into direct-provider context',
     async send() {
       const channel = makeBufferedReader();
       channel.push({ type: 'text-delta', text: 'superseded answer' });
-      channel.push({ type: 'compaction', summary: 'retained summary' });
+      channel.push({
+        type: 'compaction',
+        summary: 'retained summary',
+        retainedTail: [
+          { kind: 'message', role: 'user', content: 'tail request' },
+          { kind: 'tool-call', id: 'old-call', name: 'read', args: '{}' },
+          {
+            kind: 'tool-result',
+            id: 'old-call',
+            content: '[Old tool result content cleared]',
+          },
+        ],
+      });
       channel.push({ type: 'text-delta', text: 'after boundary' });
       channel.push({ type: 'end' });
       return channel.reader;
@@ -108,6 +120,11 @@ test('recorded compaction survives reconstruction into direct-provider context',
   await agent.converse('superseded request', makeReplyChannel().writer);
   const transcript = await agent.getTranscript();
   t.true(transcript.some(record => record.kind === 'compaction'));
+  t.false(
+    (await agent.getHistory()).some(row => row.content === 'tail request'),
+  );
+  t.deepEqual((await agent.getTurns())[0].tools, []);
+  t.deepEqual((await agent.getTurns())[0].activity, []);
   await agent.shutdown();
   const contexts = [];
   const provider = harden({
@@ -128,6 +145,23 @@ test('recorded compaction survives reconstruction into direct-provider context',
   const replay = contexts[0].filter(message => message.role !== 'system');
   t.deepEqual(replay, [
     { role: 'assistant', content: 'retained summary' },
+    { role: 'user', content: 'tail request' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'floot-history-2',
+          type: 'function',
+          function: { name: 'read', arguments: '{}' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'floot-history-2',
+      content: '[Old tool result content cleared]',
+    },
     { role: 'assistant', content: 'after boundary' },
     { role: 'user', content: 'continue now' },
   ]);

@@ -87,7 +87,13 @@ export const hostedTurnMessages = ({
         // The boundary the backend drew, kept in place. `projectTranscript`
         // carries it into the record stream, where its position is what
         // tells a restored session which span is still live context.
-        messages.push({ role: 'compaction', content: segment.summary || '' });
+        messages.push({
+          role: 'compaction',
+          content: segment.summary || '',
+          ...(segment.retainedTail === undefined
+            ? {}
+            : { retainedTail: segment.retainedTail }),
+        });
       } else {
         messages.push(...toolRoundMessages(segment.calls));
       }

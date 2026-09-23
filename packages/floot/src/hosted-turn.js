@@ -8,6 +8,11 @@ import { makeError } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { addUsage } from '@endo/hosted-agent/token-usage.js';
+import { encodeTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
+
+import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
+
+/** @import { TranscriptContextRecord } from '@endo/hosted-agent/transcript-records.js' */
 
 // Stands in for a result the backend never reported. Persisted as the tool
 // message's content, so the transcript says what happened instead of carrying
@@ -40,7 +45,7 @@ harden(UNSETTLED_TOOL_RESULT);
  * @typedef {{ type: 'text', text: string }
  *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
  *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }
- *   | { type: 'compaction', summary: string }} HostedTurnSegment
+ *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} HostedTurnSegment
  */
 
 /**
@@ -105,7 +110,13 @@ const freezeSegment = segment => {
   if (segment.type === 'text')
     return harden({ type: 'text', text: segment.text });
   if (segment.type === 'compaction')
-    return harden({ type: 'compaction', summary: segment.summary });
+    return harden({
+      type: 'compaction',
+      summary: segment.summary,
+      ...(segment.retainedTail === undefined
+        ? {}
+        : { retainedTail: segment.retainedTail }),
+    });
   return harden({
     type: 'tools',
     calls: segment.calls.map(call => harden({ ...call })),
@@ -426,10 +437,22 @@ export const runHostedTurn = async ({
           // summary. Recorded as a segment so it keeps its place in the turn:
           // the boundary is a position, not a fact about the turn as a whole.
           flushText();
-          retain(`${event.summary || ''}`);
+          const compaction = assertCompactionCheckpoint({
+            kind: 'compaction',
+            summary: event.summary,
+            ...(Object.hasOwn(event, 'retainedTail')
+              ? { retainedTail: event.retainedTail }
+              : {}),
+          });
+          // Context snapshots count toward the same retained-turn bound as
+          // text and tool evidence, including their structured representation.
+          retain(encodeTranscriptRecord(compaction));
           segments.push({
             type: 'compaction',
-            summary: `${event.summary || ''}`,
+            summary: compaction.summary,
+            ...(compaction.retainedTail === undefined
+              ? {}
+              : { retainedTail: compaction.retainedTail }),
           });
           writer.setPhase('summarizing the conversation so far');
           break;

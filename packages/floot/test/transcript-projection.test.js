@@ -391,6 +391,23 @@ test("a second result for one call, and a result under an earlier turn's id, are
   );
 });
 
+test('projection refuses an incomplete checkpoint before dropping its later result', t => {
+  t.throws(
+    () =>
+      projectTranscript([
+        {
+          role: 'compaction',
+          content: 'summary',
+          retainedTail: [
+            { kind: 'tool-call', id: 'c', name: 'read', args: '{}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c', content: 'known result' },
+      ]),
+    { message: /settled tool calls/ },
+  );
+});
+
 test('a compaction in the tree becomes the context boundary', t => {
   const records = projectTranscript([
     { role: 'user', content: 'one' },
