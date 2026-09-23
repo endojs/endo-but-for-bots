@@ -610,7 +610,10 @@ path records the error. A reconstruction regression preserves that failure and
 its history without another request. This uses an in-memory persistent-powers
 fixture, not process-loss proof. Reported usage on rejected replies is currently
 lost, as on other provider validation errors; exact failed-response accounting
-remains a follow-up. The fix is not yet deployed or live-verified.
+remains a follow-up. The fix is deployed as generation 167; one fresh live Fae
+seed/restart/recall case passed on the free route. The original failed case
+remains recorded. This is not proof that every free-route model answers, nor
+live evidence of the new negative-response path (covered by local tests).
 
 ## FA-03 — Retire the live Claude form topology
 
