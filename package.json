@@ -112,6 +112,6 @@
   },
   "resolutions": {
     "@endo/eslint-plugin": "workspace:^",
-    "ava": "8.0.1"
+    "ava": "patch:ava@npm%3A8.0.1#~/.yarn/patches/ava-npm-8.0.1-b8bcbeb736.patch"
   }
 }
