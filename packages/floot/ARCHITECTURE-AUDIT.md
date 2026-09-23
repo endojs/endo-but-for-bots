@@ -3058,9 +3058,25 @@ audit subtree renamed to `retired-codex-subscription-state-20260922` with all
 root-only archive. The final inventory differs from the pre-run one only by
 those names; Secrets, pins, the four workspace archives and the operator's live
 session are unchanged, and the discovery gate passed afterwards.
-The chat's recovery controller still carries a `legacy-import` filter
-(`packages/chat/floot-recovery.js`) for synthetic turns the runtime no longer
-produces; it is inert and listed for the next code slice rather than removed here.
+Final migration UI removal (2026-09-24, local): the chat recovery controller no
+longer computes a `blocked` flag for synthetic `legacy-import` turns, which the
+runtime no longer produces.
+Both composition guards and the send handler drop that obsolete condition;
+an active resolution still blocks sending, while ordinary unknown outcomes
+remain visible and available for explicit verification.
+The README no longer instructs users to import and acknowledge old guest journals.
+The journal's rejection test for the invalid synthetic turn ID remains useful
+validation coverage, not a compatibility path.
+No durable record, formula, resolution policy or automatic replay behavior changes.
+All 935 chat tests pass (ten skipped), as do all 52 Floot-space tests.
+The UI regression holds a resolution reply, checks disabled composition and
+send-handler fencing, then verifies sending resumes after acknowledgement.
+Changed-source lint and formatting pass; documentation has zero errors
+(180 warnings). Adversarial review approved the source and regression.
+Chat typechecking remains failing with 14 diagnostics in unchanged fixture
+logic: optional fake-daemon handles and unknown/non-passable fake event values.
+These are a separate remaining validation repair, not a passing type gate.
+Not deployed.
 
 ## FA-12 — Retire compatibility-only entrypoints
 

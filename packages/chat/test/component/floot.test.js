@@ -630,6 +630,7 @@ test.serial(
   'journal recovery renders evidence safely and keeps unavailable sessions visible',
   async t => {
     t.timeout(5000);
+    const resolution = makePromiseKit();
     const parent = testDocument.createElement('div');
     testDocument.body.appendChild(parent);
     const calls = [];
@@ -677,6 +678,7 @@ test.serial(
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
       resolveTurn: (...args) => {
         calls.push(args);
+        return resolution.promise;
       },
     });
     const factory = farFactory('JournalFactory', {
@@ -704,6 +706,7 @@ test.serial(
     });
     const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
     t.teardown(() => {
+      resolution.resolve(undefined);
       cleanup();
       parent.remove();
     });
@@ -785,6 +788,28 @@ test.serial(
     );
     await waitFor(() => calls.length === 1);
     t.deepEqual(calls[0], ['1', note.value]);
+    await waitFor(() => textareaIn(parent, '.floot-input').disabled);
+    const resolvingCompose = textareaIn(parent, '.floot-input');
+    resolvingCompose.value = 'must wait for acknowledgement';
+    resolvingCompose.dispatchEvent(
+      new testWindow.Event('input', { bubbles: true }),
+    );
+    resolvingCompose.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await tick();
+    t.is(starts, 1, 'pending resolution fences sending as well as the input');
+    resolution.resolve(undefined);
+    await waitFor(() => !textareaIn(parent, '.floot-input').disabled);
+    const resumedCompose = textareaIn(parent, '.floot-input');
+    resumedCompose.value = 'ordinary work after acknowledgement';
+    resumedCompose.dispatchEvent(
+      new testWindow.Event('input', { bubbles: true }),
+    );
+    resumedCompose.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await waitFor(() => starts === 2);
     parent
       .querySelector('.floot-session-item')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
@@ -2635,7 +2660,9 @@ const openPicker = async (t, answers) => {
   };
   const change = async (label, value) => {
     select(label).value = value;
-    select(label).dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    select(label).dispatchEvent(
+      new testWindow.Event('change', { bubbles: true }),
+    );
     await tick();
   };
   const options = () => [...select('Model').options].map(o => o.value);
@@ -2832,9 +2859,9 @@ test.serial(
       listModelCatalogs: () => harden([]),
     });
     await waitFor(() =>
-      (parent.querySelector('.floot-discovery-note')?.textContent ?? '').includes(
-        'factory listing broke',
-      ),
+      (
+        parent.querySelector('.floot-discovery-note')?.textContent ?? ''
+      ).includes('factory listing broke'),
     );
     t.regex(
       parent.querySelector('.floot-discovery-note')?.textContent ?? '',
@@ -2852,8 +2879,9 @@ test.serial(
   'a subscription change under a search keeps the selection among what the search shows, and the pick sends it',
   async t => {
     t.timeout(5000);
-    const { select, options, change, pick, created, parent } =
-      await openPicker(t, {
+    const { select, options, change, pick, created, parent } = await openPicker(
+      t,
+      {
         listBackends: () =>
           harden([
             {
@@ -2891,7 +2919,8 @@ test.serial(
             },
           ]),
         listModelCatalogs: () => harden([]),
-      });
+      },
+    );
     const search = parent.querySelector('input[aria-label="Search models"]');
     if (!(search instanceof testWindow.HTMLInputElement)) {
       throw Error('Missing search');
@@ -2995,9 +3024,13 @@ test.serial(
         session: { id: 'other', title: 'From elsewhere', createdAt: 1 },
       }),
     );
-    await waitFor(() => parent.querySelectorAll('.floot-session-item').length === 1);
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 1,
+    );
     await waitFor(() =>
-      (parent.querySelector('.floot-status-bar')?.textContent ?? '').trim().startsWith('Ready.'),
+      (parent.querySelector('.floot-status-bar')?.textContent ?? '')
+        .trim()
+        .startsWith('Ready.'),
     );
     t.false(
       (parent.querySelector('.floot-status-bar')?.textContent ?? '').includes(
@@ -3005,8 +3038,9 @@ test.serial(
       ),
     );
     t.true(
-      parent.querySelector('.floot-session-item')?.classList.contains('active') ??
-        false,
+      parent
+        .querySelector('.floot-session-item')
+        ?.classList.contains('active') ?? false,
     );
   },
 );

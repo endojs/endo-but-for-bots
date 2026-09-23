@@ -1586,9 +1586,9 @@ export const flootComponent = (
       );
       return;
     }
-    if (recovery.getState().resolving || recovery.getState().blocked) {
+    if (recovery.getState().resolving) {
       setStatus(
-        'Sending is blocked while a journal resolution is pending or imported legacy evidence needs verification. Inspect the Journal.',
+        'Sending is blocked while a journal resolution is pending. Inspect the Journal.',
       );
       return;
     }
