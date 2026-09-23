@@ -524,33 +524,37 @@ test('the native scope forwards a fixed resolver policy to factory validation', 
   const runtime = f.make();
   const service = await runtime.openNative();
   const scope = await E(service).provideScope('resolver-test');
-  const resolver = harden({
-    role: 'resolver',
-    kind: 'resolver',
-    source: '/private/provider/public-resolv.conf',
-    destination: '/etc/resolv.conf',
-    mode: 'ro',
-  });
-  const policy = harden({
-    profile: 'hosted-agent-v1',
-    imageDigest: `sha256:${'a'.repeat(64)}`,
-    uid: 1000,
-    gid: 1000,
-    brokerSidecar: { container: 'broker-test' },
-    resources: {
-      memoryBytes: 1n,
-      pids: 1,
-      cpuCores: 1,
-      openFiles: 1,
-      coreBytes: 0n,
-      shmBytes: 1n,
-      maxConcurrentOperations: 1,
-      writableBytes: 1n,
-    },
-    mounts: [resolver],
-    bindRoots: [],
-    attestationArgv: ['/bin/sleep', 'infinity'],
-  });
+  const resolver = harden(
+    /** @type {const} */ ({
+      role: 'resolver',
+      kind: 'resolver',
+      source: '/private/provider/public-resolv.conf',
+      destination: '/etc/resolv.conf',
+      mode: 'ro',
+    }),
+  );
+  const policy = harden(
+    /** @type {const} */ ({
+      profile: 'hosted-agent-v1',
+      imageDigest: `sha256:${'a'.repeat(64)}`,
+      uid: 1000,
+      gid: 1000,
+      brokerSidecar: { container: 'broker-test' },
+      resources: {
+        memoryBytes: 1n,
+        pids: 1,
+        cpuCores: 1,
+        openFiles: 1,
+        coreBytes: 0n,
+        shmBytes: 1n,
+        maxConcurrentOperations: 1,
+        writableBytes: 1n,
+      },
+      mounts: [resolver],
+      bindRoots: [],
+      attestationArgv: ['/bin/sleep', 'infinity'],
+    }),
+  );
   // Intentionally invalid at the factory's next check: these extra generated
   // files must not extend the exact policy. Reaching that check demonstrates
   // the real NativeSandboxScope guard admitted the fixed resolver variant.
@@ -559,6 +563,7 @@ test('the native scope forwards a fixed resolver policy to factory validation', 
   });
   await t.throwsAsync(
     E(scope).make(
+      // @ts-expect-error Deliberately violate the resolver's read-only contract.
       harden({
         ...opts,
         policy: { ...policy, mounts: [{ ...resolver, mode: 'rw' }] },

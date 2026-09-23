@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 394 application entries and 73 host entries still need explicit ledger
+The other 384 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -431,6 +431,36 @@ Claude services or an authoritative durable OpenCode native conversation store.
 | `b4767d5aa` | Hosted provision requests flow through the daemon session owner, with passive plan and storage roles distinct from the native controller | Later shared provisioner and transcript restoration replace original adapter-specific construction and native-store continuity. Current plan/dependency checks are not proof that lost native resources were released |
 | `d1ede212e` | Claude passive plan, native controller, state-provider and storage roles remain; shared supervisor/envelope now own common lifecycle sequencing | 25 tests cover current parser, controller and storage behavior. Native state directories remain but restoration uses the stack's canonical transcript; original hosted native-profile field was removed. Native-effect injection is not daemon-loss recovery or live CLI acceptance |
 | `db53b1040` | Daemon owner retains Claude plan and exact service identities; broker holds credential authority and grants session-scoped inference without handing credentials to the controller | 40 tests cover setup and broker routing. Inline provisioning moved to shared code, profiles were removed, catalog discovery replaced operator model lists, and pools replaced single-account assumptions. Incarnation-local grant/listener cleanup is not stop acknowledgement after process loss; #1323 remains open |
+
+### Type surfaces, fixtures and captured command environments
+
+Ten further historical changes are mapped below; mapping includes failures and
+superseded code, not just passing checks. The command-environment regressions now
+also assert distinct, extensible objects for every invocation, not merely equal
+values. Fresh listener and Podman-policy suites pass 22 and 71 tests respectively.
+These use controlled native effects, not live Podman or daemon-loss recovery.
+The sandbox runtime fixture now preserves literal types and marks the intentional
+read-only-contract violation; both runtime assertions are unchanged. Its 20 tests
+and sandbox/hosted-agent type checks pass. Changed-test lint has no errors and
+seven existing warnings. The initial combined listener/policy run exited nonzero;
+the listener rerun passed all 22 cases and the policy run reported 71 passes.
+No root cause is claimed for that initial nonzero result.
+The attempted generator repair remains uncommitted: independent semantic review
+found missing imported-symbol declarations and illegal recursive aliases that
+parse-only checks missed. Semantic compilation is required before accepting it.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `95bc54880` | Design-index documentation only | Retains explicit outstanding bucket recount; no execution or durability proof |
+| `32ec2be40` | Startup-gate test deadlines only | 13 tests pass with real local shells; observed-output cases use 2 seconds and intentional hangs retain 50 ms. Not live Podman |
+| `6d297f140` | Test teardown recognizes explicitly retained uncertain native cleanup | 43 controlled cleanup tests pass; Podman suite reports 39 passes but native checks return early without Podman. No live acceptance claim |
+| `91287398c` | Closeable stream type intersections and generated tool declarations; no runtime owner | Exo-stream types pass, but current extraction suites have 10 failures at generic CopyArray inheritance. This is an open generator compatibility defect, not successful declaration verification |
+| `c4bcf2275` | Cached-filesystem snapshot scheduling update | 7 tests pass; existing cache/pipelining assertions remain. No new durable state |
+| `366f2c6e9` | In-slice bridge lint corrections retained amid later changes | 27 bridge tests pass; lint has zero errors and seven warnings. These checks do not establish native process-loss recovery |
+| `f006c749e` | Old client-module transport type annotations | Entire module deleted by `433a21757`; no surviving transport-helper references. Do not credit the obsolete types to the current controller |
+| `dd705e037` | Each native command receives a fresh mutable copy of captured operator environment | 93 focused tests pass; strengthened identity/extensibility assertions cover both listener and policy paths. No additional persisted state or guest authority |
+| `8e260a48e` | Fake Nix applier polling allowance | 54 deploy-performer tests pass with mocked in-process applier; not actual NixOS activation |
+| `30af6a089` | Lint excludes standalone manual OCI spike | Syntax check passes; not executed. Spike still injects a raw credential into Podman environment and has fixed settings with a paid model default; retire or update before any use as current brokered/free-route acceptance |
 
 ### Post-snapshot changes
 

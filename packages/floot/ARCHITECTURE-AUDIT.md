@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 85 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 95 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -97,6 +97,27 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Type/fixture/environment mapping (2026-09-24): ten further changes are mapped,
+bringing coverage to 95 unique application entries (newest 15 plus earliest 80).
+Fresh command-environment tests cover object identity and extensibility as well
+as captured values: 22 listener and 71 policy tests pass with controlled effects.
+The current code-mode declaration generator fails ten focused tests because it
+tries to flatten generic CopyArray wrapper inheritance; this remains open until
+a bounded fix and regenerated declarations are verified.
+Independent review of the first attempted fix found missing imported-symbol
+declarations and illegal recursive aliases in the generated surfaces; parsing
+alone misses these defects. Require a semantic TypeScript compilation check
+before accepting regenerated tool declarations.
+The environment test pass also exposed a sandbox resolver fixture type error:
+preserving literal types and explicitly marking its deliberately invalid writable
+resolver input restores type checking without changing either runtime assertion.
+All 20 sandbox runtime tests pass; sandbox and hosted-agent type checks pass.
+The manual OpenCode OCI spike is another legacy removal/update candidate: it
+passes a raw credential through Podman environment and defaults to a paid model.
+It was not executed and must not serve as current brokered/free-route acceptance.
+The ledger records separate fixture, bridge and fake-applier evidence, including
+availability-skipped native tests rather than mislabeling them live acceptance.
+
 Session-service/Claude mapping (2026-09-24): two skipped OpenCode entries are now
 covered, correcting the prior consecutive-coverage claim without changing its
 previous unique count. Two further Claude changes are mapped as well.
@@ -129,7 +150,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 70 application changes, plus the first 20 host
+not. The newest 15 and earliest 80 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
