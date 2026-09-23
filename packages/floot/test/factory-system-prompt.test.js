@@ -18,9 +18,9 @@ const sandboxed = harden({
  * spec of every session it is asked to create: `spec.systemPrompt` is the
  * prompt a hosted model actually runs under.
  *
- * @param {{ promptEnvironment?: object }} [options]
+ * @param {{ promptEnvironment?: object, fetch?: typeof globalThis.fetch }} [options]
  */
-const makeWorld = ({ promptEnvironment } = {}) => {
+const makeWorld = ({ promptEnvironment, fetch } = {}) => {
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const inboxes = [];
   /** @type {Array<Record<string, any>>} */
@@ -122,7 +122,7 @@ const makeWorld = ({ promptEnvironment } = {}) => {
       hostStore.delete(name);
     },
   });
-  const factory = make(host);
+  const factory = make(host, undefined, { fetch });
   /** The prompt the backend was given for a session, once a turn has run. */
   const promptOf = async session => {
     const { id } = await E(session).getInfo();
@@ -371,6 +371,53 @@ const registryOf = hostStore => {
   return /** @type {any} */ (hostStore.get(names.at(-1))).sessions;
 };
 
+test('direct provider creation persists explicit identity for a discovered pin including a colon route', async t => {
+  const world = makeWorld({
+    fetch: async url => {
+      t.is(`${url}`, 'https://openrouter.ai/api/v1/models/user');
+      return Response.json({
+        data: [
+          {
+            id: 'vendor/model:free',
+            name: 'Model',
+            architecture: {
+              input_modalities: ['text'],
+              output_modalities: ['text'],
+            },
+            supported_parameters: ['tools'],
+          },
+        ],
+      });
+    },
+  });
+  t.teardown(world.close);
+  world.hostStore.set(
+    'llm-provider',
+    harden({
+      provider: 'openrouter',
+      model: 'openrouter/free',
+      authToken: 'test-only-key',
+    }),
+  );
+  const session = await E(world.factory).createSession({
+    backendId: 'provider',
+    modelId: 'vendor/model:free',
+    title: 'Pinned direct',
+  });
+  const { id } = await E(session).getInfo();
+  const entry = registryOf(world.hostStore).find(
+    candidate => candidate.id === id,
+  );
+  t.like(entry, { backendId: 'provider', modelId: 'vendor/model:free' });
+  t.false(Object.hasOwn(entry, 'model'));
+  t.is(world.specs.length, 0);
+  t.like(await E(session).getInfo(), {
+    backendId: 'provider',
+    modelId: 'vendor/model:free',
+    effectiveModelId: 'vendor/model:free',
+  });
+});
+
 test('a provider session is composed for the provider, and its context is recorded', async t => {
   t.timeout(10_000);
   const world = makeWorld({ promptEnvironment: sandboxed });
@@ -384,7 +431,17 @@ test('a provider session is composed for the provider, and its context is record
     session => session.title === 'Provider',
   );
   t.truthy(entry);
-  t.is(entry.backendId, undefined);
+  t.is(entry.backendId, 'provider');
+  t.is(entry.modelId, '');
+  t.false(Object.hasOwn(entry, 'model'));
+  const session = await E(world.factory).getSession(entry.id);
+  t.deepEqual(await E(session).getExecutionState(), {
+    state: 'running',
+    supported: false,
+  });
+  await t.throwsAsync(E(session).getBindings(), { message: /hosted/ });
+  await t.throwsAsync(E(session).rebind([]), { message: /hosted/ });
+  t.is(world.specs.length, 0);
   // No sandbox, so none of what only a sandbox has.
   t.false(entry.systemPrompt.includes('Where you run'));
   t.false(entry.systemPrompt.includes('sandbox'));

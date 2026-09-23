@@ -81,7 +81,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
   });
   /** @type {Map<string, unknown>} */
   const hostStore = new Map();
-  for (const sessionId of ['one', 'legacy']) {
+  for (const sessionId of ['one']) {
     hostStore.set(
       `floot-private-turn-${sessionId.length}-${sessionId}-schema`,
       harden({ version: 1, sessionId }),
@@ -102,19 +102,10 @@ test('factory facets retain disconnected turns, commit history, and provision de
           backendId: 'test',
           modelId: 'm',
         },
-        {
-          id: 'legacy',
-          title: 'Legacy Claude',
-          createdAt: 0,
-          presetId: 'general',
-          lifecycle: 'ready',
-          model: 'claude-cli',
-        },
       ],
     }),
   );
   const lookups = [];
-  hostStore.set('session-agent-legacy', guest);
   hostStore.set('codex-backend', backend);
   const host = Far('TestHost', {
     list: () => harden([...hostStore.keys()]),
@@ -143,7 +134,6 @@ test('factory facets retain disconnected turns, commit history, and provision de
     backendEvents.push(harden({ type: 'end' }));
     inbox.close();
     await E(factory).deleteSession('one');
-    await E(factory).deleteSession('legacy');
   });
   const session = await E(factory).getSession('one');
   const turn = await E(session).startTurn('hello');
@@ -200,10 +190,6 @@ test('factory facets retain disconnected turns, commit history, and provision de
   releaseAck();
   await E(turn).whenFinished();
   t.is(await E(session).getCurrentTurn(), null);
-  const legacy = await E(factory).getSession('legacy');
-  const refused = await E(legacy).startTurn('must not run legacy credentials');
-  await E(refused).whenFinished();
-  t.regex((await E(refused).getStatus()).error, /attested hosted backend/);
   t.false(lookups.some(name => name.startsWith('claude-client')));
   t.false(
     (await E(factory).listModels()).some(model => model.id === 'claude-cli'),

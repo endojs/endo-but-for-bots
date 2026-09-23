@@ -898,7 +898,27 @@ do not acquire hosted stop/mount/rebind semantics accidentally.
 Then replace optional-field inference in streaming configuration with explicit
 direct, hosted and records-only variants. Keep provider lookup per turn so
 credential refresh reaches existing direct sessions; do not create another
-sandbox lifecycle or credential owner. This is remaining work, not a landed fix.
+sandbox lifecycle or credential owner.
+
+FA-07 durable identity slice (2026-09-24, locally verified, not deployed): the factory
+now creates every registry entry with explicit `backendId` and `modelId`.
+Fae uses `backendId: 'provider'`; its exact empty model ID follows the configured
+default, while a nonempty ID remains pinned. Hosted entries require a model.
+Registry loading refuses absent identity and the legacy `model` property before
+session resource acquisition; retire incompatible sessions with the old release.
+Hosted stop, network, bindings, mounts and cleanup now use explicit classification,
+not backend-ID truthiness. Delegates inherit the parent's explicit identity.
+The existing append-only registry remains the durability authority: no new formula
+or credential owner is added, and provider credentials are still resolved per turn.
+All 640 Floot tests and five real-daemon journal restart/retirement tests pass.
+Focused tests cover default/pinned identity, restoration, colon-containing provider
+routes, hosted-only operation refusal, and legacy rejection without migration.
+Adversarial review approved after tightening whitespace validation and removing
+the delegation fallback. A dedicated direct-provider delegation regression remains
+useful follow-up coverage; hosted delegation and direct creation are covered.
+Scoped lint has no errors; documentation generation has no errors (179 warnings).
+Streaming configuration discrimination remains the next slice, not implemented by
+this change. Tokyo still runs the previous release.
 
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields

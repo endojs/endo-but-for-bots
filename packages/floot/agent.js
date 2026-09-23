@@ -53,6 +53,10 @@ import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
+import {
+  assertSessionIdentity,
+  isHostedSession,
+} from './src/session-identity.js';
 import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
@@ -383,8 +387,6 @@ harden(refreshPresetEntry);
 // (`modelCatalog`). Nothing here names a model. A session that does not pin
 // one follows the factory's configured default model (the `model` in the
 // `llm-provider` config, or the provider's own fallback).
-// Recognize persisted legacy sessions so revival refuses them explicitly.
-const CLAUDE_CLI_MODEL_ID = 'claude-cli';
 const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
 
 /**
@@ -2896,7 +2898,7 @@ export const make = async (
    * The model id a session's usage is priced against.
    *
    * An unpinned session — the default — records no model and follows the
-   * factory's configured one, so asking `entry.model` alone yields `''` and
+   * factory's configured one, so asking `entry.modelId` alone yields `''` and
    * nothing can be priced. Both the `accountStatus` tool and the session
    * facet's `getAccount` must answer the same way, or a user gets a cost from
    * the model and a blank from the UI panel beside it.
@@ -2905,10 +2907,10 @@ export const make = async (
    * @returns {Promise<string>}
    */
   const sessionModelId = async entry => {
-    if (entry?.backendId) {
-      return hostedModelId(entry.backendId, entry.modelId || '');
+    if (isHostedSession(entry)) {
+      return hostedModelId(entry.backendId, entry.modelId);
     }
-    if (entry?.model) return `${entry.model}`;
+    if (entry?.modelId) return entry.modelId;
     try {
       return `${(await getProviderConfig()).model || ''}`;
     } catch {
@@ -3222,7 +3224,7 @@ export const make = async (
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3251,6 +3253,7 @@ export const make = async (
           ) {
             throw Error('Floot lifecycle registry journal is corrupt');
           }
+          for (const entry of stored.sessions) assertSessionIdentity(entry);
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
         } else if (
@@ -3482,7 +3485,6 @@ export const make = async (
       title,
       createdAt,
       presetId,
-      model,
       backendId,
       modelId,
       reasoningEffort,
@@ -3495,12 +3497,15 @@ export const make = async (
       title,
       createdAt,
       presetId: presetId || DEFAULT_PRESET_ID,
-      model: backendId ? hostedModelId(backendId, modelId || '') : model || '',
-      backendId: backendId || 'provider',
-      modelId: modelId || model || '',
+      model: isHostedSession(entry)
+        ? hostedModelId(backendId, modelId)
+        : modelId,
+      backendId,
+      modelId,
       // What the session runs, pinned or not: an unpinned provider session
       // resolves to the configured model at each turn, so this is as of now.
-      effectiveModelId: modelId || model || (backendId ? '' : providerModel),
+      effectiveModelId:
+        modelId || (isHostedSession(entry) ? '' : providerModel),
       reasoningEffort: reasoningEffort || '',
       // Which of its backend's subscriptions the session uses: `auto`, or the
       // id it was pinned to when it was created.
@@ -3601,7 +3606,7 @@ export const make = async (
    * disagree.
    *
    * @param {string} id
-   * @param {{ executionState?: string, backendId?: string } | undefined} entry
+   * @param {{ executionState?: string, backendId: string } | undefined} entry
    */
   const projectExecution = (id, entry) => {
     // A resume fences the session while it publishes permission to run, so
@@ -3610,7 +3615,7 @@ export const make = async (
     let state = entry?.executionState || 'running';
     if (resumeTokens.has(id)) state = 'stopped';
     else if (stopFences.has(id)) state = 'stopping';
-    return harden({ state, supported: Boolean(entry?.backendId) });
+    return harden({ state, supported: isHostedSession(entry) });
   };
   const executionState = async id =>
     projectExecution(id, await assertSessionReady(id));
@@ -3630,7 +3635,7 @@ export const make = async (
       });
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
-      if (!entry.backendId) {
+      if (!isHostedSession(entry)) {
         stopFences.delete(id);
         throw Error('This backend has no hosted sandbox to stop');
       }
@@ -3729,7 +3734,7 @@ export const make = async (
           supported: async () => {
             const entry = (await loadRegistry()).find(item => item.id === id);
             if (!entry) throw Error('Unknown Floot session');
-            if (!entry.backendId) return [];
+            if (!isHostedSession(entry)) return [];
             return (
               (await getHostedBackends()).get(entry.backendId)?.descriptor
                 .supportedNetworkPolicies || []
@@ -3956,7 +3961,7 @@ export const make = async (
               throw Error('Session is stopped');
             },
           };
-        } else if (entry?.backendId) {
+        } else if (isHostedSession(entry)) {
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
@@ -4055,14 +4060,12 @@ export const make = async (
               return makeSendOnlyClient(mountClient.run);
             },
           };
-        } else if (entry?.model === CLAUDE_CLI_MODEL_ID) {
-          Fail`Legacy Claude CLI sessions are unavailable: provision an attested hosted backend with brokered credentials and verified tool isolation`;
         } else {
           // A thunk, not a resolved provider: `refreshCredentials()` clears
           // the factory's cache, and a session that had captured its provider
           // would keep using the token that provider was built with — the
           // rotation or revocation would reach only sessions opened after it.
-          agentConfig = { provideProvider: () => getProvider(entry?.model) };
+          agentConfig = { provideProvider: () => getProvider(entry.modelId) };
         }
         // A session may delegate only while its own depth leaves room. The
         // spawner is rebuilt on every revival rather than persisted, so the
@@ -4077,7 +4080,7 @@ export const make = async (
           harden({
             maxToolRounds,
             journalPowers,
-            backendId: entry?.backendId || 'provider',
+            backendId: entry.backendId,
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
             onChange: (kind, detail) => {
@@ -4293,15 +4296,14 @@ export const make = async (
             title: entry?.title || '',
             createdAt: entry?.createdAt || 0,
             presetId: entry?.presetId || DEFAULT_PRESET_ID,
-            model: entry?.backendId
-              ? hostedModelId(entry.backendId, entry.modelId || '')
-              : entry?.model || '',
-            backendId: entry?.backendId || 'provider',
-            modelId: entry?.modelId || entry?.model || '',
+            model: isHostedSession(entry)
+              ? hostedModelId(entry.backendId, entry.modelId)
+              : entry.modelId,
+            backendId: entry.backendId,
+            modelId: entry.modelId,
             effectiveModelId:
-              entry?.modelId ||
-              entry?.model ||
-              (entry?.backendId ? '' : await configuredProviderModel()),
+              entry.modelId ||
+              (isHostedSession(entry) ? '' : await configuredProviderModel()),
             reasoningEffort: entry?.reasoningEffort || '',
             subscription: entry?.subscription || 'auto',
             lifecycle: entry?.lifecycle || 'ready',
@@ -4432,7 +4434,7 @@ export const make = async (
         async getBindings() {
           await assertSessionReady(id);
           const entry = (await loadRegistry()).find(item => item.id === id);
-          if (!entry?.backendId)
+          if (!isHostedSession(entry))
             throw Error('Only a hosted session has bindings to inspect');
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) throw Error('Session backend is unavailable');
@@ -4445,7 +4447,7 @@ export const make = async (
               'Cancel or finish the active turn before rebinding the session',
             );
           const entry = (await loadRegistry()).find(item => item.id === id);
-          if (!entry?.backendId)
+          if (!isHostedSession(entry))
             throw Error('Only a hosted session has bindings to rebind');
           // The names this session's backend declares its reopen may be
           // authorized to change; whether the request may change one is the
@@ -4623,7 +4625,7 @@ export const make = async (
         // A hosted backend's admin/factory termination below is the
         // authoritative barrier for a quarantined native turn. Allow cleanup
         // to reach it; provider-only sessions still fail closed here.
-        await agent.shutdown(Boolean(entry.backendId));
+        await agent.shutdown(isHostedSession(entry));
       } catch (error) {
         // Do not tear down the guest beneath live turn or inbox activity.
         throw new AggregateError(
@@ -4649,7 +4651,7 @@ export const make = async (
         failures.push(error);
       }
     }
-    if (entry.backendId) {
+    if (isHostedSession(entry)) {
       // Termination is a stop: it releases the slice, the mount, and the
       // lease and keeps the workspace and Codex state. Deletion removes those
       // through the factory's idempotent destroy, which first stops any
@@ -4817,9 +4819,9 @@ export const make = async (
             subagentName: `${subagentName}`,
             subagentDepth: Number(subagentDepth),
           };
-    let backendId;
-    let modelId;
     const selectedModel = options.modelId || options.model || '';
+    let backendId = 'provider';
+    let modelId = selectedModel;
     const providerConfig = await getProviderConfig().catch(() => undefined);
     const openRouter = providerConfig?.provider === 'openrouter';
     if (options.backendId && options.backendId !== 'provider') {
@@ -4834,7 +4836,7 @@ export const make = async (
       [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
     }
     if (
-      !backendId &&
+      backendId === 'provider' &&
       openRouter &&
       selectedModel &&
       (typeof selectedModel !== 'string' || !selectedModel.includes('/'))
@@ -4843,7 +4845,7 @@ export const make = async (
     }
     /** @type {import('@endo/hosted-agent').PromptEnvironment} */
     let promptEnvironment = PROVIDER_PROMPT_ENVIRONMENT;
-    if (backendId) {
+    if (backendId !== 'provider') {
       const backend = (await getHostedBackends()).get(backendId);
       if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
       if (
@@ -4932,7 +4934,7 @@ export const make = async (
         );
       }
     }
-    if (!backendId && options.networkPolicy !== undefined) {
+    if (backendId === 'provider' && options.networkPolicy !== undefined) {
       throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
@@ -4950,7 +4952,7 @@ export const make = async (
     const promptContext = normalizePromptContext({
       environment: promptEnvironment,
       spoken: !delegated && options.spoken === true,
-      containerMounts: Boolean(backendId),
+      containerMounts: backendId !== 'provider',
     });
     const sessionPrompt = composeSessionSystemPrompt({
       presetPrompt: composePresetPrompt({
@@ -4982,10 +4984,10 @@ export const make = async (
         : {}),
       lifecycle: 'creating',
       ...delegationFields,
-      ...(backendId
+      backendId,
+      modelId,
+      ...(backendId !== 'provider'
         ? {
-            backendId,
-            modelId,
             ...(options.reasoningEffort
               ? { reasoningEffort: `${options.reasoningEffort}` }
               : {}),
@@ -4993,10 +4995,9 @@ export const make = async (
               ? { subscription: `${options.subscription}` }
               : {}),
           }
-        : selectedModel
-          ? { model: selectedModel }
-          : {}),
+        : {}),
     });
+    assertSessionIdentity(entry);
     // Claim the ID before asynchronous namespace checks. Petstore writes are
     // not compare-and-swap, so random IDs alone cannot serialize collisions.
     if (creatingIds.has(id) || (registry || []).some(item => item.id === id))
@@ -5075,13 +5076,7 @@ export const make = async (
       throw error;
     }
     console.error(
-      `[floot-factory] Created session "${id}" (preset "${preset.id}"${
-        entry.backendId
-          ? `, backend "${entry.backendId}", model "${entry.modelId}"`
-          : entry.model
-            ? `, model "${entry.model}"`
-            : ''
-      })`,
+      `[floot-factory] Created session "${id}" (preset "${preset.id}", backend "${entry.backendId}", model "${entry.modelId}")`,
     );
     return id;
   };
@@ -5197,25 +5192,20 @@ export const make = async (
         const parent = (registry || []).find(
           session => session.id === parentId,
         );
+        if (!parent) throw Error('Parent session no longer exists');
         // A subagent runs on the same backend and model as its parent: it is
         // extra context, not a way to reach a backend this session was not
         // provisioned for.
-        const inheritedModel = parent?.backendId
-          ? {
-              backendId: parent.backendId,
-              modelId: parent.modelId,
-              ...(parent.reasoningEffort
-                ? { reasoningEffort: parent.reasoningEffort }
-                : {}),
-              // And on the same subscription: a session pinned to one must
-              // not have its delegates drain another.
-              ...(parent.subscription
-                ? { subscription: parent.subscription }
-                : {}),
-            }
-          : parent?.model
-            ? { model: parent.model }
-            : {};
+        const inheritedModel = {
+          backendId: parent.backendId,
+          modelId: parent.modelId,
+          ...(parent.reasoningEffort
+            ? { reasoningEffort: parent.reasoningEffort }
+            : {}),
+          // And on the same subscription: a session pinned to one must
+          // not have its delegates drain another.
+          ...(parent.subscription ? { subscription: parent.subscription } : {}),
+        };
         const childId = await provisionSession({
           title: `${parent?.title || 'Session'} / ${name}`,
           presetId: parent?.presetId,

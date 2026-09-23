@@ -11,7 +11,14 @@ const prefix = 'floot-sessions-v1-';
 const journalName = sequence =>
   `${prefix}${String(sequence).padStart(20, '0')}`;
 const entries = harden([
-  { id: 'saved', title: 'Saved', createdAt: 1, executionState: 'stopped' },
+  {
+    id: 'saved',
+    title: 'Saved',
+    createdAt: 1,
+    executionState: 'stopped',
+    backendId: 'provider',
+    modelId: '',
+  },
 ]);
 const snapshot = (sessions = entries, sequence = 0n) =>
   harden({ version: 1, sequence, sessions });
@@ -60,6 +67,90 @@ test('fresh registry is empty without creating a snapshot', async t => {
   const store = new Map();
   t.deepEqual(await E(make(makeHost(store))).listSessions(), []);
   t.deepEqual([...store.keys()], []);
+});
+
+for (const identity of [
+  {},
+  { model: 'claude-cli' },
+  { model: 'vendor/model' },
+  { backendId: 'provider' },
+  { backendId: 'provider', modelId: '', model: 'vendor/model' },
+  { backendId: 'test', modelId: '' },
+  { backendId: ' ', modelId: 'm' },
+  { backendId: 'provider', modelId: ' ' },
+]) {
+  test(`legacy or incomplete persisted identity is refused without resource acquisition: ${JSON.stringify(identity)}`, async t => {
+    const invalid = {
+      id: 'legacy',
+      title: 'Legacy',
+      createdAt: 1,
+      ...identity,
+    };
+    const store = new Map([[journalName(0n), snapshot(harden([invalid]))]]);
+    const before = [...store.entries()];
+    const reads = [];
+    const host = makeHost(store, {
+      beforeLookup: name => reads.push(name),
+      beforeStore: () => t.fail('Unexpected migration'),
+      beforeRemove: () => t.fail('Unexpected retirement'),
+    });
+    await t.throwsAsync(E(make(host)).listSessions(), {
+      message: /explicit backend\/model identity/,
+    });
+    t.deepEqual([...store.entries()], before);
+    t.false(reads.some(name => name.startsWith('session-agent-')));
+  });
+}
+
+test('explicit direct pin and configured default survive registry restoration without hosted semantics', async t => {
+  const store = new Map([
+    [
+      journalName(0n),
+      snapshot(
+        harden([
+          { ...entries[0], id: 'pinned', modelId: 'vendor/pin' },
+          { ...entries[0], id: 'default', modelId: '' },
+        ]),
+      ),
+    ],
+    [
+      'llm-provider',
+      harden({ provider: 'openrouter', model: 'vendor/default' }),
+    ],
+  ]);
+  const factory = make(makeHost(store));
+  const sessions = await E(factory).listSessions();
+  t.like(
+    sessions.find(entry => entry.id === 'pinned'),
+    {
+      backendId: 'provider',
+      modelId: 'vendor/pin',
+      effectiveModelId: 'vendor/pin',
+      model: 'vendor/pin',
+    },
+  );
+  t.like(
+    sessions.find(entry => entry.id === 'default'),
+    {
+      backendId: 'provider',
+      modelId: '',
+      effectiveModelId: 'vendor/default',
+      model: '',
+    },
+  );
+  const session = await E(factory).getSession('pinned');
+  t.deepEqual(await E(session).getExecutionState(), {
+    state: 'stopped',
+    supported: false,
+  });
+  await t.throwsAsync(E(session).emergencyStop(), {
+    message: /no hosted sandbox/,
+  });
+  await E(factory).renameSession('pinned', 'Preserved pin');
+  t.like(
+    store.get(journalName(1n)).sessions.find(entry => entry.id === 'pinned'),
+    { backendId: 'provider', modelId: 'vendor/pin' },
+  );
 });
 
 test('deletion recovery takes precedence over a persisted stopped state', async t => {
