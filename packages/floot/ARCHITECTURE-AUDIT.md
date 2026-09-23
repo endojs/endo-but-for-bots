@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-21 |
-| **Updated** | 2026-09-23 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
@@ -596,6 +596,63 @@ archive left by a failed snapshot write.
 The full Floot suite passes 496 tests; bounded context selection remains open.
 Package ESLint has zero errors; type checking still reports pre-existing test
 errors, with no errors in changed production files.
+
+### Bounded-context storage obstacle and deletion sequence (2026-09-24)
+
+The conversation-tree mirror adds a second unbounded read independently of the
+journal. `conversation-tree/src/endopetstore-backend.js`'s `load()` fetches all
+`ct-` values with `Promise.all` and retains their full messages in a `Map`.
+Even `getNode(id)` invokes that load. Floot's first `getOrCreateLeaf()` calls
+`getRoots()` and scans children, while `findRecordedUsage()` and both transcript
+projections also depend on this backend. The earlier "no lifetime resident
+cache" statement describes only the journal; it does not apply to the full
+streaming agent. Journal suffix selection alone cannot establish bounded memory.
+
+Read-only reproduction at app `0e2fefc44`: create 128 independent test nodes,
+each with 8192 characters, then request only `node-127` from a fresh production
+petstore backend. It performs 128 lookups and reads 1,048,576 content characters.
+A subsequent request for `node-0` performs zero further lookups, consistent with
+the source's retained full-node cache. This is a deterministic access-count
+probe, not a process heap measurement or a live Tokyo load test.
+
+Now that Fae and hosted paths both journal ordered dialogue, prefer retiring
+Floot's tree mirror over adding another durable leaf/index authority. This is
+a proposed sequence, not a claim that the tree is already redundant or safe to
+delete. Independent source review identified these responsibilities that still
+depend on the tree:
+
+| Responsibility | Preservation requirement before deletion |
+|---|---|
+| Incoming mail | Record typed receipt identity and sender metadata before readiness/acknowledgement tools; preserve deduplication across restart. |
+| Thinking and UI ordering | Keep typed presentation records and timing separate from model-visible canonical context; never elevate reasoning into model instructions. |
+| Usage and successful settlement | Persist reported usage and successful finish under one journal authority; do not treat transcript sealing alone as success. |
+| Codex checkpoint acknowledgement | Persist the native checkpoint before acknowledging it, retain it for the next send after a lost acknowledgement. |
+| History and branch membership | Preserve full ordered history/status; the deepest-branch fallback is not permission to silently discard tree-only sessions. |
+
+The bounded implementation sequence is:
+
+1. Add only the missing typed mail/presentation/checkpoint facts to the existing
+   journal contracts, with bounded validation and before/after-write fault tests.
+   Do not add an arbitrary metadata bag, a second owner, or a new credential path.
+2. Make new-format history, usage, context and checkpoint recovery projections
+   read that journal. Successful `finish`, not `transcriptComplete`, becomes the
+   single completion authority; acknowledge the native checkpoint afterward.
+3. Remove Floot's tree creation, writes, leaf/branch discovery and node-ID
+   dependency. Explicitly retire affected disposable sessions with the old
+   release; preserve Secrets, host, workspace access and renewal owners. Any
+   session retained for its history must be exported or explicitly handled,
+   never reopened as an empty conversation. Do not change generic tree users.
+4. Add a journal-owned compaction position/read view and paged active-context
+   selection. Archive publication order is not turn order; unresolved effects
+   and late settlements must remain visible after any selected boundary.
+5. Verify bounded startup and context assembly with large superseded content,
+   exact active tool pairs, cold restart, interrupted publication and archive
+   growth. Keep full-history UI APIs separate from bounded inference reads.
+
+This remains open work. Automatic summarization additionally requires its
+cost/trigger/unknown-window policy; neither a byte cutoff nor a tree-cache
+optimization substitutes for that policy. Native producer recovery stays in
+#1323 and is not part of this storage deletion sequence.
 
 ## FA-02 — Model context must not be built from UI previews
 
@@ -2870,6 +2927,11 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — FA-01/02 bounded-context investigation reproduces eager full-tree
+payload loading independently of journal paging. Record the remaining tree
+semantics and a deletion-before-indexing sequence; no production storage change
+or bounded-memory completion claim.
 
 2026-09-23 — FA-02 real-daemon direct-provider journal verification: failed-turn
 full content/tool evidence and a subsequent sealed turn survive two orderly cold
