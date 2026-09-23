@@ -5,9 +5,81 @@ import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 
 import {
   projectTranscript,
-  recoverTurnTranscript,
+  recoverTurnTranscript as recoverJournalTurnTranscript,
   transcriptToProviderMessages,
 } from '../src/transcript-projection.js';
+import { encodeJournalTranscript } from '../src/journal-transcript.js';
+
+// Build canonical journal fixtures from readable provider-message examples.
+// Production recovery has no alternate conversation-tree input.
+const recoverTurnTranscript = (messages, turn, readContent) => {
+  const records = projectTranscript(messages);
+  let sequence = BigInt(turn.turnId);
+  const transcript = records.map((record, index) => ({
+    kind: record.kind,
+    ordinal: `${index}`,
+    sequence: `${(sequence += 1n)}`,
+    payload: encodeJournalTranscript(record),
+  }));
+  const evidence = entries =>
+    (entries ?? []).map(entry => ({
+      ...entry,
+      sequence: `${(sequence += 1n)}`,
+      ...(entry.settled ? { resultSequence: `${(sequence += 1n)}` } : {}),
+    }));
+  return recoverJournalTurnTranscript(
+    {
+      ...turn,
+      ...(transcript.length ? { transcript, transcriptComplete: true } : {}),
+      activity: evidence(turn.activity),
+      tools: evidence(turn.tools),
+    },
+    readContent,
+  );
+};
+
+test('recovery before first transcript publication keeps full input, reply and tool evidence', async t => {
+  const full = {
+    input: 'input'.repeat(3000),
+    output: 'reply'.repeat(3000),
+    args: JSON.stringify({ code: 'x'.repeat(9000) }),
+    result: 'result'.repeat(3000),
+  };
+  const records = await recoverJournalTurnTranscript(
+    {
+      turnId: '1',
+      state: 'failed',
+      input: 'preview',
+      inputRef: 'input',
+      output: 'preview',
+      outputRef: 'output',
+      error: 'Transcript publication failed',
+      tools: [
+        {
+          callId: 'host',
+          name: 'exec',
+          args: 'preview',
+          argsRef: 'args',
+          result: 'preview',
+          resultRef: 'result',
+          settled: true,
+        },
+      ],
+    },
+    async ref => full[ref],
+  );
+  t.like(records[0], { kind: 'message', role: 'user', content: full.input });
+  const { pairs } = pairToolCalls(records);
+  t.is(pairs.length, 1);
+  t.is(pairs[0].call.args, full.args);
+  t.is(pairs[0].result.content, full.result);
+  t.like(records.at(-2), {
+    kind: 'message',
+    role: 'assistant',
+    content: full.output,
+  });
+  t.regex(records.at(-1).content, /Transcript publication failed/);
+});
 
 test('provider projection pairs repeated IDs and preserves full tool arguments', t => {
   const args = JSON.stringify({ text: 'x'.repeat(9000) });

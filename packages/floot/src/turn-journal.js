@@ -6,6 +6,10 @@ import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 import { encodeJournalPresentation } from './journal-presentation.js';
 import {
+  assertContextEvidence,
+  certifyContextEvidence,
+} from './context-evidence.js';
+import {
   assertTranscriptBudget,
   encodeJournalTranscript,
   transcriptIndex,
@@ -15,7 +19,7 @@ const PREFIX = 'floot-turn-event-';
 const CONTENT_PREFIX = 'floot-turn-content-';
 const SNAPSHOT_PREFIX = 'floot-turn-snapshot-';
 const ARCHIVE_PREFIX = 'floot-turn-archive-';
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 2;
 
 /**
  * Bounds, and what each one protects.
@@ -187,6 +191,23 @@ const assertContentRef = ref => {
 };
 
 /**
+ * Canonical transcript encoding starts with kind. Check the bounded preview
+ * as well as the index so metadata selection cannot hide a mismatched entry.
+ * Missing metadata requires session retirement, not an eager history migration.
+ * @param {any} entry
+ */
+const assertTranscriptKind = entry => {
+  (typeof entry.kind === 'string' &&
+    ['message', 'tool-call', 'tool-result', 'compaction'].includes(
+      entry.kind,
+    )) ||
+    Fail`Missing or invalid transcript kind index; retire legacy session`;
+  (typeof entry.payload === 'string' &&
+    entry.payload.startsWith(`{"kind":"${entry.kind}",`)) ||
+    Fail`Transcript kind index does not match payload`;
+};
+
+/**
  * Append-only, single-writer journal scoped to one Floot agent's powers.
  * Storage failure is ambiguous: this incarnation is permanently poisoned.
  * A new incarnation replays from the newest snapshot and preserves unresolved
@@ -212,6 +233,8 @@ export const makeTurnJournal = powers => {
   let sinceSnapshot = 0;
   let archivedTurns = 0;
   let archiveChunks = 0;
+  /** @type {{ turnId: string, ordinal: string, sequence: string, chunk: string } | null} */
+  let archivedCheckpoint = null;
   /** @type {Set<string>} */
   let names = new Set();
   let initialized = false;
@@ -277,6 +300,7 @@ export const makeTurnJournal = powers => {
         };
       };
     } else if (type === 'transcript-record') {
+      assertTranscriptKind(event);
       !record.terminal || Fail`Transcript record after terminal turn`;
       !record.transcriptComplete || Fail`Transcript already complete`;
       recovered ||
@@ -292,6 +316,7 @@ export const makeTurnJournal = powers => {
         (event.payloadRef?.chars ?? event.payload.length);
       assertTranscriptBudget(chars);
       const entry = {
+        kind: event.kind,
         ordinal: event.ordinal,
         sequence: `${sequence}`,
         payload: event.payload,
@@ -452,6 +477,8 @@ export const makeTurnJournal = powers => {
         Fail`Invalid turn journal snapshot record`;
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
+      record.contextEvidence === undefined ||
+        Fail`Context evidence certificate requires archive origin`;
       // A turn the snapshotting incarnation still had in flight is one this
       // incarnation cannot finish; a later event may still settle it.
       if (record.state === 'pending') record.state = 'outcome-unknown';
@@ -461,6 +488,27 @@ export const makeTurnJournal = powers => {
     next = through + 1n;
     archivedTurns = data.archivedTurns;
     archiveChunks = data.archiveChunks;
+    const checkpoint = data.archivedCheckpoint;
+    if (checkpoint !== null) {
+      (checkpoint &&
+        typeof checkpoint === 'object' &&
+        Object.keys(checkpoint).length === 4 &&
+        ['turnId', 'sequence'].every(
+          key =>
+            typeof checkpoint[key] === 'string' &&
+            /^[1-9][0-9]*$/.test(checkpoint[key]),
+        ) &&
+        typeof checkpoint.chunk === 'string' &&
+        /^(0|[1-9][0-9]*)$/.test(checkpoint.chunk) &&
+        typeof checkpoint.ordinal === 'string' &&
+        /^(0|[1-9][0-9]{0,4})$/.test(checkpoint.ordinal) &&
+        Number(checkpoint.ordinal) < 65_536 &&
+        BigInt(checkpoint.chunk) < BigInt(archiveChunks) &&
+        BigInt(checkpoint.turnId) < BigInt(checkpoint.sequence) &&
+        BigInt(checkpoint.sequence) <= through) ||
+        Fail`Invalid archived checkpoint index`;
+    }
+    archivedCheckpoint = checkpoint;
   };
 
   const initialize = async () => {
@@ -514,6 +562,18 @@ export const makeTurnJournal = powers => {
           record.transcriptEndSequence === undefined ||
             Fail`Unexpected transcript completion position`;
         }
+      }
+      if (archivedCheckpoint !== null) {
+        const checkpoint = archivedCheckpoint;
+        const chunk = await readArchiveChunk(BigInt(checkpoint.chunk), true);
+        const turn = chunk.find(record => record.turnId === checkpoint.turnId);
+        const entry = turn?.transcript?.[Number(checkpoint.ordinal)];
+        (turn !== undefined &&
+          archivable(turn) &&
+          entry?.kind === 'compaction' &&
+          entry.ordinal === checkpoint.ordinal &&
+          entry.sequence === checkpoint.sequence) ||
+          Fail`Archived checkpoint index does not match archive`;
       }
     }
     const journalNames = [...names]
@@ -614,6 +674,19 @@ export const makeTurnJournal = powers => {
       Math.min(settled.length - RETAINED_TURNS, ARCHIVE_CHUNK_TURNS),
     );
     const name = `${ARCHIVE_PREFIX}${pad(archiveChunks)}`;
+    const archived = [];
+    try {
+      for (const record of excess) {
+        const copy = JSON.parse(JSON.stringify(record));
+        // eslint-disable-next-line no-await-in-loop
+        const certificate = await certifyContextEvidence(copy, readContent);
+        if (certificate !== undefined) copy.contextEvidence = certificate;
+        archived.push(copy);
+      }
+    } catch (error) {
+      poisoned = true;
+      throw error;
+    }
     // A chunk of this index can already exist only if a previous incarnation
     // wrote it and then failed before the snapshot that would have counted
     // it; the snapshot in force says it is not part of the history.
@@ -623,11 +696,29 @@ export const makeTurnJournal = powers => {
     await store(
       harden({
         version: SNAPSHOT_VERSION,
-        records: JSON.parse(JSON.stringify(excess)),
+        records: archived,
       }),
       name,
     );
-    for (const record of excess) records.delete(record.turnId);
+    for (const record of excess) {
+      for (const entry of record.transcript ?? []) {
+        if (
+          entry.kind === 'compaction' &&
+          (archivedCheckpoint === null ||
+            BigInt(record.turnId) > BigInt(archivedCheckpoint.turnId) ||
+            (record.turnId === archivedCheckpoint.turnId &&
+              Number(entry.ordinal) > Number(archivedCheckpoint.ordinal)))
+        ) {
+          archivedCheckpoint = {
+            turnId: record.turnId,
+            ordinal: entry.ordinal,
+            sequence: entry.sequence,
+            chunk: `${archiveChunks}`,
+          };
+        }
+      }
+      records.delete(record.turnId);
+    }
     archiveChunks += 1;
     archivedTurns += excess.length;
     return true;
@@ -650,6 +741,7 @@ export const makeTurnJournal = powers => {
         records: JSON.parse(JSON.stringify([...records.values()])),
         archivedTurns,
         archiveChunks,
+        archivedCheckpoint,
       }),
       name,
     );
@@ -712,8 +804,8 @@ export const makeTurnJournal = powers => {
     if (sinceSnapshot >= SNAPSHOT_EVERY) await snapshot();
   };
 
-  /** @param {bigint | number} index */
-  const readArchiveChunk = async index => {
+  /** @param {bigint | number} index @param {boolean} [metadataOnly] */
+  const readArchiveChunk = async (index, metadataOnly = false) => {
     const chunk = copyData(
       await E(powers).lookup(`${ARCHIVE_PREFIX}${pad(index)}`),
     );
@@ -726,8 +818,15 @@ export const makeTurnJournal = powers => {
     for (const record of chunkRecords) {
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
-      // eslint-disable-next-line no-await-in-loop
-      await validatePresentation(record);
+      assertContextEvidence(record);
+      if (!metadataOnly) {
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation(record);
+      }
+      for (const entry of record.transcript ?? []) {
+        // eslint-disable-next-line no-await-in-loop
+        await validateTranscriptPayload(entry, true);
+      }
     }
     return chunkRecords;
   };
@@ -749,6 +848,7 @@ export const makeTurnJournal = powers => {
    * @param {boolean} [metadataOnly]
    */
   const validateTranscriptPayload = async (entry, metadataOnly = false) => {
+    assertTranscriptKind(entry);
     assertText(entry.payload, PREVIEW_CHARS);
     if (entry.payloadRef !== undefined) {
       const { name, chars } = assertContentRef(entry.payloadRef);
@@ -764,8 +864,11 @@ export const makeTurnJournal = powers => {
         : entry.payload;
     (typeof payload === 'string' && payload.length <= MAX_CONTENT_CHARS) ||
       Fail`Invalid transcript payload`;
-    encodeJournalTranscript(JSON.parse(payload)) === payload ||
+    const decoded = JSON.parse(payload);
+    encodeJournalTranscript(decoded) === payload ||
       Fail`Noncanonical transcript payload`;
+    decoded.kind === entry.kind ||
+      Fail`Transcript kind index does not match full payload`;
     if (entry.payloadRef !== undefined) {
       entry.payload === payload.slice(0, PREVIEW_CHARS) ||
         Fail`Transcript preview does not match its content`;
@@ -844,7 +947,7 @@ export const makeTurnJournal = powers => {
       serialized(async () => {
         const record = records.get(turnId);
         record || Fail`Unknown turn journal turn`;
-        /** @type {Array<{ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
+        /** @type {Array<{kind: string, ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
         const entries = record.transcript ?? [];
         const index = transcriptIndex(ordinal, entries.length);
         const payload = encodeJournalTranscript(value);
@@ -858,7 +961,13 @@ export const makeTurnJournal = powers => {
         record.state === 'pending' ||
           Fail`Cannot append transcript for a recovered turn`;
         assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);
-        await write({ type: 'transcript-record', turnId, ordinal, payload });
+        await write({
+          type: 'transcript-record',
+          turnId,
+          ordinal,
+          kind: JSON.parse(payload).kind,
+          payload,
+        });
       }),
     /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
     begin: options =>
@@ -909,6 +1018,8 @@ export const makeTurnJournal = powers => {
           retained: JSON.parse(JSON.stringify([...records.values()])),
           archivedTurns,
           archiveCursor: `0:${archiveChunks}`,
+          archivedCheckpoint:
+            archivedCheckpoint === null ? null : { ...archivedCheckpoint },
         }),
       ),
     /**

@@ -749,6 +749,157 @@ regeneration removes only that dependency edge. Generic conversation-tree users
 remain unchanged. Bounded context reads and archive indexing remain open;
 this deletion alone does not establish bounded recovery memory.
 
+Compaction-selection prerequisite (2026-09-24, local, not deployed): each
+transcript entry carries a required kind index derived internally from canonical
+content and published in the same event as its payload/reference.
+Replay, snapshot and archive metadata reads validate both the kind and its match
+to the canonical payload preview without loading large externalized content.
+Full hydration still validates the canonical content and index together.
+No new formula, mutable index owner or separate publication is introduced.
+Legacy records without this field are refused, not eagerly migrated; archives
+are checked when read, so successful retained-state startup does not prove all
+legacy archives are compatible. Retire affected disposable sessions before deploy.
+The index alone does not select context or bound archive metadata scanning.
+The next context reader must preserve unresolved and late tool evidence across
+compaction boundaries, including older turns archived after newer turns.
+Full-history UI APIs remain separate from this upcoming inference read path.
+All 590 Floot tests and four real-daemon journal/lifecycle tests pass.
+Tests cover missing, invalid and conflicting kinds in events, snapshots and
+archives, large-payload metadata reads without hydration, and lost-write replies.
+Scoped lint has zero errors (19 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass; independent adversarial review found no
+durability blocker.
+
+Active-context projection (2026-09-24, locally verified, not deployed):
+Fae and hosted sends use a separate model-context projection; public transcript
+and UI history APIs retain full-history semantics. Shared recovery also preserves
+an unresolved canonical call before a checkpoint in the same turn.
+The selector uses the latest compaction in numeric dispatch/ordinal order from
+the pinned journal view, excluding pending/current turns, never archive order.
+Superseded dialogue payloads and the boundary turn's input are not hydrated.
+Tool payloads still undergo exact reconciliation before context selection.
+Prior-turn unmatched evidence, unresolved calls, host-recovered answers and
+results published after the checkpoint remain labeled exceptions after the
+active context, with collision-safe paired IDs; they are not new executions.
+Late-result comparisons use the checkpoint's global event sequence, not its
+turn ID. A summary alone is not evidence that an unmatched effect was observed
+or an uncertain outcome resolved.
+This stage still reads all archive metadata and historical tool payloads.
+It is not bounded-startup or bounded-archive completion; durable coverage/index
+work and automatic compaction policy remain separate open tasks.
+All 599 Floot tests and four real-daemon journal/lifecycle tests pass.
+Dedicated regressions cover skipped superseded payload reads, retained-tail
+expansion, excluded/pending checkpoints, mixed settled/unresolved pairs, late
+archived results across revival, repeated native IDs, exception ID collisions,
+and same-turn unresolved calls across a checkpoint.
+Scoped lint has zero errors (59 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
+Paged context metadata (2026-09-24, locally verified, not deployed):
+inference no longer calls the full-history metadata collector.
+It captures one immutable journal read view and makes two sequential page passes:
+select the checkpoint tuple, then recover each turn's required output.
+Both passes reuse the same retained snapshot and committed archive end; later
+settlements/publications belong to the next read, not half of the current read.
+The selected checkpoint's identity is checked again before projection.
+Only nonempty active/exception output groups are retained and sorted by dispatch
+ID, so late archive publication cannot reorder the model's context.
+Either-pass failures reject the whole read rather than return partial context.
+This removes whole-history archive-metadata materialization from inference, not all
+unbounded costs: there are still two full metadata scans and historical tool
+payload reads. One archive page, the retained window plus unresolved records,
+and selected active/exception output remain resident. The output and unresolved
+sets are not bounded merely by paging; context compaction and coverage/index
+work remain open. Public full-history readers retain their separate contract.
+All 606 Floot tests and four real-daemon journal/lifecycle tests pass.
+Dedicated tests pin the same cursor and retained state across concurrent archive
+publication and late settlement, verify the next read sees those updates, reject
+either-pass read failures and changed/missing checkpoints, and compare the paged
+reader with real journal archive/revival projection.
+Scoped lint has zero errors (57 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved,
+including the explicit optional-checkpoint narrowing fix caught by docs.
+
+Archived checkpoint lookup (2026-09-24, locally verified, not deployed):
+snapshots now retain a constant-size derived archived checkpoint index (or null).
+The writer selects the maximum numeric dispatch/ordinal while archiving, so an
+old checkpoint archived late cannot replace a newer checkpoint.
+Archive storage precedes the snapshot that publishes its counter and index
+together; ambiguous writes poison the incarnation before another read can expose
+an uncommitted candidate. No second formula or independently published owner exists.
+Startup validates index shape/ranges and the referenced chunk/entry using metadata
+only. This proves the referenced checkpoint is valid; maximality comes from the
+writer's derivation, not a startup rescan of all archives.
+Context selection compares this candidate with the pinned retained snapshot,
+normally removing the first full archive scan. If the caller excludes the indexed
+archived turn, selection falls back to the paged scan for the previous candidate.
+Projection still verifies the selected tuple and scans history for exceptions.
+Snapshot/archive version 2 refuses older snapshot/archive formats; event-only
+journals with current transcript fields can still replay. Retire affected sessions
+before deploy rather than relying on this as a universal legacy-format detector.
+Historical tool hydration and the remaining archive pass are still open costs.
+All 614 Floot tests and four real-daemon journal/lifecycle tests pass.
+Coverage includes exact before/after archive and snapshot failure cuts, poisoned
+writer reads, recovery after orphan publication, late archival ordering, excluded
+maximum fallback, malformed/mismatched pointers, and a large external checkpoint
+whose startup validation reads one archive page and no content values.
+Scoped lint has zero errors (25 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
+Archived tool-evidence reuse (2026-09-24, locally verified, not deployed):
+before publishing an immutable archive chunk, the writer uses exact existing
+tool reconciliation to derive an optional `no-tool-exceptions` certificate.
+It refuses certification for unresolved raw effects, missing sequence provenance,
+unmatched observations/executions, unknown placeholders, or host-only recovered
+answers. Repeated calls retain the existing one-to-one pairing rules.
+The certificate records the exact maximum canonical-tool and raw intent/result
+sequence. It belongs only to a detached archive copy and shares that chunk's
+snapshot publication; certification read failure poisons the writer.
+Retained snapshot records reject certificates. Context skips tool hydration only
+for archive-origin turns strictly before the selected checkpoint whose recorded
+frontier is no later than that checkpoint. Boundary/retained turns, missing
+certificates and late evidence use full reconciliation.
+Archive reads validate certificate shape, exact metadata frontier and raw
+settlement; semantic absence of exceptions is the writer's derivation, not a
+new proof obtained without payload reads. This does not certify dialogue
+completeness or knowledge of unobserved native execution.
+The change moves ordinary old-tool hydration to archive publication; it does not
+eliminate the archive metadata scan, exceptional evidence growth, or the need
+for a compaction policy. No new formula, publication owner or migration is added.
+All 629 Floot tests and four real-daemon journal/lifecycle tests pass.
+Dedicated tests cover repeated calls, every exception/provenance disqualifier,
+late frontiers, malformed certificates, archive-only skipping, 12,000-character
+arguments/results with zero context-time content reads, and certification-read
+failure poisoning before archive publication with recovery of the original turn.
+The archive/snapshot before/after-publication fault matrix also passes.
+Scoped lint has zero errors (26 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
+Recovery input cleanup (2026-09-24, locally verified, not deployed):
+`recoverTurnTranscript` no longer accepts an alternate provider-message/tree
+input. All production callers already supplied an empty list after the journal
+cutover; removing it leaves the journal as the sole restoration authority.
+Matching tests now create canonical journal fixtures with sequence provenance,
+preserving repeated-ID, one-to-one matching and host-result replacement checks.
+Recovery without transcript entries remains supported for failure before the
+first canonical publication, including full input/output and tool content refs.
+The direct-provider message converter remains used for new replies; it is not
+another durable transcript owner. No storage format or retirement change.
+All 630 Floot tests and four real-daemon journal/lifecycle tests pass.
+Scoped lint has zero errors (62 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
+FA-07 next implementation sequence, confirmed by source review (2026-09-24):
+public APIs use `provider` for Fae, but registry entries still encode it by an
+absent backend ID and a separate `model` field. Normalize durable session identity
+to required `backendId`/`modelId` first, preserving the public `provider` identity;
+replace truthiness-based sandbox capability checks explicitly so direct sessions
+do not acquire hosted stop/mount/rebind semantics accidentally.
+Then replace optional-field inference in streaming configuration with explicit
+direct, hosted and records-only variants. Keep provider lookup per turn so
+credential refresh reaches existing direct sessions; do not create another
+sandbox lifecycle or credential owner. This is remaining work, not a landed fix.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one
