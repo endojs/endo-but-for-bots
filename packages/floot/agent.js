@@ -2264,9 +2264,22 @@ export const make = async (
   // nothing, rather than a list somebody typed.
   /** @type {Promise<ReturnType<typeof makeModelCatalogOwner>> | undefined} */
   let providerCatalogP;
+  /** Catalog construction/retirement remains owned until close settles. */
+  const providerCatalogs = new Set();
+  const closeProviderCatalog = async pending => {
+    try {
+      const owner = await pending;
+      await owner.close();
+    } finally {
+      providerCatalogs.delete(pending);
+    }
+  };
   const getProviderCatalog = () => {
-    providerCatalogP ??= (async () => {
+    ownership.assertOpen();
+    if (providerCatalogP !== undefined) return providerCatalogP;
+    const pending = (async () => {
       const cfg = await getProviderConfig();
+      ownership.assertOpen();
       const kind = cfg?.provider || 'anthropic';
       const readKey = () => resolveAuthToken({ powers, config: cfg });
       /** @type {(() => Promise<any>) | undefined} */
@@ -2292,10 +2305,13 @@ export const make = async (
       }
       return makeModelCatalogOwner({ read });
     })().catch(error => {
-      providerCatalogP = undefined;
+      if (providerCatalogP === pending) providerCatalogP = undefined;
+      providerCatalogs.delete(pending);
       throw error;
     });
-    return providerCatalogP;
+    providerCatalogP = pending;
+    providerCatalogs.add(pending);
+    return pending;
   };
 
   /** What last went wrong reading each hosted backend's catalog, by id. */
@@ -2327,7 +2343,7 @@ export const make = async (
     let pending = catalogReads.get(key);
     if (pending === undefined) {
       pending = readCatalogsNow(backendId).finally(() => {
-        catalogReads.delete(key);
+        if (catalogReads.get(key) === pending) catalogReads.delete(key);
       });
       catalogReads.set(key, pending);
     }
@@ -5348,6 +5364,15 @@ export const make = async (
       // Interrupt consumers before waiting for callers which depend on them.
       await stopResources();
       await attempt(() => ownership.drain());
+      // Admitted catalog construction is settled before this final snapshot.
+      // Retired owners stay tracked while their already-admitted reads drain.
+      await Promise.all(
+        [...providerCatalogs].map(pending =>
+          attempt(() => closeProviderCatalog(pending)),
+        ),
+      );
+      providerCatalogP = undefined;
+      catalogReads.clear();
       // Admitted construction can acquire a resource after the first snapshot.
       await stopResources();
       await Promise.all(
@@ -5585,7 +5610,9 @@ export const make = async (
       // the owner go and read again under the next.
       const catalog = providerCatalogP;
       providerCatalogP = undefined;
-      if (catalog) void catalog.then(owner => owner.close()).catch(() => {});
+      catalogReads.delete('provider');
+      catalogReads.delete(undefined);
+      if (catalog) void closeProviderCatalog(catalog).catch(() => {});
       // An unpinned session's `effectiveModelId` is read from that config.
       touchSessionList();
       console.error(

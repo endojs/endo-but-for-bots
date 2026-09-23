@@ -2208,6 +2208,36 @@ Changes are not deployed.
 Catalog promise invalidation and draining catalog owners at factory disposal are
 a separate remaining lifecycle check; this fix does not claim to close them.
 
+### Direct-provider catalog refresh and disposal — 2026-09-24
+
+Follow-up source review found that a listing started after refresh still joined
+the old in-flight listing, and an old catalog-construction rejection could clear
+a newer cached owner.
+The local fix invalidates only provider-inclusive coalescing keys at refresh;
+completion handlers clear only their own pending read or owner.
+Hosted-only catalog reads retain their existing coalescing behavior.
+Refresh stays nonblocking: the old owner closes immediately when available, but
+its construction/retirement promise remains tracked until close settles.
+Factory disposal fences acquisition, drains admitted operations, and closes
+remaining current or retiring owners before acknowledging disposal.
+Construction awaiting configuration checks the factory fence again before
+creating an owner.
+
+These caches and their ownership set are deliberately ephemeral, not new formulas
+or saved state; reconstruction re-reads catalog metadata through existing
+credential authority.
+Floot uses awaited catalog snapshots, not background admission reads, so no claim
+is made that existing catalog reads escaped the factory's operation drain.
+The correction establishes explicit owner retirement and refresh isolation.
+Five actual-factory regressions cover refreshed reads, stale constructor failure,
+old completion versus a pending replacement, disposal during construction, and
+disposal while a retired owner's read is held.
+The focused factory suite passes 22 tests; all 652 Floot tests pass.
+Package ESLint has no errors (245 warnings), formatting passes, and documentation
+has no errors (180 warnings).
+Adversarial review approved source, failure cleanup, and regressions.
+Not deployed; draining waits for upstream completion rather than cancelling it.
+
 Model these independently:
 
 | Concept | Responsibility |

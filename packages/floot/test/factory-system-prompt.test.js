@@ -164,6 +164,10 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
     specs,
     promptOf,
     close,
+    dispose: async () => {
+      await factory;
+      await E(disposalHook)();
+    },
     revive: async () => {
       await factory;
       await E(disposalHook)();
@@ -515,6 +519,306 @@ test('old configuration rejection cannot clear the replacement configuration pro
   await staleRead;
   t.like(await E(session).getInfo(), { effectiveModelId: 'new-default' });
   t.is(lookups, 2);
+});
+
+const catalogResponse = id =>
+  Response.json({
+    data: [
+      {
+        id,
+        name: id,
+        architecture: {
+          input_modalities: ['text'],
+          output_modalities: ['text'],
+        },
+        supported_parameters: ['tools'],
+      },
+    ],
+  });
+
+test('catalog listing after refresh does not join a held old-config fetch', async t => {
+  t.timeout(10_000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  const requests = [];
+  const world = makeWorld({
+    fetch: async (url, init) => {
+      t.is(`${url}`, 'https://openrouter.ai/api/v1/models/user');
+      const authorization = new Headers(init.headers).get('authorization');
+      requests.push(authorization);
+      if (authorization === 'Bearer old-test-key') {
+        entered.resolve(undefined);
+        await release.promise;
+        return catalogResponse('vendor/old');
+      }
+      return catalogResponse('vendor/new');
+    },
+  });
+  t.teardown(async () => {
+    release.resolve(undefined);
+    await world.close();
+  });
+  world.hostStore.set(
+    'llm-provider',
+    harden({
+      provider: 'openrouter',
+      model: 'vendor/old',
+      authToken: 'old-test-key',
+    }),
+  );
+  const old = E(world.factory).listModels('provider');
+  void old.catch(() => {});
+  await entered.promise;
+  world.hostStore.set(
+    'llm-provider',
+    harden({
+      provider: 'openrouter',
+      model: 'vendor/new',
+      authToken: 'new-test-key',
+    }),
+  );
+  await E(world.factory).refreshCredentials();
+  const current = await E(world.factory).listModels('provider');
+  t.deepEqual(
+    current.map(model => model.id),
+    ['vendor/new'],
+  );
+  t.deepEqual(requests, ['Bearer old-test-key', 'Bearer new-test-key']);
+  release.resolve(undefined);
+  await old;
+  t.deepEqual(
+    (await E(world.factory).listModels('provider')).map(model => model.id),
+    ['vendor/new'],
+  );
+  t.is(requests.length, 2);
+});
+
+test('old catalog constructor rejection cannot detach the replacement owner', async t => {
+  t.timeout(10_000);
+  const entered = makePromiseKit();
+  const oldConfig = makePromiseKit();
+  void oldConfig.promise.catch(() => {});
+  let lookups = 0;
+  let reads = 0;
+  const world = makeWorld({
+    lookupProvider: () => {
+      lookups += 1;
+      if (lookups === 1) throw Error('Initial configuration unavailable');
+      if (lookups === 2) {
+        entered.resolve(undefined);
+        return oldConfig.promise;
+      }
+      return harden({
+        provider: 'openrouter',
+        model: 'vendor/new',
+        authToken: 'test-key',
+      });
+    },
+    fetch: async url => {
+      t.is(`${url}`, 'https://openrouter.ai/api/v1/models/user');
+      reads += 1;
+      return catalogResponse('vendor/new');
+    },
+  });
+  const old = E(world.factory).listModels('provider');
+  void old.catch(() => {});
+  t.teardown(async () => {
+    oldConfig.reject(Error('Cleanup'));
+    await old.catch(() => {});
+    await world.close();
+  });
+  await entered.promise;
+  await E(world.factory).refreshCredentials();
+  t.true(
+    (await E(world.factory).listModels()).some(
+      model => model.id === 'vendor/new',
+    ),
+  );
+  t.is(reads, 1);
+  oldConfig.reject(Error('Old catalog configuration failed'));
+  await old;
+  t.true(
+    (await E(world.factory).listModels()).some(
+      model => model.id === 'vendor/new',
+    ),
+  );
+  t.is(reads, 1);
+  t.is(lookups, 3);
+});
+
+test('factory disposal drains a retired catalog fetch and fences new reads', async t => {
+  t.timeout(10_000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let requests = 0;
+  const world = makeWorld({
+    fetch: async url => {
+      t.is(`${url}`, 'https://openrouter.ai/api/v1/models/user');
+      requests += 1;
+      entered.resolve(undefined);
+      await release.promise;
+      return catalogResponse('vendor/model');
+    },
+  });
+  t.teardown(async () => {
+    release.resolve(undefined);
+    await world.dispose();
+  });
+  world.hostStore.set(
+    'llm-provider',
+    harden({
+      provider: 'openrouter',
+      model: 'vendor/model',
+      authToken: 'test-key',
+    }),
+  );
+  const listing = E(world.factory).listModels('provider');
+  void listing.catch(() => {});
+  await entered.promise;
+  await E(world.factory).refreshCredentials();
+  let disposed = false;
+  const disposal = world.dispose().then(() => {
+    disposed = true;
+  });
+  void disposal.catch(() => {});
+  await t.throwsAsync(E(world.factory).listModels('provider'), {
+    message: /closed/,
+  });
+  t.false(disposed);
+  t.is(requests, 1);
+  release.resolve(undefined);
+  await listing;
+  await disposal;
+  t.true(disposed);
+  t.is(requests, 1);
+});
+
+test('disposal fences a catalog constructor held on configuration before it can fetch', async t => {
+  t.timeout(10_000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let lookups = 0;
+  let fetches = 0;
+  const world = makeWorld({
+    lookupProvider: () => {
+      lookups += 1;
+      if (lookups === 1) throw Error('First configuration lookup failed');
+      entered.resolve(undefined);
+      return release.promise;
+    },
+    fetch: async () => {
+      fetches += 1;
+      return catalogResponse('vendor/model');
+    },
+  });
+  const config = harden({
+    provider: 'openrouter',
+    model: 'vendor/model',
+    authToken: 'test-key',
+  });
+  t.teardown(async () => {
+    release.resolve(config);
+    await world.dispose();
+  });
+  const listing = E(world.factory).listModels('provider');
+  void listing.catch(() => {});
+  await entered.promise;
+  t.is(lookups, 2);
+  let disposed = false;
+  const disposal = world.dispose().then(() => {
+    disposed = true;
+  });
+  void disposal.catch(() => {});
+  await t.throwsAsync(E(world.factory).listModels(), { message: /closed/ });
+  t.false(disposed);
+  release.resolve(config);
+  t.deepEqual(await listing, []);
+  await disposal;
+  t.is(fetches, 0);
+});
+
+test('old catalog-read completion cannot evict its still-pending replacement', async t => {
+  t.timeout(10_000);
+  const oldEntered = makePromiseKit();
+  const newEntered = makePromiseKit();
+  const oldGate = makePromiseKit();
+  const newGate = makePromiseKit();
+  let requests = 0;
+  let hostedCatalogReads = 0;
+  const world = makeWorld({
+    fetch: async url => {
+      t.is(`${url}`, 'https://openrouter.ai/api/v1/models/user');
+      requests += 1;
+      if (requests === 1) {
+        oldEntered.resolve(undefined);
+        await oldGate.promise;
+        return catalogResponse('vendor/old');
+      }
+      newEntered.resolve(undefined);
+      await newGate.promise;
+      return catalogResponse('vendor/new');
+    },
+  });
+  t.teardown(async () => {
+    oldGate.resolve(undefined);
+    newGate.resolve(undefined);
+    await world.close();
+  });
+  world.hostStore.set(
+    'codex-backend',
+    Far('CountingCatalogBackend', {
+      describe: () =>
+        harden({
+          id: 'test',
+          title: 'Test',
+          kind: 'hosted',
+          continuity: 'explicit',
+          toolOwnership: 'endo',
+        }),
+      modelCatalog: () => {
+        hostedCatalogReads += 1;
+        return harden({ accounts: [] });
+      },
+    }),
+  );
+  world.hostStore.set(
+    'llm-provider',
+    harden({
+      provider: 'openrouter',
+      model: 'vendor/old',
+      authToken: 'test-key',
+    }),
+  );
+  const old = E(world.factory).listModels();
+  void old.catch(() => {});
+  await oldEntered.promise;
+  world.hostStore.set(
+    'llm-provider',
+    harden({
+      provider: 'openrouter',
+      model: 'vendor/new',
+      authToken: 'test-key',
+    }),
+  );
+  await E(world.factory).refreshCredentials();
+  const current = E(world.factory).listModels();
+  void current.catch(() => {});
+  await newEntered.promise;
+  oldGate.resolve(undefined);
+  await old;
+  const joined = E(world.factory).listModels();
+  void joined.catch(() => {});
+  newGate.resolve(undefined);
+  const [first, second] = await Promise.all([current, joined]);
+  t.deepEqual(
+    first.map(model => model.id),
+    ['vendor/new'],
+  );
+  t.deepEqual(second, first);
+  t.is(requests, 2);
+  // Provider-owner singleflight could hide a duplicated factory catalog read.
+  // The combined listing's hosted half runs once per factory read instead.
+  t.is(hostedCatalogReads, 2);
 });
 
 for (const pinned of [false, true]) {
