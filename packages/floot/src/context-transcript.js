@@ -3,12 +3,13 @@ import { Fail } from '@endo/errors';
 import { splitAtLastCompaction } from '@endo/hosted-agent/transcript-records.js';
 
 import { recoverTurnTranscript } from './transcript-projection.js';
+import { assertContextEvidence } from './context-evidence.js';
 
 /**
  * Model context only. The journal read view must pin all supplied metadata;
  * archive publication order is not dispatch order. Historical tool payloads
  * still require exact reconciliation, but superseded prose is never hydrated.
- * @param {(visit: (turn: any) => Promise<void> | void) => Promise<void>} visitTurns
+ * @param {(visit: (turn: any, archived?: boolean) => Promise<void> | void) => Promise<void>} visitTurns
  * @param {(ref: any) => Promise<string>} readContent
  * @param {string} [excludeTurnId]
  * @param {{ turnId: string, ordinal: number, sequence: string }} [initialBoundary]
@@ -43,7 +44,7 @@ const projectContext = async (
   const activeGroups = [];
   const exceptionGroups = [];
   let foundBoundary = boundary === undefined;
-  await visitTurns(async turn => {
+  await visitTurns(async (turn, archived = false) => {
     if (!eligible(turn)) return;
     if (boundary && turn.turnId === boundary.turnId) {
       const entry = turn.transcript?.[boundary.ordinal];
@@ -55,6 +56,19 @@ const projectContext = async (
     }
     const before =
       boundary !== undefined && BigInt(turn.turnId) < BigInt(boundary.turnId);
+    if (
+      archived &&
+      boundary !== undefined &&
+      before &&
+      turn.contextEvidence !== undefined
+    ) {
+      assertContextEvidence(turn);
+      if (
+        BigInt(turn.contextEvidence.throughSequence) <=
+        BigInt(boundary.sequence)
+      )
+        return;
+    }
     const selection =
       boundary === undefined
         ? {}
@@ -154,7 +168,7 @@ export const readContextTranscript = async (journal, excludeTurnId) => {
       const page = await journal.listArchivedPage(cursor);
       for (const turn of page.records) {
         // eslint-disable-next-line no-await-in-loop
-        await visit(turn);
+        await visit(turn, true);
       }
       cursor = page.next;
     }

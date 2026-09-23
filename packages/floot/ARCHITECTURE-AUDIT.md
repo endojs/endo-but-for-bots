@@ -846,6 +846,35 @@ whose startup validation reads one archive page and no content values.
 Scoped lint has zero errors (25 warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass. Independent adversarial review approved.
 
+Archived tool-evidence reuse (2026-09-24, locally verified, not deployed):
+before publishing an immutable archive chunk, the writer uses exact existing
+tool reconciliation to derive an optional `no-tool-exceptions` certificate.
+It refuses certification for unresolved raw effects, missing sequence provenance,
+unmatched observations/executions, unknown placeholders, or host-only recovered
+answers. Repeated calls retain the existing one-to-one pairing rules.
+The certificate records the exact maximum canonical-tool and raw intent/result
+sequence. It belongs only to a detached archive copy and shares that chunk's
+snapshot publication; certification read failure poisons the writer.
+Retained snapshot records reject certificates. Context skips tool hydration only
+for archive-origin turns strictly before the selected checkpoint whose recorded
+frontier is no later than that checkpoint. Boundary/retained turns, missing
+certificates and late evidence use full reconciliation.
+Archive reads validate certificate shape, exact metadata frontier and raw
+settlement; semantic absence of exceptions is the writer's derivation, not a
+new proof obtained without payload reads. This does not certify dialogue
+completeness or knowledge of unobserved native execution.
+The change moves ordinary old-tool hydration to archive publication; it does not
+eliminate the archive metadata scan, exceptional evidence growth, or the need
+for a compaction policy. No new formula, publication owner or migration is added.
+All 629 Floot tests and four real-daemon journal/lifecycle tests pass.
+Dedicated tests cover repeated calls, every exception/provenance disqualifier,
+late frontiers, malformed certificates, archive-only skipping, 12,000-character
+arguments/results with zero context-time content reads, and certification-read
+failure poisoning before archive publication with recovery of the original turn.
+The archive/snapshot before/after-publication fault matrix also passes.
+Scoped lint has zero errors (26 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one

@@ -6,6 +6,10 @@ import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 import { encodeJournalPresentation } from './journal-presentation.js';
 import {
+  assertContextEvidence,
+  certifyContextEvidence,
+} from './context-evidence.js';
+import {
   assertTranscriptBudget,
   encodeJournalTranscript,
   transcriptIndex,
@@ -473,6 +477,8 @@ export const makeTurnJournal = powers => {
         Fail`Invalid turn journal snapshot record`;
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
+      record.contextEvidence === undefined ||
+        Fail`Context evidence certificate requires archive origin`;
       // A turn the snapshotting incarnation still had in flight is one this
       // incarnation cannot finish; a later event may still settle it.
       if (record.state === 'pending') record.state = 'outcome-unknown';
@@ -668,6 +674,19 @@ export const makeTurnJournal = powers => {
       Math.min(settled.length - RETAINED_TURNS, ARCHIVE_CHUNK_TURNS),
     );
     const name = `${ARCHIVE_PREFIX}${pad(archiveChunks)}`;
+    const archived = [];
+    try {
+      for (const record of excess) {
+        const copy = JSON.parse(JSON.stringify(record));
+        // eslint-disable-next-line no-await-in-loop
+        const certificate = await certifyContextEvidence(copy, readContent);
+        if (certificate !== undefined) copy.contextEvidence = certificate;
+        archived.push(copy);
+      }
+    } catch (error) {
+      poisoned = true;
+      throw error;
+    }
     // A chunk of this index can already exist only if a previous incarnation
     // wrote it and then failed before the snapshot that would have counted
     // it; the snapshot in force says it is not part of the history.
@@ -677,7 +696,7 @@ export const makeTurnJournal = powers => {
     await store(
       harden({
         version: SNAPSHOT_VERSION,
-        records: JSON.parse(JSON.stringify(excess)),
+        records: archived,
       }),
       name,
     );
@@ -799,6 +818,7 @@ export const makeTurnJournal = powers => {
     for (const record of chunkRecords) {
       assertCheckpointState(record);
       assertMailReceipt(record.mail);
+      assertContextEvidence(record);
       if (!metadataOnly) {
         // eslint-disable-next-line no-await-in-loop
         await validatePresentation(record);
