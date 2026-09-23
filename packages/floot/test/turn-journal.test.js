@@ -48,6 +48,91 @@ const options = harden({
 
 // These fixtures deliberately serialize journal transitions and publication.
 /* eslint-disable no-await-in-loop */
+test('mail receipt metadata survives dispatch replay and archival unchanged', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const mail = { from: 'sender', messageNumber: '123' };
+  const id = await journal.begin({ ...options, mail });
+  // The journal's existing pass-style boundary hardens all admitted data.
+  t.throws(
+    () => {
+      mail.from = 'renamed';
+    },
+    { instanceOf: TypeError },
+  );
+  t.deepEqual((await makeTurnJournal(f.powers).get(id)).mail, {
+    from: 'sender',
+    messageNumber: '123',
+  });
+  await journal.append(id, { type: 'finish', state: 'failed' });
+  for (let index = 0; index < 290; index += 1) {
+    const next = await journal.begin(options);
+    await journal.append(next, { type: 'finish', state: 'completed' });
+  }
+  const archived = await makeTurnJournal(f.powers).listArchived();
+  t.deepEqual(archived.find(turn => turn.turnId === id).mail, {
+    from: 'sender',
+    messageNumber: '123',
+  });
+});
+
+test('mail receipt schema rejects malformed fields before dispatch publication', async t => {
+  for (const mail of [
+    null,
+    [],
+    {},
+    { from: '' },
+    { from: 'x'.repeat(8193) },
+    { messageNumber: 123 },
+    { messageNumber: '' },
+    { messageNumber: 'x'.repeat(129) },
+    { from: 'sender', authority: 'host' },
+  ]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    await t.throwsAsync(journal.begin({ ...options, mail }));
+    t.is(f.store.size, 0);
+  }
+  for (const mail of [{ from: 'sender' }, { messageNumber: '123' }]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin({ ...options, mail });
+    t.deepEqual((await journal.get(id)).mail, mail);
+  }
+});
+
+for (const location of ['snapshot', 'archive']) {
+  test(`mail receipt ${location} rejects malformed stored metadata`, async t => {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin({
+      ...options,
+      mail: { from: 'sender', messageNumber: '123' },
+    });
+    await journal.append(id, { type: 'finish', state: 'failed' });
+    for (
+      let index = 0;
+      index < (location === 'snapshot' ? 34 : 290);
+      index += 1
+    ) {
+      const next = await journal.begin(options);
+      await journal.append(next, { type: 'finish', state: 'completed' });
+    }
+    const key = [...f.store.keys()]
+      .filter(name => name.startsWith(`floot-turn-${location}-`))
+      .sort()
+      .at(location === 'snapshot' ? -1 : 0);
+    const data = JSON.parse(JSON.stringify(f.store.get(key)));
+    data.records.find(turn => turn.turnId === id).mail.authority = 'forged';
+    f.store.set(key, harden(data));
+    const revived = makeTurnJournal(f.powers);
+    await t.throwsAsync(
+      location === 'snapshot' ? revived.list() : revived.listArchived(),
+      { message: /mail receipt fields/ },
+    );
+  });
+}
+
 test('backend checkpoint survives event replay, snapshots and archival', async t => {
   const f = fixture();
   const journal = makeTurnJournal(f.powers);

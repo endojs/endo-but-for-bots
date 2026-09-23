@@ -1460,6 +1460,7 @@ export const makeStreamingAgent = async (
       backendId: backendId || (hostedClient ? 'hosted' : 'provider'),
       modelId: modelId || '',
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
     });
     activeJournalTurn = turnId;
     activeJournalSignal = signal;

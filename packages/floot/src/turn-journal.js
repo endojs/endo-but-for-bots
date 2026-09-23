@@ -138,6 +138,27 @@ const assertCheckpointState = record => {
   ) || Fail`Backend checkpoint requires settled tool evidence`;
 };
 
+/**
+ * Presentation/receipt metadata, never model instructions or sender authority.
+ * Message numbers are opaque mailbox-local identities, not numeric counters here.
+ * @param {unknown} value
+ */
+const assertMailReceipt = value => {
+  if (value === undefined) return;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw Fail`Invalid turn journal mail receipt`;
+  }
+  const keys = Object.keys(value);
+  (keys.length > 0 &&
+    keys.every(key => ['from', 'messageNumber'].includes(key))) ||
+    Fail`Invalid turn journal mail receipt fields`;
+  const mail = /** @type {{ from?: unknown, messageNumber?: unknown }} */ (
+    value
+  );
+  if (Object.hasOwn(mail, 'from')) assertText(mail.from, PREVIEW_CHARS);
+  if (Object.hasOwn(mail, 'messageNumber')) assertText(mail.messageNumber, 128);
+};
+
 /** @param {bigint | number} sequence */
 const pad = sequence => `${sequence}`.padStart(20, '0');
 
@@ -214,12 +235,14 @@ export const makeTurnJournal = powers => {
       if (event.reasoningEffort !== undefined)
         assertText(event.reasoningEffort);
       if (event.inputRef !== undefined) assertContentRef(event.inputRef);
+      assertMailReceipt(event.mail);
       const record = {
         turnId,
         input: event.input,
         ...(event.inputRef === undefined ? {} : { inputRef: event.inputRef }),
         backendId: event.backendId,
         modelId: event.modelId,
+        ...(event.mail === undefined ? {} : { mail: event.mail }),
         ...(event.reasoningEffort === undefined
           ? {}
           : { reasoningEffort: event.reasoningEffort }),
@@ -411,6 +434,7 @@ export const makeTurnJournal = powers => {
         !records.has(record.turnId)) ||
         Fail`Invalid turn journal snapshot record`;
       assertCheckpointState(record);
+      assertMailReceipt(record.mail);
       // A turn the snapshotting incarnation still had in flight is one this
       // incarnation cannot finish; a later event may still settle it.
       if (record.state === 'pending') record.state = 'outcome-unknown';
@@ -672,7 +696,10 @@ export const makeTurnJournal = powers => {
       chunkRecords.length > 0 &&
       chunkRecords.length <= ARCHIVE_CHUNK_TURNS) ||
       Fail`Invalid turn journal archive chunk`;
-    for (const record of chunkRecords) assertCheckpointState(record);
+    for (const record of chunkRecords) {
+      assertCheckpointState(record);
+      assertMailReceipt(record.mail);
+    }
     return chunkRecords;
   };
 
@@ -770,7 +797,7 @@ export const makeTurnJournal = powers => {
         assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);
         await write({ type: 'transcript-record', turnId, ordinal, payload });
       }),
-    /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string }} options */
+    /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
     begin: options =>
       serialized(async () => {
         // Unknown historical effects are evidence, not a session-wide

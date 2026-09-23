@@ -95,6 +95,47 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
+test('mail receipt is journaled before tree receipt publication and survives its failure', async t => {
+  const f = fixture();
+  let requests = 0;
+  const provider = harden({
+    async chatStream() {
+      requests += 1;
+      return completed();
+    },
+  });
+  f.beforeStore(value => {
+    if (value.metadata?.turnId !== undefined && Array.isArray(value.messages))
+      throw Error('Receipt tree write refused');
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  const mail = harden({ from: 'sender', messageNumber: '123' });
+  await t.throwsAsync(
+    agent.converse('Incoming task', makeReplyChannel().writer, { mail }),
+    { message: /Receipt tree write refused/ },
+  );
+  t.is(requests, 0);
+  t.deepEqual(f.events()[0].mail, mail);
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  const [turn] = await revived.getTurns();
+  t.deepEqual(turn.mail, mail);
+  t.is(turn.input, 'Incoming task');
+  t.is(turn.state, 'failed');
+});
+
 test('oversized backend token is refused before success tree publication or acknowledgement', async t => {
   const f = fixture();
   let acknowledgements = 0;

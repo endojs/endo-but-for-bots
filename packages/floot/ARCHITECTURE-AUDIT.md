@@ -672,6 +672,33 @@ Scoped lint has zero errors (76 warnings), formatting/diff checks pass, and
 root documentation has zero errors (179 warnings). Independent adversarial
 review approved after the loaded-record validation gap was fixed.
 
+Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
+preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
+in the private journal before receipt-tree writes or inference. At least one
+field is required when mail metadata is present; unknown fields are refused.
+Sender text is bounded to 8192 characters and opaque mailbox-local message
+identity to 128 characters as storage profiles. Sender text is presentation,
+not authority. Replay, snapshots and archive reads validate the same shape.
+The existing hardened-data boundary freezes admitted metadata; stored/recovered
+records remain detached copies. A refused receipt-tree write still leaves the
+journal's original sender, message number and input available after reconstruction.
+
+This does **not** change mail retry/deduplication policy. Ordinary mail currently
+carries sender metadata only; typed requests/forms also carry the message number.
+The tree currently deduplicates typed receipt text, not automatic execution:
+unfinished inbox tasks can be dispatched again after restart because the inbox
+handled set is incarnation-local. At-most-once automatic admission would leave
+uncertain requests/forms and lost replies for explicit recovery, rather than
+rerunning inference or resending an uncertain reply. That behavior change is
+awaiting an operator decision; no journal receipt cache or new policy is added
+by this metadata prerequisite. Missing historical receipts are not dedup proof.
+
+All 564 Floot tests pass, including malformed snapshot/archive rejection and
+receipt recovery after a failed tree write. Scoped lint has zero errors (77
+warnings), and root documentation has zero errors (179 warnings).
+Formatting and diff checks pass; adversarial review approved the source, tests
+and scope after the metadata immutability test and type narrowing were corrected.
+
 ## FA-02 — Model context must not be built from UI previews
 
 Deployment reconciliation (generation 169, 2026-09-23): app `819aa18c8` now
@@ -2945,6 +2972,11 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Tree-retirement prerequisite: journal existing mail sender/receipt
+metadata before tree writes or inference, validating it on replay and saved-state
+reads. 564 Floot tests and lint/docs/format gates pass after adversarial review.
+No retry/deduplication policy change or Tokyo deployment claimed.
 
 2026-09-24 — Tree-retirement prerequisite: hosted successful finish journals its
 backend checkpoint before native acknowledgement, with bounded token and settled
