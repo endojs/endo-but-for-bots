@@ -81,7 +81,7 @@ The inventory starts at the unified-sandbox design commit `3332f1928` and
 includes the current branch plus associated endo-host implementation changes.
 Earlier infrastructure still used by the refactor remains in scope; this seed
 is not an exclusion boundary.
-The ancestry range through `65e939889` contains 345 commits, including upstream
+The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, including upstream
 changes that still need classification rather than an assumption of relevance.
 No claim of complete retrospective coverage is made yet.
 
@@ -100,11 +100,17 @@ No claim of complete retrospective coverage is made yet.
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
 | Model admission and account catalogs | Implemented: each pool member's catalog owner is per incarnation and deliberately ephemeral (`model-catalog.js`); admission and `modelCatalog()` read it through the member's fenced lifecycle with a non-sticky credential facet; retirement closes it after draining a read in flight, and a far share's read has a deadline; a retained broker configuration carrying an operator `models` list is refused with the retirement instruction. Twenty-four new focused tests, 656 hosted-agent tests and the real-daemon catalog reconstruction test pass. | Reconstruction re-reads the provider under the same credential owner and cannot revive retired authority or spend; the durable pin stays in the session plan. Retire and re-mint the three brokers at cutover; observe live Codex, Claude and OpenRouter catalog reads on Tokyo. Done: deployed as generation 160 (2026-09-22), the three brokers re-minted and the discovery gate reading every account's live catalog. |
 | Backend catalogs and pin admission | Implemented: no new durable state. Session plan schemas are unchanged; a new pin is admitted against the catalog before the plan is recorded and a refused pin records nothing; a reopen that names the recorded pin, or nothing, keeps it without reading the provider (each of the Codex, Claude and OpenCode provisioner suites runs a reopen through a scripted catalog outage, and a changed pin is refused then without another model taking its place); Floot's registry entry pins a direct-provider model only after it was listed; the direct provider's catalog owner is per factory incarnation and ephemeral, and is let go when the provider config is refreshed. A request naming no model takes only a default the catalog marks; an effort changed on its own keeps the recorded model; an OpenCode record without a model is a new pin, refused clearly rather than run without one. Floot 451, chat 58, space-floot 49, Claude 183, Codex 287, OpenCode 231 and hosted-agent 663 tests pass. | Reconstruction re-reads providers under existing credential owners and cannot revive retired authority. Deployed as generation 160 (2026-09-22). |
-| Session provisioning and factory (FA-06) | Implemented: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so a record the tightened reader refuses cannot be reopened or removed through the owner until the state is recreated, which the disposable-Tokyo deployment model (wipe and recreate; the operator restores the Secrets) accepts. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Deployed as generation 165 on 2026-09-22 under the wipe model; deploy with a state wipe. |
+| Session provisioning and factory (FA-06) | Implemented: no new durable state and no new formula. The plan record stays the durable boundary; its reader is tightened (sandbox id derivation, known fields only), so rejected old plans must be retired through their old owner before activation. A reopen keeps the recorded pin and revises policy, subscription and persona in place; a failed start or revision leaves the stopped record for retry. Twenty shared conformance cases per adapter and the four package suites pass. | Reconstruction is unchanged: the controller activates the recorded plan. Historically deployed as generation 165 on 2026-09-22 under the wipe model. Current cutovers preserve Secrets, renewal owners and workspace roots; no database wipe or Secret re-import is authorized. |
 | Execution envelope (FA-06) | Implemented: no new durable state. Activation acquires the same scopes in the same order under the supervisor's owner, and the exact grant, evidence and raw attestation checks now refuse for every runtime what Codex alone refused; a refused activation releases what it acquired through the supervisor's ordinary cleanup. Ten envelope cases and the three controller suites pass. | Reconstruction is unchanged: recorded scope identities and mount reclamation, never replacement acquisitions. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
 | Reply fold, turn messages, transcript delta, turn evidence (FA-10) | Implemented: no new durable state. The converter changes what a completed hosted turn commits only in a case that cannot occur (an unsettled call) and what a mirrored turn commits not at all; the fold changes what a view holds only where the two copies disagreed, on the rule the daemon already applied; the delta's wire format is unchanged and the daemon still hardens what it publishes. The shared reconciliation reads the tree and the journal as before and writes neither; it changes what a restored transcript contains only where the history rule was looser than the restoration rule (a look-alike observation under another id is evidence of its own, and a settled execution answers a mirrored call the tree left unanswered), and what the projection emits only for a result no open call in its turn can take, which no writer produces. Floot 475, chat 935, space-floot 52 and hosted-agent 675 pass. | Nothing replayed or reconstructed changes for a well-formed tree; tree nodes and journal records are written as before. Deployed as generation 165 on 2026-09-22 under the wipe model; restart/restore, cancel and deletion passed on every backend. |
 | Rebindable session bindings (FA-08) | Implemented: one new record entry, `revision`, under which the store's `revise` stages a revision's rebound edges and then its plan before any published write; a staging without a plan is discarded by the next mutation, one with a plan is intent that snapshots show applied and that every mutation and the owner's `start` and `remove` finish first, so the record is never used between two bindings; a plan-only revision stays one entry write. The first design (each edge written in turn, then the plan, the mixed state left to the execution envelope) was found not crash-safe by the operator's reviewer on 2026-09-22: the envelope cannot tell a replacement service reporting the same image and account from the original and does not check storage. A failed stop leaves the record `stopping` and unrevisable, as before. Daemon session suites (79) pass. | The pet store overwrites a name in one entry write; a crash between staged writes leaves no intent, between published writes a durable intent finished before the next activation or removal. The first design deployed as generation 165 on 2026-09-22; the one-transition revision is not deployed. |
 | Account authority in plans, profiles, catalogs and grants (FA-07, FA-08) | Implemented: no new formula. Every session plan records `accountRef`, the operator-declared account authority id, read and validated by the shared placement reader; each broker's persisted profile records it as `accountAuthority` (a new required field of all three profiles; Codex's `accountRef` stays the verified provider account and only for a single credential, the `pool` label is gone); a pool's stored subscription set records it as `id`; the grant attestation reports it and admission compares it, decoupled from the policy's provider account; the catalog snapshot carries it as `authority`. Plans and profiles from before are refused, not migrated: a plan without `accountRef` fails its reader, a profile without `accountAuthority` fails its shape check at the next start, and a retained Claude or OpenCode broker whose profile names another authority is refused by setup. hosted-agent 680, Codex 311, Claude 207, OpenCode 255 pass. | Profile fields and set ids are written once at mint and compared, never rewritten in place; the pool identity journal's pool-level account binding takes the authority id for a newly minted pool. Not deployed: needs the three host values and the three brokers retired first, since their profiles change. The pool identity journal binds a share member (somebody else's subscription) under the pool-level id, `pool` or `anthropic` before and the authority id now, and refuses a changed binding: a pool with share members minted before this release, or whose authority is later renamed, fences until those members get new ids; Tokyo's two pools have credential members only, bound under their own accounts, so nothing changes for them. |
+
+Current preservation rule supersedes historical wipe-model language above:
+retire incompatible session plans with their old owner before activation.
+Never erase Secrets or require their re-import, and preserve renewal owners,
+workspace data, and the capabilities needed to reach it.
+Historical deployment rows are not authorization for a new database wipe.
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
@@ -653,6 +659,34 @@ This remains open work. Automatic summarization additionally requires its
 cost/trigger/unknown-window policy; neither a byte cutoff nor a tree-cache
 optimization substitutes for that policy. Native producer recovery stays in
 #1323 and is not part of this storage deletion sequence.
+
+Real-daemon archive verification gap (2026-09-24): the existing direct-journal
+restart regression contains only two turns, so it proves retained-record and
+externalized-content recovery, not archived checkpoint selection or archived
+tool-evidence certificates.
+A dedicated regression now uses the production retention threshold
+and real formula-backed private storage, without an external provider request or changed
+production limits.
+It seeds a checkpoint plus an older tool settled after that checkpoint, forcing
+archive publication order to differ from turn order before cold reconstruction.
+It verifies the actual archived checkpoint index and tool-evidence certificate,
+then constructs the production streaming agent after a graceful daemon restart.
+The summary and retained tail appear once, and the late tool result remains
+explicit; superseded prose and already summarized tool output do not enter
+context.
+A wrapper counting reads from real private storage observes no externalized
+content reads during construction or recall in this fixture; requesting full
+history afterward reads both the old prose and large certified tool arguments.
+This is selective content-loading evidence, not a heap bound or constant-time
+archive scan.
+The focused regression passes through two graceful cold restarts; the second
+also preserves the recall's completed turn and the original effect marker.
+New-test lint and formatting pass; documentation has zero errors (180 warnings).
+All six adjacent real-daemon tests pass in one serial run, including private
+journal retirement and the existing direct-provider restart case.
+Final adversarial review approved the fixture, assertions and scope.
+No production implementation or storage contract changes accompany this test;
+abrupt process loss, native compaction capture and Tokyo acceptance remain open.
 
 Checkpoint prerequisite (2026-09-24, local, not deployed): successful hosted
 `finish` records now retain `backendCheckpoint` before native acknowledgement.
@@ -1354,8 +1388,20 @@ journal-only recovery and explicit session identity require retirement of
 incompatible Floot state using the old release, preserving host, Secrets,
 renewal owners and workspace roots. Generation 169/app `819aa18c8` remain active;
 no activation or live acceptance is claimed. Fresh retirement checks and the
-pending metadata-transfer approval are still required. See the same host runbook
+pending preservation approval are still required. See the same host runbook
 for the exact binary digest, system path, protection expiry, and preservation gates.
+
+Latest preparation: app `2deaf4f55` and paired host `6ecef6e` built successfully;
+host `5f46dde` records completion and `9dd03ff` records a fresh read-only preflight.
+The four immutable image pins remain unchanged: only Floot agent/tests/audit
+changed since their actual `5f784fb91` build, whose provenance is preserved.
+Preflight found two direct-provider sessions and one Claude session, one stopped
+Claude native record with cleanup acknowledged, no containers or 9p mounts,
+and six Secrets whose values were not read.
+This is not an archive or retirement proof.
+Approval for a fresh private on-Tokyo retirement snapshot and workspace-root
+archive is pending, replacing the obsolete historical snapshot-transfer request.
+No candidate has been activated; live acceptance remains open.
 
 The next live compaction test must use ordinary owned Floot turns on the free
 route, seed identifiable facts and real tool evidence, and observe reported
