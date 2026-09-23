@@ -816,7 +816,7 @@ test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', 
 });
 
 test('write rejects a generic PassableReader that merely advertises stream', async t => {
-  const rootPath = makeTempRoot(t);
+  const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
   // A generic value `PassableReader` advertises the shared `stream` method
@@ -842,7 +842,7 @@ test('write rejects a generic PassableReader that merely advertises stream', asy
 });
 
 test('write rejects an HttpResponse that advertises text but no stream', async t => {
-  const rootPath = makeTempRoot(t);
+  const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
   // An `@endo/exo-http-client` `HttpResponse` carries the readable-blob
@@ -890,7 +890,7 @@ test('write rejects an HttpResponse that advertises text but no stream', async t
 });
 
 test('write materializes a canonical ReadableBlob source (blobFromBytes)', async t => {
-  const rootPath = makeTempRoot(t);
+  const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
   // `blobFromBytes` is the repo's canonical `ReadableBlob`: its interface is

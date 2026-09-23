@@ -1879,19 +1879,15 @@ const makeReadableBlobView = (
       if (isFull) {
         return E(readOnlyFile).stream(synPromise);
       }
-      // Attenuated view: stream the selected bytes as one base64 chunk.
-      const pump = makeReaderPump(
-        mapReader(
-          /** @type {any} */ (
-            (async function* selected() {
-              const bytes = await readSelected();
-              if (bytes.length > 0) yield bytes;
-            })()
-          ),
-          encodeBase64,
+      // Attenuated view: stream the selected bytes as one chunk.
+      return bytesReaderFromIterator(
+        /** @type {any} */ (
+          (async function* selected() {
+            const bytes = await readSelected();
+            if (bytes.length > 0) yield bytes;
+          })()
         ),
-      );
-      return pump(/** @type {any} */ (synPromise));
+      ).stream(/** @type {any} */ (synPromise));
     },
     async text() {
       return isFull ? E(readOnlyFile).text() : decodeUtf8(await readSelected());

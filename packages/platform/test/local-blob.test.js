@@ -176,7 +176,7 @@ test('LocalBlob.byteRange reflects live file changes; a snapshot does not', asyn
   t.is(await E(suffix).text(), 'globe');
 });
 
-test('LocalBlob.streamBase64 confines an attenuated view to its selected bytes', async t => {
+test('LocalBlob.stream confines an attenuated view to its selected bytes', async t => {
   const payload = 'hello world\n'; // 12 bytes
   const blob = makeLocalBlob(makeTemporaryFile(t, payload));
   // The unattenuated blob streams the whole file straight off disk.

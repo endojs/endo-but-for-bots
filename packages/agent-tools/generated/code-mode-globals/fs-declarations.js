@@ -302,12 +302,11 @@ type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> 
     promise: null;
 };
 type MountPassableBytesReader<TReadReturn = undefined> = {
-    stream: (synPromise: MountERef<MountStreamNode<MountPassable, TReadReturn>>) => Promise<MountStreamNode<Uint8Array, TReadReturn>>;
-    readReturnPattern: () => MountPattern | undefined;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<Uint8Array, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
-type MountFarRef<Primary = unknown, Local = MountDataOnly<Primary>> = MountERef<Local & unknown>;
-type MountEndoReadable = {
-    stream: (synPromise: MountERef<MountStreamNode<MountPassable, MountPassable>>) => Promise<MountStreamNode<string, undefined>>;
+type MountReadableBlobView = {
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<Uint8Array, undefined>>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     sha256: () => Promise<string>;
@@ -315,14 +314,6 @@ type MountEndoReadable = {
     bytes: () => Promise<MountPassableBytesReader>;
     byteRange: (start: bigint, end: bigint) => MountReadableBlobView;
     textRange: (startLine: number, endLine: number) => Promise<MountReadableBlobView>;
-    help: (method?: string) => string;
-};
-type MountReadableBlobView = {
-    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<Uint8Array, undefined>>;
-    text: () => Promise<string>;
-    json: () => Promise<unknown>;
-    getInfo: () => Promise<MountBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
     help: (method?: string) => string;
 };
 type MountTreeEntry = {

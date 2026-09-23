@@ -635,7 +635,8 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 
 Blobs store binary content with a content-addressed hash.
 Use text() to read as a string, json() to parse as JSON,
-stream() for base64 streaming, bytes() for byte streaming,
+stream() to stream immutable byte-array chunks, bytes() for a
+PassableBytesReader over the selected bytes,
 or byteRange() / textRange() for attenuation.
 
 ## help(methodName?) -> string
