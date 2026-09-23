@@ -2020,6 +2020,18 @@ The prepared `9c41a9e865` candidate above is superseded for deployment: rebuild
 the native binary/images and prepare the matching host pins before activation.
 Live compaction/restart and dynamic-route guarantees remain open.
 
+Corrected candidate preparation (2026-09-24): app `d5d943d33`, native `af032b9fbc`,
+and host `95e0d881` are pushed and prepared on Tokyo. The source-built OpenCode
+image is `sha256:890dfa961da8f1f2555ec956e927340a1e634a803c02d9565528ab8bcae48ef0`;
+manifest and extraction/overlay logs agree on binary SHA256
+`387d4eda7026092b318a479ba316d3253ea60803f4d79ecd76b098abe2c759ef`.
+All four image pins are available as Linux amd64, the container inventory is
+empty, and paired Nix preparation passed. The corrected image remains an
+unverified restoration candidate; no activation, retirement, or inference was
+performed. The prior `9c41a9e865` candidate is not the intended deployment target.
+See the host deployment record for exact build evidence and lease expiry;
+preservation approval and live cross-backend acceptance remain pending.
+
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
 Identify the durable formula owner and dependencies, what is replayed on daemon
