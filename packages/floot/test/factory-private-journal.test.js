@@ -339,6 +339,13 @@ test('factory private journal ignores guest forgeries across revival', async t =
   const { factory, host, guestStore, counts } = makeWorld(t);
   const session = await E(factory).getSession('one');
   t.is((await E(session).getJournalStatus()).storage, 'private');
+  t.deepEqual(await E(session).getArchivedTurnsPage(), {
+    records: [],
+    next: null,
+  });
+  await t.throwsAsync(E(session).getArchivedTurnsPage('0:1'), {
+    message: /Invalid.*cursor/,
+  });
   guestStore.set(
     'floot-turn-event-00000000000000000001',
     harden({ type: 'forged' }),
@@ -354,6 +361,10 @@ test('factory private journal ignores guest forgeries across revival', async t =
   // Revive against the same private anchors; never adopt model-written copies.
   const revived = await E(make(host)).getSession('one');
   t.deepEqual(await E(revived).getTurns(), await E(session).getTurns());
+  t.deepEqual(await E(revived).getArchivedTurnsPage('0:0'), {
+    records: [],
+    next: null,
+  });
 });
 
 test('schema publication failure creates neither a registry entry nor a guest', async t => {

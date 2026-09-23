@@ -540,6 +540,20 @@ export const makeTurnJournal = powers => {
     if (sinceSnapshot >= SNAPSHOT_EVERY) await snapshot();
   };
 
+  /** @param {bigint | number} index */
+  const readArchiveChunk = async index => {
+    const chunk = copyData(
+      await E(powers).lookup(`${ARCHIVE_PREFIX}${pad(index)}`),
+    );
+    const chunkRecords = chunk?.records;
+    (chunk?.version === SNAPSHOT_VERSION &&
+      Array.isArray(chunkRecords) &&
+      chunkRecords.length > 0 &&
+      chunkRecords.length <= ARCHIVE_CHUNK_TURNS) ||
+      Fail`Invalid turn journal archive chunk`;
+    return chunkRecords;
+  };
+
   return harden({
     /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string }} options */
     begin: options =>
@@ -582,21 +596,52 @@ export const makeTurnJournal = powers => {
       serialized(async () =>
         harden(JSON.parse(JSON.stringify([...records.values()]))),
       ),
+    // One serialized cut of both halves of the journal. Readers may yield
+    // between archive pages without losing turns moved out of the retained map.
+    readView: () =>
+      serialized(async () =>
+        harden({
+          retained: JSON.parse(JSON.stringify([...records.values()])),
+          archivedTurns,
+          archiveCursor: `0:${archiveChunks}`,
+        }),
+      ),
     /**
-     * Settled turns beyond the retained window, oldest first, read from
-     * storage on request rather than held in memory.
+     * One committed chunk in archive publication order, not global turn order.
+     * The cursor pins the committed end across appends and reconstruction. It
+     * is copy data, not a capability or a durable subscription. Never accepts
+     * storage names, nor exposes an orphan chunk ahead of its snapshot.
+     * @param {string} [cursor]
+     * @returns {Promise<{records: any[], next: string | null}>}
+     */
+    listArchivedPage: cursor =>
+      serialized(async () => {
+        const text = cursor === undefined ? `0:${archiveChunks}` : cursor;
+        (typeof text === 'string' &&
+          text.length <= 64 &&
+          /^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$/.test(text)) ||
+          Fail`Invalid turn journal archive cursor`;
+        const [index, end] = text.split(':').map(value => BigInt(value));
+        (index <= end && end <= BigInt(archiveChunks)) ||
+          Fail`Invalid turn journal archive cursor`;
+        if (index === end) return harden({ records: [], next: null });
+        const page = await readArchiveChunk(index);
+        return harden({
+          records: page,
+          next: index + 1n < end ? `${index + 1n}:${end}` : null,
+        });
+      }),
+    /**
+     * All settled turns beyond the retained window, in archive publication
+     * order. Materializes the archive on request rather than retaining it.
      */
     listArchived: () =>
       serialized(async () => {
         const archived = [];
         for (let index = 0; index < archiveChunks; index += 1) {
-          const name = `${ARCHIVE_PREFIX}${pad(index)}`;
           // eslint-disable-next-line no-await-in-loop
-          const chunk = copyData(await E(powers).lookup(name));
-          (chunk?.version === SNAPSHOT_VERSION &&
-            Array.isArray(chunk.records)) ||
-            Fail`Invalid turn journal archive chunk`;
-          archived.push(...chunk.records);
+          const chunk = await readArchiveChunk(index);
+          archived.push(...chunk);
         }
         return harden(archived);
       }),

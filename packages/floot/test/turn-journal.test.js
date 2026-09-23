@@ -9,6 +9,7 @@ const fixture = () => {
   /** @type {string[]} */
   const reads = [];
   let fail = false;
+  let refuseSnapshot = false;
   const powers = Far('JournalStorage', {
     list: () => harden([...store.keys()]),
     lookup: name => {
@@ -16,6 +17,8 @@ const fixture = () => {
       return store.get(name);
     },
     storeValue: (value, name) => {
+      if (refuseSnapshot && name.startsWith('floot-turn-snapshot-'))
+        throw Error('Snapshot refused');
       if (store.has(name)) throw Error('Overwrite forbidden');
       store.set(name, value);
       if (fail) throw Error('Lost acknowledgement');
@@ -31,6 +34,9 @@ const fixture = () => {
     powers,
     fail: () => {
       fail = true;
+    },
+    refuseSnapshots: () => {
+      refuseSnapshot = true;
     },
   };
 };
@@ -665,4 +671,126 @@ test('settled turns beyond the retained window are archived; unresolved ones nev
   await t.throwsAsync(revived.get(archived[0].turnId), {
     message: /Unknown turn/,
   });
+  await revived.resolve(unknown, 'Operator reviewed unknown effect');
+  for (let index = 0; index < 40; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await revived.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await revived.append(id, { type: 'finish', state: 'completed' });
+  }
+  const later = await revived.listArchived();
+  t.true(
+    Number(later.findIndex(turn => turn.turnId === unknown)) >=
+      Number(archived.length),
+    'late-resolved old turn appears in a later publication, not turn-ID order',
+  );
+  const paged = [];
+  let cursor = (await revived.readView()).archiveCursor;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const page = await revived.listArchivedPage(cursor);
+    paged.push(...page.records);
+    if (page.next === null) break;
+    cursor = page.next;
+  }
+  t.deepEqual(paged, later);
+});
+
+test('archive pages pin a read view across growth and reconstruction', async t => {
+  t.timeout(20_000);
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  /** @param {number} count */
+  const finish = async count => {
+    for (let index = 0; index < count; index += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const id = await journal.begin(options);
+      // eslint-disable-next-line no-await-in-loop
+      await journal.append(id, {
+        type: 'finish',
+        state: 'failed',
+        error: 'failed',
+      });
+    }
+  };
+  await finish(400);
+  const view = await journal.readView();
+  const expected = await journal.listArchived();
+  f.reads.length = 0;
+  const first = await journal.listArchivedPage(view.archiveCursor);
+  t.is(f.reads.length, 1, 'one chunk lookup');
+  t.truthy(first.next);
+  await finish(80);
+  const revived = makeTurnJournal(f.powers);
+  const records = [...first.records];
+  let cursor = first.next;
+  while (cursor !== null) {
+    // eslint-disable-next-line no-await-in-loop
+    const page = await revived.listArchivedPage(cursor);
+    records.push(...page.records);
+    cursor = page.next;
+  }
+  t.deepEqual(records, expected, 'continuation excludes later publications');
+  t.is(
+    records.length + view.retained.length,
+    400,
+    'captured partition loses no turns',
+  );
+  t.is(
+    new Set([...records, ...view.retained].map(turn => turn.turnId)).size,
+    400,
+  );
+  t.true(
+    Number((await revived.status()).archivedTurns) > Number(view.archivedTurns),
+  );
+  for (const invalid of [
+    '',
+    '-1:2',
+    '0:9999999999999999999999',
+    '2:1',
+    '00:1',
+    '1:1:1',
+    '0:1.5',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(revived.listArchivedPage(invalid), {
+      message: /Invalid.*cursor/,
+    });
+  }
+  const chunkName = [...f.store.keys()].find(name =>
+    name.startsWith('floot-turn-archive-'),
+  );
+  f.store.set(
+    chunkName,
+    harden({ version: 1, records: Array(257).fill(null) }),
+  );
+  await t.throwsAsync(revived.listArchivedPage(), {
+    message: /Invalid.*chunk/,
+  });
+});
+
+test('archive pages never publish an uncounted chunk after failed snapshot', async t => {
+  t.timeout(20_000);
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  t.deepEqual(await journal.listArchivedPage(), { records: [], next: null });
+  for (let index = 0; index < 287; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  const id = await journal.begin(options);
+  f.refuseSnapshots();
+  await t.throwsAsync(
+    journal.append(id, { type: 'finish', state: 'completed' }),
+    { message: /Snapshot refused/ },
+  );
+  t.true(
+    [...f.store.keys()].some(name => name.startsWith('floot-turn-archive-')),
+  );
+  await t.throwsAsync(journal.listArchivedPage(), { message: /unavailable/ });
+  const revived = makeTurnJournal(f.powers);
+  t.deepEqual(await revived.listArchivedPage(), { records: [], next: null });
+  t.is((await revived.readView()).retained.length, 288);
 });

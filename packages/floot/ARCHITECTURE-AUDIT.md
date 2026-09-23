@@ -565,9 +565,37 @@ and filters successful turns to the selected branch.
 Reading retained records first avoids losing a turn during concurrent archival.
 Tests cross the archive boundary with 290 turns and cover hosted revival.
 This does not add a lifetime resident cache, but full-history requests still materialize
-all records: archive pagination and explicit bounded context selection remain open.
+all records: bounded context selection remains open; local archive paging is
+recorded below.
 Deployed since generation 157 (2026-09-21); not yet tested against a long-lived
 Tokyo session.
+
+Archive paging slice (2026-09-23, local, not deployed):
+`getArchivedTurnsPage(cursor?)` reads one committed archive chunk, returning
+`{ records, next }`; the continuation pins the archive boundary across appends
+and daemon reconstruction.
+Pages are in publication order, not global turn-ID order: a late-resolved old
+turn can be archived after newer settled turns.
+Journal readers capture retained records and the archive boundary in one
+serialized read, so turns moved into a newer archive during paging are not lost.
+Usage tallying folds pages instead of materializing the full archive, retaining
+only the aggregate cached for that captured boundary.
+Full-history/transcript APIs still materialize all requested records, and
+unresolved retained records can grow; this does not close bounded model context
+or compaction, nor promise a byte bound for a chunk's tool evidence.
+
+Durability: no new stored value, formula, renewal owner, or schema migration.
+The cursor is inert copy data interpreted only by the already-authorized journal;
+it has no storage path or independent authority and does not survive journal
+replacement/deletion.
+Only committed chunks are visible; an uncertain snapshot write poisons reads
+until reconstruction from stored evidence.
+Tests cover fixed-boundary paging during archive growth, reconstruction,
+late resolution, invalid/future cursors, oversized chunks, and an uncounted
+archive left by a failed snapshot write.
+The full Floot suite passes 496 tests; bounded context selection remains open.
+Package ESLint has zero errors; type checking still reports pre-existing test
+errors, with no errors in changed production files.
 
 ## FA-02 — Model context must not be built from UI previews
 

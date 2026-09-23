@@ -231,6 +231,12 @@ test('archived failures remain in UI history and direct-provider context', async
     ),
   );
   t.true(
+    (await agent.getArchivedTurnsPage()).records.some(
+      turn => turn.input === 'Preserve this failed request',
+    ),
+  );
+  t.is((await agent.getUsage()).incompleteTurns, 1);
+  t.true(
     (await agent.getHistory()).some(
       message => message.content === 'Preserve this failed request',
     ),
