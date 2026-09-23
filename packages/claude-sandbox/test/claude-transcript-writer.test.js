@@ -112,6 +112,39 @@ test('a failed result is marked as an error', t => {
   t.true(lines[1].message.content[0].is_error);
 });
 
+test('reused ids retain each result failure status independently', t => {
+  const lines = parse(
+    writeClaudeTranscript(
+      [
+        { kind: 'message', role: 'user', content: 'first' },
+        { kind: 'tool-call', id: 'same', name: 'first', args: '{}' },
+        {
+          kind: 'tool-result',
+          id: 'same',
+          content: 'failed first',
+          failed: true,
+        },
+        { kind: 'message', role: 'user', content: 'second' },
+        { kind: 'tool-call', id: 'same', name: 'second', args: '{}' },
+        { kind: 'tool-result', id: 'same', content: 'successful second' },
+      ],
+      options,
+    ),
+  );
+  const results = lines
+    .flatMap(line =>
+      Array.isArray(line.message.content) ? line.message.content : [],
+    )
+    .filter(block => block.type === 'tool_result');
+  t.deepEqual(
+    results.map(result => [result.content, result.is_error === true]),
+    [
+      ['failed first', true],
+      ['successful second', false],
+    ],
+  );
+});
+
 test('arguments that are not a JSON object still restore the call', t => {
   const lines = parse(
     writeClaudeTranscript(

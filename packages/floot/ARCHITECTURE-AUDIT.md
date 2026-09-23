@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 145 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 157 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -97,10 +97,16 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Native restoration/mount mapping (2026-09-24): twelve further entries bring
+coverage to 157 application commits (newest 15 plus earliest 142).
+The ledger records injected policy/envelope/controller evidence separately from
+live confinement and restoration acceptance; historical proposals are not counted
+as implemented authority. The reused-ID replay defect below is fixed locally.
+
 Transcript mapping (2026-09-24): twelve further entries bring coverage to 145
 application commits (newest 15 plus earliest 130). This exposed checkpoint-first
-Claude summary loss, fixed below, and cross-turn tool-result misassociation in
-all three native translations, still open. No native/live acceptance claimed.
+Claude summary loss and cross-turn tool-result misassociation in all three native
+translations, both now fixed locally below. No native/live acceptance claimed.
 
 Publication/workspace/mount mapping (2026-09-24): eight further entries bring
 coverage to 133 application commits (newest 15 plus earliest 118).
@@ -1174,11 +1180,22 @@ Secret facet, and all seven Claude pool setup tests pass.
 This changes reconstruction of existing durable transcript records, not their
 schema, ownership or retention. Not deployed or live-compaction tested.
 
-Separate confirmed follow-up: native replay pairs tools globally by provider ID,
+Native replay follow-up: replay paired tools globally by provider ID,
 so a later turn's result can answer an earlier unanswered call with the same ID.
 Claude additionally indexes paired results by raw ID, duplicating the last result
 across distinct calls. Actual-export fixtures reproduced this in all three CLI
-translations; turn-scoped pairing and call-identity indexing remain to be fixed.
+translations. The correction now requests turn-scoped pairing in Claude,
+OpenCode and Responses-item replay, and Claude indexes results by call record
+rather than raw ID. Single-turn journal recovery keeps its existing whole-turn
+pairing; durable records and schemas are unchanged.
+The 38 adjacent Floot context/recovery tests and 69 targeted codec/native-translation
+tests pass. New tests fail before the fix on all three adapters, and cover
+completed/interrupted reused IDs, cross-turn orphan refusal, same-turn retained-tail
+FIFO pairing, and Claude/OpenCode failure flags.
+Hosted-agent and Claude source type checks pass; scoped lint has no errors and
+root documentation generation passes. OpenCode has no package TypeScript project.
+These checks validate local translation, not native CLI or live-provider acceptance.
+Independent adversarial review approved the source and regressions; not deployed.
 
 `agent.js`'s `getHistory()` and `getTranscript()` read `turnJournal.list()`, which
 contains the retained window, rather than an archive-aware conversation view.
@@ -4261,6 +4278,10 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Correct reused-tool-ID replay pairing across all three CLI backends;
+69 targeted and 38 adjacent context tests pass. Map twelve native-restoration and
+mount-convergence changes with explicit evidence limits. Not deployed.
 
 2026-09-24 — Restore Claude checkpoint-first summaries; two regressions fail before
 the fix, and shared conformance covers all three CLI translations. Map twelve

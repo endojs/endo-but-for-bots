@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 334 application entries and 73 host entries still need explicit ledger
+The other 322 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -564,14 +564,44 @@ Tokyo acceptance. Historical design rows are dispositions, not implementation pr
 | `ec9bfbfa7` | Claude observed JSONL format remains a coupling | Local writer/readback conformance is not actual pinned-image acceptance |
 | `817c74bf0` | Historical remote MCP feasibility discussion | Current Claude/OpenCode use socket MCP; no bearer-loopback implementation implied |
 | `2fdc08230` | Neutral transcript design adopted in private journal | Journal owns durable compaction and exceptional effects; JSONL alone establishes neither atomic persistence nor replay safety |
-| `c13ba0a7b` | Pure shared record codec and pairing helpers | Strict parsing and retained-tail expansion retained; global pairing callers have a confirmed cross-turn reuse defect, recorded in FA-01 |
+| `c13ba0a7b` | Pure shared record codec and pairing helpers | Strict parsing and retained-tail expansion retained; cross-turn reuse defect in multi-turn callers reproduced and corrected by the FA-01 replay follow-up |
 | `027e55ed4` | Original tree authority retired | Journal recovery supplies evidence; constructor refuses legacy tree state. Old tree-only/drop-orphan rationale does not describe current ownership |
 | `3e680010b` | Journal-owned checkpoint boundary | Current checkpoint validation/index and context reader retain committed boundary, tail and exceptional effects; original segment support alone did not establish this |
 | `983685820` | Structured handoff retained and strengthened | Context excludes current turn and superseded dialogue, preserves failed/uncertain evidence; full-history APIs remain separate |
 | `111904231` | Historical native format observations | Claude JSONL observation remains relevant; Codex's historical no-import limitation is superseded by Responses-item restoration |
-| `a605ac441` | Disposable Claude native transcript writer | Checkpoint-first summary loss reproduced and fixed with shared conformance. Repeated tool-ID result association is a separate confirmed follow-up |
+| `a605ac441` | Disposable Claude native transcript writer | Checkpoint-first summary loss and repeated tool-ID result misassociation reproduced and fixed with shared conformance; native/live acceptance remains separate |
+
+### Native restoration and attested mount convergence
+
+Twelve more diffs were compared with current code by an independent reviewer.
+Fresh local checks pass 92 sandbox policy/runtime cases, 15 shared policy/envelope
+cases (one skipped), 32 Claude profile/controller/conformance cases, 33 OpenCode
+profile/controller cases and 12 Codex conformance cases at that review checkpoint.
+These use injected infrastructure/local translations, not kernel confinement,
+provider inference, daemon restart or process-loss recovery.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `008febc3e` | Journal-owned Claude restoration; native file disposable | Empty-store-only behavior superseded by `3e130f7c0`, wrong file contents fixed by `5edcf9eb3`; current controller writes restored records even if native storage survives |
+| `09cf0fc78` | Codex journal-to-native restoration | Text preamble superseded by structured `thread/inject_items` in `362011c3f`; failed restoration refuses prompt start. No model-capacity guarantee |
+| `ed152dce4` | Stateless Claude translation and shared conformance | Retained/expanded; local inverse-format tests are not pinned-CLI acceptance. Reused-ID regression now addressed separately |
+| `53956f4a2` | Historical MCP transport proposal | Current Claude/OpenCode retain socket-directory binds, not loopback bearer MCP |
+| `b1de53d27` | Reconstructible sandbox policy and mount attestation | Bind source/mode/options checked against roots; attach requires 9P evidence. Policy owns neither storage nor host-bind quotas |
+| `421d1231c` | Adapter profile declarations and shared verifier | Claude state and both MCP binds retained; OpenCode durable native-state bind retired |
+| `40a10848c` | Historical migration progress note | Intermediate-state documentation, no runtime owner or current completion evidence |
+| `ec032d33c` | Existing native session scope exposes attested make | Existing runtime/scope owns cleanup; generic makeResolved remains, no new persistent owner |
+| `33ff95844` | Shared resource-profile constants/calculation | Envelope counts tmpfs/shm, not host-bind or capability workspace capacity; no new durable authority |
+| `55e6bca73` | Claude activation consolidated into shared envelope | Current envelope checks returned placement and policy; former duplicated controller assembly superseded |
+| `de8ad3a72` | OpenCode activation consolidated into shared envelope | State bind retired; supervisor still owns provider/mount/sandbox cleanup, not policy declarations |
+| `22ed11e77` | Historical mount-convergence completion note | Hosted controllers use attested make, no hosted makeResolved caller found; old nativeProfile description superseded by current schemas. Live-kernel acceptance separate |
 
 ### Post-snapshot changes
+
+- Multi-turn replay now uses turn-scoped pairing for Claude, OpenCode and Codex
+  Responses items; Claude also indexes by call record rather than raw ID.
+  Shared regressions distinguish prior interrupted calls from later reused IDs,
+  reject cross-turn orphan results and preserve FIFO within retained tails.
+  Durable journals and single-turn recovery are unchanged; not deployed.
 
 - Claude restoration now carries a checkpoint-first summary even without
   superseded input. Two regressions failed before the fix; shared checkpoint-first
