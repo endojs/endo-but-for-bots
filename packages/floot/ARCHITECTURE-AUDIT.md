@@ -152,6 +152,21 @@ before pins transfer to this helper remain an open rollback boundary; this fix
 must not be described as comprehensive guest-construction rollback.
 This is ordinary failed-acquisition cleanup, not the deferred native-loss design.
 
+Publication validation follow-up (2026-09-24, local, not deployed):
+the five baseline type diagnostics above are corrected in the test fixtures.
+The oracle fixture imports its sibling implementation explicitly without adding
+a daemon-to-hosted-agent dependency cycle; marshal tests use the typed directory
+result, validate passability, and parse formula identifiers at the boundary.
+Daemon `lint:types` now passes; changed-test ESLint has zero errors and three
+existing safe-await warnings. All 11 marshal-publication and account-oracle
+lifecycle tests pass, including real daemon restart and lost-acknowledgement cases.
+The broader tests exposed two old assertions that expected an unpublished marshal
+formula to remain after a write succeeded but its acknowledgement failed.
+Error-path graph draining in `71dfde012` now reclaims it before returning failure;
+the tests require absence while retaining the existing-name preservation checks.
+Independent source review confirmed this strengthens the cleanup contract rather
+than hiding a lost published value. No native process-loss recovery is claimed.
+
 Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
 the four-formula legacy helper. Host cancellation calls `provideController`, so
 the old implementation could construct dormant legacy modules during retirement.
