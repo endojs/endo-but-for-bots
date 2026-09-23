@@ -8164,6 +8164,61 @@ __metadata:
   languageName: node
   linkType: hard
 
+"ava@patch:ava@npm%3A8.0.1#~/.yarn/patches/ava-npm-8.0.1-b8bcbeb736.patch":
+  version: 8.0.1
+  resolution: "ava@patch:ava@npm%3A8.0.1#~/.yarn/patches/ava-npm-8.0.1-b8bcbeb736.patch::version=8.0.1&hash=d1fca8"
+  dependencies:
+    "@vercel/nft": "npm:^1.5.0"
+    acorn: "npm:^8.16.0"
+    acorn-walk: "npm:^8.3.5"
+    ansi-styles: "npm:^6.2.3"
+    arrgv: "npm:^1.0.2"
+    arrify: "npm:^3.0.0"
+    callsites: "npm:^4.2.0"
+    cbor2: "npm:^2.3.0"
+    chalk: "npm:^5.6.2"
+    chunkd: "npm:^2.0.1"
+    ci-info: "npm:^4.4.0"
+    ci-parallel-vars: "npm:^1.0.1"
+    cli-truncate: "npm:^6.0.0"
+    code-excerpt: "npm:^4.0.0"
+    common-path-prefix: "npm:^3.0.0"
+    concordance: "npm:^5.0.4"
+    currently-unhandled: "npm:^0.4.1"
+    debug: "npm:^4.4.3"
+    emittery: "npm:^2.0.0"
+    figures: "npm:^6.1.0"
+    globby: "npm:^16.2.0"
+    ignore-by-default: "npm:^2.1.0"
+    indent-string: "npm:^5.0.0"
+    is-plain-object: "npm:^5.0.0"
+    is-promise: "npm:^4.0.0"
+    matcher: "npm:^6.0.0"
+    memoize: "npm:^11.0.0"
+    ms: "npm:^2.1.3"
+    p-map: "npm:^7.0.4"
+    package-config: "npm:^5.0.0"
+    picomatch: "npm:^4.0.4"
+    plur: "npm:^6.0.0"
+    pretty-ms: "npm:^9.3.0"
+    resolve-cwd: "npm:^3.0.0"
+    slash: "npm:^5.1.0"
+    stack-utils: "npm:^2.0.6"
+    supertap: "npm:^3.0.1"
+    temp-dir: "npm:^3.0.0"
+    write-file-atomic: "npm:^7.0.1"
+    yargs: "npm:^18.0.0"
+  peerDependencies:
+    "@ava/typescript": "*"
+  peerDependenciesMeta:
+    "@ava/typescript":
+      optional: true
+  bin:
+    ava: entrypoints/cli.js
+  checksum: 10c0/26c6b272768ba89ca721ccd2a85cedf010e603e1b18634dee7249fd838c942a670a670b056c6c2e618454a31c35e8a0e5b03e5a1711a9d8aa37081dbe96b32af
+  languageName: node
+  linkType: hard
+
 "axios@npm:^1.8.3":
   version: 1.10.0
   resolution: "axios@npm:1.10.0"

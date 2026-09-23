@@ -1,0 +1,20 @@
+diff --git a/lib/snapshot-manager.js b/lib/snapshot-manager.js
+index 07e2eff32ab3fb0733dd0ec60913cb9322ca80da..a7d41c7406874368ca33dd34b69e196a385810fb 100644
+--- a/lib/snapshot-manager.js
++++ b/lib/snapshot-manager.js
+@@ -207,6 +207,15 @@ types.registerEncoder(Array, writeArray);
+ types.registerEncoder(Uint8Array, writeUint8Array);
+ 
+ function encodeSnapshots(snapshotData) {
++	// Endo patch: a shim loaded after this module (the @endo/immutable-arraybuffer
++	// view emulation installed by SES) can replace the global Uint8Array, so
++	// `value.constructor` no longer matches the constructor registered above and
++	// cbor2 would encode the bytes as a `{0: ..., 1: ...}` map. Register the
++	// current global too.
++	if (types.get(globalThis.Uint8Array) === undefined) {
++		types.registerEncoder(globalThis.Uint8Array, writeUint8Array);
++	}
++
+ 	const encoded = encodeCbor(normalizeBeforeEncoding(snapshotData), {
+ 		ignoreGlobalTags: true,
+ 		rejectUndefined: true,
