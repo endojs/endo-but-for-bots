@@ -1565,6 +1565,11 @@ pub mod engine {
                     .collections()
                     .checked_add(1)
                     .ok_or(MachineError::Refused(Refusal::CollectionCounterExhausted))?;
+                // Stay on the full collector: the partial and generational
+                // ones decide from the SQLite store's `edge_pairs` index,
+                // which open trusts on its epoch marker without re-deriving
+                // it. Revisit designs/ironhorse-snapshot-store-seam.md
+                // § Named integrity limitations, item 3, before switching.
                 let stats = session
                     .full_collect(&*self.store.borrow())
                     .map_err(store_err)?;
