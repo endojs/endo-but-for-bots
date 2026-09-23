@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 77 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 81 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -114,7 +114,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 62 application changes, plus the first 20 host
+not. The newest 15 and earliest 66 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA

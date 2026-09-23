@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 402 application entries and 73 host entries still need explicit ledger
+The other 398 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -387,6 +387,23 @@ are injected and do not establish live Linux or Tokyo behavior.
 |---|---|---|
 | `aaca97706` | Explicit native-profile Podman operations retain an inert trusted gate until identity, resource, mount and network observations succeed; ordinary operation owner retains failed removal and uncertain execution | Gate/operation tests cover held reads, cancellation before and after release issuance, first stdin, uncaptured stdout and failed-cleanup capacity. Current synchronous release and uncertainty semantics include later fixes. Image no-alias and trusted procfs/cgroupfs visibility remain host preconditions; seccomp mode does not prove filter contents. This branch is not used by the current hosted envelope |
 | `3a95b12d7` | Original OpenCode recorded-profile parsing/request was removed by `1366b2e31`; current hosted plans reject the obsolete field. Generic sandbox export and native-scope profile guard remain | Current plan tests verify refusal; runtime tests verify exact profile shape before driver acquisition. FA-05 records the lower-level branch as a removal candidate pending public/retained-caller tracing. Historical controller tests do not prove current hosted limits or restart behavior |
+
+### Native setup and shared session placement
+
+Four more changes are traced to retained setup and storage owners rather than
+treating their original deployment descriptions as current acceptance evidence.
+Fresh shared session-plan/state-storage suites pass 22 tests, session-storage
+passes two, and mount-caplet passes 34.
+Independent OpenCode setup-host/setup-hosted/session-plan suites pass 44 tests.
+State-storage interruption tests inject checkpoints and reconstruct local objects;
+they do not establish native process quiescence or actual power-loss durability.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `c6033c49f` | Host setup mints the native sandbox service with persisted environment and a null-powers formula; existing service keeps its recorded configuration | Retained setup refuses bound legacy runtime and leftover ownership before replacement. Naming checks are not native stop proof, and setup does not retire old processes. Original OpenCode state-provider setup was subsequently removed |
+| `30219602e` | Validated rootless mount-program settings travel in the passive session plan; shared workspace projection passes them to the session-owned mounter | Current plan and mount-caplet tests cover accepted/refused settings and cancellation/drain. Programs are trusted host configuration, not guest capabilities; injected mount commands do not establish live privileged unmount behavior |
+| `c91c3b8c6` | Shared plan parsing, session-storage removal and native state placement replace adapter copies; recorded plans remain owned by the daemon session owner | Shared tests exercise normalized paths, storage removal and interrupted ownership publication. Later `baecab949` replaces original fixed-directory placement with unique inode-bound allocations; `1366b2e31` removes hosted native-profile parsing and `d2959f834` removes obsolete OpenCode state-provider wiring. Current ownership records are not independent proof of native stop; stable host roots and administrative serialization remain preconditions |
+| `d96ec4e4e` | Lockfile adds only the local @endo/9p-server workspace dependency used by shared plan mount-program validation | No external version change, new formula owner or storage schema. Runtime evidence belongs to the preceding extraction and retained mount-program checks |
 
 ### Post-snapshot changes
 
