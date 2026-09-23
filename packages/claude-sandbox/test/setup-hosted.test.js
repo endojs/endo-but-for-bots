@@ -92,6 +92,14 @@ const makeFakeHost = ({ failMint } = {}) => {
             return harden({
               type: 'make-unconfined',
               properties: {
+                ...(id === 'session-storage-id'
+                  ? {
+                      powers: {
+                        kind: 'reference',
+                        identifier: 'state-provider-id',
+                      },
+                    }
+                  : {}),
                 specifier: {
                   kind: 'literal',
                   value: specifiers.get(id) ?? unsupportedSpecifier,

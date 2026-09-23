@@ -1409,6 +1409,36 @@ errors (176 warnings), Claude production and hosted-agent type checks pass,
 scoped lint has no errors, and 25 Claude broker/controller plus ten shared
 execution-envelope tests pass. Full test-file type cleanup remains open.
 
+### State provider ownership check — 2026-09-23
+
+Tracing the open re-rooting issue found a second necessary invariant: Claude
+and Codex activation resolve the record's `stateProvider`, but deletion runs
+through the storage owner's captured powers. Previously backend construction
+checked workspace/private roots, not that captured provider identity. A retained
+storage owner could therefore delete through a different provider than the one
+used to prepare the new incarnation. Codex setup checked this only at setup;
+Claude retained existing storage without the equivalent check.
+
+Corrected locally: the verified-formula reader can require an exact powers
+reference, checked on the same immutable formula whose environment it reads.
+Both backends capture the selected state-provider identity and require their
+storage owner to hold it before requesting a daemon session owner. Claude setup
+does the same before retaining storage. Missing powers, literal look-alikes and
+other reference identities are refused; there is no lookup or invocation of the
+captured capability. Twenty shared setup tests, 23 Claude module/setup tests and
+nine Codex owned-backend tests pass, including refusal before owner creation.
+Full backend suites also pass: Claude 209, Codex 313. Hosted-agent types and
+both adapters' production types pass; scoped lint has no errors.
+
+Durability: no schema or stored-state change. Each backend reconstruction repeats
+the exact-formula check; existing records keep their own captured dependencies.
+No native resources or credentials are acquired by the check. This does not
+prove old resources have stopped and does not retire mismatched owners itself.
+Not deployed. The remaining FA-08 change is to record a required immutable
+`stateRoot` for Claude/Codex plans, sourced from that provider's environment,
+and refuse changed-root provider rebinds before stop/revision. OpenCode has no
+separate durable native state provider; its private placement is already recorded.
+
 ## FA-09 — Give local development storage an explicit role
 
 The projected 9P workspace is a capability filesystem, not a promise of ordinary local
@@ -2159,6 +2189,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | FA-08: require Claude/Codex deletion owner to capture the same state provider used for activation; Claude setup also refuses mismatched retained storage | 52 focused tests; no new durable state; immutable native state-root pin still open; not deployed |
 | 2026-09-23 | Repair Claude broker public JSDoc type and shared OCI literal inference from binding-vocabulary refactor; quarantine stale local generated profile declarations | Docs passes, zero errors; Claude production and hosted-agent types pass; 35 focused tests; no runtime/durability change |
 | 2026-09-23 | FA-08: read-only recorded/proposed binding inspection and actual binding snapshot in rebind replies; delegated runners refuse operator identity disclosure | Three adapter conformance suites and Floot regression tests; durability boundary documented; live rebind and state-root placement remain open |
 | 2026-09-23 | Acceptance runners preserve driver failures and stop before later phases, restart, or session deletion; remove transient copies even on setup failure | Four local test methods, 36 scenarios; shell syntax checks pass; no daemon-state change; Tokyo acceptance pending connectivity |

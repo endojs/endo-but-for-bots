@@ -19,7 +19,10 @@ import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 import { makeCodexBackendFactory } from '../src/codex-backend-factory.js';
 import { normalizeCodexModelDescriptor } from '../src/codex-models.js';
 import { adaptEndoTools } from '../src/endo-tools.js';
-import { makeCodexSessionProvisioner } from '../src/codex-backend-module.js';
+import {
+  make as makeBackend,
+  makeCodexSessionProvisioner,
+} from '../src/codex-backend-module.js';
 
 const model = harden({
   id: 'model-a',
@@ -57,6 +60,43 @@ const scriptedCatalog = () => {
   return { catalog, state };
 };
 const testCatalog = scriptedCatalog().catalog;
+
+test('Codex refuses a storage owner holding another provider before creating an owner', async t => {
+  const moduleUrl = new URL('../src/codex-backend-module.js', import.meta.url);
+  const specifiers = {
+    'native-sandbox': '../../sandbox/src/native-agent.js',
+    'broker-service': './codex-broker-service-agent.js',
+    'state-provider': './codex-state-provider-module.js',
+    'session-storage': './codex-session-storage-module.js',
+  };
+  let ownerRequests = 0;
+  const host = Far('Host', {
+    identify: (_namespace, name) => name,
+    diagnostics: () =>
+      Far('Diagnostics', {
+        getFormula: name =>
+          harden({
+            type: 'make-unconfined',
+            properties: {
+              specifier: {
+                kind: 'literal',
+                value: new URL(specifiers[name], moduleUrl).href,
+              },
+              powers: { kind: 'reference', identifier: 'old-state-provider' },
+            },
+          }),
+      }),
+    getFormulaEnvironment: () => harden({}),
+    provideSessionOwner: () => {
+      ownerRequests += 1;
+      throw Error('unexpected owner');
+    },
+  });
+  await t.throwsAsync(makeBackend(host, undefined), {
+    message: /storage owner must use the selected state provider/,
+  });
+  t.is(ownerRequests, 0);
+});
 
 test('Codex factory delegates checkpoint operations and retains failed native stop for retry', async t => {
   const calls = [];

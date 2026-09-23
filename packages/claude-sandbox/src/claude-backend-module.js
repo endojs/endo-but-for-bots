@@ -165,12 +165,12 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   // Exact dependency identities are captured once, by verified entrypoint,
   // for the sessions this incarnation records; an existing record keeps the
   // identities it was created with.
-  const [sandbox, broker, state, storage] = await Promise.all([
+  const [sandbox, broker, state] = await Promise.all([
     readNativeSandbox(hostAgent),
     readBrokerService(hostAgent),
     readStateProvider(hostAgent),
-    readSessionStorage(hostAgent),
   ]);
+  const storage = await readSessionStorage(hostAgent, state.identifier);
   (storage.roots.workspaceDir === workspaceBaseDir &&
     storage.roots.mcpDir === mcpBaseDir) ||
     Fail`Backend roots must equal the recorded session storage owner's roots`;

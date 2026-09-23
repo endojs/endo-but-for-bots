@@ -87,8 +87,45 @@ const makeFakeHost = () => {
       bindings.set(key(options.resultName), `minted-${specifier}`);
     },
   });
-  return { host, seed, bindings, calls };
+  return { host, seed, bindings, calls, formulas };
 };
+
+test('a provisioned storage owner must capture the expected provider identity', async t => {
+  const { host, seed, formulas } = makeFakeHost();
+  seed(['adapter', 'storage'], 'storage-id', 'file:///storage.js', {});
+  const options = {
+    label: 'Adapter',
+    namePath: ['adapter', 'storage'],
+    expectedSpecifier: 'file:///storage.js',
+    expectedPowersIdentifier: 'state-id',
+  };
+  const formula = formulas.get('storage-id');
+  for (const powers of [
+    undefined,
+    { kind: 'literal', value: 'state-id' },
+    { kind: 'reference', identifier: 'other-id' },
+  ]) {
+    formulas.set('storage-id', {
+      ...formula,
+      properties: { ...formula.properties, powers },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(readProvisionedEnvironment(host, options), {
+      message: /storage owner must use the selected state provider/,
+    });
+  }
+  formulas.set('storage-id', {
+    ...formula,
+    properties: {
+      ...formula.properties,
+      powers: { kind: 'reference', identifier: 'state-id' },
+    },
+  });
+  t.deepEqual(await readProvisionedEnvironment(host, options), {
+    identifier: 'storage-id',
+    env: {},
+  });
+});
 
 test('a provisioned formula is read by its verified entrypoint and named by its last segment', async t => {
   const { host, seed } = makeFakeHost();

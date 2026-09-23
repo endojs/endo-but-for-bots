@@ -126,12 +126,17 @@ export const make = async (host, _context, { env = {} } = {}) => {
       namePath: ['codex-sandbox', name],
       expectedSpecifier: current(relative),
     });
-  const [sandbox, broker, state, storage] = await Promise.all([
+  const [sandbox, broker, state] = await Promise.all([
     read('native-sandbox', '../../sandbox/src/native-agent.js'),
     read('broker-service', './codex-broker-service-agent.js'),
     read('state-provider', './codex-state-provider-module.js'),
-    read('session-storage', './codex-session-storage-module.js'),
   ]);
+  const storage = await readProvisionedEnvironment(host, {
+    label: 'Codex',
+    namePath: ['codex-sandbox', 'session-storage'],
+    expectedSpecifier: current('./codex-session-storage-module.js'),
+    expectedPowersIdentifier: state.identifier,
+  });
   const brokerConfig = readCodexBrokerConfig(broker.env);
   const protectedRoots = harden([
     assertCodexStateRoot(state.env.ENDO_CODEX_STATE_DIR),

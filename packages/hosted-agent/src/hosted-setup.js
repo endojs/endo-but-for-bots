@@ -45,11 +45,13 @@ import { assertAccountAuthority } from './account-authority.js';
  * @param {string[]} options.namePath The pet name path of the formula;
  *   messages name its last segment.
  * @param {string} options.expectedSpecifier
+ * @param {string} [options.expectedPowersIdentifier] When supplied, require
+ *   this exact captured powers reference, not the current value of a pet name.
  * @returns {Promise<{ identifier: string, env: Record<string, string> }>}
  */
 export const readProvisionedEnvironment = async (
   host,
-  { label, namePath, expectedSpecifier },
+  { label, namePath, expectedSpecifier, expectedPowersIdentifier },
 ) => {
   const name = namePath[namePath.length - 1];
   const identified = await E(host).identify(...namePath);
@@ -62,6 +64,12 @@ export const readProvisionedEnvironment = async (
     specifier?.kind === 'literal' &&
     specifier.value === expectedSpecifier) ||
     Fail`${b(label)} ${b(name)} has an unsupported entrypoint. Retire the old runtime and prove its processes have stopped before replacing its formula; removing its name alone is insufficient.`;
+  if (expectedPowersIdentifier !== undefined) {
+    const powers = record.properties.powers;
+    (powers?.kind === 'reference' &&
+      powers.identifier === expectedPowersIdentifier) ||
+      Fail`${b(label)} ${b(name)} captures different powers; its storage owner must use the selected state provider`;
+  }
   const env = await E(host).getFormulaEnvironment(identifier);
   return harden({ identifier, env: env ?? {} });
 };

@@ -225,7 +225,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     'session-storage',
   );
   const { workspaceDir, mcpDir } = existingStorage
-    ? (await readSessionStorage(hostAgent)).roots
+    ? (await readSessionStorage(hostAgent, state.identifier)).roots
     : requestedRoots;
   // Refuse before any mint what the storage owner would refuse at
   // construction; a formula that cannot construct is still bound and would be
