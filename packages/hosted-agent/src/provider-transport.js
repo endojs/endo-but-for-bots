@@ -317,7 +317,7 @@ export const makeProviderFetchTransport = ({
             const valueOk =
               typeof value === 'string' && /^[\t\x20-\x7e]*$/.test(value);
             if (!nameOk || !valueOk) {
-              detail = `header ${name} ${nameOk ? 'value' : 'name'}`;
+              detail = nameOk ? 'header value' : 'header name';
             }
             (nameOk && valueOk) || Fail`Invalid provider header`;
           }

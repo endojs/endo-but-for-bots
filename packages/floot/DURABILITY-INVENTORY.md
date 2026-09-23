@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 372 application entries and 73 host entries still need explicit ledger
+The other 362 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -489,8 +489,37 @@ pass 43 lal, 19 Fae and five Floot tests without live inference.
 | `5173330d2` | First refused response chunk, bounded to 1024 bytes, reaches host diagnostics only | Audit found bare bearer-token and truncation-prefix leakage; remediation and regression evidence recorded in main audit. Does not persist logs or turn evidence |
 | `6cd58e3cc` | Listener/grant filter forwarded header shapes; broker overwrites credentials, content type and trusted adapter headers | Current transport follows generalized shape rule after `8d6fac389`; grant/quota ownership unchanged. Per-request ephemeral data, not new durable storage |
 
+### Header contracts, publication and recorded mount reclamation
+
+Ten more historical entries are mapped below. Fresh provider boundary checks pass
+134 tests; the diagnostic correction adds three regressions and its transport
+suite passes 36 tests. Current publication tests pass 20 cases, and asset-server
+tests pass 45, including five real-daemon cases with graceful reconstruction.
+Recorded-cleanup/supervisor tests pass 16 local/injected cases. The preceding
+14 setup tests are reused for unchanged probe code, not counted as a fresh run.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `418a4cffc` | Transport validates header-name shape rather than provider-name allowlist | Origin, exact route, account and credential authority remain with grant/broker; ephemeral request checks, no new durable owner |
+| `f5a4adfe3` | HTAB/printable-ASCII header values and request-stage diagnostics retained | Audit found invalid names interpolated into nominally fixed diagnostics; now fixed labels only. Exo already bounds key lengths, so this was data exposure, not demonstrated unbounded public input |
+| `f24b255bb` | Tests exact bounded-query admission/refusal | Listener teardown leak fixed later by `6a84419d1`; current tests own teardown. Local HTTP/fake fetch, no live OAuth proof |
+| `e834f15b8` | Grant headers optional through split-record guard; supplied values still validated | Current request/requestStream/requestBytes support omission. No new persistent state or authority |
+| `8d6fac389` | Redundant ChatGPT header-route branch removed | Broker policy/adaptation still owns route and credential authority; transport shape checks do not grant new origins |
+| `6d92480d8` | Tests widened header forwarding plus retained credential/host/CRLF bounds | Current 134 provider tests pass; original echo canary missed bare bearer values, fixed by `fc024770f`. No restart/native-loss claim |
+| `75bc605ee` | Missing-parent sandbox probe validates before creating namespace state | Current Claude/OpenCode setup code unchanged from preceding 14-test verification; no live host/mount probe claim |
+| `ee91b2f31` | Original Filesystem-only admission superseded by durable asset target classification/store | Current server accepts supported Filesystem/Mount/Git roots, takes read-only views and retains durable targets. 45 tests include graceful daemon restart, revocation and orphan sweep; injected cleanup failure coverage is local, not crash fault injection |
+| `c08a3c177` | Original tool-side publication projection now preflight only | Daemon-minted workspace goes to asset server for durable retention; session stores publication intent/id/url, sharing serialization across tool incarnations. 20 tool tests pass; derived views are not treated as durable owners |
+| `f76cedd1a` | Recorded-path mount reclamation retained through shared supervisor | 16 cleanup/supervisor tests pass; socket absence and missing scope observations do not prove producer quiescence. Header overclaim corrected; unresolved independent shutdown/recovery remains #1323 |
+
 ### Post-snapshot changes
 
+- Failed startup orphan cleanup in the durable asset store now returns an
+  unreadable entry through the existing administrator listing path instead of
+  silently hiding the uncertain target. Existing retained names remain the owner;
+  explicit release can retry and unaffected siblings continue. New injected test
+  fails before the fix; no new journal, automatic retry policy or shutdown proof.
+- Invalid provider header names/values now produce fixed diagnostic labels,
+  without request data; three regressions verify no fetch and no canary echo.
 - Public OpenRouter catalog reads use the existing bounded JSON reader at 16 MiB;
   oversize cancels, malformed body text stays out of diagnostics, and optional
   metadata failure preserves the reply and retry backoff. This is not an output cap.

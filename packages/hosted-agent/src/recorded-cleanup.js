@@ -9,10 +9,9 @@
  * recovered, and a reconstructed controller must not invent substitutes for
  * them.
  *
- * Almost everything that implies takes care of itself. The MCP listener died
- * with its process, and `startMcpSocketServer` already unlinks a stale socket
- * before binding. A slice container outlives the worker but is reconciled by
- * the driver's label sweep. The kernel 9P mount is the exception: it was
+ * Other cleanup paths handle MCP sockets and labelled slice containers, but
+ * their presence is not independent proof of shutdown after process loss.
+ * The kernel 9P mount needs separate recorded-path reclamation: it was
  * established by an external `mount` program, so it survives every process
  * that knew about it, and nothing else will ever take it down. Left in place
  * it fails every read of the mount point with EIO and blocks the storage owner
@@ -24,13 +23,16 @@
  * remove it, which is what `removeMountPointOnUnmount` promised the mounter
  * would do. Nothing here creates a mount, a scope, or a socket.
  *
- * The safety argument is a check, not an inference. The mount's transport is a
- * unix socket in the session's recorded private socket directory, served by
- * the bridge inside the worker that mounted it. If any of those sockets still
- * accepts a connection, that bridge is alive, this is not a lost worker, and
- * the unmount is refused. Only a socket directory with no live listener — the
- * bridge provably gone — is reclaimed. That is stronger evidence than a fresh
- * mounter kit's `close()`, which proves nothing about mounts it never made.
+ * This check supplies endpoint evidence, not native shutdown proof. The mount's
+ * transport is a unix socket in the session's recorded private socket directory,
+ * served by the bridge inside the worker that mounted it. If any socket still
+ * accepts a connection, the unmount is refused. Reclamation proceeds only when
+ * no listener is observed, but enumeration and connection probes do not fence
+ * late producers, drain accepted connections, or prove that native resources
+ * stopped. A fresh mounter kit's `close()` likewise proves nothing about mounts
+ * it never made. Independent shutdown and reconstruction proof remains the
+ * unresolved boundary documented in designs/hosted-native-recovery-investigation.md
+ * and tracked by #1323; this helper does not establish it.
  *
  * @module
  */

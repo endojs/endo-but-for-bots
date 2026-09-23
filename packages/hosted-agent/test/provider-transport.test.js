@@ -107,6 +107,49 @@ test('any well-shaped header reaches the network; the route is not this layer\u2
   t.is(dispatched, 2, 'only the two well-shaped requests reached fetch');
 });
 
+for (const { label, headers, detail } of [
+  {
+    label: 'malformed name',
+    headers: { 'bad name-canary': 'value-canary' },
+    detail: 'header name',
+  },
+  {
+    label: 'oversized name',
+    // Above transport's 64-character name limit, below Exo's key limit.
+    headers: { ['name-canary'.repeat(8)]: 'value-canary' },
+    detail: 'header name',
+  },
+  {
+    label: 'invalid value',
+    headers: { 'x-private-name-canary': 'value-canary\r\ninjected' },
+    detail: 'header value',
+  },
+]) {
+  test(`request diagnostics do not echo a ${label}`, async t => {
+    const diagnostics = [];
+    let fetches = 0;
+    const subject = setup(
+      async () => {
+        fetches += 1;
+        return new Response('unexpected');
+      },
+      diagnostic => {
+        diagnostics.push(diagnostic);
+      },
+    );
+    t.teardown(subject.dispose);
+    await t.throwsAsync(
+      () => E(subject.transport).request(harden({ ...request, headers })),
+      {
+        message: 'Provider transport failed',
+      },
+    );
+    t.deepEqual(diagnostics, [{ stage: 'request', detail }]);
+    t.false(JSON.stringify(diagnostics).includes('canary'));
+    t.is(fetches, 0);
+  });
+}
+
 test('host diagnostics contain only fixed stages and bounded HTTP status', async t => {
   const diagnostics = [];
   const capture = diagnostic => {

@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 107 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 117 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -96,6 +96,25 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Header/publication/reclamation mapping (2026-09-24): ten more entries bring
+coverage to 117 application commits (newest 15 plus earliest 102).
+Current asset-server tests pass 45 cases, including five real-daemon cases for
+graceful restoration, retained read-only targets, revocation and startup orphan
+sweep; Floot publication tests pass 20. The audit found that a failed orphan
+sweep silently hid a possibly retained target. The store now reports a fixed
+unreadable entry using the existing admin listing path; explicit release can
+retry, other orphan removals continue, and the cause's private text is not exposed.
+A new injected-powers regression fails before the fix and verifies reconstruction
+over retained names and later release; this is not abrupt daemon-loss testing.
+Header diagnostics also exposed caller-supplied invalid names despite promising
+fixed check labels. The transport now emits only `header name` or `header value`;
+three regressions verify no echoed data or fetch, and all 36 transport tests pass.
+Current Exo guards already cap names, so no unbounded public-input claim is made.
+The recorded-mount cleanup header now states the real limit: absent endpoints
+are not proof that producers stopped. Its 16 cleanup/supervisor tests use local
+socket probes and injected effects, not native process-loss recovery; #1323 remains
+open. No persistence format, credential owner or shutdown mechanism was added.
 
 Provider/metadata/diagnostics mapping (2026-09-24): twelve further entries bring
 coverage to 107 application commits (newest 15 plus earliest 92). Current local
@@ -184,7 +203,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 92 application changes, plus the first 20 host
+not. The newest 15 and earliest 102 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -4116,6 +4135,11 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Map ten header/publication/reclamation changes; surface failed asset
+orphan cleanup for explicit release, remove request-data echoes from header-check
+diagnostics, and correct native cleanup proof wording. Local and graceful-daemon
+tests recorded above; no Tokyo deployment or new recovery architecture.
 
 2026-09-24 — Map twelve provider/UI/setup changes; bound optional OpenRouter public
 catalog reads and screen bare/truncated credential echoes from host refusal logs.
