@@ -1,7 +1,9 @@
 // @ts-check
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { makeAccountReadingSource } from '@endo/hosted-agent/account-source.js';
+// Test-only integration fixture: avoid a daemon -> hosted-agent dependency cycle.
+// eslint-disable-next-line import/no-relative-packages
+import { makeAccountReadingSource } from '../../hosted-agent/src/account-source.js';
 
 /** @param {any} host */
 export const make = host => {

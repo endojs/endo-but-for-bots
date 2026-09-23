@@ -53,6 +53,26 @@ no retained formula referring to it.
 
 ## Findings register
 
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 77 of
+479 application commits and 20 of 93 host commits to explicit semantic evidence.
+The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
+and 56-test 9P runs. This is coverage progress, not closure of the audit or live
+deployment acceptance. The caplet slice exposed the pin leak fixed in `71dfde012`;
+later guest-construction fixes and remaining identity-key limits are recorded below.
+The following MCP/provider setup and native construction slice adds four more
+mappings: 52 adapter/runtime tests and 63 daemon ownership tests pass.
+The real native-session-owner graceful-restart regression passes after shortening
+its fixture socket path below macOS limits; no assertions or timeouts were changed.
+Subsequent construction fixes and remaining identity-key limits are recorded below.
+Three cancellation/tool-authority mappings add 37 focused passing tests and two
+real-daemon checks: pending-constructor stop with sibling preservation, and tools
+remaining transient across graceful restart. Only their socket fixture names were
+shortened for macOS; assertions and timeouts are unchanged.
+Five per-request preparation/issuance and shared-service-scope changes are now
+mapped too: 234 focused tests pass across sandbox and hosted-agent suites.
+The evidence covers live-owner retry and sibling isolation, not recovery of
+ephemeral scope maps after process loss or live Podman descendant quiescence.
+
 ### Native recovery — separate research follow-up
 
 The dedicated [investigation and scope decision](../../designs/hosted-native-recovery-investigation.md)
@@ -77,13 +97,231 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Broker composition/environment/diagnostics mapping (2026-09-24): four additional
+changes have explicit ownership and supersession entries in the ledger.
+Fresh focused sandbox and provider-listener suites pass 95 tests; independent
+OpenCode broker-service and broker-agent suites pass 15.
+Captured engine environment retains trusted operator configuration authority;
+stderr diagnostics are bounded per chunk, not over the listener lifetime.
+Live-owner cleanup tests do not establish daemon-loss recovery or durable logs.
+
 The inventory starts at the unified-sandbox design commit `3332f1928` and
 includes the current branch plus associated endo-host implementation changes.
 Earlier infrastructure still used by the refactor remains in scope; this seed
 is not an exclusion boundary.
-The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, including upstream
-changes that still need classification rather than an assumption of relevance.
-No claim of complete retrospective coverage is made yet.
+The [commit-by-commit coverage ledger](DURABILITY-INVENTORY.md) now enumerates
+all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
+`73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
+with conservative path-based triage rather than an assumption of relevance or
+correctness. Enumeration is complete for those exact ranges; semantic review is
+not. The newest 15 and earliest 62 application changes, plus the first 20 host
+changes, have individual owner/evidence/limitation entries based on source and
+test-diff review; other entries still need mapping to
+the evidence recorded here. Independent Git verification found exact unique SHA
+coverage and matching triage counts in both repositories.
+Earlier retained infrastructure and subsequent changes remain in scope.
+No claim of complete retrospective durability coverage is made yet.
+
+Generated-file ownership mapping (2026-09-24): three additional implementation
+diffs are traced to current literal validation, exclusive private staging, and
+Podman teardown ownership. All 74 focused sandbox tests pass.
+Failed removal retains files and reservations; existing roots are not reused.
+This is local filesystem/injected-process evidence, not live kernel isolation or
+daemon-loss recovery. The remaining crash-reconciliation boundary stays in #1323.
+Three adjacent Podman/bwrap/factory cleanup changes also have explicit owner and
+limitation mappings; their focused suites pass 107 tests after an authorized
+cache-write rerun. Their retryable ownership registries remain process-local.
+Five subsequent factory/control-command/local-engine changes are also mapped;
+131 focused tests pass, including direct Node closure and injected Podman cases.
+Unavailable optional native checks are not live acceptance evidence.
+An uncertain producer can remain retained even after container removal succeeds;
+this deliberate refusal is not automatic recovery or proof of quiescence.
+The next three driver changes bind controls to full container IDs, retain missing
+startup witnesses, and account separately for native command closure.
+Their mappings cite 153 focused sandbox tests; filesystem and injected-engine
+evidence does not establish live Podman behavior or daemon-loss recovery.
+The persisted-environment daemon regression initially failed before assertions
+because its 120-character socket path exceeded the macOS limit.
+A short fixture name fixes the test path; the unchanged assertion now passes
+against a real daemon after intentional caplet startup failure.
+This verifies stored environment retrieval, not restart or process-loss recovery.
+Seven subsequent provisioning/record/identity changes now have explicit mappings,
+including the deleted static session-powers module's disposition.
+Fresh OpenCode suites pass 74 tests and focused daemon suites pass 34 tests.
+The real-daemon passive-record test also passes across graceful restart after a
+short socket fixture name is supplied; it verifies retained reference edges and
+nonactivation, not native process-loss recovery or cross-owner exclusion.
+Five following session-forwarding/native-path/state-storage/mounter/stream changes
+are mapped, including superseded storage formats and removed OpenCode entrypoints.
+All focused owner, factory, storage, endpoint and mounter suites pass locally;
+in-process reconstruction and CapTP loopback are not daemon-loss recovery evidence.
+
+Failed caplet powers publication (2026-09-24, local fix under validation):
+`providePowersId` transfers auto-created guest dependency pins, but
+`formulateCapletDependencies` releases them only on its successful path.
+Worker selection, deferred naming publication or fresh-worker formulation can
+reject first; callers and the graph lock do not supply pin rollback.
+The existing failed-publication regression uses `powersName: '@none'` and thus
+has no transferred pins to test. A new real-daemon GC regression fails before the
+fix: the guest survives removal of its last published name. It passes after the
+fix, checking guest/worker reclamation and unrelated-guest preservation.
+Deferred tasks now settle every admitted publication before reporting failure;
+transferred pins release in finally, and graph cleanup drains on rejection outside
+the graph job token. Four focused publication tests pass, including synchronous
+and asynchronous failures with a held sibling; adversarial source review passed.
+The adjacent deferred-task, imported-reference, resource-registry, session-record,
+and directory suites pass (37 tests); changed-file ESLint reports zero errors
+and 78 warnings. Daemon typechecking still fails with five diagnostics in
+`_account-oracle-lifecycle-powers.js` and `marshal-publication.test.js`;
+an isolated HEAD source archive with the same installed dependencies reproduces
+all five diagnostics without this change. The type gate is not green.
+Failures inside powers construction
+before pins transfer to this helper remain an open rollback boundary; this fix
+must not be described as comprehensive guest-construction rollback.
+This is ordinary failed-acquisition cleanup, not the deferred native-loss design.
+
+Pre-transfer follow-up source review (2026-09-24, reproduced and fixed locally):
+`formulateGuestDependencies` has no rollback when a later dependency rejects after
+earlier pins were acquired; `formulateGuest` releases pins only after deferred
+publication and guest formulation succeed; `providePowersId` loses the pin list
+if guest formulation rejects before returning it to the caplet helper.
+Eight injected-persistence regressions fail before the fix and pass afterward:
+direct guest and automatic powers creation, mail-hub and guest writes, and failures
+before persistence or after a completed write loses its acknowledgement.
+The builder now releases acknowledged pins on failure; direct guest construction
+releases them in finally; automatic powers construction releases them if guest
+formulation fails before transfer. Direct guest names now publish only after
+guest persistence and graph registration, avoiding a named guest whose dependency
+edges are absent when cleanup runs. Tests require failed guest aliases to be absent,
+acquired dependencies and failed guest formulas to be reclaimed, and unrelated
+guests to survive. Successful creation remains usable; partial name publication
+retains the guest and worker formulas. Removing the partial publication then
+reclaims its guest and worker.
+These tests use the daemon manager and actual persistence with injected workers,
+not a daemon process restart or native process-loss experiment.
+The four adjacent publication regressions also pass; daemon typechecking and
+changed-file formatting pass, with no changed-file ESLint errors.
+`writeAgentKey` is synchronous by contract and SQLite implementation, so its lack
+of `await` is not a defect. Releasing known pins does not by itself establish
+ownership of partial formulas whose identifiers never returned, nested directory
+construction rollback, or agent-key retirement; those remain separate checks.
+At `12d79432a`, the after-write mail-hub case explicitly demonstrated an unreturned
+formula still on disk; that commit did not solve every failed acquisition.
+
+Numbered guest dependency follow-up (2026-09-24, local, not deployed):
+expanded failure injection covers handle, mailbox-store, mail-hub, pet-store,
+worker and guest writes, before and after persistence, for both direct creation
+and automatic powers. The 24-case baseline has ten failures: every numbered
+dependency's written-then-rejected case on both paths.
+The builder now reserves and pins each exact dependency ID before the write,
+not after its result returns. Existing graph collection deletes those IDs even
+when the rejected acknowledgement prevented graph registration; rejected writes
+have not yet entered formula evaluation and cannot have started native effects.
+Successfully registered workers still use ordinary controller cancellation.
+All 24 cases now pass, including an injected-worker witness that cancellation
+settles before guest-write failure returns while control workers stay live.
+Four adjacent publication regressions, daemon typechecking and formatting pass;
+changed-file ESLint reports zero errors. Independent adversarial review passed.
+The worker witness observes the control protocol, not real process termination.
+Nested directory acquisition, agent-key retirement, failed cleanup retries and
+abrupt process loss are not solved by this reservation change.
+
+Nested directory follow-up (2026-09-24, local, not deployed):
+`formulateDirectory` now reserves both the directory and its backing-store IDs
+before either persistence operation. Failure releases both reservations; success
+transfers only the directory pin, whose registered dependency edge retains the
+store. This keeps the existing caller publication/cleanup contract unchanged.
+The 40-case guest matrix reproduced 12 failures before this fix at the first or
+second nested store/directory write, including lost acknowledgements.
+All 44 expanded cases pass afterward: the guest cases plus four direct-directory
+write failures. Direct-directory cases were added after implementation, so they
+are not claimed as before/after reproductions. Successful direct publication and
+removal reclaim both directory and store; nested failures retain the unrelated
+guest and settle the injected failed guest worker cancellation.
+Adjacent directory and marshal suites, daemon typechecking and formatting pass;
+changed-file lint reports no errors. Adversarial source and test review passed.
+These are actual persistence/in-process daemon tests with injected worker control,
+not native termination or crash-recovery proof. `formulateDirectoryForStore`,
+agent-key retirement and failed collection retry ownership remain separate checks.
+
+Agent identity-key retention — reproduced, unresolved (2026-09-24):
+all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
+record despite having no persisted formulas left under its node. The four direct
+directory cases add no keys. The 44-case fixture now characterizes this explicitly
+using record counts and owner identities, without putting private key material
+in assertions. These are temporary characterization assertions of an open defect,
+not a requirement to preserve orphan keys; replace them with reclamation assertions
+when safe retirement is implemented. This concerns daemon agent identities, not
+provider Secrets, subscription credentials or renewal ownership.
+
+Source review found no manager call to `deleteAgentKey`. Its SQLite implementation
+deletes only the key row, without retiring retention rows or live followers.
+The key is also operational metadata: `hasAgentKey` determines `isLocalId`, local
+graph dependencies and local-versus-remote evaluation; host/guest reincarnation
+finds the key by agent formula number. Startup uses it to reconstruct retention
+edges. Inbound/outbound peer-retention followers capture the agent identity once
+and continue updating retention state. A collected guest alone therefore does
+not prove that independently retained formulas or peer activity can lose the key.
+
+Next design/test boundary: distinguish a never-exposed failed construction from
+general agent retirement. The former needs exact node-wide formula absence,
+settled construction/collection cleanup and proof that identity authority was not
+published; the latter also needs active retention/connection retirement and
+surviving-formula checks. Do not add unconditional key deletion in a construction
+finally or infer these conditions from an absent guest formula. No runtime key
+deletion is implemented by this characterization; this is not a native recovery
+architecture commitment or completion of the finding.
+
+Publication validation follow-up (2026-09-24, local, not deployed):
+the five baseline type diagnostics above are corrected in the test fixtures.
+The oracle fixture imports its sibling implementation explicitly without adding
+a daemon-to-hosted-agent dependency cycle; marshal tests use the typed directory
+result, validate passability, and parse formula identifiers at the boundary.
+Daemon `lint:types` now passes; changed-test ESLint has zero errors and three
+existing safe-await warnings. All 11 marshal-publication and account-oracle
+lifecycle tests pass, including real daemon restart and lost-acknowledgement cases.
+The broader tests exposed two old assertions that expected an unpublished marshal
+formula to remain after a write succeeded but its acknowledgement failed.
+Error-path graph draining in `71dfde012` now reclaims it before returning failure;
+the tests require absence while retaining the existing-name preservation checks.
+Independent source review confirmed this strengthens the cleanup contract rather
+than hiding a lost published value. No native process-loss recovery is claimed.
+
+Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
+the four-formula legacy helper. Host cancellation calls `provideController`, so
+the old implementation could construct dormant legacy modules during retirement.
+The helper now detaches only exact approved names, preserves existing identity
+checks, and explicitly requires old-daemon shutdown after effectful success or
+failure. Tests forbid cancellation and exercise actual removal failure/retry,
+reappearance and the entrypoint error instructions; three fail before the fix.
+All 44 related host helper tests pass after independent review. Pushed, not run on
+Tokyo. Name detachment is not global revocation or proof that native producers
+stopped. Historical completed retries can still fail safely after metadata GC.
+
+Old restoration acceptance runner — identified boundary (2026-09-24):
+`endo-host/ops/verify-restoration.mjs` verified requested backend coverage, but its
+old seed path created a session and obtained its ID before writing the manifest with
+ordinary `writeFile`. A lost create response can leave an unrecorded session;
+replacement writes can truncate; retry replaces unfinished session IDs, losing
+their cleanup references. `run-cutover4-restoration.sh` invoked this seed path.
+Coverage tests alone did not establish a durable acquisition/cleanup ledger.
+Existing historical acceptance observations are not erased, but do not prove this
+failure boundary safe. This is separate from native #1323.
+
+Restoration acceptance remediation (host `f922568`, 2026-09-24, not deployed):
+the host runner now records version-two intent before create, seed, and recall;
+uncertain acknowledgements stop the phase without replacing IDs or retrying sends.
+Private manifests use exclusive locks and file-sync/rename/parent-sync publication.
+Cleanup holds both locks in stable order through deletion and requires exact
+model/title identity and the completed seed/recall pair; extra turns prevent cleanup.
+Unknown-ID creation attempts remain inspectable by their unique recorded title.
+All 53 focused tests pass, independently rerun during adversarial review, including
+reopened-state publication failures and actual-filesystem lock exclusion.
+Four inert shell-wrapper tests pass; this is not live inference or power-loss proof.
+Old manifests require manual inspection, not automatic migration or replay.
+Locks exclude cooperating runners, not UI activity or hostile same-UID processes;
+exclusive operator use and trusted private directory ancestry remain prerequisites.
+The local runner defect is addressed; deployment/live acceptance remain open.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for
@@ -1831,6 +2069,21 @@ these macOS tests could not. Still open on the host: no Tokyo run asserted a
 slice's effective limits, and the obsolete field was never presented to the
 parsers because old plans were retired before activation.
 
+Retained-code follow-up (2026-09-24): the separate lower-level `nativeProfile`
+option and its Podman startup-gate/profile/mount-observer branch still exist in
+`@endo/sandbox`, including an exported profile validator and native scope guard.
+Current production JavaScript references are confined to sandbox internals;
+the shared hosted execution envelope uses the attested policy path instead.
+This is a removal candidate, not proof of unreachable code: exported native
+scopes accept the option and retained external formulas may call them.
+Before deletion, trace those public entrypoints and retained callers, and separate
+this branch from helpers still required by the active attested-policy path.
+Do not restore the unused hosted setting merely to justify retaining the branch.
+Fresh startup-gate/profile/mount/operation suites pass 72 tests, native runtime
+passes 20, and OpenCode plan parsing passes 17 (including obsolete-field refusal).
+These establish local protocol and injected-observation behavior, not current
+hosted kernel isolation, live resource limits, or daemon-loss recovery.
+
 ## FA-06 — One session provisioner and execution envelope
 
 The three `*-backend-module.js` implementations repeat service resolution, placement,
@@ -3387,6 +3640,17 @@ exports/tests no longer suggest a supported second topology.
 
 ## FA-13 — Align host image provisioning with the new builder
 
+Retrospective publication follow-up (2026-09-24): host `4e2a574` adds the missing
+parent-directory flush after atomically replacing the candidate image manifest.
+The command cannot acknowledge a successful candidate lease before that flush.
+A failed file flush preserves the old manifest; a failed directory flush reports
+failure while retaining the uncertain visible replacement, without rollback or
+deletion. Three new tests verify ordering, both failure boundaries, temporary-file
+cleanup, and descriptor closure; two failed before the fix. All 32 current
+image/holder/storage tests pass after independent review. Pushed to both remotes,
+not deployed. No new formula, credential owner, lease period, or automatic activation.
+This is injected-I/O evidence, not a physical power-loss test.
+
 In endo-host, `modules/endo-daemon.nix:309` builds the Claude image directly with Podman.
 It does not pass the `ENDO_DEV_IMAGE` argument required by the new
 `packages/claude-sandbox/oci/Containerfile`.
@@ -3684,6 +3948,31 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Mapped five more application network/runtime changes and seven host
+retirement/acceptance changes. Found and fixed legacy cancellation-triggered
+revival in host `c98eb5d`; 44 helper tests pass. Fresh network/MCP/policy checks
+pass (62 shared, 3 Claude, 7 OpenCode, 13 Codex). Corrected stale design text about
+OpenCode network integration. Opened the old restoration runner's unrecorded-create,
+manifest replacement and abandoned-ID boundary explicitly; not yet remedied.
+No Tokyo runtime or Secret changes.
+
+2026-09-24 — Initial host durability mapping found a missing candidate-manifest
+directory flush. Corrected in host `4e2a574` after regression reproduction and
+independent review; 32 image/holder/storage tests pass. Thirteen early host commits
+now have owner/disposition/limitation mappings; 20 inventory/archive helper tests
+also pass. The first six application commits are mapped to their retained grant,
+MCP, cleanup and registry boundaries; superseded factory integrations are not
+counted as current evidence. The design's stale three-adapter cleanup-scope claim
+is corrected. No remote runtime state changed and no deployment occurred.
+
+2026-09-24 — Added the retrospective change ledger: 479 application and 93 host
+commits enumerated, including upstream and reverted work. Path-based triage is
+explicitly not semantic durability approval. The remaining work is to connect
+every retained implementation to its owner, replay/retirement rules and evidence,
+including infrastructure predating the enumeration seeds. The newest 15 changes
+are individually mapped with evidence limitations. Independent review verified
+exact unique coverage and classifications in both repositories. No deployment change.
 
 2026-09-24 — Claude diagnostic reads no longer hold turn failures behind stalled
 stderr reads or iterator closure. Partial excerpts survive the read deadline and

@@ -608,8 +608,11 @@ const makeDaemonCore = async (
     }
     formulaGraphLockDepth += 1;
     let result;
+    const failures = [];
     try {
       result = await formulaGraphJobs.enqueue(asyncFn);
+    } catch (error) {
+      failures.push(error);
     } finally {
       formulaGraphLockDepth -= 1;
     }
@@ -619,7 +622,18 @@ const makeDaemonCore = async (
     // (e.g., CapTP messages triggering graph mutations on a
     // remote callback) can acquire it without deadlock.
     // eslint-disable-next-line no-use-before-define
-    await drainCollectionCleanup();
+    try {
+      await drainCollectionCleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        'Graph operation and collection cleanup failed',
+      );
+    }
     return result;
   };
   console.log('Node', localNodeNumber);
@@ -5687,21 +5701,35 @@ const makeDaemonCore = async (
   const formulateDirectory = async (nodeNumber = localNodeNumber) => {
     return /** @type {FormulateResult<EndoDirectory>} */ (
       withFormulaGraphLock(async () => {
-        const { id: petStoreId } = await formulateNumberedPetStore(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          nodeNumber,
-        );
+        const storeNumber = /** @type {FormulaNumber} */ (await randomHex256());
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
-        /** @type {DirectoryFormula} */
-        const formula = {
-          type: 'directory',
-          petStore: petStoreId,
-        };
-        const result = await formulate(formulaNumber, formula, nodeNumber);
-        pinTransient(result.id);
-        return result;
+        const storeId = formatId({ number: storeNumber, node: nodeNumber });
+        const directoryId = formatId({
+          number: formulaNumber,
+          node: nodeNumber,
+        });
+        // Reserve both identities before writes can lose acknowledgements.
+        pinTransient(storeId);
+        pinTransient(directoryId);
+        let transferred = false;
+        try {
+          await formulateNumberedPetStore(storeNumber, nodeNumber);
+          /** @type {DirectoryFormula} */
+          const formula = { type: 'directory', petStore: storeId };
+          const result = await formulate(formulaNumber, formula, nodeNumber);
+          transferred = true;
+          return result;
+        } finally {
+          // On success the directory edge retains its store; only its pin is
+          // transferred to the caller. Failed construction retains neither.
+          await Promise.all(
+            (transferred ? [storeId] : [storeId, directoryId]).map(
+              unpinTransient,
+            ),
+          );
+        }
       })
     );
   };
@@ -6015,103 +6043,97 @@ const makeDaemonCore = async (
       return id;
     };
 
-    // Generate the agent keypair first so we know the agent's node number.
     const guestFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
     );
-    const keypair = await generateEd25519Keypair();
-    const agentNodeNumber = /** @type {NodeNumber} */ (
-      toHex(keypair.publicKey)
-    );
-    const guestId = formatId({
-      number: guestFormulaNumber,
-      node: agentNodeNumber,
-    });
-    persistencePowers.writeAgentKey(
-      toHex(keypair.publicKey),
-      toHex(keypair.privateKey),
-      guestId,
-    );
+    try {
+      // Generate the agent keypair first so we know the agent's node number.
+      const keypair = await generateEd25519Keypair();
+      const agentNodeNumber = /** @type {NodeNumber} */ (
+        toHex(keypair.publicKey)
+      );
+      const guestId = formatId({
+        number: guestFormulaNumber,
+        node: agentNodeNumber,
+      });
+      persistencePowers.writeAgentKey(
+        toHex(keypair.publicKey),
+        toHex(keypair.privateKey),
+        guestId,
+      );
 
-    const handleId = pin(
-      await formulateNumberedHandle(
-        /** @type {FormulaNumber} */ (await randomHex256()),
+      // Retain each exact identity before persistence can succeed and lose its
+      // acknowledgement. Rollback can then collect even an unregistered formula.
+      const reserveNumber = async () => {
+        const number = /** @type {FormulaNumber} */ (await randomHex256());
+        pin(formatId({ number, node: agentNodeNumber }));
+        return number;
+      };
+      const handleId = await formulateNumberedHandle(
+        await reserveNumber(),
         guestId,
         agentNodeNumber,
-      ),
-    );
-    const mailboxStoreId = pin(
-      (
-        await formulateNumberedMailboxStore(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          agentNodeNumber,
-        )
-      ).id,
-    );
-    const mailHubId = pin(
-      (
-        await formulateNumberedMailHub(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          mailboxStoreId,
-          agentNodeNumber,
-        )
-      ).id,
-    );
+      );
+      const { id: mailboxStoreId } = await formulateNumberedMailboxStore(
+        await reserveNumber(),
+        agentNodeNumber,
+      );
+      const { id: mailHubId } = await formulateNumberedMailHub(
+        await reserveNumber(),
+        mailboxStoreId,
+        agentNodeNumber,
+      );
 
-    const storeId = pin(
-      (
-        await formulateNumberedPetStore(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          agentNodeNumber,
-        )
-      ).id,
-    );
-    const workerId = pin(
-      (
-        await formulateNumberedWorker(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
-        )
-      ).id,
-    );
-    // Each guest gets its own (initially empty) networks directory that
-    // controls which connection hints appear in locators it produces.
-    // Newly formulated directories transfer one construction pin. Adopt it;
-    // caller-provided directories require a new pin for this construction.
-    /** @param {FormulaIdentifier | undefined} [specifiedId] */
-    const retainDirectory = async specifiedId => {
-      if (specifiedId !== undefined) return pin(specifiedId);
-      const { id } = await formulateDirectory(agentNodeNumber);
-      pinned.push(id);
-      return id;
-    };
-    const networksDirectoryId = await retainDirectory(
-      specifiedNetworksDirectoryId,
-    );
-    const planesDirectoryId = await retainDirectory();
-    // The guest may manage its own @pins, while host-owned relationship pins
-    // remain outside the guest's namespace and authority.
-    const guestPinsDirectoryId = await retainDirectory(
-      specifiedGuestPinsDirectoryId,
-    );
-    const hostPinsDirectoryId = await retainDirectory();
-    return harden({
-      guestFormulaNumber,
-      guestId,
-      handleId,
-      agentNodeNumber,
-      hostAgentId,
-      hostHandleId,
-      storeId,
-      mailboxStoreId,
-      mailHubId,
-      workerId,
-      networksDirectoryId,
-      planesDirectoryId,
-      guestPinsDirectoryId,
-      hostPinsDirectoryId,
-      pinned,
-    });
+      const { id: storeId } = await formulateNumberedPetStore(
+        await reserveNumber(),
+        agentNodeNumber,
+      );
+      const { id: workerId } = await formulateNumberedWorker(
+        await reserveNumber(),
+        { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
+      );
+      // Each guest gets its own (initially empty) networks directory that
+      // controls which connection hints appear in locators it produces.
+      // Newly formulated directories transfer one construction pin. Adopt it;
+      // caller-provided directories require a new pin for this construction.
+      /** @param {FormulaIdentifier | undefined} [specifiedId] */
+      const retainDirectory = async specifiedId => {
+        if (specifiedId !== undefined) return pin(specifiedId);
+        const { id } = await formulateDirectory(agentNodeNumber);
+        pinned.push(id);
+        return id;
+      };
+      const networksDirectoryId = await retainDirectory(
+        specifiedNetworksDirectoryId,
+      );
+      const planesDirectoryId = await retainDirectory();
+      // The guest may manage its own @pins, while host-owned relationship pins
+      // remain outside the guest's namespace and authority.
+      const guestPinsDirectoryId = await retainDirectory(
+        specifiedGuestPinsDirectoryId,
+      );
+      const hostPinsDirectoryId = await retainDirectory();
+      return harden({
+        guestFormulaNumber,
+        guestId,
+        handleId,
+        agentNodeNumber,
+        hostAgentId,
+        hostHandleId,
+        storeId,
+        mailboxStoreId,
+        mailHubId,
+        workerId,
+        networksDirectoryId,
+        planesDirectoryId,
+        guestPinsDirectoryId,
+        hostPinsDirectoryId,
+        pinned,
+      });
+    } catch (error) {
+      await Promise.all(pinned.map(unpinTransient));
+      throw error;
+    }
   };
 
   /** @type {DaemonCore['formulateNumberedGuest']} */
@@ -6159,16 +6181,18 @@ const makeDaemonCore = async (
         networksDirectoryId,
       );
 
-      await deferredTasks.execute({
-        agentId: identifiers.guestId,
-        handleId: identifiers.handleId,
-      });
-
-      const result = await formulateNumberedGuest(identifiers);
-      for (const id of identifiers.pinned) {
-        unpinTransient(id);
+      try {
+        // Persist and register dependency edges before publishing either name.
+        // The handle pin retains the guest's identity group through publication.
+        const result = await formulateNumberedGuest(identifiers);
+        await deferredTasks.execute({
+          agentId: identifiers.guestId,
+          handleId: identifiers.handleId,
+        });
+        return result;
+      } finally {
+        await Promise.all(identifiers.pinned.map(unpinTransient));
       }
-      return result;
     });
   };
 
@@ -6447,7 +6471,13 @@ const makeDaemonCore = async (
       hostAgentId,
       hostHandleId,
     );
-    const guestFormulation = await formulateNumberedGuest(guestFormulationData);
+    let guestFormulation;
+    try {
+      guestFormulation = await formulateNumberedGuest(guestFormulationData);
+    } catch (error) {
+      await Promise.all(guestFormulationData.pinned.map(unpinTransient));
+      throw error;
+    }
     // Return pins to the caller for deferred unpinning — the guest
     // must be named (via deferred tasks) before its pins are removed.
     return {
@@ -6487,57 +6517,60 @@ const makeDaemonCore = async (
       hostHandleId,
       specifiedPowersId,
     );
-    // Allocate a fresh worker identity without starting its process. Like
-    // formulateWorker, publish ownership before persisting/evaluating it.
-    // A rejected publication must not leave a newly acquired worker behind.
-    const freshWorkerNumber =
-      specifiedWorkerId === undefined
-        ? /** @type {FormulaNumber} */ (await randomHex256())
-        : undefined;
-    const workerId =
-      freshWorkerNumber === undefined
-        ? await provideWorkerId(
-            specifiedWorkerId,
-            trustedShims,
-            workerLabel,
-            undefined,
-            workerKind,
-          )
-        : formatId({ number: freshWorkerNumber, node: localNodeNumber });
-    // When a new node worker was created because the specified worker
-    // was XS-only, record the original so that cancelling the original
-    // worker cascades to the caplet.  This is a runtime dependency only,
-    // not persisted in the formula JSON.
-    const originalWorkerId =
-      specifiedWorkerId && workerId !== specifiedWorkerId
-        ? specifiedWorkerId
-        : undefined;
-    const identifiers = harden({
-      powersId,
-      capletId: formatId({
-        number: ownFormulaNumber,
-        node: localNodeNumber,
-      }),
-      capletFormulaNumber: ownFormulaNumber,
-      workerId,
-      originalWorkerId,
-    });
-    // Execute deferred tasks first (stores pet names, creating
-    // pet-store edges) so that the powers guest is reachable
-    // before we unpin its dependencies.
-    await deferredTasks.execute(identifiers);
-    if (freshWorkerNumber !== undefined) {
-      const worker = await formulateNumberedWorker(freshWorkerNumber, {
-        kind: workerKind,
-        trustedShims,
-        label: workerLabel,
+    try {
+      // Allocate a fresh worker identity without starting its process. Like
+      // formulateWorker, publish ownership before persisting/evaluating it.
+      // A rejected publication must not leave a newly acquired worker behind.
+      const freshWorkerNumber =
+        specifiedWorkerId === undefined
+          ? /** @type {FormulaNumber} */ (await randomHex256())
+          : undefined;
+      const workerId =
+        freshWorkerNumber === undefined
+          ? await provideWorkerId(
+              specifiedWorkerId,
+              trustedShims,
+              workerLabel,
+              undefined,
+              workerKind,
+            )
+          : formatId({ number: freshWorkerNumber, node: localNodeNumber });
+      // When a new node worker was created because the specified worker
+      // was XS-only, record the original so that cancelling the original
+      // worker cascades to the caplet.  This is a runtime dependency only,
+      // not persisted in the formula JSON.
+      const originalWorkerId =
+        specifiedWorkerId && workerId !== specifiedWorkerId
+          ? specifiedWorkerId
+          : undefined;
+      const identifiers = harden({
+        powersId,
+        capletId: formatId({
+          number: ownFormulaNumber,
+          node: localNodeNumber,
+        }),
+        capletFormulaNumber: ownFormulaNumber,
+        workerId,
+        originalWorkerId,
       });
-      retainWorker?.(worker.id, worker.context);
+      // Execute deferred tasks first (stores pet names, creating
+      // pet-store edges) so that the powers guest is reachable
+      // before we unpin its dependencies.
+      await deferredTasks.execute(identifiers);
+      if (freshWorkerNumber !== undefined) {
+        const worker = await formulateNumberedWorker(freshWorkerNumber, {
+          kind: workerKind,
+          trustedShims,
+          label: workerLabel,
+        });
+        retainWorker?.(worker.id, worker.context);
+      }
+      return identifiers;
+    } finally {
+      // execute() drains every admitted publication before rejecting. Durable
+      // names now retain successful publications; failed ones need no pin.
+      await Promise.all(powersPinned.map(unpinTransient));
     }
-    for (const id of powersPinned) {
-      unpinTransient(id);
-    }
-    return identifiers;
   };
 
   /** @type {DaemonCore['formulateUnconfined']} */

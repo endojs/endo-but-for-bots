@@ -658,7 +658,10 @@ test.serial(
   'session records retain exact references without activating clients',
   async t => {
     t.timeout(30_000);
-    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { cancelled, config } = await prepareConfig(t, {
+      gcEnabled: true,
+      configName: 'rec',
+    });
     const plan = '{"sessionId":"session-a"}';
     let references;
     let recordId;
@@ -1086,7 +1089,7 @@ testNeedsNodeWorker.serial(
   'native session owner activates exact dependencies after inert construction and restart',
   async t => {
     t.timeout(60_000);
-    const { cancelled, config } = await prepareConfig(t);
+    const { cancelled, config } = await prepareConfig(t, { configName: 'nat' });
     const specifier = new URL(
       './_native-session-controller.js',
       import.meta.url,
@@ -1321,7 +1324,7 @@ testNeedsNodeWorker.serial(
   'native session stop closes a worker with a pending inert constructor',
   async t => {
     t.timeout(30_000);
-    const { host, config } = await prepareHost(t);
+    const { host, config } = await prepareHost(t, 'pend');
     const sibling = await E(host).evaluate(
       '@node',
       "makeExo('Sibling', M.interface('Sibling', { ping: M.call().returns(M.string()) }), { ping: () => 'alive' })",
@@ -1377,7 +1380,9 @@ testNeedsNodeWorker.serial(
   'native session tools are transient across daemon restart',
   async t => {
     t.timeout(30_000);
-    const { config, cancelled } = await prepareConfig(t);
+    const { config, cancelled } = await prepareConfig(t, {
+      configName: 'tool',
+    });
     const specifier = new URL('./_native-session-tools.js', import.meta.url)
       .href;
     const tools = label =>
@@ -4958,7 +4963,7 @@ testNeedsNodeWorker(
 test.serial(
   'getFormulaEnvironment reads persisted environment after startup failure',
   async t => {
-    const { host } = await prepareHost(t);
+    const { host } = await prepareHost(t, 'env');
     const missing = path.join(
       dirname,
       'test',
@@ -9856,7 +9861,7 @@ testNeedsNodeWorker.serial(
   'failed caplet publication does not formulate its fresh native worker',
   async t => {
     t.timeout(30_000);
-    const { host, config } = await prepareHost(t);
+    const { host, config } = await prepareHost(t, 'pub');
     const modulePath = path.join(dirname, 'test', 'move-hub.js');
     await t.throwsAsync(
       () =>
@@ -9889,6 +9894,35 @@ testNeedsNodeWorker.serial(
       worker: publishedWorkerId,
     });
     t.not(publishedWorkerId, await E(host).identify('@node'));
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'failed caplet publication releases automatic powers construction pins',
+  async t => {
+    const { host, config } = await prepareHost(t, 'pins');
+    await E(host).provideGuest('retained-control');
+    const controlId = await E(host).identify('retained-control');
+    await t.throwsAsync(
+      E(host).makeUnconfined(
+        'failed-worker',
+        path.join(dirname, 'test', 'move-hub.js'),
+        {
+          powersName: 'failed-powers',
+          resultName: ['missing-parent', 'client'],
+        },
+      ),
+      { message: /missing-parent/ },
+    );
+    const powersId = await E(host).identify('failed-powers');
+    t.is(typeof powersId, 'string');
+    const powers = readFormulaFromDb(config.statePath, powersId);
+    const workerId = powers.worker;
+    t.true(formulaExistsInDb(config.statePath, workerId));
+    await E(host).remove('failed-powers');
+    t.false(formulaExistsInDb(config.statePath, powersId));
+    t.false(formulaExistsInDb(config.statePath, workerId));
+    t.true(formulaExistsInDb(config.statePath, controlId));
   },
 );
 

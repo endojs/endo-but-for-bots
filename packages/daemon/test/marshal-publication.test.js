@@ -1,8 +1,9 @@
 // @ts-check
-/** @import {FormulaNumber} from '../src/types.js'; */
+/** @import {EndoDirectory, FormulaNumber} from '../src/types.js'; */
+/** @import {Passable} from '@endo/pass-style'; */
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/pass-style';
+import { assertPassable, Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -118,16 +119,17 @@ for (const fail of [false, true, 'after-write']) {
           let capability;
           let capabilityId;
           if (interleaved) {
-            await E(host).makeDirectory('sole-root');
-            capability = await E(host).lookup('sole-root');
+            capability = await E(host).makeDirectory('sole-root');
             capabilityId = await E(host).identify('sole-root');
             await E(capability).makeDirectory('child');
           }
           if (existing) await E(host).storeValue('old', 'target');
           const oldId = await E(host).identify('target');
           armed = true;
+          const value = interleaved ? harden({ capability }) : 'new';
+          assertPassable(value);
           const storing = E(host).storeValue(
-            interleaved ? harden({ capability }) : 'new',
+            /** @type {Passable} */ (value),
             'target',
           );
           const outcome = fail
@@ -157,25 +159,28 @@ for (const fail of [false, true, 'after-write']) {
               );
             }
             if (fail === 'after-write') {
-              // Lost acknowledgement must not publish a dangling name. This
-              // boundary still leaves a durable, unnamed formula to reclaim.
+              // Lost acknowledgement must not publish a dangling name. Error
+              // cleanup must also reclaim the written but unpublished formula.
               if (lastMarshalNumber === undefined)
                 throw Error('Missing marshal');
-              t.is(
-                (await powers.persistence.readFormula(lastMarshalNumber))
-                  .formula.type,
-                'marshal',
+              await t.throwsAsync(
+                powers.persistence.readFormula(lastMarshalNumber),
+                { message: /No formula exists for number/ },
               );
             }
           } else {
             if (interleaved) {
-              const published = await E(host).lookup('target');
+              // The persisted value was constructed above with this exact shape.
+              const published = /** @type {{ capability: EndoDirectory }} */ (
+                await E(host).lookup('target')
+              );
               t.deepEqual(await E(published.capability).list(), ['child']);
               if (capabilityId === undefined)
                 throw Error('Missing capability ID');
               const diagnostics = await E(host).diagnostics();
               t.is(
-                (await E(diagnostics).getFormula(capabilityId)).type,
+                (await E(diagnostics).getFormula(parseId(capabilityId).id))
+                  .type,
                 'directory',
               );
               t.is(
