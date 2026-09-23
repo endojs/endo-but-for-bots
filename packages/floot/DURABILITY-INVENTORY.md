@@ -460,10 +460,16 @@ parse-only checks missed. Semantic compilation is required before accepting it.
 | `f006c749e` | Old client-module transport type annotations | Entire module deleted by `433a21757`; no surviving transport-helper references. Do not credit the obsolete types to the current controller |
 | `dd705e037` | Each native command receives a fresh mutable copy of captured operator environment | 93 focused tests pass; strengthened identity/extensibility assertions cover both listener and policy paths. No additional persisted state or guest authority |
 | `8e260a48e` | Fake Nix applier polling allowance | 54 deploy-performer tests pass with mocked in-process applier; not actual NixOS activation |
-| `30af6a089` | Lint excludes standalone manual OCI spike | Syntax check passes; not executed. Spike still injects a raw credential into Podman environment and has fixed settings with a paid model default; retire or update before any use as current brokered/free-route acceptance |
+| `30af6a089` | Obsolete standalone OCI spike lint exclusion, now removed with both harness files | Application/host source caller checks found only its launcher, lint rule and historical docs. Historical evidence retained; no live execution. Source deletion does not retire old deployed formulas or containers |
 
 ### Post-snapshot changes
 
+- Removed the obsolete direct-credential OpenCode OCI spike and its lint exception,
+  retaining clearly labeled historical design evidence. No new replacement path,
+  credential access or runtime migration; current brokered acceptance is unchanged.
+  Current OpenCode tests pass 289 cases with explicit zero exit status on rerun;
+  the first run reported the same passes but a nonzero exit without a diagnostic.
+  Scoped lint and root docs pass (zero errors, 176 documentation warnings).
 - Collection draining now attempts queued siblings after a callback rejects,
   retaining all errors until the drain ends. A guest-construction regression
   reproduces stranded mailbox cleanup before the fix; a second variant checks

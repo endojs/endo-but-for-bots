@@ -112,9 +112,12 @@ The environment test pass also exposed a sandbox resolver fixture type error:
 preserving literal types and explicitly marking its deliberately invalid writable
 resolver input restores type checking without changing either runtime assertion.
 All 20 sandbox runtime tests pass; sandbox and hosted-agent type checks pass.
-The manual OpenCode OCI spike is another legacy removal/update candidate: it
-passes a raw credential through Podman environment and defaults to a paid model.
-It was not executed and must not serve as current brokered/free-route acceptance.
+The obsolete manual OpenCode OCI spike and its lint exception are now removed:
+it passed a raw credential through Podman environment and defaulted to a paid model.
+Application and host source checks found no caller beyond its own launcher;
+historical design evidence is retained and explicitly labeled obsolete.
+This is source retirement only, not proof that old deployed formulas or containers
+were retired. It was not executed; no Secret or host resource was changed.
 The ledger records separate fixture, bridge and fake-applier evidence, including
 availability-skipped native tests rather than mislabeling them live acceptance.
 
@@ -2051,6 +2054,15 @@ This source removal is recoverable from Git; it shipped in the coordinated cutov
 of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
+
+2026-09-24 source retirement: removed the obsolete `oci/spike/` launcher and
+direct-credential runner, plus its dedicated lint exception. Repository and host
+caller checks found no supported caller; the historical design record remains.
+The full OpenCode suite rerun passes 289 tests with an explicit zero exit status;
+the first run reported 289 passes but returned nonzero without a diagnostic, so
+no cause or repair is claimed for that discrepancy. Lint configuration and diff
+checks pass; root docs has zero errors and 176 warnings. No live resources were
+retired, and old deployed formulas/containers remain a separate operator gate.
 
 The current native controller directly constructs `opencode-client.js`.
 The 718-line old `src/opencode-client-module.js` (at the baseline)
@@ -4073,6 +4085,11 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — FA-04: remove obsolete direct-credential OpenCode OCI spike and its
+lint exception after caller tracing and independent review. Full current OpenCode
+suite rerun: 289 passed, exit zero; root docs and scoped lint pass.
+Historical spike evidence retained, no Secret access or live resource retirement.
 
 2026-09-24 — Mapped five more application network/runtime changes and seven host
 retirement/acceptance changes. Found and fixed legacy cancellation-triggered

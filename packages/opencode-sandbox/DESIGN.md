@@ -635,7 +635,7 @@ New package `packages/opencode-sandbox/`.
 | `src/managed-credentials*.js` | SecretBlob-backed cap; **ported from `f13c7cbd9`** | `f13c7cbd9:…/managed-credentials.js` |
 | `src/opencode-agent-config.js` | Host-side `OPENCODE_CONFIG_CONTENT` builder: hard-coded `provider.openrouter` block (baseURL, `models`, `whitelist`), agent `prompt`/`disable:false`/`mode`, MCP, permissions | new |
 | `src/parse-rootfs.js` (adapter default over `@endo/hosted-agent/parse-rootfs.js`), `src/opencode-hosted-policy.js` (mount table + `assertContainerMounts`) | small shared helpers; `current-specifier.js` is imported from `@endo/hosted-agent` directly | claude/codex-sandbox |
-| `oci/Containerfile`, `oci/Containerfile.source`, `oci/build-reproducible.sh`, `oci/spike/` | Prebuilt and in-image fork builds (Bun 1.3.14, pinned commit + recorded digest); Tokyo slice spike harness | codex-sandbox `oci/` |
+| `oci/Containerfile`, `oci/Containerfile.source`, `oci/build-reproducible.sh` | Prebuilt and in-image fork builds (Bun 1.3.14, pinned commit + recorded digest); obsolete direct-credential spike harness removed | codex-sandbox `oci/` |
 | `test/*.test.js` | see Testing | claude/codex tests |
 
 ### Edits outside the package
@@ -843,8 +843,10 @@ New package `packages/opencode-sandbox/`.
   build was then exercised on Tokyo and failed on disk (the `bun install`
   layer needs more scratch than the ~6 GB free), so the seed ships both
   `Containerfile` (prebuilt binary — the validated deployment path) and
-  `Containerfile.source` (multi-stage, for hosts with headroom); the spike
-  harness lives in `packages/opencode-sandbox/oci/spike/`.
+  `Containerfile.source` (multi-stage, for hosts with headroom). The historical
+  `oci/spike/` harness was removed on 2026-09-24: its direct credential injection,
+  fixed catalog and paid default do not exercise the current brokered setup.
+  These results are historical fork evidence, not current acceptance results.
 - 2026-09-11 — **round 9: adversarial review of the fork patches, the oci
   seed, and this record.** Fixes: the compaction filter now keys on
   `summary === true` only (`mode` is the agent name and collides with the
