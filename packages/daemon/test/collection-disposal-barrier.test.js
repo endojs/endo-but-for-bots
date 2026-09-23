@@ -27,8 +27,14 @@ for (const mode of [
   'cancel-failure',
   'held-read',
   'reclaim-failure',
+  'delete-and-reclaim-failure',
 ]) {
-  const failDeletion = mode === 'delete-failure' || mode === 'combined-failure';
+  const failDeletion =
+    mode === 'delete-failure' ||
+    mode === 'combined-failure' ||
+    mode === 'delete-and-reclaim-failure';
+  const failReclamation =
+    mode === 'reclaim-failure' || mode === 'delete-and-reclaim-failure';
   const failStore = mode === 'store-failure' || mode === 'combined-failure';
   test(`collection fences reconstruction before asynchronous formula deletion: ${mode}`, async t => {
     t.timeout(15_000);
@@ -53,6 +59,8 @@ for (const mode of [
     let deletionAttempts = 0;
     let reclamationAttempts = 0;
     let storeFailureObserved = false;
+    const deletionFailure = Error('Injected formula deletion failure');
+    const reclamationFailure = Error('Injected reclamation failure');
     const files = makeFilePowers({ fs, path });
     const powers = await makeDaemonicPowers({
       config: {
@@ -69,7 +77,7 @@ for (const mode of [
         ...files,
         removeDirectory: async directory => {
           if (
-            mode === 'reclaim-failure' &&
+            failReclamation &&
             directory ===
               path.join(temporary, 'state', 'mounts', heldNumber || '')
           ) {
@@ -78,7 +86,7 @@ for (const mode of [
             await t.throwsAsync(E(retainedMount).readText('proof.txt'), {
               message: /revok|cancel/i,
             });
-            if (injectFailure) throw Error('Injected reclamation failure');
+            if (injectFailure) throw reclamationFailure;
           }
           return files.removeDirectory(directory);
         },
@@ -138,8 +146,7 @@ for (const mode of [
               deletionAttempts += 1;
               entered.resolve(undefined);
               await release.promise;
-              if (failDeletion && injectFailure)
-                throw Error('Injected formula deletion failure');
+              if (failDeletion && injectFailure) throw deletionFailure;
             }
             return powers.persistence.deleteFormula(number);
           },
@@ -153,7 +160,7 @@ for (const mode of [
     );
     t.teardown(() => daemon.cancelGracePeriod(Error('Test finished')));
     const host = await E(daemon.endoBootstrap).host();
-    if (mode === 'reclaim-failure') {
+    if (failReclamation) {
       retainedMount = await E(host).provideScratchMount('victim');
       await E(retainedMount).writeText('proof.txt', 'live mount');
     } else if (mode === 'cancel-failure') {
@@ -188,15 +195,12 @@ for (const mode of [
     }
     const removal = E(host).remove('victim');
     const removalOutcome =
-      mode === 'reclaim-failure' ||
-      mode === 'cancel-failure' ||
-      failDeletion ||
-      failStore
+      failReclamation || mode === 'cancel-failure' || failDeletion || failStore
         ? t.throwsAsync(removal, {
             message:
               mode === 'cancel-failure'
                 ? 'Collected controller cancellation failed'
-                : mode === 'combined-failure' || mode === 'reclaim-failure'
+                : mode === 'combined-failure' || failReclamation
                   ? 'Collected storage cleanup failed'
                   : failDeletion
                     ? 'Injected formula deletion failure'
@@ -211,6 +215,17 @@ for (const mode of [
     });
     release.resolve(undefined);
     const removalError = await removalOutcome;
+    if (mode === 'delete-and-reclaim-failure') {
+      if (!(removalError instanceof AggregateError))
+        throw Error('Expected deletion and reclamation failures');
+      t.is(removalError.errors.length, 2);
+      t.is(removalError.errors[0], deletionFailure);
+      const reclamationError = removalError.errors[1];
+      if (!(reclamationError instanceof AggregateError))
+        throw Error('Expected reclamation aggregate');
+      t.is(reclamationError.errors.length, 1);
+      t.is(reclamationError.errors[0], reclamationFailure);
+    }
     if (mode === 'combined-failure') {
       t.true(removalError instanceof AggregateError);
       if (!(removalError instanceof AggregateError))
@@ -250,14 +265,14 @@ for (const mode of [
       await reading;
       await t.throwsAsync(E(host).lookupById(id));
     }
-    if (failDeletion || failStore || mode === 'reclaim-failure') {
+    if (failDeletion || failStore || failReclamation) {
       // Failed durable deletion must not make the still-present formula usable
       // after its old controller and cleanup owner have been withdrawn.
       await t.throwsAsync(E(host).lookupById(id), {
         message: /disposal|collect/i,
       });
     }
-    if (mode === 'reclaim-failure') {
+    if (failReclamation) {
       t.true(reclaimAttempted);
       t.is(
         await fs.promises.readFile(
@@ -267,7 +282,7 @@ for (const mode of [
         'live mount',
       );
     }
-    if (failDeletion || mode === 'reclaim-failure') {
+    if (failDeletion || failReclamation) {
       // Characterize the open retry-ownership defect, not desired behavior:
       // clearing the external failure and draining subsequent graph changes
       // does not retry the cleanup removed from pendingCollectionCleanup.
@@ -284,7 +299,10 @@ for (const mode of [
       });
       if (failDeletion) {
         const stored = await powers.persistence.readFormula(parseId(id).number);
-        t.is(stored.formula.type, 'directory');
+        t.is(
+          stored.formula.type,
+          failReclamation ? 'scratch-mount' : 'directory',
+        );
       } else {
         t.is(
           await fs.promises.readFile(

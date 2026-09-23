@@ -416,8 +416,13 @@ both causes in the combined error; existing deletion tests now require rejection
 The final barrier/directory/marshal-publication run passes 17 tests, including
 graceful daemon restart; 44 construction-cleanup cases also passed during this
 change. Daemon types pass; changed-file lint reports zero errors and 68 warnings.
-Simultaneous deletion plus reclamation failure aggregation is source-reviewed,
-not separately fault-injected by the combined formula/pet-store test.
+Follow-up verification (2026-09-24): all eight barrier cases pass, including a
+new simultaneous formula-deletion plus scratch-reclamation fault.
+It checks original error identities in the nested aggregate, revocation before
+reclamation, retained formula/data and continued reconstruction refusal.
+Clearing the injected failures and draining unrelated graph work still does not
+retry cleanup; that remains explicitly characterized as the open defect.
+This adds fault-injection evidence, not runtime behavior or restart recovery.
 This is a prerequisite diagnostic correction, not the retry fix: failed
 cancellation and disconnection reporting, retained retry records, reentrant
 retry scheduling, stage acknowledgements and restart recovery remain open.
