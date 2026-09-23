@@ -661,8 +661,8 @@ characters as a journal storage profile, not as a provider protocol limit.
 Token-bearing events, snapshots and archives require a terminal completed turn
 and settled host/observed tool evidence. A failed or unacknowledged journal write
 never permits the native acknowledgement; a lost acknowledgement preserves the
-completed token. The tree remains the current checkpoint recovery source until
-the projection cutover; its removal is not claimed by this prerequisite.
+completed token. This prerequisite initially left tree-based checkpoint recovery
+in place; the local projection change below replaces that source, not the tree.
 No new formula or credential owner is introduced, and old records lacking the
 optional token do not acquire an invented checkpoint.
 Tests cover replay, snapshot/archive reconstruction, lost write replies, invalid
@@ -671,6 +671,29 @@ including token rejection before tree publication. All 559 Floot tests pass.
 Scoped lint has zero errors (76 warnings), formatting/diff checks pass, and
 root documentation has zero errors (179 warnings). Independent adversarial
 review approved after the loaded-record validation gap was fixed.
+
+Checkpoint recovery projection (2026-09-24, local, not deployed): native send now
+receives only a token from a terminal completed journal turn. Selection uses the
+greatest dispatch ID across one pinned retained/archive view, never tree metadata
+or archive publication order. A tree write followed by a refused journal finish
+cannot authorize acknowledgement; a lost reply after successful journal storage
+can recover the committed token. Later partial nodes no longer hide a prior token.
+New tree nodes, including typed mail receipts, no longer copy or store checkpoints;
+the successful journal finish is their sole durable authority.
+
+Until tree removal, a temporary retirement guard inspects checkpoint-bearing
+ancestors and refuses legacy successful/tree-only tokens lacking journal proof,
+unless superseded by a newer proven checkpoint. Failed/unknown journal turns do
+not promote their tree tokens to success. This is refusal, not migration:
+retire/reprovision affected disposable legacy sessions before deployment.
+The existing full-tree traversal and archive scanning are not bounded-startup
+completion; no durable index, compatibility owner or retry policy is added.
+All 579 Floot tests pass, including actual follow-up sends after before/after
+finish-publication failures, lost acknowledgement, hidden legacy/proven tokens
+behind partial nodes, and archived tokens published out of dispatch order.
+Scoped lint has zero errors (57 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Adversarial re-review approved after checking
+ancestors and removing redundant tree token writes.
 
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
@@ -2997,6 +3020,11 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Checkpoint recovery now selects only completed journal evidence;
+tree token writes are removed. Legacy unproven tokens require retirement, not
+silent promotion. 579 Floot tests and lint/docs/format gates pass after
+adversarial review. Not deployed; tree/history/usage retirement remains open.
 
 2026-09-24 — Tree-retirement prerequisite: persist bounded typed thinking
 presentation separately from canonical model context, with ordering anchors,

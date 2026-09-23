@@ -5,6 +5,7 @@ import { makeOpenRouterProvider } from '@endo/lal/providers/index.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
+import { makeTurnJournal } from '../src/turn-journal.js';
 import { usageCounts } from './helpers/usage.js';
 
 const fixture = () => {
@@ -302,13 +303,15 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
   test(`hosted acknowledgement follows checkpoint journal publication: ${fault}`, async t => {
     const f = fixture();
     let acknowledges = 0;
+    const sent = [];
     if (fault === 'beforeStore' || fault === 'afterStore') {
       f[fault](value => {
         if (value.type === 'finish') throw Error('Lost finish');
       });
     }
     const hostedClient = harden({
-      async send() {
+      async send(_text, options) {
+        sent.push(options);
         const stream = makeBufferedReader();
         stream.push({ type: 'text-delta', text: 'Done' });
         stream.push({ type: 'end', checkpoint: 'native-turn-1' });
@@ -339,6 +342,27 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
       t.is(acknowledges, 1);
     }
     await agent.shutdown();
+    t.false(
+      [...f.store.values()].some(
+        value => value.metadata?.backendCheckpoint !== undefined,
+      ),
+    );
+    if (fault === 'beforeStore') {
+      // An older release could leave a tree token despite a refused finish.
+      for (const [name, value] of f.store) {
+        if (value.metadata?.usageTotals)
+          f.store.set(
+            name,
+            harden({
+              ...value,
+              metadata: {
+                ...value.metadata,
+                backendCheckpoint: 'unproven-old-tree-token',
+              },
+            }),
+          );
+      }
+    }
     const revived = await makeStreamingAgent(
       f.powers,
       undefined,
@@ -351,8 +375,147 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
       turn.backendCheckpoint,
       fault === 'beforeStore' ? undefined : 'native-turn-1',
     );
+    f.beforeStore(undefined);
+    f.afterStore(undefined);
+    await revived.converse('Continue', makeReplyChannel().writer);
+    t.is(sent[0].acknowledgedCheckpoint, undefined);
+    t.is(
+      sent[1].acknowledgedCheckpoint,
+      fault === 'beforeStore' ? undefined : 'native-turn-1',
+    );
   });
 }
+
+for (const mode of ['legacy-leaf', 'legacy-hidden', 'proven-hidden']) {
+  test(`checkpoint provenance survives a later partial tree node: ${mode}`, async t => {
+    const f = fixture();
+    let sends = 0;
+    const hostedClient = harden({
+      async send(text, options) {
+        sends += 1;
+        const stream = makeBufferedReader();
+        if (text === 'Partial') {
+          stream.push({ type: 'text-delta', text: 'partial response' });
+          stream.push({ type: 'abort', reason: 'provider failure' });
+        } else {
+          if (text === 'Continue')
+            t.is(options.acknowledgedCheckpoint, 'legacy-token');
+          stream.push({ type: 'end', checkpoint: 'legacy-token' });
+        }
+        return stream.reader;
+      },
+      async acknowledge() {
+        return undefined;
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { hostedClient },
+      'Test',
+      { hostedContinuity: 'transcript' },
+    );
+    t.teardown(() => agent.shutdown());
+    await agent.converse('First', makeReplyChannel().writer);
+    if (mode !== 'legacy-leaf') {
+      await t.throwsAsync(
+        agent.converse('Partial', makeReplyChannel().writer),
+        { message: /provider failure/ },
+      );
+    }
+    await agent.shutdown();
+    for (const [name, value] of f.store) {
+      // Emulate the old release: successful tree nodes carried tokens before
+      // the journal recorded them. New tree writes carry no checkpoint.
+      if (value.metadata?.usageTotals && mode !== 'proven-hidden') {
+        f.store.set(
+          name,
+          harden({
+            ...value,
+            metadata: { ...value.metadata, backendCheckpoint: 'legacy-token' },
+          }),
+        );
+      }
+      if (value.type === 'finish' && mode !== 'proven-hidden') {
+        const copy = { ...value };
+        delete copy.backendCheckpoint;
+        f.store.set(name, harden(copy));
+      }
+    }
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { hostedClient },
+      'Test',
+    );
+    t.teardown(() => revived.shutdown());
+    if (mode === 'proven-hidden') {
+      await revived.converse('Continue', makeReplyChannel().writer);
+      t.is(sends, 3);
+    } else {
+      await t.throwsAsync(
+        revived.converse('Continue', makeReplyChannel().writer),
+        {
+          message: /Legacy backend checkpoint lacks journal proof/,
+        },
+      );
+      t.is(sends, mode === 'legacy-leaf' ? 1 : 2);
+    }
+  });
+}
+
+test('checkpoint recovery orders archived evidence by turn rather than publication', async t => {
+  const f = fixture();
+  const options = { input: 'seed', backendId: 'codex', modelId: 'luna' };
+  const initial = makeTurnJournal(f.powers);
+  const oldest = await initial.begin(options);
+  const journal = makeTurnJournal(f.powers);
+  for (let i = 0; i < 290; i += 1) {
+    // Deliberately await sequential journal writes.
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, {
+      type: 'finish',
+      state: 'completed',
+      ...(i === 0 ? { backendCheckpoint: 'newer-token' } : {}),
+    });
+  }
+  await journal.append(oldest, {
+    type: 'finish',
+    state: 'completed',
+    backendCheckpoint: 'older-token',
+  });
+  for (let i = 0; i < 35; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  const archive = await journal.listArchived();
+  t.true(
+    /** @type {any[]} */ (archive).findIndex(turn => turn.turnId === oldest) >
+      /** @type {any[]} */ (archive).findIndex(
+        turn => turn.backendCheckpoint === 'newer-token',
+      ),
+  );
+  const hostedClient = harden({
+    async send(_text, config) {
+      t.is(config.acknowledgedCheckpoint, 'newer-token');
+      const stream = makeBufferedReader();
+      stream.push({ type: 'end' });
+      return stream.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Continue', makeReplyChannel().writer);
+});
 
 test('cancellation during transcript sealing does not commit a successful turn', async t => {
   const f = fixture();

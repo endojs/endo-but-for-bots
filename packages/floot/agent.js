@@ -944,13 +944,70 @@ export const makeStreamingAgent = async (
     return text;
   };
 
+  // A tree mirror may have committed before the journal's successful finish.
+  // Only the latter permits acknowledging a native checkpoint. Read one pinned
+  // journal view. The temporary legacy gate inspects the whole tree path: a
+  // later partial/mail node can hide or copy an older unproven token.
+  const recoverBackendCheckpoint = async baseNode => {
+    const { retained, archiveCursor } = await turnJournal.readView();
+    let newest;
+    const unproven = new Set();
+    let node = baseNode;
+    while (node) {
+      if (typeof node.metadata?.backendCheckpoint === 'string') {
+        unproven.add(node.metadata.turnId);
+      }
+      // This temporary traversal disappears with the tree mirror, not a new
+      // journal index or persistent compatibility authority.
+      // eslint-disable-next-line no-await-in-loop
+      node = node.parentId ? await tree.getNode(node.parentId) : undefined;
+    }
+    const visit = turns => {
+      for (const turn of turns) {
+        if (
+          !turn.terminal ||
+          turn.state !== 'completed' ||
+          turn.backendCheckpoint !== undefined
+        ) {
+          unproven.delete(turn.turnId);
+        }
+        if (
+          turn.terminal &&
+          turn.state === 'completed' &&
+          turn.backendCheckpoint !== undefined
+        ) {
+          if (!newest || BigInt(turn.turnId) > BigInt(newest.turnId)) {
+            newest = { turnId: turn.turnId, token: turn.backendCheckpoint };
+          }
+        }
+      }
+    };
+    visit(retained);
+    await visitArchivedPages(archiveCursor, visit);
+    // Temporary retirement gate while the tree mirror still exists: legacy
+    // successful tokens are not silently promoted to journal evidence. A tree
+    // token belonging to a failed/unknown journal turn is instead ignored.
+    for (const id of unproven) {
+      const superseded =
+        newest &&
+        typeof id === 'string' &&
+        /^[1-9][0-9]*$/.test(id) &&
+        BigInt(newest.turnId) >= BigInt(id);
+      if (!superseded) {
+        throw Error(
+          'Legacy backend checkpoint lacks journal proof; retire and reprovision this session',
+        );
+      }
+    }
+    return newest?.token;
+  };
+
   const runTurnBody = async (text, writer, meta, signal, turnId) => {
     let baseLeafId = await getOrCreateLeaf();
     const baseNode = await tree.getNode(baseLeafId);
-    const acknowledgedCheckpoint =
-      typeof baseNode?.metadata?.backendCheckpoint === 'string'
-        ? baseNode.metadata.backendCheckpoint
-        : undefined;
+    const acknowledgedCheckpoint = hostedClient
+      ? await recoverBackendCheckpoint(baseNode)
+      : undefined;
     const receivedMail = meta?.mail?.messageNumber !== undefined;
     const inputMessages = [
       { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
@@ -969,9 +1026,6 @@ export const makeStreamingAgent = async (
       ) {
         const received = await tree.addNode(baseLeafId, inputMessages, {
           turnId,
-          ...(acknowledgedCheckpoint
-            ? { backendCheckpoint: acknowledgedCheckpoint }
-            : {}),
         });
         baseLeafId = received.id;
         cachedLeaf = received.id;
@@ -1034,7 +1088,6 @@ export const makeStreamingAgent = async (
       const finalNode = await tree.addNode(baseLeafId, messages, {
         turnId,
         usageTotals: harden({ ...nextUsage }),
-        ...(backendCheckpoint ? { backendCheckpoint } : {}),
       });
       cachedLeaf = finalNode.id;
       usage = nextUsage;
@@ -1051,7 +1104,7 @@ export const makeStreamingAgent = async (
         try {
           await E(hostedClient).acknowledge(backendCheckpoint);
         } catch (error) {
-          // The durable tree node is the source of truth. The checkpoint rides
+          // The successful journal finish is the source of truth. The checkpoint rides
           // on the next send and safely completes acknowledgement after a
           // transient failure or reincarnation.
           console.error(
