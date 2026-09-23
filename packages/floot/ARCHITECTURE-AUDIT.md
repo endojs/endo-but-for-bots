@@ -626,6 +626,29 @@ Explicit compaction/context selection remains open: this converter does not impl
 a compaction policy, and the full-history replay can grow without a context bound.
 The full-content fix is now deployed; bounded context remains open.
 
+Recorded-compaction replay correction (2026-09-23, local, not deployed):
+the direct-provider converter ignored canonical compaction records, replaying
+superseded messages and omitting the summary.
+It now uses the shared last-compaction split, emits the summary as an assistant
+message (never a system instruction), and pairs tool evidence only in the active
+span.
+A result whose call lies before the boundary is refused as malformed context,
+not silently dropped or paired to a different effect.
+Original transcript records remain unchanged and readable.
+Tests cover multiple boundaries, repeated tool IDs, unknown outcomes, malformed
+cross-boundary results, and a hosted compaction persisted through reconstruction
+into an actual direct-provider dispatch.
+No new persisted state, summarization call, or compaction trigger is introduced.
+
+Native capture remains open: the current OpenCode bridge explicitly suppresses
+summary-message text and emits no `compaction` event from those records
+(`makeMessageRegistry`/`mapSseEvent` in `opencode-bridge.mjs`).
+The existing synthetic compaction round-trip tests prove representation and
+restoration, not that this bridge captures a live CLI boundary.
+Complete capture and interrupted-turn durability must be verified before
+claiming end-to-end compaction; bounded context selection and automatic
+summarization policy remain open as well.
+
 Generation 166 acceptance found a separate direct-provider failure: after a
 daemon restart the seed history survived, but OpenRouter's free route returned
 an empty recall answer recorded as completed. The three hosted recall cases

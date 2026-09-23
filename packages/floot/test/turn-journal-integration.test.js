@@ -85,6 +85,58 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
+test('recorded compaction survives reconstruction into direct-provider context', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      channel.push({ type: 'text-delta', text: 'superseded answer' });
+      channel.push({ type: 'compaction', summary: 'retained summary' });
+      channel.push({ type: 'text-delta', text: 'after boundary' });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('superseded request', makeReplyChannel().writer);
+  const transcript = await agent.getTranscript();
+  t.true(transcript.some(record => record.kind === 'compaction'));
+  await agent.shutdown();
+  const contexts = [];
+  const provider = harden({
+    async chatStream(context) {
+      contexts.push(context);
+      return completed();
+    },
+  });
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), transcript);
+  await revived.converse('continue now', makeReplyChannel().writer);
+  const replay = contexts[0].filter(message => message.role !== 'system');
+  t.deepEqual(replay, [
+    { role: 'assistant', content: 'retained summary' },
+    { role: 'assistant', content: 'after boundary' },
+    { role: 'user', content: 'continue now' },
+  ]);
+  t.deepEqual(
+    (await revived.getTranscript()).slice(0, transcript.length),
+    transcript,
+  );
+});
+
 test('empty OpenRouter completion remains a failed turn after reconstruction', async t => {
   t.timeout(10_000);
   const f = fixture();

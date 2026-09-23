@@ -402,6 +402,54 @@ test('a compaction in the tree becomes the context boundary', t => {
     kind: 'compaction',
     summary: 'we discussed one and two',
   });
+  t.deepEqual(transcriptToProviderMessages(records), [
+    { role: 'assistant', content: 'we discussed one and two' },
+    { role: 'user', content: 'three' },
+  ]);
+});
+
+test('provider replay selects only the last compaction and pairs tools inside it', t => {
+  const records = projectTranscript([
+    { role: 'user', content: 'superseded request' },
+    { role: 'assistant', tool_calls: [call('same', 'old', '{}')] },
+    { role: 'tool', tool_call_id: 'same', content: 'superseded result' },
+    { role: 'compaction', content: 'superseded summary' },
+    { role: 'assistant', tool_calls: [call('same', 'also-old', '{}')] },
+    { role: 'compaction', content: 'current summary' },
+    { role: 'user', content: 'continue' },
+    { role: 'assistant', tool_calls: [call('same', 'current', '{"x":1}')] },
+    { role: 'tool', tool_call_id: 'same', content: 'current result' },
+    { role: 'assistant', tool_calls: [call('unknown', 'uncertain', '{}')] },
+  ]);
+  const before = JSON.stringify(records);
+  const replay = transcriptToProviderMessages(records);
+  t.deepEqual(replay.slice(0, 2), [
+    { role: 'assistant', content: 'current summary' },
+    { role: 'user', content: 'continue' },
+  ]);
+  t.deepEqual(
+    replay
+      .filter(message => message.tool_calls)
+      .map(message => message.tool_calls[0].function.name),
+    ['current', 'uncertain'],
+  );
+  const results = replay.filter(message => message.role === 'tool');
+  t.is(results[0].content, 'current result');
+  t.regex(results[1].content, /outcome unknown; do not automatically retry/);
+  t.false(JSON.stringify(replay).includes('superseded'));
+  t.is(JSON.stringify(records), before, 'stored history remains unchanged');
+});
+
+test('provider replay refuses a result whose call was superseded by compaction', t => {
+  t.throws(
+    () =>
+      transcriptToProviderMessages([
+        { kind: 'tool-call', id: 'old', name: 'old', args: '{}' },
+        { kind: 'compaction', summary: 'boundary' },
+        { kind: 'tool-result', id: 'old', content: 'late result' },
+      ]),
+    { message: /answers no call/ },
+  );
 });
 
 test('empty and malformed dialogue is skipped rather than fabricated', t => {

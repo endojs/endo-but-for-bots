@@ -26,6 +26,7 @@
 import {
   assertTranscriptRecord,
   pairToolCalls,
+  splitAtLastCompaction,
 } from '@endo/hosted-agent/transcript-records.js';
 
 import {
@@ -132,19 +133,24 @@ harden(projectTranscript);
  * Render full transcript records for a direct chat-completions provider.
  * Pair calls before projecting so repeated native IDs in different turns do
  * not alias, and each replayed call has a result even after an interrupted turn.
- * Thinking remains display-only; this provider has no native compaction store.
+ * Thinking remains display-only. The latest recorded compaction supplies the
+ * opening summary; superseded history must not become active context again.
  *
  * @param {readonly TranscriptRecord[]} records
  */
 export const transcriptToProviderMessages = records => {
+  const { active } = splitAtLastCompaction(records);
   // Pair within each turn: an unanswered call stays unanswered when a later
   // turn reuses its native id.
-  const { pairs } = pairToolCalls(records, { perTurn: true });
+  const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultOf = new Map(pairs.map(pair => [pair.call, pair.result]));
   const messages = [];
-  for (const [index, record] of records.entries()) {
+  for (const [index, record] of active.entries()) {
     if (record.kind === 'message') {
       messages.push({ role: record.role, content: record.content });
+    } else if (record.kind === 'compaction') {
+      // Model-authored context, never elevated to a harness/system instruction.
+      messages.push({ role: 'assistant', content: record.summary });
     } else if (record.kind === 'tool-call') {
       const id = `floot-history-${index}`;
       messages.push({
