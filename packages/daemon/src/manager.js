@@ -595,8 +595,11 @@ const makeDaemonCore = async (
     }
     formulaGraphLockDepth += 1;
     let result;
+    const failures = [];
     try {
       result = await formulaGraphJobs.enqueue(asyncFn);
+    } catch (error) {
+      failures.push(error);
     } finally {
       formulaGraphLockDepth -= 1;
     }
@@ -606,7 +609,18 @@ const makeDaemonCore = async (
     // (e.g., CapTP messages triggering graph mutations on a
     // remote callback) can acquire it without deadlock.
     // eslint-disable-next-line no-use-before-define
-    await drainCollectionCleanup();
+    try {
+      await drainCollectionCleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        'Graph operation and collection cleanup failed',
+      );
+    }
     return result;
   };
   console.log('Node', localNodeNumber);
@@ -6117,57 +6131,60 @@ const makeDaemonCore = async (
       hostHandleId,
       specifiedPowersId,
     );
-    // Allocate a fresh worker identity without starting its process. Like
-    // formulateWorker, publish ownership before persisting/evaluating it.
-    // A rejected publication must not leave a newly acquired worker behind.
-    const freshWorkerNumber =
-      specifiedWorkerId === undefined
-        ? /** @type {FormulaNumber} */ (await randomHex256())
-        : undefined;
-    const workerId =
-      freshWorkerNumber === undefined
-        ? await provideWorkerId(
-            specifiedWorkerId,
-            trustedShims,
-            workerLabel,
-            undefined,
-            workerKind,
-          )
-        : formatId({ number: freshWorkerNumber, node: localNodeNumber });
-    // When a new node worker was created because the specified worker
-    // was XS-only, record the original so that cancelling the original
-    // worker cascades to the caplet.  This is a runtime dependency only,
-    // not persisted in the formula JSON.
-    const originalWorkerId =
-      specifiedWorkerId && workerId !== specifiedWorkerId
-        ? specifiedWorkerId
-        : undefined;
-    const identifiers = harden({
-      powersId,
-      capletId: formatId({
-        number: ownFormulaNumber,
-        node: localNodeNumber,
-      }),
-      capletFormulaNumber: ownFormulaNumber,
-      workerId,
-      originalWorkerId,
-    });
-    // Execute deferred tasks first (stores pet names, creating
-    // pet-store edges) so that the powers guest is reachable
-    // before we unpin its dependencies.
-    await deferredTasks.execute(identifiers);
-    if (freshWorkerNumber !== undefined) {
-      const worker = await formulateNumberedWorker(freshWorkerNumber, {
-        kind: workerKind,
-        trustedShims,
-        label: workerLabel,
+    try {
+      // Allocate a fresh worker identity without starting its process. Like
+      // formulateWorker, publish ownership before persisting/evaluating it.
+      // A rejected publication must not leave a newly acquired worker behind.
+      const freshWorkerNumber =
+        specifiedWorkerId === undefined
+          ? /** @type {FormulaNumber} */ (await randomHex256())
+          : undefined;
+      const workerId =
+        freshWorkerNumber === undefined
+          ? await provideWorkerId(
+              specifiedWorkerId,
+              trustedShims,
+              workerLabel,
+              undefined,
+              workerKind,
+            )
+          : formatId({ number: freshWorkerNumber, node: localNodeNumber });
+      // When a new node worker was created because the specified worker
+      // was XS-only, record the original so that cancelling the original
+      // worker cascades to the caplet.  This is a runtime dependency only,
+      // not persisted in the formula JSON.
+      const originalWorkerId =
+        specifiedWorkerId && workerId !== specifiedWorkerId
+          ? specifiedWorkerId
+          : undefined;
+      const identifiers = harden({
+        powersId,
+        capletId: formatId({
+          number: ownFormulaNumber,
+          node: localNodeNumber,
+        }),
+        capletFormulaNumber: ownFormulaNumber,
+        workerId,
+        originalWorkerId,
       });
-      retainWorker?.(worker.id, worker.context);
+      // Execute deferred tasks first (stores pet names, creating
+      // pet-store edges) so that the powers guest is reachable
+      // before we unpin its dependencies.
+      await deferredTasks.execute(identifiers);
+      if (freshWorkerNumber !== undefined) {
+        const worker = await formulateNumberedWorker(freshWorkerNumber, {
+          kind: workerKind,
+          trustedShims,
+          label: workerLabel,
+        });
+        retainWorker?.(worker.id, worker.context);
+      }
+      return identifiers;
+    } finally {
+      // execute() drains every admitted publication before rejecting. Durable
+      // names now retain successful publications; failed ones need no pin.
+      await Promise.all(powersPinned.map(unpinTransient));
     }
-    for (const id of powersPinned) {
-      unpinTransient(id);
-    }
-    return identifiers;
   };
 
   /** @type {DaemonCore['formulateUnconfined']} */

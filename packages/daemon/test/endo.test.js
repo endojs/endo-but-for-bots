@@ -9117,7 +9117,7 @@ testNeedsNodeWorker.serial(
   'failed caplet publication does not formulate its fresh native worker',
   async t => {
     t.timeout(30_000);
-    const { host, config } = await prepareHost(t);
+    const { host, config } = await prepareHost(t, 'pub');
     const modulePath = path.join(dirname, 'test', 'move-hub.js');
     await t.throwsAsync(
       () =>
@@ -9150,6 +9150,35 @@ testNeedsNodeWorker.serial(
       worker: publishedWorkerId,
     });
     t.not(publishedWorkerId, await E(host).identify('@node'));
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'failed caplet publication releases automatic powers construction pins',
+  async t => {
+    const { host, config } = await prepareHost(t, 'pins');
+    await E(host).provideGuest('retained-control');
+    const controlId = await E(host).identify('retained-control');
+    await t.throwsAsync(
+      E(host).makeUnconfined(
+        'failed-worker',
+        path.join(dirname, 'test', 'move-hub.js'),
+        {
+          powersName: 'failed-powers',
+          resultName: ['missing-parent', 'client'],
+        },
+      ),
+      { message: /missing-parent/ },
+    );
+    const powersId = await E(host).identify('failed-powers');
+    t.is(typeof powersId, 'string');
+    const powers = readFormulaFromDb(config.statePath, powersId);
+    const workerId = powers.worker;
+    t.true(formulaExistsInDb(config.statePath, workerId));
+    await E(host).remove('failed-powers');
+    t.false(formulaExistsInDb(config.statePath, powersId));
+    t.false(formulaExistsInDb(config.statePath, workerId));
+    t.true(formulaExistsInDb(config.statePath, controlId));
   },
 );
 

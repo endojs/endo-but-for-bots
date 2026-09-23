@@ -128,6 +128,30 @@ are mapped, including superseded storage formats and removed OpenCode entrypoint
 All focused owner, factory, storage, endpoint and mounter suites pass locally;
 in-process reconstruction and CapTP loopback are not daemon-loss recovery evidence.
 
+Failed caplet powers publication (2026-09-24, local fix under validation):
+`providePowersId` transfers auto-created guest dependency pins, but
+`formulateCapletDependencies` releases them only on its successful path.
+Worker selection, deferred naming publication or fresh-worker formulation can
+reject first; callers and the graph lock do not supply pin rollback.
+The existing failed-publication regression uses `powersName: '@none'` and thus
+has no transferred pins to test. A new real-daemon GC regression fails before the
+fix: the guest survives removal of its last published name. It passes after the
+fix, checking guest/worker reclamation and unrelated-guest preservation.
+Deferred tasks now settle every admitted publication before reporting failure;
+transferred pins release in finally, and graph cleanup drains on rejection outside
+the graph job token. Four focused publication tests pass, including synchronous
+and asynchronous failures with a held sibling; adversarial source review passed.
+The adjacent deferred-task, imported-reference, resource-registry, session-record,
+and directory suites pass (37 tests); changed-file ESLint reports zero errors
+and 78 warnings. Daemon typechecking still fails with five diagnostics in
+`_account-oracle-lifecycle-powers.js` and `marshal-publication.test.js`;
+an isolated HEAD source archive with the same installed dependencies reproduces
+all five diagnostics without this change. The type gate is not green.
+Failures inside powers construction
+before pins transfer to this helper remain an open rollback boundary; this fix
+must not be described as comprehensive guest-construction rollback.
+This is ordinary failed-acquisition cleanup, not the deferred native-loss design.
+
 Legacy detachment follow-up (2026-09-24): host `c98eb5d` removes cancellation from
 the four-formula legacy helper. Host cancellation calls `provideController`, so
 the old implementation could construct dormant legacy modules during retirement.
