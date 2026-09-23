@@ -1335,6 +1335,45 @@ actual native model limits, compaction trigger, output behavior, catalog outage,
 and daemon reconstruction rather than testing only the picker descriptor.
 No implementation or provider-window correctness is claimed by this finding.
 
+Context-plumbing remediation (2026-09-23, local, not deployed): OpenCode native
+activation now reads the existing broker's normalized single-account catalog
+and passes only the exact selected route's observed context length into its
+CLI configuration. Current and usable stale observations are accepted;
+unavailable/unsupported/missing metadata supplies no invented limit. Invalid
+catalogs and owner/transport exceptions abort activation, rather than being
+silently converted into unknown data. The supervisor checks cancellation after
+the catalog await and releases already-owned scopes on failure.
+The shared envelope passes its existing `prepared` result to `sliceEnv` without
+changing acquisition order or any other adapter's behavior.
+
+The fabricated 128,000-context/8,192-output model descriptor is removed.
+The prior 8,192 output ceiling is retained explicitly as the native runtime's
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX` execution budget, not a provider fact;
+known smaller native model limits can reduce it. Removing the descriptor alone
+would otherwise cause unknown-model requests to use the native 32,000 default.
+Absent context overrides leave native bundled metadata available; when native
+context is also unknown, proactive threshold compaction is disabled. Native
+merging can still retain a separate bundled input limit, and auto-route limits
+remain observations rather than guarantees. These limitations remain open.
+
+Durability: no new formula, credential owner, or durable session-plan field.
+Context observations are reconstructed per native activation through the same
+broker owner, while the durable exact model/account pin is unchanged. Local
+tests cover changed observations on a fresh activation, exact-model matching,
+missing context, malformed/unexpected accounts, all catalog states, retirement
+errors, and late completion after termination producing no slice/client/tools.
+This is native-controller reconstruction coverage, not real-daemon acceptance.
+Deployment and the ordinary-turn live compaction/restart gate remain pending.
+
+Validation: OpenCode 286, shared catalog/envelope 30, Claude controller 17, and
+Codex controller 8 tests pass. Scoped ESLint has no errors; formatting passes.
+The hosted-agent declaration build and root documentation gate pass after
+quarantining stale generated declarations (the old envelope declaration omitted
+`prepared`). Native request preparation, without inference, produces output
+budgets of 8192, 4096, and 8192 for model output limits of 0, 4096, and 64000
+respectively with the explicit 8192 runtime budget. Independent adversarial
+review approved the source, tests, and durability classification.
+
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
 Identify the durable formula owner and dependencies, what is replayed on daemon
@@ -2777,6 +2816,13 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-23 — FA-07 runtime context plumbing: selected OpenCode route context
+comes from the existing broker catalog at activation; fabricated model limits
+are removed and the output budget remains explicit. Controller/cancellation
+regressions, declaration build, formatting, and root docs pass (0 errors,
+179 warnings); adversarial review approved. No new durable state. Not deployed;
+live model-window and compaction/restart acceptance remain open.
 
 | Date | Change | Verification / deployment |
 |---|---|---|
