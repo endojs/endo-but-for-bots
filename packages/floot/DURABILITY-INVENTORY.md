@@ -390,6 +390,9 @@ are injected and do not establish live Linux or Tokyo behavior.
 
 ### Post-snapshot changes
 
+- Collection now reports formula/pet-store deletion errors and preserves them
+  alongside reclamation errors. Reconstruction fences and missing retry behavior
+  are unchanged; the barrier suite adds single-store and combined-error checks.
 - Collection barrier tests now characterize lost retry ownership after a
   transient formula deletion or scratch reclamation failure clears: later graph
   work succeeds but does not retry the original cleanup. Four cases pass.

@@ -1047,12 +1047,23 @@ const makeDaemonCore = async (
         // multiple readable-blob and readable-tree formulas can dedupe
         // on the same sha256.  Scratch-mount directories have a 1:1
         // relationship with their formula and need no reference count.
-        // eslint-disable-next-line no-use-before-define
-        await reclaimCollectedStorage(collectedFormulas);
-
-        cleanupSucceeded = [...formulaDeletions, ...storeDeletions].every(
-          result => result.status === 'fulfilled',
-        );
+        const storageFailures = [...formulaDeletions, ...storeDeletions]
+          .filter(result => result.status === 'rejected')
+          .map(result => result.reason);
+        try {
+          // eslint-disable-next-line no-use-before-define
+          await reclaimCollectedStorage(collectedFormulas);
+        } catch (error) {
+          storageFailures.push(error);
+        }
+        if (storageFailures.length === 1) throw storageFailures[0];
+        if (storageFailures.length > 1) {
+          throw new AggregateError(
+            storageFailures,
+            'Collected storage cleanup failed',
+          );
+        }
+        cleanupSucceeded = true;
       } finally {
         // Even failed storage reclamation must not leave worker routes live.
         try {

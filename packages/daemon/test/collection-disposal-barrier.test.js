@@ -22,10 +22,13 @@ import { formatId, parseId } from '../src/formula-identifier.js';
 for (const mode of [
   'success',
   'delete-failure',
+  'store-failure',
+  'combined-failure',
   'held-read',
   'reclaim-failure',
 ]) {
-  const failDeletion = mode === 'delete-failure';
+  const failDeletion = mode === 'delete-failure' || mode === 'combined-failure';
+  const failStore = mode === 'store-failure' || mode === 'combined-failure';
   test(`collection fences reconstruction before asynchronous formula deletion: ${mode}`, async t => {
     t.timeout(15_000);
     const temporary = await mkdtemp(path.join(tmpdir(), 'endo-collection-'));
@@ -48,6 +51,7 @@ for (const mode of [
     let injectFailure = true;
     let deletionAttempts = 0;
     let reclamationAttempts = 0;
+    let storeFailureObserved = false;
     const files = makeFilePowers({ fs, path });
     const powers = await makeDaemonicPowers({
       config: {
@@ -92,6 +96,16 @@ for (const mode of [
     const daemon = await makeDaemon(
       {
         ...powers,
+        petStore: harden({
+          ...powers.petStore,
+          deletePetStore: async (number, type) => {
+            if (heldNumber && failStore && injectFailure) {
+              storeFailureObserved = true;
+              throw Error('Injected pet-store deletion failure');
+            }
+            return powers.petStore.deletePetStore(number, type);
+          },
+        }),
         control: /** @type {any} */ ({
           makeWorker: async (_id, _facet, workerCancelled, forceCancelled) => {
             void forceCancelled.catch(() => {});
@@ -165,9 +179,14 @@ for (const mode of [
     }
     const removal = E(host).remove('victim');
     const removalOutcome =
-      mode === 'reclaim-failure'
+      mode === 'reclaim-failure' || failDeletion || failStore
         ? t.throwsAsync(removal, {
-            message: 'Collected storage cleanup failed',
+            message:
+              mode === 'combined-failure' || mode === 'reclaim-failure'
+                ? 'Collected storage cleanup failed'
+                : failDeletion
+                  ? 'Injected formula deletion failure'
+                  : 'Injected pet-store deletion failure',
           })
         : removal;
     await entered.promise;
@@ -177,7 +196,17 @@ for (const mode of [
       message: /disposal|collect/i,
     });
     release.resolve(undefined);
-    await removalOutcome;
+    const removalError = await removalOutcome;
+    if (mode === 'combined-failure') {
+      t.true(removalError instanceof AggregateError);
+      if (!(removalError instanceof AggregateError))
+        throw Error('Expected both storage failures');
+      t.deepEqual(removalError.errors.map(error => error.message).sort(), [
+        'Injected formula deletion failure',
+        'Injected pet-store deletion failure',
+      ]);
+    }
+    if (failStore) t.true(storeFailureObserved);
     if (mode === 'held-read') {
       // Complete the read only after collection/deletion finishes. A stale
       // successful read must not reinsert the removed formula in the graph.
@@ -185,7 +214,7 @@ for (const mode of [
       await reading;
       await t.throwsAsync(E(host).lookupById(id));
     }
-    if (failDeletion || mode === 'reclaim-failure') {
+    if (failDeletion || failStore || mode === 'reclaim-failure') {
       // Failed durable deletion must not make the still-present formula usable
       // after its old controller and cleanup owner have been withdrawn.
       await t.throwsAsync(E(host).lookupById(id), {

@@ -285,6 +285,24 @@ a queue change; it remains distinct from retrying storage after proven cancellat
 Formula deletion preceding failed storage reclamation also means in-memory retry
 ownership alone would not prove restart recovery.
 
+Storage failure reporting (2026-09-24): collection now propagates rejected
+formula and pet-store deletions to the initiating graph operation instead of
+resolving as though cleanup succeeded.
+Reclamation is still attempted after acknowledged cancellation; if it also fails,
+its error is preserved alongside deletion errors rather than masking them.
+One failure keeps its original error; multiple failures use an AggregateError.
+Failed collection fences remain in place.
+The barrier suite adds pet-store-only and combined deletion failures and checks
+both causes in the combined error; existing deletion tests now require rejection.
+The final barrier/directory/marshal-publication run passes 17 tests, including
+graceful daemon restart; 44 construction-cleanup cases also passed during this
+change. Daemon types pass; changed-file lint reports zero errors and 68 warnings.
+Simultaneous deletion plus reclamation failure aggregation is source-reviewed,
+not separately fault-injected by the combined formula/pet-store test.
+This is a prerequisite diagnostic correction, not the retry fix: failed
+cancellation and disconnection reporting, retained retry records, reentrant
+retry scheduling, stage acknowledgements and restart recovery remain open.
+
 Agent identity-key retention — reproduced, unresolved (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
 record despite having no persisted formulas left under its node. The four direct
