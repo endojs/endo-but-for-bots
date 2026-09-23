@@ -743,8 +743,11 @@ Scoped lint has zero errors (79 warnings before the final regression addition;
 the final helper/test check has two warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass. Adversarial re-review approved after the
 interrupted reply evidence fix and receipt continuation regression.
-Bounded context reads, archive indexing and dependency cleanup remain
-open; this deletion alone does not establish bounded recovery memory.
+The unused Floot dependency on `@endo/conversation-tree` is removed as a follow-up;
+composite configuration regeneration produces no tracked changes, and lockfile
+regeneration removes only that dependency edge. Generic conversation-tree users
+remain unchanged. Bounded context reads and archive indexing remain open;
+this deletion alone does not establish bounded recovery memory.
 
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
