@@ -117,7 +117,7 @@ const isRealRequest = message =>
  *
  * @returns {{
  *   handle: (event: any) => HostedTurnEvent[],
- *   finish: () => HostedTurnEvent[],
+ *   finish: (terminalReason?: string) => HostedTurnEvent[],
  * }}
  */
 export const makeClaudeHostedTranslator = () => {
@@ -332,7 +332,9 @@ export const makeClaudeHostedTranslator = () => {
           // whatever text happened to stream and be persisted as a normal
           // assistant reply. Record it; finish() raises it.
           errorReason =
-            resultText ||
+            [resultText, ...(Array.isArray(event.errors) ? event.errors : [])]
+              .filter(item => typeof item === 'string' && item.trim() !== '')
+              .join('\n') ||
             (typeof event.subtype === 'string' && event.subtype) ||
             'claude reported an error';
         } else if (resultText !== undefined && !streamedAny) {
@@ -374,13 +376,19 @@ export const makeClaudeHostedTranslator = () => {
     return out;
   };
 
-  const finish = () =>
-    errorReason === undefined
+  /** @param {string} [terminalReason] */
+  const finish = terminalReason =>
+    errorReason === undefined && terminalReason === undefined
       ? [/** @type {HostedTurnEvent} */ ({ type: 'end' })]
       : [
           /** @type {HostedTurnEvent} */ ({
             type: 'abort',
-            reason: `claude turn failed: ${errorReason}`,
+            reason: [
+              ...(errorReason === undefined
+                ? []
+                : [`claude turn failed: ${errorReason}`]),
+              ...(terminalReason === undefined ? [] : [terminalReason]),
+            ].join('\n'),
           }),
         ];
 
@@ -421,10 +429,10 @@ export const translateClaudeTurn = rawReader => {
           return;
         }
         if (event?.type === 'abort') {
-          push({
-            type: 'abort',
-            reason: `${event.reason || 'claude turn aborted'}`,
-          });
+          for (const terminal of translator.finish(
+            `${event.reason || 'claude turn aborted'}`,
+          ))
+            push(terminal);
           return;
         }
         for (const translated of translator.handle(event)) {
@@ -435,15 +443,15 @@ export const translateClaudeTurn = rawReader => {
       // The raw reader ended without an in-band terminal: its producer closed
       // it (the client's interrupt() or terminate() killed the process), so
       // whatever streamed is a truncated reply and must not read as complete.
-      push({
-        type: 'abort',
-        reason: 'claude turn ended without a terminal event',
-      });
+      for (const terminal of translator.finish(
+        'claude turn ended without a terminal event',
+      ))
+        push(terminal);
     } catch (error) {
-      push({
-        type: 'abort',
-        reason: error instanceof Error ? error.message : String(error),
-      });
+      for (const terminal of translator.finish(
+        error instanceof Error ? error.message : String(error),
+      ))
+        push(terminal);
     }
   })();
   return reader;

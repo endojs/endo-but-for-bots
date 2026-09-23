@@ -532,7 +532,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; cross-backend acceptance including OpenCode restart/restore passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
-| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission deployed and accepted. Generation 166 adds the operator-declared account authority in plans, profiles, catalogs and grants, replacing provider-name constants and the Codex `pool` label. All-account discovery and hosted seed/policy checks pass. Open: runtime support for Claude's discovered models and the absent-backend orchestration special case |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission deployed and accepted. Generation 166 adds operator-declared account authority in plans, profiles, catalogs and grants. Explicit durable backend/model identity and discriminated runtime configuration are pushed (`7275afa72`, `25e264f90`), tested locally, not deployed. Claude failure diagnostics are improved locally; the cause of the discovered-model failure and live runtime support remain unverified. Coordinated retirement/deployment and acceptance remain open. |
 | FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Generation 166 deploys atomic revision intent, the shared `image`/`account`/`provider` vocabulary, recorded/proposed binding inspection and returned binding snapshots, exact state-provider ownership checks, and immutable Claude/Codex state-root placement. Local crash/reconstruction and adapter conformance evidence is recorded below. Generations 167 and 168 pass live provider-only and image-plus-provider authorized rebind with history/workspace preservation, respectively |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the operator deferred it on 2026-09-22 and will choose the mechanism and default bound later |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
@@ -1832,8 +1832,10 @@ evidence before treating an implementation as ready for deployment.
 
 Floot owns the direct-provider inference loop in `agent.js`, while hosted runtimes implement
 a separate backend interface.
-The direct runtime is represented internally by the absence of a hosted backend ID and
-externally as `provider`/Fae.
+At the audit baseline the direct runtime was represented internally by the absence
+of a hosted backend ID and externally as `provider`/Fae.
+The September 24 identity and runtime slices remove that ambiguity locally;
+deployment is still pending.
 OpenRouter catalogs are separately declared in Floot and OpenCode.
 [Account views](src/account-watch.js) use backend-based identities.
 
@@ -2138,6 +2140,26 @@ contains exit code 1 and a stdin warning, not a diagnostic establishing that
 `claude-fable-5-1` is unsupported. Do not invent a runtime allowlist from this
 single failure. Inspect structured CLI errors and compare pinned runtime
 capabilities before filtering provider-discovered routes.
+
+Diagnostic follow-up (2026-09-24, local, not deployed): Tokyo still reports active
+app `819aa18c8`; the daemon journal since September 22 contains no matching
+model-specific diagnostic. This limited search does not establish runtime support
+or explain the earlier failure. Source inspection found that the Claude hosted
+translator discarded the CLI result's `errors` string array and that a later
+process abort replaced the retained result error. The translator now preserves
+result text and string diagnostics alongside process, transport or EOF failure.
+Non-string error objects are not serialized. The
+[official SDK error handling](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_errors.py)
+confirms the CLI's structured error-list contract. This is an observability fix,
+not grounds for filtering discovered models or claiming the live cause is known.
+Failures use the existing hosted abort and private turn journal path; no new
+formula, stored schema, credential access, or renewal owner is introduced.
+All 216 Claude tests and ten Floot hosted integration tests pass, including
+structured-error preservation across normal termination, nonzero process exit
+and producer EOF. Scoped lint has no errors (four warnings); the documentation
+gate has no errors (180 warnings) after correcting the translator signature.
+Adversarial review approved the implementation and EOF regression.
+A fresh failing runtime turn remains a deployment gate.
 
 Model these independently:
 
