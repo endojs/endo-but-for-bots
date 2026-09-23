@@ -5,14 +5,18 @@
  * (`@endo/hosted-agent/session-plan.js`) with Codex's own fields: the pinned
  * slice image, the subscription account and the operator's container mounts.
  * Host record/checkpoint and CLI-home placement belong to the exact state
- * provider reference, not to a path supplied by the guest. There is no volume
+ * provider reference; its operator-configured root is pinned as stateRoot,
+ * never supplied by the guest. There is no volume
  * identity or storage lease, and no MCP directory. Nothing unknown is
  * admitted: a plan with a field this parser does not know is refused.
  *
  * @module
  */
 
-import { readSessionPlacement } from '@endo/hosted-agent/session-plan.js';
+import {
+  readRecordedPath,
+  readSessionPlacement,
+} from '@endo/hosted-agent/session-plan.js';
 
 import { assertContainerMounts } from './codex-hosted-policy.js';
 
@@ -21,6 +25,7 @@ import { assertContainerMounts } from './codex-hosted-policy.js';
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs The pinned slice image, `oci:<image>@<digest>`.
+ * @property {string} stateRoot Immutable root of host records and CLI homes.
  * @property {string} accountRef The account authority the session is bound
  *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
@@ -46,11 +51,12 @@ export const readCodexSessionPlan = text => {
   const { placement, recorded } = readSessionPlacement(text, {
     label: 'Codex',
     sandboxIdFallback: 'codex',
-    fields: ['containerMounts'],
+    fields: ['containerMounts', 'stateRoot'],
   });
   return harden(
     /** @type {CodexSessionPlan} */ ({
       ...placement,
+      stateRoot: readRecordedPath('stateRoot', recorded.stateRoot),
       containerMounts: assertContainerMounts(recorded.containerMounts),
     }),
   );

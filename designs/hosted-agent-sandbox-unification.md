@@ -117,7 +117,20 @@ and the record's roles under the fourth:
 | `account` | `accountRef`, and `credentialKind` where the credential has a kind | the id of the account authority the broker serves: a pool's id, or a single account's id as the catalog lists it | a broker re-minted over another account authority, or over the same one with a credential of another kind |
 | `provider` | none: the record's references | the broker, sandbox, storage and, where the runtime keeps native state, state-provider identities | a backend re-minted over other services |
 
-Placement (the workspace, the private directories, the mounter settings) stays
+Native state placement (2026-09-23, implemented, not deployed): Claude and Codex
+plans require `stateRoot`, the normalized absolute root read from the verified
+state-provider formula environment. The storage owner must capture that same
+provider. Root placement is immutable even under an authorized provider rebind;
+the provisioner refuses a changed root before stop/revision, but permits a
+same-root replacement. Both adapters protect the root from guest placement.
+The existing durable plan stores this pin before activation and reconstruction
+rechecks it. OpenCode has no separate durable native state provider. This adds
+no recovery adapter or claim about filesystem inode identity. Retire old
+Claude/Codex sessions with the old release before deployment: plans without the
+required root are refused, including during deletion. Preserve Secrets, renewal
+credentials and workspaces. Live rebind acceptance remains pending.
+
+Placement (the workspace, the private directories, native state roots, the mounter settings) stays
 immutable; a different placement is a different session. Which member of a pool
 serves a pinned session (`subscription`, or `auto`) stays the session's own
 revisable choice, as today: a member added to or removed from the same pool is

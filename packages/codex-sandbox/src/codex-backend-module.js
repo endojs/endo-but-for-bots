@@ -61,6 +61,7 @@ harden(controllerSpecifier);
  * @param {Record<string,string>} powers.dependencies
  * @param {string} powers.workspaceRoot
  * @param {string} powers.privateRoot
+ * @param {string} powers.stateRoot The exact provider's immutable native storage root.
  * @param {readonly string[]} powers.protectedRoots Host-only records and services.
  * @param {string} powers.imageRef The broker's pinned image, digest included.
  * @param {string} powers.accountRef The account authority the broker serves,
@@ -74,6 +75,7 @@ export const makeCodexSessionProvisioner = ({
   dependencies,
   workspaceRoot,
   privateRoot,
+  stateRoot,
   protectedRoots,
   imageRef,
   accountRef,
@@ -86,10 +88,12 @@ export const makeCodexSessionProvisioner = ({
     dependencies,
     workspaceRoot,
     privateRoot,
-    protectedRoots,
+    protectedRoots: [...new Set([stateRoot, ...protectedRoots])],
+    immutable: { stateRoot: 'native state root' },
     sandboxIdFallback: 'codex',
     readPlan: readCodexSessionPlan,
     fields: ({ request }) => ({
+      stateRoot,
       rootfs: `oci:${imageRef}`,
       accountRef,
       containerMounts: request.containerMounts,
@@ -178,6 +182,7 @@ export const make = async (host, _context, { env = {} } = {}) => {
     listSubscriptions,
   });
   const provisionSession = makeCodexSessionProvisioner({
+    stateRoot: assertCodexStateRoot(state.env.ENDO_CODEX_STATE_DIR),
     owner,
     dependencies: harden({
       sandboxService: sandbox.identifier,

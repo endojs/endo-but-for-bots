@@ -1434,10 +1434,36 @@ Durability: no schema or stored-state change. Each backend reconstruction repeat
 the exact-formula check; existing records keep their own captured dependencies.
 No native resources or credentials are acquired by the check. This does not
 prove old resources have stopped and does not retire mismatched owners itself.
-Not deployed. The remaining FA-08 change is to record a required immutable
-`stateRoot` for Claude/Codex plans, sourced from that provider's environment,
-and refuse changed-root provider rebinds before stop/revision. OpenCode has no
+Not deployed. The root-placement follow-up is implemented below. OpenCode has no
 separate durable native state provider; its private placement is already recorded.
+
+### Immutable native state root — 2026-09-23
+
+Claude and Codex plans now require `stateRoot`, read from the verified state
+provider formula's environment, not from a guest request. Both parsers require
+an absolute normalized non-root path. The shared provisioner treats this as
+immutable placement and the adapters always protect it from workspace/private
+directory overlap. Even an authorized provider rebind refuses a changed root
+before stopping or revising the session; same-root provider replacement remains
+supported. No new provider API or native recovery mechanism is introduced.
+
+Durability: the root is part of the existing plan persisted before activation.
+Reconstruction compares the stored plan against the current provider root; it
+does not infer placement from current configuration alone. Shared adapter tests
+exercise changed-root refusal, same-root replacement, and reconstruction over a
+recording owner. These are not live daemon-restart or physical filesystem-identity
+proofs; live cross-backend rebind acceptance remains open under FA-08.
+
+Verification: Claude 211 and Codex 315 tests pass; the strengthened adapter
+conformance fixtures also pass all 24 cases each with no caller-supplied root
+protection. Both production type checks and hosted-agent types pass. Scoped
+lint has zero errors (14 existing warnings). Final adversarial review found no
+blocking issue.
+
+Breaking deployment gate: retire affected old Claude/Codex sessions using the
+old release before switching parsers. Old plans without `stateRoot` are refused,
+including by storage deletion. Preserve Secrets, renewal credentials and
+workspaces. This change is not deployed.
 
 ## FA-09 — Give local development storage an explicit role
 
@@ -2189,6 +2215,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | FA-08: pin Claude/Codex native state roots in durable session plans and refuse relocation before rebind; automatically protect roots from guest placement | Parser and adapter conformance regressions; adversarial review; old-release retirement required before deploy; live acceptance pending |
 | 2026-09-23 | FA-08: require Claude/Codex deletion owner to capture the same state provider used for activation; Claude setup also refuses mismatched retained storage | 52 focused tests; no new durable state; immutable native state-root pin still open; not deployed |
 | 2026-09-23 | Repair Claude broker public JSDoc type and shared OCI literal inference from binding-vocabulary refactor; quarantine stale local generated profile declarations | Docs passes, zero errors; Claude production and hosted-agent types pass; 35 focused tests; no runtime/durability change |
 | 2026-09-23 | FA-08: read-only recorded/proposed binding inspection and actual binding snapshot in rebind replies; delegated runners refuse operator identity disclosure | Three adapter conformance suites and Floot regression tests; durability boundary documented; live rebind and state-root placement remain open |

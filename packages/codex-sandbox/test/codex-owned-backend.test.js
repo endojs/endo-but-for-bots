@@ -299,6 +299,7 @@ test('Codex placement is recorded before directories and replacement stops befor
   });
   const scripted = scriptedCatalog();
   const provision = makeCodexSessionProvisioner({
+    stateRoot: join(root, 'state'),
     owner,
     dependencies,
     workspaceRoot,

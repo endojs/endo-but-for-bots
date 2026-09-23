@@ -83,6 +83,7 @@ const planFor = (id, overrides = {}) =>
     sandboxSessionId: makeSandboxSessionId(id),
     rootfs: `oci:example@${digest}`,
     accountRef: 'claude-main',
+    stateRoot: '/native-state',
     networkPolicy: 'off',
     credentialKind: 'apiKey',
     workspaceDir: `/workspaces/${id}`,

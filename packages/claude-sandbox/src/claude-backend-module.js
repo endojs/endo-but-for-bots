@@ -108,6 +108,7 @@ harden(resolveBackendConfig);
  * @param {Record<string, string>} powers.dependencies
  * @param {string} powers.workspaceRoot
  * @param {string} powers.privateRoot
+ * @param {string} powers.stateRoot The exact provider's immutable native storage root.
  * @param {readonly string[]} powers.protectedRoots
  * @param {string} powers.rootfs The broker's pinned image, as `oci:<ref>`.
  * @param {string} powers.accountRef The account authority the broker serves,
@@ -121,6 +122,7 @@ export const makeClaudeSessionProvisioner = ({
   dependencies,
   workspaceRoot,
   privateRoot,
+  stateRoot,
   protectedRoots,
   rootfs,
   accountRef,
@@ -134,7 +136,8 @@ export const makeClaudeSessionProvisioner = ({
     dependencies,
     workspaceRoot,
     privateRoot,
-    protectedRoots,
+    protectedRoots: [...new Set([stateRoot, ...protectedRoots])],
+    immutable: { stateRoot: 'native state root' },
     sandboxIdFallback: 'claude',
     privatePaths: { mcpDir: 'mcp' },
     readPlan: readClaudeSessionPlan,
@@ -142,7 +145,7 @@ export const makeClaudeSessionProvisioner = ({
     // controller later refuses a broker whose evidence names another digest,
     // and a session reopens under a broker re-minted over another image or
     // credential kind only when the request authorizes that rebind.
-    fields: () => ({ rootfs, accountRef, credentialKind }),
+    fields: () => ({ rootfs, accountRef, credentialKind, stateRoot }),
     // The credential's kind is a property of the account authority's
     // credential, so it sits under `account`.
     rebindable: { credentialKind: 'account' },
@@ -210,6 +213,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
     }),
     workspaceRoot: workspaceBaseDir,
     privateRoot: mcpBaseDir,
+    stateRoot: state.stateDir,
     // Host records, the runtime directory and the broker's directory: no
     // guest storage may resolve into them.
     protectedRoots: harden([

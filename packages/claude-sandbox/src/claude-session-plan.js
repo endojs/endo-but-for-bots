@@ -16,6 +16,7 @@ import {
   isNormalizedAbsolutePath,
   makeSandboxSessionId as makeSharedSandboxSessionId,
   readMounterEnv,
+  readRecordedPath,
   readSessionPlacement,
 } from '@endo/hosted-agent/session-plan.js';
 
@@ -36,6 +37,7 @@ export { containsPath, isNormalizedAbsolutePath, readMounterEnv };
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
+ * @property {string} stateRoot Immutable native state-provider root.
  * @property {string} accountRef The account authority the session is bound
  *   to (`@endo/hosted-agent/account-authority.js`).
  * @property {'off' | 'public-internet'} networkPolicy
@@ -78,12 +80,13 @@ export const readClaudeSessionPlan = text => {
     label: 'Claude',
     sandboxIdFallback: SANDBOX_ID_FALLBACK,
     privatePaths: ['mcpDir'],
-    fields: ['credentialKind'],
+    fields: ['credentialKind', 'stateRoot'],
     assertEffort: assertClaudeEffort,
   });
   return harden(
     /** @type {ClaudeSessionPlan} */ ({
       ...placement,
+      stateRoot: readRecordedPath('stateRoot', recorded.stateRoot),
       credentialKind: assertCredentialKind(recorded.credentialKind),
     }),
   );

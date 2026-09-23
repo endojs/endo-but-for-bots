@@ -12,6 +12,7 @@ const plan = harden({
   sandboxSessionId: makeSandboxSessionId('session-a'),
   rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
   accountRef: 'claude-main',
+  stateRoot: '/native-state',
   networkPolicy: 'off',
   credentialKind: 'apiKey',
   workspaceDir: '/workspaces/session-a-0123456789ab',
@@ -21,6 +22,25 @@ const plan = harden({
   model: 'claude-sonnet-4',
   reasoningEffort: 'max',
   systemPrompt: 'You are Floot.',
+});
+
+test('native state root is required and must be a normalized absolute non-root path', t => {
+  for (const stateRoot of [
+    undefined,
+    '/',
+    'relative',
+    '/state/../other',
+    '/state/',
+    `/state${String.fromCharCode(0)}bad`,
+  ]) {
+    t.throws(
+      () => readClaudeSessionPlan(JSON.stringify({ ...plan, stateRoot })),
+      {
+        message: /recorded absolute path for "stateRoot"/,
+      },
+    );
+  }
+  t.is(readClaudeSessionPlan(JSON.stringify(plan)).stateRoot, plan.stateRoot);
 });
 
 test('a recorded plan parses without deployment resource settings', t => {

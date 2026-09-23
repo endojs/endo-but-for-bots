@@ -10,11 +10,31 @@ const plan = harden({
   sandboxSessionId: makeSandboxSessionId('session-a', 'codex'),
   rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
   accountRef: 'subscription-a',
+  stateRoot: '/native-state',
   networkPolicy: 'off',
   workspaceDir: '/workspaces/a',
   workspaceMountPoint: '/private/a/workspace',
   mounterSocketDir: '/private/a/9p',
   containerMounts: [],
+});
+
+test('native state root is required and must be a normalized absolute non-root path', t => {
+  for (const stateRoot of [
+    undefined,
+    '/',
+    'relative',
+    '/state/../other',
+    '/state/',
+    `/state${String.fromCharCode(0)}bad`,
+  ]) {
+    t.throws(
+      () => readCodexSessionPlan(JSON.stringify({ ...plan, stateRoot })),
+      {
+        message: /recorded absolute path for "stateRoot"/,
+      },
+    );
+  }
+  t.is(readCodexSessionPlan(JSON.stringify(plan)).stateRoot, plan.stateRoot);
 });
 
 test('Codex records placement without a volume lease or an MCP directory', t => {

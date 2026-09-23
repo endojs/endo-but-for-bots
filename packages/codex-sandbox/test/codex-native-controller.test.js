@@ -69,6 +69,7 @@ const fixture = async (
     sandboxSessionId,
     rootfs: `oci:example@${imageDigest}`,
     accountRef: 'account-a',
+    stateRoot: join(root, 'state'),
     networkPolicy: 'off',
     workspaceDir: join(root, 'workspace'),
     workspaceMountPoint: join(root, 'mount'),

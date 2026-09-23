@@ -33,6 +33,7 @@ import {
  *
  * @param {object} adapter
  * @param {string} adapter.label
+ * @param {boolean} [adapter.nativeState] Whether the adapter pins a separate native state root.
  * @param {(powers: { owner: any, dependencies: Record<string, string>, workspaceRoot: string, privateRoot: string, protectedRoots: readonly string[], catalog: ReturnType<typeof makeBackendCatalog> }) => (sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>} adapter.makeProvisioner
  *   The adapter's declaration over the shared provisioner.
  * @param {(powers: { provisionSession: any, stopSession: any, removeSession: any, catalog: any, publicInternetEnabled?: boolean, listSubscriptions?: any }) => any} adapter.makeFactory
@@ -47,6 +48,7 @@ import {
  */
 export const testProvisioningConformance = ({
   label,
+  nativeState = false,
   makeProvisioner,
   makeFactory,
   request: extraRequest = {},
@@ -491,6 +493,69 @@ export const testProvisioningConformance = ({
     t.deepEqual(f.names(), ['inspect']);
     t.is(f.records.get('a')?.phase, 'ready');
   });
+
+  if (nativeState) {
+    test(`${label} provider rebind cannot relocate native state, but same-root replacement remains allowed`, async t => {
+      const f = await fixture(t);
+      await f.provision('a', f.request, f.tools);
+      const original = f.records.get('a');
+      t.is(f.plan('a').stateRoot, f.protectedRoot);
+      const changedRoot = join(f.base, 'other-state');
+      const dependencies = harden({
+        ...f.dependencies,
+        stateProvider: 'state-2',
+        storage: 'storage-2',
+      });
+      const replacement = stateRoot =>
+        makeProvisioner({
+          owner: f.owner,
+          dependencies,
+          workspaceRoot: f.workspaceRoot,
+          privateRoot: f.privateRoot,
+          protectedRoots: harden([stateRoot]),
+          catalog: f.scripted.catalog,
+        });
+      f.log.length = 0;
+      await t.throwsAsync(
+        replacement(changedRoot)(
+          'a',
+          {
+            ...f.request,
+            rebind: ['image', 'account', 'provider'],
+          },
+          f.tools,
+        ),
+        { message: /native state root cannot change/ },
+      );
+      t.deepEqual(f.names(), ['inspect']);
+      t.is(f.records.get('a'), original);
+      t.deepEqual(f.records.get('a')?.references, f.dependencies);
+      t.false(await f.exists(changedRoot));
+      await replacement(f.protectedRoot)(
+        'a',
+        { ...f.request, rebind: ['provider'] },
+        f.tools,
+      );
+      t.deepEqual(f.names().slice(-4), ['inspect', 'stop', 'revise', 'start']);
+      t.is(f.plan('a').stateRoot, f.protectedRoot);
+      t.deepEqual(f.records.get('a')?.references, dependencies);
+      // A reconstructed provisioner sees the durable pin, not an in-memory
+      // permission granted by the preceding rebind.
+      f.log.length = 0;
+      await t.throwsAsync(
+        replacement(changedRoot)(
+          'a',
+          {
+            ...f.request,
+            rebind: ['provider'],
+          },
+          f.tools,
+        ),
+        { message: /native state root cannot change/ },
+      );
+      t.deepEqual(f.names(), ['inspect']);
+    });
+  }
 
   for (const { what, makeProvisioner: makeRebound } of rebound) {
     test(`${label} a record reopened under a broker with another ${what} is refused until a request authorizes the rebind, which revises after a stop`, async t => {

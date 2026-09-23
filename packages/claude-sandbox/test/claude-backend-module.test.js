@@ -430,6 +430,7 @@ test('create() records the plan under the sandbox id with exact dependencies, th
   t.deepEqual(JSON.parse(planText), {
     sessionId: 'session-a',
     sandboxSessionId: sid,
+    stateRoot: path.join(f.base, 'state'),
     rootfs,
     accountRef: 'claude-main',
     networkPolicy: 'off',
