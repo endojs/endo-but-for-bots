@@ -879,6 +879,27 @@ Supporting this optional mutation needs a separately identified context revision
 and safe publication boundary, not a changed payload under the existing summary ID.
 The current summary-checkpoint wiring does not claim to capture these revisions.
 
+Live acceptance preparation (2026-09-23): native producer `f6492ac3f9` and app
+`347c31dee` have built successfully on Tokyo. Host `3978754` pins the candidate
+OpenCode image and has passed NixOS preparation, but generation 169 remains
+active. The scoped broker cutover is waiting for explicit permission to copy
+Tokyo's metadata-only preservation snapshot back to Tokyo; no broker aliases
+have been removed. See endo-host
+`ops/native-checkpoint-deployment-20260923.md` for exact hashes and gates.
+The native Claude runtime was stopped with cleanup acknowledgement, while all
+three Floot sessions, workspace roots, Secrets and credential owners remain.
+
+The next live compaction test must use ordinary owned Floot turns on the free
+route, seed identifiable facts and real tool evidence, and observe reported
+token usage while adding bounded context. Then verify an actual checkpoint,
+continuation, recall, and daemon-restart recall. Set explicit request, time and
+token budgets; a provider limit/rate error or an unreachable threshold is
+unverified, not a passing test. Do not call native HTTP summarization outside
+the hosted turn frontier or concurrently with its prompt loop. Artificially
+lowered test-only model limits establish neither normal production timing nor
+provider-window correctness. The FA-07 limit-plumbing finding below affects
+predictability of this acceptance, independently of checkpoint transport.
+
 Validation at the storage-foundation checkpoint: 515 Floot tests passed,
 including snapshot corruption, canonical payload
 checks, conflicting duplicate suffixes and failed content/event acknowledgement.
@@ -1283,6 +1304,36 @@ failure, stop and retry, restart and deletion. Deployment and acceptance on
 Tokyo followed the wipe model (generation 165).
 
 ## FA-07 — Separate runtime, provider, account, and route
+
+Additional open finding (2026-09-23): provider model limits do not reach the
+OpenCode runtime. `openrouter-model-read.js` preserves `context_length` as
+`contextLength` in the shared descriptor, but
+`opencode-native-controller.js` calls `makeOpencodeConfig()` without `models`.
+`opencode-agent-config.js` consequently supplies every selected route with
+`DEFAULT_LIMITS = { context: 128_000, output: 8192 }`.
+The native child also has model fetching disabled. In pinned native source
+`f6492ac3f9`, `session/overflow.ts` calculates a 119,808-token usable window
+with no inherited separate input limit and an effective 8,192-token output cap.
+Native catalog merging can retain an existing model's input limit, and runtime
+output overrides can change the cap. Inspect the effective native model before
+asserting a live threshold; disabling fetch does not remove the bundled catalog.
+`prompt.ts` checks
+the last finished assistant's reported usage before proactive compaction.
+A large first prompt can fail before that check has useful usage evidence.
+These are fabricated runtime limits, not just display defaults: they can cause
+early compaction, late compaction/provider rejection, and output-budget mismatch.
+
+Required follow-up: carry validated provider context/output metadata into the
+selected runtime model configuration without restoring NixOS model lists or
+duplicating credential owners. Model identity remains pinned; account catalog
+observations remain explicitly ephemeral unless a distinct durable execution
+policy is designed. Define honest unknown-limit and dynamic auto-route behavior:
+the free route can change underlying models, so a route-level observation alone
+does not prove every selected provider's effective window. Provider-limit reads
+must obey existing owner retirement/fencing and failure semantics. Verify the
+actual native model limits, compaction trigger, output behavior, catalog outage,
+and daemon reconstruction rather than testing only the picker descriptor.
+No implementation or provider-window correctness is claimed by this finding.
 
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
