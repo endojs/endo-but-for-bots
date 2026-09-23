@@ -23,11 +23,14 @@ so it never runs in CI).
 
 The test bed is a developer workstation, not an isolated performance lab, and
 the timing numbers are **indicative single-run figures**, not a maintained
-regression benchmark; expect meaningful run-to-run noise on the timed row. The
+regression benchmark; expect meaningful run-to-run noise on the timed row.
+The freeze+thaw row was re-measured on Node 22.23.2 on 2026-09-23: four
+consecutive runs gave 20.3–22.8 µs per round-trip, and an independent
+four-run sample on a matching host gave 15.7–19.7 µs. The
 wire-size row, by contrast, is exact and engine-independent (it is a property of
 the two encodings, computed analytically).
 
-**Measured environment ≠ every deployed environment.** Every figure below is
+**The measured environment is not every deployed environment.** Every figure below is
 Node 22 (V8, JIT). An interpreted engine — XS, which has no native immutable
 `ArrayBuffer` and installs an emulation — is plausibly worse on the freeze/thaw
 round-trip and is **not** measured here.
@@ -53,7 +56,7 @@ Over a single 64 KiB (65,536-byte) chunk:
 | Metric                         | Direct immutable bytes (current) | Retired base64 | Ratio  |
 | ------------------------------ | -------------------------------- | -------------- | ------ |
 | Wire characters                | 131,072                          | 87,384         | 1.500x |
-| freeze+thaw per chunk (Node 22)| ~30 µs                           | n/a            | —      |
+| freeze+thaw per chunk (Node 22)| ~20 µs                           | n/a            | —      |
 
 The cross-boundary round-trip figure quoted in `DESIGN.md` (roughly 4–5x slower
 than the base64 path) folds `@endo/marshal` serialize/unserialize of the larger

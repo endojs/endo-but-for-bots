@@ -10,7 +10,7 @@
  * - No partial-range I/O: `read(path, offset, length)` fetches the
  *   whole file via `stream()` and slices. `write`/`setStat`
  *   likewise read-modify-write the whole file, since Mount has no
- *   partial-range write. Cost is O(filesize) on the wire (≈2×, the hex
+ *   partial-range write. Cost is O(filesize) on the wire (about 2x, the hex
  *   marshal representation of a passable byteArray)
  *   and in memory; the write side sends the file as a *single* byteArray
  *   chunk via `makeBytesBlob` (no back-pressure). Acceptable for the
