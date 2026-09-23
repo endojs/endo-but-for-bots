@@ -190,6 +190,7 @@ export const SecretImporterInterface = M.interface('SecretImporter', {
 
 export const SecretCatalogInterface = M.interface('SecretCatalog', {
   list: M.call().returns(M.promise()),
+  adminFor: M.call(M.remotable()).returns(M.promise()),
 });
 
 export const SecretAuditReaderInterface = M.interface('SecretAuditReader', {

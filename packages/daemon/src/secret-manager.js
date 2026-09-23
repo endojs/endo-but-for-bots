@@ -182,6 +182,11 @@ export const makeSecretManager = ({
 
   /** @type {Map<string, SecretBlob>} */
   const blobs = new Map();
+  // Incarnation-local identity index, rebuilt whenever a persisted grant is
+  // resolved. This does not root or persist a capability; formula dependencies
+  // retain the read facet, and the catalog already carries admin authority.
+  /** @type {WeakMap<object, string>} */
+  const secretIdForBlob = new WeakMap();
   /** @type {Map<string, Promise<unknown>>} */
   const mutationTails = new Map();
 
@@ -306,6 +311,7 @@ export const makeSecretManager = ({
       readBase64WithGeneration: readWithGeneration,
     });
     blobs.set(grantId, blob);
+    secretIdForBlob.set(blob, secretId);
     return blob;
   };
 
@@ -569,6 +575,14 @@ export const makeSecretManager = ({
     };
 
     const catalog = makeExo('SecretCatalog', SecretCatalogInterface, {
+      adminFor: async blob => {
+        const secretId = secretIdForBlob.get(blob);
+        if (secretId === undefined) throw fixedError('UNKNOWN_GRANT');
+        // A revoked record remains administrable (as through list), but a
+        // deleted record must not return a previously cached admin facet.
+        requireRecord(secretId);
+        return provideAdmin(secretId);
+      },
       list: async () => {
         const knownPaths = await listKnownGrantPaths();
         /** @type {Map<string, string[][]>} */

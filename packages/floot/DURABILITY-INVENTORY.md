@@ -525,13 +525,25 @@ confirmed mutable-path reconstruction defect described in FA-08.
 | `c811a84a9` | Shared image resolver strips tag, preserves registry port, validates resulting digest pin against runtime pattern | Injected Podman inspector tests and active plan-reader round trip pass; pin checks do not prove local image availability or build reproducibility |
 | `40ba08d3b` | Early pinned-image refusal retained through shared setup/plan readers; old hosted-subscription path removed | Unused Codex-specific reader/re-export now deleted after caller checks; current plan rejection tests and shared-resolver round trip retained. No daemon entrypoint was removed |
 | `39fd686ab` | Original Codex host configuration/quota observer/custom native agent | Removed by `812f10b47`; shared scoped runtime now owns native operations. Current exact runtime/state/store dependencies are recorded by daemon owner, not obsolete module topology |
-| `06f745f78` | Managed renewable wrapper formula retains host powers and a secret path; Secrets owns credential bytes/generations | 105 tests pass but independent reproduction confirms same wrapper configuration resolves a different Secret after pet-name rebind/reconstruction. Separate catalog/read lookup can mix identities; open FA-08 defect, not durable identity proof |
+| `06f745f78` | Original path-only wrapper superseded by versioned marshal host/Secret powers; Secrets owns bytes/generations | FA-08 fix retains matching authority by facet identity and validates static grant recipes before mint/adoption. Production provisioning survives alias changes and graceful restart; cold dynamic-recipe retargeting reproduced then refused. Reviewed locally, old-owner retirement and deployment pending |
 | `fb641a860` | Split state/runtime and canonical journal storage survive, three-capability backend construction superseded | Current backend is a replaceable shared-provisioner shell with exact dependencies recorded by daemon; later sync/unique-allocation work strengthens original rename-only storage. 60 local tests, no native restart proof |
 | `26287567a` | Refusing noScratch workaround for custom Codex native agent | Removed with custom agent by `812f10b47`; do not attribute that capability-construction behavior to the shared runtime |
 | `4a4749a56` | Original retained backend strategy superseded by retained broker/runtime/state and replaceable backend shell | Current setup checks exact broker powers/environment, publishes backend-next only after preparation. 60 local tests include repeat setup; no live listener or credential renewal exercised |
 
 ### Post-snapshot changes
 
+- Renewable credential identity fix: versioned wrappers retain a
+  marshalled host/Secret pair; the catalog derives administration authority from
+  the exact read facet rather than a mutable name. Synthetic real-daemon testing
+  covers alias rebinding/removal and graceful reconstruction without retargeting.
+  Production provisioning/adoption now runs in that daemon test; adoption rejects
+  non-marshalled powers and non-static Secret slot recipes before evaluating stored
+  powers on adoption, or before creating a wrapper on provisioning (which already
+  resolved the configured Secret). A cold-start dynamic-slot retargeting reproduction now
+  fails closed; error-injection cases preserve provisioning and cleanup failures.
+  Independently reviewed with 35 wrapper and 19 manager tests plus the real-daemon
+  regression. Not deployed or live-renewal tested; old renewal owners must retire
+  before replacement, without altering Secrets or pending renewal intents.
 - Removed unused Codex-specific pinned-image reader and its setup-helper re-export.
   It had no current production callers or formula entrypoint. The retained test
   now checks the shared resolver against the actual shared session-plan reader;

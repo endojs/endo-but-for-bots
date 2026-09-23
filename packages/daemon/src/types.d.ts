@@ -1661,6 +1661,12 @@ export interface SecretCatalogEntry {
 
 export interface SecretCatalog {
   list(): Promise<SecretCatalogEntry[]>;
+  /**
+   * Select administration by an exact read facet from this secret manager.
+   * Requires catalog authority; foreign or wrapped facets are refused.
+   * Revoked records remain administrable, but deleted records are refused.
+   */
+  adminFor(blob: SecretBlob): Promise<SecretAdmin>;
 }
 
 export type SecretAuditEvent = {

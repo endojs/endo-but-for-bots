@@ -10,7 +10,7 @@
  * subscription grant that is exchanged for short-lived access tokens and
  * written back under a generation check.
  *
- * ## Why this one needs `@agent`, and what that costs
+ * ## Durable identity and administration authority
  *
  * A renewing holder needs two authorities over one record: read with the
  * generation it read at (`SecretBlob.readBase64WithGeneration`) and conditional
@@ -23,19 +23,13 @@
  * to the host formula, so "mint it with just the catalog" is not smaller than
  * `@agent` — it *is* `@agent`.
  *
- * So this caplet takes `@agent` and gives back exactly one secret's read and
- * conditional-replace. That is the attenuation: the host agent's whole naming
- * authority goes in, one pinned record's two methods come out, and the backend
- * that renews the credential holds only those. It is deliberately the smallest
- * thing that can hold `@agent` — it resolves one configured path once, at
- * construction, and never consults the catalog again, so re-creating a secret
- * under the same name does not silently re-point a live credential.
- *
- * Closing the gap needs a daemon change: a way for the catalog to bind an
- * administration facet at a pet name, the way `bindGrant` binds a read facet
- * today. The comment on `lookup` in `secret-manager.js` explains why the
- * obvious spelling (`admin/<secretId>`) is refused — a secretId is published on
- * three surfaces — which is exactly why it wants designing rather than adding.
+ * Powers is a marshalled pair of the host and the exact SecretBlob capability.
+ * Its formula retains both dependencies. The host's catalog derives the matching
+ * administration facet from that exact read facet, never a mutable pet name or
+ * public secret ID. Rebinding the operator's name therefore cannot retarget a
+ * reconstructed wrapper or pair one record's reads with another record's writes.
+ * Old path-only formulas fail before lookup; deliberate owner retirement and
+ * reprovisioning are required. No credential bytes or renewal state are copied.
  *
  * @module
  */
@@ -43,11 +37,14 @@
 import { Fail, b, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { M, mustMatch } from '@endo/patterns';
 
 import { ReplaceBase64MethodGuard } from './secret-rotator.js';
 
 const PET_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
+export const RENEWABLE_CREDENTIAL_BINDING_VERSION = '2';
+harden(RENEWABLE_CREDENTIAL_BINDING_VERSION);
 
 export const RenewableCredentialInterface = M.interface(
   'ManagedRenewableCredential',
@@ -92,27 +89,22 @@ export const readCredentialSecretPath = value => {
 harden(readCredentialSecretPath);
 
 /**
- * @param {any} host The `@agent` host powers.
+ * @param {any} powers The durably retained host and SecretBlob pair.
  * @param {unknown} _context
  * @param {{ env?: Record<string, string> }} [options]
  */
-export const make = async (host, _context, { env = {} } = {}) => {
-  const secretPath = readCredentialSecretPath(env.CREDENTIAL_SECRET_PATH);
+export const make = async (powers, _context, { env = {} } = {}) => {
+  env.CREDENTIAL_BINDING_VERSION === RENEWABLE_CREDENTIAL_BINDING_VERSION ||
+    Fail`Legacy renewable credential binding; retire its renewal owner before reprovisioning`;
+  const pair = await powers;
+  mustMatch(
+    pair,
+    M.splitRecord({ host: M.remotable(), secret: M.remotable() }, {}, {}),
+  );
+  const { host, secret } = pair;
   const label = env.CREDENTIAL_LABEL || 'Provider';
   const catalog = await E(host).lookup(['@secrets', 'catalog']);
-  const entries = await E(catalog).list();
-  const wanted = JSON.stringify(secretPath);
-  const entry = entries.find((/** @type {any} */ item) =>
-    item.petNamePaths.some(
-      (/** @type {string[]} */ path) => JSON.stringify(path) === wanted,
-    ),
-  );
-  entry ||
-    Fail`${b(label)} credential secret ${q(secretPath)} is not in the secrets catalog`;
-  // Resolved once. A later `secrets/<name>` rebinding is a different record,
-  // and adopting it would re-point a pinned credential without a mint.
-  const secret = await E(host).lookup(secretPath);
-  const { admin } = entry;
+  const admin = await E(catalog).adminFor(secret);
   return makeExo('ManagedRenewableCredential', RenewableCredentialInterface, {
     readBase64: () => E(secret).readBase64(),
     readBase64WithGeneration: () => E(secret).readBase64WithGeneration(),

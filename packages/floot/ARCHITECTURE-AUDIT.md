@@ -3004,7 +3004,7 @@ not depend on runtime; route selection and model capabilities have a single proj
 
 ## FA-08 — Separate durable identity from incarnation pins
 
-### Open: renewable wrapper reconstructs through a mutable Secret name
+### Renewable wrapper Secret identity — fixed locally, deployment pending
 
 Confirmed 2026-09-24 while mapping `06f745f78`: the managed renewable credential
 formula stores host powers and `CREDENTIAL_SECRET_PATH`. Its `make()` looks up
@@ -3027,7 +3027,49 @@ stored in an environment string. Reconstruct from those exact dependencies;
 refuse old path-only formulas until explicitly retired/replaced. Add deterministic
 rebinding and catalog/read-race tests plus a real daemon reconstruction test.
 Preserve Secrets and renewal owners during any deployment; do not rotate, copy,
-or overwrite live credentials to repair wrapper topology. Implementation pending.
+or overwrite live credentials to repair wrapper topology.
+
+Implemented and independently reviewed, not deployed: the wrapper receives a marshalled
+`{ host, secret }` powers record instead of resolving the Secret by pet name.
+The administrator-only catalog gains `adminFor(readFacet)`, resolving only an
+exact manager-known facet to its matching administrator; it does not accept a
+public identifier or invoke a foreign/wrapped facet.
+The identity index is incarnation-local and rebuilt as persisted grants resolve;
+Secrets remains the owner of bytes and generations.
+Version-2 setup refuses legacy wrappers and changed Secret identity on adoption.
+A real-daemon test with synthetic credentials verifies reads and conditional
+writes still target the original Secret after alias replacement/removal and a
+graceful restart, leaving the replacement unchanged.
+This is not abrupt-loss or cross-worker renewal-exclusion evidence.
+Adversarial review additionally found that adoption must validate the retained
+powers recipe, not merely the object it returns; setup now refuses non-marshalled
+powers before evaluating them.
+The real-daemon test now uses production provisioning and adoption, including
+adoption after restart, and confirms setup rejects a rebound Secret name.
+Fault tests retain the original provisioning error and any separate temporary-name
+cleanup error instead of masking one with the other.
+Local verification includes 35 wrapper tests (20 invalid-topology cases), 17 Codex
+setup tests, seven Claude pool setup tests, 19 Secrets-manager tests, daemon type
+contracts, package type checks, scoped lint and root API docs.
+Source review raised a first-registration edge case: an operator
+caplet can obtain a genuine Secret facet through the special Secrets hub before
+its ordinary grant lookup is evaluated, making the dynamic caplet the canonical
+recipe used when that facet is marshalled.
+The initial warm-daemon test did not reproduce this because Secret import eagerly
+registers the stable lookup recipe.
+A cold restart between import and dynamic lookup removes that confound: inspection
+confirms the saved pair contains the dynamic `make-unconfined` recipe, and a second
+restart demonstrably retargets the wrapper from synthetic `first` to `second` bytes.
+Setup now validates the powers record before mint/adoption: exactly the current
+host and a static lookup through that host's `@secrets/use/<grant>` route.
+Adoption refuses dynamic slots before evaluating stored powers; provisioning
+refuses them before creating a wrapper, after resolving the configured Secret.
+This is a bounded provisioning guard, not a daemon-wide canonical-identity redesign.
+The real-daemon test passes with the production provisioner, four graceful daemon
+incarnations, original-Secret conditional writes and cold dynamic-recipe refusal.
+Independent adversarial review approved the source and each other's regression
+tests. Deployment still requires explicit retirement of old renewal owners and
+path-only wrappers; Secrets and pending renewal intents must be preserved.
 
 Broker configuration pins the guest image along with provider authority.
 Backend plans derive the image from that broker and treat several image/account fields
