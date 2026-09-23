@@ -9,7 +9,7 @@
 // protocol the daemon really speaks, not a guess at it.
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/pass-style';
+import { Far, isPassable } from '@endo/pass-style';
 import harden from '@endo/harden';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
@@ -29,7 +29,9 @@ import { makeSessionSubmissions } from '@endo/floot/src/session-submissions.js';
  */
 const staticStream = snapshot => {
   const view = makeBufferedReader();
-  view.push(harden(snapshot()));
+  const value = harden(snapshot());
+  if (!isPassable(value)) throw Error('Invalid fake session snapshot');
+  view.push(value);
   return view.reader;
 };
 
@@ -251,19 +253,19 @@ export const makeFakeDaemon = ({
           },
         },
       });
-      push(
-        harden({
-          type: 'snapshot',
-          status: turnStatus(turn) || {
-            messages: [],
-            streamingText: '',
-            phase: 'thinking',
-            usage: null,
-            error: null,
-            done: false,
-          },
-        }),
-      );
+      const snapshot = harden({
+        type: 'snapshot',
+        status: turnStatus(turn) || {
+          messages: [],
+          streamingText: '',
+          phase: 'thinking',
+          usage: null,
+          error: null,
+          done: false,
+        },
+      });
+      if (!isPassable(snapshot)) throw Error('Invalid fake turn snapshot');
+      push(snapshot);
       touch();
       touch('journal');
       if (autoBegin) void turn.begin();

@@ -2240,9 +2240,7 @@ test.serial(
       source: 'observed',
       observedAt: new Date().toISOString(),
     });
-    let daemon;
-    const { parent } = await setup(t, 1, false, made => {
-      daemon = made;
+    const { parent, daemon } = await setup(t, 1, false, made => {
       made.setAccounts([account(41)]);
     });
     await waitFor(() =>
@@ -2295,9 +2293,7 @@ test.serial(
       source: 'observed',
       observedAt: new Date().toISOString(),
     });
-    let daemon;
-    const { parent } = await setup(t, 1, false, made => {
-      daemon = made;
+    const { parent, daemon } = await setup(t, 1, false, made => {
       made.setAccounts([account('codex', 17), account('claude-code', 100)]);
     });
     parent
@@ -2358,9 +2354,7 @@ test.serial(
       source: 'observed',
       observedAt: new Date().toISOString(),
     });
-    let daemon;
-    const { parent } = await setup(t, 1, false, made => {
-      daemon = made;
+    const { parent, daemon } = await setup(t, 1, false, made => {
       made.setAccounts([account({ pending: null, last: null })]);
     });
     parent

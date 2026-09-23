@@ -3073,10 +3073,22 @@ The UI regression holds a resolution reply, checks disabled composition and
 send-handler fencing, then verifies sending resumes after acknowledgement.
 Changed-source lint and formatting pass; documentation has zero errors
 (180 warnings). Adversarial review approved the source and regression.
-Chat typechecking remains failing with 14 diagnostics in unchanged fixture
+At the removal checkpoint, chat typechecking failed with 14 diagnostics in unchanged fixture
 logic: optional fake-daemon handles and unknown/non-passable fake event values.
-These are a separate remaining validation repair, not a passing type gate.
+That checkpoint did not have a passing type gate; the repair below supersedes it.
 Not deployed.
+
+Fixture validation repair (2026-09-24): account-capacity/reset tests now take
+their daemon from the existing setup return value, avoiding optional handles
+assigned through callbacks.
+Fake session and turn snapshots are hardened and narrowed with `isPassable`
+before being published to the real buffered stream, rather than asserted with
+a type cast or accepted as arbitrary unknown values.
+Chat typechecking now passes with no diagnostics.
+This changes test fixtures only: no production state, formula, or protocol changes.
+All 935 chat tests pass (ten skipped); full package lint, typechecking, and
+changed-file formatting pass. Documentation has zero errors (180 warnings).
+Adversarial review approved the fixture changes and validation boundary.
 
 ## FA-12 — Retire compatibility-only entrypoints
 
