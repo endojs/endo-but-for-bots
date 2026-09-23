@@ -857,15 +857,15 @@ test('the context window comes from the catalog, read once and never before a re
   });
   t.is(catalogReads, 0);
   // The model that served wins over the one that was asked for.
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 200_000);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 200_000);
   // A served model the catalog does not size falls back to the requested one.
   served = 'org/nameless';
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 64_000);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 64_000);
   // A reply that names the dated slug is sized too.
   served = 'org/dated-20260901';
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 32_000);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 32_000);
   served = '';
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 64_000);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 64_000);
   t.is(catalogReads, 1);
   t.deepEqual(
     lines.filter(line => line.includes('catalog')),
@@ -895,10 +895,61 @@ test('a catalog that cannot be read costs the window size, not the reply', async
   });
   const { usage, message } = await provider.chat([], []);
   t.is(message.content, 'ok');
-  t.deepEqual(usage.context, { usedTokens: 9, windowTokens: 0 });
+  t.deepEqual(usage?.context, { usedTokens: 9, windowTokens: 0 });
   t.is(lines.filter(line => line.includes('no model catalog')).length, 1);
   await provider.chat([], []);
   t.is(lines.filter(line => line.includes('no model catalog')).length, 1);
+});
+
+test('oversized or malformed public catalogs preserve replies without logging body data', async t => {
+  const privateText = 'catalog-body-must-not-be-logged';
+  for (const oversized of [true, false]) {
+    const lines = [];
+    let cancelled = false;
+    let catalogReads = 0;
+    const provider = makeOpenRouterProvider({
+      apiKey: 'test-not-a-key',
+      model: 'openrouter/free',
+      log: line => lines.push(line),
+      fetchImpl: async url => {
+        if (url === CATALOG_URL) {
+          catalogReads += 1;
+          if (!oversized) return new Response(privateText);
+          let chunks = 0;
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                if (chunks === 18) controller.close();
+                else {
+                  chunks += 1;
+                  controller.enqueue(new Uint8Array(1024 * 1024));
+                }
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+          );
+        }
+        return Response.json({
+          choices: [{ message: { role: 'assistant', content: 'Still here' } }],
+          usage: { prompt_tokens: 7, completion_tokens: 2 },
+        });
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const result = await provider.chat([], []);
+    t.is(result.message.content, 'Still here');
+    t.is(result.usage?.context.windowTokens, 0);
+    t.is(cancelled, oversized);
+    t.is(lines.length, 1);
+    t.notRegex(lines[0], new RegExp(privateText));
+    t.regex(lines[0], oversized ? /too large/ : /was not JSON/);
+    // Failed optional metadata is backed off, not requested for each turn.
+    // eslint-disable-next-line no-await-in-loop
+    await provider.chat([], []);
+    t.is(catalogReads, 1);
+  }
 });
 
 test('a routing id has no window of its own, and a failed catalog is read again later', async t => {
@@ -937,14 +988,14 @@ test('a routing id has no window of its own, and a failed catalog is read again 
       );
     },
   });
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 0);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 0);
   // Not read again on the very next reply…
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 0);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 0);
   t.is(catalogReads, 1);
   // …but read again once the wait is over. The router's nominal size is not
   // the size of whatever it routed to, so an unlisted served model reads 0.
   catalogWorks = true;
   clock += 301_000;
-  t.is((await provider.chat([], [])).usage.context.windowTokens, 0);
+  t.is((await provider.chat([], [])).usage?.context.windowTokens, 0);
   t.is(catalogReads, 2);
 });

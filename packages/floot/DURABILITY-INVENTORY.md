@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 384 application entries and 73 host entries still need explicit ledger
+The other 372 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -465,8 +465,39 @@ and nonempty interface flattening still fails closed. No durable owner changes.
 | `8e260a48e` | Fake Nix applier polling allowance | 54 deploy-performer tests pass with mocked in-process applier; not actual NixOS activation |
 | `30af6a089` | Obsolete standalone OCI spike lint exclusion, now removed with both harness files | Application/host source caller checks found only its launcher, lint rule and historical docs. Historical evidence retained; no live execution. Source deletion does not retire old deployed formulas or containers |
 
+### Provider routing, metadata and diagnostic boundaries
+
+Twelve more historical changes are mapped below. Fresh checks pass 74 UI/setup
+tests, 161 shared provider tests and 18 Claude broker/setup tests. Shared HTTP
+checks required loopback permission; their initial ten permission failures are not
+provider failures. These are local/mocked checks, not live upstream or native
+process-loss acceptance. Direct OpenRouter/provider-cache/credential/routing checks
+pass 43 lal, 19 Fae and five Floot tests without live inference.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `498654d52` | Shell quoting/spelling only in retained OCI builder; spike half removed by `bd43daec7` | Shell syntax passes; ShellCheck unavailable. No build, deployment or durable state proof |
+| `e47c6cfa3` | Test-only Linux refusal-shape matching | Lifecycle/dependency/destroy assertions retained; earlier corrected daemon evidence applies, no fresh Linux run in this slice |
+| `2731a96da` | Label-sized header journal/network controls; actions still delegate to daemon/controller | 60 component tests pass, including journal/network actions; Happy DOM is not pixel-layout verification. No new durable owner |
+| `b85e0c816` | Temporary Claude managed-credential module shim | Shim removed by `886192baf`; current mint uses shared hosted-agent module. Old persisted paths require retirement, not compatibility restoration |
+| `00ad7b6e5` | Original pre-probe directory creation | Superseded by `75bc605ee`: missing-parent probe validates before namespace mutation. 14 current setup tests pass; no native runtime replay claim |
+| `5e94e663a` | Secrets-backed direct OpenRouter provider selection; named provider config and delegated Secret capability are durable, token/provider cache ephemeral | Per-turn Secret re-read supports rotation/revocation; current discovery replaces static model choices. 67 direct-provider/credential/routing tests pass. Existing token-form submissions and plaintext compatibility fallbacks are not erased by this mapping; no form replay or daemon-loss proof |
+| `199252059` | Broker diagnostic configuration stored in formula environment; callback reconstructed on activation | Failure opt-in superseded by `676bc8341`: failures always logged, optional admission logs remain. Diagnostics are host output, not durable transcript evidence |
+| `d89c89c2f` | OAuth beta exact-route addition | Wholly reverted by `a144237cc`; no independently retained state/schema effect |
+| `a144237cc` | Reverts preceding route addition | Current bounded-query behavior comes from the following change, not this reverted implementation |
+| `8e90f65f0` | Exact bounded-query target parser shared by grant/listener; broker profile reconstructs policy | Restricted query charset and exact full-target equality; no wildcard or normalization admission. Local provider/Claude tests, not live OAuth proof |
+| `5173330d2` | First refused response chunk, bounded to 1024 bytes, reaches host diagnostics only | Audit found bare bearer-token and truncation-prefix leakage; remediation and regression evidence recorded in main audit. Does not persist logs or turn evidence |
+| `6cd58e3cc` | Listener/grant filter forwarded header shapes; broker overwrites credentials, content type and trusted adapter headers | Current transport follows generalized shape rule after `8d6fac389`; grant/quota ownership unchanged. Per-request ephemeral data, not new durable storage |
+
 ### Post-snapshot changes
 
+- Public OpenRouter catalog reads use the existing bounded JSON reader at 16 MiB;
+  oversize cancels, malformed body text stays out of diagnostics, and optional
+  metadata failure preserves the reply and retry backoff. This is not an output cap.
+- Host refusal excerpts screen bare bearer tokens and withhold boundary-cut
+  credential prefixes in addition to existing full-header/API-key matching.
+  Six regressions retain one upstream read and generic grant errors; no claim of
+  arbitrary encoded/obfuscated secret screening or persistent diagnostic records.
 - Tool declaration generation preserves empty generic auxiliary interfaces and
   declared literal property identities, retaining recursive interface indirection.
   Filesystem/Git/HTTP declarations are regenerated. Strict semantic compilation

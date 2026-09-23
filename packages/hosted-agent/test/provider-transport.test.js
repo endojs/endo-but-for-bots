@@ -149,7 +149,11 @@ test('host diagnostics contain only fixed stages and bounded HTTP status', async
   // capability. `detail` names which request-stage check refused, and is a
   // fixed string, never request data.
   t.deepEqual(diagnostics, [
-    { stage: 'response', status: 429, refusal: 'body-canary-secret' },
+    {
+      stage: 'response',
+      status: 429,
+      refusal: '[redacted: upstream echoed the credential]',
+    },
     { stage: 'fetch' },
     { stage: 'request', detail: 'request shape' },
   ]);
@@ -193,6 +197,86 @@ test('a refusal is bounded, and never echoes the credential it carried', async t
   await t.throwsAsync(() => E(bounded.transport).request(request));
   t.true(`${diagnostics[1].refusal}`.length <= 1024);
 });
+
+for (const fixture of [
+  {
+    name: 'bare bearer',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: 'invalid token demo-only-token',
+    expected: '[redacted: upstream echoed the credential]',
+  },
+  {
+    name: 'API key',
+    headers: { 'x-api-key': 'demo-only-token' },
+    body: 'invalid token demo-only-token',
+    expected: '[redacted: upstream echoed the credential]',
+  },
+  {
+    name: 'excerpt boundary',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: `${'x'.repeat(1018)}demo-only-token`,
+    expected: 'x'.repeat(1018),
+  },
+  {
+    name: 'chunk boundary',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: 'invalid token demo-only-',
+    expected: 'invalid token ',
+  },
+  {
+    name: 'API key chunk boundary',
+    headers: { 'x-api-key': 'demo-only-token' },
+    body: 'invalid token demo-only-',
+    expected: 'invalid token ',
+  },
+  {
+    name: 'full header chunk boundary',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: 'invalid token Bearer demo-only-',
+    expected: 'invalid token ',
+  },
+]) {
+  test(`refusal diagnostics screen ${fixture.name}`, async t => {
+    const diagnostics = [];
+    let pulls = 0;
+    const subject = setup(
+      async () => ({
+        status: 400,
+        redirected: false,
+        headers: new Headers(),
+        body: {
+          getReader: () => ({
+            read: async () => {
+              pulls += 1;
+              return {
+                done: false,
+                value: new TextEncoder().encode(fixture.body),
+              };
+            },
+            cancel: async () => {},
+            releaseLock: () => {},
+          }),
+        },
+      }),
+      diagnostic => diagnostics.push(diagnostic),
+    );
+    t.teardown(subject.dispose);
+    await t.throwsAsync(
+      () =>
+        E(subject.transport).request(
+          harden({
+            ...request,
+            headers: fixture.headers,
+          }),
+        ),
+      { message: 'Provider transport failed' },
+    );
+    t.deepEqual(diagnostics, [
+      { stage: 'response', status: 400, refusal: fixture.expected },
+    ]);
+    t.is(pulls, 1, 'screening does not consume another upstream chunk');
+  });
+}
 
 test('diagnostic observer failures cannot change provider outcomes', async t => {
   for (const observer of [

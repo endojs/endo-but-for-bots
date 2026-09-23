@@ -432,9 +432,28 @@ export const makeProviderFetchTransport = ({
                 const carried = ['authorization', 'x-api-key']
                   .map(name => request.headers[name])
                   .filter(value => typeof value === 'string' && value !== '');
+                const authorization = request.headers.authorization;
+                if (authorization?.startsWith('Bearer ')) {
+                  const token = authorization.slice('Bearer '.length);
+                  if (token !== '') carried.push(token);
+                }
+                // The excerpt or the first upstream chunk can end in the
+                // middle of a credential. Never publish that prefix either:
+                // withhold the longest suffix that could continue as one of
+                // the carried secrets. No additional body pull is needed.
+                let safeEnd = text.length;
+                for (const secret of carried) {
+                  const longest = Math.min(secret.length - 1, text.length);
+                  for (let length = longest; length > 0; length -= 1) {
+                    if (text.endsWith(secret.slice(0, length))) {
+                      safeEnd = Math.min(safeEnd, text.length - length);
+                      break;
+                    }
+                  }
+                }
                 refusal = carried.some(secret => text.includes(secret))
                   ? '[redacted: upstream echoed the credential]'
-                  : text;
+                  : text.slice(0, safeEnd);
               }
             } catch (_error) {
               // A refused body the host could not read is simply not reported.

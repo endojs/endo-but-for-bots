@@ -46,6 +46,9 @@ const MAX_RETRY_AFTER_MS = 30_000;
  */
 const CATALOG_WAIT_MS = 2000;
 const CATALOG_TIMEOUT_MS = 20_000;
+// Local metadata transport bound, matching the account-scoped catalog reader.
+// This is not a context-window or generated-reply limit.
+const MAX_CATALOG_BODY_BYTES = 16 * 1024 * 1024;
 /** How long after a failed catalog read the next one waits. */
 const CATALOG_RETRY_MS = 300_000;
 /** Error diagnostics are small; never buffer an arbitrary error body. */
@@ -221,7 +224,11 @@ export const makeOpenRouterProvider = ({
             },
           );
           if (!response.ok) throw Error(`HTTP ${response.status}`);
-          const listing = await response.json();
+          const listing = await boundedJson(
+            response,
+            MAX_CATALOG_BODY_BYTES,
+            'OpenRouter model catalog',
+          );
           const windows = new Map();
           for (const entry of Array.isArray(listing?.data)
             ? listing.data

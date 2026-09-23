@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 95 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 107 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -96,6 +96,29 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Provider/metadata/diagnostics mapping (2026-09-24): twelve further entries bring
+coverage to 107 application commits (newest 15 plus earliest 92). Current local
+evidence includes 74 UI/setup tests, 161 shared provider tests, 18 Claude tests,
+and 67 direct OpenRouter/credential/cache/routing tests; no live inference.
+Historical shims and reverted route changes have explicit supersession entries.
+This pass found two defects: unbounded optional public-catalog buffering, and host
+diagnostics exposing a bare bearer credential or a truncated credential prefix.
+The catalog fix uses the same 16 MiB metadata transport bound as account discovery,
+not a model context or reply-output limit. A new finite-stream regression fails
+before the fix and passes afterward: oversize cancels the stream, malformed JSON
+does not log its contents, successful replies survive with unknown context size,
+and failed catalog reads retain backoff. Existing optional-usage assertions were
+type-narrowed without changing their expected values; lal typechecking passes.
+Arbitrary fetch/stream rejection-message redaction is not established by this test.
+Host refusal diagnostics now screen the carried full authorization value, bare
+bearer token and API key before publication, and withhold a suffix that could be
+a credential prefix cut by the first-chunk or 1024-byte excerpt boundary.
+Six regressions cover full/bare values and both boundaries, with exactly one
+upstream read and an unchanged generic refusal through the grant. All 161 hosted
+provider tests and hosted-agent types pass; this does not claim screening of
+arbitrarily encoded/obfuscated secrets, durable logging or hostile upstream prose.
+Credential/formula owners and transcript persistence remain unchanged.
 
 Type/fixture/environment mapping (2026-09-24): ten further changes are mapped,
 bringing coverage to 95 unique application entries (newest 15 plus earliest 80).
@@ -161,7 +184,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 80 application changes, plus the first 20 host
+not. The newest 15 and earliest 92 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -4093,6 +4116,11 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Map twelve provider/UI/setup changes; bound optional OpenRouter public
+catalog reads and screen bare/truncated credential echoes from host refusal logs.
+Local mocked tests cover metadata cancellation/backoff and six diagnostic cases;
+lal/hosted-agent types pass. No live inference, deployment or durable owner change.
 
 2026-09-24 — Repair generic auxiliary interface extraction and literal computed
 keys in tool declarations; retain recursive interfaces and fail-closed unsupported
