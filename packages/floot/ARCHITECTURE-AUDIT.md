@@ -94,7 +94,7 @@ No claim of complete retrospective coverage is made yet.
 | Native teardown after reconstruction | The fail-closed teardown (`0d66bd945`: absent/failed scope lookup refuses stop acknowledgement; mount reclamation waits for sandbox close) was deployed on 2026-09-22 in generation 160 and observed: after a graceful `endo-daemon` restart every ready hosted session failed to reopen and to delete with `Original native cleanup proof is unavailable`, and six records were stranded with their listener containers and 9p mounts. **Reverted from this branch the same day and moved to #1323**: `session-supervisor.js` again treats absent/failed scope lookup as diagnostic and reclaims the recorded mount, as the release that passed the second pass's restart/restore did; runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof stays with the dedicated investigation (#1323), where the fail-closed teardown now lives with its six injected-reconstruction tests. A missing scope still cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
-| Private journal deletion | Terminal deletion now durably records `deleting`, stops the agent/backend, closes and drains its retained journal facets, validates the exact namespace, and removes value names before schema. Normal incarnation/incomplete-creation cleanup preserves the namespace. | Local uncertain-removal and factory-reconstruction regressions; real daemon/Tokyo verification still required. Pre-publication orphan namespaces still require inventory/reclamation; unbinding names alone does not prove physical GC. |
+| Private journal deletion | Terminal deletion now durably records `deleting`, stops the agent/backend, closes and drains its retained journal facets, validates the exact namespace, and removes value names before schema. Normal incarnation/incomplete-creation cleanup preserves the namespace. | Real-daemon restart recovery verified locally, including GC interruption; smooth deletion with GC is NOT verified: guest collection kills retaining workers (see below). Tokyo verification remains required. Pre-publication orphan namespaces still require inventory/reclamation; unbinding names alone does not prove physical GC. |
 | Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
 | Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
@@ -170,7 +170,31 @@ durable registry still says `creating`), factory reconstruction after
 partial removal, malformed namespace refusal before any removal, unrelated
 namespace preservation, and an account read held across deletion. The existing
 private-facet tests cover admitted write draining and poisoned close refusal.
-These are in-memory host tests, not process-loss or real daemon GC evidence.
+Those tests use an in-memory host. Added real-daemon tests on 2026-09-23
+(`packages/daemon/test/floot-journal-retirement.test.js`) cover failed removal,
+removed-but-unacknowledged content, and removed-but-unacknowledged schema. These
+three fault cases explicitly disable GC to isolate storage acknowledgement
+semantics. A fourth case enables real GC and captures the interruption below.
+All four verify the durable terminal registry before restart, poll the latest
+persisted registry for completion after restart, and verify durable absence
+after a second cold start. Unrelated host data remains intact. They do not
+exercise native producers or abrupt OS/process death.
+
+**Pre-merge review item: session deletion can terminate its own factory.** With
+GC enabled, removing the guest's final name in `cleanupSessionResources`
+collects the guest. `residence.js`'s `disconnectRetainersHolding` deliberately
+terminates workers retaining that formula, including the Floot factory that
+imported it. The test powers-forwarding worker is also affected; it is not the
+only retainer. The delete call rejects before private-journal retirement. A
+fresh daemon/worker resumes the durable terminal intent and completes cleanup,
+but this is recovery evidence, not normal deletion availability. Other sessions
+sharing that factory may be interrupted; that impact is not yet tested. The
+GC-enabled test intentionally characterizes this failure and must change when
+the conflict is fixed. Resolve the deletion/worker-ownership boundary before
+claiming GC-safe deletion; do not silently disable production GC, weaken daemon
+revocation semantics, or retain tombstone aliases indefinitely. This is separate
+from #1323's native-producer shutdown design and does not select its adapter.
+
 Pre-registry-publication orphan namespaces remain outside automatic retirement;
 native process-loss producer exclusion remains with #1323. Unbinding names
 releases roots for GC; it does not prove the underlying formulas or disk blocks
@@ -2308,7 +2332,8 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
-| 2026-09-23 | Add terminal private-journal namespace retirement after durable intent, writer drain and backend cleanup; fence delayed observation from rebuilding during deletion | Exact namespace/schema validation, uncertain-removal retry and factory reconstruction regressions; no generic-cleanup deletion; real-daemon and Tokyo verification pending |
+| 2026-09-23 | Verify terminal journal retirement across real daemon restarts; identify guest-GC/factory termination conflict | Four restart cases pass with persisted-registry assertions and a second cold start; acknowledgement faults isolated with GC off, real-GC interruption/recovery tested separately. Smooth GC-enabled deletion and shared-session impact remain pre-merge review items; no production semantic change or Tokyo deployment |
+| 2026-09-23 | Add terminal private-journal namespace retirement after durable intent, writer drain and backend cleanup; fence delayed observation from rebuilding during deletion | Exact namespace/schema validation, uncertain-removal retry and factory reconstruction regressions; no generic-cleanup deletion; real-daemon evidence added above, Tokyo verification pending |
 | 2026-09-23 | Retrospective durability audit: include partial pool-member construction in existing core rollback, releasing unused cleanup handles if a later member fails | Direct/wrapped regressions; no credential use or persistent state; normal member ownership preserved; not deployed |
 | 2026-09-23 | FA-07: preserve saved subscription pins on restoration rather than silently falling back to automatic account selection | Removed-member and missing-descriptor factory regressions; backend admission remains authoritative; no new durable state; not deployed |
 | 2026-09-23 | Prepare exact-binding live rebind harness in endo-host: refusal, explicit authorization, preserved history/workspace tool evidence, guarded cleanup | Local fake-facet tests and adversarial review; pending intents are not replayed; Tokyo run blocked by SSH connectivity |
