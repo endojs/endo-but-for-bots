@@ -1656,12 +1656,22 @@ export interface EndoGateway {
   >;
 }
 
+export interface AgentBinding {
+  agentPublicKey: string;
+  signature: string;
+}
+
 export interface EndoGreeter {
+  makeGateway: (
+    remoteNodeKey: string,
+    cancel: (error: Error) => void,
+  ) => Promise<EndoGateway>;
   hello: (
     remoteNodeKey: string,
     remoteGateway: Promise<EndoGateway>,
     cancel: (error: Error) => void,
     cancelled: Promise<never>,
+    agentBinding?: AgentBinding,
   ) => Promise<EndoGateway>;
 }
 

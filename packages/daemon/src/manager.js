@@ -130,10 +130,11 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
-/** @import { PassableBytesReader } from '@endo/exo-stream' */
+/** @import { PassableBytesReader, PassableReader } from '@endo/exo-stream' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
+/** @import { RetentionDelta } from './retention-accumulator.js' */
 /** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
@@ -1603,8 +1604,45 @@ const makeDaemonCore = async (
 
   const provideRemoteControl = makeRemoteControlProvider(localNodeNumber);
 
-  // Gateway is equivalent to E's "nonce locator".
-  // It provides a value for a locator to a remote client.
+  /**
+   * Follow formulas held from exactly one peer. The caller-facing gateway
+   * deliberately does not get to choose this node number; the greeter binds
+   * it to the authenticated peer before handing the gateway across the
+   * connection.
+   *
+   * @param {string} peerNodeNumber
+   * @returns {Promise<PassableReader<RetentionDelta, undefined>>}
+   */
+  const followRetentionSetForPeer = async peerNodeNumber => {
+    const snapshot = persistencePowers.listFormulaNumbersByNode(peerNodeNumber);
+    const accumulator = makeRetentionAccumulator({
+      snapshot,
+      emitEmptySnapshot: true,
+    });
+
+    // Feed formula change events into the accumulator, filtered by the
+    // authenticated peer's node number.
+    const subscription = formulaChangeTopic.subscribe();
+    (async () => {
+      for await (const change of subscription) {
+        if (change.node === peerNodeNumber) {
+          if (change.add !== undefined) {
+            accumulator.add(change.add);
+          } else if (change.remove !== undefined) {
+            accumulator.remove(change.remove);
+          }
+        }
+      }
+    })();
+
+    return /** @type {any} */ (
+      readerFromIterator(/** @type {any} */ (accumulator.subscribe()))
+    );
+  };
+
+  // Gateway is equivalent to E's "nonce locator". This unrestricted local
+  // facet is retained for daemon-internal use and loopback. A remote peer gets
+  // a fresh, bound gateway from `makeGatewayForPeer` below.
   const localGateway = Far('Gateway', {
     /** @param {string} requestedId */
     provide: async requestedId => {
@@ -1702,33 +1740,98 @@ const makeDaemonCore = async (
      * @returns {Promise<import('@endo/exo-stream').PassableReader<import('./retention-accumulator.js').RetentionDelta, undefined>>}
      */
     followRetentionSet: async peerNodeNumber => {
-      const snapshot =
-        persistencePowers.listFormulaNumbersByNode(peerNodeNumber);
-      const accumulator = makeRetentionAccumulator({ snapshot });
-
-      // Feed formula change events into the accumulator, filtered
-      // by the peer's node number.
-      const subscription = formulaChangeTopic.subscribe();
-      (async () => {
-        for await (const change of subscription) {
-          if (change.node === peerNodeNumber) {
-            if (change.add !== undefined) {
-              accumulator.add(change.add);
-            } else if (change.remove !== undefined) {
-              accumulator.remove(change.remove);
-            }
-          }
-        }
-      })();
-
-      return /** @type {any} */ (
-        readerFromIterator(/** @type {any} */ (accumulator.subscribe()))
-      );
+      return followRetentionSetForPeer(peerNodeNumber);
     },
   });
 
+  // Match the direct OCapN formula locator's deliberately small per-session
+  // miss budget. A bearer that knows an exact formula identifier succeeds;
+  // malformed, foreign, absent, collected, and failed-to-incarnate formulas
+  // all produce the same peer-visible error and consume the same budget.
+  const gatewayMissBound = 3;
+
+  /**
+   * Make the gateway for one authenticated peer session.
+   *
+   * Formula identifiers are bearer capabilities. This includes agent
+   * formulas (`host` and `guest`): they are redeemable only when the peer
+   * presents their full unguessable identifier. The bound retention stream
+   * never discloses another node's identifiers, and the miss path reveals
+   * neither formula existence nor type.
+   *
+   * @param {string} peerNodeNumber
+   * @param {(error: Error) => unknown} cancelConnection
+   * @returns {EndoGateway}
+   */
+  const makeGatewayForPeer = (peerNodeNumber, cancelConnection) => {
+    assertNodeNumber(peerNodeNumber);
+    let misses = 0;
+    let inFlight = 0;
+    let cancelledForMisses = false;
+
+    const unavailable = () => Error('Formula is not available');
+    const cancelForMisses = () => {
+      if (cancelledForMisses) {
+        return;
+      }
+      cancelledForMisses = true;
+      Promise.resolve(
+        cancelConnection(Error('Too many unavailable formula requests')),
+      ).catch(() => {});
+    };
+
+    return Far('Gateway', {
+      /** @param {string} requestedId */
+      provide: async requestedId => {
+        if (cancelledForMisses || misses + inFlight >= gatewayMissBound) {
+          throw unavailable();
+        }
+        inFlight += 1;
+        try {
+          assertValidId(requestedId);
+          if (!isLocalId(requestedId)) {
+            throw unavailable();
+          }
+          // Establish existence before incarnation so a formula whose value is
+          // legitimately `undefined` is still a successful bearer redemption.
+          await getFormulaForId(/** @type {FormulaIdentifier} */ (requestedId));
+          return await provide(/** @type {FormulaIdentifier} */ (requestedId));
+        } catch {
+          misses += 1;
+          if (misses >= gatewayMissBound) {
+            cancelForMisses();
+          }
+          throw unavailable();
+        } finally {
+          inFlight -= 1;
+        }
+      },
+      provideBlob: hash => E(localGateway).provideBlob(hash),
+      provideTree: hash => E(localGateway).provideTree(hash),
+      // Retain the argument for wire compatibility, but never trust it. The
+      // authenticated peer identity captured above is the sole selector.
+      followRetentionSet: _allegedPeerNodeNumber =>
+        followRetentionSetForPeer(peerNodeNumber),
+    });
+  };
+
   /** @type {EndoGreeter} */
   const localGreeter = Far('Greeter', {
+    /**
+     * Build the local half of a peer handshake after the network has
+     * authenticated the remote node. This keeps the gateway sent as the
+     * `hello` argument subject to the same binding and miss budget as the
+     * gateway returned from `hello`.
+     *
+     * @param {string} remoteNodeId
+     * @param {ERef<(error: Error) => void>} cancelConnection
+     */
+    makeGateway: async (remoteNodeId, cancelConnection) => {
+      assertNodeNumber(remoteNodeId);
+      /** @param {Error} error */
+      const wrappedCancel = error => E(cancelConnection)(error);
+      return makeGatewayForPeer(remoteNodeId, wrappedCancel);
+    },
     /**
      * @param {string} remoteNodeId
      * @param {Promise<EndoGateway>} remoteGateway
@@ -1821,7 +1924,7 @@ const makeDaemonCore = async (
         );
       });
 
-      return localGateway;
+      return makeGatewayForPeer(remoteNodeId, wrappedCancel);
     },
   });
 

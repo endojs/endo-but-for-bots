@@ -72,6 +72,11 @@ const protocol = 'ocapn+noise+tcp';
 // is read, mirroring `tcp-netstring.js`'s `tcp-listen-addr`.
 const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 
+// Optional pet name under which a public `host:port` is read. This changes
+// only the location and connection hint peers receive; the TCP transport
+// continues to bind the address selected by `ocapn-listen-addr`.
+const ADVERTISE_ADDRESS_NAME = 'ocapn-advertise-addr';
+
 // Domain-separation prefix for the agent-binding signature. Mixed into
 // the signed material so a signature produced for this binding cannot
 // be replayed as a signature on any other message the agent might be
@@ -82,6 +87,65 @@ const AGENT_BINDING_DOMAIN = 'endo-agent-binding\0';
 
 const agentBindingMessage = sessionPublicKey =>
   concatBytes([encodeUtf8(AGENT_BINDING_DOMAIN), sessionPublicKey]);
+
+/**
+ * Verify that an agent key endorses the authenticated OCapN session key.
+ *
+ * @param {ReturnType<typeof makeCryptography>} cryptography
+ * @param {unknown} allegedBinding
+ * @param {string} expectedAgentPublicKey
+ * @param {Uint8Array} sessionPublicKey
+ */
+const assertAgentBinding = (
+  cryptography,
+  allegedBinding,
+  expectedAgentPublicKey,
+  sessionPublicKey,
+) => {
+  if (
+    allegedBinding === null ||
+    typeof allegedBinding !== 'object' ||
+    !('agentPublicKey' in allegedBinding) ||
+    !('signature' in allegedBinding) ||
+    typeof allegedBinding.agentPublicKey !== 'string' ||
+    typeof expectedAgentPublicKey !== 'string' ||
+    allegedBinding.agentPublicKey !== expectedAgentPublicKey ||
+    typeof allegedBinding.signature !== 'string'
+  ) {
+    throw Error('OCapN peer identity mismatch');
+  }
+  const agentPublicKeyBytes = fromHex(expectedAgentPublicKey);
+  const signatureBytes = fromHex(allegedBinding.signature);
+  if (
+    agentPublicKeyBytes.byteLength !== 32 ||
+    signatureBytes.byteLength !== 64
+  ) {
+    throw Error('OCapN peer identity mismatch');
+  }
+  const publicKeyVerifier =
+    cryptography.makeOcapnPublicKey(agentPublicKeyBytes);
+  const ocapnSignature = harden({
+    type: 'sig-val',
+    scheme: 'eddsa',
+    r: signatureBytes
+      .subarray(0, 32)
+      .buffer.slice(signatureBytes.byteOffset, signatureBytes.byteOffset + 32),
+    s: signatureBytes
+      .subarray(32, 64)
+      .buffer.slice(
+        signatureBytes.byteOffset + 32,
+        signatureBytes.byteOffset + 64,
+      ),
+  });
+  try {
+    publicKeyVerifier.assertSignatureValid(
+      agentBindingMessage(sessionPublicKey),
+      /** @type {any} */ (ocapnSignature),
+    );
+  } catch {
+    throw Error('OCapN peer identity mismatch');
+  }
+};
 
 // Format an authority (`host:port`) component. IPv6 literals contain
 // colons and must be wrapped in brackets so `new URL('proto://[::1]:8080')`
@@ -236,6 +300,7 @@ export const make = async (powers, context) => {
   }
 
   const codec = cborCodec;
+  const cryptography = makeCryptography(codec);
   const network = makeOcapnNoiseNetwork({ codec });
 
   // The OCapN-Noise session uses an ephemeral Ed25519 keypair, freshly
@@ -274,13 +339,15 @@ export const make = async (powers, context) => {
   // hands back the greeter that runs the handshake, and exposes the
   // agent-binding attestation that ties this session's ephemeral OCapN
   // key to the agent's persistent identity.
-  const peerEntry = makeExo('EndoPeerEntry', EndoPeerEntryInterface, {
-    getNodeId: () => localNodeId,
-    getAgentBinding: async () => agentBinding,
-    getGreeter: () => localGreeter,
-    help: () =>
-      `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
-  });
+  const makePeerEntry = greeter =>
+    makeExo('EndoPeerEntry', EndoPeerEntryInterface, {
+      getNodeId: () => localNodeId,
+      getAgentBinding: async () => agentBinding,
+      getGreeter: () => greeter,
+      help: () =>
+        `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
+    });
+  const peerEntry = makePeerEntry(localGreeter);
 
   // The OCapN locator (a "nonce locator"): the table of local
   // capabilities a remote peer may fetch by swissnum through the OCapN
@@ -307,10 +374,68 @@ export const make = async (powers, context) => {
     localNodeNumber: /** @type {any} */ (localNodeId),
     isLocalNode: () => true,
   });
-  const makeLocatorForSession = makeWellKnownLocatorForSession(
-    locator,
-    formulaLocator,
-  );
+  const makeLocatorForSession = sessionContext => {
+    /** @type {string | undefined} */
+    let authenticatedRemoteNodeId;
+    /** @type {Promise<unknown> | undefined} */
+    let sessionGateway;
+    const sessionGreeter = Far('Authenticated OCapN greeter', {
+      hello: async (
+        remoteNodeId,
+        remoteGateway,
+        _remoteCanceller,
+        connectionCancelled,
+        remoteAgentBinding,
+      ) => {
+        try {
+          assertAgentBinding(
+            cryptography,
+            remoteAgentBinding,
+            remoteNodeId,
+            sessionContext.peerPublicKey.bytes,
+          );
+        } catch {
+          sessionContext.abortSession();
+          throw Error('OCapN peer identity mismatch');
+        }
+        if (
+          authenticatedRemoteNodeId !== undefined &&
+          authenticatedRemoteNodeId !== remoteNodeId
+        ) {
+          sessionContext.abortSession();
+          throw Error('OCapN peer identity mismatch');
+        }
+        authenticatedRemoteNodeId = remoteNodeId;
+
+        // Repeated connect attempts over the same OCapN session get the same
+        // gateway. In particular, calling hello again cannot reset the miss
+        // counter or switch the authenticated node.
+        if (sessionGateway !== undefined) {
+          return sessionGateway;
+        }
+
+        // Do not trust the peer-supplied canceller for enforcement. The
+        // gateway's miss bound must tear down this authenticated session even
+        // when the peer is hostile and supplies a no-op capability.
+        const cancelSession = Far('OCapN session canceller', _error =>
+          sessionContext.abortSession(),
+        );
+        sessionGateway = E(localGreeter).hello(
+          remoteNodeId,
+          remoteGateway,
+          cancelSession,
+          connectionCancelled,
+        );
+        return sessionGateway;
+      },
+    });
+    const sessionWellKnown = new Map(locator);
+    sessionWellKnown.set(PEER_ENTRY_SWISSNUM, makePeerEntry(sessionGreeter));
+    return makeWellKnownLocatorForSession(
+      sessionWellKnown,
+      formulaLocator,
+    )(sessionContext);
+  };
 
   const tcpTransport = makeTcpTransport({ host, port });
   await network.addTransport(tcpTransport);
@@ -343,6 +468,47 @@ export const make = async (powers, context) => {
     await E(powers).storeValue(resolvedHostPort, LISTEN_ADDR_NAME);
   }
 
+  /** @type {string | undefined} */
+  let configuredAdvertiseHostPort;
+  try {
+    configuredAdvertiseHostPort = /** @type {string} */ (
+      await E(powers).lookup(ADVERTISE_ADDRESS_NAME)
+    );
+  } catch {
+    // No advertised-address override; publish the bound address below.
+  }
+
+  let advertisedHost = (localHints['tcp:host'] || host).replace(/^\[|\]$/g, '');
+  let advertisedPort = boundPort;
+  if (configuredAdvertiseHostPort !== undefined) {
+    if (typeof configuredAdvertiseHostPort !== 'string') {
+      throw Error('OCapN advertised address must be a host:port string');
+    }
+    const advertiseUrl = new URL(`tcp://${configuredAdvertiseHostPort}`);
+    advertisedHost = advertiseUrl.hostname.replace(/^\[|\]$/g, '');
+    advertisedPort = advertiseUrl.port;
+    if (
+      advertiseUrl.username !== '' ||
+      advertiseUrl.password !== '' ||
+      advertiseUrl.pathname !== '' ||
+      advertiseUrl.search !== '' ||
+      advertiseUrl.hash !== '' ||
+      advertisedPort === '' ||
+      formatHostPort(advertisedHost, advertisedPort) !==
+        configuredAdvertiseHostPort
+    ) {
+      throw Error('OCapN advertised address must be a host:port string');
+    }
+  }
+  const advertisedLocation = harden({
+    ...localLocation,
+    hints: harden({
+      ...localHints,
+      'tcp:host': advertisedHost,
+      'tcp:port': advertisedPort,
+    }),
+  });
+
   // The connection-hint address embeds both the daemon node id and
   // the full OCapN location, so a dialing peer can reconstruct the
   // location without guessing transport hint keys and can check that
@@ -353,10 +519,11 @@ export const make = async (powers, context) => {
   // continue to work.
   // Strip any IPv6 brackets the transport hint may carry, for the same
   // reason as the listen host above: `formatHostPort` expects a bare host.
-  const hintHost = (localHints['tcp:host'] || host).replace(/^\[|\]$/g, '');
   const encodedNode = encodeURIComponent(String(localNodeId));
-  const encodedLocation = encodeURIComponent(JSON.stringify(localLocation));
-  const address = `${protocol}://${formatHostPort(hintHost, boundPort)}/?node=${encodedNode}&loc=${encodedLocation}`;
+  const encodedLocation = encodeURIComponent(
+    JSON.stringify(advertisedLocation),
+  );
+  const address = `${protocol}://${formatHostPort(advertisedHost, advertisedPort)}/?node=${encodedNode}&loc=${encodedLocation}`;
 
   // `client.shutdown()` tears down the OCapN sessions and the
   // network's transports (closing the TCP listener); shutting the
@@ -430,28 +597,17 @@ export const make = async (powers, context) => {
     // `@endo/ocapn-noise/src/network.js`). Decode it to match the
     // bytes the signer mixed into the binding message.
     const sessionPublicKey = fromHex(remoteLocation.designator);
-    const cryptography = makeCryptography(codec);
-    const publicKeyVerifier = cryptography.makeOcapnPublicKey(
-      fromHex(binding.agentPublicKey),
-    );
-    // Ed25519 raw signature is 64 bytes (r||s); the OCapN signature
-    // value the cryptography helper expects splits those into a
-    // structured `{ scheme: 'eddsa', r, s }` (`OcapnSignatureCodec`).
-    const sigBytes = fromHex(binding.signature);
-    const ocapnSignature = harden({
-      type: 'sig-val',
-      scheme: 'eddsa',
-      r: sigBytes
-        .subarray(0, 32)
-        .buffer.slice(sigBytes.byteOffset, sigBytes.byteOffset + 32),
-      s: sigBytes
-        .subarray(32, 64)
-        .buffer.slice(sigBytes.byteOffset + 32, sigBytes.byteOffset + 64),
-    });
     try {
-      publicKeyVerifier.assertSignatureValid(
-        agentBindingMessage(sessionPublicKey),
-        /** @type {any} */ (ocapnSignature),
+      const expectedAgentPublicKey =
+        expectedNodeId ??
+        (binding && typeof binding.agentPublicKey === 'string'
+          ? binding.agentPublicKey
+          : '');
+      assertAgentBinding(
+        cryptography,
+        binding,
+        expectedAgentPublicKey,
+        sessionPublicKey,
       );
     } catch (_e) {
       throw new Error(
@@ -462,11 +618,17 @@ export const make = async (powers, context) => {
     // Run the peer handshake. `hello` carries our gateway to the peer
     // and returns the peer's gateway to us — the same handshake
     // `tcp-netstring.js` ran over CapTP.
+    const connectionCanceller = Far('Canceller', cancelConnection);
+    const localSessionGateway = E(localGreeter).makeGateway(
+      binding.agentPublicKey,
+      connectionCanceller,
+    );
     return E(remoteGreeterP).hello(
       localNodeId,
-      localGateway,
-      Far('Canceller', cancelConnection),
+      localSessionGateway,
+      connectionCanceller,
       connectionCancelled,
+      agentBinding,
     );
   };
 

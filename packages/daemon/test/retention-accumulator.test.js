@@ -76,6 +76,17 @@ test('empty snapshot emits nothing', async t => {
   t.deepEqual(value.remove, []);
 });
 
+test('empty snapshot can be emitted as an authoritative first delta', async t => {
+  const acc = makeRetentionAccumulator({
+    snapshot: [],
+    emitEmptySnapshot: true,
+  });
+
+  const iter = acc.subscribe();
+  const { value } = await iter.next();
+  t.deepEqual(value, { add: [], remove: [] });
+});
+
 test('add and remove accumulate into single delta', async t => {
   const { scheduleBatch, flushAll } = makeManualScheduler();
   const acc = makeRetentionAccumulator({
