@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 424 application entries and 73 host entries still need explicit ledger
+The other 420 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -286,7 +286,27 @@ real-daemon restart result is claimed for this slice.
 | `a2cb55d81` | Mounter construction preserves cancellation promise inside a record instead of assimilating it; cancellation initiates registry shutdown | Tests cover local/presence/promised contexts, later cancellation and held mount admission. Awaited host close proves cleanup; formula cancellation or worker death alone does not. Real privileged mount/umount behavior is not exercised |
 | `4c498b1bc` | Stream endpoint owns source lifecycle separately from stream outcome; explicit close fences admission, drains pulls and retries failed return | Reader/writer/bytes cases and CapTP loopback exercise failure vs cleanup, repeated close and done:false refusal. Later intrinsic promise adoption protects retained pulls. Hung source operations still require source-specific interruption; no persisted endpoint or restart recovery is introduced |
 
+### Cursor, filesystem drain and caplet publication
+
+Four more application changes are mapped to their retained ownership boundaries.
+Fresh cursor/cursor-lifecycle suites pass 16 tests; 9p-server fs-bridge,
+server-lifecycle and mount-caplet suites pass 56 tests.
+Daemon publication validation is recorded in the main audit: four focused tests,
+37 adjacent tests, and 11 marshal-publication/account-oracle lifecycle tests pass.
+The latter include graceful daemon restart, not native process-loss recovery.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `5399817fc` | Each cursor listing owns its iterator, admitted pulls and retryable release; rewind installs a successor only after release succeeds | Tests cover held pulls, failed return, done:false, close during rewind and stale streams. State is ephemeral; resourceful iterators must retain failed cleanup themselves. Hung pulls can prevent close; no restart recovery |
+| `93e2457fb` | 9P connection retains streams/files/cursors and pending filesystem operations after socket closure; bridge retains connection cleanup; mounter requires non-lazy unmount before bridge/storage release | 56 tests cover failed/held acquisition, drain, cleanup retry and path reservation. Historical client-module wiring was later deleted; shared mounter remains. Tests inject privileged mount commands; cancellation is not release proof and reservations do not exclude independent owners |
+| `3353c5dad` | Lockfile adds workspace daemon and promise-kit dependencies for the preceding 9P change | Diff contains no external version change, durable schema or new runtime owner; lifecycle evidence belongs to the preceding row |
+| `c5cf84243` | Fresh caplet worker identity is published before process acquisition; later retention callback owns acquired worker cleanup | Original @none regression passes but did not exercise automatic powers pins. Review reproduced a pin leak; `71dfde012` drains publications and releases transferred pins on failure. `4929571ea` verifies uncertain-write orphan reclamation and fixes test types. Pre-transfer guest construction failures remain open, not certified by these tests |
+
 ### Post-snapshot changes
+
+- Application `71dfde012` and `4929571ea`: failed-publication pin release,
+  error-path graph cleanup, and strengthened regression/type validation, as
+  described above and in the main audit. Pushed to GitHub and Forgejo, not deployed.
 
 - Host `f922568` restoration-ledger correction (2026-09-24): persist intent before remote
   create/seed/recall, refuse uncertain retries, preserve IDs, and atomically flush

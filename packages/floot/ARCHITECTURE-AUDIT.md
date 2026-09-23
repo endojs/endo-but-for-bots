@@ -53,6 +53,13 @@ no retained formula referring to it.
 
 ## Findings register
 
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 59 of
+479 application commits and 20 of 93 host commits to explicit semantic evidence.
+The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
+and 56-test 9P runs. This is coverage progress, not closure of the audit or live
+deployment acceptance. The caplet slice exposed the pin leak fixed in `71dfde012`;
+failures before guest-construction pins transfer remain a separate open boundary.
+
 ### Native recovery — separate research follow-up
 
 The dedicated [investigation and scope decision](../../designs/hosted-native-recovery-investigation.md)
@@ -86,7 +93,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 40 application changes, plus the first 20 host
+not. The newest 15 and earliest 44 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -151,6 +158,19 @@ Failures inside powers construction
 before pins transfer to this helper remain an open rollback boundary; this fix
 must not be described as comprehensive guest-construction rollback.
 This is ordinary failed-acquisition cleanup, not the deferred native-loss design.
+
+Pre-transfer follow-up source review (2026-09-24, still open):
+`formulateGuestDependencies` has no rollback when a later dependency rejects after
+earlier pins were acquired; `formulateGuest` releases pins only after deferred
+publication and guest formulation succeed; `providePowersId` loses the pin list
+if guest formulation rejects before returning it to the caplet helper.
+The next regression slice must inject dependency and guest-formula write failures,
+including written-then-rejected results, and check reclamation while preserving
+published names and an unrelated guest.
+`writeAgentKey` is synchronous by contract and SQLite implementation, so its lack
+of `await` is not a defect. Releasing known pins does not by itself establish
+ownership of partial formulas whose identifiers never returned, nested directory
+construction rollback, or agent-key retirement; those remain separate checks.
 
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.
