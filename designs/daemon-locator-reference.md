@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-18 |
-| **Updated** | 2026-05-10 |
+| **Updated** | 2026-09-23 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Current |
 
@@ -247,3 +247,141 @@ components.
 | `guest.js` | `makeGuestMaker` (carries up directory methods) |
 | `mail.js` | `makeMailboxMaker` (externalizes message identifiers to locators) |
 | `daemon.js` | `makeInvitation` (constructs invitation locators) |
+
+
+## Minion Town guest federation integration plan (2026-09-23)
+
+The maintainer's first target is a user who signs into minion.town, copies a
+locator for their own guest, and adopts it with the Endo CLI on a local daemon.
+An object already in that guest's grasp is the subsequent generalization.
+The acceptance test must exercise a real account and the production service.
+This section plans the integration; it does not claim that federation is deployed.
+
+### Grounded state
+
+Code inspected at Endo `f9cbcfc426` and minion.town `3062124`:
+
+- `EndoHost.adoptFromLocator` already extracts identity and hints, calls
+  `addPeerInfo`, and stores the identifier in the local directory.
+  The CLI has no caller for it: `adopt` adopts a message attachment, while
+  `accept` consumes an invitation.
+  Neither is currently a general guest-locator import command.
+- The installed OCapN network module uses CBOR over Noise/TCP and a signed
+  binding between the daemon agent identity and the ephemeral session key.
+  It still fetches `endo-peer-entry` and uses the greeter/gateway protocol.
+  Direct formula redemption is a different application bootstrap path.
+- Live GitHub checks on 2026-09-23 found #340 merged (2026-08-25), and
+  #684 (WebSocket transport), #688 (forked-daemon tests), and #693 (cross-host
+  demo) open and draft.
+  Their heads were `efcc498729`, `884afffb79`, and `c25fe20a3d` respectively.
+  #990 (operation lanes) was also open and draft, at `86d91b3762`.
+- #1124 is open and draft at `96674df196`.
+  Its `makeFormulaNonceLocator` and `makeLocatorForSession` implement bounded,
+  local-only formula redemption through the OCapN bootstrap's `fetch`.
+  They are absent from the inspected `llm` tree.
+  `ocapn-nonce-locator.md`, cited in earlier planning, is absent too;
+  the actual specification cited by #1124 is
+  [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md)
+  section 2.
+  Reuse this work rather than building a second nonce adapter.
+- minion.town's `guest-self-endpoint.ts` and landing-page/shell copy fields
+  already expose `/account/guest-formula-id`.
+  The route derives the guest solely from authenticated `iss+sub`, applies
+  account admission, and sends the raw identifier with `Cache-Control: no-store`.
+  It does not supply the remote identity and usable route needed for adoption.
+- The checked-in Caddy `/.well-known/ocapn-cbor-np` route targets port 8931,
+  documented as the separate Pet-Daemon demo container.
+  Account guests use the systemd daemon's Unix socket.
+  This is a topology discrepancy to verify on the box, not evidence that the
+  public endpoint can already fetch the account guest.
+  The production script and client pins are both `f66505034aaa54ac46294347b2bf0e14655b088a`;
+  minion.town #111 reverted a newer pin after a persisted-database startup failure.
+
+### Integration contract
+
+Retain the existing `endo://` user-facing locator as directed by the resolved
+choices in the external-connectivity design.
+The locator must carry the guest formula identity, authenticated hosting-peer
+identity, and candidate connection hints sufficient for a fresh local daemon.
+The server emits those hints from its actual public configuration; users must
+not assemble JSON locations, infer a key from a port, or run custom JavaScript.
+Formula identifiers and locators are bearer capabilities and must stay out of
+logs, analytics, query strings sent to HTTP servers, and committed test evidence.
+
+Select a mutually supported route using the existing network/codec machinery.
+The first concrete target is CBOR over Noise over WSS on the public edge.
+Only advertise Syrup or native CapTP alternatives when the corresponding
+endpoint and client adapter actually work.
+Codec choice is currently out of band; this plan does not invent an on-wire
+negotiation protocol or require all M4 protocol redesigns to land first.
+Reject incompatible routes and identity mismatches clearly, without accepting a
+wrong identity as a fallback or reporting success merely because a name was stored.
+
+Add a CLI surface for locator adoption without changing message-attachment
+`adopt` semantics or invitation `accept` semantics.
+Prefer a stdin/file input mode so the bearer need not enter shell history.
+Reuse `adoptFromLocator` where its remote-resolution contract suffices; complete
+the daemon bridge where formula-fetch endpoints do not offer `endo-peer-entry`.
+Keep the imported capability in the daemon's durable formula/pet-name machinery,
+including retention and re-acquisition after restart, rather than only in the CLI.
+A localhost demonstration must prove a real method call through the imported guest.
+
+Wire the public formula locator to the same formula store that provisions account
+guests, preserving local-only redemption and per-session bounds from #1124.
+Do not replace the current peer-entry locator wholesale: #1124's formula-only
+adapter refuses that fixed name, so existing peer traffic needs deliberate
+composition or a separate endpoint.
+No host/root capability is disclosed by the browser reveal or by an empty fetch.
+The reveal gate controls obtaining the bearer; it does not promise revocation of
+an already-held capability when an OAuth session ends or an account is suspended.
+
+## Ownership map
+
+| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
+|---|---|---|---|---|---|
+| Browser / account service | Authenticate and reveal own guest locator | Account service admits the verified identity | Account store owns identity; remote daemon owns guest formula | Account service provisions; browser only copies | Bearer locator |
+| CLI / local daemon | Parse/import and name the remote capability | User selects name; daemon validates identity and compatible routes | Local daemon owns retained formula and pet name | Daemon commits binding and re-acquires after restart | Locator, then remote presence |
+| Local / remote OCapN | Establish session and fetch formula | Netlayer authenticates peer; remote locator enforces locality and miss bounds | Remote daemon owns formula graph and agent keys | OCapN manages sessions; daemon manages formula revival | Canonical formula identifier, then guest capability |
+| Deployment / daemon | Configure public routes and pinned artifacts | Reviewed release and operator deployment policy | Daemon owns account state; deployment owns configuration | Existing SSM scripts deploy/rollback; systemd restarts | Artifact revision and non-secret route configuration |
+
+Each daemon owns its own persistent state and binding commits.
+OCapN classifies session/delivery errors; the daemon decides reconnection and the
+CLI decides its exit status, not whether remote application execution committed.
+Deployment owns process rollback and must not replay arbitrary guest mutations.
+The inner/outer naming check holds: session success is not called a durable
+adoption or an application commit.
+
+### Serial delivery and gates
+
+The garden orchestration `endo-minion-town-guest-locator-federation` owns:
+
+1. **Endo integration:** reconcile the existing #684/#1124 work, add the missing
+   daemon/CLI adoption path, and prove it with real local daemons.
+   Produce draft PRs against pinned bases, with exact dependency revisions.
+2. **Minion Town wiring:** expose a complete self-scoped locator and connect its
+   public endpoint to the account guest daemon through the reusable Endo code.
+   Prepare idempotent SSM configuration and pin/client compatibility changes.
+   Designs require PR review; keep production-affecting changes in review until
+   the release gate, because a direct `main` push may trigger deployment.
+3. **Release readiness:** require the plan and all implementation dependencies
+   to pass their existing review gates and land before selecting deploy pins.
+   Manual gauntlet triggers remain maintainer-controlled.
+   A draft build's completion does not satisfy this gate.
+   Block durably on the concrete missing PR; do not report readiness or deploy.
+4. **Deployment:** use `deploy/aws/scripts/*`, prove persisted-state upgrade
+   compatibility before touching production, preserve rollback, and attest the
+   actual running revision, socket, public route, key binding, and dialect.
+5. **Acceptance:** browse and authenticate as a real account, copy its locator,
+   adopt using only the Endo CLI into a separate local daemon, then invoke the
+   remote guest and demonstrate a benign capability round trip.
+   Record redacted browser/CLI evidence, negotiated layers, both revisions,
+   restart/re-acquisition behavior, and negative identity/invalid-locator cases.
+   A mock guest, a bare WebSocket upgrade, or a demo-container capability fails
+   this gate.
+
+The whole M4 ledger remains open: broader per-agent transport configuration,
+cryptographic review, transport separation, and operation-lane work are not
+silently declared complete by this experiment.
+A live test identity/browser login is an operational prerequisite for stage 5;
+request maintainer participation through the liaison if existing access cannot
+complete it, and leave acceptance unverified until it actually runs.
