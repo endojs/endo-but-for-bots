@@ -81,9 +81,17 @@ The inventory starts at the unified-sandbox design commit `3332f1928` and
 includes the current branch plus associated endo-host implementation changes.
 Earlier infrastructure still used by the refactor remains in scope; this seed
 is not an exclusion boundary.
-The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, including upstream
-changes that still need classification rather than an assumption of relevance.
-No claim of complete retrospective coverage is made yet.
+The [commit-by-commit coverage ledger](DURABILITY-INVENTORY.md) now enumerates
+all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
+`73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
+with conservative path-based triage rather than an assumption of relevance or
+correctness. Enumeration is complete for those exact ranges; semantic review is
+not. The newest 15 application changes have individual owner/evidence/limitation
+entries based on source and test-diff review; older entries still need mapping to
+the evidence recorded here. Independent Git verification found exact unique SHA
+coverage and matching triage counts in both repositories.
+Earlier retained infrastructure and subsequent changes remain in scope.
+No claim of complete retrospective durability coverage is made yet.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for
@@ -3684,6 +3692,14 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Added the retrospective change ledger: 479 application and 93 host
+commits enumerated, including upstream and reverted work. Path-based triage is
+explicitly not semantic durability approval. The remaining work is to connect
+every retained implementation to its owner, replay/retirement rules and evidence,
+including infrastructure predating the enumeration seeds. The newest 15 changes
+are individually mapped with evidence limitations. Independent review verified
+exact unique coverage and classifications in both repositories. No deployment change.
 
 2026-09-24 — Claude diagnostic reads no longer hold turn failures behind stalled
 stderr reads or iterator closure. Partial excerpts survive the read deadline and
