@@ -160,7 +160,7 @@ const expectedAttestation = ({ imageDigest, networkNamespaceId, mounts }) =>
  *   The deployment-owned roots those binds must sit under.
  * @property {(plan: Record<string, any>) => readonly any[]} [attaches] The
  *   runtime attaches the session declared, after the temporary mounts.
- * @property {(context: { plan: Record<string, any>, attestation: Record<string, any>, publicNetwork: any, tools: any }) => Record<string, string>} [sliceEnv]
+ * @property {(context: { plan: Record<string, any>, attestation: Record<string, any>, publicNetwork: any, tools: any, prepared: any }) => Record<string, string>} [sliceEnv]
  *   The slice's environment; never a credential.
  * @property {{ assertHostedAgentPolicyV1: (policy: any, requirements?: any) => any, hostedPolicyFromSlice: (context: any) => any }} policy
  *   The adapter's binding of the hosted contract to its fixed mount table.
@@ -358,7 +358,7 @@ export const activateExecutionEnvelope = async (
       bindRoots: bindRoots({ plan, prepared }),
       attestationArgv: HOSTED_ANCHOR_ARGV,
     },
-    env: sliceEnv({ plan, attestation: grant, publicNetwork, tools }),
+    env: sliceEnv({ plan, attestation: grant, publicNetwork, tools, prepared }),
   });
   assertCopyData(options);
   // `make`, not `makeResolved`: the runtime returns a slice only once its

@@ -10,6 +10,29 @@ const streamOf = async function* streamOf(chunks) {
   }
 };
 
+test('compaction events validate nested canonical records and strip native identifiers', t => {
+  const event = assertBridgeEvent({
+    type: 'compaction',
+    summary: 'summary',
+    nativeId: 'not forwarded',
+    retainedTail: [{ kind: 'message', role: 'user', content: 'continue' }],
+  });
+  t.deepEqual(event, {
+    type: 'compaction',
+    summary: 'summary',
+    retainedTail: [{ kind: 'message', role: 'user', content: 'continue' }],
+  });
+  t.true(Object.isFrozen(event.retainedTail[0]));
+  t.throws(() =>
+    assertBridgeEvent({
+      type: 'compaction',
+      summary: 'summary',
+      retainedTail: [{ kind: 'compaction', summary: 'nested' }],
+    }),
+  );
+  t.throws(() => assertBridgeEvent({ type: 'compaction', summary: 'summary' }));
+});
+
 const collect = async chunks => {
   const values = [];
   for await (const value of parseJsonLines(streamOf(chunks))) {

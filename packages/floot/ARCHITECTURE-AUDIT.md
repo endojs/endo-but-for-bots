@@ -688,6 +688,224 @@ Complete capture and interrupted-turn durability must be verified before
 claiming end-to-end compaction; bounded context selection and automatic
 summarization policy remain open as well.
 
+Retained-context contract (2026-09-23, local, not deployed): source inspection
+of pinned fork `870a58b973a2892d93c04e5db6e49757ad8237b9` established that
+`packages/opencode/src/session/message-v2.ts:filterCompacted` reorders a
+completed summary ahead of older retained messages selected by `tail_start_id`.
+`session/compaction.ts:prune` separately marks old tool results, and
+`message-v2.ts:toModelMessages` substitutes `[Old tool result content cleared]`.
+Therefore neither a summary alone nor an offset into Floot's original history
+faithfully describes native active context.
+
+The shared canonical compaction record now accepts `retainedTail`, an ordered
+snapshot of ordinary message/tool records, never nested compactions, capabilities
+or native storage identifiers. Its nested records receive the same strict
+validation and canonical field ordering as top-level records.
+The shared last-compaction selector expands summary, retained tail, then later
+records exactly once; its returned summary carries no tail to expand again.
+Original historical records are untouched. Pruned outputs can be preserved in
+the context snapshot without replacing full historical tool evidence.
+Shared conformance covers the three hosted adapters; direct-provider replay
+has a separate exact-message regression.
+
+Tree/event propagation now carries this field through successful turns and
+failed-stream partial segments, without expanding it into displayed history,
+tool activity or execution accounting (local, not deployed).
+The complete encoded checkpoint counts against the retained-turn memory bound.
+A reconstruction test restores the exact pruned context into a direct provider.
+Admission currently requires a self-contained tail with settled tool pairs;
+incomplete calls or orphan results are refused, not silently dropped.
+The canonical format remains more general, but supporting results arriving
+after a checkpoint requires the ordered-journal reconciliation below.
+The ordered journal wiring below now covers interruption before tree publication
+in synthetic storage/stream tests. The native producer and bridge wiring below
+are now implemented locally; Tokyo still runs the earlier image.
+No formula is created and no existing stored record is rewritten.
+Native capture implementation/acceptance sequence (the first three are now
+implemented locally; deployment and live acceptance in the fourth remain open):
+
+1. Carry checkpoints through tree messages and protocol events without adding
+   retained-tail copies to display history or usage/execution accounting.
+2. Persist full checkpoint content before its ordered journal reference, and
+   preserve surrounding text ordering. The former tool-only observations and a
+   concatenated terminal output cannot locate a recovered compaction safely.
+   Failed publication must fence; repeated identical boundary delivery must be
+   idempotent and a changed payload under the same identity must be refused.
+3. Capture the completed native summary and exact retained context with an
+   explicit event frontier. A history fetch can race later SSE events; never
+   splice a snapshot and replay those same events a second time.
+4. Test interruption at content/journal publication, cancellation, duplicate
+   delivery, restart/replay and tool-pair preservation, then live compaction.
+
+This transcript work is separate from native-process crash recovery in #1323.
+
+Ordered journal storage foundation (2026-09-23, local, not deployed):
+`recordTranscript` stores canonical context records at contiguous per-turn
+ordinals, preserving their journal sequence as well as their transcript order.
+Full large content is stored before the referring event, using the existing
+uncertain-write fencing. Identical ordinal retries compare full content and
+are no-ops, including after settlement/reconstruction; conflicting content,
+gaps, new records on recovered/terminal turns and unknown turns are refused.
+The profile limits one turn to 65,536 records and 16 Mi UTF-16 content units;
+snapshot reconstruction validates ordering, references and aggregate bounds.
+It does not hydrate every retained payload: full canonical content is checked
+when read or compared for a retry. Aggregate counts are maintained per append
+and recomputed once on reconstruction, not scanned on every write.
+Older records without this stream have an empty stream, not inferred ordering.
+Hosted streaming now writes ordered entries, coalescing ordinary answer text up
+to a 64 Ki character flush threshold and flushing before tools and checkpoints.
+An explicit completion event seals the acknowledged ordinal frontier.
+Failed publication stops the producer and leaves that journal incarnation fenced;
+cancellation flushes the last text only after the producer acknowledges shutdown.
+An interrupted stream may lose unflushed text; reconstruction labels its durable
+prefix rather than filling it out with concatenated terminal output.
+Tool observations and execution entries retain independent call/result positions.
+Recovery uses the ordered journal for model context, not duplicate tree copies.
+Unmatched effects remain supplemental after active context: journal chronology
+does not prove that a native summary included them. A newly recovered completion
+of a pre-boundary call is also surfaced as explicitly recovered evidence after the
+boundary, including when replacing an old unknown-result placeholder.
+Synthetic tests cover tree-free restoration, failure before/after event publication,
+cancellation barriers, delayed call observations and compaction-crossing effects.
+The stream refuses checkpoints crossing an unsettled reported tool call rather
+than creating an orphan result after the context boundary.
+Stream/recovery validation: 529 Floot tests pass; touched lint and docs pass with
+warnings, and source typechecking reports no errors. Adversarial review approved.
+The native bridge wiring below supersedes the earlier disabled-capture status;
+live compaction and real-daemon restart acceptance remain open.
+
+Native checkpoint producer preparation (2026-09-23, local fork, not deployed):
+the pinned OpenCode fork's import endpoint inserts legacy message/part rows
+directly without publishing their corresponding events.
+An SSE-only context mirror would therefore omit imported retained history.
+The isolated `kumavis/opencode` branch `codex/compaction-checkpoint`
+(producer commit `f6492ac3f9`), based on
+`870a58b973a2892d93c04e5db6e49757ad8237b9`, instead reads the authoritative
+store and applies native `filterCompacted` when publishing `session.compacted`.
+Its optional version-1 checkpoint includes the summary identity and ordered
+native messages, after continuation creation and before the normal prompt loop
+can start another model step.
+This is not an atomic snapshot against unrelated concurrent native writers.
+The checkpoint is bounded to 16 MiB of encoded UTF-8; overflow stops processing
+rather than silently truncating context or continuing without the checkpoint.
+The size check bounds publication, not the preceding database read or encoding
+allocation, and is separate from Floot's aggregate retained-turn profile.
+Native message records still need canonical conversion, including ignored text,
+pruned tool output, and explicit refusal of unsupported media.
+The bridge must align its frame bounds, validate boundary identity and duplicate
+payloads, and prove actual SSE ordering before this producer is enabled.
+Checkpoint preparation failure publishes a sanitized session error before
+returning `stop`; relying on the outer HTTP error handler would allow the
+runner's earlier idle event to incorrectly seal a successful Floot turn.
+The service-level regression verifies error publication before process return.
+Stopping this turn does not undo native compaction or prevent later prompts.
+Before enabling capture, the bridge must fence continuity after checkpoint
+failure, or reconcile the same authoritative boundary before accepting a prompt.
+Focused validation: 58 native compaction tests pass (one skip), three schema
+tests pass, and both package typechecks pass; legacy SDK generation completed.
+The existing event-manifest suite also fails on fixed inventory counts/order;
+no new event type was added, and this is not counted as a passing gate.
+There is no app image pin change, daemon deployment, or live compaction claim.
+
+Native checkpoint projection preparation (2026-09-23, local, not enabled):
+the standalone bridge now has a pure converter for the version-1 native snapshot.
+It validates message/part ownership and uniqueness, the completed summary and
+its leading compaction request, then preserves the retained dialogue/tool order.
+The native request scaffold maps to the canonical summary; the synthetic
+continuation remains context, unlike its suppression in the live UI stream.
+User ignored text, failed assistant omission, interrupted partial tool output
+and pruned tool placeholders follow the inspected native rules.
+Unsettled calls, provider-executed tools, media attachments, nested boundaries
+and unknown context-bearing parts fail explicitly.
+Tool-call identifiers may repeat across user turns, not within one turn.
+Native reasoning and provider metadata remain outside the existing canonical
+text/tool contract: this is not exact provider-prompt equivalence, including
+signed-reasoning replay. Supporting that requires a separate contract extension.
+At this preparation checkpoint the converter was not called by event handling;
+transport bounds, duplicate-boundary reconciliation, continuity fencing, and
+actual SSE ordering remained gates, addressed by the wiring below.
+It adds no durable formula or stored schema.
+Validation: all 268 OpenCode sandbox tests pass, including eight projection
+regressions and canonical import round-trips. Scoped lint has no errors and
+seven pre-existing warnings. Adversarial review caught and corrected the
+cross-turn tool-ID restriction; re-review approved the supported subset.
+
+Native bridge wiring (2026-09-23, local, not deployed): `session.compacted`
+now projects and emits the checkpoint at its SSE position, without a later
+history fetch. A repeated native summary identity with identical encoded content
+is a no-op; conflicting content under that identity fails closed.
+Only a digest is retained per boundary, bounded to 65,536 identities per bridge.
+The producer's 16 MiB checkpoint profile has 17 MiB SSE envelope capacity and
+34 MiB host JSONL capacity (tool JSON inputs are encoded again as argument strings).
+Framing limits count UTF-8 bytes per frame rather than per coalesced network chunk.
+Malformed/truncated frames, missing checkpoints, unsupported context, identity
+conflicts and native checkpoint-publication failures stop the entire incarnation.
+No later prompt is accepted from its queue; restoration must use Endo's transcript.
+Timeout or expired cancellation grace also stops the bridge, since neither is
+proof that the old native turn ended. This prevents late old-turn checkpoints
+from being assigned to a queued new turn.
+Output delivery waits for pipe backpressure and bounded shutdown flushing, after
+a process test exposed truncation of a large checkpoint during immediate exit.
+Compaction summary model usage is reported once per native step, not hidden with
+the summary's live UI text; snapshot projection itself adds no usage or tool events.
+The source-build default now selects `kumavis/opencode` branch
+`codex/compaction-checkpoint`, containing producer `f6492ac3f9`.
+Seven actual bridge-process tests use a fixture HTTP/SSE server, including a
+2 MiB checkpoint before later answer text, duplicate delivery, conflict/native
+failure, malformed data, stream loss, and queued-send/late-checkpoint fencing
+on timeout and cancellation. These are not a live native model compaction test.
+An image rebuild, paired deployment and native compaction/restart acceptance
+are still required; this does not claim native process-loss recovery from #1323.
+Validation: all 280 OpenCode sandbox and 529 Floot tests pass.
+Root documentation/type validation has zero errors and 178 warnings.
+Scoped ESLint has no errors
+and nine warnings. The existing standalone fixture lacks an ESLint project
+mapping; its syntax check and process tests pass, but that lint invocation is
+not counted as passing. Adversarial review found the unconfirmed-stop race;
+the fix, queued-send regression and stdout-drain correction were re-reviewed.
+
+Additional native-context parity finding: when `compaction.prune` is enabled,
+native `prompt.ts:1338` forks pruning without awaiting it; `compaction.ts:286-330`
+sets old tool parts' `time.compacted` flags through ordinary part updates,
+without a new summary checkpoint. The bridge suppresses repeated completed-tool
+updates, so a later restoration could reintroduce output pruned after the last
+checkpoint. Pruning normally stops at the latest summary, but an older background
+prune can race a newer snapshot. The pinned fork defaults pruning to false.
+The hosted bridge now additionally sets `OPENCODE_DISABLE_PRUNE=1` on its child;
+the pinned native config applies this override after merging configuration sources.
+Process fixtures require that override through the normal bridge startup path.
+This disables an optional unrecorded mutation, not summary compaction.
+Supporting this optional mutation needs a separately identified context revision
+and safe publication boundary, not a changed payload under the existing summary ID.
+The current summary-checkpoint wiring does not claim to capture these revisions.
+
+Live acceptance preparation (2026-09-23): native producer `f6492ac3f9` and app
+`347c31dee` have built successfully on Tokyo. Host `3978754` pins the candidate
+OpenCode image and has passed NixOS preparation, but generation 169 remains
+active. The scoped broker cutover is waiting for explicit permission to copy
+Tokyo's metadata-only preservation snapshot back to Tokyo; no broker aliases
+have been removed. See endo-host
+`ops/native-checkpoint-deployment-20260923.md` for exact hashes and gates.
+The native Claude runtime was stopped with cleanup acknowledgement, while all
+three Floot sessions, workspace roots, Secrets and credential owners remain.
+
+The next live compaction test must use ordinary owned Floot turns on the free
+route, seed identifiable facts and real tool evidence, and observe reported
+token usage while adding bounded context. Then verify an actual checkpoint,
+continuation, recall, and daemon-restart recall. Set explicit request, time and
+token budgets; a provider limit/rate error or an unreachable threshold is
+unverified, not a passing test. Do not call native HTTP summarization outside
+the hosted turn frontier or concurrently with its prompt loop. Artificially
+lowered test-only model limits establish neither normal production timing nor
+provider-window correctness. The FA-07 limit-plumbing finding below affects
+predictability of this acceptance, independently of checkpoint transport.
+
+Validation at the storage-foundation checkpoint: 515 Floot tests passed,
+including snapshot corruption, canonical payload
+checks, conflicting duplicate suffixes and failed content/event acknowledgement.
+Touched-file lint and docs pass with warnings; package typechecking still reports
+existing test-fixture errors but no source errors. Adversarial review completed.
+
 Generation 166 acceptance found a separate direct-provider failure: after a
 daemon restart the seed history survived, but OpenRouter's free route returned
 an empty recall answer recorded as completed. The three hosted recall cases
@@ -1086,6 +1304,75 @@ failure, stop and retry, restart and deletion. Deployment and acceptance on
 Tokyo followed the wipe model (generation 165).
 
 ## FA-07 — Separate runtime, provider, account, and route
+
+Additional open finding (2026-09-23): provider model limits do not reach the
+OpenCode runtime. `openrouter-model-read.js` preserves `context_length` as
+`contextLength` in the shared descriptor, but
+`opencode-native-controller.js` calls `makeOpencodeConfig()` without `models`.
+`opencode-agent-config.js` consequently supplies every selected route with
+`DEFAULT_LIMITS = { context: 128_000, output: 8192 }`.
+The native child also has model fetching disabled. In pinned native source
+`f6492ac3f9`, `session/overflow.ts` calculates a 119,808-token usable window
+with no inherited separate input limit and an effective 8,192-token output cap.
+Native catalog merging can retain an existing model's input limit, and runtime
+output overrides can change the cap. Inspect the effective native model before
+asserting a live threshold; disabling fetch does not remove the bundled catalog.
+`prompt.ts` checks
+the last finished assistant's reported usage before proactive compaction.
+A large first prompt can fail before that check has useful usage evidence.
+These are fabricated runtime limits, not just display defaults: they can cause
+early compaction, late compaction/provider rejection, and output-budget mismatch.
+
+Required follow-up: carry validated provider context/output metadata into the
+selected runtime model configuration without restoring NixOS model lists or
+duplicating credential owners. Model identity remains pinned; account catalog
+observations remain explicitly ephemeral unless a distinct durable execution
+policy is designed. Define honest unknown-limit and dynamic auto-route behavior:
+the free route can change underlying models, so a route-level observation alone
+does not prove every selected provider's effective window. Provider-limit reads
+must obey existing owner retirement/fencing and failure semantics. Verify the
+actual native model limits, compaction trigger, output behavior, catalog outage,
+and daemon reconstruction rather than testing only the picker descriptor.
+No implementation or provider-window correctness is claimed by this finding.
+
+Context-plumbing remediation (2026-09-23, local, not deployed): OpenCode native
+activation now reads the existing broker's normalized single-account catalog
+and passes only the exact selected route's observed context length into its
+CLI configuration. Current and usable stale observations are accepted;
+unavailable/unsupported/missing metadata supplies no invented limit. Invalid
+catalogs and owner/transport exceptions abort activation, rather than being
+silently converted into unknown data. The supervisor checks cancellation after
+the catalog await and releases already-owned scopes on failure.
+The shared envelope passes its existing `prepared` result to `sliceEnv` without
+changing acquisition order or any other adapter's behavior.
+
+The fabricated 128,000-context/8,192-output model descriptor is removed.
+The prior 8,192 output ceiling is retained explicitly as the native runtime's
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX` execution budget, not a provider fact;
+known smaller native model limits can reduce it. Removing the descriptor alone
+would otherwise cause unknown-model requests to use the native 32,000 default.
+Absent context overrides leave native bundled metadata available; when native
+context is also unknown, proactive threshold compaction is disabled. Native
+merging can still retain a separate bundled input limit, and auto-route limits
+remain observations rather than guarantees. These limitations remain open.
+
+Durability: no new formula, credential owner, or durable session-plan field.
+Context observations are reconstructed per native activation through the same
+broker owner, while the durable exact model/account pin is unchanged. Local
+tests cover changed observations on a fresh activation, exact-model matching,
+missing context, malformed/unexpected accounts, all catalog states, retirement
+errors, and late completion after termination producing no slice/client/tools.
+This is native-controller reconstruction coverage, not real-daemon acceptance.
+Deployment and the ordinary-turn live compaction/restart gate remain pending.
+
+Validation: OpenCode 286, shared catalog/envelope 30, Claude controller 17, and
+Codex controller 8 tests pass. Scoped ESLint has no errors; formatting passes.
+The hosted-agent declaration build and root documentation gate pass after
+quarantining stale generated declarations (the old envelope declaration omitted
+`prepared`). Native request preparation, without inference, produces output
+budgets of 8192, 4096, and 8192 for model output limits of 0, 4096, and 64000
+respectively with the explicit 8192 runtime budget. Independent adversarial
+review approved the source, tests, and durability classification.
 
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
@@ -2530,8 +2817,16 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 ## Change log
 
+2026-09-23 — FA-07 runtime context plumbing: selected OpenCode route context
+comes from the existing broker catalog at activation; fabricated model limits
+are removed and the output budget remains explicit. Controller/cancellation
+regressions, declaration build, formatting, and root docs pass (0 errors,
+179 warnings); adversarial review approved. No new durable state. Not deployed;
+live model-window and compaction/restart acceptance remain open.
+
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Add canonical retained-tail compaction representation and one shared expansion rule | Pinned native source disproves summary-only capture; 686 hosted-agent tests (one skip), 502 Floot tests and Claude/Codex/OpenCode conformance suites (8/8/12) pass. Production declaration generation, formatting and scoped ESLint pass; docs have zero errors (178 warnings). Independent review approved validation, canonical ordering and idempotent expansion. Native capture, ordered journal persistence and tree projection remain gated; not deployed. |
 | 2026-09-23 | Deploy archive paging, recorded-compaction replay and provider accounting fixes as generation 169 (app `819aa18c8`, host `7dbf7c3`) | Four-backend seed/restart/recall/delete passed; reconstructed archive API checked; Secrets, host and credential bindings preserved; no native resources left. Live archive-boundary and compaction/error-path injection remain open; see host cutover record. |
 | 2026-09-23 | Preserve usage on OpenRouter HTTP/API/finish errors and stop automatic replay when token consumption is reported | 94 Lal tests (one skip), 501 Floot tests, production declarations, formatting and composite consistency pass; scoped lint has zero errors and docs have zero errors (178 warnings). Independent review found a swallowed error-body timeout; fixed and regression-tested with native-style AbortError and exactly two attempts. Tests also cover observer/no-observer behavior, zero-usage retries, fractional refusal, bounded error bodies and failed HTTP turn reconstruction. Reuses hosted-agent's bounded JSON reader rather than duplicating it; no new formula/schema. Not deployed. |
 | 2026-09-23 | Preserve reported OpenRouter usage when assistant validation rejects a response, using an optional pre-settlement incremental provider notification and the existing turn finish journal | 500 Floot and 82 Lal tests pass (one Lal skip), including failed-turn reconstruction and no double counting; independently reviewed; changed-file ESLint has zero errors and docs have zero errors. Whole Lal lint still has eight project-service errors in unchanged files. No new durable schema; process loss before finish and API-error/retry usage remain open. Not deployed. |

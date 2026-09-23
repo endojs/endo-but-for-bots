@@ -25,6 +25,7 @@ const SANDBOX_OLD = makeSandboxSessionId('old');
  * authority handoff, so a stub that echoed the request would prove nothing:
  * the limits are the per-cgroup halves a runtime reports, and each source
  * carries the prefix its kind gets.
+ * @param policy
  */
 const sliceAttestationFor = policy =>
   harden({
@@ -94,6 +95,15 @@ const fixture = (t, { realClient = false } = {}) => {
   const grants = new Map();
   const clients = [];
   const faults = {
+    catalogState: 'unavailable',
+    catalogContext: 65_536,
+    catalogFail: false,
+    catalogMissing: false,
+    catalogWait: false,
+    catalogNoContext: false,
+    catalogModel: 'anthropic/claude-sonnet-4',
+    catalogAccount: 'default',
+    catalogDuplicate: false,
     /** @type {string | undefined} */
     resolverFail: undefined,
     reclaimFail: false,
@@ -114,6 +124,8 @@ const fixture = (t, { realClient = false } = {}) => {
   const sandboxClosed = gate();
   const scopeEntered = gate();
   const scopeReleased = gate();
+  const catalogEntered = gate();
+  const catalogReleased = gate();
   const foreign = Far('Filesystem', {});
   const tools = Far('JournaledTools', {});
   const sandboxService = Far('SandboxService', {
@@ -167,6 +179,43 @@ const fixture = (t, { realClient = false } = {}) => {
     },
   });
   const brokerService = Far('BrokerService', {
+    async modelCatalog() {
+      if (faults.catalogWait) {
+        catalogEntered.resolve();
+        await catalogReleased.promise;
+      }
+      if (faults.catalogFail) throw Error('catalog owner retired');
+      const result = {
+        accounts: [
+          {
+            subscriptionId: faults.catalogAccount,
+            state: faults.catalogState,
+            observedAt: 0,
+            models: faults.catalogMissing
+              ? []
+              : [
+                  {
+                    id: faults.catalogModel,
+                    title: 'Model',
+                    description: '',
+                    default: false,
+                    defaultReasoningEffort: null,
+                    reasoningEfforts: [],
+                    ...(faults.catalogNoContext
+                      ? {}
+                      : { contextLength: faults.catalogContext }),
+                  },
+                ],
+          },
+        ],
+      };
+      if (faults.catalogDuplicate)
+        result.accounts.push({
+          ...result.accounts[0],
+          subscriptionId: 'other',
+        });
+      return harden(result);
+    },
     async provideScope(id, spec) {
       events.push(['grant', id, spec]);
       let closed = false;
@@ -383,6 +432,7 @@ const fixture = (t, { realClient = false } = {}) => {
     mountReleased.resolve();
     grantReleased.resolve();
     scopeReleased.resolve();
+    catalogReleased.resolve();
   });
   return {
     events,
@@ -398,6 +448,8 @@ const fixture = (t, { realClient = false } = {}) => {
     sandboxClosed,
     scopeEntered,
     scopeReleased,
+    catalogEntered,
+    catalogReleased,
     tools,
   };
 };
@@ -430,6 +482,7 @@ test('native controller construction is inert; activation uses copy paths and no
   // incarnation — the stack holds the conversation and restores it — so the
   // database runs in memory and its data directory sits on the slice's tmpfs.
   t.is(options.env.OPENCODE_DB, ':memory:');
+  t.is(options.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX, '8192');
   t.is(options.env.XDG_DATA_HOME, '/tmp/opencode-home/.local/share');
   t.deepEqual(options.policy.bindRoots, [path.dirname(plan.mcpDir)]);
   t.is(options.network, 'broker-only');
@@ -460,6 +513,138 @@ test('native controller construction is inert; activation uses copy paths and no
   t.is((await E(controller).status()).sessionId, 'a');
   await E(controller).terminate(JSON.stringify(plan), f.resolver);
   t.true((await E(controller).status()).stopped);
+});
+
+test('activation observes exact provider context while retaining a separate output budget', async t => {
+  for (const state of ['current', 'stale', 'unavailable', 'unsupported']) {
+    const f = fixture(t);
+    f.faults.catalogState = state;
+    const controller = f.makeController();
+    // eslint-disable-next-line no-await-in-loop
+    await E(controller).activate(JSON.stringify(planFor('a')), f.resolver);
+    const [, , options] = f.events.find(
+      event => Array.isArray(event) && event[0] === 'slice',
+    );
+    const config = JSON.parse(options.env.OPENCODE_CONFIG_CONTENT);
+    t.deepEqual(
+      config.provider.openrouter.models['anthropic/claude-sonnet-4'].limit,
+      ['current', 'stale'].includes(state) ? { context: 65_536 } : undefined,
+    );
+    t.is(options.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX, '8192');
+  }
+});
+
+test('missing model metadata remains unknown and retired catalog owners abort activation', async t => {
+  const f = fixture(t);
+  f.faults.catalogState = 'current';
+  f.faults.catalogMissing = true;
+  await E(f.makeController()).activate(
+    JSON.stringify(planFor('a')),
+    f.resolver,
+  );
+  const [, , options] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'slice',
+  );
+  t.false(
+    Object.hasOwn(
+      JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).provider.openrouter
+        .models['anthropic/claude-sonnet-4'],
+      'limit',
+    ),
+  );
+  const g = fixture(t);
+  g.faults.catalogFail = true;
+  await t.throwsAsync(
+    E(g.makeController()).activate(JSON.stringify(planFor('a')), g.resolver),
+    { message: /catalog owner retired/ },
+  );
+  t.false(g.events.some(event => Array.isArray(event) && event[0] === 'slice'));
+});
+
+test('catalog metadata is exact, optional, and reobserved for each incarnation', async t => {
+  const f = fixture(t);
+  f.faults.catalogState = 'current';
+  const text = JSON.stringify(planFor('a'));
+  for (const context of [65_536, 131_072]) {
+    f.faults.catalogContext = context;
+    const controller = f.makeController();
+    // eslint-disable-next-line no-await-in-loop
+    await E(controller).activate(text, f.resolver);
+    const [, , options] = f.events
+      .filter(event => Array.isArray(event) && event[0] === 'slice')
+      .at(-1);
+    t.is(
+      JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).provider.openrouter
+        .models['anthropic/claude-sonnet-4'].limit.context,
+      context,
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await E(controller).terminate(text, f.resolver);
+  }
+  for (const kind of ['wrong-model', 'no-context']) {
+    const g = fixture(t);
+    g.faults.catalogState = 'current';
+    if (kind === 'wrong-model') g.faults.catalogModel = 'vendor/another-model';
+    else g.faults.catalogNoContext = true;
+    // eslint-disable-next-line no-await-in-loop
+    await E(g.makeController()).activate(text, g.resolver);
+    const [, , options] = g.events.find(
+      event => Array.isArray(event) && event[0] === 'slice',
+    );
+    t.false(
+      Object.hasOwn(
+        JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).provider.openrouter
+          .models['anthropic/claude-sonnet-4'],
+        'limit',
+      ),
+    );
+  }
+});
+
+test('malformed catalog facts and unexpected accounts cannot start a slice', async t => {
+  for (const change of [
+    { catalogContext: 0 },
+    { catalogContext: -1 },
+    { catalogContext: 0x1_0000_0000 },
+    { catalogAccount: 'other' },
+    { catalogDuplicate: true },
+  ]) {
+    const f = fixture(t);
+    Object.assign(f.faults, change, { catalogState: 'current' });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(f.makeController()).activate(JSON.stringify(planFor('a')), f.resolver),
+    );
+    t.false(
+      f.events.some(event => Array.isArray(event) && event[0] === 'slice'),
+    );
+  }
+});
+
+test('late catalog completion after termination cannot create native effects', async t => {
+  t.timeout(3000);
+  const f = fixture(t);
+  f.faults.catalogWait = true;
+  f.faults.catalogState = 'current';
+  const controller = f.makeController();
+  const text = JSON.stringify(planFor('a'));
+  const failed = t.throwsAsync(E(controller).activate(text, f.resolver), {
+    message: /stopping/,
+  });
+  await f.catalogEntered.promise;
+  const stopping = E(controller).terminate(text, f.resolver);
+  await f.sandboxClosed.promise;
+  f.catalogReleased.resolve();
+  await Promise.all([failed, stopping]);
+  t.is(f.clients.length, 0);
+  t.is(f.scopes.size, 0);
+  t.is(f.grants.size, 0);
+  t.false(
+    f.events.some(
+      event =>
+        Array.isArray(event) && ['slice', 'mounter', 'mcp'].includes(event[0]),
+    ),
+  );
 });
 
 test('recorded mounter settings reach the session mounter beneath its own socket directory', async t => {

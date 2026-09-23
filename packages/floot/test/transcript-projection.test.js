@@ -391,6 +391,23 @@ test("a second result for one call, and a result under an earlier turn's id, are
   );
 });
 
+test('projection refuses an incomplete checkpoint before dropping its later result', t => {
+  t.throws(
+    () =>
+      projectTranscript([
+        {
+          role: 'compaction',
+          content: 'summary',
+          retainedTail: [
+            { kind: 'tool-call', id: 'c', name: 'read', args: '{}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c', content: 'known result' },
+      ]),
+    { message: /settled tool calls/ },
+  );
+});
+
 test('a compaction in the tree becomes the context boundary', t => {
   const records = projectTranscript([
     { role: 'user', content: 'one' },
@@ -462,6 +479,49 @@ test('empty and malformed dialogue is skipped rather than fabricated', t => {
       { role: 'assistant', tool_calls: [{ id: '', function: { name: 'x' } }] },
     ]),
     [],
+  );
+});
+
+test('direct-provider replay keeps the explicit tail after the summary', t => {
+  t.deepEqual(
+    transcriptToProviderMessages([
+      { kind: 'message', role: 'user', content: 'superseded' },
+      {
+        kind: 'compaction',
+        summary: 'head summary',
+        retainedTail: [
+          { kind: 'message', role: 'user', content: 'recent request' },
+          { kind: 'tool-call', id: 'c', name: 'read', args: '{}' },
+          {
+            kind: 'tool-result',
+            id: 'c',
+            content: '[Old tool result content cleared]',
+          },
+        ],
+      },
+      { kind: 'message', role: 'user', content: 'continue' },
+    ]),
+    [
+      { role: 'assistant', content: 'head summary' },
+      { role: 'user', content: 'recent request' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'floot-history-2',
+            type: 'function',
+            function: { name: 'read', arguments: '{}' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'floot-history-2',
+        content: '[Old tool result content cleared]',
+      },
+      { role: 'user', content: 'continue' },
+    ],
   );
 });
 

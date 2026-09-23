@@ -106,6 +106,42 @@ export const testTranscriptRestoration = ({ label, restore, readBack }) => {
     t.is(await restore(conversation), await restore(conversation));
   });
 
+  test(`${label} restores a compaction's explicit retained tail exactly once`, async t => {
+    const retainedTail = harden([
+      { kind: 'message', role: 'user', content: 'retained request' },
+      { kind: 'tool-call', id: 'tail-call', name: 'readFile', args: '{}' },
+      {
+        kind: 'tool-result',
+        id: 'tail-call',
+        content: '[Old tool result content cleared]',
+      },
+    ]);
+    const records = await readBack(
+      await restore(
+        harden([
+          ...conversation,
+          { kind: 'compaction', summary: 'head summary', retainedTail },
+          {
+            kind: 'message',
+            role: 'user',
+            content: 'continue after checkpoint',
+          },
+        ]),
+      ),
+    );
+    t.is(records.filter(row => row.kind === 'tool-call').length, 1);
+    t.like(
+      records.find(row => row.kind === 'tool-result'),
+      { content: '[Old tool result content cleared]' },
+    );
+    const dialogue = records
+      .filter(row => row.kind === 'message')
+      .map(row => row.content);
+    t.is(dialogue.filter(text => text === 'retained request').length, 1);
+    t.true(dialogue.includes('continue after checkpoint'));
+    t.false(dialogue.includes('build the page'));
+  });
+
   test(`${label} restores an empty conversation as an empty store`, async t => {
     t.deepEqual(await readBack(await restore([])), []);
   });

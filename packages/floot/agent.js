@@ -1087,6 +1087,10 @@ export const makeStreamingAgent = async (
           // from, keeping tool calls as tool calls with their results.
           transcript: await getTranscript(),
           recordToolEvent: event => turnJournal.append(turnId, event),
+          recordTranscript: (ordinal, record) =>
+            turnJournal.recordTranscript(turnId, ordinal, record),
+          completeTranscript: count =>
+            turnJournal.completeTranscript(turnId, count),
         });
       } catch (error) {
         // A transcript backend keeps a delivered prompt and whatever streamed

@@ -3,7 +3,6 @@ import '@endo/init';
 import test from 'ava';
 
 import {
-  DEFAULT_LIMITS,
   OPENROUTER_NPM,
   makeOpencodeConfig,
   parseModelRef,
@@ -32,7 +31,6 @@ test('builds the default OpenRouter config with a fixed provider list', t => {
         models: {
           'deepseek/deepseek-v4.1-flash': {
             name: 'deepseek/deepseek-v4.1-flash',
-            limit: DEFAULT_LIMITS,
           },
         },
       },
@@ -67,9 +65,26 @@ test('whitelists both models when the small model differs', t => {
     'deepseek/deepseek-v4.1-flash',
     'anthropic/claude-sonnet-5',
   ]);
-  t.is(
-    provider.models['anthropic/claude-sonnet-5'].limit.context,
-    DEFAULT_LIMITS.context,
+  t.false(Object.hasOwn(provider.models['anthropic/claude-sonnet-5'], 'limit'));
+});
+
+test('context observations do not invent output limits or other model limits', t => {
+  const config = makeOpencodeConfig({
+    model: DEFAULT_MODEL,
+    models: {
+      'deepseek/deepseek-v4.1-flash': { limit: { context: 65_536 } },
+    },
+  });
+  t.deepEqual(
+    config.provider.openrouter.models['deepseek/deepseek-v4.1-flash'].limit,
+    { context: 65_536 },
+  );
+  const unknown = makeOpencodeConfig({ model: 'openrouter/vendor/unknown' });
+  t.false(
+    Object.hasOwn(
+      unknown.provider.openrouter.models['vendor/unknown'],
+      'limit',
+    ),
   );
 });
 

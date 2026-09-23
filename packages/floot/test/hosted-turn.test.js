@@ -11,6 +11,68 @@ import {
 } from '../src/hosted-turn.js';
 import { usageCounts } from './helpers/usage.js';
 
+test('failed hosted turns preserve retained context without emitting tool activity', async t => {
+  const retainedTail = harden([
+    { kind: 'message', role: 'user', content: 'retained request' },
+  ]);
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'compaction', summary: 'summary', retainedTail };
+          throw Error('stream failed');
+        })(),
+      ),
+    interrupt: async () => {},
+  });
+  const error = await t.throwsAsync(
+    runHostedTurn({ client, text: 'go', writer: harden({ setPhase() {} }) }),
+  );
+  t.deepEqual(hostedTurnPartialOf(error)?.segments, [
+    { type: 'compaction', summary: 'summary', retainedTail },
+  ]);
+  t.deepEqual(hostedTurnPartialOf(error)?.toolCalls, []);
+});
+
+test('compaction retained context is validated and charged to the turn bound', async t => {
+  for (const retainedTail of [
+    [{ kind: 'compaction', summary: 'nested' }],
+    [{ kind: 'tool-call', id: 'c', name: 'read', args: '{}' }],
+    [{ kind: 'tool-result', id: 'c', content: 'orphan' }],
+    [{ kind: 'message', role: 'user', content: 'x'.repeat(2000) }],
+  ]) {
+    let interrupted = false;
+    const client = harden({
+      send: async () =>
+        readerFromIterator(
+          (async function* () {
+            yield { type: 'compaction', summary: 'summary', retainedTail };
+            yield { type: 'end' };
+          })(),
+        ),
+      interrupt: async () => {
+        interrupted = true;
+      },
+    });
+    // Check each producer's interruption before starting the next case.
+    // eslint-disable-next-line no-await-in-loop
+    const error = await t.throwsAsync(
+      runHostedTurn({
+        client,
+        text: 'go',
+        writer: harden({ setPhase() {} }),
+        maxRetainedChars: 1000,
+      }),
+    );
+    t.regex(
+      error.message,
+      /must not contain compactions|retained transcript bound|settled tool calls|answers no call/,
+    );
+    t.true(interrupted);
+    t.deepEqual(hostedTurnPartialOf(error)?.segments, []);
+  }
+});
+
 test('public thinking is bounded display-only data with settled timing', async t => {
   const thinking = [];
   const deltas = [];

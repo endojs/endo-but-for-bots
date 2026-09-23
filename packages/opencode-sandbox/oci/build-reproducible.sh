@@ -27,7 +27,7 @@ fi
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 OPENCODE_REPO=${OPENCODE_REPO:-https://github.com/kumavis/opencode.git}
-OPENCODE_REF=${OPENCODE_REF:-build/v1.18.30-endo-session-import}
+OPENCODE_REF=${OPENCODE_REF:-codex/compaction-checkpoint}
 OPENCODE_COMMIT=${OPENCODE_COMMIT:-}
 if [ -z "$OPENCODE_COMMIT" ] && command -v git >/dev/null 2>&1; then
   OPENCODE_COMMIT=$(git ls-remote "$OPENCODE_REPO" "$OPENCODE_REF" 2>/dev/null | cut -f1)

@@ -241,8 +241,9 @@ const fixture = ({
       },
     ],
     bindRoots: () => ['/state'],
-    sliceEnv: ({ attestation }) => ({
+    sliceEnv: ({ attestation, prepared }) => ({
       BASE_URL: attestation.endpoint,
+      PREPARED_DIRECTORY: prepared.directory,
       TOKEN: 'placeholder',
     }),
     policy,
@@ -295,7 +296,11 @@ test('activation acquires the scopes, checks the grant, prepares state, projects
     rootfs: { kind: 'oci', ref: `example@${digest}` },
     network: 'broker-only',
     cwd: WORKSPACE_PATH,
-    env: { BASE_URL: 'http://127.0.0.1:9000', TOKEN: 'placeholder' },
+    env: {
+      BASE_URL: 'http://127.0.0.1:9000',
+      PREPARED_DIRECTORY: '/state/a',
+      TOKEN: 'placeholder',
+    },
     policy: {
       profile: 'hosted-agent-v1',
       imageDigest: digest,

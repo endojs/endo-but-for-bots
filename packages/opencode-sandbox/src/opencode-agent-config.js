@@ -6,7 +6,6 @@ export const OPENROUTER_PROVIDER_ID = 'openrouter';
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_ENV_VAR = 'OPENROUTER_API_KEY';
 export const OPENROUTER_NPM = '@openrouter/ai-sdk-provider';
-export const DEFAULT_LIMITS = harden({ context: 128_000, output: 8192 });
 
 // The whole config travels in an environment variable, so keep it well under
 // Linux MAX_ARG_STRLEN (131072 bytes) including the JSON envelope. Both
@@ -222,17 +221,18 @@ const normalizeLimits = (limits, label) => {
   )) {
     Fail`${q(label)} context must be a positive integer`;
   }
-  if (!(
-    typeof output === 'number' &&
-    Number.isSafeInteger(output) &&
-    output > 0
-  )) {
+  if (
+    output !== undefined &&
+    !(typeof output === 'number' && Number.isSafeInteger(output) && output > 0)
+  ) {
     Fail`${q(label)} output must be a positive integer`;
   }
   const ctx = /** @type {number} */ (context);
-  const out = /** @type {number} */ (output);
-  ctx > out || Fail`${q(label)} context must exceed output`;
-  return harden({ context: ctx, output: out });
+  if (typeof output === 'number') {
+    ctx > output || Fail`${q(label)} context must exceed output`;
+    return harden({ context: ctx, output });
+  }
+  return harden({ context: ctx });
 };
 
 /**
@@ -249,11 +249,14 @@ const normalizeModelEntry = (entry, label) => {
       name.length > 0 &&
       name.length <= MAX_NAME_CHARS) ||
     Fail`${q(label)} name is invalid`;
-  const limit =
-    record.limit === undefined
-      ? DEFAULT_LIMITS
-      : normalizeLimits(record.limit, `${label} limit`);
-  return harden({ ...(name === undefined ? {} : { name }), limit });
+  // No invented model limits. Native catalog metadata remains available;
+  // execution budgets are configured separately by the controller.
+  return harden({
+    ...(name === undefined ? {} : { name }),
+    ...(record.limit === undefined
+      ? {}
+      : { limit: normalizeLimits(record.limit, `${label} limit`) }),
+  });
 };
 
 /**
@@ -348,7 +351,7 @@ const normalizeMcpServers = (servers, label) => {
  * @param {string} [options.smallModel] ref used for titles/summaries; defaults to `model`
  * @param {string} [options.agentName]
  * @param {string} [options.systemPrompt]
- * @param {Record<string, { name?: string, limit?: { context: number, output: number } }>} [options.models]
+ * @param {Record<string, { name?: string, limit?: { context: number, output?: number } }>} [options.models]
  * @param {string} [options.baseUrl]
  * @param {boolean} [options.allowLoopbackHttp] - Permit the broker-only
  *   loopback endpoint form. Only the broker transport sets this.

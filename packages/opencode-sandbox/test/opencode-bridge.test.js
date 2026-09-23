@@ -144,19 +144,17 @@ test('suppresses the compaction summary and user-message content', t => {
     ),
     undefined,
   );
-  t.is(
-    mapSseEvent(
-      partUpdated({
-        id: 'prt_step_summary',
-        messageID: 'msg_summary',
-        type: 'step-finish',
-        tokens: { input: 10, output: 2 },
-      }),
-      registry,
-      SESSION,
-    ),
-    undefined,
+  const summaryUsage = partUpdated({
+    id: 'prt_step_summary',
+    messageID: 'msg_summary',
+    type: 'step-finish',
+    tokens: { input: 10, output: 2 },
+  });
+  t.deepEqual(
+    mapSseEvent(summaryUsage, registry, SESSION),
+    usageEventFromStep(summaryUsage.properties.part.tokens, 0),
   );
+  t.is(mapSseEvent(summaryUsage, registry, SESSION), undefined);
   t.deepEqual(
     mapSseEvent(
       partDelta({ partID: 'prt_text', field: 'text', delta: 'hi' }),
@@ -385,12 +383,47 @@ test('parses SSE frames across chunk boundaries', async t => {
       '\n:heartbeat\n\ndata: {"n":2}\r\n\r\ndata: {"n":',
     );
     yield new TextEncoder().encode('3}\n\n');
-    yield new TextEncoder().encode('data: not json\n\n');
   };
   for await (const payload of iterateSseData(source())) {
     payloads.push(payload);
   }
   t.deepEqual(payloads, [{ n: 1 }, { n: 2 }, { n: 3 }]);
+});
+
+test('SSE framing fails closed on corrupt, truncated, and oversized input', async t => {
+  for (const input of [
+    'data: not json\n\n',
+    'data: []\n\n',
+    'data: {"n":1}',
+    `data: {"text":"${'é'.repeat(9 * 1024 * 1024)}"}\n\n`,
+  ]) {
+    const chunks = async function* chunks() {
+      yield new TextEncoder().encode(input);
+    };
+    // Each candidate independently exercises a terminal decoder failure.
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(async () => {
+      for await (const event of iterateSseData(chunks())) {
+        void event;
+      }
+    });
+  }
+  const invalidUtf8 = async function* invalidUtf8() {
+    yield new Uint8Array([0xff]);
+  };
+  await t.throwsAsync(iterateSseData(invalidUtf8()).next());
+});
+
+test('SSE framing handles split CRLF and many frames in a coalesced chunk', async t => {
+  const chunks = async function* chunks() {
+    yield new TextEncoder().encode('data: {"n":1}\r');
+    yield new TextEncoder().encode('\n\r');
+    yield new TextEncoder().encode('\ndata: {"n":2}\n\n');
+    yield new TextEncoder().encode(`${':'.repeat(1024)}\n\n`.repeat(18 * 1024));
+  };
+  const values = [];
+  for await (const value of iterateSseData(chunks())) values.push(value);
+  t.deepEqual(values, [{ n: 1 }, { n: 2 }]);
 });
 
 test('deduplicates repeated running updates for one tool call', t => {

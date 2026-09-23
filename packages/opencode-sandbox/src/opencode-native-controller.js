@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { normalizeBrokerCatalog } from '@endo/hosted-agent/backend-catalog.js';
 import {
   WORKSPACE_PATH,
   activateExecutionEnvelope,
@@ -108,6 +109,34 @@ export const makeOpencodeNativeController = ({
             ...(plan.model ? { model: parseModelRef(plan.model) } : {}),
           }),
           authMode: () => 'api-key',
+          // Catalogs are incarnation-local observations under the existing
+          // credential owner, never new session-plan or credential state.
+          // Unavailable discovery supplies no invented limit. Exceptions
+          // (including retirement) propagate and fence activation.
+          prepare: async ({ plan, resolver: dependencies, assertOpen }) => {
+            const broker = await E(dependencies).get('brokerService');
+            assertOpen();
+            const accounts = normalizeBrokerCatalog(
+              await E(broker).modelCatalog(),
+            );
+            assertOpen();
+            (accounts.length === 1 &&
+              accounts[0].subscriptionId === 'default') ||
+              Fail`Unexpected OpenCode catalog account`;
+            const account = accounts[0];
+            const modelId = parseModelRef(plan.model);
+            const model = ['current', 'stale'].includes(account.state)
+              ? account.models.find(row => row.id === modelId)
+              : undefined;
+            return harden({
+              models:
+                model?.contextLength === undefined
+                  ? {}
+                  : {
+                      [modelId]: { limit: { context: model.contextLength } },
+                    },
+            });
+          },
           // The Endo tools Floot pinned reach the CLI over a per-session MCP
           // socket this controller runs; only JSON crosses it. Its socket
           // has to be serving before the slice can be asked for.
@@ -135,7 +164,7 @@ export const makeOpencodeNativeController = ({
             },
           ],
           bindRoots: ({ plan }) => [bindRootOf(plan.mcpDir)],
-          sliceEnv: ({ plan, attestation, publicNetwork }) => ({
+          sliceEnv: ({ plan, attestation, publicNetwork, prepared }) => ({
             ...makePublicNetworkEnvironment(publicNetwork),
             OPENROUTER_API_KEY: 'opencode-broker-placeholder',
             HOME: OPENCODE_HOME,
@@ -148,8 +177,12 @@ export const makeOpencodeNativeController = ({
             // shared-memory index to need a local filesystem for.
             XDG_DATA_HOME: `${OPENCODE_HOME}/.local/share`,
             OPENCODE_DB: ':memory:',
+            // Preserve the existing application output budget without
+            // misrepresenting it as a provider model's output limit.
+            OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '8192',
             OPENCODE_CONFIG_CONTENT: JSON.stringify(
               makeOpencodeConfig({
+                models: prepared.models,
                 ...(plan.model ? { model: plan.model } : {}),
                 ...(plan.systemPrompt
                   ? { systemPrompt: plan.systemPrompt }

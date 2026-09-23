@@ -2,8 +2,11 @@
 
 import { Fail, makeError, q, X } from '@endo/errors';
 import { projectUsage } from '@endo/hosted-agent/token-usage.js';
+import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
 
-export const DEFAULT_MAX_LINE_BYTES = 1024 * 1024;
+// Match the standalone bridge: a 16 MiB native checkpoint may double in size
+// when JSON tool inputs become canonical argument strings, plus its envelope.
+export const DEFAULT_MAX_LINE_BYTES = 34 * 1024 * 1024;
 harden(DEFAULT_MAX_LINE_BYTES);
 
 /** The closed set of events the in-slice bridge may emit. */
@@ -17,6 +20,7 @@ export const BRIDGE_EVENT_TYPES = harden([
   'tool-call',
   'tool-result',
   'usage',
+  'compaction',
   'end',
   'abort',
 ]);
@@ -117,6 +121,19 @@ export const assertBridgeEvent = candidate => {
   BRIDGE_EVENT_TYPES.includes(candidate.type) ||
     Fail`unknown opencode bridge event type ${q(candidate.type)}`;
   const { type } = candidate;
+  if (type === 'compaction') {
+    const record = assertTranscriptRecord({
+      kind: 'compaction',
+      summary: candidate.summary,
+      retainedTail: candidate.retainedTail,
+    });
+    if (record.kind !== 'compaction') throw Fail`expected compaction record`;
+    return harden({
+      type,
+      summary: record.summary,
+      retainedTail: record.retainedTail,
+    });
+  }
   if (type === 'ready') {
     const rawSessionId = candidate.sessionId;
     if (!(
