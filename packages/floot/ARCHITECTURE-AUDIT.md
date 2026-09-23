@@ -737,6 +737,30 @@ Do not enable native capture until the following ordered work is complete:
 
 This transcript work is separate from native-process crash recovery in #1323.
 
+Ordered journal storage foundation (2026-09-23, local, not deployed):
+`recordTranscript` stores canonical context records at contiguous per-turn
+ordinals, preserving their journal sequence as well as their transcript order.
+Full large content is stored before the referring event, using the existing
+uncertain-write fencing. Identical ordinal retries compare full content and
+are no-ops, including after settlement/reconstruction; conflicting content,
+gaps, new records on recovered/terminal turns and unknown turns are refused.
+The profile limits one turn to 65,536 records and 16 Mi UTF-16 content units;
+snapshot reconstruction validates ordering, references and aggregate bounds.
+It does not hydrate every retained payload: full canonical content is checked
+when read or compared for a retry. Aggregate counts are maintained per append
+and recomputed once on reconstruction, not scanned on every write.
+Older records without this stream have an empty stream, not inferred ordering.
+This is storage only: no production caller writes these entries yet, and recovery
+does not yet merge them with tree/tool evidence. Native capture remains disabled.
+Next wire the hosted stream and recovery together, preserving text/tool/checkpoint
+order and fencing publication failure before accepting further stream events.
+Existing tool/activity snapshot entries still lack their event positions; include
+those positions before merging ordered context with execution evidence.
+Validation: 515 Floot tests pass, including snapshot corruption, canonical payload
+checks, conflicting duplicate suffixes and failed content/event acknowledgement.
+Touched-file lint and docs pass with warnings; package typechecking still reports
+existing test-fixture errors but no source errors. Adversarial review completed.
+
 Generation 166 acceptance found a separate direct-provider failure: after a
 daemon restart the seed history survived, but OpenRouter's free route returned
 an empty recall answer recorded as completed. The three hosted recall cases

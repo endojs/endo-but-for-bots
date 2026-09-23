@@ -4,6 +4,12 @@ import { E } from '@endo/eventual-send';
 import { passStyleOf } from '@endo/pass-style';
 import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
+import {
+  assertTranscriptBudget,
+  encodeJournalTranscript,
+  transcriptIndex,
+} from './journal-transcript.js';
+
 const PREFIX = 'floot-turn-event-';
 const CONTENT_PREFIX = 'floot-turn-content-';
 const SNAPSHOT_PREFIX = 'floot-turn-snapshot-';
@@ -63,6 +69,7 @@ const CONTENT_FIELDS = harden({
   'observed-tool-call': harden(['args']),
   'tool-result': harden(['result']),
   'observed-tool-result': harden(['result']),
+  'transcript-record': harden(['payload']),
   finish: harden(['output', 'error']),
   resolve: harden([]),
 });
@@ -204,7 +211,34 @@ export const makeTurnJournal = powers => {
     }
     const record = records.get(turnId);
     record || Fail`Unknown turn journal turn`;
-    if (type === 'tool-intent' || type === 'observed-tool-call') {
+    if (type === 'transcript-record') {
+      !record.terminal || Fail`Transcript record after terminal turn`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot append transcript for a recovered turn`;
+      const entries = record.transcript ?? [];
+      transcriptIndex(event.ordinal, entries.length) === entries.length ||
+        Fail`Duplicate stored transcript ordinal`;
+      assertText(event.payload, textLimit);
+      if (event.payloadRef !== undefined) assertContentRef(event.payloadRef);
+      const chars =
+        (record.transcriptChars ?? 0) +
+        (event.payloadRef?.chars ?? event.payload.length);
+      assertTranscriptBudget(chars);
+      const entry = {
+        ordinal: event.ordinal,
+        sequence: `${sequence}`,
+        payload: event.payload,
+        ...(event.payloadRef === undefined
+          ? {}
+          : { payloadRef: event.payloadRef }),
+      };
+      return () => {
+        entries.push(entry);
+        record.transcript = entries;
+        record.transcriptChars = chars;
+      };
+    } else if (type === 'tool-intent' || type === 'observed-tool-call') {
       !record.terminal || Fail`Tool intent after terminal turn`;
       recovered ||
         record.state === 'pending' ||
@@ -354,6 +388,29 @@ export const makeTurnJournal = powers => {
     if (snapshots.length > 0) {
       snapshotName = snapshots[snapshots.length - 1];
       loadSnapshot(await E(powers).lookup(snapshotName));
+      for (const record of records.values()) {
+        const entries = record.transcript ?? [];
+        Array.isArray(entries) || Fail`Invalid transcript snapshot`;
+        let previous = BigInt(record.turnId);
+        let chars = 0;
+        for (const [index, entry] of entries.entries()) {
+          transcriptIndex(entry.ordinal, index) === index ||
+            Fail`Invalid transcript snapshot ordinal`;
+          (typeof entry.sequence === 'string' &&
+            /^[1-9][0-9]*$/.test(entry.sequence)) ||
+            Fail`Invalid transcript journal sequence`;
+          const sequence = BigInt(entry.sequence);
+          (sequence > previous && sequence <= through) ||
+            Fail`Invalid transcript journal order`;
+          previous = sequence;
+          // eslint-disable-next-line no-await-in-loop
+          await validateTranscriptPayload(entry, true);
+          chars += entry.payloadRef?.chars ?? entry.payload.length;
+        }
+        assertTranscriptBudget(chars);
+        chars === (record.transcriptChars ?? 0) ||
+          Fail`Invalid transcript snapshot content count`;
+      }
     }
     const journalNames = [...names]
       .filter(name => name.startsWith(PREFIX) && sequenceOf(name) > through)
@@ -366,6 +423,10 @@ export const makeTurnJournal = powers => {
       const event = copyData(await E(powers).lookup(name));
       JSON.stringify(event).length <= MAX_EVENT_SIZE ||
         Fail`Turn journal event too large`;
+      if (event.type === 'transcript-record') {
+        // eslint-disable-next-line no-await-in-loop
+        await validateTranscriptPayload(event, true);
+      }
       prepare(event, next, true)();
       next += 1n;
     }
@@ -554,7 +615,89 @@ export const makeTurnJournal = powers => {
     return chunkRecords;
   };
 
+  /** @param {{ name: string, chars: number }} ref */
+  const readContent = async ref => {
+    const { name, chars } = assertContentRef(ref);
+    names.has(name) || Fail`Unknown turn journal content`;
+    const text = await E(powers).lookup(name);
+    (typeof text === 'string' && text.length === chars) ||
+      Fail`Turn journal content does not match its reference`;
+    return /** @type {string} */ (text);
+  };
+
+  /**
+   * Replay validates references without loading the full retained history.
+   * Full canonical payload validation occurs when content is consumed.
+   * @param {any} entry
+   * @param {boolean} [metadataOnly]
+   */
+  const validateTranscriptPayload = async (entry, metadataOnly = false) => {
+    assertText(entry.payload, PREVIEW_CHARS);
+    if (entry.payloadRef !== undefined) {
+      const { name, chars } = assertContentRef(entry.payloadRef);
+      (names.has(name) &&
+        chars <= MAX_CONTENT_CHARS &&
+        entry.payload.length === PREVIEW_CHARS) ||
+        Fail`Invalid transcript content reference`;
+      if (metadataOnly) return undefined;
+    }
+    const payload =
+      entry.payloadRef !== undefined
+        ? await readContent(entry.payloadRef)
+        : entry.payload;
+    (typeof payload === 'string' && payload.length <= MAX_CONTENT_CHARS) ||
+      Fail`Invalid transcript payload`;
+    encodeJournalTranscript(JSON.parse(payload)) === payload ||
+      Fail`Noncanonical transcript payload`;
+    if (entry.payloadRef !== undefined) {
+      entry.payload === payload.slice(0, PREVIEW_CHARS) ||
+        Fail`Transcript preview does not match its content`;
+    }
+    return payload;
+  };
+
   return harden({
+    /**
+     * Read and validate one full payload lazily, without hydrating other turns.
+     * @param {string} turnId
+     * @param {string} ordinal
+     */
+    readTranscriptRecord: (turnId, ordinal) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        const entries = record.transcript ?? [];
+        const entry = entries[transcriptIndex(ordinal, entries.length)];
+        entry || Fail`Unknown transcript ordinal`;
+        return harden(JSON.parse(await validateTranscriptPayload(entry)));
+      }),
+    /**
+     * Persist one ordered context record. Identical retries are no-ops even
+     * after settlement; new positions require a live pending turn. No tool is
+     * executed or accounted by this operation. Content precedes publication.
+     * @param {string} turnId
+     * @param {string} ordinal
+     * @param {unknown} value
+     */
+    recordTranscript: (turnId, ordinal, value) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        /** @type {Array<{ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
+        const entries = record.transcript ?? [];
+        const index = transcriptIndex(ordinal, entries.length);
+        const payload = encodeJournalTranscript(value);
+        if (index < entries.length) {
+          payload === (await validateTranscriptPayload(entries[index])) ||
+            Fail`Conflicting transcript ordinal`;
+          return;
+        }
+        !record.terminal || Fail`Transcript record after terminal turn`;
+        record.state === 'pending' ||
+          Fail`Cannot append transcript for a recovered turn`;
+        assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);
+        await write({ type: 'transcript-record', turnId, ordinal, payload });
+      }),
     /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string }} options */
     begin: options =>
       serialized(async () => {
@@ -651,15 +794,7 @@ export const makeTurnJournal = powers => {
      *
      * @param {{ name: string, chars: number }} ref
      */
-    readContent: ref =>
-      serialized(async () => {
-        const { name, chars } = assertContentRef(ref);
-        names.has(name) || Fail`Unknown turn journal content`;
-        const text = await E(powers).lookup(name);
-        (typeof text === 'string' && text.length === chars) ||
-          Fail`Turn journal content does not match its reference`;
-        return /** @type {string} */ (text);
-      }),
+    readContent: ref => serialized(() => readContent(ref)),
     status: () =>
       serialized(async () =>
         harden({
