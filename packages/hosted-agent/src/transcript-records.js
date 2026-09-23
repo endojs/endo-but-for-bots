@@ -44,7 +44,7 @@ const RECORD_FIELDS = harden({
   message: harden(['kind', 'role', 'content']),
   'tool-call': harden(['kind', 'id', 'name', 'args']),
   'tool-result': harden(['kind', 'id', 'content', 'failed']),
-  compaction: harden(['kind', 'summary']),
+  compaction: harden(['kind', 'summary', 'retainedTail']),
 });
 
 /** Fields a kind may omit. Everything else is required. */
@@ -52,7 +52,7 @@ const OPTIONAL_FIELDS = harden({
   message: harden([]),
   'tool-call': harden([]),
   'tool-result': harden(['failed']),
-  compaction: harden([]),
+  compaction: harden(['retainedTail']),
 });
 
 const KINDS = harden(Object.keys(RECORD_FIELDS));
@@ -61,7 +61,8 @@ const KINDS = harden(Object.keys(RECORD_FIELDS));
  * @typedef {{ kind: 'message', role: 'user' | 'assistant', content: string }} TranscriptMessage
  * @typedef {{ kind: 'tool-call', id: string, name: string, args: string }} TranscriptToolCall
  * @typedef {{ kind: 'tool-result', id: string, content: string, failed?: boolean }} TranscriptToolResult
- * @typedef {{ kind: 'compaction', summary: string }} TranscriptCompaction
+ * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult} TranscriptContextRecord
+ * @typedef {{ kind: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} TranscriptCompaction
  * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult | TranscriptCompaction} TranscriptRecord
  */
 
@@ -114,7 +115,8 @@ export const assertTranscriptRecord = candidate => {
   }
   const textFields = fields.filter(
     key =>
-      !['kind', 'failed', 'role'].includes(key) && Object.hasOwn(record, key),
+      !['kind', 'failed', 'role', 'retainedTail'].includes(key) &&
+      Object.hasOwn(record, key),
   );
   for (const key of textFields) {
     typeof record[key] === 'string' ||
@@ -126,9 +128,20 @@ export const assertTranscriptRecord = candidate => {
   // Rebuilt in declared field order rather than returned as given, so two
   // records with the same content encode to the same bytes whatever order
   // their producer happened to use.
+  /** @type {Record<string, unknown>} */
   const ordered = {};
   for (const key of fields) {
     if (Object.hasOwn(record, key)) ordered[key] = record[key];
+  }
+  if (kind === 'compaction' && Object.hasOwn(record, 'retainedTail')) {
+    if (!Array.isArray(record.retainedTail)) {
+      throw Fail`compaction retainedTail must be an array`;
+    }
+    ordered.retainedTail = Array.from(record.retainedTail, item => {
+      item?.kind !== 'compaction' ||
+        Fail`compaction retainedTail must not contain compactions`;
+      return assertTranscriptRecord(item);
+    });
   }
   return harden(/** @type {TranscriptRecord} */ (ordered));
 };
@@ -199,18 +212,19 @@ harden(parseTranscript);
  * Split a stream at its last compaction.
  *
  * A `compaction` record's position is the boundary: what precedes it is
- * history the model no longer carries, and the record itself plus everything
- * after it is the context it does. This is OpenCode's own model — it selects
- * messages at or after the latest row of type `compaction`
- * (`packages/core/src/session/history.ts`) — and it is the reason the boundary
- * has to be a record rather than something the stack infers. Restore a
+ * history the model no longer carries, except for the explicit retainedTail
+ * snapshot. Active context is the summary, that ordered tail, then subsequent
+ * records. A tail is model context, not another execution or UI-history entry.
+ * It may carry pruned tool output rather than the original historical output.
+ * The snapshot avoids guessing how native IDs map to Floot history. Restore a
  * compacted conversation without it and the whole pre-compaction history
  * becomes active context, which can overflow the model on the first turn
  * after a revival.
  *
- * An adapter whose CLI has no compaction concept can ignore the split and
- * restore `records` whole; one that has it restores `superseded` as history
- * and `active` as the live context.
+ * Expansion happens here only: the active summary omits retainedTail, so
+ * selecting active context a second time cannot duplicate the tail.
+ * Adapters must restore active context even if their CLI has no compaction
+ * concept. Superseded records remain available separately for history.
  *
  * @param {readonly TranscriptRecord[]} records
  * @returns {{ superseded: readonly TranscriptRecord[], active: readonly TranscriptRecord[] }}
@@ -223,9 +237,16 @@ export const splitAtLastCompaction = records => {
   if (boundary < 0) {
     return harden({ superseded: harden([]), active: harden([...records]) });
   }
+  const checkpoint = assertTranscriptRecord(records[boundary]);
+  if (checkpoint.kind !== 'compaction')
+    throw Fail`Expected compaction boundary`;
   return harden({
     superseded: harden(records.slice(0, boundary)),
-    active: harden(records.slice(boundary)),
+    active: harden([
+      { kind: 'compaction', summary: checkpoint.summary },
+      ...(checkpoint.retainedTail ?? []),
+      ...records.slice(boundary + 1),
+    ]),
   });
 };
 harden(splitAtLastCompaction);

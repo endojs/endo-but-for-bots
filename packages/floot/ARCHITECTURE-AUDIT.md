@@ -688,6 +688,46 @@ Complete capture and interrupted-turn durability must be verified before
 claiming end-to-end compaction; bounded context selection and automatic
 summarization policy remain open as well.
 
+Retained-context contract (2026-09-23, local, not deployed): source inspection
+of pinned fork `870a58b973a2892d93c04e5db6e49757ad8237b9` established that
+`packages/opencode/src/session/message-v2.ts:filterCompacted` reorders a
+completed summary ahead of older retained messages selected by `tail_start_id`.
+`session/compaction.ts:prune` separately marks old tool results, and
+`message-v2.ts:toModelMessages` substitutes `[Old tool result content cleared]`.
+Therefore neither a summary alone nor an offset into Floot's original history
+faithfully describes native active context.
+
+The shared canonical compaction record now accepts `retainedTail`, an ordered
+snapshot of ordinary message/tool records, never nested compactions, capabilities
+or native storage identifiers. Its nested records receive the same strict
+validation and canonical field ordering as top-level records.
+The shared last-compaction selector expands summary, retained tail, then later
+records exactly once; its returned summary carries no tail to expand again.
+Original historical records are untouched. Pruned outputs can be preserved in
+the context snapshot without replacing full historical tool evidence.
+Shared conformance covers the three hosted adapters; direct-provider replay
+has a separate exact-message regression.
+
+This is representation/replay only: there is no new native producer or journal
+writer, and the current tree-message projection does not yet carry this field.
+No formula is created and no existing stored record is rewritten.
+Do not enable native capture until the following ordered work is complete:
+
+1. Carry checkpoints through tree messages and protocol events without adding
+   retained-tail copies to display history or usage/execution accounting.
+2. Persist full checkpoint content before its ordered journal reference, and
+   preserve surrounding text ordering. Current tool-only observations and a
+   concatenated terminal output cannot locate a recovered compaction safely.
+   Failed publication must fence; repeated identical boundary delivery must be
+   idempotent and a changed payload under the same identity must be refused.
+3. Capture the completed native summary and exact retained context with an
+   explicit event frontier. A history fetch can race later SSE events; never
+   splice a snapshot and replay those same events a second time.
+4. Test interruption at content/journal publication, cancellation, duplicate
+   delivery, restart/replay and tool-pair preservation, then live compaction.
+
+This transcript work is separate from native-process crash recovery in #1323.
+
 Generation 166 acceptance found a separate direct-provider failure: after a
 daemon restart the seed history survived, but OpenRouter's free route returned
 an empty recall answer recorded as completed. The three hosted recall cases
@@ -2532,6 +2572,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Add canonical retained-tail compaction representation and one shared expansion rule | Pinned native source disproves summary-only capture; 686 hosted-agent tests (one skip), 502 Floot tests and Claude/Codex/OpenCode conformance suites (8/8/12) pass. Production declaration generation, formatting and scoped ESLint pass; docs have zero errors (178 warnings). Independent review approved validation, canonical ordering and idempotent expansion. Native capture, ordered journal persistence and tree projection remain gated; not deployed. |
 | 2026-09-23 | Deploy archive paging, recorded-compaction replay and provider accounting fixes as generation 169 (app `819aa18c8`, host `7dbf7c3`) | Four-backend seed/restart/recall/delete passed; reconstructed archive API checked; Secrets, host and credential bindings preserved; no native resources left. Live archive-boundary and compaction/error-path injection remain open; see host cutover record. |
 | 2026-09-23 | Preserve usage on OpenRouter HTTP/API/finish errors and stop automatic replay when token consumption is reported | 94 Lal tests (one skip), 501 Floot tests, production declarations, formatting and composite consistency pass; scoped lint has zero errors and docs have zero errors (178 warnings). Independent review found a swallowed error-body timeout; fixed and regression-tested with native-style AbortError and exactly two attempts. Tests also cover observer/no-observer behavior, zero-usage retries, fractional refusal, bounded error bodies and failed HTTP turn reconstruction. Reuses hosted-agent's bounded JSON reader rather than duplicating it; no new formula/schema. Not deployed. |
 | 2026-09-23 | Preserve reported OpenRouter usage when assistant validation rejects a response, using an optional pre-settlement incremental provider notification and the existing turn finish journal | 500 Floot and 82 Lal tests pass (one Lal skip), including failed-turn reconstruction and no double counting; independently reviewed; changed-file ESLint has zero errors and docs have zero errors. Whole Lal lint still has eight project-service errors in unchanged files. No new durable schema; process loss before finish and API-error/retry usage remain open. Not deployed. |

@@ -97,7 +97,7 @@ test('records carry dialogue and tool traffic, and nothing else', t => {
   for (const [label, bad, message] of rejected) {
     t.throws(() => assertTranscriptRecord(bad), { message }, label);
   }
-  // `failed` is the one optional field.
+  // A tool result need not carry `failed`.
   t.deepEqual(
     assertTranscriptRecord({ kind: 'tool-result', id: 'c', content: 'x' }),
     { kind: 'tool-result', id: 'c', content: 'x' },
@@ -132,6 +132,52 @@ test('a compaction record is the context boundary, by position', t => {
     superseded: [],
     active: [...conversation],
   });
+});
+
+test('retained context is canonical, immutable, and expanded exactly once', t => {
+  const checkpoint = assertTranscriptRecord({
+    retainedTail: [{ content: 'recent', role: 'user', kind: 'message' }],
+    summary: 'older context',
+    kind: 'compaction',
+  });
+  t.is(
+    encodeTranscriptRecord(checkpoint),
+    '{"kind":"compaction","summary":"older context","retainedTail":[{"kind":"message","role":"user","content":"recent"}]}',
+  );
+  t.deepEqual(parseTranscript(encodeTranscript([checkpoint])), [checkpoint]);
+  const records = harden([...conversation, checkpoint]);
+  const { active, superseded } = splitAtLastCompaction(records);
+  t.deepEqual(active, [
+    { kind: 'compaction', summary: 'older context' },
+    { kind: 'message', role: 'user', content: 'recent' },
+  ]);
+  t.deepEqual(superseded, conversation);
+  t.deepEqual(splitAtLastCompaction(active).active, active);
+  t.deepEqual(
+    splitAtLastCompaction([...records, { kind: 'compaction', summary: 'new' }])
+      .active,
+    [{ kind: 'compaction', summary: 'new' }],
+  );
+  t.true(Object.isFrozen(checkpoint));
+});
+
+test('retained context refuses nested boundaries and non-record authority', t => {
+  for (const retainedTail of [
+    undefined,
+    {},
+    [null],
+    [{ kind: 'compaction', summary: 'nested' }],
+    [{ kind: 'message', role: 'system', content: 'authority' }],
+    [{ kind: 'message', role: 'user', content: 'x', capability: {} }],
+  ]) {
+    t.throws(() =>
+      assertTranscriptRecord({
+        kind: 'compaction',
+        summary: 'summary',
+        retainedTail,
+      }),
+    );
+  }
 });
 
 test('tool calls pair with their results by id, earliest unanswered first', t => {

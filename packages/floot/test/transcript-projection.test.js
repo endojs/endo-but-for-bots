@@ -465,6 +465,49 @@ test('empty and malformed dialogue is skipped rather than fabricated', t => {
   );
 });
 
+test('direct-provider replay keeps the explicit tail after the summary', t => {
+  t.deepEqual(
+    transcriptToProviderMessages([
+      { kind: 'message', role: 'user', content: 'superseded' },
+      {
+        kind: 'compaction',
+        summary: 'head summary',
+        retainedTail: [
+          { kind: 'message', role: 'user', content: 'recent request' },
+          { kind: 'tool-call', id: 'c', name: 'read', args: '{}' },
+          {
+            kind: 'tool-result',
+            id: 'c',
+            content: '[Old tool result content cleared]',
+          },
+        ],
+      },
+      { kind: 'message', role: 'user', content: 'continue' },
+    ]),
+    [
+      { role: 'assistant', content: 'head summary' },
+      { role: 'user', content: 'recent request' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'floot-history-2',
+            type: 'function',
+            function: { name: 'read', arguments: '{}' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'floot-history-2',
+        content: '[Old tool result content cleared]',
+      },
+      { role: 'user', content: 'continue' },
+    ],
+  );
+});
+
 test('a compaction segment reaches the tree in its own place', t => {
   // The shape `agent.js` writes for a `compaction` segment, projected back
   // out: a turn that compacted mid-way keeps the boundary between the text
