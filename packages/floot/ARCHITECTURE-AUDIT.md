@@ -598,6 +598,20 @@ Explicit compaction/context selection remains open: this converter does not impl
 a compaction policy, and the full-history replay can grow without a context bound.
 The full-content fix is now deployed; bounded context remains open.
 
+Generation 166 acceptance found a separate direct-provider failure: after a
+daemon restart the seed history survived, but OpenRouter's free route returned
+an empty recall answer recorded as completed. The three hosted recall cases
+passed. Empty-response validation now rejects absent, null, empty or whitespace
+answers without tool calls, without replaying a potentially billed request.
+Valid tool-only replies are preserved; sanitized finish/model/provider fields
+identify the failure without exposing response bodies or reasoning.
+No new durable state or formula is introduced: the existing failed-turn journal
+path records the error. A reconstruction regression preserves that failure and
+its history without another request. This uses an in-memory persistent-powers
+fixture, not process-loss proof. Reported usage on rejected replies is currently
+lost, as on other provider validation errors; exact failed-response accounting
+remains a follow-up. The fix is not yet deployed or live-verified.
+
 ## FA-03 — Retire the live Claude form topology
 
 At the baseline, the host's `modules/endo-daemon.nix` ran `setup-host.js`, `setup-peer.js`, and

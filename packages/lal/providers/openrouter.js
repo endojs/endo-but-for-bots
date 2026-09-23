@@ -63,7 +63,10 @@ const tokens = value =>
 export const usageFromOpenRouter = (usage, windowTokens) => {
   const prompt = tokens(usage.prompt_tokens);
   const completion = tokens(usage.completion_tokens);
-  const cached = Math.min(prompt, tokens(usage.prompt_tokens_details?.cached_tokens));
+  const cached = Math.min(
+    prompt,
+    tokens(usage.prompt_tokens_details?.cached_tokens),
+  );
   const reasoning = Math.min(
     completion,
     tokens(usage.completion_tokens_details?.reasoning_tokens),
@@ -438,6 +441,16 @@ export const makeOpenRouterProvider = ({
       ) {
         throw Error('OpenRouter returned an invalid tool call');
       }
+    }
+    // A syntactically valid assistant message can still contain no answer.
+    // Reasoning alone is not user-facing output. Do not silently complete or
+    // repeat a request that may already have consumed provider usage.
+    if (!message.content?.trim() && !message.tool_calls?.length) {
+      throw Error(
+        `OpenRouter returned an empty assistant response${describe([
+          ['finish_reason', 'reason', choice.finish_reason],
+        ])}${served}`,
+      );
     }
     if (
       result.usage &&

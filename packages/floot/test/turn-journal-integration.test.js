@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { makeOpenRouterProvider } from '@endo/lal/providers/index.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
@@ -83,6 +84,60 @@ const callEffect = () =>
   });
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
+
+test('empty OpenRouter completion remains a failed turn after reconstruction', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  let requests = 0;
+  const provider = makeOpenRouterProvider({
+    apiKey: 'test-not-a-key',
+    model: 'openrouter/free',
+    fetchImpl: async url => {
+      if (String(url).endsWith('/models')) return Response.json({ data: [] });
+      requests += 1;
+      return Response.json({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: {
+              role: 'assistant',
+              content: '',
+            },
+          },
+        ],
+      });
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(
+    agent.converse('Recall the saved word', makeReplyChannel().writer),
+    { message: /empty assistant response/ },
+  );
+  const before = await agent.getTurns();
+  t.is(before.length, 1);
+  t.is(before[0].state, 'failed');
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTurns(), before);
+  t.true(
+    (await revived.getHistory()).some(row =>
+      String(row.content).includes('empty assistant response'),
+    ),
+  );
+  t.is(requests, 1);
+});
 
 for (const backend of ['provider', 'hosted']) {
   test(`${backend} usage survives revival from conversation metadata without the legacy cache`, async t => {

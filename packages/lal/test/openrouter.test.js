@@ -14,10 +14,12 @@ const CATALOG_URL = 'https://openrouter.ai/api/v1/models';
  * @param {(url: any, init: any) => Promise<Response>} chat
  * @param {Array<{ id: string, context_length: number }>} [models]
  */
-const withCatalog = (chat, models = []) => async (url, init) =>
-  url === CATALOG_URL
-    ? new Response(JSON.stringify({ data: models }), { status: 200 })
-    : chat(url, init);
+const withCatalog =
+  (chat, models = []) =>
+  async (url, init) =>
+    url === CATALOG_URL
+      ? new Response(JSON.stringify({ data: models }), { status: 200 })
+      : chat(url, init);
 
 test('OpenRouter requires a key and explicit qualified model', t => {
   t.is(detectProviderKind('https://openrouter.ai/api/v1'), 'openrouter');
@@ -39,34 +41,37 @@ test('OpenRouter round trips tool calls, reports usage, and honors cancellation'
   };
   const provider = makeOpenRouterProvider({
     ...options,
-    fetchImpl: withCatalog(async (url, init) => {
-      t.is(url, 'https://openrouter.ai/api/v1/chat/completions');
-      t.is(init.redirect, 'error');
-      t.is(init.headers.Authorization, 'Bearer test-not-a-key');
-      const body = JSON.parse(init.body);
-      t.false('max_tokens' in body);
-      t.deepEqual(body.messages[0].tool_calls, [call]);
-      t.is(body.messages[1].tool_call_id, 'call1');
-      controller.abort();
-      t.true(init.signal.aborted);
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              finish_reason: 'stop',
-              message: { role: 'assistant', content: 'Done' },
+    fetchImpl: withCatalog(
+      async (url, init) => {
+        t.is(url, 'https://openrouter.ai/api/v1/chat/completions');
+        t.is(init.redirect, 'error');
+        t.is(init.headers.Authorization, 'Bearer test-not-a-key');
+        const body = JSON.parse(init.body);
+        t.false('max_tokens' in body);
+        t.deepEqual(body.messages[0].tool_calls, [call]);
+        t.is(body.messages[1].tool_call_id, 'call1');
+        controller.abort();
+        t.true(init.signal.aborted);
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'Done' },
+              },
+            ],
+            model: 'org/served',
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 3,
+              prompt_tokens_details: { cached_tokens: 8 },
+              completion_tokens_details: { reasoning_tokens: 1 },
             },
-          ],
-          model: 'org/served',
-          usage: {
-            prompt_tokens: 12,
-            completion_tokens: 3,
-            prompt_tokens_details: { cached_tokens: 8 },
-            completion_tokens_details: { reasoning_tokens: 1 },
-          },
-        }),
-      );
-    }, [{ id: 'org/served', context_length: 1000 }]),
+          }),
+        );
+      },
+      [{ id: 'org/served', context_length: 1000 }],
+    ),
   });
   const deltas = [];
   const result = await provider.chatStream(
@@ -247,6 +252,47 @@ const ok = (content = 'Done', extra = {}) =>
       ...extra,
     }),
   );
+
+for (const content of [undefined, null, '', ' \n\t']) {
+  test(`OpenRouter refuses empty answer ${JSON.stringify(content)} without replay`, async t => {
+    let requests = 0;
+    const provider = makeOpenRouterProvider({
+      ...options,
+      sleep: async () =>
+        t.fail('An empty completed answer must not be retried'),
+      fetchImpl: withCatalog(async () => {
+        requests += 1;
+        return new Response(
+          JSON.stringify({
+            model: 'vendor/free-model',
+            provider: 'Some Host',
+            choices: [
+              {
+                finish_reason: 'stop',
+                message: {
+                  role: 'assistant',
+                  content,
+                  tool_calls: [],
+                  reasoning: 'PRIVATE_REASONING',
+                },
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 3 },
+          }),
+        );
+      }),
+    });
+    const error = await t.throwsAsync(
+      provider.chatStream([], [], () => t.fail('No empty output delivery')),
+      {
+        message:
+          /empty assistant response.*finish_reason stop.*served by vendor\/free-model/,
+      },
+    );
+    t.false(error.message.includes('PRIVATE_REASONING'));
+    t.is(requests, 1);
+  });
+}
 
 /**
  * A provider whose requests are answered in order by `responses`, and which
@@ -582,7 +628,6 @@ test('an abort that is not the caller’s is a failure, not a timeout', async t 
   for (const line of world.lines) t.notRegex(line, /did not answer within/);
 });
 
-
 test('the context window comes from the catalog, read once and never before a reply', async t => {
   let catalogReads = 0;
   const lines = [];
@@ -590,7 +635,10 @@ test('the context window comes from the catalog, read once and never before a re
     new Response(
       JSON.stringify({
         choices: [
-          { finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+          {
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: 'ok' },
+          },
         ],
         ...(served ? { model: served } : {}),
         usage: { prompt_tokens: 100, completion_tokens: 10 },
@@ -636,7 +684,10 @@ test('the context window comes from the catalog, read once and never before a re
   served = '';
   t.is((await provider.chat([], [])).usage.context.windowTokens, 64_000);
   t.is(catalogReads, 1);
-  t.deepEqual(lines.filter(line => line.includes('catalog')), []);
+  t.deepEqual(
+    lines.filter(line => line.includes('catalog')),
+    [],
+  );
 });
 
 test('a catalog that cannot be read costs the window size, not the reply', async t => {
@@ -649,7 +700,10 @@ test('a catalog that cannot be read costs the window size, not the reply', async
       return new Response(
         JSON.stringify({
           choices: [
-            { finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+            {
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: 'ok' },
+            },
           ],
           usage: { prompt_tokens: 7, completion_tokens: 2 },
         }),
@@ -663,7 +717,6 @@ test('a catalog that cannot be read costs the window size, not the reply', async
   await provider.chat([], []);
   t.is(lines.filter(line => line.includes('no model catalog')).length, 1);
 });
-
 
 test('a routing id has no window of its own, and a failed catalog is read again later', async t => {
   let catalogReads = 0;
@@ -690,7 +743,10 @@ test('a routing id has no window of its own, and a failed catalog is read again 
       return new Response(
         JSON.stringify({
           choices: [
-            { finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } },
+            {
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: 'ok' },
+            },
           ],
           model: 'org/unlisted',
           usage: { prompt_tokens: 5, completion_tokens: 1 },
