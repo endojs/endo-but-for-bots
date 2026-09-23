@@ -86,6 +86,25 @@ for (const [kind, after] of [
       const turn = await E(session).startTurn('write journal evidence');
       await E(turn).whenFinished();
       t.is((await E(turn).getStatus()).error, null);
+      let survivor;
+      let survivorId;
+      let survivorHistory;
+      if (kind === 'gc') {
+        survivor = await E(factory).createSession({
+          backendId: 'test',
+          modelId: 'm',
+        });
+        survivorId = (await E(survivor).getInfo()).id;
+        const seed = await E(survivor).startTurn('preserve this other session');
+        await E(seed).whenFinished();
+        t.is((await E(seed).getStatus()).error, null);
+        survivorHistory = await E(survivor).getHistory();
+        t.deepEqual(survivorHistory, [
+          { role: 'user', content: 'preserve this other session' },
+          { role: 'assistant', content: 'journal evidence' },
+        ]);
+      }
+      const expectedIds = survivorId ? [survivorId] : [];
       const prefix = `floot-private-turn-${id.length}-${id}-`;
       /** @type {string[]} */
       const before = (await E(host).list()).filter(name =>
@@ -99,6 +118,13 @@ for (const [kind, after] of [
             ? /became unreachable by any pet name path and was collected/
             : /Injected journal removal/,
       });
+      if (survivor) {
+        // Characterize the collateral loss of an unrelated held session facet.
+        // A fix must keep this facet usable, not merely recover on restart.
+        await t.throwsAsync(E(survivor).getInfo(), {
+          message: /became unreachable by any pet name path and was collected/,
+        });
+      }
       const failedRegistry = await readRegistry(host);
       t.is(failedRegistry.sessions[0].id, id);
       t.true(
@@ -121,12 +147,26 @@ for (const [kind, after] of [
       const recoveryDeadline = Date.now() + 10_000;
       while (Date.now() < recoveryDeadline) {
         // eslint-disable-next-line no-await-in-loop
-        if ((await readRegistry(revivedHost)).sessions.length === 0) break;
+        const current = await readRegistry(revivedHost);
+        if (!current.sessions.some(entry => entry.id === id)) break;
         // eslint-disable-next-line no-await-in-loop
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      t.deepEqual(await E(revivedFactory).listSessions(), []);
-      t.deepEqual((await readRegistry(revivedHost)).sessions, []);
+      t.deepEqual(
+        (await E(revivedFactory).listSessions()).map(entry => entry.id),
+        expectedIds,
+      );
+      t.deepEqual(
+        (await readRegistry(revivedHost)).sessions.map(entry => entry.id),
+        expectedIds,
+      );
+      if (survivorId) {
+        const recovered = await E(revivedFactory).getSession(survivorId);
+        t.deepEqual(await E(recovered).getHistory(), survivorHistory);
+        const nextTurn = await E(recovered).startTurn('continue after restart');
+        await E(nextTurn).whenFinished();
+        t.is((await E(nextTurn).getStatus()).error, null);
+      }
       t.deepEqual(
         (await E(revivedHost).list()).filter(name => name.startsWith(prefix)),
         [],
@@ -139,8 +179,14 @@ for (const [kind, after] of [
       await start(config);
       const finalHost = await connect();
       const finalFactory = await E(finalHost).lookup('journal-factory');
-      t.deepEqual(await E(finalFactory).listSessions(), []);
-      t.deepEqual((await readRegistry(finalHost)).sessions, []);
+      t.deepEqual(
+        (await E(finalFactory).listSessions()).map(entry => entry.id),
+        expectedIds,
+      );
+      t.deepEqual(
+        (await readRegistry(finalHost)).sessions.map(entry => entry.id),
+        expectedIds,
+      );
       t.deepEqual(
         (await E(finalHost).list()).filter(name => name.startsWith(prefix)),
         [],

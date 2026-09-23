@@ -187,13 +187,39 @@ terminates workers retaining that formula, including the Floot factory that
 imported it. The test powers-forwarding worker is also affected; it is not the
 only retainer. The delete call rejects before private-journal retirement. A
 fresh daemon/worker resumes the durable terminal intent and completes cleanup,
-but this is recovery evidence, not normal deletion availability. Other sessions
-sharing that factory may be interrupted; that impact is not yet tested. The
+but this is recovery evidence, not normal deletion availability. A two-session
+regression now proves collateral interruption: the unrelated session's held
+facet rejects with the same collection error. Its durable registry entry and
+history survive restart, and a new turn succeeds after reacquiring the facet. The
 GC-enabled test intentionally characterizes this failure and must change when
 the conflict is fixed. Resolve the deletion/worker-ownership boundary before
 claiming GC-safe deletion; do not silently disable production GC, weaken daemon
 revocation semantics, or retain tombstone aliases indefinitely. This is separate
 from #1323's native-producer shutdown design and does not select its adapter.
+
+Reference-lifecycle investigation: CapTP defaults `gcImports` to false and the
+daemon does not override it. Its `releaseSlot`/`CTP_DROP` machinery is internal,
+not a supported application release API. Dropping JavaScript references or
+forcing JavaScript GC cannot provide a deterministic release acknowledgement.
+The guest exo has no universal revocation gate, so exempting guests from worker
+termination is not a safe substitute. A per-session worker by itself also fails:
+if the factory imports that worker's collected formula, the same propagation
+reaches the factory. Candidate designs need separate review:
+
+- A daemon-side scoped operation facade that keeps raw guest references out of
+  the factory. Capability results, streams and tool references must also be
+  wrapped; a shallow forwarding object does not suffice.
+- Per-session workers behind a stable control service that never imports the
+  doomed formula or its descendants into the shared factory.
+- Deterministic revocable imports, covering aliases and in-flight calls before
+  acknowledging release. This is a transport/security design, not a local fix.
+- Coordinated factory shutdown before deletion from a separate controller.
+  This still interrupts other sessions, so it does not meet isolated deletion.
+
+Do not choose a larger lifecycle redesign implicitly during this refactor.
+The required acceptance gate for a remedy is successful deletion with GC on,
+continued use of another session's existing facet, and durable recovery without
+leaking tombstone names or leaving stale authority callable.
 
 Pre-registry-publication orphan namespaces remain outside automatic retirement;
 native process-loss producer exclusion remains with #1323. Unbinding names
@@ -2341,6 +2367,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Bound the guest-GC deletion impact and research safe remedies | Two-session regression proves collateral facet loss and recovery of history/continued turns after restart. No supported deterministic import-release API found; design alternatives and acceptance gate recorded, no unsafe GC bypass |
 | 2026-09-23 | Repair stale factory-disposal test backend after model catalog refactor | Reproduced late-native admission failure/timeout; current catalog and fail-fast gate restore all three lifecycle tests. Fake guest boundary explicit; no production change |
 | 2026-09-23 | Verify terminal journal retirement across real daemon restarts; identify guest-GC/factory termination conflict | Four restart cases pass with persisted-registry assertions and a second cold start; acknowledgement faults isolated with GC off, real-GC interruption/recovery tested separately. Smooth GC-enabled deletion and shared-session impact remain pre-merge review items; no production semantic change or Tokyo deployment |
 | 2026-09-23 | Add terminal private-journal namespace retirement after durable intent, writer drain and backend cleanup; fence delayed observation from rebuilding during deletion | Exact namespace/schema validation, uncertain-removal retry and factory reconstruction regressions; no generic-cleanup deletion; real-daemon evidence added above, Tokyo verification pending |
