@@ -2,7 +2,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
-import { projectContextTranscript } from '../src/context-transcript.js';
+import {
+  projectContextTranscript,
+  readContextTranscript,
+} from '../src/context-transcript.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
 import { encodeJournalTranscript } from '../src/journal-transcript.js';
 
@@ -272,4 +275,125 @@ test('real journal late old-turn settlement survives subsequent archive publicat
   t.is(pairs.length, 1);
   t.is(pairs[0].result.content, 'late effect');
   t.is(projected[0].summary, 'durable summary');
+  t.deepEqual(await readContextTranscript(revived), projected);
 });
+
+test('paged reader pins one cut across publication and late settlement between passes', async t => {
+  const old = turn(1, [call('unsettled', 'exec')]);
+  const boundary = turn(10, [checkpoint('old summary')]);
+  const after = turn(20, [message('after checkpoint')]);
+  const newer = turn(30, [checkpoint('new summary')]);
+  let published = false;
+  let views = 0;
+  const cursors = [];
+  const journal = {
+    readView: async () => {
+      views += 1;
+      return {
+        retained: structuredClone([
+          published
+            ? {
+                ...old,
+                activity: [
+                  {
+                    callId: 'unsettled',
+                    name: 'exec',
+                    args: '{}',
+                    settled: true,
+                    result: 'new settlement',
+                    sequence: '2',
+                    resultSequence: '40',
+                  },
+                ],
+              }
+            : old,
+        ]),
+        archiveCursor: published ? '0:3' : '0:2',
+      };
+    },
+    listArchivedPage: async cursor => {
+      cursors.push(cursor);
+      const [index, end] = cursor.split(':').map(Number);
+      // Publication order intentionally differs from dispatch order.
+      const pages = [[after], [boundary], [newer]];
+      if (cursor === '1:2') published = true;
+      return {
+        records: pages[index],
+        next: Number(index) + 1 < Number(end) ? `${index + 1}:${end}` : null,
+      };
+    },
+    readContent: noRead,
+  };
+  const first = await readContextTranscript(journal);
+  t.is(views, 1);
+  t.deepEqual(cursors, ['0:2', '1:2', '0:2', '1:2']);
+  t.is(first[0].summary, 'old summary');
+  t.true(first.some(record => record.content === 'after checkpoint'));
+  t.regex(pairToolCalls(first).pairs[0].result.content, /outcome unknown/);
+  t.false(JSON.stringify(first).includes('new settlement'));
+  const second = await readContextTranscript(journal);
+  t.is(views, 2);
+  t.deepEqual(cursors.slice(4), ['0:3', '1:3', '2:3', '0:3', '1:3', '2:3']);
+  t.is(second[0].summary, 'new summary');
+  t.is(pairToolCalls(second).pairs[0].result.content, 'new settlement');
+  t.false(second.some(record => record.content === 'after checkpoint'));
+});
+
+for (const failingPass of [1, 2]) {
+  test(`paged reader rejects archive failure in pass ${failingPass}`, async t => {
+    let visits = 0;
+    let views = 0;
+    const journal = {
+      readView: async () => {
+        views += 1;
+        return {
+          retained: [turn(20, [message('not partial output')])],
+          archiveCursor: '0:1',
+        };
+      },
+      listArchivedPage: async cursor => {
+        t.is(cursor, '0:1');
+        visits += 1;
+        if (visits === failingPass) throw Error('Archive unavailable');
+        return { records: [turn(1, [checkpoint('summary')])], next: null };
+      },
+      readContent: noRead,
+    };
+    await t.throwsAsync(readContextTranscript(journal), {
+      message: 'Archive unavailable',
+    });
+    t.is(views, 1);
+    t.is(visits, failingPass);
+  });
+}
+
+for (const corruption of ['missing', 'sequence', 'kind', 'ordinal']) {
+  test(`paged reader rejects ${corruption} checkpoint on second pass`, async t => {
+    let visits = 0;
+    const original = turn(1, [checkpoint('summary')]);
+    const changed = structuredClone(original);
+    if (corruption === 'sequence') changed.transcript[0].sequence = '99';
+    if (corruption === 'kind') changed.transcript[0].kind = 'message';
+    if (corruption === 'ordinal') changed.transcript[0].ordinal = '1';
+    const journal = {
+      readView: async () => ({ retained: [], archiveCursor: '0:1' }),
+      listArchivedPage: async () => {
+        visits += 1;
+        return {
+          records:
+            visits === 1
+              ? [original]
+              : corruption === 'missing'
+                ? []
+                : [changed],
+          next: null,
+        };
+      },
+      readContent: noRead,
+    };
+    await t.throwsAsync(readContextTranscript(journal), {
+      message: /Context checkpoint (changed|missing)/,
+    });
+    t.is(visits, 2);
+  });
+}

@@ -52,7 +52,7 @@ import {
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
-import { projectContextTranscript } from './src/context-transcript.js';
+import { readContextTranscript } from './src/context-transcript.js';
 import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
@@ -1911,11 +1911,7 @@ export const makeStreamingAgent = async (
   };
 
   const getContextTranscript = async excludeTurnId =>
-    projectContextTranscript(
-      await readAllTurns(),
-      ref => turnJournal.readContent(ref),
-      excludeTurnId,
-    );
+    readContextTranscript(turnJournal, excludeTurnId);
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const out = [];

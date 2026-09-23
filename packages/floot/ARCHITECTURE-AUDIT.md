@@ -795,6 +795,31 @@ and same-turn unresolved calls across a checkpoint.
 Scoped lint has zero errors (59 warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass. Independent adversarial review approved.
 
+Paged context metadata (2026-09-24, locally verified, not deployed):
+inference no longer calls the full-history metadata collector.
+It captures one immutable journal read view and makes two sequential page passes:
+select the checkpoint tuple, then recover each turn's required output.
+Both passes reuse the same retained snapshot and committed archive end; later
+settlements/publications belong to the next read, not half of the current read.
+The selected checkpoint's identity is checked again before projection.
+Only nonempty active/exception output groups are retained and sorted by dispatch
+ID, so late archive publication cannot reorder the model's context.
+Either-pass failures reject the whole read rather than return partial context.
+This removes whole-history archive-metadata materialization from inference, not all
+unbounded costs: there are still two full metadata scans and historical tool
+payload reads. One archive page, the retained window plus unresolved records,
+and selected active/exception output remain resident. The output and unresolved
+sets are not bounded merely by paging; context compaction and coverage/index
+work remain open. Public full-history readers retain their separate contract.
+All 606 Floot tests and four real-daemon journal/lifecycle tests pass.
+Dedicated tests pin the same cursor and retained state across concurrent archive
+publication and late settlement, verify the next read sees those updates, reject
+either-pass read failures and changed/missing checkpoints, and compare the paged
+reader with real journal archive/revival projection.
+Scoped lint has zero errors (57 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved,
+including the explicit optional-checkpoint narrowing fix caught by docs.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one
