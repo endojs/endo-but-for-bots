@@ -2780,6 +2780,7 @@ __metadata:
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/hosted-agent": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
