@@ -411,6 +411,138 @@ test('it gives up after three attempts and says how many it made', async t => {
   t.is(world.requests(), 3);
 });
 
+for (const kind of ['HTTP 429', 'HTTP 503', 'API', 'finish']) {
+  for (const observe of [false, true]) {
+    test(`reported usage prevents replay for ${kind}, observer ${observe}`, async t => {
+      const readings = [];
+      const world = scripted([
+        () =>
+          Response.json(
+            {
+              usage: { prompt_tokens: 10, completion_tokens: 3 },
+              ...(kind === 'API'
+                ? { error: { code: 503, message: 'PRIVATE' } }
+                : {}),
+              ...(kind === 'finish'
+                ? { choices: [{ finish_reason: 'error' }] }
+                : {}),
+            },
+            { status: kind.startsWith('HTTP') ? Number(kind.slice(5)) : 200 },
+          ),
+      ]);
+      const error = await t.throwsAsync(
+        world.provider.chatStream(
+          [],
+          [],
+          undefined,
+          undefined,
+          observe ? usage => readings.push(usage) : undefined,
+        ),
+      );
+      t.is(world.requests(), 1);
+      t.deepEqual(world.waits, []);
+      t.false(error.message.includes('PRIVATE'));
+      t.regex(
+        error.message,
+        kind.startsWith('HTTP')
+          ? /HTTP/
+          : kind === 'API'
+            ? /API error/
+            : /no successful assistant/,
+      );
+      t.is(readings.length, observe ? 1 : 0);
+      if (observe) {
+        t.is(readings[0].inputTokens, 10);
+        t.is(readings[0].outputTokens, 3);
+      }
+    });
+  }
+}
+
+test('zero reported usage permits a transient retry without inflating totals', async t => {
+  const world = scripted([
+    () =>
+      Response.json(
+        { usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        { status: 503 },
+      ),
+    () => ok(),
+  ]);
+  const readings = [];
+  const result = await world.provider.chatStream(
+    [],
+    [],
+    undefined,
+    undefined,
+    usage => readings.push(usage),
+  );
+  t.is(world.requests(), 2);
+  t.is(readings.length, 2);
+  t.is(readings[0].inputTokens, 0);
+  t.is(result.usage?.inputTokens, 1);
+});
+
+test('fractional reported usage is refused instead of rounded down and replayed', async t => {
+  const world = scripted([
+    () =>
+      Response.json(
+        {
+          usage: { prompt_tokens: 0.5, completion_tokens: 0 },
+        },
+        { status: 503 },
+      ),
+  ]);
+  await t.throwsAsync(world.provider.chat([], []), {
+    message: /invalid token usage/,
+  });
+  t.is(world.requests(), 1);
+});
+
+test('oversized HTTP error body is cancelled without exposing its contents', async t => {
+  let cancelled = false;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(65_537));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const world = scripted([() => new Response(body, { status: 403 })]);
+  await t.throwsAsync(world.provider.chat([], []), { message: /HTTP 403/ });
+  t.true(cancelled);
+  t.is(world.requests(), 1);
+});
+
+test('a stalled HTTP error body keeps its cause and permits only one timeout retry', async t => {
+  t.timeout(2000);
+  let requests = 0;
+  const provider = makeOpenRouterProvider({
+    ...options,
+    requestTimeoutMs: 10,
+    sleep: async () => {},
+    log: () => {},
+    fetchImpl: withCatalog(async (_url, init) => {
+      requests += 1;
+      const body = new ReadableStream({
+        start(controller) {
+          init.signal.addEventListener(
+            'abort',
+            () =>
+              controller.error(new DOMException('Aborted body', 'AbortError')),
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { status: 503 });
+    }),
+  });
+  await t.throwsAsync(provider.chat([], []), {
+    message: 'OpenRouter request failed (HTTP 503), after 2 attempts',
+  });
+  t.is(requests, 2);
+});
+
 test('a request the API refused for cause is not repeated', async t => {
   for (const status of [400, 401, 402, 403, 404]) {
     const world = scripted([() => new Response('{}', { status })]);

@@ -694,8 +694,18 @@ counting. Tests cover failed-turn reconstruction, invalid usage refusal,
 observer failure without replay, and multiple increments plus a returned total.
 No formula or persisted schema changes: notification state is ephemeral until
 the existing finish write; abrupt loss before that write is not covered.
-Usage on retried/API-error responses still needs accounting, and missing or
-invalid usage cannot be inferred. Exact failed-response accounting remains open.
+Error-response accounting correction (2026-09-23, not deployed): parsed HTTP,
+API and finish-error responses now report validated usage through the same
+notification before failure. A response reporting positive token consumption
+is never automatically retried, even without an observer; free models also
+consume tokens, so this is not a claim about billing.
+Transient errors with absent or zero usage retain the existing retry policy.
+Non-2xx bodies use the shared bounded JSON reader (64 KiB maximum, under the
+request abort signal); unreadable/oversized bodies retain the HTTP diagnosis.
+Malformed token totals are refused, including fractional counts that could
+otherwise round to zero and incorrectly permit replay.
+Missing, invalid, unreadable, or unreported usage cannot be inferred; exact
+accounting across transport failures and process loss remains open.
 The empty-answer fix is deployed as generation 167; one fresh live Fae
 seed/restart/recall case passed on the free route. The original failed case
 remains recorded. This is not proof that every free-route model answers, nor
@@ -2507,6 +2517,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Preserve usage on OpenRouter HTTP/API/finish errors and stop automatic replay when token consumption is reported | 94 Lal tests (one skip), 501 Floot tests, production declarations, formatting and composite consistency pass; scoped lint has zero errors and docs have zero errors (178 warnings). Independent review found a swallowed error-body timeout; fixed and regression-tested with native-style AbortError and exactly two attempts. Tests also cover observer/no-observer behavior, zero-usage retries, fractional refusal, bounded error bodies and failed HTTP turn reconstruction. Reuses hosted-agent's bounded JSON reader rather than duplicating it; no new formula/schema. Not deployed. |
 | 2026-09-23 | Preserve reported OpenRouter usage when assistant validation rejects a response, using an optional pre-settlement incremental provider notification and the existing turn finish journal | 500 Floot and 82 Lal tests pass (one Lal skip), including failed-turn reconstruction and no double counting; independently reviewed; changed-file ESLint has zero errors and docs have zero errors. Whole Lal lint still has eight project-service errors in unchanged files. No new durable schema; process loss before finish and API-error/retry usage remain open. Not deployed. |
 | 2026-09-23 | Preservation-safe paired cutover activated as generation 166 | App `4b425552f` with host `d696a88`; zero sessions/runs, slot-free workflow startup records verified. Detached 24 old Floot/provider aliases with repeated Secret/host/credential/pool identity checks, then proved old-daemon shutdown and no containers/9p. No database wipe. Hosted setup, all-account discovery and hosted create/shell/policy-tool seed passed, including Luna/free routes; post-activation Secret and controller-host identities unchanged. Remaining cross-backend acceptance and live rebind are pending. See endo-host `ops/hosted-cutover5-20260923.md` |
 | 2026-09-23 | Repair retirement helper's dormant-formula hazard and verify the durable empty registry | Host helper now detaches names without cancellation, validates capability-free registry sequence/data, preserves credential/pool/host state, and fences changed/reappearing aliases. Reviewed tests cover partial removal, collected metadata and empty-registry guards; Tokyo dry run passed for 22 provider plus two Floot bindings. No effectful retirement; startup-dependency check, quiescence, old-worker shutdown, activation and acceptance remain required |

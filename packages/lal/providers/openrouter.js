@@ -1,6 +1,8 @@
 // @ts-check
 /* global fetch, setTimeout, clearTimeout */
 
+import { boundedJson } from '@endo/hosted-agent/bounded-json.js';
+
 import { toOpenAICompatibleMessages } from './openai-compatible-messages.js';
 
 /**
@@ -29,7 +31,8 @@ const defaultSleep = (ms, signal) =>
  * How many requests one `chat` may make. A request is repeated only when
  * nothing usable came back — the API refused it (429, 408, 5xx), the network
  * failed, or the answer held no assistant message — and never once a message
- * was delivered, so a reply is not paid for twice.
+ * was delivered or positive token usage was reported. Missing usage is not
+ * proof that an unsuccessful request was free.
  */
 const MAX_ATTEMPTS = 3;
 /** A request that outlives this is abandoned; it is repeated at most once. */
@@ -45,6 +48,8 @@ const CATALOG_WAIT_MS = 2000;
 const CATALOG_TIMEOUT_MS = 20_000;
 /** How long after a failed catalog read the next one waits. */
 const CATALOG_RETRY_MS = 300_000;
+/** Error diagnostics are small; never buffer an arbitrary error body. */
+const MAX_ERROR_BODY_BYTES = 65_536;
 
 /** @param {unknown} value */
 const tokens = value =>
@@ -275,20 +280,22 @@ export const makeOpenRouterProvider = ({
    * @param {any[]} messages
    * @param {any[]} tools
    * @param {AbortSignal} [signal]
-   * @returns {Promise<{ result: any } | { failure: string, retryable: boolean, timedOut?: boolean, retryAfterMs?: number }>}
+   * @returns {Promise<({ result: any } | { failure: string, retryable: boolean, timedOut?: boolean, retryAfterMs?: number }) & { usage?: ReturnType<typeof usageFromOpenRouter> }>}
    */
   const attempt = async (messages, tools, signal) => {
+    const requestSignal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(requestTimeoutMs)])
+      : AbortSignal.timeout(requestTimeoutMs);
     let response;
     let result;
+    let bodyTimedOut = false;
     try {
       response = await fetchImpl(
         'https://openrouter.ai/api/v1/chat/completions',
         {
           method: 'POST',
           redirect: 'error',
-          signal: signal
-            ? AbortSignal.any([signal, AbortSignal.timeout(requestTimeoutMs)])
-            : AbortSignal.timeout(requestTimeoutMs),
+          signal: requestSignal,
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
@@ -304,29 +311,64 @@ export const makeOpenRouterProvider = ({
       );
       // Never echo a provider response body: it can contain credentials or
       // input. What is kept of a failure is its status and identifiers.
-      if (!response.ok) {
-        const retryAfter = Number(response.headers?.get?.('retry-after'));
-        return {
-          failure: `OpenRouter request failed (HTTP ${response.status})`,
-          retryable: retryableStatus(response.status),
-          ...(Number.isFinite(retryAfter) && retryAfter > 0
-            ? { retryAfterMs: retryAfter * 1000 }
-            : {}),
-        };
+      try {
+        result = response.ok
+          ? await response.json()
+          : await boundedJson(
+              response,
+              MAX_ERROR_BODY_BYTES,
+              'OpenRouter error',
+            );
+      } catch (error) {
+        // An HTML/empty HTTP error must retain its status-based diagnosis.
+        // No usage can be recovered from an unreadable body.
+        if (response.ok || signal?.aborted) throw error;
+        bodyTimedOut =
+          requestSignal.reason?.name === 'TimeoutError' ||
+          /** @type {any} */ (error)?.name === 'TimeoutError';
       }
-      result = await response.json();
     } catch (error) {
       // The caller's own cancellation is not a failure to report or repeat.
       if (signal?.aborted) throw error;
       // Only the request's own clock: an abort from anywhere else is an
       // ordinary failure, and says nothing about how long was waited.
-      const timedOut = /** @type {any} */ (error)?.name === 'TimeoutError';
+      const timedOut =
+        requestSignal.reason?.name === 'TimeoutError' ||
+        /** @type {any} */ (error)?.name === 'TimeoutError';
       return {
         failure: timedOut
           ? `OpenRouter did not answer within ${Math.round(requestTimeoutMs / 1000)} seconds`
           : 'OpenRouter could not be reached or sent an unreadable response',
         retryable: true,
         timedOut,
+      };
+    }
+    if (
+      result?.usage &&
+      ![result.usage.prompt_tokens, result.usage.completion_tokens].every(
+        count =>
+          typeof count === 'number' && Number.isInteger(count) && count >= 0,
+      )
+    ) {
+      throw Error('OpenRouter returned invalid token usage');
+    }
+    const usage = result?.usage
+      ? usageFromOpenRouter(result.usage, await contextWindowOf(result.model))
+      : undefined;
+    const observation = usage ? { usage } : {};
+    // A failed response can still represent consumed tokens. Preserve its usage
+    // and let the caller decide whether to try again, rather than replaying it.
+    const consumed = !!usage && usage.context.usedTokens > 0;
+    if (!response.ok) {
+      const retryAfter = Number(response.headers?.get?.('retry-after'));
+      return {
+        ...observation,
+        failure: `OpenRouter request failed (HTTP ${response.status})`,
+        retryable: !consumed && retryableStatus(response.status),
+        ...(bodyTimedOut ? { timedOut: true } : {}),
+        ...(Number.isFinite(retryAfter) && retryAfter > 0
+          ? { retryAfterMs: retryAfter * 1000 }
+          : {}),
       };
     }
     /** @type {Array<[string, keyof typeof SHAPES, unknown]>} */
@@ -337,18 +379,22 @@ export const makeOpenRouterProvider = ({
     if (result?.error) {
       const code = result.error.code;
       return {
+        ...observation,
         failure: `OpenRouter returned an API error${describe([['code', 'code', code], ...servedBy])}`,
         // The code is an HTTP status, as a number or as its digits.
-        retryable: retryableStatus(
-          typeof code === 'string' && /^\d{3}$/.test(code)
-            ? Number(code)
-            : code,
-        ),
+        retryable:
+          !consumed &&
+          retryableStatus(
+            typeof code === 'string' && /^\d{3}$/.test(code)
+              ? Number(code)
+              : code,
+          ),
       };
     }
     const choice = result?.choices?.[0];
     if (!choice?.message || choice.finish_reason === 'error') {
       return {
+        ...observation,
         failure: `OpenRouter returned no successful assistant message${describe(
           [
             ['finish_reason', 'reason', choice ? choice.finish_reason : 'none'],
@@ -356,10 +402,10 @@ export const makeOpenRouterProvider = ({
             ...servedBy,
           ],
         )}`,
-        retryable: true,
+        retryable: !consumed,
       };
     }
-    return { result };
+    return { result, ...observation };
   };
 
   /**
@@ -373,12 +419,17 @@ export const makeOpenRouterProvider = ({
     // a second round trip. Its failures are its own and already handled.
     void loadCatalog();
     let result;
+    let usage;
     let timeouts = 0;
     for (let tries = 1; ; tries += 1) {
       // eslint-disable-next-line no-await-in-loop
       const outcome = await attempt(messages, tools, signal);
+      // Outside the request/retry catch: an observer failure must not replay
+      // inference. Each callback reports only this attempt's usage.
+      if (outcome.usage) onUsage?.(harden(outcome.usage));
       if ('result' in outcome) {
         result = outcome.result;
+        usage = outcome.usage;
         break;
       }
       if (outcome.timedOut) timeouts += 1;
@@ -402,21 +453,6 @@ export const makeOpenRouterProvider = ({
         signal,
       );
     }
-    if (
-      result.usage &&
-      ![result.usage.prompt_tokens, result.usage.completion_tokens].every(
-        count =>
-          typeof count === 'number' && Number.isFinite(count) && count >= 0,
-      )
-    ) {
-      throw Error('OpenRouter returned invalid token usage');
-    }
-    // Usage belongs to the request, even when the answer cannot be delivered.
-    // Notify before validation; the caller can record it with a failed turn.
-    const usage = result.usage
-      ? usageFromOpenRouter(result.usage, await contextWindowOf(result.model))
-      : undefined;
-    if (usage) onUsage?.(harden(usage));
     const choice = result.choices[0];
     const served = describe([
       ['served by', 'model', result.model],
