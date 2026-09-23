@@ -10,11 +10,13 @@ import path from 'path';
 import crypto from 'crypto';
 import baseTest from 'ava';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeOcapn } from '@endo/ocapn';
 import { cborCodec } from '@endo/ocapn/cbor';
 import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import {
   formatLocator,
@@ -22,6 +24,7 @@ import {
   idFromLocator,
   parseLocator,
 } from '../src/locator.js';
+import { parseId } from '../src/formula-identifier.js';
 
 // Guest-locator adoption across two real daemons over the OCapN-Noise
 // network (`designs/daemon-locator-reference.md`, Minion Town guest
@@ -341,5 +344,125 @@ test.serial(
     // locator, so existing peer traffic keeps working.
     const entry = await fetchSecret('endo-peer-entry');
     t.is(typeof (await E(entry).getNodeId()), 'string');
+  },
+);
+
+test.serial(
+  'an authenticated peer cannot enumerate another node or discover the host',
+  async t => {
+    t.timeout(60_000);
+    const { host: hostA } = await prepareDaemon(t);
+    const { locator } = await provisionGuest(hostA);
+    const [hint] = parseLocator(locator).hints;
+    const location = JSON.parse(
+      /** @type {string} */ (new URL(hint).searchParams.get('loc')),
+    );
+    const victimNode = /** @type {string} */ (
+      new URL(hint).searchParams.get('node')
+    );
+    const hostId = /** @type {string} */ (await E(hostA).identify('@agent'));
+    const { number: hostNumber } = parseId(hostId);
+
+    const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+    const sessionKeys = network.generateSigningKeys();
+    network.addSigningKeys(sessionKeys);
+    await network.addTransport(
+      makeTcpTransport({ host: '127.0.0.1', port: 0 }),
+    );
+    const client = await makeOcapn({
+      codec: cborCodec,
+      network: /** @type {any} */ (network),
+      locator: new Map(),
+      debugLabel: 'hostile-peer-client',
+    });
+    t.teardown(() => client.shutdown());
+
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+    const publicDer = publicKey.export({ type: 'spki', format: 'der' });
+    const attackerNode = Buffer.from(
+      publicDer.subarray(publicDer.length - 32),
+    ).toString('hex');
+    const bindingMessage = Buffer.concat([
+      Buffer.from('endo-agent-binding\0'),
+      Buffer.from(sessionKeys.publicKey),
+    ]);
+    const agentBinding = harden({
+      agentPublicKey: attackerNode,
+      signature: crypto.sign(null, bindingMessage, privateKey).toString('hex'),
+    });
+
+    await client.provideSession(location);
+    const peerEntry = await client.enlivenSturdyRef(
+      client.makeSturdyRef(location, 'endo-peer-entry'),
+    );
+    const greeter = await E(peerEntry).getGreeter();
+    const remoteGateway = Far('Hostile remote gateway', {
+      provide: async () => {
+        throw Error('not available');
+      },
+      followRetentionSet: async () => {
+        throw Error('not following retention');
+      },
+    });
+    const cancelConnection = Far('Hostile canceller', () => {});
+    const connectionCancelled = new Promise(() => {});
+    const gateway = await E(greeter).hello(
+      attackerNode,
+      remoteGateway,
+      cancelConnection,
+      connectionCancelled,
+      agentBinding,
+    );
+
+    const retentionChanges = iterateReader(
+      await E(gateway).followRetentionSet(victimNode),
+    );
+    const { value: snapshotValue } = await retentionChanges.next();
+    const snapshot = /** @type {{ add: string[], remove: string[] }} */ (
+      snapshotValue
+    );
+    t.deepEqual(snapshot, { add: [], remove: [] });
+    t.false(
+      snapshot.add.includes(hostNumber),
+      'the victim host formula is not disclosed',
+    );
+    await retentionChanges.return();
+
+    const unavailableMessages = [];
+    for (const unavailableId of [
+      'not-a-formula-identifier',
+      `${'f'.repeat(64)}:${randomNode()}`,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const error = await t.throwsAsync(() =>
+        E(gateway).provide(unavailableId),
+      );
+      unavailableMessages.push(error.message);
+      t.false(error.message.includes(hostNumber));
+    }
+    t.deepEqual(unavailableMessages, [
+      'Formula is not available',
+      'Formula is not available',
+    ]);
+
+    const repeatedGateway = await E(greeter).hello(
+      attackerNode,
+      remoteGateway,
+      cancelConnection,
+      connectionCancelled,
+      agentBinding,
+    );
+    t.is(
+      repeatedGateway,
+      gateway,
+      'repeating hello cannot reset the session gateway miss budget',
+    );
+
+    // The third miss consumes the session budget. Even presenting a real host
+    // identifier afterward cannot recover the severed probing session.
+    await t.throwsAsync(() =>
+      E(gateway).provide(`${'f'.repeat(64)}:${victimNode}`),
+    );
+    await t.throwsAsync(() => E(gateway).provide(hostId));
   },
 );

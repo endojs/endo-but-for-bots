@@ -92,8 +92,15 @@ const makeMockContext = () => {
  *
  * @param {string} label
  * @param {{ publicKey: Uint8Array, privateKey: Uint8Array }} [keypair]
+ * @param {Map<string, string>} [initialValues]
+ * @param {{ publicKey: Uint8Array, privateKey: Uint8Array }} [bindingKeypair]
  */
-const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
+const makeMockPowers = (
+  label,
+  keypair = generateEd25519Keypair(),
+  initialValues = new Map(),
+  bindingKeypair = keypair,
+) => {
   const helloCalls = [];
   const storedValues = [];
   const nodeId = toHex(keypair.publicKey);
@@ -102,6 +109,7 @@ const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
     provide: id => `${label}:value-for:${id}`,
   });
   const greeter = Far('Greeter', {
+    makeGateway: () => gateway,
     hello: (remoteNodeId, _remoteGateway, _canceller, _cancelled) => {
       helloCalls.push(remoteNodeId);
       return gateway;
@@ -112,10 +120,11 @@ const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
     greeter: () => greeter,
     gateway: () => gateway,
     sign: hexBytes =>
-      toHex(ed25519SignBytes(keypair.privateKey, fromHex(hexBytes))),
-    // No stored listen address — the transport falls back to an
-    // ephemeral local port.
+      toHex(ed25519SignBytes(bindingKeypair.privateKey, fromHex(hexBytes))),
     lookup: name => {
+      if (initialValues.has(name)) {
+        return initialValues.get(name);
+      }
       throw Error(`no such name ${name}`);
     },
     storeValue: (value, name) => {
@@ -211,6 +220,38 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   t.false(await E(service).supports('tcp+netstring+json+captp0:'));
 });
 
+test('OCapN-Noise transport advertises an address distinct from its bind address', async t => {
+  t.timeout(60_000);
+  const context = makeMockContext();
+  t.teardown(() => context.cancel());
+  const configuredValues = new Map([
+    ['ocapn-listen-addr', '127.0.0.1:0'],
+    ['ocapn-advertise-addr', 'public.example:443'],
+  ]);
+  const { powers, storedValues } = makeMockPowers(
+    'A',
+    generateEd25519Keypair(),
+    configuredValues,
+  );
+
+  const service = await makeOcapnNetwork(powers, context);
+  const [address] = await E(service).addresses();
+  const addressUrl = new URL(address);
+  const location = JSON.parse(
+    /** @type {string} */ (addressUrl.searchParams.get('loc')),
+  );
+
+  t.is(addressUrl.hostname, 'public.example');
+  t.is(addressUrl.port, '443');
+  t.is(location.hints['tcp:host'], 'public.example');
+  t.is(location.hints['tcp:port'], '443');
+  t.regex(
+    storedValues.find(entry => entry.name === 'ocapn-listen-addr').value,
+    /^127\.0\.0\.1:\d+$/,
+    'the listener remains bound to the configured local host',
+  );
+});
+
 test('OCapN-Noise transport carries a peer connection end to end', async t => {
   t.timeout(60_000);
   const contextA = makeMockContext();
@@ -301,6 +342,28 @@ test('OCapN-Noise transport rejects a peer whose binding signature is wrong key'
     () => E(serviceA).connect(tampered.href, connectionContext),
     { message: /OCapN peer identity mismatch/ },
   );
+});
+
+test('OCapN-Noise transport rejects a caller whose reciprocal binding is wrong', async t => {
+  t.timeout(60_000);
+  const contextA = makeMockContext();
+  const contextB = makeMockContext();
+  t.teardown(() => contextA.cancel());
+  t.teardown(() => contextB.cancel());
+
+  const a = makeMockPowers(
+    'A',
+    generateEd25519Keypair(),
+    new Map(),
+    generateEd25519Keypair(),
+  );
+  const b = makeMockPowers('B');
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB = await makeOcapnNetwork(b.powers, contextB);
+  const [addressB] = await E(serviceB).addresses();
+
+  await t.throwsAsync(() => E(serviceA).connect(addressB, makeMockContext()));
 });
 
 test('peer teardown surfaces as a rejection on the next call', async t => {
