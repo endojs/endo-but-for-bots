@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 420 application entries and 73 host entries still need explicit ledger
+The other 416 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -300,9 +300,36 @@ The latter include graceful daemon restart, not native process-loss recovery.
 | `5399817fc` | Each cursor listing owns its iterator, admitted pulls and retryable release; rewind installs a successor only after release succeeds | Tests cover held pulls, failed return, done:false, close during rewind and stale streams. State is ephemeral; resourceful iterators must retain failed cleanup themselves. Hung pulls can prevent close; no restart recovery |
 | `93e2457fb` | 9P connection retains streams/files/cursors and pending filesystem operations after socket closure; bridge retains connection cleanup; mounter requires non-lazy unmount before bridge/storage release | 56 tests cover failed/held acquisition, drain, cleanup retry and path reservation. Historical client-module wiring was later deleted; shared mounter remains. Tests inject privileged mount commands; cancellation is not release proof and reservations do not exclude independent owners |
 | `3353c5dad` | Lockfile adds workspace daemon and promise-kit dependencies for the preceding 9P change | Diff contains no external version change, durable schema or new runtime owner; lifecycle evidence belongs to the preceding row |
-| `c5cf84243` | Fresh caplet worker identity is published before process acquisition; later retention callback owns acquired worker cleanup | Original @none regression passes but did not exercise automatic powers pins. Review reproduced a pin leak; `71dfde012` drains publications and releases transferred pins on failure. `4929571ea` verifies uncertain-write orphan reclamation and fixes test types. Pre-transfer guest construction failures remain open, not certified by these tests |
+| `c5cf84243` | Fresh caplet worker identity is published before process acquisition; later retention callback owns acquired worker cleanup | Original @none regression passes but did not exercise automatic powers pins. Review reproduced a pin leak; `71dfde012` drains publications and releases transferred pins on failure. `4929571ea` verifies uncertain-write orphan reclamation and fixes test types. Subsequent pre-transfer/dependency fixes and remaining identity-key limits are listed under post-snapshot changes |
+
+### MCP/provider admission and retained native construction
+
+Four subsequent changes are mapped to current ownership boundaries.
+Fresh hosted-agent MCP socket/provider-listener runtime suites pass 35 tests;
+OpenCode MCP socket/broker suites pass 17. These require local socket/process
+permissions; an initial sandbox-restricted attempt was not a valid passing run.
+Daemon native-worker-lifecycle/native-session-owner/session-owner/session-protocol
+suites pass 63 tests. One native-worker case forks a real child and distinguishes
+CapTP pipe closure from process/stdio closure; most other native effects are injected.
+The real-daemon native-session-owner restart regression also passes after using
+the short fixture name `nat`: the original 120-character socket path exceeded
+macOS's limit. This verifies explicit restart activation and exact dependencies,
+not abrupt native loss or current live backend acceptance.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `18de3ccc4` | Inert MCP listener/server kits retain cleanup before startup, fence admission and drain calls; OpenCode delegates to shared mcp-server after `c311b2f98` | Held installation/listen/call, failed close and same-tick cancellation tests pass. External socket-path exclusivity required; hung calls can block close. Native owners must retain kits, not rely on convenience wrappers returning after failed rollback. No durable schema or crash recovery |
+| `9843b3ab9` | Provider runtime owns lock/recovery/resolver/listener cleanup; shared broker service separately retains issuer revocation and runtime closure | Tests cover failed sweeps/releases, late acquisition, scoped retries and sibling preservation. Later shared-service/recovery changes supersede original composition. Injected engines/child fixtures are not live Podman or descendant-quiescence proof |
+| `e0a67872a` | Worker context registers cancellation before acquisition; native power retains child until close rather than CapTP shutdown or exit alone | Lifecycle tests exercise post-fork failure, cancelled acquisition, descriptor release, delayed stdio closure and a real child. No daemon-loss recovery or process-tree quiescence guarantee; grace expiration requests force cancellation but does not prove closure |
+| `2b7642dbe` | Session owner records worker/client identities before acquisition, lifecycle phases before activation, and native-closed acknowledgement before worker/reference release | Owner tests cover interrupted construction, fenced forwarding, exact dependencies and retry cleanup. Later staged binding revisions and transient tools are separate changes. Persistent plans do not by themselves prove native recovery or current live backend acceptance |
 
 ### Post-snapshot changes
+
+- Application `12d79432a`, `19315967e`, `8ea9466d5`: guest and nested-directory
+  construction reserve identities before writes, drain publication and release
+  pins on failure. The current 44-case fault matrix passes; details and limits
+  are in the main audit. `ab339180d` characterizes residual agent identity keys,
+  still unresolved, without changing runtime credential handling.
 
 - Application `71dfde012` and `4929571ea`: failed-publication pin release,
   error-path graph cleanup, and strengthened regression/type validation, as

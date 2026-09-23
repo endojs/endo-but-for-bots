@@ -1040,7 +1040,7 @@ testNeedsNodeWorker.serial(
   'native session owner activates exact dependencies after inert construction and restart',
   async t => {
     t.timeout(60_000);
-    const { cancelled, config } = await prepareConfig(t);
+    const { cancelled, config } = await prepareConfig(t, { configName: 'nat' });
     const specifier = new URL(
       './_native-session-controller.js',
       import.meta.url,

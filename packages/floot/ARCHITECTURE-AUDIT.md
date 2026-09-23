@@ -53,12 +53,17 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 59 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 63 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
 deployment acceptance. The caplet slice exposed the pin leak fixed in `71dfde012`;
-failures before guest-construction pins transfer remain a separate open boundary.
+later guest-construction fixes and remaining identity-key limits are recorded below.
+The following MCP/provider setup and native construction slice adds four more
+mappings: 52 adapter/runtime tests and 63 daemon ownership tests pass.
+The real native-session-owner graceful-restart regression passes after shortening
+its fixture socket path below macOS limits; no assertions or timeouts were changed.
+Subsequent construction fixes and remaining identity-key limits are recorded below.
 
 ### Native recovery — separate research follow-up
 
@@ -93,7 +98,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 44 application changes, plus the first 20 host
+not. The newest 15 and earliest 48 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
