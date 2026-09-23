@@ -13,6 +13,7 @@ const fixture = () => {
   let refusedType;
   let beforeStore;
   let afterStore;
+  let beforeLookup;
   const accessedNames = [];
   const nameOf = name => {
     const key = Array.isArray(name) ? name.join('.') : name;
@@ -30,6 +31,7 @@ const fixture = () => {
       store.delete(nameOf(name));
     },
     async lookup(name) {
+      if (beforeLookup) await beforeLookup(nameOf(name));
       if (!store.has(nameOf(name))) throw Error('Not found');
       return store.get(nameOf(name));
     },
@@ -61,6 +63,9 @@ const fixture = () => {
     },
     afterStore: hook => {
       afterStore = hook;
+    },
+    beforeLookup: hook => {
+      beforeLookup = hook;
     },
   };
 };
@@ -350,7 +355,11 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
     if (fault === 'beforeStore') {
       // An older release could leave a tree token despite a refused finish.
       for (const [name, value] of f.store) {
-        if (value.metadata?.usageTotals)
+        if (
+          value.metadata?.turnId ===
+            f.events().find(event => event.type === 'dispatch')?.turnId &&
+          Array.isArray(value.messages)
+        )
           f.store.set(
             name,
             harden({
@@ -427,7 +436,12 @@ for (const mode of ['legacy-leaf', 'legacy-hidden', 'proven-hidden']) {
     for (const [name, value] of f.store) {
       // Emulate the old release: successful tree nodes carried tokens before
       // the journal recorded them. New tree writes carry no checkpoint.
-      if (value.metadata?.usageTotals && mode !== 'proven-hidden') {
+      if (
+        value.metadata?.turnId ===
+          f.events().find(event => event.type === 'dispatch')?.turnId &&
+        Array.isArray(value.messages) &&
+        mode !== 'proven-hidden'
+      ) {
         f.store.set(
           name,
           harden({
@@ -1179,8 +1193,176 @@ test('provider usage notifications and returned totals are not double counted', 
   t.is((await agent.getUsage()).outputTokens, 3);
 });
 
+test('usage context follows dispatch order across late archive publication', async t => {
+  const f = fixture();
+  const options = { input: 'seed', backendId: 'provider', modelId: 'free' };
+  const old = await makeTurnJournal(f.powers).begin(options);
+  const journal = makeTurnJournal(f.powers);
+  for (let i = 0; i < 290; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, {
+      type: 'finish',
+      state: i === 1 ? 'failed' : 'completed',
+      usage: {
+        inputTokens: 1,
+        ...(i === 0 ? { context: { usedTokens: 20, windowTokens: 1000 } } : {}),
+        ...(i === 1 ? { context: { usedTokens: 30, windowTokens: 0 } } : {}),
+      },
+    });
+  }
+  await journal.append(old, {
+    type: 'finish',
+    state: 'outcome-unknown',
+    usage: { inputTokens: 7, context: { usedTokens: 10, windowTokens: 100 } },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider: harden({ chatStream: async () => completed() }) },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  f.beforeLookup(name => {
+    if (name.startsWith('ct-')) throw Error('Usage must not read tree');
+  });
+  t.deepEqual(await agent.getUsage(), {
+    ...usageCounts({ inputTokens: 297 }),
+    turns: 289,
+    incompleteTurns: 2,
+    context: { usedTokens: 30, windowTokens: 1000 },
+  });
+  f.beforeLookup(undefined);
+  await agent.resolveTurn(old, 'Known recovered outcome');
+  for (let i = 0; i < 35; i += 1) {
+    // Use the actual agent writer so the original journal incarnation owns
+    // every subsequent publication and archive cache update.
+    // eslint-disable-next-line no-await-in-loop
+    await agent.converse('Later', makeReplyChannel().writer);
+  }
+  t.deepEqual((await agent.getUsage()).context, {
+    usedTokens: 30,
+    windowTokens: 1000,
+  });
+  t.is((await agent.getUsage()).inputTokens, 297);
+});
+
 for (const backend of ['provider', 'hosted']) {
-  test(`${backend} usage survives revival from conversation metadata without the legacy cache`, async t => {
+  for (const fault of ['tree', 'before-finish', 'after-finish']) {
+    test(`${backend} journal finish alone controls usage accounting: ${fault}`, async t => {
+      const f = fixture();
+      const perTurn = usageCounts({ inputTokens: 11, outputTokens: 3 });
+      const config =
+        backend === 'provider'
+          ? {
+              provider: harden({
+                chatStream: async () =>
+                  harden({ ...completed(), usage: perTurn }),
+              }),
+            }
+          : {
+              hostedClient: harden({
+                async send() {
+                  const channel = makeBufferedReader();
+                  channel.push({ type: 'usage', ...perTurn });
+                  channel.push({ type: 'end' });
+                  return channel.reader;
+                },
+              }),
+            };
+      f.beforeStore(value => {
+        if (
+          (fault === 'tree' &&
+            value.metadata?.turnId &&
+            Array.isArray(value.messages)) ||
+          (fault === 'before-finish' && value.type === 'finish')
+        )
+          throw Error('Refused write');
+      });
+      f.afterStore(value => {
+        if (fault === 'after-finish' && value.type === 'finish')
+          throw Error('Lost reply');
+      });
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        config,
+        'Test',
+      );
+      t.teardown(() => agent.shutdown());
+      await t.throwsAsync(agent.converse('Go', makeReplyChannel().writer));
+      await agent.shutdown();
+      f.beforeStore(undefined);
+      f.afterStore(undefined);
+      const revived = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        config,
+        'Test',
+      );
+      t.teardown(() => revived.shutdown());
+      t.deepEqual(await revived.getUsage(), {
+        ...(fault === 'before-finish' ? usageCounts({}) : perTurn),
+        turns: fault === 'after-finish' ? 1 : 0,
+        incompleteTurns: fault === 'tree' ? 1 : 0,
+      });
+    });
+  }
+}
+
+test('usage projection failure cannot undo successful journal settlement', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  for (let i = 0; i < 290; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await journal.begin({
+      input: 'seed',
+      backendId: 'provider',
+      modelId: 'free',
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await journal.append(id, { type: 'finish', state: 'completed' });
+  }
+  let refuse = false;
+  f.afterStore(value => {
+    if (value.type === 'finish') refuse = true;
+  });
+  f.beforeLookup(name => {
+    if (refuse && name.startsWith('floot-turn-archive-'))
+      throw Error('Totals unavailable');
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provider: harden({
+        chatStream: async () =>
+          harden({ ...completed(), usage: usageCounts({ inputTokens: 11 }) }),
+      }),
+    },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  let updates = 0;
+  await agent.converse(
+    'Go',
+    harden({
+      ...makeReplyChannel().writer,
+      usage: () => {
+        updates += 1;
+      },
+    }),
+  );
+  t.is(updates, 0);
+  t.is((await agent.getTurns()).at(-1).state, 'completed');
+  refuse = false;
+  t.is((await agent.getUsage()).inputTokens, 11);
+  t.is((await agent.getUsage()).turns, 291);
+});
+
+for (const backend of ['provider', 'hosted']) {
+  test(`${backend} usage survives revival from journal evidence and ignores tree totals`, async t => {
     const f = fixture();
     const obsolete = harden({ inputTokens: 999_999, turns: 999 });
     f.store.set('floot-usage', obsolete);
@@ -1213,6 +1395,21 @@ for (const backend of ['provider', 'hosted']) {
       incompleteTurns: 0,
     });
     await agent.converse('First', makeReplyChannel().writer);
+    t.false(
+      [...f.store.values()].some(
+        value => value.metadata?.usageTotals !== undefined,
+      ),
+    );
+    for (const [name, value] of f.store) {
+      if (Array.isArray(value.messages))
+        f.store.set(
+          name,
+          harden({
+            ...value,
+            metadata: { ...value.metadata, usageTotals: obsolete },
+          }),
+        );
+    }
     t.deepEqual(await agent.getUsage(), {
       ...perTurn,
       turns: 1,

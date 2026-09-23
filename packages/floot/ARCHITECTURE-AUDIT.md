@@ -695,6 +695,35 @@ Scoped lint has zero errors (57 warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass. Adversarial re-review approved after checking
 ancestors and removing redundant tree token writes.
 
+Usage recovery projection (2026-09-24, local, not deployed): all token counts and
+completed/incomplete turn counts now derive from terminal journal records.
+Tree `usageTotals` reads/writes and the mutable completed-total cache are removed.
+Transcript sealing or a successful tree write without journal finish is not
+counted as completion; a lost reply after a stored finish recovers its usage.
+The private usage reader keeps only an immutable archived aggregate keyed to
+the captured archive frontier, combining retained turns from the same read view.
+Each nonzero context field is selected by greatest dispatch ID, so a late-settled
+old turn cannot overwrite a newer archived reading, even when only one context
+field was reported. Token arithmetic and public usage fields remain unchanged.
+
+Aggregation is now optional display work after settlement, not a prerequisite
+for saving billed usage. On reporting failure/timeout the display update is
+skipped instead of substituting guessed or incomplete totals; the completed
+turn remains durable. The cache is not a formula or a second accounting owner.
+Archive scanning still grows with history on cache misses; bounded startup and
+the journal compaction/read index remain open work.
+
+Deployment gate: retire affected disposable legacy sessions before this cutover.
+If any history is retained, export it first and explicitly account for any
+tree-only totals; this implementation does not migrate or trust those totals.
+Secrets, host, renewal owners and workspace references remain outside retirement.
+All 588 Floot tests pass. Coverage includes fabricated tree totals, both backends'
+tree/finish write failures and lost replies, late archived context readings,
+successful settlement despite reporting failure, and overlapping captured views
+completed out of order with cache invalidation/reuse. Scoped lint has zero errors
+(60 warnings), root docs zero errors (179 warnings), and formatting/diff checks
+pass. Adversarial review approved the private projection and concurrency tests.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one
@@ -3020,6 +3049,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Usage totals and context readings now project from terminal journal
+evidence; tree totals and the completed-total cache are removed. Optional totals
+reporting cannot block durable settlement. 588 Floot tests and lint/docs/format
+gates pass after adversarial review. Not deployed; legacy session retirement is
+a cutover gate and tree-based history remains to remove.
 
 2026-09-24 — Checkpoint recovery now selects only completed journal evidence;
 tree token writes are removed. Legacy unproven tokens require retirement, not

@@ -50,13 +50,13 @@ import {
 } from '@endo/hosted-agent/openrouter-model-read.js';
 import {
   addUsage,
-  mergeContext,
   priceableUsage,
   projectUsage,
 } from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
+import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { hostedTurnMessages } from './src/turn-messages.js';
 import {
@@ -809,51 +809,10 @@ export const makeStreamingAgent = async (
       },
     });
 
-  // Completed usage is committed with each conversation node and recovered
-  // from the durable leaf. Incomplete usage is counted from the turn journal.
-  /**
-   * The five disjoint counts and the last context reading of
-   * `@endo/hosted-agent/token-usage.js`, and how many turns completed. Totals
-   * recorded before the three newer counts existed read them as 0.
-   *
-   * @typedef {import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number }} UsageTotals
-   */
-  /** @param {any} stored @returns {UsageTotals} */
-  const totalsFrom = stored => ({
-    ...projectUsage(stored),
-    turns: Number(stored?.turns) || 0,
-  });
-  /**
-   * @param {UsageTotals} totals
-   * @param {unknown} turnUsage
-   * @returns {UsageTotals}
-   */
-  const totalsWithTurn = (totals, turnUsage) => ({
-    ...addUsage(totals, turnUsage),
-    turns: totals.turns + 1,
-  });
-  /** @type {UsageTotals | undefined} */
-  let usage;
-  const findRecordedUsage = async () => {
-    let nodeId = await getOrCreateLeaf();
-    while (nodeId) {
-      const node = await tree.getNode(nodeId);
-      if (!node) break;
-      const recorded = /** @type {any} */ (node.metadata?.usageTotals);
-      if (recorded) return totalsFrom(recorded);
-      nodeId = node.parentId;
-    }
-    return undefined;
-  };
   const servedByOfTurn = () =>
     activeJournalServedBy.length > 0
       ? { servedBy: harden([...activeJournalServedBy]) }
       : {};
-  const loadUsage = async () => {
-    if (usage) return usage;
-    usage = (await findRecordedUsage()) ?? totalsFrom(undefined);
-    return usage;
-  };
 
   // Delegation state is per session and lives beside the inbox loop that feeds
   // it: `claim` below is the only reader of the mailbox stream.
@@ -1070,8 +1029,6 @@ export const makeStreamingAgent = async (
         assertBackendCheckpoint(backendCheckpoint);
       await assertTurnToolsSettled(turnId);
       await recordPresentation(segments);
-      const current = await loadUsage();
-      const nextUsage = totalsWithTurn(current, turnUsage);
       // The completed answer always goes on record, even an empty one.
       const messages = [
         ...(receivedMail ? [] : inputMessages),
@@ -1082,15 +1039,12 @@ export const makeStreamingAgent = async (
           recordEmptyReply: true,
         }),
       ];
-      // Commit the external answer and accounting as a unit. Typed incoming
-      // mail was recorded separately; ordinary input remains atomic with its
-      // answer, so a failed runtime call cannot leave an orphaned UI turn.
+      // Mirror the external answer; successful journal finish below commits
+      // its accounting. Typed incoming mail was recorded separately.
       const finalNode = await tree.addNode(baseLeafId, messages, {
         turnId,
-        usageTotals: harden({ ...nextUsage }),
       });
       cachedLeaf = finalNode.id;
-      usage = nextUsage;
       await turnJournal.append(turnId, {
         type: 'finish',
         state: 'completed',
@@ -1114,7 +1068,8 @@ export const makeStreamingAgent = async (
           );
         }
       }
-      writer.usage(await usageToReport(nextUsage));
+      const reportedUsage = await usageToReport();
+      if (reportedUsage) writer.usage(reportedUsage);
       // Consumers flush streaming text into a message at each tool_call and
       // flush the trailing segment at end. Re-emitting the concatenated reply
       // here would re-merge those segments into one bubble (the
@@ -1481,18 +1436,8 @@ export const makeStreamingAgent = async (
       );
     }
 
-    // Fold this turn's token usage into the session total, persist it, and emit
-    // it so the UI can surface per-session cost.
-    // Compute the next totals without touching the cache, then adopt them only
-    // once the node carrying them is durable — the same discipline as
-    // `commitExternalTurn`. Mutating the live cache first meant a failed
-    // `addNode` left the in-memory counters permanently inflated by a turn
-    // that produced nothing, and the next successful turn committed that
-    // inflated figure as authoritative metadata.
-    const current = await loadUsage();
-    const totals = harden(totalsWithTurn(current, turnUsage));
-    // Persist the complete answer and accounting in one node. A provider
-    // failure leaves no partially answered branch for revival to adopt.
+    // Mirror the answer, then journal completion and usage as one fact. Total
+    // accounting is a projection, never a prerequisite for recording this turn.
     await assertTurnToolsSettled(turnId);
     if (signal?.aborted) throw Error('Floot turn aborted');
     await turnJournal.completeTranscript(turnId, `${transcriptOrdinal}`);
@@ -1502,10 +1447,8 @@ export const makeStreamingAgent = async (
     if (signal?.aborted) throw Error('Floot turn aborted');
     const committedNode = await tree.addNode(baseLeafId, stagedMessages, {
       turnId,
-      usageTotals: totals,
     });
     cachedLeaf = committedNode.id;
-    usage = { ...totals };
     await turnJournal.append(turnId, {
       type: 'finish',
       state: 'completed',
@@ -1515,7 +1458,8 @@ export const makeStreamingAgent = async (
       conversationNodeId: committedNode.id,
     });
     completedJournalTurn = turnId;
-    writer.usage(await usageToReport(totals));
+    const reportedUsage = await usageToReport();
+    if (reportedUsage) writer.usage(reportedUsage);
     writer.final(finalContent);
     writer.end();
   };
@@ -2415,101 +2359,31 @@ export const makeStreamingAgent = async (
       notifyChange('turn-resolved');
     });
 
-  /**
-   * What the session has used. The running totals are committed with each
-   * completed turn's conversation node, so they know nothing of a turn that
-   * failed, was stopped, or whose outcome is unknown — yet its tokens were
-   * spent all the same. Those are read from the journal, which records every
-   * turn's usage with its finish, and added here; `turns` stays the count of
-   * completed turns and `incompleteTurns` counts the rest.
-   */
-  /** @type {{ archived: number, usage: import('@endo/hosted-agent/token-usage.js').TokenUsage, turns: number } | undefined} */
-  let archivedIncomplete;
-  const tally = turns => {
-    let sum = projectUsage(undefined);
-    let count = 0;
-    for (const turn of turns) {
-      if (turn.terminal && turn.state !== 'completed') {
-        count += 1;
-        sum = addUsage(sum, turn.usage);
-      }
-    }
-    // The readings of turns that did not complete are handled by getUsage,
-    // which knows which turn came last.
-    const { context: _reading, ...counts } = sum;
-    return { usage: counts, turns: count };
-  };
-  const getUsage = async () => {
-    const completed = await loadUsage();
-    // Archived turns never change, and reading them costs a lookup per
-    // chunk; read them again only when there are more of them.
-    const {
-      archivedTurns,
-      archiveCursor,
-      retained: retainedTurns,
-    } = await turnJournal.readView();
-    let incomplete = archivedIncomplete;
-    if (!incomplete || incomplete.archived !== archivedTurns) {
-      let archiveUsage = projectUsage(undefined);
-      let turns = 0;
-      await visitArchivedPages(archiveCursor, page => {
-        const part = tally(page);
-        archiveUsage = addUsage(archiveUsage, part.usage);
-        turns += part.turns;
-      });
-      incomplete = {
-        archived: archivedTurns,
-        usage: archiveUsage,
-        turns,
-      };
-      archivedIncomplete = incomplete;
-    }
-    const retained = tally(retainedTurns);
-    // How full the window is now: the newest reading any turn left, whether
-    // or not that turn completed. The completed totals hold the last reading
-    // of a completed turn; the retained turns, which the journal lists in the
-    // order they began, are merged over it field by field, so a turn that was
-    // stopped before its backend said how large the window is keeps the size
-    // already known. (A retained turn older than the last completed reading
-    // could only win if that completed turn had since been archived, which
-    // takes hundreds of later turns that report nothing.)
-    let context = completed.context;
-    for (const turn of retainedTurns) {
-      context = mergeContext(context, projectUsage(turn.usage).context);
-    }
-    return harden({
-      ...addUsage(addUsage(completed, incomplete.usage), retained.usage),
-      ...(context === undefined ? {} : { context }),
-      turns: completed.turns,
-      incompleteTurns: incomplete.turns + retained.turns,
-    });
-  };
+  const getUsage = makeJournalUsageReader(turnJournal);
 
   /**
    * The usage a finished turn tells its view: what getUsage() answers, so the
    * figure does not drop at the end of a turn because an earlier one did not
    * complete. The turn is already journaled as completed when this runs, so
    * it may neither fail nor wait for long — a journal that cannot be read is
-   * a reason to report the completed totals, not to abort a reply.
-   *
-   * @param {UsageTotals} completedTotals
+   * a reason to skip this display update, not to abort a reply or invent totals.
    */
-  const usageToReport = async completedTotals => {
+  const usageToReport = async () => {
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     try {
       return await Promise.race([
         getUsage(),
         new Promise(resolve => {
-          timer = setTimeout(() => resolve(completedTotals), 5000);
+          timer = setTimeout(() => resolve(undefined), 5000);
         }),
       ]);
     } catch (error) {
       console.error(
-        '[floot] could not total the session’s usage; reporting completed turns only:',
+        '[floot] could not total the session’s usage; skipping display update:',
         error instanceof Error ? error.message : String(error),
       );
-      return completedTotals;
+      return undefined;
     } finally {
       clearTimeout(timer);
     }
