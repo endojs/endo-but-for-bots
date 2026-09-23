@@ -1901,7 +1901,7 @@ export const makeStreamingAgent = async (
     for (const turn of await readAllTurns()) {
       if (turn.turnId !== excludeTurnId && turn.state !== 'pending') {
         records.push(
-          ...(await recoverTurnTranscript([], turn, ref =>
+          ...(await recoverTurnTranscript(turn, ref =>
             turnJournal.readContent(ref),
           )),
         );

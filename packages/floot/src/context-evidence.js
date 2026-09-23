@@ -38,7 +38,7 @@ export const certifyContextEvidence = async (turn, readContent) => {
     return undefined;
   const throughSequence = frontier(turn);
   if (throughSequence === undefined) return undefined;
-  const exceptions = await recoverTurnTranscript([], turn, readContent, {
+  const exceptions = await recoverTurnTranscript(turn, readContent, {
     evidenceAfter: throughSequence,
   });
   if (exceptions.length) return undefined;

@@ -77,12 +77,7 @@ const projectContext = async (
           : turn.turnId === boundary.turnId
             ? { startOrdinal: boundary.ordinal }
             : {};
-    const recovered = await recoverTurnTranscript(
-      [],
-      turn,
-      readContent,
-      selection,
-    );
+    const recovered = await recoverTurnTranscript(turn, readContent, selection);
     if (recovered.length) {
       const groups = before ? exceptionGroups : activeGroups;
       groups.push({ turnId: turn.turnId, records: recovered });

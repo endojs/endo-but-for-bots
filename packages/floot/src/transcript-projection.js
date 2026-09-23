@@ -182,13 +182,11 @@ harden(transcriptToProviderMessages);
  * evidence distinct from backend observations, and never claim it ran twice.
  * Full journal content is required: a preview is not executable JSON.
  *
- * @param {Iterable<any>} messages
  * @param {any} turn
  * @param {(ref: any) => Promise<string>} readContent
  * @param {{ startOrdinal?: number, evidenceAfter?: string }} [selection]
  */
 export const recoverTurnTranscript = async (
-  messages,
   turn,
   readContent,
   selection = {},
@@ -196,7 +194,7 @@ export const recoverTurnTranscript = async (
   const ordered =
     turn.transcript !== undefined || turn.transcriptComplete === true;
   /** @type {TranscriptRecord[]} */
-  const records = ordered ? [] : [...projectTranscript(messages)];
+  const records = [];
   /** @type {Map<TranscriptRecord, bigint>} */
   const positions = new Map();
   /** @param {TranscriptRecord} record */

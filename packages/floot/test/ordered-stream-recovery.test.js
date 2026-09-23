@@ -53,7 +53,7 @@ const fixture = async () => {
     recover: async () => {
       const revived = makeTurnJournal(powers);
       const turn = await revived.get(id);
-      return recoverTurnTranscript([], turn, ref => revived.readContent(ref));
+      return recoverTurnTranscript(turn, ref => revived.readContent(ref));
     },
   };
 };

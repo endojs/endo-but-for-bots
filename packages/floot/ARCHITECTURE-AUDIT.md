@@ -875,6 +875,31 @@ The archive/snapshot before/after-publication fault matrix also passes.
 Scoped lint has zero errors (26 warnings), root docs zero errors (179 warnings),
 and formatting/diff checks pass. Independent adversarial review approved.
 
+Recovery input cleanup (2026-09-24, locally verified, not deployed):
+`recoverTurnTranscript` no longer accepts an alternate provider-message/tree
+input. All production callers already supplied an empty list after the journal
+cutover; removing it leaves the journal as the sole restoration authority.
+Matching tests now create canonical journal fixtures with sequence provenance,
+preserving repeated-ID, one-to-one matching and host-result replacement checks.
+Recovery without transcript entries remains supported for failure before the
+first canonical publication, including full input/output and tool content refs.
+The direct-provider message converter remains used for new replies; it is not
+another durable transcript owner. No storage format or retirement change.
+All 630 Floot tests and four real-daemon journal/lifecycle tests pass.
+Scoped lint has zero errors (62 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Independent adversarial review approved.
+
+FA-07 next implementation sequence, confirmed by source review (2026-09-24):
+public APIs use `provider` for Fae, but registry entries still encode it by an
+absent backend ID and a separate `model` field. Normalize durable session identity
+to required `backendId`/`modelId` first, preserving the public `provider` identity;
+replace truthiness-based sandbox capability checks explicitly so direct sessions
+do not acquire hosted stop/mount/rebind semantics accidentally.
+Then replace optional-field inference in streaming configuration with explicit
+direct, hosted and records-only variants. Keep provider lookup per turn so
+credential refresh reaches existing direct sessions; do not create another
+sandbox lifecycle or credential owner. This is remaining work, not a landed fix.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one
