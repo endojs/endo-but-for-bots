@@ -1057,7 +1057,15 @@ const makeDaemonCore = async (
             await controller.context.cancel(cancelReason, '!');
           }),
         );
-        if (cancellations.some(result => result.status === 'rejected')) return;
+        const cancellationFailures = cancellations
+          .filter(result => result.status === 'rejected')
+          .map(result => result.reason);
+        if (cancellationFailures.length > 0) {
+          throw new AggregateError(
+            cancellationFailures,
+            'Collected controller cancellation failed',
+          );
+        }
 
         // Delete from durable storage.
         const formulaDeletions = await Promise.allSettled(
@@ -1085,12 +1093,23 @@ const makeDaemonCore = async (
         // multiple readable-blob and readable-tree formulas can dedupe
         // on the same sha256.  Scratch-mount directories have a 1:1
         // relationship with their formula and need no reference count.
-        // eslint-disable-next-line no-use-before-define
-        await reclaimCollectedStorage(collectedFormulas);
-
-        cleanupSucceeded = [...formulaDeletions, ...storeDeletions].every(
-          result => result.status === 'fulfilled',
-        );
+        const storageFailures = [...formulaDeletions, ...storeDeletions]
+          .filter(result => result.status === 'rejected')
+          .map(result => result.reason);
+        try {
+          // eslint-disable-next-line no-use-before-define
+          await reclaimCollectedStorage(collectedFormulas);
+        } catch (error) {
+          storageFailures.push(error);
+        }
+        if (storageFailures.length === 1) throw storageFailures[0];
+        if (storageFailures.length > 1) {
+          throw new AggregateError(
+            storageFailures,
+            'Collected storage cleanup failed',
+          );
+        }
+        cleanupSucceeded = true;
       } finally {
         // Even failed storage reclamation must not leave worker routes live.
         try {
@@ -1293,11 +1312,22 @@ const makeDaemonCore = async (
    * (controller cancellation, worker termination) completes.
    */
   const drainCollectionCleanup = async () => {
+    const failures = [];
     while (pendingCollectionCleanup.length > 0) {
       const cleanup = /** @type {() => Promise<void>} */ (
         pendingCollectionCleanup.shift()
       );
-      await cleanup();
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    // Failure of one owner must not strand already-queued sibling cleanup.
+    // This drains admitted work, not retries: failed owners remain fenced.
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Collection cleanup failures');
     }
   };
 
@@ -5735,30 +5765,6 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulates a `directory` formula backed by an existing pet-store.
-   *
-   * @param {FormulaIdentifier} storeId - The existing store formula ID.
-   * @returns {FormulateResult<EndoDirectory>}
-   */
-  const formulateDirectoryForStore = async storeId => {
-    return /** @type {FormulateResult<EndoDirectory>} */ (
-      withFormulaGraphLock(async () => {
-        const formulaNumber = /** @type {FormulaNumber} */ (
-          await randomHex256()
-        );
-        /** @type {DirectoryFormula} */
-        const formula = {
-          type: 'directory',
-          petStore: storeId,
-        };
-        const result = await formulate(formulaNumber, formula);
-        pinTransient(result.id);
-        return result;
-      })
-    );
-  };
-
-  /**
    * Formulates a `worker` formula and synchronously adds it to the formula graph.
    * The returned promise is resolved after the formula is persisted.
    *
@@ -8484,7 +8490,6 @@ const makeDaemonCore = async (
     formulateGitRemote,
     formulateInvitation,
     acceptInvitation,
-    formulateDirectoryForStore,
     getPeerIdForNodeIdentifier,
     getAllNetworkAddresses,
     getAllContentSources,

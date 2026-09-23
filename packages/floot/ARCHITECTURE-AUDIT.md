@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 77 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 95 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -97,6 +97,42 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Type/fixture/environment mapping (2026-09-24): ten further changes are mapped,
+bringing coverage to 95 unique application entries (newest 15 plus earliest 80).
+Fresh command-environment tests cover object identity and extensibility as well
+as captured values: 22 listener and 71 policy tests pass with controlled effects.
+The current code-mode declaration generator fails ten focused tests because it
+tries to flatten generic CopyArray wrapper inheritance; this remains open until
+a bounded fix and regenerated declarations are verified.
+Independent review of the first attempted fix found missing imported-symbol
+declarations and illegal recursive aliases in the generated surfaces; parsing
+alone misses these defects. Require a semantic TypeScript compilation check
+before accepting regenerated tool declarations.
+The environment test pass also exposed a sandbox resolver fixture type error:
+preserving literal types and explicitly marking its deliberately invalid writable
+resolver input restores type checking without changing either runtime assertion.
+All 20 sandbox runtime tests pass; sandbox and hosted-agent type checks pass.
+The manual OpenCode OCI spike is another legacy removal/update candidate: it
+passes a raw credential through Podman environment and defaults to a paid model.
+It was not executed and must not serve as current brokered/free-route acceptance.
+The ledger records separate fixture, bridge and fake-applier evidence, including
+availability-skipped native tests rather than mislabeling them live acceptance.
+
+Session-service/Claude mapping (2026-09-24): two skipped OpenCode entries are now
+covered, correcting the prior consecutive-coverage claim without changing its
+previous unique count. Two further Claude changes are mapped as well.
+There are now 85 unique application mappings: newest 15 plus earliest 70,
+verified against all 479 index entries with no gap in those first 70.
+Focused package suites pass 161 tests; two real-daemon regressions also pass
+after correcting a long socket fixture path and obsolete broker configuration.
+The broker fixture now supplies a free-route catalog in an isolated worker,
+rejecting unexpected fetch requests rather than relying on live discovery.
+Original stale-owner refusal, retained dependencies and failed-activation cleanup
+assertions remain intact. This is not live Podman or native crash-recovery proof.
+Stale Claude minting and OpenCode native-store continuity comments were corrected.
+Daemon types pass without incremental output; scoped lint reports no errors,
+formatting and root documentation generation pass. No deployment occurred.
+
 Broker composition/environment/diagnostics mapping (2026-09-24): four additional
 changes have explicit ownership and supersession entries in the ledger.
 Fresh focused sandbox and provider-listener suites pass 95 tests; independent
@@ -114,7 +150,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 62 application changes, plus the first 20 host
+not. The newest 15 and earliest 80 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -241,8 +277,97 @@ guest and settle the injected failed guest worker cancellation.
 Adjacent directory and marshal suites, daemon typechecking and formatting pass;
 changed-file lint reports no errors. Adversarial source and test review passed.
 These are actual persistence/in-process daemon tests with injected worker control,
-not native termination or crash-recovery proof. `formulateDirectoryForStore`,
-agent-key retirement and failed collection retry ownership remain separate checks.
+not native termination or crash-recovery proof.
+Agent-key retirement and failed collection retry ownership remain separate checks.
+
+Unused constructor removal (2026-09-24): `formulateDirectoryForStore` had no
+callers, no host facet exposure, and only unused manager-to-host plumbing.
+Removed its implementation, internal type member and host argument instead of
+adding uncertain-write rollback to dead code.
+The active `formulateDirectory` constructor and persisted directory interpreter
+are unchanged; no state migration or retained-directory retirement is needed.
+The 55 construction-cleanup/directory/marshal-publication tests pass, including
+the real-daemon graceful publication restart test.
+Daemon typechecking passes after moving a verified ignored stale `host.d.ts`
+out of source resolution; a declaration rebuild had first hit TS5055 on existing
+generated inputs. The recoverable copy is in
+`/private/tmp/endo-host-declaration.KZOzBU/host.d.ts`.
+Changed-file ESLint reports zero errors (80 warnings including the ignored type
+file); formatting and root documentation generation pass (176 documentation
+warnings). This removes one unused construction path, not the remaining key
+retirement or failed collection retry defects.
+
+Collection retry ownership — reproduced, unresolved (2026-09-24):
+`drainCollectionCleanup` shifts each callback before running it.
+At reproduction, cancellation or formula/store deletion failures could resolve
+the callback while retaining a failed collection fence; reclamation could throw
+after the callback had already been removed. Neither outcome retained the
+callback for retry. Subsequent error-reporting fixes below do not restore it.
+Extended `collection-disposal-barrier.test.js` clears the injected deletion or
+scratch reclamation failure, creates and removes an unrelated directory to drain
+fresh graph work, and verifies the original cleanup attempt count does not change.
+The original formula or scratch bytes remain; lookup still refuses resurrection.
+All four barrier cases pass, characterizing an open defect rather than recovery.
+Replace the no-retry assertions with successful reclamation assertions when fixed.
+
+The next bounded implementation should separate acknowledged-stopped storage
+cleanup from failed cancellation, retain per-stage progress and original metadata,
+and exclude in-flight records from reentrant drains.
+Keeping a failed callback at the queue head or awaiting one shared drain promise
+can deadlock when an awaited cleanup callback reenters a graph operation.
+`context.cancel()` caches its disposal promise, including rejection: rerunning the
+same cancellation cannot be assumed to retry failed hooks.
+Automatic native disposal recovery is not authorized by this finding or solved by
+a queue change; it remains distinct from retrying storage after proven cancellation.
+Formula deletion preceding failed storage reclamation also means in-memory retry
+ownership alone would not prove restart recovery.
+
+Storage failure reporting (2026-09-24): collection now propagates rejected
+formula and pet-store deletions to the initiating graph operation instead of
+resolving as though cleanup succeeded.
+Reclamation is still attempted after acknowledged cancellation; if it also fails,
+its error is preserved alongside deletion errors rather than masking them.
+One failure keeps its original error; multiple failures use an AggregateError.
+Failed collection fences remain in place.
+The barrier suite adds pet-store-only and combined deletion failures and checks
+both causes in the combined error; existing deletion tests now require rejection.
+The final barrier/directory/marshal-publication run passes 17 tests, including
+graceful daemon restart; 44 construction-cleanup cases also passed during this
+change. Daemon types pass; changed-file lint reports zero errors and 68 warnings.
+Simultaneous deletion plus reclamation failure aggregation is source-reviewed,
+not separately fault-injected by the combined formula/pet-store test.
+This is a prerequisite diagnostic correction, not the retry fix: failed
+cancellation and disconnection reporting, retained retry records, reentrant
+retry scheduling, stage acknowledgements and restart recovery remain open.
+
+Cancellation failure reporting (2026-09-24): the collection callback now rejects
+with its cancellation failures instead of returning success when a controller's
+disposal hook rejects. It still exits before storage deletion and retains failed
+reconstruction fences; it does not retry cancellation or claim native quiescence.
+A new worker-termination fault regression fails before the change because removal
+resolves. Afterward it checks the nested original disposal cause, zero victim
+formula-deletion attempts, retained worker formula, refused lookup, and successful
+unrelated directory creation/removal.
+The barrier/context/native-worker-lifecycle suites pass 28 tests.
+This closes the cancellation-reporting item above, not disconnection reporting
+or retained retry ownership. The worker failure in the new case is injected;
+adjacent real-child closure tests do not turn it into a process-loss recovery test.
+
+Sibling cleanup draining (2026-09-24): a rejected collection callback no longer
+aborts the queue before other admitted callbacks are attempted.
+The drain preserves a single original failure or aggregates multiple failures
+after draining, without retrying failed callbacks or adding a shared-flight lock.
+A real-persistence guest-construction regression fails before the fix: a handle
+deletion failure strands the separately queued mailbox cleanup until another
+graph operation. With the fix, sibling cleanup is observed directly in storage
+before the original construction rejection returns.
+A second variant checks two failed callbacks and a later successful cleanup,
+preserving both deletion errors and the original construction error.
+Both new cases and 60 adjacent collection/construction/publication cases pass,
+including graceful daemon publication restart. Only the first new case was run
+against the pre-fix implementation; the second was added afterward.
+This does not establish global quiescence across concurrent/reentrant drains,
+nor fix the failed callback's missing retry ownership.
 
 Agent identity-key retention — reproduced, unresolved (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`

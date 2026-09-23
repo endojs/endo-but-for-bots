@@ -322,7 +322,6 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
  * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
- * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
  * @param {DaemonCore['formulateTimer']} args.formulateTimer
@@ -376,7 +375,6 @@ export const makeHostMaker = ({
   formulateGitRemote,
   formulateInvitation,
   acceptInvitation,
-  formulateDirectoryForStore,
   getPeerIdForNodeIdentifier,
   formulateChannel,
   formulateTimer,

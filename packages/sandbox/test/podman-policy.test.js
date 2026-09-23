@@ -467,8 +467,10 @@ for (const policy of [false, true]) {
     t.true(calls.some(call => call.args[0] === 'rm'));
     const captured = calls[0]?.env;
     if (!captured) throw Error('Expected captured native environment');
+    t.is(new Set(calls.map(call => call.env)).size, calls.length);
     for (const call of calls) {
       if (!call.env) throw Error('Expected command environment');
+      t.true(Object.isExtensible(call.env));
       // Every command gets a fresh copy of the one captured environment:
       // the same values, never re-read from the ambient process env.
       t.deepEqual(

@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 402 application entries and 73 host entries still need explicit ledger
+The other 384 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -388,8 +388,104 @@ are injected and do not establish live Linux or Tokyo behavior.
 | `aaca97706` | Explicit native-profile Podman operations retain an inert trusted gate until identity, resource, mount and network observations succeed; ordinary operation owner retains failed removal and uncertain execution | Gate/operation tests cover held reads, cancellation before and after release issuance, first stdin, uncaptured stdout and failed-cleanup capacity. Current synchronous release and uncertainty semantics include later fixes. Image no-alias and trusted procfs/cgroupfs visibility remain host preconditions; seccomp mode does not prove filter contents. This branch is not used by the current hosted envelope |
 | `3a95b12d7` | Original OpenCode recorded-profile parsing/request was removed by `1366b2e31`; current hosted plans reject the obsolete field. Generic sandbox export and native-scope profile guard remain | Current plan tests verify refusal; runtime tests verify exact profile shape before driver acquisition. FA-05 records the lower-level branch as a removal candidate pending public/retained-caller tracing. Historical controller tests do not prove current hosted limits or restart behavior |
 
+### Native setup and shared session placement
+
+Four more changes are traced to retained setup and storage owners rather than
+treating their original deployment descriptions as current acceptance evidence.
+Fresh shared session-plan/state-storage suites pass 22 tests, session-storage
+passes two, and mount-caplet passes 34.
+Independent OpenCode setup-host/setup-hosted/session-plan suites pass 44 tests.
+State-storage interruption tests inject checkpoints and reconstruct local objects;
+they do not establish native process quiescence or actual power-loss durability.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `c6033c49f` | Host setup mints the native sandbox service with persisted environment and a null-powers formula; existing service keeps its recorded configuration | Retained setup refuses bound legacy runtime and leftover ownership before replacement. Naming checks are not native stop proof, and setup does not retire old processes. Original OpenCode state-provider setup was subsequently removed |
+| `30219602e` | Validated rootless mount-program settings travel in the passive session plan; shared workspace projection passes them to the session-owned mounter | Current plan and mount-caplet tests cover accepted/refused settings and cancellation/drain. Programs are trusted host configuration, not guest capabilities; injected mount commands do not establish live privileged unmount behavior |
+| `c91c3b8c6` | Shared plan parsing, session-storage removal and native state placement replace adapter copies; recorded plans remain owned by the daemon session owner | Shared tests exercise normalized paths, storage removal and interrupted ownership publication. Later `baecab949` replaces original fixed-directory placement with unique inode-bound allocations; `1366b2e31` removes hosted native-profile parsing and `d2959f834` removes obsolete OpenCode state-provider wiring. Current ownership records are not independent proof of native stop; stable host roots and administrative serialization remain preconditions |
+| `d96ec4e4e` | Lockfile adds only the local @endo/9p-server workspace dependency used by shared plan mount-program validation | No external version change, new formula owner or storage schema. Runtime evidence belongs to the preceding extraction and retained mount-program checks |
+
+### Session service routing and Claude adoption
+
+This pass fills two previously skipped OpenCode entries and maps the next two
+Claude changes. The previous total of 81 unique mappings was correct, but its
+description as the earliest 66 commits was not: `aabd998ba` and `b4767d5aa`
+had been skipped. They are now explicitly covered below.
+Fresh Claude native-controller/session-plan/session-storage-module suites pass
+25 tests; independent broker/backend/setup/runtime-setup suites pass 40.
+Independent OpenCode setup/runtime/plan/storage/backend suites pass 96 tests.
+Two historical daemon regressions initially failed before their target assertions:
+an overlong macOS socket path and a retired broker `models` fixture field.
+The fixture corrections use a short unique configuration name and an isolated
+broker worker with a test-only free-model catalog; no live inference is involved.
+Both corrected daemon cases pass with their original lifecycle assertions intact,
+plus broker-worker isolation and recorded free-route assertions.
+They establish graceful stale-owner refusal and failed-activation cleanup wiring,
+not successful native recovery or live Podman execution.
+Current source comments were corrected where they still described unminted
+Claude services or an authoritative durable OpenCode native conversation store.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `aabd998ba` | Setup mints daemon session services and records exact dependencies; later shared setup helpers retain this ownership boundary | Original OpenCode state-provider wiring was removed; current storage service has null powers and CLI state is ephemeral. Setup mocks do not prove process retirement or native restart |
+| `b4767d5aa` | Hosted provision requests flow through the daemon session owner, with passive plan and storage roles distinct from the native controller | Later shared provisioner and transcript restoration replace original adapter-specific construction and native-store continuity. Current plan/dependency checks are not proof that lost native resources were released |
+| `d1ede212e` | Claude passive plan, native controller, state-provider and storage roles remain; shared supervisor/envelope now own common lifecycle sequencing | 25 tests cover current parser, controller and storage behavior. Native state directories remain but restoration uses the stack's canonical transcript; original hosted native-profile field was removed. Native-effect injection is not daemon-loss recovery or live CLI acceptance |
+| `db53b1040` | Daemon owner retains Claude plan and exact service identities; broker holds credential authority and grants session-scoped inference without handing credentials to the controller | 40 tests cover setup and broker routing. Inline provisioning moved to shared code, profiles were removed, catalog discovery replaced operator model lists, and pools replaced single-account assumptions. Incarnation-local grant/listener cleanup is not stop acknowledgement after process loss; #1323 remains open |
+
+### Type surfaces, fixtures and captured command environments
+
+Ten further historical changes are mapped below; mapping includes failures and
+superseded code, not just passing checks. The command-environment regressions now
+also assert distinct, extensible objects for every invocation, not merely equal
+values. Fresh listener and Podman-policy suites pass 22 and 71 tests respectively.
+These use controlled native effects, not live Podman or daemon-loss recovery.
+The sandbox runtime fixture now preserves literal types and marks the intentional
+read-only-contract violation; both runtime assertions are unchanged. Its 20 tests
+and sandbox/hosted-agent type checks pass. Changed-test lint has no errors and
+seven existing warnings. The initial combined listener/policy run exited nonzero;
+the listener rerun passed all 22 cases and the policy run reported 71 passes.
+No root cause is claimed for that initial nonzero result.
+The attempted generator repair remains uncommitted: independent semantic review
+found missing imported-symbol declarations and illegal recursive aliases that
+parse-only checks missed. Semantic compilation is required before accepting it.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `95bc54880` | Design-index documentation only | Retains explicit outstanding bucket recount; no execution or durability proof |
+| `32ec2be40` | Startup-gate test deadlines only | 13 tests pass with real local shells; observed-output cases use 2 seconds and intentional hangs retain 50 ms. Not live Podman |
+| `6d297f140` | Test teardown recognizes explicitly retained uncertain native cleanup | 43 controlled cleanup tests pass; Podman suite reports 39 passes but native checks return early without Podman. No live acceptance claim |
+| `91287398c` | Closeable stream type intersections and generated tool declarations; no runtime owner | Exo-stream types pass, but current extraction suites have 10 failures at generic CopyArray inheritance. This is an open generator compatibility defect, not successful declaration verification |
+| `c4bcf2275` | Cached-filesystem snapshot scheduling update | 7 tests pass; existing cache/pipelining assertions remain. No new durable state |
+| `366f2c6e9` | In-slice bridge lint corrections retained amid later changes | 27 bridge tests pass; lint has zero errors and seven warnings. These checks do not establish native process-loss recovery |
+| `f006c749e` | Old client-module transport type annotations | Entire module deleted by `433a21757`; no surviving transport-helper references. Do not credit the obsolete types to the current controller |
+| `dd705e037` | Each native command receives a fresh mutable copy of captured operator environment | 93 focused tests pass; strengthened identity/extensibility assertions cover both listener and policy paths. No additional persisted state or guest authority |
+| `8e260a48e` | Fake Nix applier polling allowance | 54 deploy-performer tests pass with mocked in-process applier; not actual NixOS activation |
+| `30af6a089` | Lint excludes standalone manual OCI spike | Syntax check passes; not executed. Spike still injects a raw credential into Podman environment and has fixed settings with a paid model default; retire or update before any use as current brokered/free-route acceptance |
+
 ### Post-snapshot changes
 
+- Collection draining now attempts queued siblings after a callback rejects,
+  retaining all errors until the drain ends. A guest-construction regression
+  reproduces stranded mailbox cleanup before the fix; a second variant checks
+  multiple failed callbacks followed by successful cleanup. Failed callbacks
+  are still not retained for retry; no global quiescence or recovery claim.
+- Collection cancellation failures now reject before storage deletion, retaining
+  original causes and reconstruction fences. A new injected-worker regression
+  fails before the fix; 28 barrier/context/worker tests pass afterward.
+  This reports failed disposal, not native quiescence or retry recovery.
+- Collection now reports formula/pet-store deletion errors and preserves them
+  alongside reclamation errors. Reconstruction fences and missing retry behavior
+  are unchanged; the barrier suite adds single-store and combined-error checks.
+- Collection barrier tests now characterize lost retry ownership after a
+  transient formula deletion or scratch reclamation failure clears: later graph
+  work succeeds but does not retry the original cleanup. Four cases pass.
+  This is an unresolved defect, not recovery evidence; the main audit records
+  reentrancy, cancellation and per-stage ownership constraints for the fix.
+- Removed unused `formulateDirectoryForStore` and its internal type/host wiring
+  after whole-repository caller and facet tracing; active directory construction
+  and replay are unchanged. The 55 construction/directory/marshal tests, daemon
+  types, changed-file formatting/lint and root docs pass; stale generated
+  declaration handling and warning counts are recorded in the main audit.
 - Application `12d79432a`, `19315967e`, `8ea9466d5`: guest and nested-directory
   construction reserve identities before writes, drain publication and release
   pins on failure. The current 44-case fault matrix passes; details and limits

@@ -3,12 +3,12 @@
 /**
  * The `claude-sandbox/session-storage` caplet: the durable storage owner the
  * daemon session owner records as each session's `storage` role and invokes
- * as `remove(planText)` inside record removal. To be minted by
- * `setup-hosted.js` (nothing mints it yet) with the state provider as its
+ * as `remove(planText)` inside record removal. Minted by
+ * `setup-hosted.js` with the state provider as its
  * sole powers, so removal of the session's persistent Claude config directory
  * keeps that provider's ownership-marker checks.
  *
- * Formula env (to be set by `setup-hosted.js`; no process fallback):
+ * Formula env (set by `setup-hosted.js`; no process fallback):
  *   CLAUDE_WORKSPACE_BASE_DIR  Root of per-session workspace storage.
  *   CLAUDE_MCP_DIR             Root of per-session private socket parents.
  *

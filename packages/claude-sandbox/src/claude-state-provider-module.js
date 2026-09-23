@@ -4,14 +4,14 @@
 /**
  * The `claude-sandbox/state-provider` caplet: host-backed durable per-session
  * state — each session's persistent Claude config directory, which holds the
- * conversation transcript — as one 0700 host directory per session under a
- * configured root, owned through the provider's `.owners/` markers (see
+ * conversation transcript — in uniquely allocated 0700 data directories under
+ * a configured root, owned through inode-bound `.owners/` records (see
  * `@endo/hosted-agent/session-state-storage.js`). It returns host paths only;
  * the native controller binds the directory into the slice directly. To be
- * minted by `setup-host.js` (nothing mints it yet) with `@none`: it ignores
+ * minted by `setup-host.js` with `@none`: it ignores
  * its powers and needs no daemon Mount facade.
  *
- * Formula env (to be set by `setup-host.js`) and the daemon-process fallback,
+ * Formula env (set by `setup-host.js`) and the daemon-process fallback,
  * which must be `ENDO_`-prefixed to survive the daemon's `allowEnvPass` filter:
  *   ENDO_CLAUDE_STATE_DIR — absolute host root under which per-session state
  *     directories are created.

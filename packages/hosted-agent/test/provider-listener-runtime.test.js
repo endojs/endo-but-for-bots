@@ -191,7 +191,9 @@ test.serial(
     const first = nativeCalls[0];
     if (!first) throw Error('Expected native commands');
     const captured = first.env;
+    t.is(new Set(nativeCalls.map(call => call.env)).size, nativeCalls.length);
     for (const call of nativeCalls) {
+      t.true(Object.isExtensible(call.env));
       t.is(call.command, 'podman');
       t.deepEqual(call.args.slice(0, 2), ['--remote=false', '--syslog=false']);
       // Every command gets a fresh copy of the one captured environment:

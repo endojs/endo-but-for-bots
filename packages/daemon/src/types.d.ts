@@ -2936,10 +2936,6 @@ export interface DaemonCore {
     nodeNumber?: NodeNumber,
   ) => FormulateResult<EndoDirectory>;
 
-  formulateDirectoryForStore: (
-    storeId: FormulaIdentifier,
-  ) => FormulateResult<EndoDirectory>;
-
   getPeerIdForNodeIdentifier: (
     nodeNumber: NodeNumber,
   ) => Promise<FormulaIdentifier>;
