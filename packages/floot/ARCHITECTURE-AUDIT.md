@@ -94,7 +94,7 @@ No claim of complete retrospective coverage is made yet.
 | Native teardown after reconstruction | The fail-closed teardown (`0d66bd945`: absent/failed scope lookup refuses stop acknowledgement; mount reclamation waits for sandbox close) was deployed on 2026-09-22 in generation 160 and observed: after a graceful `endo-daemon` restart every ready hosted session failed to reopen and to delete with `Original native cleanup proof is unavailable`, and six records were stranded with their listener containers and 9p mounts. **Reverted from this branch the same day and moved to #1323**: `session-supervisor.js` again treats absent/failed scope lookup as diagnostic and reclaims the recorded mount, as the release that passed the second pass's restart/restore did; runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof stays with the dedicated investigation (#1323), where the fail-closed teardown now lives with its six injected-reconstruction tests. A missing scope still cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
-| Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
+| Private journal deletion | Terminal deletion now durably records `deleting`, stops the agent/backend, closes and drains its retained journal facets, validates the exact namespace, and removes value names before schema. Normal incarnation/incomplete-creation cleanup preserves the namespace. | Real-daemon restart recovery verified locally, including GC interruption; smooth deletion with GC is NOT verified: guest collection kills retaining workers (see below). Tokyo verification remains required. Pre-publication orphan namespaces still require inventory/reclamation; unbinding names alone does not prove physical GC. |
 | Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
 | Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
@@ -108,6 +108,11 @@ No claim of complete retrospective coverage is made yet.
 
 All rows above remain open except the classification of deliberately transient
 picker state; that classification does not waive session-creation verification.
+Deployment reconciliation (generation 166, 2026-09-23): the atomic revision,
+account-authority vocabulary, provider-ownership checks and immutable state-root
+plans are now deployed. Their earlier "not deployed" evidence below describes
+the pre-cutover checkpoint, not the current host. This does not close the broader
+durability audit or substitute for live authorized rebind acceptance.
 Full supervisor/storage, journal/restoration, broker/credential, publication,
 network/image, and host deployment coverage is being inventoried separately.
 Existing Tokyo evidence is retained: generation 159 / app `81f3428e3` passed
@@ -146,8 +151,89 @@ A rejected watch-acquisition reply can still hide a remote reader allocation
 whose capability was never received. This observer-protocol reclamation gap
 remains open; no claim that every remote reader is reclaimed is made.
 It does not grant the closed factory a new reader or revive its canonical writer.
-Closed private-journal facades remain retained until factory disposal; terminal
-journal namespace retirement and earlier facade reclamation remain open.
+Terminal journal retirement implemented locally on 2026-09-23. The factory
+tracks each journal facet's session and drops it only after successful close
+during terminal deletion. Failed/uncertain close retains its owner and blocks
+retirement. Ordinary incarnation changes still retain their old journal facets
+until terminal deletion or factory disposal; earlier reclamation remains open.
+`finishSessionDeletion` requires acknowledged terminal intent before namespace
+retirement, including creation rollback after an earlier failed registry write.
+It attempts that write before ordinary cleanup; a failed acknowledgement does
+not skip stopping live work, but it prevents journal retirement. Only after agent/backend
+cleanup and journal close does it unbind the journal's exact known value names,
+with the matching v1 schema last. Missing empty namespaces are complete; orphan,
+foreign-schema and unknown-name namespaces are preserved, not guessed at.
+Partially applied deletions keep the registry entry for retry. Generic
+`cleanupSessionResources` does not remove the namespace needed by an interrupted
+creation that will resume. A central `getAgent` lifecycle/existence check also
+fences delayed observe-only calls: they cannot recreate resources while or after
+terminal cleanup removes the old incarnation.
+
+Durability evidence: local tests cover removed-but-unacknowledged content and
+schema names, refused terminal-intent writes (including creation rollback whose
+durable registry still says `creating`), factory reconstruction after
+partial removal, malformed namespace refusal before any removal, unrelated
+namespace preservation, and an account read held across deletion. The existing
+private-facet tests cover admitted write draining and poisoned close refusal.
+Those tests use an in-memory host. Added real-daemon tests on 2026-09-23
+(`packages/daemon/test/floot-journal-retirement.test.js`) cover failed removal,
+removed-but-unacknowledged content, and removed-but-unacknowledged schema. These
+three fault cases explicitly disable GC to isolate storage acknowledgement
+semantics. A fourth case enables real GC and captures the interruption below.
+All four verify the durable terminal registry before restart, poll the latest
+persisted registry for completion after restart, and verify durable absence
+after a second cold start. Unrelated host data remains intact. They do not
+exercise native producers or abrupt OS/process death.
+
+**Pre-merge review item: session deletion can terminate its own factory.** With
+GC enabled, removing the guest's final name in `cleanupSessionResources`
+collects the guest. `residence.js`'s `disconnectRetainersHolding` deliberately
+terminates workers retaining that formula, including the Floot factory that
+imported it. The test powers-forwarding worker is also affected; it is not the
+only retainer. The delete call rejects before private-journal retirement. A
+fresh daemon/worker resumes the durable terminal intent and completes cleanup,
+but this is recovery evidence, not normal deletion availability. A two-session
+regression now proves collateral interruption: the unrelated session's held
+facet rejects with the same collection error. Its durable registry entry and
+history survive restart, and a new turn succeeds after reacquiring the facet. The
+GC-enabled test intentionally characterizes this failure and must change when
+the conflict is fixed. Resolve the deletion/worker-ownership boundary before
+claiming GC-safe deletion; do not silently disable production GC, weaken daemon
+revocation semantics, or retain tombstone aliases indefinitely. This is separate
+from #1323's native-producer shutdown design and does not select its adapter.
+
+Reference-lifecycle investigation: CapTP defaults `gcImports` to false and the
+daemon does not override it. Its `releaseSlot`/`CTP_DROP` machinery is internal,
+not a supported application release API. Dropping JavaScript references or
+forcing JavaScript GC cannot provide a deterministic release acknowledgement.
+The guest exo has no universal revocation gate, so exempting guests from worker
+termination is not a safe substitute. A per-session worker by itself also fails:
+if the factory imports that worker's collected formula, the same propagation
+reaches the factory. Candidate designs need separate review:
+
+- A daemon-side scoped operation facade that keeps raw guest references out of
+  the factory. Capability results, streams and tool references must also be
+  wrapped; a shallow forwarding object does not suffice.
+- Per-session workers behind a stable control service that never imports the
+  doomed formula or its descendants into the shared factory.
+- Deterministic revocable imports, covering aliases and in-flight calls before
+  acknowledging release. This is a transport/security design, not a local fix.
+- Coordinated factory shutdown before deletion from a separate controller.
+  This still interrupts other sessions, so it does not meet isolated deletion.
+
+Do not choose a larger lifecycle redesign implicitly during this refactor.
+The required acceptance gate for a remedy is successful deletion with GC on,
+continued use of another session's existing facet, and durable recovery without
+leaking tombstone names or leaving stale authority callable.
+
+Pre-registry-publication orphan namespaces remain outside automatic retirement;
+native process-loss producer exclusion remains with #1323. Unbinding names
+releases roots for GC; it does not prove the underlying formulas or disk blocks
+have been collected. All 493 Floot tests pass, including terminal-intent writes
+rejected with falsy reasons. Scoped lint has zero errors; docs has zero errors
+and 176 warnings. Full Floot typechecking still has baseline test-file errors;
+none are reported in the changed implementation or test files. Final
+adversarial review found no blocking issue. Not deployed.
 Source review found the separately minted account oracle ignored formula
 disposal: `ensureWatching` could continue `applyObserved` journal writes after
 Floot closed its own reader.
@@ -166,6 +252,15 @@ and retained old-facet/source checks. Scoped lint has no errors.
 This proves the tested formula-incarnation boundary, not cross-formula
 same-namespace exclusion or process-loss observer reclamation.
 An incarnation-local registry does not establish cross-worker exclusion.
+Revalidated the three real-daemon factory-disposal cases on 2026-09-23.
+The late-native fixture still exposed removed `listModels`, so current model
+admission failed before backend creation and the gate wait timed out.
+Updated it to `modelCatalog` and made the gate wait propagate early creation
+failure instead of hiding it behind the timeout. All three cases now pass:
+admitted write drain, lost-write-acknowledgement fencing, and late backend admin
+termination before failed disposal settles. The late-native case deliberately
+uses fake guests to isolate factory disposal; it does not prove real guest-GC
+deletion safety. No production behavior or persisted format changed.
 Pooled member retirement now has a module-local admission/drain owner.
 Removal fences retained account/model/reset/credential access, closes only that
 member's inference transports and wrapped endpoints/status reader, drains
@@ -187,8 +282,19 @@ Failed credential/current calls, body cancellation acknowledgements, or remote
 release can require operator recovery. Removed IDs/authorities remain tombstoned;
 safe re-add and retirement epochs are not implemented.
 Failed observation writes may lose cache hints but cannot grant authority.
-An unpublished partial pool core can retain never-used transports until member
-retirement; this remains a cleanup follow-up.
+Partial pool-core construction cleanup corrected 2026-09-23: member construction
+now runs inside the same rollback boundary as core construction. A later member
+failing its lifecycle check previously bypassed rollback and retained earlier
+members' unused transport/endpoint cleanup handles until member retirement.
+Two regressions cover direct and wrapped members, verify release without
+retiring the surviving member, and assert no credential read, fetch or remote
+endpoint acquisition. This adds no durable state or formula: these cores are
+ephemeral and unpublished, and wrapped endpoints open only on first use. Existing
+member ownership still retains failed cleanup; this does not establish
+process-loss cleanup or cross-worker exclusion. All 684 hosted-agent tests pass
+(one skipped), including 35 issuer cases; package types pass, scoped lint has
+zero errors, and docs has zero errors/176 warnings. Final adversarial review
+found no blocking issue. Not deployed.
 The daemon barrier now rejects reconstruction while exact-formula disposal is
 pending or failed, including dependency cancellation.
 It rejects rather than waits, so mutually dependent cleanup lookups cannot
@@ -426,8 +532,8 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-04 | High | OpenCode retains obsolete controller and unused state service | Obsolete path / unused allocation | Source removed, old storage/state formulas retired; cross-backend acceptance including OpenCode restart/restore passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-05 | High | Recorded native resource profile does not drive execution | Ignored configuration | Removed; old plans retired before coordinated deployment; cross-backend acceptance passed on generation 158 (2026-09-21), across generations 160 and 161, and on generation 165 (2026-09-22) |
 | FA-06 | High | Session provisioning and restart policy are triplicated | Duplication with observed drift | One provisioner, one factory and one execution envelope own the shared lifecycle and the three adapters declare their differences; a shared conformance suite runs all three through creation, reopen through a catalog outage, refused placement, failed start and failed revision, stop retention, restart and deletion, and the exact grant, evidence and raw placement checks Codex alone applied now hold for every runtime (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
-| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission implemented, deployed (generations 160 and 161, live since) and accepted on Tokyo; the completion criterion that account identity not depend on runtime is met locally (2026-09-23): every plan records the operator-declared account authority id, every grant reports it, and the provider-name constants and the Codex `pool` label are gone (not deployed); open: whether the Claude projection should leave out models the pinned runtime cannot run, and the absent-backend special case in orchestration |
-| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | The record's image, account, credential-kind and service bindings are rebindable under an explicitly authorized reopen after a stop, with the daemon refusing the revision while any authority is held; Floot exposes the operator's `rebind` (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`), though that matrix has no `rebind` case (no re-minted broker to rebind to) and the verb's evidence is the conformance and module suites; the revision made one crash-safe transition on 2026-09-22 after the operator's reviewer found a crash between edge writes left a mixed record `start` accepted (not deployed); one binding vocabulary (`image`, `account`, `provider`) for every backend is implemented locally (2026-09-23, not deployed), closing the account item; open: the state root is not placement, so a `provider` rebind does not detect a re-rooted state provider, and the verb reports nothing about the new binding |
+| FA-07 | High | Runtime, provider, account, and model route are conflated | Ontology mismatch | Provider-backed discovery and account-bound admission deployed and accepted. Generation 166 adds the operator-declared account authority in plans, profiles, catalogs and grants, replacing provider-name constants and the Codex `pool` label. All-account discovery and hosted seed/policy checks pass. Open: runtime support for Claude's discovered models and the absent-backend orchestration special case |
+| FA-08 | Medium | Logical session identity is coupled to execution incarnation | Ontology mismatch | Generation 166 deploys atomic revision intent, the shared `image`/`account`/`provider` vocabulary, recorded/proposed binding inspection and returned binding snapshots, exact state-provider ownership checks, and immutable Claude/Codex state-root placement. Local crash/reconstruction and adapter conformance evidence is recorded below. Live provider-only and image-plus-provider authorized rebind preservation cases remain unverified; earlier general acceptance did not exercise the rebind verb |
 | FA-09 | Medium | Storage/environment contract lacks local development storage | Missing resource abstraction | Open; scoped 2026-09-22 (host facts, two enforceable mechanisms, the app-side contract common to both); the operator deferred it on 2026-09-22 and will choose the mechanism and default bound later |
 | FA-10 | Medium | Event reduction and conversation conversion are duplicated | Duplication | One reply-event fold shared by the daemon's turn and the browser's component, one hosted-turn message converter, one transcript-delta applier, one reconciliation of a turn's tool evidence for history and restoration, one tool-pairing rule (2026-09-22); completion criteria met, deployed as generation 165 on 2026-09-22 with the full acceptance matrix passed (endo-host `ops/hosted-cutover4-20260922.md`) |
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
@@ -1132,14 +1238,45 @@ descriptors each; a subagent delegated during a catalog outage is a new pin
 and is refused then; the direct provider's `lal` OpenRouter adapter still reads
 the public model list itself for context windows; retired-catalog subscription
 ids reach `resolve` only through a factory's own thirty-second listing cache.
-Follow-up outside this slice: Floot reopens a session pinned to a subscription
+Follow-up discovered outside this slice: Floot reopened a session pinned to a subscription
 the backend no longer declares by dropping the pin, but the Claude module's
 subscription-immutability check refuses that reopen, so such a Claude session
 never runs again until it is recreated (pre-existing; Codex has no such
-check).
+check). The silent fallback is removed by the 2026-09-23 correction below.
 The root type build passed after quarantining stale generated declarations
 (which had also produced the earlier documentation-gate errors); the
 documentation gate's result is recorded in the change log.
+
+### Preserve subscription selection on restoration — 2026-09-23
+
+Floot no longer drops a saved subscription pin when a backend descriptor stops
+listing it. The original pin always reaches backend admission; missing catalog
+membership cannot authorize automatic selection of another account. The shared
+backend factory refuses unknown subscriptions before provisioning, and the pool
+chooser never falls through from an explicit pin. Sessions intentionally created
+with `auto` remain automatic. Changing or removing a pin still requires an
+explicit operator operation; no automatic migration is added.
+
+Durability: no new formula or storage schema, and no mutation of the saved
+registry entry. Reconstruction reads the same persisted `subscription` and
+forwards it rather than changing its meaning according to transient discovery.
+Factory regressions rebuild over stored registry data, exercise removed-member
+and no-subscription descriptors, and require the backend refusal to reach the
+turn status while session metadata keeps the original pin. These are in-memory
+host reconstruction tests, not proof of real daemon process-loss recovery.
+Verification: all 481 Floot tests pass, including admission succeeding despite
+an incomplete discovery descriptor. Scoped lint has zero errors; docs has zero
+errors and 176 warnings. Full Floot typechecking remains failing on test-file
+errors, including unchanged optional `find()` results in this fixture; it is
+not claimed clean. Independent adversarial review found no production blocker.
+Deployed as generation 166. The focused live removed-subscription refusal case
+is still unverified; general acceptance does not prove that case.
+
+The separate Claude runtime-model concern remains unproven: the live record
+contains exit code 1 and a stdin warning, not a diagnostic establishing that
+`claude-fable-5-1` is unsupported. Do not invent a runtime allowlist from this
+single failure. Inspect structured CLI errors and compare pinned runtime
+capabilities before filtering provider-discovered routes.
 
 Model these independently:
 
@@ -1317,8 +1454,9 @@ then removing under the revised plan); native owner cases (an interrupted
 revision refusing the next start without constructing anything until it
 can finish, then activating the revised plan and resolving the rebound
 dependency, never the old one; removal refused without a native call or a
-lifecycle change until it can finish, then removing). Not deployed.
-Open, from the review: a `provider` rebind moves the state provider and
+lifecycle change until it can finish, then removing). Deployed as generation 166.
+Historical findings from that review, addressed by the account-authority,
+binding-inspection and immutable-state-root changes below: a `provider` rebind moved the state provider and
 storage owner without checking that they serve the recorded session's
 state root, which the plan does not record (the roots are host
 configuration under the wipe-and-recreate deployment model, so a re-rooted
@@ -1434,7 +1572,7 @@ Durability: no schema or stored-state change. Each backend reconstruction repeat
 the exact-formula check; existing records keep their own captured dependencies.
 No native resources or credentials are acquired by the check. This does not
 prove old resources have stopped and does not retire mismatched owners itself.
-Not deployed. The root-placement follow-up is implemented below. OpenCode has no
+Deployed as generation 166. The root-placement follow-up is implemented below. OpenCode has no
 separate durable native state provider; its private placement is already recorded.
 
 ### Immutable native state root — 2026-09-23
@@ -1463,7 +1601,9 @@ blocking issue.
 Breaking deployment gate: retire affected old Claude/Codex sessions using the
 old release before switching parsers. Old plans without `stateRoot` are refused,
 including by storage deletion. Preserve Secrets, renewal credentials and
-workspaces. This change is not deployed.
+workspaces. Deployed as generation 166 after verifying no old native session
+records or Floot sessions remained; this is retirement evidence, not migration
+compatibility or live rebind proof.
 
 ### Live rebind acceptance harness — 2026-09-23
 
@@ -1483,8 +1623,9 @@ local manifest lock prevents overlapping invocations; it is not a distributed
 lease. No credential or daemon-state schema changes. Adversarial review caught
 and corrected an API mismatch: `whenFinished()` resolves on failure, so the
 driver also reads the final turn status. Fake-facet regressions validate the
-harness, not daemon restart or real inference. Not run on Tokyo: SSH still times
-out before authentication. FA-08 live acceptance remains open.
+harness, not daemon restart or real inference. SSH connectivity is restored and
+generation 166 is deployed. The two live rebind cases have not run; FA-08 live
+acceptance remains open.
 
 ## FA-09 — Give local development storage an explicit role
 
@@ -2086,7 +2227,7 @@ their remaining work is not implied complete by this deployment sequence.
 
 ### Acceptance runner correction — 2026-09-23
 
-Current acceptance-runner correction (2026-09-23, not deployed): the host's
+Acceptance-runner correction (2026-09-23): the host's
 `run-cutover4-*` scripts now preserve driver exit codes, stop before subsequent
 phases after a failure, and refuse restart after failed seeding or recall after
 failed restart. Hosted acceptance no longer unconditionally runs the
@@ -2097,10 +2238,13 @@ or sessions. Four local test methods cover 23 injected phase failures, four
 empty-output successes, eight setup failures, and a failed restart using inert
 host substitutes.
 This changes only the one-shot operator harness, not daemon formula state or
-replay. Live cross-backend and rebind acceptance remain pending; SSH to Tokyo
-timed out before authentication during preparation. Both GitHub branches are
-pushed through app `5b8674613` and host `338d594`; no new Tokyo activation is
-claimed.
+replay. SSH connectivity is restored. Generation 166 uses the corrected phase
+drivers through individual supervised invocations, preserving exit status and
+not advancing after failures. Hosted create/tool, policy and cancellation phases
+passed; restart/restore and live rebind acceptance remain pending. The cancel
+result is deliberately limited to admitted turns with observed native calls,
+not native-process termination proof. See the current cutover record in
+endo-host `ops/hosted-cutover5-20260923.md`.
 
 ### Cutover progress — 2026-09-21
 
@@ -2236,6 +2380,15 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Preservation-safe paired cutover activated as generation 166 | App `4b425552f` with host `d696a88`; zero sessions/runs, slot-free workflow startup records verified. Detached 24 old Floot/provider aliases with repeated Secret/host/credential/pool identity checks, then proved old-daemon shutdown and no containers/9p. No database wipe. Hosted setup, all-account discovery and hosted create/shell/policy-tool seed passed, including Luna/free routes; post-activation Secret and controller-host identities unchanged. Remaining cross-backend acceptance and live rebind are pending. See endo-host `ops/hosted-cutover5-20260923.md` |
+| 2026-09-23 | Repair retirement helper's dormant-formula hazard and verify the durable empty registry | Host helper now detaches names without cancellation, validates capability-free registry sequence/data, preserves credential/pool/host state, and fences changed/reappearing aliases. Reviewed tests cover partial removal, collected metadata and empty-registry guards; Tokyo dry run passed for 22 provider plus two Floot bindings. No effectful retirement; startup-dependency check, quiescence, old-worker shutdown, activation and acceptance remain required |
+| 2026-09-23 | Resume preservation-safe coordinated deployment preparation after SSH recovery | App `4b425552f` mirrored to Forgejo and prebuilt; paired host `5827da0` NixOS build passed without activation. Fresh inventories: six Secrets, no native session records/containers/9p/Floot guest roots, 22 broker/dependent bindings including three broker roots. No retirement or state wipe; guarded alias detachment, activation and full acceptance still pending. See endo-host `ops/hosted-cutover5-20260923.md` |
+| 2026-09-23 | Bound the guest-GC deletion impact and research safe remedies | Two-session regression proves collateral facet loss and recovery of history/continued turns after restart. No supported deterministic import-release API found; design alternatives and acceptance gate recorded, no unsafe GC bypass |
+| 2026-09-23 | Repair stale factory-disposal test backend after model catalog refactor | Reproduced late-native admission failure/timeout; current catalog and fail-fast gate restore all three lifecycle tests. Fake guest boundary explicit; no production change |
+| 2026-09-23 | Verify terminal journal retirement across real daemon restarts; identify guest-GC/factory termination conflict | Four restart cases pass with persisted-registry assertions and a second cold start; acknowledgement faults isolated with GC off, real-GC interruption/recovery tested separately. Smooth GC-enabled deletion and shared-session impact remain pre-merge review items; no production semantic change or Tokyo deployment |
+| 2026-09-23 | Add terminal private-journal namespace retirement after durable intent, writer drain and backend cleanup; fence delayed observation from rebuilding during deletion | Exact namespace/schema validation, uncertain-removal retry and factory reconstruction regressions; no generic-cleanup deletion; real-daemon evidence added above, Tokyo verification pending |
+| 2026-09-23 | Retrospective durability audit: include partial pool-member construction in existing core rollback, releasing unused cleanup handles if a later member fails | Direct/wrapped regressions; no credential use or persistent state; normal member ownership preserved; not deployed |
+| 2026-09-23 | FA-07: preserve saved subscription pins on restoration rather than silently falling back to automatic account selection | Removed-member and missing-descriptor factory regressions; backend admission remains authoritative; no new durable state; not deployed |
 | 2026-09-23 | Prepare exact-binding live rebind harness in endo-host: refusal, explicit authorization, preserved history/workspace tool evidence, guarded cleanup | Local fake-facet tests and adversarial review; pending intents are not replayed; Tokyo run blocked by SSH connectivity |
 | 2026-09-23 | FA-08: pin Claude/Codex native state roots in durable session plans and refuse relocation before rebind; automatically protect roots from guest placement | Parser and adapter conformance regressions; adversarial review; old-release retirement required before deploy; live acceptance pending |
 | 2026-09-23 | FA-08: require Claude/Codex deletion owner to capture the same state provider used for activation; Claude setup also refuses mismatched retained storage | 52 focused tests; no new durable state; immutable native state-root pin still open; not deployed |

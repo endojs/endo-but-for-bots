@@ -492,8 +492,10 @@ export const makeProviderBrokerGrantIssuer = ({
         }),
       ];
     };
-    const members = declared.flatMap(makeMember);
     try {
+      // A later member can fail its lifecycle check after earlier members
+      // retained transports. Construction shares the core's rollback path.
+      const members = declared.flatMap(makeMember);
       const core = makeProviderBrokerGrant(configuredPolicy, {
         audit,
         revealExhaustion,

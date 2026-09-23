@@ -5,12 +5,14 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { makePromiseKit } from './_promise-kit.js';
 
 /**
  * @param {import('ava').ExecutionContext} t
  * @param {{ existing?: boolean, schema?: boolean,
  *   beforeStore?: (value: any, name: string) => Promise<void>,
  *   afterStore?: (value: any, name: string) => Promise<void>,
+ *   beforeRemove?: (name: string) => Promise<void>,
  *   extraHas?: (name: string) => boolean }} [options]
  */
 const makeWorld = (
@@ -20,6 +22,7 @@ const makeWorld = (
     schema = true,
     beforeStore = async () => {},
     afterStore = async () => {},
+    beforeRemove = async () => {},
     extraHas = () => false,
   } = {},
 ) => {
@@ -132,7 +135,10 @@ const makeWorld = (
       hostStore.set(name, value);
       await afterStore(value, name);
     },
-    remove: name => hostStore.delete(name),
+    remove: async name => {
+      await beforeRemove(name);
+      return hostStore.delete(name);
+    },
     provideGuest: (name, { agentName }) => {
       guests += 1;
       const id = name.slice('session-'.length);
@@ -156,6 +162,166 @@ const makeWorld = (
     counts: () => ({ sends, creates, guests }),
   };
 };
+
+test('terminal deletion retires journal data and schema, not unrelated namespaces', async t => {
+  const world = makeWorld(t);
+  const session = await E(world.factory).getSession('one');
+  const turn = await E(session).startTurn('write private history');
+  await E(turn).whenFinished();
+  const prefix = 'floot-private-turn-3-one-';
+  t.true(
+    [...world.hostStore.keys()].filter(name => name.startsWith(prefix)).length >
+      1,
+  );
+  world.hostStore.set('floot-private-turn-3-two-schema', 'preserve');
+  await E(world.factory).deleteSession('one');
+  t.false([...world.hostStore.keys()].some(name => name.startsWith(prefix)));
+  t.is(world.hostStore.get('floot-private-turn-3-two-schema'), 'preserve');
+  t.deepEqual(await E(world.factory).listSessions(), []);
+});
+
+test('an admitted account read cannot recreate a journal while deletion is retiring it', async t => {
+  const refreshEntered = makePromiseKit();
+  const releaseRefresh = makePromiseKit();
+  const removalEntered = makePromiseKit();
+  const releaseRemoval = makePromiseKit();
+  t.teardown(() => {
+    releaseRefresh.resolve(undefined);
+    releaseRemoval.resolve(undefined);
+  });
+  const world = makeWorld(t, {
+    beforeRemove: async name => {
+      if (name === 'floot-private-turn-3-one-schema') {
+        removalEntered.resolve(undefined);
+        await releaseRemoval.promise;
+      }
+    },
+  });
+  const session = await E(world.factory).getSession('one');
+  await E(session).getTurns();
+  world.hostStore.set(
+    'account-oracle',
+    Far('HeldOracle', {
+      refresh: async () => {
+        refreshEntered.resolve(undefined);
+        await releaseRefresh.promise;
+      },
+    }),
+  );
+  const reading = E(session).getAccount(true);
+  void reading.catch(() => {});
+  await refreshEntered.promise;
+  const deleting = E(world.factory).deleteSession('one');
+  void deleting.catch(() => {});
+  await removalEntered.promise;
+  const before = world.counts();
+  releaseRefresh.resolve(undefined);
+  await t.throwsAsync(reading, {
+    message: /cannot open an incarnation during or after deletion/,
+  });
+  t.deepEqual(world.counts(), before);
+  releaseRemoval.resolve(undefined);
+  await deleting;
+});
+
+test('failed durable deletion intent leaves private journal intact', async t => {
+  let fail = false;
+  const removed = [];
+  const world = makeWorld(t, {
+    beforeStore: async value => {
+      if (fail && value?.sessions?.some(row => row.lifecycle === 'deleting'))
+        throw Error('intent write failed');
+    },
+    beforeRemove: async name => {
+      removed.push(name);
+    },
+  });
+  const session = await E(world.factory).getSession('one');
+  await E(session).getTurns();
+  fail = true;
+  await t.throwsAsync(E(world.factory).deleteSession('one'), {
+    message: /intent write failed/,
+  });
+  t.deepEqual(removed, []);
+  t.true(world.hostStore.has('floot-private-turn-3-one-schema'));
+  fail = false;
+  await E(world.factory).deleteSession('one');
+  t.false(world.hostStore.has('floot-private-turn-3-one-schema'));
+});
+
+for (const rejection of [
+  Error('terminal publication unavailable'),
+  undefined,
+  null,
+  false,
+]) {
+  test(`creation rollback preserves journal without terminal intent: ${String(rejection)}`, async t => {
+    const removed = [];
+    const world = makeWorld(t, {
+      existing: false,
+      beforeStore: async value => {
+        if (
+          value?.sessions?.some(row =>
+            ['ready', 'error', 'deleting'].includes(row.lifecycle),
+          )
+        ) {
+          throw rejection;
+        }
+      },
+      beforeRemove: async name => {
+        removed.push(name);
+      },
+    });
+    await t.throwsAsync(
+      E(world.factory).createSession({ backendId: 'test', modelId: 'm' }),
+      {
+        message: /creation and rollback failed/,
+      },
+    );
+    const [entry] = await E(world.factory).listSessions();
+    const prefix = `floot-private-turn-${entry.id.length}-${entry.id}-`;
+    t.true(world.hostStore.has(`${prefix}schema`));
+    t.false(removed.some(name => name.startsWith(prefix)));
+    t.false(
+      world.hostStore.has(`session-agent-${entry.id}`),
+      'failed publication must not skip ordinary cleanup',
+    );
+    const snapshots = [...world.hostStore.entries()].filter(([name]) =>
+      name.startsWith('floot-sessions-v1-'),
+    );
+    const latest = /** @type {any} */ (
+      snapshots.sort(([a], [b]) => a.localeCompare(b)).at(-1)?.[1]
+    );
+    t.is(latest.sessions[0].lifecycle, 'creating');
+  });
+}
+
+test('failed journal retirement keeps terminal intent and retries after factory reconstruction', async t => {
+  let fail = true;
+  const world = makeWorld(t, {
+    beforeRemove: async name => {
+      if (fail && name === 'floot-private-turn-3-one-schema')
+        throw Error('retirement unavailable');
+    },
+  });
+  const session = await E(world.factory).getSession('one');
+  await E(session).getTurns();
+  await t.throwsAsync(E(world.factory).deleteSession('one'), {
+    message: /retirement unavailable/,
+  });
+  t.is((await E(world.factory).listSessions())[0].lifecycle, 'error');
+  t.true(world.hostStore.has('floot-private-turn-3-one-schema'));
+  fail = false;
+  const revived = make(world.host);
+  for (let i = 0; i < 100; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await E(revived).listSessions()).length === 0) break;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  t.deepEqual(await E(revived).listSessions(), []);
+  t.false(world.hostStore.has('floot-private-turn-3-one-schema'));
+});
 
 for (const binding of [undefined, 'session-one', 'session-agent-one']) {
   test(`factory refuses missing private schema with guest binding ${binding}`, async t => {

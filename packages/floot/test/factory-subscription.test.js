@@ -21,7 +21,7 @@ const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
   // What the backend declares now; an operator can change it under a session.
   let declared = subscriptions;
   // Whether the backend's accounts can be read now.
-  const knobs = { catalogDown: false };
+  const knobs = { catalogDown: false, acceptUnlistedPin: false };
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const inboxes = [];
   /** @type {Array<Record<string, any>>} */
@@ -97,6 +97,13 @@ const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
     },
     create: async (spec, toolSet) => {
       specs.push(spec);
+      if (
+        spec.subscription &&
+        !knobs.acceptUnlistedPin &&
+        !declared?.some(row => row.id === spec.subscription)
+      ) {
+        throw Error(`Unknown subscription "${spec.subscription}"`);
+      }
       return harden({
         run: Far('PromptRun', {
           send: async () => {
@@ -239,7 +246,7 @@ test('a subscription the backend does not declare is refused at creation', async
   t.is((await E(withSet.factory).listSessions()).length, 0);
 });
 
-test('a session pinned to a subscription that was since removed still runs, on the backend’s choice', async t => {
+test('restoration preserves a removed subscription pin and surfaces backend refusal', async t => {
   t.timeout(10_000);
   const world = makeWorld({ subscriptions });
   t.teardown(world.close);
@@ -259,10 +266,55 @@ test('a session pinned to a subscription that was since removed still runs, on t
     .slice(before)
     .filter(spec => spec.sessionId === id);
   t.true(rebuilt.length > 0);
-  // The backend would refuse an id it does not declare, and the session would
-  // never run again; it is sent nothing, and still says what it was pinned to.
-  t.true(rebuilt.every(spec => !('subscription' in spec)));
+  t.true(rebuilt.every(spec => spec.subscription === 'home'));
+  t.regex((await E(turn).getStatus()).error, /Unknown subscription "home"/);
   t.is((await E(revived).getInfo()).subscription, 'home');
+});
+
+test('restoration does not drop a pin when the backend stops declaring subscriptions', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ subscriptions });
+  t.teardown(world.close);
+  const pinned = await E(world.factory).createSession({
+    ...hosted,
+    subscription: 'home',
+  });
+  const { id } = await E(pinned).getInfo();
+  world.declare(undefined);
+  const before = world.specs.length;
+  const revived = await E(world.restart()).getSession(id);
+  const turn = await E(revived).startTurn('hello');
+  await E(turn).whenFinished();
+  const rebuilt = world.specs
+    .slice(before)
+    .filter(spec => spec.sessionId === id);
+  t.true(rebuilt.length > 0);
+  t.true(rebuilt.every(spec => spec.subscription === 'home'));
+  t.regex((await E(turn).getStatus()).error, /Unknown subscription "home"/);
+  t.is((await E(revived).getInfo()).subscription, 'home');
+});
+
+test('restoration leaves admission to the backend when discovery omits the saved pin', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ subscriptions });
+  t.teardown(world.close);
+  const pinned = await E(world.factory).createSession({
+    ...hosted,
+    subscription: 'home',
+  });
+  const { id } = await E(pinned).getInfo();
+  world.declare(undefined);
+  world.knobs.acceptUnlistedPin = true;
+  const before = world.specs.length;
+  const revived = await E(world.restart()).getSession(id);
+  const turn = await E(revived).startTurn('hello');
+  await E(turn).whenFinished();
+  const rebuilt = world.specs
+    .slice(before)
+    .filter(spec => spec.sessionId === id);
+  t.true(rebuilt.length > 0);
+  t.true(rebuilt.every(spec => spec.subscription === 'home'));
+  t.is((await E(turn).getStatus()).error, null);
 });
 
 test('a hosted pin is admitted by what the session’s account lists now; missing discovery refuses and says so', async t => {

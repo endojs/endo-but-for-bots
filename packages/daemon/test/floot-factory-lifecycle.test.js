@@ -70,7 +70,14 @@ for (const mode of ['write', 'failed-write', 'late-native']) {
           modelId: 'm',
         });
         void creation.catch(() => {});
-        await E(control).writing();
+        // Fail with the admission error instead of waiting for the test
+        // timeout if startup never reaches the backend's held create call.
+        await Promise.race([
+          E(control).writing(),
+          creation.then(() => {
+            throw Error('Session creation bypassed the held backend call');
+          }),
+        ]);
         let settled = false;
         const disposal = E(host)
           .cancel('factory')

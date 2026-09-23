@@ -86,6 +86,7 @@ import {
 import {
   createPrivateTurnStorage,
   providePrivateTurnStorage,
+  retirePrivateTurnStorage,
 } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
@@ -3250,7 +3251,7 @@ export const make = async (
   // a recreate that is still in flight.
   /** @type {Map<string, { close: () => Promise<void> }>} */
   const hostedMountClients = new Map();
-  const privateJournals = new Set();
+  const privateJournals = new Map();
 
   // A hosted backend refuses to stop under an unsettled Endo tool call — and
   // the attach that asks for a recreate IS one until its result is back —
@@ -4114,6 +4115,14 @@ export const make = async (
   const getAgent = (id, { observeOnly = false } = {}) => {
     ownership.assertOpen();
     assertPublished(id);
+    const recorded = (registry || []).find(session => session.id === id);
+    if (
+      !recorded ||
+      !['ready', 'creating'].includes(recorded.lifecycle || 'ready')
+    )
+      throw Error(
+        `Session "${id}" cannot open an incarnation during or after deletion`,
+      );
     if (!observeOnly) assertSessionAdmission(id);
     if (incarnationChanges.has(id))
       throw Error('Session incarnation change in progress');
@@ -4128,7 +4137,7 @@ export const make = async (
       agentP = (async () => {
         const host = getHost();
         const journalPowers = await providePrivateTurnStorage(host, id);
-        privateJournals.add(journalPowers);
+        privateJournals.set(journalPowers, id);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
         const handleName = `session-${id}`;
@@ -4320,24 +4329,13 @@ export const make = async (
                   },
                 }),
               );
-              // A session pinned to a subscription its operator has since
-              // removed would otherwise never run again, and Floot has no way
-              // to unpin it. It runs on the backend's own choice instead, and
-              // says so where an operator reads.
-              const declaredSubscriptions =
-                backend.descriptor.subscriptions || [];
+              // Preserve the durable account selection even when discovery
+              // no longer lists it. The backend owns admission; absence from
+              // a catalog is not permission to spend another account.
               const pinnedSubscription =
-                entry.subscription &&
-                declaredSubscriptions.some(
-                  declared => declared.id === entry.subscription,
-                )
+                entry.subscription && entry.subscription !== 'auto'
                   ? entry.subscription
                   : undefined;
-              if (entry.subscription && !pinnedSubscription) {
-                console.error(
-                  `[floot-factory] session ${id} is pinned to subscription "${entry.subscription}", which backend "${entry.backendId}" no longer declares; running it on the backend's own choice`,
-                );
-              }
               // An authorization to rebind is spent by the request it is
               // built into, whatever becomes of that request.
               const rebind = pendingRebinds.get(id);
@@ -4350,9 +4348,7 @@ export const make = async (
                   model: entry.modelId || '',
                   reasoningEffort: entry.reasoningEffort || '',
                   systemPrompt: sessionPrompt,
-                  // Only when pinned, and only to a subscription the backend
-                  // still declares: a backend with nothing to choose from is
-                  // never sent the field.
+                  // Never silently widen a saved pin to automatic routing.
                   ...(pinnedSubscription
                     ? { subscription: pinnedSubscription }
                     : {}),
@@ -5075,8 +5071,33 @@ export const make = async (
   const finishSessionDeletion = async id => {
     const entry = (registry || []).find(session => session.id === id);
     if (!entry) return;
+    // Creation rollback can arrive after a failed lifecycle write. Before
+    // removing its schema, make terminal intent durable: `creating` would
+    // otherwise attempt to rebuild this namespace on the next incarnation.
+    const index = (registry || []).findIndex(session => session.id === id);
+    /** @type {any[]} */ (registry)[index] = harden({
+      ...entry,
+      lifecycle: 'deleting',
+    });
+    const terminalIntent = await saveRegistry().then(
+      () => ({}),
+      error => ({ error }),
+    );
     try {
+      // Still stop live work if intent publication failed during creation
+      // rollback. Ordinary cleanup preserves the journal needed by a durable
+      // `creating` entry; only namespace retirement requires this acknowledgement.
       await cleanupSessionResources(entry);
+      if ('error' in terminalIntent) throw terminalIntent.error;
+      for (const [journal, sessionId] of privateJournals) {
+        if (sessionId === id) {
+          // A failed/uncertain writer stays retained and blocks retirement.
+          // eslint-disable-next-line no-await-in-loop
+          await E(journal).close();
+          privateJournals.delete(journal);
+        }
+      }
+      await retirePrivateTurnStorage(getHost(), id);
     } catch (error) {
       const current = (registry || []).findIndex(session => session.id === id);
       if (current >= 0) {
@@ -5682,7 +5703,9 @@ export const make = async (
         [...submissions.values()].map(entry => attempt(() => entry.close())),
       );
       await Promise.all(
-        [...privateJournals].map(journal => attempt(() => E(journal).close())),
+        [...privateJournals.keys()].map(journal =>
+          attempt(() => E(journal).close()),
+        ),
       );
       await attempt(() =>
         Promise.all([
