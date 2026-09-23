@@ -37,6 +37,38 @@ const options = harden({ input: 'go', backendId: 'opencode', modelId: 'free' });
 const message = content =>
   harden({ kind: 'message', role: 'assistant', content });
 
+test('completion seals the exact frontier and survives a snapshot', async t => {
+  const { powers, values, writes } = fixture();
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin(options);
+  for (let index = 0; index < 61; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await journal.recordTranscript(id, `${index}`, message('text'));
+  }
+  await t.throwsAsync(journal.completeTranscript(id, '60'), {
+    message: /frontier/,
+  });
+  await journal.completeTranscript(id, '61');
+  await t.throwsAsync(journal.recordTranscript(id, '61', message('late')), {
+    message: /already complete/,
+  });
+  await journal.append(id, { type: 'finish', state: 'completed' });
+  const revived = makeTurnJournal(powers);
+  t.true((await revived.get(id)).transcriptComplete);
+  const count = writes.length;
+  await revived.completeTranscript(id, '61');
+  t.is(writes.length, count);
+  const name = [...values.keys()].find(key =>
+    key.startsWith('floot-turn-snapshot-'),
+  );
+  const snapshot = JSON.parse(JSON.stringify(values.get(name)));
+  snapshot.records[0].transcriptEndSequence = id;
+  values.set(name, harden(snapshot));
+  await t.throwsAsync(makeTurnJournal(powers).get(id), {
+    message: /completion order/,
+  });
+});
+
 test('ordered transcript survives snapshots and full-content duplicate comparison', async t => {
   const { powers, writes } = fixture();
   const journal = makeTurnJournal(powers);

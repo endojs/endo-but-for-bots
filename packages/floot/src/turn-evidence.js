@@ -95,6 +95,8 @@ harden(isUnansweredResult);
  * @property {boolean} observed Whether a backend observation matched this
  *   row.
  * @property {boolean} executed Whether a host execution matched this row.
+ * @property {string} [sequence] Journal position of unmatched evidence.
+ * @property {string} [resultSequence] Journal position of a recovered result.
  */
 
 /**
@@ -140,7 +142,7 @@ export const reconcileTurnEvidence = async ({
     [tools, false],
   ])) {
     const unmatched = [...rows];
-    /** @type {Array<{ callId: string, name: string, settled: boolean, args: string, result: string | undefined, cut: TextCuts }>} */
+    /** @type {Array<{ callId: string, name: string, settled: boolean, args: string, result: string | undefined, cut: TextCuts, sequence?: string, resultSequence?: string }>} */
     const entries = [];
     for (const raw of source) {
       // Journal reads are serialized; retain source order for matching.
@@ -158,6 +160,10 @@ export const reconcileTurnEvidence = async ({
         args: texts.args,
         result: raw.settled ? texts.result : undefined,
         cut: texts.cut ?? {},
+        ...(raw.sequence === undefined ? {} : { sequence: raw.sequence }),
+        ...(raw.resultSequence === undefined
+          ? {}
+          : { resultSequence: raw.resultSequence }),
       });
     }
     /** @typedef {(typeof entries)[number]} Entry */
@@ -192,6 +198,8 @@ export const reconcileTurnEvidence = async ({
         row.settled = true;
         row.cut = { ...row.cut, result: tool.cut.result };
         row.settledBy = observed ? 'guest' : 'host';
+        if (tool.resultSequence !== undefined)
+          row.resultSequence = tool.resultSequence;
       }
       unmatched.splice(at, 1);
       return true;
@@ -248,6 +256,10 @@ export const reconcileTurnEvidence = async ({
         settledBy: undefined,
         observed,
         executed: !observed,
+        ...(tool.sequence === undefined ? {} : { sequence: tool.sequence }),
+        ...(tool.resultSequence === undefined
+          ? {}
+          : { resultSequence: tool.resultSequence }),
       });
     }
   }

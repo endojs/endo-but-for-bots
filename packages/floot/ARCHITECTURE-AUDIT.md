@@ -717,8 +717,8 @@ Admission currently requires a self-contained tail with settled tool pairs;
 incomplete calls or orphan results are refused, not silently dropped.
 The canonical format remains more general, but supporting results arriving
 after a checkpoint requires the ordered-journal reconciliation below.
-This is representation/replay only: there is no new native producer or journal
-writer, and stream interruption before tree publication is still not covered.
+The ordered journal wiring below now covers interruption before tree publication
+in synthetic storage/stream tests. There is still no native compaction producer.
 No formula is created and no existing stored record is rewritten.
 Do not enable native capture until the following ordered work is complete:
 
@@ -750,13 +750,29 @@ It does not hydrate every retained payload: full canonical content is checked
 when read or compared for a retry. Aggregate counts are maintained per append
 and recomputed once on reconstruction, not scanned on every write.
 Older records without this stream have an empty stream, not inferred ordering.
-This is storage only: no production caller writes these entries yet, and recovery
-does not yet merge them with tree/tool evidence. Native capture remains disabled.
-Next wire the hosted stream and recovery together, preserving text/tool/checkpoint
-order and fencing publication failure before accepting further stream events.
-Existing tool/activity snapshot entries still lack their event positions; include
-those positions before merging ordered context with execution evidence.
-Validation: 515 Floot tests pass, including snapshot corruption, canonical payload
+Hosted streaming now writes ordered entries, coalescing ordinary answer text up
+to a 64 Ki character flush threshold and flushing before tools and checkpoints.
+An explicit completion event seals the acknowledged ordinal frontier.
+Failed publication stops the producer and leaves that journal incarnation fenced;
+cancellation flushes the last text only after the producer acknowledges shutdown.
+An interrupted stream may lose unflushed text; reconstruction labels its durable
+prefix rather than filling it out with concatenated terminal output.
+Tool observations and execution entries retain independent call/result positions.
+Recovery uses the ordered journal for model context, not duplicate tree copies.
+Unmatched effects remain supplemental after active context: journal chronology
+does not prove that a native summary included them. A newly recovered completion
+of a pre-boundary call is also surfaced as explicitly recovered evidence after the
+boundary, including when replacing an old unknown-result placeholder.
+Synthetic tests cover tree-free restoration, failure before/after event publication,
+cancellation barriers, delayed call observations and compaction-crossing effects.
+The stream refuses checkpoints crossing an unsettled reported tool call rather
+than creating an orphan result after the context boundary.
+Stream/recovery validation: 529 Floot tests pass; touched lint and docs pass with
+warnings, and source typechecking reports no errors. Adversarial review approved.
+Native capture remains disabled; native boundary identity/frontier reconciliation,
+live compaction and real-daemon restart acceptance remain open.
+Validation at the storage-foundation checkpoint: 515 Floot tests passed,
+including snapshot corruption, canonical payload
 checks, conflicting duplicate suffixes and failed content/event acknowledgement.
 Touched-file lint and docs pass with warnings; package typechecking still reports
 existing test-fixture errors but no source errors. Adversarial review completed.

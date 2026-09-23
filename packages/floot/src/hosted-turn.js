@@ -147,7 +147,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], recordToolEvent?: (event: any) => Promise<void>, maxRetainedChars?: number }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], recordToolEvent?: (event: any) => Promise<void>, recordTranscript?: (ordinal: string, record: any) => Promise<void>, completeTranscript?: (count: string) => Promise<void>, maxRetainedChars?: number }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -160,11 +160,40 @@ export const runHostedTurn = async ({
   acknowledgedCheckpoint,
   transcript,
   recordToolEvent,
+  recordTranscript,
+  completeTranscript,
   maxRetainedChars = MAX_RETAINED_CHARS,
 }) => {
   const recordObservedTool = async event => {
     if (!recordToolEvent) return;
-    await recordToolEvent(event);
+    try {
+      await recordToolEvent(event);
+    } catch (error) {
+      journalFailed = true;
+      throw error;
+    }
+  };
+  let transcriptOrdinal = 0;
+  let journalText = '';
+  let journalFailed = false;
+  const recordContext = async record => {
+    if (!recordTranscript) return;
+    try {
+      await recordTranscript(`${transcriptOrdinal}`, record);
+      transcriptOrdinal += 1;
+    } catch (error) {
+      journalFailed = true;
+      throw error;
+    }
+  };
+  const flushContextText = async () => {
+    if (!journalText || journalFailed) return;
+    await recordContext({
+      kind: 'message',
+      role: 'assistant',
+      content: journalText,
+    });
+    journalText = '';
   };
   if (signal?.aborted) {
     return harden({
@@ -366,6 +395,10 @@ export const runHostedTurn = async ({
           finalContent += textDelta;
           pendingText += textDelta;
           writer.delta(textDelta);
+          if (recordTranscript) {
+            journalText += textDelta;
+            if (journalText.length >= 65_536) await flushContextText();
+          }
           break;
         }
         case 'commentary-delta': {
@@ -386,6 +419,7 @@ export const runHostedTurn = async ({
           writer.setPhase('using tools');
           {
             flushText();
+            await flushContextText();
             const call = {
               id: `${event.id || ''}`,
               name: `${event.name || 'tool'}`,
@@ -409,10 +443,17 @@ export const runHostedTurn = async ({
               name: call.name,
               args: call.args,
             });
+            await recordContext({
+              kind: 'tool-call',
+              id: call.id,
+              name: call.name,
+              args: call.args,
+            });
             writer.toolCall(call);
           }
           break;
         case 'tool-result': {
+          await flushContextText();
           const result = `${event.result || ''}`;
           const call = callsById.get(`${event.id || ''}`);
           if (!call || call.result !== null)
@@ -425,6 +466,11 @@ export const runHostedTurn = async ({
               callId: call.id,
               result,
             });
+          await recordContext({
+            kind: 'tool-result',
+            id: call.id,
+            content: result,
+          });
           writer.toolResult({
             id: `${event.id || ''}`,
             name: `${event.name || 'tool'}`,
@@ -433,10 +479,16 @@ export const runHostedTurn = async ({
           break;
         }
         case 'compaction': {
+          if (toolCalls.some(call => call.result === null)) {
+            throw Error(
+              'Compaction cannot cross an unsettled hosted tool call',
+            );
+          }
           // The backend replaced the conversation it was carrying with a
           // summary. Recorded as a segment so it keeps its place in the turn:
           // the boundary is a position, not a fact about the turn as a whole.
           flushText();
+          await flushContextText();
           const compaction = assertCompactionCheckpoint({
             kind: 'compaction',
             summary: event.summary,
@@ -447,6 +499,7 @@ export const runHostedTurn = async ({
           // Context snapshots count toward the same retained-turn bound as
           // text and tool evidence, including their structured representation.
           retain(encodeTranscriptRecord(compaction));
+          await recordContext(compaction);
           segments.push({
             type: 'compaction',
             summary: compaction.summary,
@@ -467,6 +520,7 @@ export const runHostedTurn = async ({
           break;
         case 'abort':
           terminal = true;
+          await flushContextText();
           flushText();
           throw failTurn(`${event.reason || 'hosted turn aborted'}`, {
             delivered,
@@ -496,6 +550,15 @@ export const runHostedTurn = async ({
           }
           terminal = true;
           flushText();
+          await flushContextText();
+          if (completeTranscript) {
+            try {
+              await completeTranscript(`${transcriptOrdinal}`);
+            } catch (error) {
+              journalFailed = true;
+              throw error;
+            }
+          }
           return harden({
             delivered,
             finalContent,
@@ -527,6 +590,14 @@ export const runHostedTurn = async ({
       }
     }
     flushText();
+    if (cancellationP) await cancellationP;
+    if (!journalFailed) {
+      try {
+        await flushContextText();
+      } catch {
+        // Preserve the original failure. The journal itself fences admission.
+      }
+    }
     throw failTurn(error instanceof Error ? error.message : String(error), {
       delivered,
       ...(!terminal ? { outcomeUnknown: true } : {}),
@@ -559,6 +630,7 @@ export const runHostedTurn = async ({
   // flush any text that streamed after the last tool round so the mirrored
   // partial keeps it.
   flushText();
+  await flushContextText();
   return harden({
     delivered,
     finalContent,

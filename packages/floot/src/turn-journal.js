@@ -213,6 +213,7 @@ export const makeTurnJournal = powers => {
     record || Fail`Unknown turn journal turn`;
     if (type === 'transcript-record') {
       !record.terminal || Fail`Transcript record after terminal turn`;
+      !record.transcriptComplete || Fail`Transcript already complete`;
       recovered ||
         record.state === 'pending' ||
         Fail`Cannot append transcript for a recovered turn`;
@@ -238,6 +239,18 @@ export const makeTurnJournal = powers => {
         record.transcript = entries;
         record.transcriptChars = chars;
       };
+    } else if (type === 'transcript-complete') {
+      (!record.terminal && !record.transcriptComplete) ||
+        Fail`Transcript already settled`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot complete recovered transcript`;
+      event.count === `${record.transcript?.length ?? 0}` ||
+        Fail`Transcript completion frontier mismatch`;
+      return () => {
+        record.transcriptComplete = true;
+        record.transcriptEndSequence = `${sequence}`;
+      };
     } else if (type === 'tool-intent' || type === 'observed-tool-call') {
       !record.terminal || Fail`Tool intent after terminal turn`;
       recovered ||
@@ -255,6 +268,7 @@ export const makeTurnJournal = powers => {
         Fail`Duplicate tool journal call ID`;
       const tool = {
         callId: event.callId,
+        sequence: `${sequence}`,
         name: event.name,
         args: event.args,
         ...(event.argsRef === undefined ? {} : { argsRef: event.argsRef }),
@@ -274,6 +288,7 @@ export const makeTurnJournal = powers => {
         tool.result = event.result;
         if (event.resultRef !== undefined) tool.resultRef = event.resultRef;
         tool.settled = true;
+        tool.resultSequence = `${sequence}`;
       };
     } else if (type === 'finish') {
       !record.terminal || Fail`Duplicate terminal turn journal event`;
@@ -410,6 +425,18 @@ export const makeTurnJournal = powers => {
         assertTranscriptBudget(chars);
         chars === (record.transcriptChars ?? 0) ||
           Fail`Invalid transcript snapshot content count`;
+        if (record.transcriptComplete !== undefined) {
+          (record.transcriptComplete === true &&
+            typeof record.transcriptEndSequence === 'string' &&
+            /^[1-9][0-9]*$/.test(record.transcriptEndSequence)) ||
+            Fail`Invalid transcript completion marker`;
+          const end = BigInt(record.transcriptEndSequence);
+          (end > previous && end <= through) ||
+            Fail`Invalid transcript completion order`;
+        } else {
+          record.transcriptEndSequence === undefined ||
+            Fail`Unexpected transcript completion position`;
+        }
       }
     }
     const journalNames = [...names]
@@ -657,6 +684,16 @@ export const makeTurnJournal = powers => {
   };
 
   return harden({
+    /** @param {string} turnId @param {string} count */
+    completeTranscript: (turnId, count) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        count === `${record.transcript?.length ?? 0}` ||
+          Fail`Transcript completion frontier mismatch`;
+        if (record.transcriptComplete) return;
+        await write({ type: 'transcript-complete', turnId, count });
+      }),
     /**
      * Read and validate one full payload lazily, without hydrating other turns.
      * @param {string} turnId
@@ -693,6 +730,7 @@ export const makeTurnJournal = powers => {
           return;
         }
         !record.terminal || Fail`Transcript record after terminal turn`;
+        !record.transcriptComplete || Fail`Transcript already complete`;
         record.state === 'pending' ||
           Fail`Cannot append transcript for a recovered turn`;
         assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);

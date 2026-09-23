@@ -23,6 +23,7 @@
  * @module
  */
 
+import { Fail } from '@endo/errors';
 import {
   assertTranscriptRecord,
   pairToolCalls,
@@ -30,6 +31,10 @@ import {
 } from '@endo/hosted-agent/transcript-records.js';
 
 import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
+import {
+  encodeJournalTranscript,
+  transcriptIndex,
+} from './journal-transcript.js';
 import {
   UNKNOWN_TOOL_OUTCOME,
   reconcileTurnEvidence,
@@ -193,19 +198,58 @@ harden(transcriptToProviderMessages);
  * @param {(ref: any) => Promise<string>} readContent
  */
 export const recoverTurnTranscript = async (messages, turn, readContent) => {
-  const records = [...projectTranscript(messages)];
+  const ordered =
+    turn.transcript !== undefined || turn.transcriptComplete === true;
+  /** @type {TranscriptRecord[]} */
+  const records = ordered ? [] : [...projectTranscript(messages)];
+  /** @type {Map<TranscriptRecord, bigint>} */
+  const positions = new Map();
+  /** @param {TranscriptRecord} record */
+  const recordedPosition = record => {
+    const position = positions.get(record);
+    if (position === undefined) throw Fail`Missing recovered record position`;
+    return position;
+  };
+  const positionOf = sequence => {
+    (typeof sequence === 'string' && /^[1-9][0-9]*$/.test(sequence)) ||
+      Fail`Recovered transcript evidence has no journal position`;
+    return BigInt(sequence);
+  };
+  const add = (record, sequence) => {
+    records.push(record);
+    if (ordered) positions.set(record, positionOf(sequence));
+  };
+  if (ordered) {
+    let previous = positionOf(turn.turnId);
+    for (const [index, entry] of (turn.transcript ?? []).entries()) {
+      transcriptIndex(entry.ordinal, index) === index ||
+        Fail`Invalid recovered transcript ordinal`;
+      const sequence = positionOf(entry.sequence);
+      sequence > previous || Fail`Invalid recovered transcript order`;
+      previous = sequence;
+      // Full immutable content, never its UI preview; works for archived turns too.
+      const payload = entry.payloadRef
+        ? // eslint-disable-next-line no-await-in-loop
+          await readContent(entry.payloadRef)
+        : entry.payload;
+      const record = JSON.parse(payload);
+      encodeJournalTranscript(record) === payload ||
+        Fail`Invalid recovered transcript payload`;
+      add(assertTranscriptRecord(record), entry.sequence);
+    }
+  }
   const text = async (value, ref) =>
     ref ? readContent(ref) : argumentText(value);
   if (
     !records.some(record => record.kind === 'message' && record.role === 'user')
   ) {
-    records.unshift(
-      assertTranscriptRecord({
-        kind: 'message',
-        role: 'user',
-        content: await text(turn.input, turn.inputRef),
-      }),
-    );
+    const input = assertTranscriptRecord({
+      kind: 'message',
+      role: 'user',
+      content: await text(turn.input, turn.inputRef),
+    });
+    records.unshift(input);
+    if (ordered) positions.set(input, positionOf(turn.turnId));
   }
   // One turn's records pair as a whole: a turn's node sequence carries its
   // user message first and its tool traffic after, never a user message
@@ -228,6 +272,44 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
       result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
     }),
   });
+  /** @type {TranscriptRecord[]} */
+  const supplemental = [];
+  const knownIds = new Set(pairs.map(pair => pair.call.id));
+  const boundary = ordered
+    ? records.filter(record => record.kind === 'compaction').at(-1)
+    : undefined;
+  const boundaryPosition = boundary ? recordedPosition(boundary) : undefined;
+  const supplement = (row, recoveredResult = false) => {
+    if (!supplemental.length)
+      supplemental.push(
+        assertTranscriptRecord({
+          kind: 'message',
+          role: 'assistant',
+          content: RECOVERY_NOTICE,
+        }),
+      );
+    let id = recoveredResult
+      ? `recovered-result:${turn.turnId}:${row.id}`
+      : row.id;
+    while (knownIds.has(id)) id = `recovered:${id}`;
+    knownIds.add(id);
+    supplemental.push(
+      assertTranscriptRecord({
+        kind: 'tool-call',
+        id,
+        name: row.name,
+        args: row.args,
+      }),
+    );
+    if (row.settled)
+      supplemental.push(
+        assertTranscriptRecord({
+          kind: 'tool-result',
+          id,
+          content: row.result,
+        }),
+      );
+  };
   let recoveryNotice = false;
   for (const [position, row] of rows.entries()) {
     if (row.source === 'tree') {
@@ -243,41 +325,94 @@ export const recoverTurnTranscript = async (messages, turn, readContent) => {
         });
         const previous = pairs[position].result;
         const index = previous ? records.indexOf(previous) : -1;
-        if (index >= 0) records[index] = result;
-        else records.push(result);
+        const crossesBoundary =
+          ordered &&
+          boundaryPosition !== undefined &&
+          recordedPosition(pairs[position].call) < boundaryPosition &&
+          (row.settledBy === 'host' ||
+            positionOf(row.resultSequence) > boundaryPosition);
+        if (crossesBoundary) supplement(row, true);
+        if (index >= 0) {
+          records[index] = result;
+          if (ordered && previous)
+            positions.set(result, recordedPosition(previous));
+        } else {
+          add(
+            result,
+            crossesBoundary
+              ? `${recordedPosition(pairs[position].call)}`
+              : row.resultSequence,
+          );
+          if (ordered) {
+            // Host completion may precede the backend's delayed call report.
+            // Never put a result before its known call.
+            const callPosition = recordedPosition(pairs[position].call);
+            if (recordedPosition(result) < callPosition)
+              positions.set(result, callPosition);
+          }
+        }
       }
       // eslint-disable-next-line no-continue
       continue;
     }
+    if (ordered) {
+      // Journal chronology is not proof that a native summary covered these
+      // effects. Keep unmatched evidence visible after the active context.
+      supplement(row);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
     if (!recoveryNotice) {
-      records.push(
+      add(
         assertTranscriptRecord({
           kind: 'message',
           role: 'assistant',
           content: RECOVERY_NOTICE,
         }),
+        row.sequence,
       );
       recoveryNotice = true;
     }
-    records.push(
+    add(
       assertTranscriptRecord({
         kind: 'tool-call',
         id: row.id,
         name: row.name,
         args: row.args,
       }),
+      row.sequence,
     );
     if (row.settled) {
-      records.push(
+      add(
         assertTranscriptRecord({
           kind: 'tool-result',
           id: row.id,
           content: row.result,
         }),
+        row.resultSequence,
+      );
+    }
+  }
+  if (ordered) {
+    records.sort((left, right) => {
+      const a = recordedPosition(left);
+      const b = recordedPosition(right);
+      return a === b ? 0 : a < b ? -1 : 1;
+    });
+    records.push(...supplemental);
+    if (!turn.transcriptComplete) {
+      records.push(
+        assertTranscriptRecord({
+          kind: 'message',
+          role: 'assistant',
+          content:
+            '[Recovered a durable transcript prefix. The remaining streamed text or events may be missing; do not assume the turn completed.]',
+        }),
       );
     }
   }
   if (
+    !ordered &&
     turn.output &&
     !records.some(
       record =>
