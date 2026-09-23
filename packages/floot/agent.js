@@ -13,8 +13,7 @@
 // the daemon (src/session-turn.js): watching is how a client sees it, not what
 // keeps it alive.
 //
-// Persistence and provisioning match fae: per-session conversation history lives
-// in the session guest's petstore via @endo/conversation-tree, and a single
+// Per-session conversation history lives in the private turn journal, and a single
 // pinned factory caplet revives every session on daemon restart.
 
 import { execFile } from 'node:child_process';
@@ -27,10 +26,6 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import {
-  makeConversationTree,
-  makeEndoPetstoreBackend,
-} from '@endo/conversation-tree';
 import { runAgenticTurn } from '@endo/fae/src/turn-engine.js';
 import {
   SubagentSpawnerInterface,
@@ -50,19 +45,15 @@ import {
 } from '@endo/hosted-agent/openrouter-model-read.js';
 import {
   addUsage,
-  mergeContext,
   priceableUsage,
   projectUsage,
 } from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
+import { projectJournalTurnHistory } from './src/journal-history.js';
+import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
-import { hostedTurnMessages } from './src/turn-messages.js';
-import {
-  UNKNOWN_TOOL_OUTCOME,
-  reconcileTurnEvidence,
-} from './src/turn-evidence.js';
 import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
@@ -77,7 +68,10 @@ import {
   normalizePromptContext,
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
-import { makeTurnJournal } from './src/turn-journal.js';
+import {
+  assertBackendCheckpoint,
+  makeTurnJournal,
+} from './src/turn-journal.js';
 import {
   projectTranscript,
   recoverTurnTranscript,
@@ -539,7 +533,7 @@ const provisionPresetObjects = async (
 
 /**
  * Build a streaming agent over a guest's powers. The returned object exposes
- * `converse(input, writer)`, which appends to the conversation tree, streams the
+ * `converse(input, writer)`, which journals dialogue and tool evidence, streams the
  * model's reply through `writer` (src/stream.js), and persists the assistant
  * turn so subsequent calls keep context.
  *
@@ -581,12 +575,6 @@ const provisionPresetObjects = async (
  *   the UI, the mailbox, a queued submission. It is how a view learns that the
  *   transcript moved without asking again on a timer. `turn-started` carries
  *   the turn's input and, for a mail turn, who sent it.
- * @param {string} [options.hostedContinuity] - The hosted backend's declared
- *   continuity. A `'transcript'` backend keeps its own record of every
- *   delivered prompt and streamed reply (a CLI resuming its transcript), so an
- *   aborted or failed turn is mirrored into the tree rather than dropped —
- *   otherwise the history the UI shows and the context the model resumes with
- *   drift apart. Other backends reconcile through checkpoints instead.
  * @returns {Promise<{
  *   converse: (
  *     input: string | object,
@@ -625,11 +613,21 @@ export const makeStreamingAgent = async (
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
-    hostedContinuity,
     journalPowers = powers,
     onChange,
   } = {},
 ) => {
+  // No implicit migration: reject legacy branches before recovery or backend startup.
+  const existingNames = await E(powers).list();
+  if (
+    existingNames.some(
+      name => typeof name === 'string' && name.startsWith('ct-'),
+    )
+  ) {
+    throw Error(
+      'Legacy Floot conversation tree requires retirement or export before journal-only recovery',
+    );
+  }
   /**
    * @param {'turn-started' | 'turn-settled' | 'turn-resolved'} kind
    * @param {{ input: string, from?: string }} [detail]
@@ -643,7 +641,6 @@ export const makeStreamingAgent = async (
       console.error('[floot-agent] change observer failed:', error);
     }
   };
-  const retainsDeliveredTurns = hostedContinuity === 'transcript';
   let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
   const provideHostedClient = /** @type {any} */ (providerConfig)
     .provideHostedClient;
@@ -675,7 +672,6 @@ export const makeStreamingAgent = async (
   // so nothing reads its replies aloud.
   const effectivePrompt =
     systemPrompt || composePresetPrompt({ presetId: 'general' });
-  const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
   const turnJournal = makeTurnJournal(journalPowers);
   // Validate persisted evidence before installing a backend or starting inbox work.
   await turnJournal.list();
@@ -806,51 +802,10 @@ export const makeStreamingAgent = async (
       },
     });
 
-  // Completed usage is committed with each conversation node and recovered
-  // from the durable leaf. Incomplete usage is counted from the turn journal.
-  /**
-   * The five disjoint counts and the last context reading of
-   * `@endo/hosted-agent/token-usage.js`, and how many turns completed. Totals
-   * recorded before the three newer counts existed read them as 0.
-   *
-   * @typedef {import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number }} UsageTotals
-   */
-  /** @param {any} stored @returns {UsageTotals} */
-  const totalsFrom = stored => ({
-    ...projectUsage(stored),
-    turns: Number(stored?.turns) || 0,
-  });
-  /**
-   * @param {UsageTotals} totals
-   * @param {unknown} turnUsage
-   * @returns {UsageTotals}
-   */
-  const totalsWithTurn = (totals, turnUsage) => ({
-    ...addUsage(totals, turnUsage),
-    turns: totals.turns + 1,
-  });
-  /** @type {UsageTotals | undefined} */
-  let usage;
-  const findRecordedUsage = async () => {
-    let nodeId = await getOrCreateLeaf();
-    while (nodeId) {
-      const node = await tree.getNode(nodeId);
-      if (!node) break;
-      const recorded = /** @type {any} */ (node.metadata?.usageTotals);
-      if (recorded) return totalsFrom(recorded);
-      nodeId = node.parentId;
-    }
-    return undefined;
-  };
   const servedByOfTurn = () =>
     activeJournalServedBy.length > 0
       ? { servedBy: harden([...activeJournalServedBy]) }
       : {};
-  const loadUsage = async () => {
-    if (usage) return usage;
-    usage = (await findRecordedUsage()) ?? totalsFrom(undefined);
-    return usage;
-  };
 
   // Delegation state is per session and lives beside the inbox loop that feeds
   // it: `claim` below is the only reader of the mailbox stream.
@@ -873,52 +828,7 @@ export const makeStreamingAgent = async (
       : {}),
   });
 
-  // One session = one guest = one linear conversation. The guest's petstore
-  // holds a conversation-tree root and a linear branch beneath it. We cache the
-  // current leaf in memory and rediscover it from the tree on first use after a
-  // restart. The match is NOT keyed on the system prompt: that orphaned all
-  // history whenever the prompt changed. Instead we reuse the root with the
-  // deepest branch — the one that actually holds the conversation — ignoring any
-  // empty roots a past prompt change may have spawned. The current prompt is
-  // applied at call time (see runTurn), so reusing an old root never leaks a
-  // stale prompt.
-  /** @type {string | undefined} */
-  let cachedLeaf;
-
-  const getOrCreateLeaf = async () => {
-    if (cachedLeaf !== undefined) return cachedLeaf;
-
-    const roots = await tree.getRoots();
-    /** @type {{ leaf: string, depth: number } | undefined} */
-    let best;
-    for (const r of roots) {
-      // Walk down the (linear) branch to its deepest node, counting depth.
-      let leaf = r.id;
-      let depth = 0;
-      for (;;) {
-        const kids = await tree.getChildren(leaf);
-        if (!kids || kids.length === 0) break;
-        leaf = kids[kids.length - 1].id;
-        depth += 1;
-      }
-      if (best === undefined || depth > best.depth) {
-        best = { leaf, depth };
-      }
-    }
-    if (best !== undefined) {
-      cachedLeaf = best.leaf;
-      return best.leaf;
-    }
-
-    const root = await tree.addNode(null, [
-      { role: 'system', content: effectivePrompt },
-    ]);
-    cachedLeaf = root.id;
-    return root.id;
-  };
-
-  // Serialize turns: a streaming reply must finish (and persist its assistant
-  // node) before the next converse() reads the path, or context would race.
+  // Serialize turns: settlement must finish before the next model reads context.
   let turnChain = Promise.resolve();
   let stopped = false;
   let quarantineError;
@@ -941,39 +851,55 @@ export const makeStreamingAgent = async (
     return text;
   };
 
+  // Only successful journal finish permits acknowledging a native checkpoint.
+  const recoverBackendCheckpoint = async () => {
+    const { retained, archiveCursor } = await turnJournal.readView();
+    let newest;
+    const visit = turns => {
+      for (const turn of turns) {
+        if (
+          turn.terminal &&
+          turn.state === 'completed' &&
+          turn.backendCheckpoint !== undefined
+        ) {
+          if (!newest || BigInt(turn.turnId) > BigInt(newest.turnId)) {
+            newest = { turnId: turn.turnId, token: turn.backendCheckpoint };
+          }
+        }
+      }
+    };
+    visit(retained);
+    await visitArchivedPages(archiveCursor, visit);
+    return newest?.token;
+  };
+
   const runTurnBody = async (text, writer, meta, signal, turnId) => {
-    let baseLeafId = await getOrCreateLeaf();
-    const baseNode = await tree.getNode(baseLeafId);
-    const acknowledgedCheckpoint =
-      typeof baseNode?.metadata?.backendCheckpoint === 'string'
-        ? baseNode.metadata.backendCheckpoint
-        : undefined;
-    const receivedMail = meta?.mail?.messageNumber !== undefined;
+    const acknowledgedCheckpoint = hostedClient
+      ? await recoverBackendCheckpoint()
+      : undefined;
     const inputMessages = [
       { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
     ];
-    if (receivedMail) {
-      // Receiving typed mail is durable independently of the model's answer.
-      // In particular, a readiness acknowledgement tool must never run before
-      // the notice is visible in history. Deduplicate a replay after a failed
-      // provider call or a crash before the mailbox dismissal.
-      const path = await tree.getPath(baseLeafId);
-      if (
-        !path.some(
-          message =>
-            message.meta?.mail?.messageNumber === meta.mail.messageNumber,
-        )
-      ) {
-        const received = await tree.addNode(baseLeafId, inputMessages, {
-          turnId,
-          ...(acknowledgedCheckpoint
-            ? { backendCheckpoint: acknowledgedCheckpoint }
-            : {}),
-        });
-        baseLeafId = received.id;
-        cachedLeaf = received.id;
-      }
-    }
+
+    /** @param {import('./src/hosted-turn.js').HostedTurnSegment[] | undefined} segments */
+    const recordPresentation = async segments => {
+      const blocks = (segments ?? []).flatMap(segment => {
+        if (segment.type !== 'thinking') return [];
+        return [
+          {
+            id: segment.id,
+            text: segment.text,
+            startedAt: segment.startedAt,
+            ...(segment.endedAt === undefined
+              ? {}
+              : { endedAt: segment.endedAt }),
+            truncated: segment.truncated,
+            beforeTranscriptOrdinal: segment.beforeTranscriptOrdinal,
+          },
+        ];
+      });
+      await turnJournal.recordPresentation(turnId, blocks);
+    };
 
     /**
      * @param {string} replyText
@@ -989,42 +915,26 @@ export const makeStreamingAgent = async (
       toolCalls = [],
       segments = undefined,
     ) => {
+      if (backendCheckpoint !== undefined)
+        assertBackendCheckpoint(backendCheckpoint);
       await assertTurnToolsSettled(turnId);
-      const current = await loadUsage();
-      const nextUsage = totalsWithTurn(current, turnUsage);
-      // The completed answer always goes on record, even an empty one.
-      const messages = [
-        ...(receivedMail ? [] : inputMessages),
-        ...hostedTurnMessages({
-          replyText,
-          toolCalls,
-          segments,
-          recordEmptyReply: true,
-        }),
-      ];
-      // Commit the external answer and accounting as a unit. Typed incoming
-      // mail was recorded separately; ordinary input remains atomic with its
-      // answer, so a failed runtime call cannot leave an orphaned UI turn.
-      const finalNode = await tree.addNode(baseLeafId, messages, {
-        turnId,
-        usageTotals: harden({ ...nextUsage }),
-        ...(backendCheckpoint ? { backendCheckpoint } : {}),
-      });
-      cachedLeaf = finalNode.id;
-      usage = nextUsage;
+      await recordPresentation(segments);
+      // Finish admission is the completion frontier. Presentation/transcript
+      // settlement alone must not turn a cancelled turn into a success.
+      if (signal?.aborted) throw Error('Floot turn aborted');
       await turnJournal.append(turnId, {
         type: 'finish',
         state: 'completed',
         output: replyText,
         usage: turnUsage,
-        conversationNodeId: finalNode.id,
+        ...(backendCheckpoint ? { backendCheckpoint } : {}),
       });
       completedJournalTurn = turnId;
       if (backendCheckpoint && hostedClient) {
         try {
           await E(hostedClient).acknowledge(backendCheckpoint);
         } catch (error) {
-          // The durable tree node is the source of truth. The checkpoint rides
+          // The successful journal finish is the source of truth. The checkpoint rides
           // on the next send and safely completes acknowledgement after a
           // transient failure or reincarnation.
           console.error(
@@ -1034,7 +944,8 @@ export const makeStreamingAgent = async (
           );
         }
       }
-      writer.usage(await usageToReport(nextUsage));
+      const reportedUsage = await usageToReport();
+      if (reportedUsage) writer.usage(reportedUsage);
       // Consumers flush streaming text into a message at each tool_call and
       // flush the trailing segment at end. Re-emitting the concatenated reply
       // here would re-merge those segments into one bubble (the
@@ -1045,30 +956,6 @@ export const makeStreamingAgent = async (
         writer.final(replyText);
       }
       writer.end();
-    };
-
-    // Mirror a turn the backend's own transcript already retains — the
-    // delivered prompt, and whatever tool activity and reply streamed before a
-    // stop or a failure — without the usage accounting or reply traffic of a
-    // completed turn. Nothing to add (mail already recorded, nothing streamed)
-    // leaves the branch where it was.
-    /**
-     * @param {string} replyText
-     * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {import('./src/hosted-turn.js').HostedTurnSegment[]} [segments]
-     */
-    const commitDeliveredTurn = async (
-      replyText,
-      toolCalls = [],
-      segments = undefined,
-    ) => {
-      const messages = [
-        ...(receivedMail ? [] : inputMessages),
-        ...hostedTurnMessages({ replyText, toolCalls, segments }),
-      ];
-      if (messages.length === 0) return;
-      const node = await tree.addNode(baseLeafId, messages, { turnId });
-      cachedLeaf = node.id;
     };
 
     if (hostedClient) {
@@ -1093,25 +980,17 @@ export const makeStreamingAgent = async (
             turnJournal.completeTranscript(turnId, count),
         });
       } catch (error) {
-        // A transcript backend keeps a delivered prompt and whatever streamed
-        // before the failure (an error_max_turns turn retains every tool
-        // round), so mirror them — otherwise the next history drops messages
-        // the model still remembers. A prompt the backend never took (spawn
-        // refused, stopped before dispatch) is not mirrored: the transcript
-        // does not have it either.
+        // Canonical dialogue is already journaled. Preserve delivered public
+        // thinking separately, regardless of the backend's continuity mode.
         const partial = hostedTurnPartialOf(error);
-        if (retainsDeliveredTurns && partial?.delivered) {
+        if (partial?.delivered) {
           try {
-            await commitDeliveredTurn(
-              partial.finalContent,
-              partial.toolCalls,
-              partial.segments,
-            );
+            await recordPresentation(partial.segments);
           } catch (commitError) {
-            // The turn's own failure is the one to surface; a mirroring
+            // The turn's own failure is the one to surface; a presentation
             // failure must not mask it.
             console.error(
-              '[floot] could not mirror the failed hosted turn:',
+              '[floot] could not record failed hosted presentation:',
               commitError instanceof Error
                 ? commitError.message
                 : String(commitError),
@@ -1129,13 +1008,7 @@ export const makeStreamingAgent = async (
       } = hosted;
       activeJournalUsage = turnUsage;
       if (signal?.aborted) {
-        if (retainsDeliveredTurns && delivered) {
-          // Stopped mid-turn. The backend's transcript retains the prompt and
-          // whatever streamed before the kill; mirror that partial turn into
-          // the tree instead of dropping it. A stop that landed before the
-          // prompt was dispatched leaves nothing to mirror.
-          await commitDeliveredTurn(replyText, toolCalls, hosted.segments);
-        }
+        if (delivered) await recordPresentation(hosted.segments);
         return;
       }
       await commitExternalTurn(
@@ -1148,10 +1021,25 @@ export const makeStreamingAgent = async (
       return;
     }
 
-    // `meta` rides along on the user node (the provider ignores unknown fields)
-    // so getHistory can mark, e.g., turns that arrived via mail rather than the
-    // local UI.
-    const stagedMessages = receivedMail ? [] : [...inputMessages];
+    // The current input is always sent, even when history hides a repeated
+    // typed receipt. Display deduplication does not alter inference or retries.
+    const stagedMessages = [...inputMessages];
+    // Publish the ordered prefix before admitting tool effects.
+    let transcriptOrdinal = 0;
+    /** @param {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} record */
+    const recordProviderTranscript = async record => {
+      await turnJournal.recordTranscript(
+        turnId,
+        `${transcriptOrdinal}`,
+        record,
+      );
+      transcriptOrdinal += 1;
+    };
+    await recordProviderTranscript({
+      kind: 'message',
+      role: 'user',
+      content: text,
+    });
 
     // Agentic loop: stream a reply; if it calls tools, run them, persist the
     // assistant turn plus tool results, and loop again until the model returns a
@@ -1168,7 +1056,8 @@ export const makeStreamingAgent = async (
     writer.setPhase('thinking');
 
     const loop = await runAgenticTurn({
-      leafId: baseLeafId,
+      // The shared loop treats this as an opaque accumulator, not a tree ID.
+      leafId: turnId,
       maxRounds: maxToolRounds,
       getTools: async () => {
         if (signal?.aborted) throw Error('Floot turn aborted');
@@ -1176,7 +1065,7 @@ export const makeStreamingAgent = async (
       },
       getContext: async () => {
         // Include prior failed/cancelled turns and their known effects, not just
-        // successful tree nodes. The active turn's staging stays separate.
+        // successful turns. The active turn's staging stays separate.
         // Model context is not a UI history projection: the latter deliberately
         // carries previews. Hydrate the same full transcript hosted runners use.
         const transcript = await getTranscript(turnId);
@@ -1184,7 +1073,6 @@ export const makeStreamingAgent = async (
         return [
           { role: 'system', content: effectivePrompt },
           ...path.filter(message => message.role !== 'system'),
-          ...(receivedMail ? inputMessages : []),
           ...stagedMessages,
         ];
       },
@@ -1214,6 +1102,13 @@ export const makeStreamingAgent = async (
             },
           );
         } catch (error) {
+          if (streamed !== '') {
+            await recordProviderTranscript({
+              kind: 'message',
+              role: 'assistant',
+              content: streamed,
+            });
+          }
           // The turn's failure reaches the journal and the view, but this log
           // otherwise ends at the round that was asked for and never says
           // what became of it.
@@ -1247,13 +1142,28 @@ export const makeStreamingAgent = async (
           turnUsage = addUsage(turnUsage, roundUsage);
           activeJournalUsage = turnUsage;
         }
-        return harden({
-          message: message || { role: 'assistant', content: streamed },
-        });
+        const reply = message || { role: 'assistant', content: streamed };
+        const recordedReply = {
+          ...reply,
+          ...(Array.isArray(reply.tool_calls)
+            ? {
+                tool_calls: reply.tool_calls.map((call, index) => ({
+                  ...call,
+                  id: call.id || `floot-synth-${round}-${index}`,
+                })),
+              }
+            : {}),
+        };
+        for (const record of projectTranscript([recordedReply])) {
+          await recordProviderTranscript(record);
+        }
+        if (signal?.aborted) throw Error('Floot turn aborted');
+        return harden({ message: recordedReply });
       },
       getToolCalls: message =>
         Array.isArray(message.tool_calls) ? message.tool_calls : [],
       runTools: async (calls, tools, round) => {
+        if (signal?.aborted) throw Error('Floot turn aborted');
         writer.setPhase('using tools');
         const normalizedCalls = calls.map((call, index) => ({
           ...call,
@@ -1282,14 +1192,17 @@ export const makeStreamingAgent = async (
             turnId,
             name,
             args,
-            run:
-              parseError !== undefined
-                ? () => {
-                    throw Error(
-                      `could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`,
-                    );
-                  }
-                : () => tools.execute(name, args),
+            run: () => {
+              // Intent publication can yield across cancellation. Record its
+              // refused outcome without granting the tool execution authority.
+              if (signal?.aborted) throw Error('Floot turn aborted');
+              if (parseError !== undefined) {
+                throw Error(
+                  `could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`,
+                );
+              }
+              return tools.execute(name, args);
+            },
           });
           const resultText =
             'error' in outcome
@@ -1310,6 +1223,14 @@ export const makeStreamingAgent = async (
           };
         };
         const results = await Promise.all(normalizedCalls.map(runOne));
+        for (const result of results) {
+          await recordProviderTranscript({
+            kind: 'tool-result',
+            id: result.tool_call_id,
+            content: result.content,
+          });
+        }
+        if (signal?.aborted) throw Error('Floot turn aborted');
         return harden({ normalizedCalls, results });
       },
       commitStep: async (currentLeafId, message, step) => {
@@ -1336,40 +1257,35 @@ export const makeStreamingAgent = async (
       finalContent =
         "I wasn't able to finish that within my tool-step limit. Could you narrow it down or try again?";
       stagedMessages.push({ role: 'assistant', content: finalContent });
+      await recordProviderTranscript({
+        kind: 'message',
+        role: 'assistant',
+        content: finalContent,
+      });
       console.error(
         `[floot] turn hit maxToolRounds (${maxToolRounds}); sent fallback reply`,
       );
     }
 
-    // Fold this turn's token usage into the session total, persist it, and emit
-    // it so the UI can surface per-session cost.
-    // Compute the next totals without touching the cache, then adopt them only
-    // once the node carrying them is durable — the same discipline as
-    // `commitExternalTurn`. Mutating the live cache first meant a failed
-    // `addNode` left the in-memory counters permanently inflated by a turn
-    // that produced nothing, and the next successful turn committed that
-    // inflated figure as authoritative metadata.
-    const current = await loadUsage();
-    const totals = harden(totalsWithTurn(current, turnUsage));
-    // Persist the complete answer and accounting in one node. A provider
-    // failure leaves no partially answered branch for revival to adopt.
+    // Journal completion and usage as one fact. Total
+    // accounting is a projection, never a prerequisite for recording this turn.
     await assertTurnToolsSettled(turnId);
-    const committedNode = await tree.addNode(baseLeafId, stagedMessages, {
-      turnId,
-      usageTotals: totals,
-    });
-    cachedLeaf = committedNode.id;
-    usage = { ...totals };
+    if (signal?.aborted) throw Error('Floot turn aborted');
+    await turnJournal.completeTranscript(turnId, `${transcriptOrdinal}`);
+    // A complete transcript is not yet a successful turn. Cancellation up to
+    // admission of the journal finish still records a cancelled turn; once
+    // that immutable write is admitted, its completion wins the race.
+    if (signal?.aborted) throw Error('Floot turn aborted');
     await turnJournal.append(turnId, {
       type: 'finish',
       state: 'completed',
       output: finalContent,
       usage: turnUsage,
       ...servedByOfTurn(),
-      conversationNodeId: committedNode.id,
     });
     completedJournalTurn = turnId;
-    writer.usage(await usageToReport(totals));
+    const reportedUsage = await usageToReport();
+    if (reportedUsage) writer.usage(reportedUsage);
     writer.final(finalContent);
     writer.end();
   };
@@ -1393,6 +1309,7 @@ export const makeStreamingAgent = async (
       backendId: backendId || (hostedClient ? 'hosted' : 'provider'),
       modelId: modelId || '',
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
     });
     activeJournalTurn = turnId;
     activeJournalSignal = signal;
@@ -1942,62 +1859,6 @@ export const makeStreamingAgent = async (
   // Replay the conversation for UI repaint: user prompts, the assistant's spoken
   // answers, and each tool call paired with its result so tool activity survives
   // a refresh. The system prompt (root) is omitted.
-  const projectHistory = path => {
-    const out = [];
-    // Call IDs are provider-local and may repeat in later turns. Pair each raw
-    // tool result with the earliest unmatched call of that ID as the linear
-    // path is replayed, rather than globally indexing by ID and overwriting an
-    // earlier turn's result.
-    const pendingById = new Map();
-    for (const m of path) {
-      if (m.role === 'thinking') {
-        out.push({
-          role: 'thinking',
-          content: m.content,
-          thinking: m.thinking,
-        });
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      if (m.role === 'tool' && m.tool_call_id != null) {
-        const pending = pendingById.get(m.tool_call_id);
-        const index = pending?.shift();
-        if (index !== undefined) out[index].result = m.content;
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      if (m.role !== 'user' && m.role !== 'assistant') {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      if (typeof m.content === 'string' && m.content.trim() !== '') {
-        out.push({
-          role: m.role,
-          content: m.content,
-          ...(m.meta ? { meta: m.meta } : {}),
-        });
-      }
-      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) {
-          const args = tc.function?.arguments;
-          const index = out.length;
-          out.push({
-            role: 'tool',
-            // The provider's id, so evidence the backend reported under it
-            // reconciles by identity rather than by resemblance.
-            ...(typeof tc.id === 'string' && tc.id !== '' ? { id: tc.id } : {}),
-            name: tc.function?.name || 'tool',
-            args: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
-            result: null,
-          });
-          const pending = pendingById.get(tc.id) || [];
-          pending.push(index);
-          pendingById.set(tc.id, pending);
-        }
-      }
-    }
-    return harden(out);
-  };
 
   /**
    * This conversation as transcript records, for an adapter rebuilding its
@@ -2035,42 +1896,12 @@ export const makeStreamingAgent = async (
   };
 
   const getTranscript = async (excludeTurnId = undefined) => {
-    const turns = await readAllTurns();
-    const ids = new Set(turns.map(turn => turn.turnId));
-    const nodes = [];
-    let id = await getOrCreateLeaf();
-    while (id) {
-      const node = await tree.getNode(id);
-      if (!node) break;
-      nodes.push(node);
-      id = node.parentId;
-    }
-    const legacy = [];
-    const byTurn = new Map();
-    for (const node of nodes.reverse()) {
-      const turnId = node.metadata?.turnId;
-      if (!ids.has(turnId)) legacy.push(...node.messages);
-      else {
-        const messages = byTurn.get(turnId) || [];
-        messages.push(...node.messages);
-        byTurn.set(turnId, messages);
-      }
-    }
-    const records = [...projectTranscript(legacy)];
-    const pathIds = new Set(nodes.map(node => node.id));
-    for (const turn of turns) {
-      // The current prompt is passed separately to send(). Do not replay it
-      // or incomplete live evidence into its own backend dispatch.
-      if (
-        turn.turnId !== excludeTurnId &&
-        turn.state !== 'pending' &&
-        (!turn.conversationNodeId || pathIds.has(turn.conversationNodeId))
-      ) {
+    const records = [];
+    for (const turn of await readAllTurns()) {
+      if (turn.turnId !== excludeTurnId && turn.state !== 'pending') {
         records.push(
-          ...(await recoverTurnTranscript(
-            byTurn.get(turn.turnId) || [],
-            turn,
-            ref => turnJournal.readContent(ref),
+          ...(await recoverTurnTranscript([], turn, ref =>
+            turnJournal.readContent(ref),
           )),
         );
       }
@@ -2079,150 +1910,24 @@ export const makeStreamingAgent = async (
   };
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
-    const leafId = await getOrCreateLeaf();
-    const turns = await readAllTurns();
-    if (!turns.length) return projectHistory(await tree.getPath(leafId));
-    const ids = new Set(turns.map(turn => turn.turnId));
-    const nodes = [];
-    let id = leafId;
-    while (id) {
-      const node = await tree.getNode(id);
-      if (!node) break;
-      nodes.push(node);
-      id = node.parentId;
-    }
-    const legacy = [];
-    const byTurn = new Map();
-    for (const node of nodes.reverse()) {
-      const turnId = node.metadata?.turnId;
-      if (!ids.has(turnId)) legacy.push(...node.messages);
-      else {
-        const messages = byTurn.get(turnId) || [];
-        messages.push(...node.messages);
-        byTurn.set(turnId, messages);
-      }
-    }
-    const out = [...projectHistory(legacy)];
-    const pathIds = new Set(nodes.map(node => node.id));
-    for (const turn of turns) {
-      if (turn.conversationNodeId && !pathIds.has(turn.conversationNodeId))
-        // eslint-disable-next-line no-continue
-        continue;
-      // eslint-disable-next-line no-continue
-      if (turn.turnId === excludeTurnId) continue;
-      // A settled view leaves out the turn that is running: by its journal
-      // state, and by identity too, because the journal records `finish`
-      // before the turn has finished unwinding (a hosted acknowledge, the
-      // reply channel closing), and until it has, its viewers are still
-      // rendering it from the turn's own stream.
+    const out = [];
+    const receipts = new Set();
+    for (const turn of await readAllTurns()) {
       if (
-        settledOnly &&
-        (turn.state === 'pending' || turn.turnId === activeJournalTurn)
-      )
-        // eslint-disable-next-line no-continue
-        continue;
-      const meta = {
-        turnId: turn.turnId,
-        turnState: turn.state,
-        ...(turn.resolution ? { resolution: turn.resolution } : {}),
-      };
-      const committed = byTurn.get(turn.turnId);
-      const projected = committed ? projectHistory(committed) : [];
-      // A partial turn the backend retained was mirrored into the tree in
-      // stream order; prefer it over the journal's joined output so a
-      // failed/cancelled turn keeps the same text/tool interleaving as a
-      // completed one. A tree node with only user messages (mail input, no
-      // mirrored partial) still composes from the journal.
-      const mirrored = Boolean(
-        committed && committed.some(message => message.role !== 'user'),
-      );
-      const ordered =
-        (turn.state === 'completed' && Boolean(committed)) || mirrored;
-      const treeTools = ordered
-        ? projected.filter(message => message.role === 'tool')
-        : [];
-      // An input-only mail node is not a complete turn transcript. The journal
-      // owns failed-turn evidence even when part of that turn reached the
-      // tree. The tree mirrors the provider's argument string and the whole
-      // result; the journal re-serializes the one and may hold a preview of
-      // either, so the journal's texts are compared as the previews they are.
-      const rows = await reconcileTurnEvidence({
-        turnId: turn.turnId,
-        known: treeTools.map(message => ({
-          id: message.id ?? '',
-          name: message.name,
-          args: message.args,
-          result: message.result ?? undefined,
-        })),
-        activity: turn.activity,
-        tools: turn.tools,
-        read: tool => ({
-          args: tool.args,
-          result: tool.result,
-          cut: {
-            args: tool.argsRef !== undefined,
-            result: tool.resultRef !== undefined,
-          },
-        }),
-      });
-      /** @param {import('./src/turn-evidence.js').EvidenceRow} row */
-      const evidenceRow = row => ({
-        role: 'tool',
-        ...(row.source === 'guest' ? { id: row.id } : {}),
-        name: row.name,
-        args: row.args,
-        result:
-          row.source === 'host' && turn.activity?.length
-            ? `[Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution.]\n${row.result ?? UNKNOWN_TOOL_OUTCOME}`
-            : (row.result ?? UNKNOWN_TOOL_OUTCOME),
-      });
-      const recovered = rows.filter(row => row.source !== 'tree');
-      const users = projected.filter(message => message.role === 'user');
-      /** @type {any[]} */
-      let messages;
-      if (ordered) {
-        messages = [...projected];
-        // A mirrored call the journal settled shows the settled result. The
-        // rows the tree contributed come first, in the tree's order, so each
-        // settles the message it was read from, whatever id that message
-        // carries.
-        const treeAt = projected.flatMap((message, index) =>
-          message.role === 'tool' ? [index] : [],
+        turn.turnId !== excludeTurnId &&
+        (!settledOnly ||
+          (turn.state !== 'pending' && turn.turnId !== activeJournalTurn))
+      ) {
+        const receipt = turn.mail?.messageNumber;
+        const omitInput = receipt !== undefined && receipts.has(receipt);
+        if (receipt !== undefined) receipts.add(receipt);
+        out.push(
+          ...(await projectJournalTurnHistory(
+            turn,
+            ref => turnJournal.readContent(ref),
+            omitInput,
+          )),
         );
-        treeAt.forEach((index, position) => {
-          const row = rows[position];
-          if (row.settledBy)
-            messages[index] = { ...messages[index], result: row.result };
-        });
-        for (const row of recovered) {
-          messages.splice(
-            Math.max(0, messages.length - 1),
-            0,
-            evidenceRow(row),
-          );
-        }
-      } else {
-        messages = [
-          ...(users.length ? users : [{ role: 'user', content: turn.input }]),
-          ...recovered.map(evidenceRow),
-          ...(turn.output
-            ? [{ role: 'assistant', content: turn.output }]
-            : projected.filter(message => message.role === 'assistant')),
-        ];
-      }
-      out.push(
-        ...messages.map(message =>
-          turn.state === 'completed'
-            ? message
-            : { ...message, meta: { ...message.meta, ...meta } },
-        ),
-      );
-      if (turn.state !== 'completed') {
-        out.push({
-          role: 'assistant',
-          content: `Turn ${turn.state}${turn.error ? `: ${turn.error}` : '.'}`,
-          meta: { ...meta, turnStatus: true },
-        });
       }
     }
     return harden(out);
@@ -2268,101 +1973,31 @@ export const makeStreamingAgent = async (
       notifyChange('turn-resolved');
     });
 
-  /**
-   * What the session has used. The running totals are committed with each
-   * completed turn's conversation node, so they know nothing of a turn that
-   * failed, was stopped, or whose outcome is unknown — yet its tokens were
-   * spent all the same. Those are read from the journal, which records every
-   * turn's usage with its finish, and added here; `turns` stays the count of
-   * completed turns and `incompleteTurns` counts the rest.
-   */
-  /** @type {{ archived: number, usage: import('@endo/hosted-agent/token-usage.js').TokenUsage, turns: number } | undefined} */
-  let archivedIncomplete;
-  const tally = turns => {
-    let sum = projectUsage(undefined);
-    let count = 0;
-    for (const turn of turns) {
-      if (turn.terminal && turn.state !== 'completed') {
-        count += 1;
-        sum = addUsage(sum, turn.usage);
-      }
-    }
-    // The readings of turns that did not complete are handled by getUsage,
-    // which knows which turn came last.
-    const { context: _reading, ...counts } = sum;
-    return { usage: counts, turns: count };
-  };
-  const getUsage = async () => {
-    const completed = await loadUsage();
-    // Archived turns never change, and reading them costs a lookup per
-    // chunk; read them again only when there are more of them.
-    const {
-      archivedTurns,
-      archiveCursor,
-      retained: retainedTurns,
-    } = await turnJournal.readView();
-    let incomplete = archivedIncomplete;
-    if (!incomplete || incomplete.archived !== archivedTurns) {
-      let archiveUsage = projectUsage(undefined);
-      let turns = 0;
-      await visitArchivedPages(archiveCursor, page => {
-        const part = tally(page);
-        archiveUsage = addUsage(archiveUsage, part.usage);
-        turns += part.turns;
-      });
-      incomplete = {
-        archived: archivedTurns,
-        usage: archiveUsage,
-        turns,
-      };
-      archivedIncomplete = incomplete;
-    }
-    const retained = tally(retainedTurns);
-    // How full the window is now: the newest reading any turn left, whether
-    // or not that turn completed. The completed totals hold the last reading
-    // of a completed turn; the retained turns, which the journal lists in the
-    // order they began, are merged over it field by field, so a turn that was
-    // stopped before its backend said how large the window is keeps the size
-    // already known. (A retained turn older than the last completed reading
-    // could only win if that completed turn had since been archived, which
-    // takes hundreds of later turns that report nothing.)
-    let context = completed.context;
-    for (const turn of retainedTurns) {
-      context = mergeContext(context, projectUsage(turn.usage).context);
-    }
-    return harden({
-      ...addUsage(addUsage(completed, incomplete.usage), retained.usage),
-      ...(context === undefined ? {} : { context }),
-      turns: completed.turns,
-      incompleteTurns: incomplete.turns + retained.turns,
-    });
-  };
+  const getUsage = makeJournalUsageReader(turnJournal);
 
   /**
    * The usage a finished turn tells its view: what getUsage() answers, so the
    * figure does not drop at the end of a turn because an earlier one did not
    * complete. The turn is already journaled as completed when this runs, so
    * it may neither fail nor wait for long — a journal that cannot be read is
-   * a reason to report the completed totals, not to abort a reply.
-   *
-   * @param {UsageTotals} completedTotals
+   * a reason to skip this display update, not to abort a reply or invent totals.
    */
-  const usageToReport = async completedTotals => {
+  const usageToReport = async () => {
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     try {
       return await Promise.race([
         getUsage(),
         new Promise(resolve => {
-          timer = setTimeout(() => resolve(completedTotals), 5000);
+          timer = setTimeout(() => resolve(undefined), 5000);
         }),
       ]);
     } catch (error) {
       console.error(
-        '[floot] could not total the session’s usage; reporting completed turns only:',
+        '[floot] could not total the session’s usage; skipping display update:',
         error instanceof Error ? error.message : String(error),
       );
-      return completedTotals;
+      return undefined;
     } finally {
       clearTimeout(timer);
     }
@@ -4310,8 +3945,6 @@ export const make = async (
         // unpinned session follows the factory's configured default.
         // Persisted legacy CLI sessions fail instead of bypassing admission.
         let agentConfig;
-        /** @type {string | undefined} */
-        let hostedContinuity;
         if (suspended) {
           // Construct a records-only observer, never a backend or inbox.
           agentConfig = {
@@ -4324,7 +3957,6 @@ export const make = async (
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
           }
-          hostedContinuity = backend.descriptor.continuity;
           // Runtime container-mount tools (designs/runtime-container-fs-mount.md):
           // let the session bind capabilities it holds into its sandbox
           // under /mnt/. Built before the tool catalog is pinned, so the
@@ -4476,7 +4108,6 @@ export const make = async (
                 });
             },
             ...(extraTools.size > 0 ? { extraTools } : {}),
-            ...(hostedContinuity ? { hostedContinuity } : {}),
             ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),

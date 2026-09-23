@@ -73,6 +73,53 @@ test('compaction retained context is validated and charged to the turn bound', a
   }
 });
 
+test('thinking anchors split canonical text without entering model context', async t => {
+  const records = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'text-delta', text: 'before' };
+          yield { type: 'thinking-delta', text: 'reasoning' };
+          yield { type: 'text-delta', text: 'after' };
+          yield { type: 'thinking-delta', text: 'before call' };
+          yield { type: 'tool-call', id: 'c', name: 'read', args: '{}' };
+          yield { type: 'thinking-delta', text: 'before result' };
+          yield { type: 'tool-result', id: 'c', result: 'ok' };
+          yield { type: 'thinking-delta', text: 'more reasoning' };
+          yield { type: 'compaction', summary: 'summary' };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({
+      thinking() {},
+      delta() {},
+      setPhase() {},
+      toolCall() {},
+      toolResult() {},
+    }),
+    recordTranscript: async (ordinal, record) => {
+      t.is(ordinal, `${records.length}`);
+      records.push(record);
+    },
+  });
+  t.deepEqual(
+    result.segments
+      .filter(s => s.type === 'thinking')
+      .map(s => s.beforeTranscriptOrdinal),
+    ['1', '2', '3', '4'],
+  );
+  t.deepEqual(
+    records.map(r => r.kind),
+    ['message', 'message', 'tool-call', 'tool-result', 'compaction'],
+  );
+  t.false(JSON.stringify(records).includes('reasoning'));
+});
+
 test('public thinking is bounded display-only data with settled timing', async t => {
   const thinking = [];
   const deltas = [];

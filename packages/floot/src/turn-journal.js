@@ -4,6 +4,7 @@ import { E } from '@endo/eventual-send';
 import { passStyleOf } from '@endo/pass-style';
 import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
+import { encodeJournalPresentation } from './journal-presentation.js';
 import {
   assertTranscriptBudget,
   encodeJournalTranscript,
@@ -70,6 +71,7 @@ const CONTENT_FIELDS = harden({
   'tool-result': harden(['result']),
   'observed-tool-result': harden(['result']),
   'transcript-record': harden(['payload']),
+  presentation: harden(['payload']),
   finish: harden(['output', 'error']),
   resolve: harden([]),
 });
@@ -112,6 +114,51 @@ const assertText = (value, limit = 1024, allowEmpty = false) => {
     (allowEmpty || value.length > 0) &&
     value.length <= limit) ||
     Fail`Invalid turn journal text field`;
+};
+
+/**
+ * Opaque backend acknowledgement token, not model context or a capability.
+ * The 8192-character limit is a journal storage profile, not a provider limit.
+ * @param {unknown} value
+ */
+export const assertBackendCheckpoint = value => {
+  assertText(value, PREVIEW_CHARS);
+};
+harden(assertBackendCheckpoint);
+
+/** @param {any} record */
+const assertCheckpointState = record => {
+  (record !== null && typeof record === 'object') ||
+    Fail`Invalid turn journal checkpoint record`;
+  if (record.backendCheckpoint === undefined) return;
+  assertBackendCheckpoint(record.backendCheckpoint);
+  (record.terminal === true && record.state === 'completed') ||
+    Fail`Backend checkpoint requires a completed turn`;
+  [record.tools, record.activity].every(
+    calls =>
+      Array.isArray(calls) && calls.every(call => call?.settled === true),
+  ) || Fail`Backend checkpoint requires settled tool evidence`;
+};
+
+/**
+ * Presentation/receipt metadata, never model instructions or sender authority.
+ * Message numbers are opaque mailbox-local identities, not numeric counters here.
+ * @param {unknown} value
+ */
+const assertMailReceipt = value => {
+  if (value === undefined) return;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw Fail`Invalid turn journal mail receipt`;
+  }
+  const keys = Object.keys(value);
+  (keys.length > 0 &&
+    keys.every(key => ['from', 'messageNumber'].includes(key))) ||
+    Fail`Invalid turn journal mail receipt fields`;
+  const mail = /** @type {{ from?: unknown, messageNumber?: unknown }} */ (
+    value
+  );
+  if (Object.hasOwn(mail, 'from')) assertText(mail.from, PREVIEW_CHARS);
+  if (Object.hasOwn(mail, 'messageNumber')) assertText(mail.messageNumber, 128);
 };
 
 /** @param {bigint | number} sequence */
@@ -190,12 +237,14 @@ export const makeTurnJournal = powers => {
       if (event.reasoningEffort !== undefined)
         assertText(event.reasoningEffort);
       if (event.inputRef !== undefined) assertContentRef(event.inputRef);
+      assertMailReceipt(event.mail);
       const record = {
         turnId,
         input: event.input,
         ...(event.inputRef === undefined ? {} : { inputRef: event.inputRef }),
         backendId: event.backendId,
         modelId: event.modelId,
+        ...(event.mail === undefined ? {} : { mail: event.mail }),
         ...(event.reasoningEffort === undefined
           ? {}
           : { reasoningEffort: event.reasoningEffort }),
@@ -211,7 +260,23 @@ export const makeTurnJournal = powers => {
     }
     const record = records.get(turnId);
     record || Fail`Unknown turn journal turn`;
-    if (type === 'transcript-record') {
+    if (type === 'presentation') {
+      (!record.terminal && record.presentation === undefined) ||
+        Fail`Presentation already settled`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot append presentation for a recovered turn`;
+      assertText(event.payload, textLimit);
+      if (event.payloadRef !== undefined) assertContentRef(event.payloadRef);
+      return () => {
+        record.presentation = {
+          payload: event.payload,
+          ...(event.payloadRef === undefined
+            ? {}
+            : { payloadRef: event.payloadRef }),
+        };
+      };
+    } else if (type === 'transcript-record') {
       !record.terminal || Fail`Transcript record after terminal turn`;
       !record.transcriptComplete || Fail`Transcript already complete`;
       recovered ||
@@ -292,7 +357,7 @@ export const makeTurnJournal = powers => {
       };
     } else if (type === 'finish') {
       !record.terminal || Fail`Duplicate terminal turn journal event`;
-      for (const key of ['output', 'error', 'conversationNodeId']) {
+      for (const key of ['output', 'error']) {
         if (event[key] !== undefined) assertText(event[key], textLimit, true);
       }
       for (const key of ['outputRef', 'errorRef']) {
@@ -312,6 +377,13 @@ export const makeTurnJournal = powers => {
         record.activity.some(tool => !tool.settled)
           ? 'outcome-unknown'
           : event.state;
+      assertCheckpointState({
+        ...event,
+        terminal: true,
+        state,
+        tools: record.tools,
+        activity: record.activity,
+      });
       return () => {
         record.terminal = true;
         record.state = state;
@@ -323,7 +395,7 @@ export const makeTurnJournal = powers => {
           'errorRef',
           'usage',
           'servedBy',
-          'conversationNodeId',
+          'backendCheckpoint',
         ]) {
           if (event[key] !== undefined) {
             // Usage is kept as the five disjoint counts and the last context
@@ -378,6 +450,8 @@ export const makeTurnJournal = powers => {
         /^\d+$/.test(record.turnId) &&
         !records.has(record.turnId)) ||
         Fail`Invalid turn journal snapshot record`;
+      assertCheckpointState(record);
+      assertMailReceipt(record.mail);
       // A turn the snapshotting incarnation still had in flight is one this
       // incarnation cannot finish; a later event may still settle it.
       if (record.state === 'pending') record.state = 'outcome-unknown';
@@ -404,6 +478,9 @@ export const makeTurnJournal = powers => {
       snapshotName = snapshots[snapshots.length - 1];
       loadSnapshot(await E(powers).lookup(snapshotName));
       for (const record of records.values()) {
+        // Bounded display metadata is validated without admitting it to context.
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation(record);
         const entries = record.transcript ?? [];
         Array.isArray(entries) || Fail`Invalid transcript snapshot`;
         let previous = BigInt(record.turnId);
@@ -453,6 +530,13 @@ export const makeTurnJournal = powers => {
       if (event.type === 'transcript-record') {
         // eslint-disable-next-line no-await-in-loop
         await validateTranscriptPayload(event, true);
+      }
+      if (event.type === 'presentation') {
+        // eslint-disable-next-line no-await-in-loop
+        await validatePresentation({
+          transcript: records.get(event.turnId)?.transcript,
+          presentation: event,
+        });
       }
       prepare(event, next, true)();
       next += 1n;
@@ -639,6 +723,12 @@ export const makeTurnJournal = powers => {
       chunkRecords.length > 0 &&
       chunkRecords.length <= ARCHIVE_CHUNK_TURNS) ||
       Fail`Invalid turn journal archive chunk`;
+    for (const record of chunkRecords) {
+      assertCheckpointState(record);
+      assertMailReceipt(record.mail);
+      // eslint-disable-next-line no-await-in-loop
+      await validatePresentation(record);
+    }
     return chunkRecords;
   };
 
@@ -683,7 +773,41 @@ export const makeTurnJournal = powers => {
     return payload;
   };
 
+  /** @param {any} record */
+  const validatePresentation = async record => {
+    if (record.presentation === undefined) return undefined;
+    const entry = record.presentation;
+    assertText(entry.payload, PREVIEW_CHARS);
+    const payload =
+      entry.payloadRef === undefined
+        ? entry.payload
+        : await readContent(entry.payloadRef);
+    (entry.payload === payload.slice(0, PREVIEW_CHARS) &&
+      encodeJournalPresentation(
+        JSON.parse(payload),
+        record.transcript?.length ?? 0,
+      ) === payload) ||
+      Fail`Invalid journal presentation payload`;
+    return payload;
+  };
+
   return harden({
+    /** @param {string} turnId @param {unknown} blocks */
+    recordPresentation: (turnId, blocks) =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        record || Fail`Unknown turn journal turn`;
+        const payload = encodeJournalPresentation(
+          blocks,
+          record.transcript?.length ?? 0,
+        );
+        if (record.presentation !== undefined) {
+          payload === (await validatePresentation(record)) ||
+            Fail`Conflicting turn presentation`;
+          return;
+        }
+        await write({ type: 'presentation', turnId, payload });
+      }),
     /** @param {string} turnId @param {string} count */
     completeTranscript: (turnId, count) =>
       serialized(async () => {
@@ -736,7 +860,7 @@ export const makeTurnJournal = powers => {
         assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);
         await write({ type: 'transcript-record', turnId, ordinal, payload });
       }),
-    /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string }} options */
+    /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
     begin: options =>
       serialized(async () => {
         // Unknown historical effects are evidence, not a session-wide

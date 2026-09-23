@@ -43,7 +43,7 @@ harden(UNSETTLED_TOOL_RESULT);
  * revival.
  *
  * @typedef {{ type: 'text', text: string }
- *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
+ *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean, beforeTranscriptOrdinal: string }
  *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }
  *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} HostedTurnSegment
  */
@@ -360,6 +360,9 @@ export const runHostedTurn = async ({
               break;
             }
             flushText();
+            // Preserve the display boundary without sending reasoning to the
+            // model. A later presentation snapshot anchors to this frontier.
+            await flushContextText();
             thinkingCount += 1;
             thinking = {
               type: 'thinking',
@@ -367,6 +370,7 @@ export const runHostedTurn = async ({
               text: '',
               startedAt: Date.now(),
               truncated: false,
+              beforeTranscriptOrdinal: `${transcriptOrdinal}`,
             };
             segments.push(thinking);
             lastThinking = thinking;
@@ -453,6 +457,7 @@ export const runHostedTurn = async ({
           }
           break;
         case 'tool-result': {
+          finishThinking();
           await flushContextText();
           const result = `${event.result || ''}`;
           const call = callsById.get(`${event.id || ''}`);

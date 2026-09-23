@@ -46,6 +46,307 @@ const options = harden({
   modelId: 'sol',
 });
 
+// These fixtures deliberately serialize journal transitions and publication.
+/* eslint-disable no-await-in-loop */
+const thinkingBlock = harden({
+  id: 'thinking-1',
+  text: 'Public reasoning',
+  startedAt: 100,
+  endedAt: 200,
+  truncated: false,
+  beforeTranscriptOrdinal: '0',
+});
+
+test('thinking presentation is immutable, idempotent and survives replay and archives', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  const blocks = [{ ...thinkingBlock, text: '\u0000'.repeat(65_536) }];
+  await journal.recordPresentation(id, blocks);
+  const size = f.store.size;
+  await journal.recordPresentation(id, blocks);
+  t.is(f.store.size, size);
+  await t.throwsAsync(journal.recordPresentation(id, [thinkingBlock]), {
+    message: /Conflicting/,
+  });
+  const revived = makeTurnJournal(f.powers);
+  const turn = await revived.get(id);
+  t.deepEqual(
+    JSON.parse(await revived.readContent(turn.presentation.payloadRef)),
+    blocks,
+  );
+  await journal.append(id, { type: 'finish', state: 'failed' });
+  for (let index = 0; index < 290; index += 1) {
+    const next = await journal.begin(options);
+    await journal.append(next, { type: 'finish', state: 'completed' });
+  }
+  const archived = await makeTurnJournal(f.powers).listArchived();
+  t.deepEqual(
+    archived.find(item => item.turnId === id).presentation,
+    turn.presentation,
+  );
+});
+
+test('thinking presentation rejects malformed data before storage', async t => {
+  for (const blocks of [
+    new Array(1),
+    [{ ...thinkingBlock, authority: 'x' }],
+    [thinkingBlock, thinkingBlock],
+    [{ ...thinkingBlock, endedAt: 99 }],
+    [{ ...thinkingBlock, startedAt: Infinity }],
+    [{ ...thinkingBlock, beforeTranscriptOrdinal: '1' }],
+    [{ ...thinkingBlock, beforeTranscriptOrdinal: '00' }],
+    [{ ...thinkingBlock, text: 'x'.repeat(65_537) }],
+    Array.from({ length: 65 }, (_, i) => ({ ...thinkingBlock, id: `${i}` })),
+  ]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin(options);
+    await t.throwsAsync(journal.recordPresentation(id, blocks));
+    t.is(f.store.size, 1);
+  }
+});
+
+for (const location of ['snapshot', 'archive']) {
+  test(`thinking presentation rejects corrupted ${location} anchors`, async t => {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin(options);
+    await journal.recordPresentation(id, [thinkingBlock]);
+    await journal.append(id, { type: 'finish', state: 'failed' });
+    for (
+      let index = 0;
+      index < (location === 'snapshot' ? 34 : 290);
+      index += 1
+    ) {
+      const next = await journal.begin(options);
+      await journal.append(next, { type: 'finish', state: 'completed' });
+    }
+    const key = [...f.store.keys()]
+      .filter(name => name.startsWith(`floot-turn-${location}-`))
+      .sort()
+      .at(location === 'snapshot' ? -1 : 0);
+    const data = JSON.parse(JSON.stringify(f.store.get(key)));
+    data.records.find(turn => turn.turnId === id).presentation.payload =
+      JSON.stringify([{ ...thinkingBlock, beforeTranscriptOrdinal: '1' }]);
+    f.store.set(key, harden(data));
+    const revived = makeTurnJournal(f.powers);
+    await t.throwsAsync(
+      location === 'snapshot' ? revived.list() : revived.listArchived(),
+      { message: /thinking anchor/ },
+    );
+  });
+}
+
+test('mail receipt metadata survives dispatch replay and archival unchanged', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const mail = { from: 'sender', messageNumber: '123' };
+  const id = await journal.begin({ ...options, mail });
+  // The journal's existing pass-style boundary hardens all admitted data.
+  t.throws(
+    () => {
+      mail.from = 'renamed';
+    },
+    { instanceOf: TypeError },
+  );
+  t.deepEqual((await makeTurnJournal(f.powers).get(id)).mail, {
+    from: 'sender',
+    messageNumber: '123',
+  });
+  await journal.append(id, { type: 'finish', state: 'failed' });
+  for (let index = 0; index < 290; index += 1) {
+    const next = await journal.begin(options);
+    await journal.append(next, { type: 'finish', state: 'completed' });
+  }
+  const archived = await makeTurnJournal(f.powers).listArchived();
+  t.deepEqual(archived.find(turn => turn.turnId === id).mail, {
+    from: 'sender',
+    messageNumber: '123',
+  });
+});
+
+test('mail receipt schema rejects malformed fields before dispatch publication', async t => {
+  for (const mail of [
+    null,
+    [],
+    {},
+    { from: '' },
+    { from: 'x'.repeat(8193) },
+    { messageNumber: 123 },
+    { messageNumber: '' },
+    { messageNumber: 'x'.repeat(129) },
+    { from: 'sender', authority: 'host' },
+  ]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    await t.throwsAsync(journal.begin({ ...options, mail }));
+    t.is(f.store.size, 0);
+  }
+  for (const mail of [{ from: 'sender' }, { messageNumber: '123' }]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin({ ...options, mail });
+    t.deepEqual((await journal.get(id)).mail, mail);
+  }
+});
+
+for (const location of ['snapshot', 'archive']) {
+  test(`mail receipt ${location} rejects malformed stored metadata`, async t => {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin({
+      ...options,
+      mail: { from: 'sender', messageNumber: '123' },
+    });
+    await journal.append(id, { type: 'finish', state: 'failed' });
+    for (
+      let index = 0;
+      index < (location === 'snapshot' ? 34 : 290);
+      index += 1
+    ) {
+      const next = await journal.begin(options);
+      await journal.append(next, { type: 'finish', state: 'completed' });
+    }
+    const key = [...f.store.keys()]
+      .filter(name => name.startsWith(`floot-turn-${location}-`))
+      .sort()
+      .at(location === 'snapshot' ? -1 : 0);
+    const data = JSON.parse(JSON.stringify(f.store.get(key)));
+    data.records.find(turn => turn.turnId === id).mail.authority = 'forged';
+    f.store.set(key, harden(data));
+    const revived = makeTurnJournal(f.powers);
+    await t.throwsAsync(
+      location === 'snapshot' ? revived.list() : revived.listArchived(),
+      { message: /mail receipt fields/ },
+    );
+  });
+}
+
+test('backend checkpoint survives event replay, snapshots and archival', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  await journal.append(id, {
+    type: 'finish',
+    state: 'completed',
+    backendCheckpoint: 'native-turn-1',
+  });
+  t.is(
+    (await makeTurnJournal(f.powers).get(id)).backendCheckpoint,
+    'native-turn-1',
+  );
+  for (let index = 0; index < 290; index += 1) {
+    const next = await journal.begin(options);
+    await journal.append(next, { type: 'finish', state: 'completed' });
+  }
+  const revived = makeTurnJournal(f.powers);
+  const archived = await revived.listArchived();
+  t.is(
+    archived.find(turn => turn.turnId === id).backendCheckpoint,
+    'native-turn-1',
+  );
+});
+
+for (const location of ['snapshot', 'archive']) {
+  for (const collection of ['tools', 'activity']) {
+    test(`checkpoint ${location} refuses unsettled ${collection}`, async t => {
+      const f = fixture();
+      const journal = makeTurnJournal(f.powers);
+      const id = await journal.begin(options);
+      await journal.append(id, {
+        type: 'finish',
+        state: 'completed',
+        backendCheckpoint: 'native-turn-1',
+      });
+      for (
+        let index = 0;
+        index < (location === 'snapshot' ? 34 : 290);
+        index += 1
+      ) {
+        const next = await journal.begin(options);
+        await journal.append(next, { type: 'finish', state: 'completed' });
+      }
+      const key = [...f.store.keys()]
+        .filter(name => name.startsWith(`floot-turn-${location}-`))
+        .sort()
+        .at(location === 'snapshot' ? -1 : 0);
+      const data = JSON.parse(JSON.stringify(f.store.get(key)));
+      const record = data.records.find(turn => turn.turnId === id);
+      t.truthy(record);
+      record[collection].push({
+        callId: 'unsettled',
+        name: 'effect',
+        args: '{}',
+      });
+      f.store.set(key, harden(data));
+      const revived = makeTurnJournal(f.powers);
+      await t.throwsAsync(
+        location === 'snapshot' ? revived.list() : revived.listArchived(),
+        { message: /settled tool evidence/ },
+      );
+    });
+  }
+}
+
+test('backend checkpoints require bounded text and a truly completed turn', async t => {
+  for (const value of ['', 'x'.repeat(8193), null, 42, {}]) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin(options);
+    await t.throwsAsync(
+      journal.append(id, {
+        type: 'finish',
+        state: 'completed',
+        backendCheckpoint: value,
+      }),
+    );
+    t.is(f.store.size, 1);
+    t.is((await journal.get(id)).state, 'pending');
+  }
+  for (const state of ['failed', 'cancelled', 'outcome-unknown', 'unsettled']) {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const id = await journal.begin(options);
+    if (state === 'unsettled')
+      await journal.append(id, {
+        type: 'tool-intent',
+        callId: 'a',
+        name: 'effect',
+        args: '{}',
+      });
+    await t.throwsAsync(
+      journal.append(id, {
+        type: 'finish',
+        state: state === 'unsettled' ? 'completed' : state,
+        backendCheckpoint: 'native-turn-1',
+      }),
+      { message: /requires a completed/ },
+    );
+  }
+});
+
+test('lost checkpoint finish acknowledgement replays the durable completed token', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  f.fail();
+  await t.throwsAsync(
+    journal.append(id, {
+      type: 'finish',
+      state: 'completed',
+      backendCheckpoint: 'native-turn-1',
+    }),
+    { message: /Lost acknowledgement/ },
+  );
+  await t.throwsAsync(journal.get(id), { message: /uncertain storage/ });
+  const restored = await makeTurnJournal(f.powers).get(id);
+  t.is(restored.state, 'completed');
+  t.is(restored.backendCheckpoint, 'native-turn-1');
+});
+
+/* eslint-enable no-await-in-loop */
+
 test('targeted reads are detached snapshots and invalid transitions leave evidence unchanged', async t => {
   const { powers, store } = fixture();
   const journal = makeTurnJournal(powers);

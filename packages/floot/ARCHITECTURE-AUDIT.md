@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-21 |
-| **Updated** | 2026-09-23 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
@@ -597,6 +597,210 @@ The full Floot suite passes 496 tests; bounded context selection remains open.
 Package ESLint has zero errors; type checking still reports pre-existing test
 errors, with no errors in changed production files.
 
+### Bounded-context storage obstacle and deletion sequence (2026-09-24)
+
+The conversation-tree mirror adds a second unbounded read independently of the
+journal. `conversation-tree/src/endopetstore-backend.js`'s `load()` fetches all
+`ct-` values with `Promise.all` and retains their full messages in a `Map`.
+Even `getNode(id)` invokes that load. Floot's first `getOrCreateLeaf()` calls
+`getRoots()` and scans children, while `findRecordedUsage()` and both transcript
+projections also depend on this backend. The earlier "no lifetime resident
+cache" statement describes only the journal; it does not apply to the full
+streaming agent. Journal suffix selection alone cannot establish bounded memory.
+
+Read-only reproduction at app `0e2fefc44`: create 128 independent test nodes,
+each with 8192 characters, then request only `node-127` from a fresh production
+petstore backend. It performs 128 lookups and reads 1,048,576 content characters.
+A subsequent request for `node-0` performs zero further lookups, consistent with
+the source's retained full-node cache. This is a deterministic access-count
+probe, not a process heap measurement or a live Tokyo load test.
+
+Now that Fae and hosted paths both journal ordered dialogue, prefer retiring
+Floot's tree mirror over adding another durable leaf/index authority. This is
+a proposed sequence, not a claim that the tree is already redundant or safe to
+delete. Independent source review identified these responsibilities that still
+depend on the tree:
+
+| Responsibility | Preservation requirement before deletion |
+|---|---|
+| Incoming mail | Record typed receipt identity and sender metadata before readiness/acknowledgement tools; preserve deduplication across restart. |
+| Thinking and UI ordering | Keep typed presentation records and timing separate from model-visible canonical context; never elevate reasoning into model instructions. |
+| Usage and successful settlement | Persist reported usage and successful finish under one journal authority; do not treat transcript sealing alone as success. |
+| Codex checkpoint acknowledgement | Persist the native checkpoint before acknowledging it, retain it for the next send after a lost acknowledgement. |
+| History and branch membership | Preserve full ordered history/status; the deepest-branch fallback is not permission to silently discard tree-only sessions. |
+
+The bounded implementation sequence is:
+
+1. Add only the missing typed mail/presentation/checkpoint facts to the existing
+   journal contracts, with bounded validation and before/after-write fault tests.
+   Do not add an arbitrary metadata bag, a second owner, or a new credential path.
+2. Make new-format history, usage, context and checkpoint recovery projections
+   read that journal. Successful `finish`, not `transcriptComplete`, becomes the
+   single completion authority; acknowledge the native checkpoint afterward.
+3. Remove Floot's tree creation, writes, leaf/branch discovery and node-ID
+   dependency. Explicitly retire affected disposable sessions with the old
+   release; preserve Secrets, host, workspace access and renewal owners. Any
+   session retained for its history must be exported or explicitly handled,
+   never reopened as an empty conversation. Do not change generic tree users.
+4. Add a journal-owned compaction position/read view and paged active-context
+   selection. Archive publication order is not turn order; unresolved effects
+   and late settlements must remain visible after any selected boundary.
+5. Verify bounded startup and context assembly with large superseded content,
+   exact active tool pairs, cold restart, interrupted publication and archive
+   growth. Keep full-history UI APIs separate from bounded inference reads.
+
+This remains open work. Automatic summarization additionally requires its
+cost/trigger/unknown-window policy; neither a byte cutoff nor a tree-cache
+optimization substitutes for that policy. Native producer recovery stays in
+#1323 and is not part of this storage deletion sequence.
+
+Checkpoint prerequisite (2026-09-24, local, not deployed): successful hosted
+`finish` records now retain `backendCheckpoint` before native acknowledgement.
+The opaque text token is validated before the tree write and bounded to 8192
+characters as a journal storage profile, not as a provider protocol limit.
+Token-bearing events, snapshots and archives require a terminal completed turn
+and settled host/observed tool evidence. A failed or unacknowledged journal write
+never permits the native acknowledgement; a lost acknowledgement preserves the
+completed token. This prerequisite initially left tree-based checkpoint recovery
+in place; the local projection change below replaces that source, not the tree.
+No new formula or credential owner is introduced, and old records lacking the
+optional token do not acquire an invented checkpoint.
+Tests cover replay, snapshot/archive reconstruction, lost write replies, invalid
+tokens/states, corrupted unsettled checkpoint records, and actual hosted ordering
+including token rejection before tree publication. All 559 Floot tests pass.
+Scoped lint has zero errors (76 warnings), formatting/diff checks pass, and
+root documentation has zero errors (179 warnings). Independent adversarial
+review approved after the loaded-record validation gap was fixed.
+
+Checkpoint recovery projection (2026-09-24, local, not deployed): native send now
+receives only a token from a terminal completed journal turn. Selection uses the
+greatest dispatch ID across one pinned retained/archive view, never tree metadata
+or archive publication order. A tree write followed by a refused journal finish
+cannot authorize acknowledgement; a lost reply after successful journal storage
+can recover the committed token. Later partial nodes no longer hide a prior token.
+New tree nodes, including typed mail receipts, no longer copy or store checkpoints;
+the successful journal finish is their sole durable authority.
+
+Until tree removal, a temporary retirement guard inspects checkpoint-bearing
+ancestors and refuses legacy successful/tree-only tokens lacking journal proof,
+unless superseded by a newer proven checkpoint. Failed/unknown journal turns do
+not promote their tree tokens to success. This is refusal, not migration:
+retire/reprovision affected disposable legacy sessions before deployment.
+The existing full-tree traversal and archive scanning are not bounded-startup
+completion; no durable index, compatibility owner or retry policy is added.
+All 579 Floot tests pass, including actual follow-up sends after before/after
+finish-publication failures, lost acknowledgement, hidden legacy/proven tokens
+behind partial nodes, and archived tokens published out of dispatch order.
+Scoped lint has zero errors (57 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Adversarial re-review approved after checking
+ancestors and removing redundant tree token writes.
+
+Usage recovery projection (2026-09-24, local, not deployed): all token counts and
+completed/incomplete turn counts now derive from terminal journal records.
+Tree `usageTotals` reads/writes and the mutable completed-total cache are removed.
+Transcript sealing or a successful tree write without journal finish is not
+counted as completion; a lost reply after a stored finish recovers its usage.
+The private usage reader keeps only an immutable archived aggregate keyed to
+the captured archive frontier, combining retained turns from the same read view.
+Each nonzero context field is selected by greatest dispatch ID, so a late-settled
+old turn cannot overwrite a newer archived reading, even when only one context
+field was reported. Token arithmetic and public usage fields remain unchanged.
+
+Aggregation is now optional display work after settlement, not a prerequisite
+for saving billed usage. On reporting failure/timeout the display update is
+skipped instead of substituting guessed or incomplete totals; the completed
+turn remains durable. The cache is not a formula or a second accounting owner.
+Archive scanning still grows with history on cache misses; bounded startup and
+the journal compaction/read index remain open work.
+
+Deployment gate: retire affected disposable legacy sessions before this cutover.
+If any history is retained, export it first and explicitly account for any
+tree-only totals; this implementation does not migrate or trust those totals.
+Secrets, host, renewal owners and workspace references remain outside retirement.
+All 588 Floot tests pass. Coverage includes fabricated tree totals, both backends'
+tree/finish write failures and lost replies, late archived context readings,
+successful settlement despite reporting failure, and overlapping captured views
+completed out of order with cache invalidation/reuse. Scoped lint has zero errors
+(60 warnings), root docs zero errors (179 warnings), and formatting/diff checks
+pass. Adversarial review approved the private projection and concurrency tests.
+
+Journal-only history cutover (2026-09-24, locally verified, not deployed):
+the current implementation removes Floot's conversation-tree reads and writes,
+leaf cache, and obsolete hosted turn-message converter.
+Model context and UI history now project the private turn journal; thinking,
+mail metadata, tool evidence, checkpoint recovery and usage retain that same
+durable authority.
+An existing `ct-*` name refuses session construction before journal recovery or
+backend startup: retire/export affected sessions, not migrate them implicitly.
+Removing those names manually is not a supported migration or completeness proof.
+Secrets, host, renewal owners and workspace references remain outside retirement.
+Repeated typed receipts hide only the repeated display input, not execution;
+automatic mail retry policy is unchanged pending its separate decision.
+Recovered effects and interrupted reply text with unprovable ordering are marked
+explicitly unordered rather than silently discarded or presented as new effects.
+All 587 Floot tests and four real-daemon journal restart/lifecycle tests pass.
+Scoped lint has zero errors (79 warnings before the final regression addition;
+the final helper/test check has two warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Adversarial re-review approved after the
+interrupted reply evidence fix and receipt continuation regression.
+The unused Floot dependency on `@endo/conversation-tree` is removed as a follow-up;
+composite configuration regeneration produces no tracked changes, and lockfile
+regeneration removes only that dependency edge. Generic conversation-tree users
+remain unchanged. Bounded context reads and archive indexing remain open;
+this deletion alone does not establish bounded recovery memory.
+
+Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
+preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
+in the private journal before receipt-tree writes or inference. At least one
+field is required when mail metadata is present; unknown fields are refused.
+Sender text is bounded to 8192 characters and opaque mailbox-local message
+identity to 128 characters as storage profiles. Sender text is presentation,
+not authority. Replay, snapshots and archive reads validate the same shape.
+The existing hardened-data boundary freezes admitted metadata; stored/recovered
+records remain detached copies. A refused receipt-tree write still leaves the
+journal's original sender, message number and input available after reconstruction.
+
+This does **not** change mail retry/deduplication policy. Ordinary mail currently
+carries sender metadata only; typed requests/forms also carry the message number.
+The tree currently deduplicates typed receipt text, not automatic execution:
+unfinished inbox tasks can be dispatched again after restart because the inbox
+handled set is incarnation-local. At-most-once automatic admission would leave
+uncertain requests/forms and lost replies for explicit recovery, rather than
+rerunning inference or resending an uncertain reply. That behavior change is
+awaiting an operator decision; no journal receipt cache or new policy is added
+by this metadata prerequisite. Missing historical receipts are not dedup proof.
+
+All 564 Floot tests pass, including malformed snapshot/archive rejection and
+receipt recovery after a failed tree write. Scoped lint has zero errors (77
+warnings), and root documentation has zero errors (179 warnings).
+Formatting and diff checks pass; adversarial review approved the source, tests
+and scope after the metadata immutability test and type narrowing were corrected.
+
+Thinking presentation prerequisite (2026-09-24, local, not deployed): hosted
+turns publish a finalized, typed thinking snapshot in the same private journal
+before the successful tree mirror/finish or the partial-turn mirror.
+Delivered failed/cancelled turns retain presentation independently of whether
+their backend retains its own transcript. This is settlement-time durability,
+not a claim that every streamed thinking delta survives abrupt process loss.
+The existing preview limits remain 64 blocks and 65,536 total text characters;
+large encoded payloads use the journal's content-before-event references.
+Each block records its identity, timing, truncation and a canonical transcript
+ordinal anchor. Flushing text before a new thinking block and ending thinking
+at tool/compaction boundaries preserves placement without putting reasoning
+into model context. An omitted end time is allowed; neither presentation nor
+transcript sealing asserts successful settlement.
+Exact duplicate publication is idempotent; conflicting snapshots and malformed
+identity, timing, bounds or anchors are refused. Replay, snapshots and archive
+reads validate presentation. No formula, credential owner or second journal is
+introduced. UI history still reads the tree until the planned projection cutover.
+All 575 Floot tests pass, including sparse/malformed payloads, archive/snapshot
+corruption, exact thinking/tool/compaction ordering, before/after-publication
+failures, failed tree writes, and cancellation after the interruption barrier.
+Restored canonical context excludes reasoning in every integration fault case.
+Scoped lint has zero errors (92 warnings); root documentation has zero errors
+(179 warnings). Formatting/diff checks pass. Adversarial re-review approved
+after sparse-array validation and the tool-result thinking boundary were fixed.
+
 ## FA-02 — Model context must not be built from UI previews
 
 Deployment reconciliation (generation 169, 2026-09-23): app `819aa18c8` now
@@ -664,6 +868,60 @@ The full Floot suite passes 407 tests; package ESLint has no errors; formatting 
 Explicit compaction/context selection remains open: this converter does not implement
 a compaction policy, and the full-history replay can grow without a context bound.
 The full-content fix is now deployed; bounded context remains open.
+
+Direct-provider journal prerequisite (2026-09-23, local, not deployed):
+Fae's assistant/tool dialogue previously remained in `stagedMessages` until the
+final tree write. A later provider failure could lose earlier assistant prose;
+putting a future summary only there would also lose its context boundary.
+The current implementation uses the existing ordered turn journal for input,
+completed model replies/calls before tool execution, tool results, and the
+acknowledged prefix before the final tree mirror. A rejected provider stream's
+available text is retained as an unsealed prefix, not claimed complete.
+No new formula, journal schema, or automatic summarization policy is introduced.
+Initial full Floot coverage passed 531 tests. Adversarial review then identified
+cancellation during transcript/intent publication as an execution-admission gap;
+new checks refuse execution after cancellation while preserving settled evidence.
+Expanded coverage also verifies malformed arguments and synthetic IDs, identical
+parallel calls settling in reverse order, and failed/lost acknowledgements at
+call, result, seal, tree, and finish publication. Model calls and external tools
+are not replayed during reconstruction. A further review check fences cancellation
+before and after sealing: complete dialogue is not necessarily a successful turn.
+Cancellation before admission of the final tree write leaves a cancelled turn,
+possibly with a complete transcript; once that immutable write is admitted, its
+completion wins the race. No implicit cancellation of already-admitted effects.
+In-memory reconstruction is not real-daemon durability acceptance, and process
+loss during a live stream can still lose its unacknowledged text. Usage whose
+terminal journal write cannot be acknowledged has no new independent durable
+owner in this slice. Real-daemon/live acceptance remains required.
+Final local validation: all 547 Floot tests pass, formatting and diff checks
+pass, scoped ESLint has zero errors (56 warnings), and root documentation has
+zero errors (179 warnings). Independent adversarial review approved the changes
+after both cancellation gaps were fixed and regression-tested.
+
+Real-daemon reconstruction evidence (2026-09-23, local):
+`packages/daemon/test/floot-direct-journal.test.js` runs the production streaming
+agent and private journal in a persisted module formula with real daemon storage
+and GC enabled. Inert inference creates a failed tool turn with a long assistant
+message stored by content reference, one durable test effect, and partial reply.
+After orderly shutdown and cold restart, the exact transcript and turn records
+match and reconstruction makes zero provider calls. A follow-up provider request
+receives the full long text and settled tool result; its completed sealed turn
+survives a second cold start. The durable effect proof remains unchanged.
+This tests the streaming-agent/private-journal boundary, not the full Floot
+factory provisioning path, native producers, abrupt process death, or Tokyo.
+The restart test and three adjacent factory lifecycle tests pass together;
+scoped lint has zero errors (three warnings), formatting/diff checks pass, and
+root documentation has zero errors (179 warnings). Independent review requested
+full expected-text and exact turn-count assertions; both are now verified.
+
+Next sequence: finish direct-provider ordered durability, then bounded active
+context admission and journal-owned suffix selection, then automatic summaries.
+Checking final request size alone does not bound assembly: `getTranscript()`
+currently hydrates all archive pages before selecting the last compaction.
+Keep full-history APIs separate from bounded model-context reads, and retain
+unresolved execution evidence. Automatic summarization still needs an explicit
+cost/trigger/headroom and unknown-window policy; do not silently truncate history
+or introduce a separate context authority to bypass those decisions.
 
 Recorded-compaction replay correction (2026-09-23, local, not deployed):
 the direct-provider converter ignored canonical compaction records, replaying
@@ -2816,6 +3074,52 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Usage totals and context readings now project from terminal journal
+evidence; tree totals and the completed-total cache are removed. Optional totals
+reporting cannot block durable settlement. 588 Floot tests and lint/docs/format
+gates pass after adversarial review. Not deployed; legacy session retirement is
+a cutover gate and tree-based history remains to remove.
+
+2026-09-24 — Checkpoint recovery now selects only completed journal evidence;
+tree token writes are removed. Legacy unproven tokens require retirement, not
+silent promotion. 579 Floot tests and lint/docs/format gates pass after
+adversarial review. Not deployed; tree/history/usage retirement remains open.
+
+2026-09-24 — Tree-retirement prerequisite: persist bounded typed thinking
+presentation separately from canonical model context, with ordering anchors,
+timing and truncation. 575 Floot tests and lint/docs/format gates pass after
+adversarial review. Settlement-time durability only; UI projection cutover and
+Tokyo deployment remain pending.
+
+2026-09-24 — Tree-retirement prerequisite: journal existing mail sender/receipt
+metadata before tree writes or inference, validating it on replay and saved-state
+reads. 564 Floot tests and lint/docs/format gates pass after adversarial review.
+No retry/deduplication policy change or Tokyo deployment claimed.
+
+2026-09-24 — Tree-retirement prerequisite: hosted successful finish journals its
+backend checkpoint before native acknowledgement, with bounded token and settled
+state validation on write/replay/snapshot/archive. 559 Floot tests and lint/docs/
+format gates pass after adversarial review. Tree-based recovery remains for now;
+no deployment or completed tree retirement claimed.
+
+2026-09-24 — FA-01/02 bounded-context investigation reproduces eager full-tree
+payload loading independently of journal paging. Record the remaining tree
+semantics and a deletion-before-indexing sequence; no production storage change
+or bounded-memory completion claim.
+
+2026-09-23 — FA-02 real-daemon direct-provider journal verification: failed-turn
+full content/tool evidence and a subsequent sealed turn survive two orderly cold
+restarts, with no inference on reconstruction or repeated durable test effect.
+Four daemon tests, lint/format and root docs pass. Not Tokyo or process-loss
+acceptance; no production implementation changed in this test slice.
+
+2026-09-23 — FA-02 direct-provider ordered transcript durability: journal model
+replies before tools and settled results before continuation, seal before the
+final tree mirror, and fence cancellation at effect and settlement admission.
+547 Floot tests and documentation/lint/format gates pass; adversarial review
+approved. No new schema or formula. Not deployed; real-daemon acceptance and
+bounded context/automatic summaries remain open.
 
 2026-09-23 — FA-07 runtime context plumbing: selected OpenCode route context
 comes from the existing broker catalog at activation; fabricated model limits

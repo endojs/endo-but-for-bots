@@ -210,6 +210,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
   );
   t.deepEqual(await E(session).getHistory(), [
     { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'hello back' },
     {
       role: 'tool',
       name: 'handoffDesign',
@@ -220,8 +221,8 @@ test('factory facets retain disconnected turns, commit history, and provision de
         base: 'main',
         rounds: '2',
       }),
-      result: handoff,
+      result: `[Recovered evidence; ordering relative to the reply is unknown.]\n${handoff}`,
+      meta: { recoveredEvidence: true, orderUnknown: true },
     },
-    { role: 'assistant', content: 'hello back' },
   ]);
 });
