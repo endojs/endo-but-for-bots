@@ -8,11 +8,15 @@ import { transcriptIndex } from '../src/journal-transcript.js';
 const fixture = () => {
   const values = new Map();
   const writes = [];
+  const reads = [];
   let failAt;
   let storeBeforeFailure = false;
   const powers = Far('TranscriptStorage', {
     list: () => harden([...values.keys()]),
-    lookup: name => values.get(name),
+    lookup: name => {
+      reads.push(name);
+      return values.get(name);
+    },
     storeValue: (value, name) => {
       writes.push(name);
       if (name === failAt && !storeBeforeFailure)
@@ -27,6 +31,7 @@ const fixture = () => {
     powers,
     values,
     writes,
+    reads,
     fail: (name, after = false) => {
       failAt = name;
       storeBeforeFailure = after;
@@ -190,6 +195,7 @@ for (const [where, after] of [
     const record = await revived.get(id);
     if (after && where === 'event') {
       t.is(record.transcript.length, 1);
+      t.is(record.transcript[0].kind, 'compaction');
       await revived.recordTranscript(id, '0', checkpoint);
     } else {
       t.is(record.transcript, undefined);
@@ -254,6 +260,58 @@ test('reconstruction rejects corrupt transcript snapshot indexes and budgets', a
     });
   }
 });
+
+for (const storage of ['event', 'snapshot', 'archive']) {
+  test(`kind index survives ${storage} without hydration and rejects missing or conflicting metadata`, async t => {
+    const { powers, values, reads } = fixture();
+    const journal = makeTurnJournal(powers);
+    const id = await journal.begin(options);
+    await journal.recordTranscript(id, '0', {
+      kind: 'compaction',
+      summary: 's'.repeat(9000),
+    });
+    await journal.append(id, { type: 'finish', state: 'completed' });
+    const count = storage === 'archive' ? 300 : storage === 'snapshot' ? 32 : 0;
+    for (let index = 0; index < count; index += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const next = await journal.begin(options);
+      // eslint-disable-next-line no-await-in-loop
+      await journal.append(next, { type: 'finish', state: 'completed' });
+    }
+    const name =
+      storage === 'event'
+        ? 'floot-turn-event-00000000000000000002'
+        : [...values.keys()].find(key =>
+            key.startsWith(`floot-turn-${storage}-`),
+          );
+    const original = values.get(name);
+    const read = async () => {
+      const revived = makeTurnJournal(powers);
+      return storage === 'archive'
+        ? (await revived.listArchivedPage()).records.find(
+            record => record.turnId === id,
+          )
+        : revived.get(id);
+    };
+    reads.length = 0;
+    t.is((await read()).transcript[0].kind, 'compaction');
+    t.false(reads.some(key => key.startsWith('floot-turn-content-')));
+    for (const kind of [undefined, 'invalid', 'message']) {
+      const value = JSON.parse(JSON.stringify(original));
+      const entry =
+        storage === 'event'
+          ? value
+          : value.records.find(record => record.turnId === id).transcript[0];
+      if (kind === undefined) delete entry.kind;
+      else entry.kind = kind;
+      values.set(name, harden(value));
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(read, { message: /kind index/ });
+    }
+    values.set(name, original);
+    t.is((await read()).transcript[0].kind, 'compaction');
+  });
+}
 
 test('full external payload validation is lazy and checks canonical content and preview', async t => {
   const { powers, values } = fixture();

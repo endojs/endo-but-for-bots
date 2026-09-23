@@ -749,6 +749,27 @@ regeneration removes only that dependency edge. Generic conversation-tree users
 remain unchanged. Bounded context reads and archive indexing remain open;
 this deletion alone does not establish bounded recovery memory.
 
+Compaction-selection prerequisite (2026-09-24, local, not deployed): each
+transcript entry carries a required kind index derived internally from canonical
+content and published in the same event as its payload/reference.
+Replay, snapshot and archive metadata reads validate both the kind and its match
+to the canonical payload preview without loading large externalized content.
+Full hydration still validates the canonical content and index together.
+No new formula, mutable index owner or separate publication is introduced.
+Legacy records without this field are refused, not eagerly migrated; archives
+are checked when read, so successful retained-state startup does not prove all
+legacy archives are compatible. Retire affected disposable sessions before deploy.
+The index alone does not select context or bound archive metadata scanning.
+The next context reader must preserve unresolved and late tool evidence across
+compaction boundaries, including older turns archived after newer turns.
+Full-history UI APIs remain separate from this upcoming inference read path.
+All 590 Floot tests and four real-daemon journal/lifecycle tests pass.
+Tests cover missing, invalid and conflicting kinds in events, snapshots and
+archives, large-payload metadata reads without hydration, and lost-write replies.
+Scoped lint has zero errors (19 warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass; independent adversarial review found no
+durability blocker.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one

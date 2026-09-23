@@ -187,6 +187,23 @@ const assertContentRef = ref => {
 };
 
 /**
+ * Canonical transcript encoding starts with kind. Check the bounded preview
+ * as well as the index so metadata selection cannot hide a mismatched entry.
+ * Missing metadata requires session retirement, not an eager history migration.
+ * @param {any} entry
+ */
+const assertTranscriptKind = entry => {
+  (typeof entry.kind === 'string' &&
+    ['message', 'tool-call', 'tool-result', 'compaction'].includes(
+      entry.kind,
+    )) ||
+    Fail`Missing or invalid transcript kind index; retire legacy session`;
+  (typeof entry.payload === 'string' &&
+    entry.payload.startsWith(`{"kind":"${entry.kind}",`)) ||
+    Fail`Transcript kind index does not match payload`;
+};
+
+/**
  * Append-only, single-writer journal scoped to one Floot agent's powers.
  * Storage failure is ambiguous: this incarnation is permanently poisoned.
  * A new incarnation replays from the newest snapshot and preserves unresolved
@@ -277,6 +294,7 @@ export const makeTurnJournal = powers => {
         };
       };
     } else if (type === 'transcript-record') {
+      assertTranscriptKind(event);
       !record.terminal || Fail`Transcript record after terminal turn`;
       !record.transcriptComplete || Fail`Transcript already complete`;
       recovered ||
@@ -292,6 +310,7 @@ export const makeTurnJournal = powers => {
         (event.payloadRef?.chars ?? event.payload.length);
       assertTranscriptBudget(chars);
       const entry = {
+        kind: event.kind,
         ordinal: event.ordinal,
         sequence: `${sequence}`,
         payload: event.payload,
@@ -728,6 +747,10 @@ export const makeTurnJournal = powers => {
       assertMailReceipt(record.mail);
       // eslint-disable-next-line no-await-in-loop
       await validatePresentation(record);
+      for (const entry of record.transcript ?? []) {
+        // eslint-disable-next-line no-await-in-loop
+        await validateTranscriptPayload(entry, true);
+      }
     }
     return chunkRecords;
   };
@@ -749,6 +772,7 @@ export const makeTurnJournal = powers => {
    * @param {boolean} [metadataOnly]
    */
   const validateTranscriptPayload = async (entry, metadataOnly = false) => {
+    assertTranscriptKind(entry);
     assertText(entry.payload, PREVIEW_CHARS);
     if (entry.payloadRef !== undefined) {
       const { name, chars } = assertContentRef(entry.payloadRef);
@@ -764,8 +788,11 @@ export const makeTurnJournal = powers => {
         : entry.payload;
     (typeof payload === 'string' && payload.length <= MAX_CONTENT_CHARS) ||
       Fail`Invalid transcript payload`;
-    encodeJournalTranscript(JSON.parse(payload)) === payload ||
+    const decoded = JSON.parse(payload);
+    encodeJournalTranscript(decoded) === payload ||
       Fail`Noncanonical transcript payload`;
+    decoded.kind === entry.kind ||
+      Fail`Transcript kind index does not match full payload`;
     if (entry.payloadRef !== undefined) {
       entry.payload === payload.slice(0, PREVIEW_CHARS) ||
         Fail`Transcript preview does not match its content`;
@@ -844,7 +871,7 @@ export const makeTurnJournal = powers => {
       serialized(async () => {
         const record = records.get(turnId);
         record || Fail`Unknown turn journal turn`;
-        /** @type {Array<{ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
+        /** @type {Array<{kind: string, ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
         const entries = record.transcript ?? [];
         const index = transcriptIndex(ordinal, entries.length);
         const payload = encodeJournalTranscript(value);
@@ -858,7 +885,13 @@ export const makeTurnJournal = powers => {
         record.state === 'pending' ||
           Fail`Cannot append transcript for a recovered turn`;
         assertTranscriptBudget((record.transcriptChars ?? 0) + payload.length);
-        await write({ type: 'transcript-record', turnId, ordinal, payload });
+        await write({
+          type: 'transcript-record',
+          turnId,
+          ordinal,
+          kind: JSON.parse(payload).kind,
+          payload,
+        });
       }),
     /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
     begin: options =>
