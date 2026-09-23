@@ -52,6 +52,7 @@ export const HostedBackendFactoryInterface = M.interface(
     // account named; `authority` is the account authority the broker serves.
 
     modelCatalog: M.call().optional(M.string()).returns(M.promise()),
+    inspectBindings: M.call(M.record()).returns(M.promise()),
     create: M.call(M.record(), M.remotable('HostedToolSet')).returns(
       M.promise(),
     ),

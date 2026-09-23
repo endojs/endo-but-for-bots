@@ -214,6 +214,7 @@ const MESSAGE_LIMITS = harden({ stringLengthLimit: 100_000_000 });
 const FlootSessionInterface = M.interface('FlootSession', {
   getInfo: M.callWhen().returns(M.record()),
   getExecutionState: M.callWhen().returns(M.record()),
+  getBindings: M.callWhen().returns(M.record()),
   // Admission must close on delivery, not after callWhen's argument await.
   emergencyStop: M.call().returns(M.promise()),
   resume: M.callWhen().returns(M.record()),
@@ -4755,6 +4756,15 @@ export const make = async (
           await assertSessionReady(id);
           return networkController(id).get();
         },
+        async getBindings() {
+          await assertSessionReady(id);
+          const entry = (await loadRegistry()).find(item => item.id === id);
+          if (!entry?.backendId)
+            throw Error('Only a hosted session has bindings to inspect');
+          const backend = (await getHostedBackends()).get(entry.backendId);
+          if (!backend) throw Error('Session backend is unavailable');
+          return E(backend.factory).inspectBindings(harden({ sessionId: id }));
+        },
         async rebind(bindings) {
           await assertSessionReady(id);
           if (turns.getCurrent())
@@ -4804,7 +4814,13 @@ export const make = async (
             if (pendingRebinds.get(id) === authorized)
               pendingRebinds.delete(id);
           }
-          return harden({ rebind: [...authorized] });
+          const backend = (await getHostedBackends()).get(entry.backendId);
+          if (!backend)
+            throw Error('Session backend is unavailable after rebind');
+          const bindingsNow = await E(backend.factory).inspectBindings(
+            harden({ sessionId: id }),
+          );
+          return harden({ rebind: [...authorized], bindings: bindingsNow });
         },
         async setNetworkPolicy(policy) {
           await assertSessionReady(id);
@@ -4884,8 +4900,10 @@ export const make = async (
             return 'resume() — After completed emergency stop, explicitly permit a fresh incarnation. Never replays a prompt.';
           if (methodName === 'getNetworkPolicy')
             return 'getNetworkPolicy() — Report enforced backend support, configured off/public-internet policy, and pending requests. Null policy is not proof of off enforcement.';
+          if (methodName === 'getBindings')
+            return 'getBindings() — Read-only hosted binding snapshot: recorded (null before provisioning), proposed, and changed binding names. Each binding view contains image (rootfs), account (accountRef and runtime credential kind where applicable), and provider (dependency formula identities). No credentials or tool capabilities. Inspection grants no authorization and is not a reservation; a later rebind checks current state again.';
           if (methodName === 'rebind')
-            return 'rebind(bindings) — Operator-only idle-session rebind of what a hosted session was bound to when its record was created: "image" (the broker’s pinned image), "account" (Codex, whose plan records the account), "credential kind" (Claude) and "provider" (the backend’s own services: its broker, sandbox, state and storage formulas; for Claude and OpenCode the account is the broker’s own, so a broker re-minted over another Secret is a "provider" change). Stops the old incarnation and releases its authority, then the record is revised under the named bindings; a binding that changed without being named is refused by name and nothing is revised, though the incarnation was replaced. The session keeps its identity, workspace and conversation. Assumes the re-minted services keep the host’s state and storage roots.';
+            return 'rebind(bindings) — Operator-only idle-session rebind: "image" (pinned rootfs), "account" (declared account authority, including Claude credential kind), and "provider" (broker, sandbox, state and storage formula identities). Use getBindings() to inspect recorded and proposed values first. Stops the old incarnation and releases its authority before revision; changes not authorized by name are refused. Returns { rebind, bindings }, where bindings is the resulting read-only snapshot, not merely the names authorized. The session keeps its identity, workspace and conversation. Assumes replacement services retain the state and storage roots. A failed result inspection may follow a completed revision; inspect again before deciding to retry.';
           if (methodName === 'setNetworkPolicy')
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')

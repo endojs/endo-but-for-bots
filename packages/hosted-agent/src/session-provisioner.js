@@ -138,7 +138,9 @@ const readRebind = (value, known, label) => {
  *   adapter's parser: what the controller activates and the storage owner
  *   removes.
  * @param {(context: { request: Record<string, any> }) => Record<string, any>} [powers.fields]
- *   The adapter's own plan fields.
+ *   The adapter's own plan fields. Declared image/account binding fields
+ *   must be request-independent: inspection projects them with an empty
+ *   request without admitting a model or acquiring any session resources.
  * @param {Record<string, string>} [powers.immutable] Adapter fields no reopen
  *   may change, by plan field and the name a refusal gives it.
  * @param {Record<string, string>} [powers.rebindable] Further adapter fields
@@ -409,10 +411,63 @@ export const makeSessionProvisioner = ({
     }
     return E(owner).start(sessionId, toolSet);
   };
+  /**
+   * Diagnostic only: no catalog read, activation, mutation or authorization.
+   * Project only declared binding fields and dependency identities, never
+   * tools, persona, credentials or incarnation references. A later reopen
+   * still compares the actual record against its own proposed bindings.
+   * @param {string} sessionId
+   */
+  const inspectBindings = async sessionId => {
+    const record = await E(owner).inspect(sessionId);
+    const plan = record === undefined ? undefined : readPlan(record.plan);
+    const proposedFields = fields({ request: {} });
+    /** @param {Record<string, any>} values */
+    const project = values =>
+      Object.fromEntries(
+        [IMAGE, ACCOUNT].map(binding => [
+          binding,
+          Object.fromEntries(
+            Object.entries(rebindableNames)
+              .filter(([, name]) => name === binding)
+              .map(([field]) => [field, values[field] ?? null]),
+          ),
+        ]),
+      );
+    const proposed = {
+      ...project(proposedFields),
+      provider: { ...dependencies },
+    };
+    const recorded =
+      plan === undefined
+        ? null
+        : {
+            ...project(plan),
+            provider: Object.fromEntries(
+              Object.keys(dependencies).map(role => [
+                role,
+                record.references?.[role] ?? null,
+              ]),
+            ),
+          };
+    const changed =
+      recorded === null
+        ? []
+        : [...bindings].filter(binding =>
+            Object.entries(proposed[binding]).some(
+              ([key, value]) => recorded[binding][key] !== value,
+            ),
+          );
+    return harden({ recorded, proposed, changed });
+  };
+
   // The names a request may authorize, declared with the function so the
   // factory's descriptor can carry them to an operator.
   return harden(
-    Object.assign(provision, { rebindable: harden([...bindings]) }),
+    Object.assign(provision, {
+      rebindable: harden([...bindings]),
+      inspectBindings,
+    }),
   );
 };
 harden(makeSessionProvisioner);

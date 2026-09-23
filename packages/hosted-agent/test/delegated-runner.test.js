@@ -264,6 +264,14 @@ test('the descriptor is the runner’s own: its id, no pinning, its policies, an
   });
 });
 
+test('a delegated runner never exposes operator binding identities', async t => {
+  const { factory, beneath } = makeHarness();
+  await t.throwsAsync(E(factory).inspectBindings({ sessionId: 's1' }), {
+    message: /do not expose operator bindings/,
+  });
+  t.is(beneath.calls.length, 0);
+});
+
 test('stop and destroy reach only this runner’s sessions', async t => {
   const { factory, beneath } = makeHarness();
   await E(factory).create(harden({ sessionId: 's1' }), tools);

@@ -602,6 +602,10 @@ export const makeDelegatedRunner = ({
   };
 
   const factory = makeExo('DelegatedRunner', HostedBackendFactoryInterface, {
+    // Operator formula identities and account authority are not delegated.
+    async inspectBindings() {
+      throw Fail`Delegated runners do not expose operator bindings`;
+    },
     // Answered whether or not the runner still stands: a holder's Floot asks
     // every backend it knows at once, and one that refused would cost it the
     // others. It says nothing a holder did not already have.

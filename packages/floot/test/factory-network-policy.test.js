@@ -100,6 +100,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
           },
         ],
       }),
+    inspectBindings: () => harden({ recorded: {}, proposed: {}, changed: [] }),
     create: async (spec, toolSet) => {
       tools = toolSet;
       creates.push(spec);
@@ -671,8 +672,15 @@ test('rebind stops the incarnation and reopens it under the named bindings, once
   const world = await makeWorld(t);
   t.is(world.creates.length, 1);
   t.false('rebind' in world.creates[0]);
+  t.deepEqual(await E(world.session).getBindings(), {
+    recorded: {},
+    proposed: {},
+    changed: [],
+  });
+  t.is(world.creates.length, 1, 'inspection does not replace the incarnation');
   t.deepEqual(await E(world.session).rebind(['image', 'provider']), {
     rebind: ['image', 'provider'],
+    bindings: { recorded: {}, proposed: {}, changed: [] },
   });
   // The old incarnation is stopped and released before the next is
   // provisioned, and only that provisioning carries the authorization.

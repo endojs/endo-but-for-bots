@@ -1352,6 +1352,44 @@ power-loss test or a live Tokyo rebind acceptance test. The staged protocol
 still assumes atomic individual database entries. Native producer cleanup
 after process loss remains the separate #1323 investigation. Not deployed.
 
+### Binding inspection — 2026-09-23
+
+The operator can now call a hosted session's `getBindings()` before granting
+a rebind. It reads the provisioner's recorded plan and dependency identities
+alongside its proposed image/account/provider values and changed binding names.
+A successful `rebind()` returns this snapshot as `bindings` beside the list
+of authorized names. It does not imply that every authorized name changed.
+The help now uses the shared account-authority vocabulary, including Claude's
+credential kind under `account`, rather than the obsolete Codex-only account
+description. Delegated runners explicitly refuse this inspection: their holders
+must not learn the operator's account authority or dependency identities.
+
+Durability: no new formula, stored authorization, or durable state. Inspection
+reads the owner's current snapshot (including staged revision intent) and
+selects only declared binding fields and stable dependency roles; it does not
+settle an intent, acquire a client, query model catalogs, or start an incarnation.
+Reconstruction reads the same durable record again. Recorded bindings describe
+logical committed intent, which may still await publication; they are not proof
+of a live runtime using those bindings. The snapshot is diagnostic,
+not a reservation: another operation can change bindings afterward, and the
+existing rebind checks still run against current state. A result-inspection
+failure after rebind does not roll back a completed revision; the help tells the
+operator to inspect again before retrying. It does not fix the separate missing
+state-root placement check or establish live Tokyo rebind acceptance.
+
+Local evidence: shared conformance on Claude, Codex and OpenCode checks a
+missing record, an existing record without mutation or activation, image/account
+differences before rebind, and matching recorded/proposed values afterward.
+Floot checks read-only inspection and the returned result snapshot; delegated
+runner coverage checks refusal without forwarding. Hosted-agent: 681 passed,
+one skipped; adapter conformance: 23 per backend; Floot: 479 passed.
+Hosted-agent type checking passes, scoped ESLint has no errors. Floot's type
+check still reports errors in unchanged test files. The documentation gate
+fails with ten errors, including the prior account-authority change's malformed
+Claude broker JSDoc and resulting missing profile types; fix that gate before
+merge rather than treating the new inspection tests as whole-branch proof.
+Not deployed.
+
 ## FA-09 — Give local development storage an explicit role
 
 The projected 9P workspace is a capability filesystem, not a promise of ordinary local
@@ -2102,6 +2140,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | FA-08: read-only recorded/proposed binding inspection and actual binding snapshot in rebind replies; delegated runners refuse operator identity disclosure | Three adapter conformance suites and Floot regression tests; durability boundary documented; live rebind and state-root placement remain open |
 | 2026-09-23 | Acceptance runners preserve driver failures and stop before later phases, restart, or session deletion; remove transient copies even on setup failure | Four local test methods, 36 scenarios; shell syntax checks pass; no daemon-state change; Tokyo acceptance pending connectivity |
 | 2026-09-23 | One binding vocabulary, slices 2 and 3: every hosted plan records `accountRef`, the operator-declared id of the account authority the broker serves (`account-authority.js`; host option `accountAuthority`, required), read by the shared reader; setup writes it into the broker's profile and refuses a retained broker serving another; a pool set carries it as `id`, the catalog snapshot as `authority`, the grant reports it, the controllers ask for it from the plan; the provider-name constants and Codex's `pool` label are gone, Codex's profile `accountRef` is the verified provider account for a single credential only, and the issuer no longer ties the id it reports to the policy's provider account; the provisioner owns the vocabulary (`rootfs` under `image`, `accountRef` under `account`, dependencies under `provider`, Claude's `credentialKind` under `account`), so every descriptor lists `['image', 'account', 'provider']` | hosted-agent 680, Codex 311, Claude 207, OpenCode 255 and the Floot factory suites pass; the shared conformance suite proves the vocabulary on every adapter over the real provisioner and rebinds `account` on Claude and OpenCode; new cases for the authority id on plans, catalogs and the issuer's split, for a profile from before (refused with the way out, all three readers) and for the Codex module's binding to the authority rather than the provider account; lint and formatting clean, the hosted-agent and Claude type checks clean, Codex's source clean with its pre-existing test-file errors; independent adversarial review, whose findings (the retained-broker message, the Codex set written before the retained comparison, the untested Codex binding, three stale documents) are fixed; not deployed (needs the three host values and the brokers retired) |
 | 2026-09-23 | One binding vocabulary, slice 1: `rootfs` is the one image field of every hosted plan, read and pinned by the shared placement reader (`readPinnedRootfs`), so the execution envelope reads the plan's image itself and the three per-adapter image hooks go; every plan reader refuses a field it does not know (each adapter declares its `fields`; the retired-name checks fold in); Codex's plan field `imageRef` is gone; from the review, setup applies the runtime's pinned-reference rule to an operator's own pin too, where the message is read, rather than at every session creation | hosted-agent 678, Codex 310, Claude 205, OpenCode 252 pass; the shared reader's new cases prove the pinned-image spellings and the refusal for the shared and each adapter's reader; lint, formatting and the hosted-agent type check clean; independent adversarial review; not deployed |

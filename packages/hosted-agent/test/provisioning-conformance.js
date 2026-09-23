@@ -446,6 +446,52 @@ export const testProvisioningConformance = ({
     t.is(f.plan('a').systemPrompt, 'persona');
   });
 
+  /** @param {any} provision */
+  const inspectionFactory = provision =>
+    makeFactory({
+      provisionSession: provision,
+      stopSession: async () => {
+        throw Error('inspection stopped a session');
+      },
+      removeSession: async () => {
+        throw Error('inspection removed a session');
+      },
+      catalog: {
+        catalog: async () => {
+          throw Error('inspection read a catalog');
+        },
+      },
+    });
+
+  test(`${label} binding inspection is read-only and excludes nonbinding fields`, async t => {
+    const f = await fixture(t);
+    const factory = inspectionFactory(f.provision);
+    const before = await E(factory).inspectBindings({ sessionId: 'a' });
+    t.is(before.recorded, null);
+    t.deepEqual(before.changed, []);
+    t.deepEqual(f.names(), ['inspect']);
+    t.false(await f.exists(f.workspaceRoot));
+    await f.provision(
+      'a',
+      { ...f.request, systemPrompt: 'private persona' },
+      f.tools,
+    );
+    f.log.length = 0;
+    f.scripted.state.answer = false;
+    const after = await E(factory).inspectBindings({ sessionId: 'a' });
+    t.deepEqual(after.recorded, after.proposed);
+    t.deepEqual(after.changed, []);
+    t.deepEqual(after.proposed.provider, f.dependencies);
+    t.deepEqual(Object.keys(after.recorded).sort(), [
+      'account',
+      'image',
+      'provider',
+    ]);
+    t.false(JSON.stringify(after).includes('private persona'));
+    t.deepEqual(f.names(), ['inspect']);
+    t.is(f.records.get('a')?.phase, 'ready');
+  });
+
   for (const { what, makeProvisioner: makeRebound } of rebound) {
     test(`${label} a record reopened under a broker with another ${what} is refused until a request authorizes the rebind, which revises after a stop`, async t => {
       const f = await fixture(t);
@@ -458,6 +504,10 @@ export const testProvisioningConformance = ({
         protectedRoots: harden([f.protectedRoot]),
         catalog: f.scripted.catalog,
       });
+      const inspector = inspectionFactory(other);
+      const preview = await E(inspector).inspectBindings({ sessionId: 'a' });
+      t.deepEqual(preview.changed, [what]);
+      t.notDeepEqual(preview.recorded[what], preview.proposed[what]);
       const before = f.log.length;
       await t.throwsAsync(other('a', f.request, f.tools), {
         message: new RegExp(
@@ -492,6 +542,9 @@ export const testProvisioningConformance = ({
       await other('a', f.request, f.tools);
       t.deepEqual(f.names().slice(-3), ['inspect', 'stop', 'start']);
       t.deepEqual(f.plan('a'), revised);
+      const applied = await E(inspector).inspectBindings({ sessionId: 'a' });
+      t.deepEqual(applied.recorded, preview.proposed);
+      t.deepEqual(applied.changed, []);
       await t.throwsAsync(f.provision('a', f.request, f.tools), {
         message: new RegExp(`${what} cannot change`),
       });
@@ -514,6 +567,11 @@ export const testProvisioningConformance = ({
       protectedRoots: harden([f.protectedRoot]),
       catalog: f.scripted.catalog,
     });
+    const inspector = inspectionFactory(other);
+    const preview = await E(inspector).inspectBindings({ sessionId: 'a' });
+    t.deepEqual(preview.changed, ['provider']);
+    t.deepEqual(preview.recorded.provider, f.dependencies);
+    t.deepEqual(preview.proposed.provider, dependencies);
     const before = f.log.length;
     await t.throwsAsync(other('a', f.request, f.tools), {
       message:
@@ -543,6 +601,9 @@ export const testProvisioningConformance = ({
     t.deepEqual(revise?.[3], dependencies);
     t.deepEqual(f.records.get('a')?.references, dependencies);
     t.deepEqual(f.plan('a'), planBefore, 'the plan is untouched by it');
+    const applied = await E(inspector).inspectBindings({ sessionId: 'a' });
+    t.deepEqual(applied.recorded, preview.proposed);
+    t.deepEqual(applied.changed, []);
     // Rebound, the record answers the rebound services without a further
     // authorization.
     await other('a', f.request, f.tools);
