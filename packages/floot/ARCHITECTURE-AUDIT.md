@@ -694,6 +694,22 @@ pass, scoped ESLint has zero errors (56 warnings), and root documentation has
 zero errors (179 warnings). Independent adversarial review approved the changes
 after both cancellation gaps were fixed and regression-tested.
 
+Real-daemon reconstruction evidence (2026-09-23, local):
+`packages/daemon/test/floot-direct-journal.test.js` runs the production streaming
+agent and private journal in a persisted module formula with real daemon storage
+and GC enabled. Inert inference creates a failed tool turn with a long assistant
+message stored by content reference, one durable test effect, and partial reply.
+After orderly shutdown and cold restart, the exact transcript and turn records
+match and reconstruction makes zero provider calls. A follow-up provider request
+receives the full long text and settled tool result; its completed sealed turn
+survives a second cold start. The durable effect proof remains unchanged.
+This tests the streaming-agent/private-journal boundary, not the full Floot
+factory provisioning path, native producers, abrupt process death, or Tokyo.
+The restart test and three adjacent factory lifecycle tests pass together;
+scoped lint has zero errors (three warnings), formatting/diff checks pass, and
+root documentation has zero errors (179 warnings). Independent review requested
+full expected-text and exact turn-count assertions; both are now verified.
+
 Next sequence: finish direct-provider ordered durability, then bounded active
 context admission and journal-owned suffix selection, then automatic summaries.
 Checking final request size alone does not bound assembly: `getTranscript()`
@@ -2854,6 +2870,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-23 — FA-02 real-daemon direct-provider journal verification: failed-turn
+full content/tool evidence and a subsequent sealed turn survive two orderly cold
+restarts, with no inference on reconstruction or repeated durable test effect.
+Four daemon tests, lint/format and root docs pass. Not Tokyo or process-loss
+acceptance; no production implementation changed in this test slice.
 
 2026-09-23 — FA-02 direct-provider ordered transcript durability: journal model
 replies before tools and settled results before continuation, seal before the
