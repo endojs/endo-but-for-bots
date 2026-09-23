@@ -86,6 +86,7 @@ import {
 import {
   createPrivateTurnStorage,
   providePrivateTurnStorage,
+  retirePrivateTurnStorage,
 } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
@@ -3250,7 +3251,7 @@ export const make = async (
   // a recreate that is still in flight.
   /** @type {Map<string, { close: () => Promise<void> }>} */
   const hostedMountClients = new Map();
-  const privateJournals = new Set();
+  const privateJournals = new Map();
 
   // A hosted backend refuses to stop under an unsettled Endo tool call — and
   // the attach that asks for a recreate IS one until its result is back —
@@ -4114,6 +4115,14 @@ export const make = async (
   const getAgent = (id, { observeOnly = false } = {}) => {
     ownership.assertOpen();
     assertPublished(id);
+    const recorded = (registry || []).find(session => session.id === id);
+    if (
+      !recorded ||
+      !['ready', 'creating'].includes(recorded.lifecycle || 'ready')
+    )
+      throw Error(
+        `Session "${id}" cannot open an incarnation during or after deletion`,
+      );
     if (!observeOnly) assertSessionAdmission(id);
     if (incarnationChanges.has(id))
       throw Error('Session incarnation change in progress');
@@ -4128,7 +4137,7 @@ export const make = async (
       agentP = (async () => {
         const host = getHost();
         const journalPowers = await providePrivateTurnStorage(host, id);
-        privateJournals.add(journalPowers);
+        privateJournals.set(journalPowers, id);
         const network = networkController(id);
         const networkPolicy = await network.forTurn();
         const handleName = `session-${id}`;
@@ -5062,8 +5071,33 @@ export const make = async (
   const finishSessionDeletion = async id => {
     const entry = (registry || []).find(session => session.id === id);
     if (!entry) return;
+    // Creation rollback can arrive after a failed lifecycle write. Before
+    // removing its schema, make terminal intent durable: `creating` would
+    // otherwise attempt to rebuild this namespace on the next incarnation.
+    const index = (registry || []).findIndex(session => session.id === id);
+    /** @type {any[]} */ (registry)[index] = harden({
+      ...entry,
+      lifecycle: 'deleting',
+    });
+    const terminalIntent = await saveRegistry().then(
+      () => ({}),
+      error => ({ error }),
+    );
     try {
+      // Still stop live work if intent publication failed during creation
+      // rollback. Ordinary cleanup preserves the journal needed by a durable
+      // `creating` entry; only namespace retirement requires this acknowledgement.
       await cleanupSessionResources(entry);
+      if ('error' in terminalIntent) throw terminalIntent.error;
+      for (const [journal, sessionId] of privateJournals) {
+        if (sessionId === id) {
+          // A failed/uncertain writer stays retained and blocks retirement.
+          // eslint-disable-next-line no-await-in-loop
+          await E(journal).close();
+          privateJournals.delete(journal);
+        }
+      }
+      await retirePrivateTurnStorage(getHost(), id);
     } catch (error) {
       const current = (registry || []).findIndex(session => session.id === id);
       if (current >= 0) {
@@ -5669,7 +5703,9 @@ export const make = async (
         [...submissions.values()].map(entry => attempt(() => entry.close())),
       );
       await Promise.all(
-        [...privateJournals].map(journal => attempt(() => E(journal).close())),
+        [...privateJournals.keys()].map(journal =>
+          attempt(() => E(journal).close()),
+        ),
       );
       await attempt(() =>
         Promise.all([

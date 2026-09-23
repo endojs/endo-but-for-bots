@@ -33,6 +33,60 @@ export const createPrivateTurnStorage = async (host, sessionId) => {
 };
 harden(createPrivateTurnStorage);
 
+/** @param {unknown} name */
+const assertJournalName = name => {
+  (typeof name === 'string' &&
+    /^floot-turn-(event-\d{20}|content-\d{20}-[a-z]+|snapshot-\d{20}|archive-\d{20})$/.test(
+      name,
+    )) ||
+    Fail`Invalid private journal value name`;
+  return /** @type {string} */ (name);
+};
+
+/**
+ * @param {any} schema
+ * @param {string} sessionId
+ */
+const assertSchema = (schema, sessionId) => {
+  (schema !== null &&
+    typeof schema === 'object' &&
+    !Array.isArray(schema) &&
+    Reflect.ownKeys(schema).length === 2 &&
+    Object.hasOwn(schema, 'version') &&
+    Object.hasOwn(schema, 'sessionId') &&
+    schema.version === 1 &&
+    schema.sessionId === sessionId) ||
+    Fail`Invalid private journal schema; session reset required`;
+};
+
+/**
+ * Terminal deletion only, after the factory has durably recorded deletion
+ * intent and stopped all writers/backends and closed their storage facets.
+ * The schema is removed last, so partial removal can be retried. This function
+ * is not a writer fence and must never be used by ordinary incarnation cleanup.
+ * Unknown or ownerless data is retained for operator inspection.
+ * @param {any} host
+ * @param {string} sessionId
+ */
+export const retirePrivateTurnStorage = async (host, sessionId) => {
+  const prefix = privatePrefix(sessionId);
+  const names = (await E(host).list()).filter(name => name.startsWith(prefix));
+  if (names.length === 0) return;
+  const schemaName = `${prefix}schema`;
+  names.includes(schemaName) ||
+    Fail`Private journal retirement requires its schema`;
+  assertSchema(await E(host).lookup(schemaName), sessionId);
+  const values = names.filter(name => name !== schemaName);
+  // Validate the whole namespace before removing any of it.
+  for (const name of values) assertJournalName(name.slice(prefix.length));
+  for (const name of values) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).remove(name);
+  }
+  await E(host).remove(schemaName);
+};
+harden(retirePrivateTurnStorage);
+
 /**
  * Open factory-owned journal storage. Never introduce this facet into a guest.
  * Full-control administrators holding the factory host remain trusted: this
@@ -52,29 +106,7 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
   names.has(schemaName) ||
     Fail`Private journal schema missing; session reset required`;
   const schema = await E(host).lookup(schemaName);
-  (schema !== null &&
-    typeof schema === 'object' &&
-    !Array.isArray(schema) &&
-    Reflect.ownKeys(schema).length === 2 &&
-    Object.hasOwn(schema, 'version') &&
-    Object.hasOwn(schema, 'sessionId') &&
-    schema.version === 1 &&
-    schema.sessionId === sessionId) ||
-    Fail`Invalid private journal schema; session reset required`;
-  /**
-   * Events, content values, snapshots, and archive chunks are the only names
-   * reaching the factory host through this facet (see `turn-journal.js`).
-   *
-   * @param {unknown} name
-   */
-  const assertJournalName = name => {
-    (typeof name === 'string' &&
-      /^floot-turn-(event-\d{20}|content-\d{20}-[a-z]+|snapshot-\d{20}|archive-\d{20})$/.test(
-        name,
-      )) ||
-      Fail`Invalid private journal value name`;
-    return /** @type {string} */ (name);
-  };
+  assertSchema(schema, sessionId);
   let poisoned = false;
   let closed = false;
   let queue = Promise.resolve();

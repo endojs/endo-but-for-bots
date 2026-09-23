@@ -7,11 +7,83 @@ import { makePromiseKit } from './_promise-kit.js';
 import {
   createPrivateTurnStorage,
   providePrivateTurnStorage,
+  retirePrivateTurnStorage,
 } from '../src/private-turn-storage.js';
 
 const eventName = index => `floot-turn-event-${`${index}`.padStart(20, '0')}`;
 const prefix = 'floot-private-turn-7-session-';
 const schemaName = `${prefix}schema`;
+
+for (const lost of ['none', 'content', 'schema']) {
+  test(`terminal retirement retries uncertain removal, lost=${lost}`, async t => {
+    const contentName = `${prefix}${eventName(1)}`;
+    /** @type {Map<string, unknown>} */
+    const values = new Map();
+    values.set(schemaName, harden({ version: 1, sessionId: 'session' }));
+    values.set(contentName, 'content');
+    values.set('floot-private-turn-8-session2-schema', 'untouched');
+    const removed = [];
+    let failed = false;
+    const host = Far('RetirementHost', {
+      list: () => harden([...values.keys()]),
+      lookup: name => values.get(name),
+      remove: name => {
+        values.delete(name);
+        removed.push(name);
+        if (
+          !failed &&
+          name ===
+            (lost === 'content'
+              ? contentName
+              : lost === 'schema'
+                ? schemaName
+                : 'never')
+        ) {
+          failed = true;
+          throw Error('Removal acknowledgement lost');
+        }
+      },
+    });
+    if (lost !== 'none') {
+      await t.throwsAsync(retirePrivateTurnStorage(host, 'session'), {
+        message: /acknowledgement lost/,
+      });
+      if (lost === 'content') t.true(values.has(schemaName));
+    }
+    await retirePrivateTurnStorage(host, 'session');
+    await retirePrivateTurnStorage(host, 'session');
+    t.deepEqual(removed, [contentName, schemaName]);
+    t.deepEqual(
+      [...values],
+      [['floot-private-turn-8-session2-schema', 'untouched']],
+    );
+  });
+}
+
+test('retirement refuses missing schema, wrong owner, or unknown data before deletion', async t => {
+  for (const scenario of ['missing', 'wrong-owner', 'unknown']) {
+    /** @type {Map<string, unknown>} */
+    const values = new Map([[`${prefix}${eventName(1)}`, 'content']]);
+    if (scenario !== 'missing')
+      values.set(
+        schemaName,
+        harden({
+          version: 1,
+          sessionId: scenario === 'wrong-owner' ? 'other' : 'session',
+        }),
+      );
+    if (scenario === 'unknown') values.set(`${prefix}unexpected`, 'preserve');
+    const host = Far('UnsafeRetirementHost', {
+      list: () => harden([...values.keys()]),
+      lookup: name => values.get(name),
+      remove: () => t.fail('must validate every name before deletion'),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(retirePrivateTurnStorage(host, 'session'), {
+      message: /schema|value name/,
+    });
+  }
+});
 
 for (const fails of [false, true]) {
   test(`private storage close drains admitted writes and fences old facet: fails=${fails}`, async t => {

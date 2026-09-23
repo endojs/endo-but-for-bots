@@ -94,7 +94,7 @@ No claim of complete retrospective coverage is made yet.
 | Native teardown after reconstruction | The fail-closed teardown (`0d66bd945`: absent/failed scope lookup refuses stop acknowledgement; mount reclamation waits for sandbox close) was deployed on 2026-09-22 in generation 160 and observed: after a graceful `endo-daemon` restart every ready hosted session failed to reopen and to delete with `Original native cleanup proof is unavailable`, and six records were stranded with their listener containers and 9p mounts. **Reverted from this branch the same day and moved to #1323**: `session-supervisor.js` again treats absent/failed scope lookup as diagnostic and reclaims the recorded mount, as the release that passed the second pass's restart/restore did; runtime lookup still reads only an in-memory map. | Automatic reconciliation/process-loss proof stays with the dedicated investigation (#1323), where the fail-closed teardown now lives with its six injected-reconstruction tests. A missing scope still cannot prove that native resources stopped. |
 | Native state creation | Rewritten with unique inode-bound allocations, atomic ownership publication, and durable orphan-retirement intent. Twenty-seven focused tests and four subprocess SIGKILL regressions pass independently. | Retire old native state with the old release before coordinated deployment; verify on Tokyo. Abrupt process loss is tested, not physical power loss. |
 | Mount inspection | Baseline `recorded-cleanup.js` treated all socket `lstat` errors as absence. Corrected locally with ten passing tests. | Deploy and verify with native cleanup; the independent reconstruction/cleanup-proof gap remains open. |
-| Private journal deletion | `private-turn-storage.js` roots values under factory-host names; `cleanupSessionResources` removes session aliases and submissions, but not the journal namespace. Failed pre-publication creation also leaves namespaces without a reclamation path. | Durable, retryable journal retirement after writer shutdown; inventory and safely reclaim orphan namespaces; test crash/uncertain removal and daemon reconstruction. |
+| Private journal deletion | Terminal deletion now durably records `deleting`, stops the agent/backend, closes and drains its retained journal facets, validates the exact namespace, and removes value names before schema. Normal incarnation/incomplete-creation cleanup preserves the namespace. | Local uncertain-removal and factory-reconstruction regressions; real daemon/Tokyo verification still required. Pre-publication orphan namespaces still require inventory/reclamation; unbinding names alone does not prove physical GC. |
 | Daemon value publication | Corrected locally: persist before name publication; transiently pin the new formula and all marshal slots; transfer caller retention only on success. Nine persistence/GC/restart tests pass independently. | Deploy; after-write lost acknowledgements leave unnamed durable formulas requiring reclamation. Abrupt crash injection remains unverified. |
 | Codex checkpoint commit | Corrected locally: sync directory ancestry when opening and sync the containing directory after rename/removal, including absent-removal retries. Thirteen tests pass. | Deploy; broader checkpoint ownership/recovery audit remains open. Filesystem flush support is verified on Tokyo, not physical power-loss recovery. |
 | Model picker | `65e939889` adds deliberately transient view state; persisted session route still travels through existing creation path. | No new formula required for the search query; session creation durability remains subject to its existing boundary audit. |
@@ -146,8 +146,39 @@ A rejected watch-acquisition reply can still hide a remote reader allocation
 whose capability was never received. This observer-protocol reclamation gap
 remains open; no claim that every remote reader is reclaimed is made.
 It does not grant the closed factory a new reader or revive its canonical writer.
-Closed private-journal facades remain retained until factory disposal; terminal
-journal namespace retirement and earlier facade reclamation remain open.
+Terminal journal retirement implemented locally on 2026-09-23. The factory
+tracks each journal facet's session and drops it only after successful close
+during terminal deletion. Failed/uncertain close retains its owner and blocks
+retirement. Ordinary incarnation changes still retain their old journal facets
+until terminal deletion or factory disposal; earlier reclamation remains open.
+`finishSessionDeletion` requires acknowledged terminal intent before namespace
+retirement, including creation rollback after an earlier failed registry write.
+It attempts that write before ordinary cleanup; a failed acknowledgement does
+not skip stopping live work, but it prevents journal retirement. Only after agent/backend
+cleanup and journal close does it unbind the journal's exact known value names,
+with the matching v1 schema last. Missing empty namespaces are complete; orphan,
+foreign-schema and unknown-name namespaces are preserved, not guessed at.
+Partially applied deletions keep the registry entry for retry. Generic
+`cleanupSessionResources` does not remove the namespace needed by an interrupted
+creation that will resume. A central `getAgent` lifecycle/existence check also
+fences delayed observe-only calls: they cannot recreate resources while or after
+terminal cleanup removes the old incarnation.
+
+Durability evidence: local tests cover removed-but-unacknowledged content and
+schema names, refused terminal-intent writes (including creation rollback whose
+durable registry still says `creating`), factory reconstruction after
+partial removal, malformed namespace refusal before any removal, unrelated
+namespace preservation, and an account read held across deletion. The existing
+private-facet tests cover admitted write draining and poisoned close refusal.
+These are in-memory host tests, not process-loss or real daemon GC evidence.
+Pre-registry-publication orphan namespaces remain outside automatic retirement;
+native process-loss producer exclusion remains with #1323. Unbinding names
+releases roots for GC; it does not prove the underlying formulas or disk blocks
+have been collected. All 493 Floot tests pass, including terminal-intent writes
+rejected with falsy reasons. Scoped lint has zero errors; docs has zero errors
+and 176 warnings. Full Floot typechecking still has baseline test-file errors;
+none are reported in the changed implementation or test files. Final
+adversarial review found no blocking issue. Not deployed.
 Source review found the separately minted account oracle ignored formula
 disposal: `ensureWatching` could continue `applyObserved` journal writes after
 Floot closed its own reader.
@@ -2277,6 +2308,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Add terminal private-journal namespace retirement after durable intent, writer drain and backend cleanup; fence delayed observation from rebuilding during deletion | Exact namespace/schema validation, uncertain-removal retry and factory reconstruction regressions; no generic-cleanup deletion; real-daemon and Tokyo verification pending |
 | 2026-09-23 | Retrospective durability audit: include partial pool-member construction in existing core rollback, releasing unused cleanup handles if a later member fails | Direct/wrapped regressions; no credential use or persistent state; normal member ownership preserved; not deployed |
 | 2026-09-23 | FA-07: preserve saved subscription pins on restoration rather than silently falling back to automatic account selection | Removed-member and missing-descriptor factory regressions; backend admission remains authoritative; no new durable state; not deployed |
 | 2026-09-23 | Prepare exact-binding live rebind harness in endo-host: refusal, explicit authorization, preserved history/workspace tool evidence, guarded cleanup | Local fake-facet tests and adversarial review; pending intents are not replayed; Tokyo run blocked by SSH connectivity |
