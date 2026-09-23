@@ -599,6 +599,21 @@ errors, with no errors in changed production files.
 
 ## FA-02 — Model context must not be built from UI previews
 
+Deployment reconciliation (generation 169, 2026-09-23): app `819aa18c8` now
+runs the archive read-view/paging, Fae/OpenCode recorded-compaction replay,
+and failed-response usage/retry fixes described below.
+Four-backend seed, actual daemon restart, recall and scoped deletion passed
+on OpenCode/Fae automatic free routes, Codex Luna, and Claude Haiku.
+Reconstructed session facets all expose the new archive-page method; empty
+terminal pages were checked, not a live archive boundary.
+All six Secret identities, controller host and credential namespace bindings
+were preserved; two unrelated sessions remain, with zero native records,
+containers or 9p mounts after test cleanup.
+The host evidence is `endo-host/ops/hosted-cutover5-20260923.md`, generation 169.
+This supersedes the earlier local/not-deployed checkpoints below, but does not
+prove native compaction capture, large archives, provider-error fault injection
+on Tokyo, or process-loss recovery.
+
 OpenCode import correction (2026-09-23, not deployed): the pinned fork
 `kumavis/opencode@870a58b973a2892d93c04e5db6e49757ad8237b9` uses
 `packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts` for
@@ -2517,6 +2532,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Deploy archive paging, recorded-compaction replay and provider accounting fixes as generation 169 (app `819aa18c8`, host `7dbf7c3`) | Four-backend seed/restart/recall/delete passed; reconstructed archive API checked; Secrets, host and credential bindings preserved; no native resources left. Live archive-boundary and compaction/error-path injection remain open; see host cutover record. |
 | 2026-09-23 | Preserve usage on OpenRouter HTTP/API/finish errors and stop automatic replay when token consumption is reported | 94 Lal tests (one skip), 501 Floot tests, production declarations, formatting and composite consistency pass; scoped lint has zero errors and docs have zero errors (178 warnings). Independent review found a swallowed error-body timeout; fixed and regression-tested with native-style AbortError and exactly two attempts. Tests also cover observer/no-observer behavior, zero-usage retries, fractional refusal, bounded error bodies and failed HTTP turn reconstruction. Reuses hosted-agent's bounded JSON reader rather than duplicating it; no new formula/schema. Not deployed. |
 | 2026-09-23 | Preserve reported OpenRouter usage when assistant validation rejects a response, using an optional pre-settlement incremental provider notification and the existing turn finish journal | 500 Floot and 82 Lal tests pass (one Lal skip), including failed-turn reconstruction and no double counting; independently reviewed; changed-file ESLint has zero errors and docs have zero errors. Whole Lal lint still has eight project-service errors in unchanged files. No new durable schema; process loss before finish and API-error/retry usage remain open. Not deployed. |
 | 2026-09-23 | Preservation-safe paired cutover activated as generation 166 | App `4b425552f` with host `d696a88`; zero sessions/runs, slot-free workflow startup records verified. Detached 24 old Floot/provider aliases with repeated Secret/host/credential/pool identity checks, then proved old-daemon shutdown and no containers/9p. No database wipe. Hosted setup, all-account discovery and hosted create/shell/policy-tool seed passed, including Luna/free routes; post-activation Secret and controller-host identities unchanged. Remaining cross-backend acceptance and live rebind are pending. See endo-host `ops/hosted-cutover5-20260923.md` |
