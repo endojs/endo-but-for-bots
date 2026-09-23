@@ -267,6 +267,196 @@ export const isCompactionContinuation = part =>
   part.metadata?.compaction_continue === true;
 
 /**
+ * Project the pinned fork's authoritative snapshot, not an SSE history mirror.
+ * This is the stack's text/tool context contract, not a byte-for-byte provider
+ * prompt: reasoning and provider metadata are not represented by that contract.
+ * Do not wire this into the event stream until framing and failure fencing are
+ * in place. The native compaction request becomes the canonical summary's
+ * scaffold on import; its synthetic continuation remains ordinary context.
+ * @param {any} checkpoint
+ * @param {ReturnType<typeof makeMessageRegistry>} registry
+ * @param {string} sessionID
+ */
+export const projectCompactionCheckpoint = (
+  checkpoint,
+  registry,
+  sessionID,
+) => {
+  const refuse = () => {
+    throw new Error('Unsupported or malformed native compaction checkpoint');
+  };
+  if (
+    checkpoint?.version !== 1 ||
+    typeof checkpoint.summaryID !== 'string' ||
+    !Array.isArray(checkpoint.messages) ||
+    checkpoint.messages.length < 2 ||
+    checkpoint.messages.length > 65_536
+  )
+    refuse();
+  const messages = checkpoint.messages;
+  const messageIDs = new Set();
+  const partIDs = new Set();
+  for (const message of messages) {
+    const info = message?.info;
+    if (
+      !info ||
+      typeof info.id !== 'string' ||
+      info.id === '' ||
+      messageIDs.has(info.id) ||
+      info.sessionID !== sessionID ||
+      !['user', 'assistant'].includes(info.role) ||
+      !Array.isArray(message.parts)
+    )
+      refuse();
+    messageIDs.add(info.id);
+    for (const part of message.parts) {
+      if (
+        !part ||
+        typeof part.id !== 'string' ||
+        part.id === '' ||
+        partIDs.has(part.id) ||
+        part.messageID !== info.id ||
+        part.sessionID !== sessionID ||
+        typeof part.type !== 'string'
+      )
+        refuse();
+      partIDs.add(part.id);
+    }
+  }
+  const [request, summary, ...tail] = messages;
+  if (
+    request.info.role !== 'user' ||
+    request.parts.length !== 1 ||
+    request.parts[0].type !== 'compaction' ||
+    summary.info.role !== 'assistant' ||
+    summary.info.summary !== true ||
+    summary.info.id !== checkpoint.summaryID ||
+    summary.info.parentID !== request.info.id ||
+    typeof summary.info.finish !== 'string' ||
+    summary.info.finish === '' ||
+    summary.info.error
+  )
+    refuse();
+  const retainedTail = [];
+  const calls = new Set();
+  const appendMessage = (role, content) => {
+    if (typeof content !== 'string') refuse();
+    if (content !== '') {
+      if (role === 'user') calls.clear();
+      retainedTail.push({ kind: 'message', role, content });
+    }
+  };
+  // The native projector ignores these storage/accounting parts. Reasoning is
+  // display-only in the existing canonical contract; do not turn it into prose.
+  const ignored = new Set([
+    'reasoning',
+    'step-start',
+    'step-finish',
+    'snapshot',
+    'patch',
+    'agent',
+    'retry',
+  ]);
+  const summaryText = [];
+  for (const part of summary.parts) {
+    if (part.type === 'text' && typeof part.text === 'string')
+      summaryText.push(part.text);
+    else if (!ignored.has(part.type)) refuse();
+  }
+  if (summaryText.join('') === '') refuse();
+  for (const message of tail) {
+    const { info, parts } = message;
+    if (info.role === 'assistant' && info.summary === true) refuse();
+    // Match native omission of failed assistant messages, except interrupted
+    // messages containing ordinary content or a tool result.
+    if (
+      info.role === 'assistant' &&
+      info.error &&
+      !(
+        info.error.name === 'MessageAbortedError' &&
+        parts.some(part => !['step-start', 'reasoning'].includes(part.type))
+      )
+    )
+      // eslint-disable-next-line no-continue
+      continue;
+    for (const part of parts) {
+      if (part.type === 'text') {
+        if (info.role !== 'user' || !part.ignored)
+          appendMessage(info.role, part.text);
+      } else if (part.type === 'tool' && info.role === 'assistant') {
+        const { state } = part;
+        if (
+          typeof part.callID !== 'string' ||
+          part.callID === '' ||
+          calls.has(part.callID) ||
+          typeof part.tool !== 'string' ||
+          part.tool === '' ||
+          !state ||
+          !['completed', 'error'].includes(state.status) ||
+          state.input === null ||
+          typeof state.input !== 'object' ||
+          Array.isArray(state.input) ||
+          part.metadata?.providerExecuted === true
+        )
+          refuse();
+        calls.add(part.callID);
+        const pruned =
+          state.status === 'completed' && Boolean(state.time?.compacted);
+        if (
+          !pruned &&
+          state.attachments !== undefined &&
+          (!Array.isArray(state.attachments) || state.attachments.length !== 0)
+        )
+          refuse();
+        const interruptedOutput =
+          state.status === 'error' &&
+          state.metadata?.interrupted === true &&
+          typeof state.metadata.output === 'string';
+        const content = pruned
+          ? '[Old tool result content cleared]'
+          : state.status === 'completed'
+            ? state.output
+            : interruptedOutput
+              ? state.metadata.output
+              : state.error;
+        if (typeof content !== 'string') refuse();
+        retainedTail.push({
+          kind: 'tool-call',
+          id: part.callID,
+          name: registry.canonicalToolName(part.tool),
+          args: JSON.stringify(state.input),
+        });
+        retainedTail.push({
+          kind: 'tool-result',
+          id: part.callID,
+          content,
+          ...(state.status !== 'completed' && !interruptedOutput
+            ? { failed: true }
+            : {}),
+        });
+      } else if (
+        part.type === 'file' &&
+        info.role === 'user' &&
+        ['text/plain', 'application/x-directory'].includes(part.mime)
+      ) {
+        // Native preprocessing has already expanded these into text parts.
+      } else if (part.type === 'subtask' && info.role === 'user') {
+        appendMessage('user', 'The following tool was executed by the user');
+      } else if (!ignored.has(part.type)) {
+        // Media, nested compactions, and unknown context-bearing parts are not
+        // silently discarded. Supporting them needs a canonical format change.
+        refuse();
+      }
+    }
+  }
+  return Object.freeze({
+    type: 'compaction',
+    summary: summaryText.join(''),
+    retainedTail,
+  });
+};
+
+/**
  * Map one opencode SSE event to zero or one hosted event. Terminal handling
  * and turn state stay in the caller. Events for another session are dropped:
  * the instance event bus also carries Task/subagent sessions.

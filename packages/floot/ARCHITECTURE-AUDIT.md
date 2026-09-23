@@ -805,6 +805,28 @@ The existing event-manifest suite also fails on fixed inventory counts/order;
 no new event type was added, and this is not counted as a passing gate.
 There is no app image pin change, daemon deployment, or live compaction claim.
 
+Native checkpoint projection preparation (2026-09-23, local, not enabled):
+the standalone bridge now has a pure converter for the version-1 native snapshot.
+It validates message/part ownership and uniqueness, the completed summary and
+its leading compaction request, then preserves the retained dialogue/tool order.
+The native request scaffold maps to the canonical summary; the synthetic
+continuation remains context, unlike its suppression in the live UI stream.
+User ignored text, failed assistant omission, interrupted partial tool output
+and pruned tool placeholders follow the inspected native rules.
+Unsettled calls, provider-executed tools, media attachments, nested boundaries
+and unknown context-bearing parts fail explicitly.
+Tool-call identifiers may repeat across user turns, not within one turn.
+Native reasoning and provider metadata remain outside the existing canonical
+text/tool contract: this is not exact provider-prompt equivalence, including
+signed-reasoning replay. Supporting that requires a separate contract extension.
+This converter is deliberately not called by event handling yet; transport
+bounds, duplicate-boundary reconciliation, continuity fencing, and actual SSE
+ordering remain gates. It adds no durable formula or stored schema.
+Validation: all 268 OpenCode sandbox tests pass, including eight projection
+regressions and canonical import round-trips. Scoped lint has no errors and
+seven pre-existing warnings. Adversarial review caught and corrected the
+cross-turn tool-ID restriction; re-review approved the supported subset.
+
 Validation at the storage-foundation checkpoint: 515 Floot tests passed,
 including snapshot corruption, canonical payload
 checks, conflicting duplicate suffixes and failed content/event acknowledgement.
