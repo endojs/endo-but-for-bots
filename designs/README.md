@@ -528,7 +528,7 @@ LLM-agent stack).*
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 | [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
 | [daemon-engo-supervisor](daemon-engo-supervisor.md) | 2026-02-25 | 2026-02-25 | Not Started |
-| [daemon-locator-reference](daemon-locator-reference.md) | 2026-03-18 | 2026-05-10 | Reference |
+| [daemon-locator-reference](daemon-locator-reference.md) | 2026-03-18 | 2026-09-23 | Reference |
 | [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) | 2026-06-18 | 2026-06-18 | **Complete** |
 | [http-confine](http-confine.md) | 2026-07-08 | 2026-07-08 | Proposed |
 | [inter-package-plain-re-exports](inter-package-plain-re-exports.md) | 2026-06-27 | 2026-06-27 | Not Started |
@@ -621,6 +621,17 @@ summary table for why the bucket counts are left to a separate pass.
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
+
+**Maintainer reprioritization (2026-09-23):** the local Endo CLI → authenticated
+Minion Town guest-locator federation experiment now takes precedence over M3's
+2026-09-03 client-side bridge "first priority" below.
+Start with the signed-in user's own guest, then objects in their grasp, using a
+mutually supported CapTP/OCapN route.
+The [integration plan](daemon-locator-reference.md#minion-town-guest-federation-integration-plan-2026-09-23)
+records the remaining CLI, formula-bootstrap, account-daemon routing, deployment,
+and real-account acceptance work.
+This changes execution priority, not milestone dependencies or M4 completion.
+
 
 The Minion Town experiment is the leading execution path. It is an integration
 spine across milestones, not a new dependency-free milestone: deliver MCP
@@ -1182,7 +1193,7 @@ finalized.
 | cbor-encode-decode | Not Started | Split `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports with an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds; root `.` re-export preserved; follow-up to kriskowal's review of #885 |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
-| daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (implementation in-flight: PRs #340, #684, #688, #693) |
+| daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (live state checked 2026-09-23: #340 merged; #684, #688, #693 remain open drafts; formula nonce adapter #1124 is also an open draft, with CLI adoption and production account-guest routing tracked in [daemon-locator-reference](daemon-locator-reference.md#minion-town-guest-federation-integration-plan-2026-09-23)) |
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
 | thixotrope | In Progress | OCapN comms hub owned by Thixotrope; XS and Ironhorse SQLite workers; snapshot/journal recovery; persistent guest objects, answers, and listeners; local supervisor, application installation, observable inventory, and vat retention diagnostics. Layered durable acceptance and outbox recovery are implemented in protocol v2; the application admission API remains separate design work. Potential mechanisms are tracked separately in the package designs. |
