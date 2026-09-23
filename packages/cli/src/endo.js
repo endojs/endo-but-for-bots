@@ -366,6 +366,23 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('adopt-locator <name>')
+    .option(
+      '-f,--file <path>',
+      'read the endo:// locator from a file instead of standard input',
+    )
+    .option(...commonOptions.as)
+    .description(
+      'adopt the remote value an endo:// locator names (read from stdin)',
+    )
+    .action(async (name, options) => {
+      const { file, as: agentNames } = options;
+      const { adoptLocatorCommand } =
+        await import('./commands/adopt-locator.js');
+      return adoptLocatorCommand({ name, file, agentNames });
+    });
+
+  program
     .command('dismiss <message-number>')
     .description('delete a message')
     .option(...commonOptions.as)
@@ -1035,6 +1052,7 @@ export const main = async rawArgs => {
         'resolve',
         'reject',
         'adopt',
+        'adopt-locator',
         'define',
         'endow',
         'form',

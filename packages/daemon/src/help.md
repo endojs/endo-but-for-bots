@@ -505,8 +505,13 @@ Example: locateWithHints("my-channel") returns a shareable locator URL.
 ## adoptFromLocator(locator, petNameOrPath) -> Promise<void>
 
 Adopt a value from a locator that includes connection hints.
-Parses the locator to extract peer info, establishes a connection if needed,
-and writes the formula ID into the local pet store.
+Parses the locator to extract peer info, connects over a hint that an
+installed network supports (skipping unsupported hints), authenticates the
+peer against the identity the hint names, and resolves the value before
+writing the formula ID into the local pet store. A remote locator with no
+hints, no mutually supported route, a peer identity mismatch, or a value the
+peer does not provide rejects without storing the name. Errors never echo the
+bearer locator.
 Example: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")
 
 ## invite(correspondentName) -> Promise<Invitation>

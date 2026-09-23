@@ -156,7 +156,7 @@ export const helpTextEntries = harden([
       locateWithHints:
         'locateWithHints(...petNamePath) -> Promise<string | undefined>\nLocate a formula and return a locator URL with connection hints.\nThe returned locator includes network addresses from all registered netlayers,\nallowing remote peers to connect and access the value.\nExample: locateWithHints("my-channel") returns a shareable locator URL.',
       adoptFromLocator:
-        'adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")',
+        'adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, connects over a hint that an\ninstalled network supports (skipping unsupported hints), authenticates the\npeer against the identity the hint names, and resolves the value before\nwriting the formula ID into the local pet store. A remote locator with no\nhints, no mutually supported route, a peer identity mismatch, or a value the\npeer does not provide rejects without storing the name. Errors never echo the\nbearer locator.\nExample: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")',
       invite:
         "invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation and bind the correspondent under correspondentName\nonce they accept. Hand the returned invitation's locate() string to the invitee\nout of band.",
       accept:
