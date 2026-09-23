@@ -38,8 +38,9 @@ const bytesIterable = chunks =>
  * the i-th spawned process emits. The returned wrapper exposes
  * recorders that are *not* reachable from the slice/proc objects.
  * @param outputs
+ * @param {(() => Promise<{ code: number | null, signal: string | null }>)} [waitForExit]
  */
-const makeFakeSlice = (outputs = []) => {
+const makeFakeSlice = (outputs = [], waitForExit = undefined) => {
   const spawned = [];
   let i = 0;
   let disposed = false;
@@ -57,6 +58,7 @@ const makeFakeSlice = (outputs = []) => {
           procKilled.set(proc, true);
         },
         async wait() {
+          if (waitForExit) return waitForExit();
           return harden({ code: 0, signal: null });
         },
       };
@@ -448,6 +450,41 @@ test('a stream-error abort folds claude stderr into the reason', async t => {
   t.true(procKilled.get(fake.spawned[0]));
 });
 
+for (const [label, failure] of [
+  ['error', Error('exit status unavailable')],
+  ['false', false],
+  ['undefined', undefined],
+]) {
+  test(`failed exit observation (${label}) aborts rather than certifying success`, async t => {
+    t.timeout(5000);
+    const partial = { type: 'assistant', text: 'partial answer' };
+    const fake = makeFakeSlice(
+      [[enc.encode(`${JSON.stringify(partial)}\n`)]],
+      async () => {
+        throw failure;
+      },
+    );
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: proc => {
+          t.true(procKilled.get(proc), 'kill precedes diagnostic read');
+          return bytesIterable([enc.encode('process diagnostic')]);
+        },
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('work'));
+    t.deepEqual(events, [
+      partial,
+      {
+        type: 'abort',
+        reason: `${failure instanceof Error ? failure.message : String(failure)}\n--- stderr ---\nprocess diagnostic`,
+      },
+    ]);
+    t.true(procKilled.get(fake.spawned[0]));
+  });
+}
+
 test('terminate() disposes the slice, unmounts, and rejects subsequent send', async t => {
   const fake = makeFakeSlice([[]]);
   const mount = makeFakeMount();
@@ -672,9 +709,7 @@ test('a store that outlived the daemon does not decide the conversation', async 
 
 test('fresh construction does not dispatch an unobserved prompt', async t => {
   const fake = makeFakeSlice([[]]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount()),
-  );
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
   await new Promise(resolve => setImmediate(resolve));
   t.is(fake.spawned.length, 0);
   await drain(await client.send('next'));

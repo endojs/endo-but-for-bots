@@ -718,9 +718,9 @@ export const makeClaudeClient = ({
         // status so a failed turn terminates as `abort` (with whatever it
         // wrote to stderr) instead of a clean `end` the consumer would
         // persist as a successful answer.
-        const status = await E(proc)
-          .wait()
-          .catch(() => null);
+        // A failed exit observation is not evidence of success. Let the
+        // error path kill the process and preserve diagnostics in an abort.
+        const status = await E(proc).wait();
         if (status && (status.code === null ? status.signal : status.code)) {
           const how =
             status.code === null

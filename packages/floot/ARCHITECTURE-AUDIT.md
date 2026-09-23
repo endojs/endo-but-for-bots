@@ -85,6 +85,30 @@ The range `3332f1928..2deaf4f55` (excluding the seed) contains 464 commits, incl
 changes that still need classification rather than an assumption of relevance.
 No claim of complete retrospective coverage is made yet.
 
+Claude exit-observation follow-up (2026-09-24, local, not deployed):
+the raw client swallowed a rejected process `wait()` and reported `end`, allowing
+an unverified outcome to be recorded as a successful turn. The rejection now
+reaches the existing abort path, which attempts a kill before reading stderr and
+preserves partial streamed events and diagnostics. Three regressions reproduce
+the old false success with Error, false, and undefined rejections and require
+exactly the partial event followed by an abort after the fix. All 219 Claude
+sandbox tests pass, package lint has zero errors (57 warnings), formatting passes,
+and root documentation generation has zero errors (176 warnings).
+Independent adversarial review approved the narrow change.
+This changes outcome reporting, not durable schemas, credential ownership, or
+retry policy. A rejected exit observation does not prove process retirement;
+the existing best-effort kill and native process-loss limitations remain open.
+
+Adjacent OpenCode terminal audit (2026-09-24): source review found no analogous
+host-side checkpoint settlement latch. Uncertain transcript import fences later
+sends; native checkpoint publication failure shuts down the bridge before idle.
+The existing client and actual-bridge compaction suites were rerun: 35 tests pass,
+including native-error, conflict, malformed checkpoint, EOF, timeout, interruption,
+and lost import acknowledgement. The bridge blocks native dispatch during fatal
+shutdown, although the client can still write a queued prompt before observing EOF.
+These injected transport/bridge checks are not live-provider or daemon-crash evidence.
+No OpenCode production change was needed for this bounded comparison.
+
 Session-watcher retirement follow-up (2026-09-24, local, not deployed):
 `makeSessionWatch.end()` previously ended existing streams but still allowed
 late subscriptions to read sources, and held reads could publish/cache values
@@ -3643,6 +3667,16 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Claude no longer reports success when process exit observation
+rejects. Three reproduced regressions and all 219 package tests pass; lint,
+formatting and docs pass after independent review. Adjacent OpenCode client and
+bridge failure paths were audited and 35 existing tests rerun successfully.
+This is truthful outcome reporting, not native retirement proof. Not deployed.
+
+2026-09-24 — Codex fixture contracts corrected in `5d419544e`, pushed to both
+remotes after independent review. All 322 tests, full package lint, formatting,
+and docs pass. No production or durable-state change.
 
 2026-09-24 — Failed setup now retains acquisition exclusion until agent/native
 rollback and exact journal closure acknowledge completion. Failed constructions
