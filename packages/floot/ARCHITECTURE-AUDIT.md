@@ -187,8 +187,19 @@ Failed credential/current calls, body cancellation acknowledgements, or remote
 release can require operator recovery. Removed IDs/authorities remain tombstoned;
 safe re-add and retirement epochs are not implemented.
 Failed observation writes may lose cache hints but cannot grant authority.
-An unpublished partial pool core can retain never-used transports until member
-retirement; this remains a cleanup follow-up.
+Partial pool-core construction cleanup corrected 2026-09-23: member construction
+now runs inside the same rollback boundary as core construction. A later member
+failing its lifecycle check previously bypassed rollback and retained earlier
+members' unused transport/endpoint cleanup handles until member retirement.
+Two regressions cover direct and wrapped members, verify release without
+retiring the surviving member, and assert no credential read, fetch or remote
+endpoint acquisition. This adds no durable state or formula: these cores are
+ephemeral and unpublished, and wrapped endpoints open only on first use. Existing
+member ownership still retains failed cleanup; this does not establish
+process-loss cleanup or cross-worker exclusion. All 684 hosted-agent tests pass
+(one skipped), including 35 issuer cases; package types pass, scoped lint has
+zero errors, and docs has zero errors/176 warnings. Final adversarial review
+found no blocking issue. Not deployed.
 The daemon barrier now rejects reconstruction while exact-formula disposal is
 pending or failed, including dependency cancellation.
 It rejects rather than waits, so mutually dependent cleanup lookups cannot
@@ -2266,6 +2277,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Retrospective durability audit: include partial pool-member construction in existing core rollback, releasing unused cleanup handles if a later member fails | Direct/wrapped regressions; no credential use or persistent state; normal member ownership preserved; not deployed |
 | 2026-09-23 | FA-07: preserve saved subscription pins on restoration rather than silently falling back to automatic account selection | Removed-member and missing-descriptor factory regressions; backend admission remains authoritative; no new durable state; not deployed |
 | 2026-09-23 | Prepare exact-binding live rebind harness in endo-host: refusal, explicit authorization, preserved history/workspace tool evidence, guarded cleanup | Local fake-facet tests and adversarial review; pending intents are not replayed; Tokyo run blocked by SSH connectivity |
 | 2026-09-23 | FA-08: pin Claude/Codex native state roots in durable session plans and refuse relocation before rebind; automatically protect roots from guest placement | Parser and adapter conformance regressions; adversarial review; old-release retirement required before deploy; live acceptance pending |

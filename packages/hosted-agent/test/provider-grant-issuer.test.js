@@ -55,6 +55,99 @@ const makeIssuer = options =>
         },
   );
 
+for (const wrapped of [false, true]) {
+  test(`failed pool construction releases earlier ${wrapped ? 'wrapped' : 'direct'} member resources`, async t => {
+    t.timeout(5000);
+    const owner = makePoolMemberLifecycle();
+    const retired = makePoolMemberLifecycle();
+    retired.fence();
+    let retained = 0;
+    let acquired = 0;
+    let signalReleased = () => {};
+    const released = new Promise(resolve => {
+      signalReleased = () => resolve(undefined);
+    });
+    const lifecycle = harden({
+      ...owner,
+      /** @param {() => void | Promise<void>} cleanup */
+      retain: cleanup => {
+        const release = owner.retain(cleanup);
+        retained += 1;
+        return () => {
+          if (release()) retained -= 1;
+          signalReleased();
+        };
+      },
+    });
+    const issuer = makeIssuer({
+      runtime: {},
+      secret: undefined,
+      policy,
+      imageDigest: digest,
+      accountRef: 'account',
+      fetch: async () => {
+        acquired += 1;
+        throw Error('unused transport must not fetch');
+      },
+      pool: {
+        members: () => [
+          {
+            id: 'first',
+            lifecycle,
+            ...(wrapped
+              ? {
+                  subscription: Far('UnusedShare', {
+                    openEndpoint: () => {
+                      acquired += 1;
+                      throw Error('unused share must not open');
+                    },
+                  }),
+                }
+              : {
+                  secret: Far('UnusedSecret', {
+                    readBase64: () => {
+                      acquired += 1;
+                      throw Error('unused secret must not read');
+                    },
+                  }),
+                }),
+          },
+          { id: 'retired', lifecycle: retired },
+        ],
+        forSession: () => {
+          throw Error('construction must stop at retired member');
+        },
+      },
+    });
+    t.teardown(async () => {
+      await issuer.dispose();
+      await owner.close();
+      await retired.close();
+    });
+    await t.throwsAsync(
+      issuer.openEndpoint({ sessionId: 'partial', subscription: 'auto' }),
+      {
+        message: /Provider subscription retired/,
+      },
+    );
+    await released;
+    t.is(
+      retained,
+      0,
+      'unused cleanup is released without retiring the first member',
+    );
+    t.is(
+      acquired,
+      0,
+      'partial construction must not use credentials or remote resources',
+    );
+    t.notThrows(
+      () => owner.check(),
+      'rollback must not retire the surviving member',
+    );
+  });
+}
+
 test('retiring one pool member leaves an existing auto endpoint usable by its sibling', async t => {
   const work = makePoolMemberLifecycle();
   const home = makePoolMemberLifecycle();
