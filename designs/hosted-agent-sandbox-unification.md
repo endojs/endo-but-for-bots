@@ -145,11 +145,17 @@ Rules:
   `['image', 'account', 'provider']`. The provisioner owns that vocabulary; an
   adapter declares only which of its fields sit under each name.
 - `stateProvider` remains an optional role under `provider`.
+- Every plan reader refuses a field it does not know (operator's decision,
+  2026-09-23). Today the shared placement reader drops unknown fields and
+  refuses only the retired names `nativeProfile` and `opencodeSessionId`; an
+  adapter will pass the names of the fields it records, and the shared reader
+  refuses any other key, so a stale or misspelled field fails at creation,
+  activation and deletion alike.
 
-Records change shape. The readers drop unknown fields, so `imageRef` is retired
-by name as `nativeProfile` and `opencodeSessionId` were; a Codex record without
-`rootfs`, or a Claude or OpenCode record without `accountRef`, is refused for
-the missing field and recreated, not migrated, as the audit's request allows.
+Records change shape. A Codex record carrying `imageRef` is refused as an
+unknown field, and a record without `rootfs` or without `accountRef` is refused
+for the missing field; both are recreated, not migrated, as the audit's request
+allows.
 Tokyo holds no hosted records at generation 165 beyond what an acceptance run
 makes and deletes.
 
