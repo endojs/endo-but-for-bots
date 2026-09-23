@@ -141,6 +141,13 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  */
 
 /**
+ * A host formula read from persistence may predate the required `registry`
+ * field. Runtime host formulas always have the field after startup migration.
+ *
+ * @typedef {Omit<HostFormula, 'registry'> & { registry?: FormulaIdentifier }} PersistedHostFormula
+ */
+
+/**
  * The daemon's filesystem content store always surfaces the optional `size` /
  * `readRange` members of the host-side `ContentStoreBlob`, so its `fetch`
  * result can be narrowed to require them.
@@ -1435,6 +1442,66 @@ const makeDaemonCore = async (
         return { id, formula };
       }),
     );
+
+    // Idempotent startup migration: a host formula persisted before the
+    // required `registry` field existed (see designs/registry-capability.md
+    // § Migration for already-formulated hosts) fails fast at incarnation,
+    // exactly as a missing `nodeWorker` does. Upgrade it in place with a
+    // fresh registry formula pointed at the daemon's default registry URL,
+    // mirroring the registry formula every new host gets in
+    // `formulateHostDependencies`.
+    /** @type {FormulaIdentifier[]} */
+    const migratedRegistryIds = [];
+    // Sequential — never `Promise.all(entries.map(...))`. Each iteration awaits
+    // `formulateLazy`, which enters `withFormulaGraphLock`. That lock's
+    // reentrancy guard is a depth counter that cannot distinguish call-stack
+    // nesting (the case it must bypass to avoid self-deadlock) from
+    // event-loop-interleaved siblings, so a concurrent `.map()` fan-out would
+    // let a second migration observe the first's depth increment and skip the
+    // serial queue, mutating the formula graph out of the intended order —
+    // benign here only because each entry touches a disjoint host/registry id
+    // pair, but not a property the lock guarantees. Every other formulate
+    // chain in this file (e.g. `formulateHostDependencies`) issues its calls
+    // sequentially for exactly this reason. Sequencing also bounds a failed
+    // write to the host being migrated instead of racing partial state across
+    // siblings.
+    for (const entry of entries) {
+      const persistedHostFormula = /** @type {PersistedHostFormula} */ (
+        entry.formula
+      );
+      const needsRegistryMigration =
+        entry.formula.type === 'host' &&
+        persistedHostFormula.registry === undefined;
+      if (needsRegistryMigration) {
+        const { number: hostFormulaNumber, node: hostNode } = parseId(entry.id);
+        const registryFormulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+        /** @type {RegistryFormula} */
+        const registryFormula = {
+          type: 'registry',
+          registryUrl: registryDefaultUrl,
+        };
+        const registryId = await formulateLazy(
+          registryFormulaNumber,
+          registryFormula,
+          hostNode,
+        );
+        pinTransient(registryId);
+        migratedRegistryIds.push(registryId);
+        const migratedFormula = {
+          ...persistedHostFormula,
+          registry: registryId,
+        };
+        await persistencePowers.writeFormula(
+          hostFormulaNumber,
+          hostNode,
+          migratedFormula,
+        );
+        entry.formula = migratedFormula;
+      }
+    }
+
     await withFormulaGraphLock(async () => {
       for (const { id, formula } of entries) {
         if (!formulaForId.has(id)) {
@@ -1443,6 +1510,7 @@ const makeDaemonCore = async (
         formulaGraph.onFormulaAdded(id, formula);
       }
     });
+    await Promise.all(migratedRegistryIds.map(unpinTransient));
 
     const petStoreTypes = new Map([
       ['pet-store', assertPetName],
