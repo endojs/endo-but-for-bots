@@ -22,7 +22,8 @@
 /* global fetch */
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 import { clearTimeout, setImmediate, setTimeout } from 'node:timers';
@@ -34,8 +35,12 @@ const LISTEN_TIMEOUT_MS = 30_000;
 const INTERRUPT_GRACE_MS = 5000;
 const API_TIMEOUT_MS = 10_000;
 const STDERR_TAIL_BYTES = 2048;
-const MAX_LINE_BYTES = 1024 * 1024;
-const MAX_SSE_BUFFER_BYTES = 2 * 1024 * 1024;
+// The native producer bounds checkpoints to 16 MiB. JSON tool inputs are
+// encoded again as canonical argument strings, so the output needs twice that
+// space plus envelope headroom. These are transport, not model-token limits.
+const MAX_CHECKPOINT_BYTES = 16 * 1024 * 1024;
+const MAX_LINE_BYTES = 34 * 1024 * 1024;
+const MAX_SSE_BUFFER_BYTES = 17 * 1024 * 1024;
 
 const positiveEnvNumber = (raw, fallback) => {
   const value = Number(raw ?? fallback);
@@ -116,11 +121,30 @@ export const makeMessageRegistry = ({
   // matching unsettled call, so track what was emitted per callID.
   const startedToolCalls = new Set();
   const finishedToolCalls = new Set();
+  const checkpoints = new Map();
+  const reportedUsage = new Set();
 
   const isCompactionSummary = info =>
     info?.role === 'assistant' && info.summary === true;
 
   return Object.freeze({
+    acceptCheckpoint(checkpoint) {
+      const encoded = JSON.stringify(checkpoint);
+      if (Buffer.byteLength(encoded) > MAX_CHECKPOINT_BYTES) {
+        throw new Error('Native compaction checkpoint exceeds transport limit');
+      }
+      const digest = createHash('sha256').update(encoded).digest('hex');
+      const prior = checkpoints.get(checkpoint.summaryID);
+      if (prior !== undefined) {
+        if (prior !== digest)
+          throw new Error('Native compaction checkpoint identity changed');
+        return false;
+      }
+      if (checkpoints.size >= 65_536)
+        throw new Error('Native compaction checkpoint identity limit exceeded');
+      checkpoints.set(checkpoint.summaryID, digest);
+      return true;
+    },
     noteMessage(info) {
       if (!info || typeof info.id !== 'string') return;
       messages.set(info.id, {
@@ -166,6 +190,15 @@ export const makeMessageRegistry = ({
     },
     isSummaryMessage(messageID) {
       return summaryIDs.has(messageID);
+    },
+    markUsage(partID) {
+      if (
+        messages.get(parts.get(partID)?.messageID)?.role !== 'assistant' ||
+        reportedUsage.has(partID)
+      )
+        return false;
+      reportedUsage.add(partID);
+      return true;
     },
     isVisibleAssistantPart(partID) {
       const part = parts.get(partID);
@@ -270,8 +303,7 @@ export const isCompactionContinuation = part =>
  * Project the pinned fork's authoritative snapshot, not an SSE history mirror.
  * This is the stack's text/tool context contract, not a byte-for-byte provider
  * prompt: reasoning and provider metadata are not represented by that contract.
- * Do not wire this into the event stream until framing and failure fencing are
- * in place. The native compaction request becomes the canonical summary's
+ * The native compaction request becomes the canonical summary's
  * scaffold on import; its synthetic continuation remains ordinary context.
  * @param {any} checkpoint
  * @param {ReturnType<typeof makeMessageRegistry>} registry
@@ -467,6 +499,17 @@ export const projectCompactionCheckpoint = (
  */
 export const mapSseEvent = (event, registry, sessionID) => {
   const { type, properties = {} } = event ?? {};
+  if (type === 'session.compacted') {
+    if (properties.sessionID !== sessionID) return undefined;
+    const projected = projectCompactionCheckpoint(
+      properties.checkpoint,
+      registry,
+      sessionID,
+    );
+    return registry.acceptCheckpoint(properties.checkpoint)
+      ? projected
+      : undefined;
+  }
   if (type === 'message.updated') {
     if (properties.sessionID !== sessionID) return undefined;
     registry.noteMessage(properties.info);
@@ -532,7 +575,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
       part.type === 'step-finish' &&
       typeof part.tokens?.input === 'number' &&
       typeof part.tokens?.output === 'number' &&
-      registry.isVisibleAssistantPart(part.id)
+      registry.markUsage(part.id)
     ) {
       return usageEventFromStep(
         part.tokens,
@@ -583,6 +626,14 @@ export const mapSseEvent = (event, registry, sessionID) => {
   }
   if (type === 'session.error') {
     if (properties.sessionID !== sessionID) return undefined;
+    if (
+      properties.error?.data?.message ===
+      'Unable to publish compaction checkpoint'
+    ) {
+      throw new Error(
+        'Native compaction checkpoint failed; session continuity lost',
+      );
+    }
     return Object.freeze({
       type: 'phase',
       phase: 'error',
@@ -614,32 +665,48 @@ export const deriveTerminal = ({
  * @param chunks
  */
 export async function* iterateSseData(chunks) {
-  const decoder = new TextDecoder('utf-8', { fatal: false });
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let buffer = '';
   for await (const chunk of chunks) {
-    buffer += decoder.decode(chunk, { stream: true }).replaceAll('\r\n', '\n');
-    if (buffer.length > MAX_SSE_BUFFER_BYTES) {
-      throw new Error('opencode event frame exceeded the bridge buffer');
-    }
-    let index = buffer.indexOf('\n\n');
-    while (index !== -1) {
-      const frame = buffer.slice(0, index);
-      buffer = buffer.slice(index + 2);
-      const data = frame
-        .split('\n')
-        .filter(line => line.startsWith('data:'))
-        .map(line => line.slice(5).trimStart())
-        .join('\n');
-      if (data !== '') {
-        try {
-          yield Object.freeze(JSON.parse(data));
-        } catch {
-          // Ignore malformed frames; the server retries.
+    // Bound each frame, not a coalesced network chunk containing many frames.
+    // Slicing also bounds temporary decoder headroom above the current frame.
+    for (let offset = 0; offset < chunk.byteLength; offset += 64 * 1024) {
+      buffer = (
+        buffer +
+        decoder.decode(chunk.subarray(offset, offset + 64 * 1024), {
+          stream: true,
+        })
+      ).replaceAll('\r\n', '\n');
+      let index = buffer.indexOf('\n\n');
+      while (index !== -1) {
+        const frame = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        if (Buffer.byteLength(frame) > MAX_SSE_BUFFER_BYTES) {
+          throw new Error('opencode event frame exceeded the bridge buffer');
         }
+        const data = frame
+          .split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart())
+          .join('\n');
+        if (data !== '') {
+          // This event stream has no resumable cursor. Skipping a corrupt
+          // checkpoint would silently continue from context Endo never saw.
+          const event = JSON.parse(data);
+          if (!event || typeof event !== 'object' || Array.isArray(event)) {
+            throw new Error('Invalid opencode event frame');
+          }
+          yield Object.freeze(event);
+        }
+        index = buffer.indexOf('\n\n');
       }
-      index = buffer.indexOf('\n\n');
+      if (Buffer.byteLength(buffer) > MAX_SSE_BUFFER_BYTES) {
+        throw new Error('opencode event frame exceeded the bridge buffer');
+      }
     }
   }
+  buffer += decoder.decode();
+  if (buffer.trim() !== '') throw new Error('Truncated opencode event frame');
 }
 
 // ---- main ------------------------------------------------------------------
@@ -667,6 +734,9 @@ const main = async () => {
       );
       error.oversize = true;
       throw error;
+    }
+    if (process.stdout.writableLength > MAX_LINE_BYTES) {
+      throw new Error('Bridge output queue exceeded transport limit');
     }
     process.stdout.write(`${line}\n`);
   };
@@ -721,6 +791,16 @@ const main = async () => {
         timer.unref();
       }),
     ]);
+    // process.exit does not flush pipes. Preserve complete checkpoints and the
+    // terminal when the host is reading, without hanging forever if it is gone.
+    let flushTimer;
+    await Promise.race([
+      new Promise(resolve => process.stdout.write('', resolve)),
+      new Promise(resolve => {
+        flushTimer = setTimeout(resolve, 2000);
+      }),
+    ]);
+    clearTimeout(flushTimer);
     process.exit(code);
   };
 
@@ -855,6 +935,7 @@ const main = async () => {
   };
 
   const dispatchSend = text => {
+    if (shuttingDown) return;
     inFlight = true;
     sawBusy = false;
     pendingError = undefined;
@@ -862,19 +943,18 @@ const main = async () => {
     clearTurnTimers();
     if (TURN_TIMEOUT_MS > 0) {
       turnTimer = setTimeout(() => {
-        finishTurn(deriveTerminal({ pendingError, timedOut: true }));
-        void api(`/session/${encodeURIComponent(activeSessionId)}/abort`, {
-          method: 'POST',
-        }).catch(() => {});
+        void shutdown(1, 'turn timeout; native stop unconfirmed');
       }, TURN_TIMEOUT_MS);
     }
     void api(`/session/${encodeURIComponent(activeSessionId)}/prompt_async`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ parts: [{ type: 'text', text }] }),
-    }).catch(error => {
-      pendingError = `${error}`;
-      finishTurn(deriveTerminal({ pendingError }));
+    }).catch(() => {
+      void shutdown(
+        1,
+        'Native prompt admission failed; session continuity unknown',
+      );
     });
   };
 
@@ -894,6 +974,7 @@ const main = async () => {
 
   const consumeEvents = (async () => {
     for await (const event of iterateSseData(events.body)) {
+      if (shuttingDown) return;
       // A recovered error marker is cleared only by a new model step, not by
       // tool or usage traffic from the failed step.
       if (
@@ -905,6 +986,12 @@ const main = async () => {
       }
       const mapped = mapSseEvent(event, registry, activeSessionId);
       if (mapped) {
+        if (
+          mapped.type === 'compaction' &&
+          (!inFlight || outstandingCalls.size > 0)
+        ) {
+          throw new Error('Native compaction crossed an invalid turn frontier');
+        }
         // A terminal tool update can arrive without an observed running
         // update; Floot only accepts a result with a matching unsettled call,
         // so announce a bare call first.
@@ -919,8 +1006,8 @@ const main = async () => {
         }
         if (mapped.type === 'phase' && mapped.phase === 'error') {
           if (inFlight && !sawBusy) {
-            pendingError = mapped.error;
-            finishTurn(deriveTerminal({ pendingError }));
+            await shutdown(1, 'Native turn failed before its busy boundary');
+            return;
           } else {
             pendingError = mapped.error;
           }
@@ -943,10 +1030,7 @@ const main = async () => {
           // eslint-disable-next-line no-continue
           if (!sawBusy) continue;
           if (outstandingCalls.size > 0) {
-            finishTurn({
-              type: 'abort',
-              reason: 'turn ended with unresolved tool calls',
-            });
+            throw new Error('Turn ended with unresolved tool calls');
           } else {
             finishTurn(
               deriveTerminal({ pendingError, timedOut: false, interrupted }),
@@ -961,10 +1045,12 @@ const main = async () => {
         if (mapped.type === 'tool-result') outstandingCalls.delete(mapped.id);
         try {
           writeEvent(mapped);
+          if (process.stdout.writableNeedDrain)
+            await once(process.stdout, 'drain');
         } catch {
-          finishTurn({ type: 'abort', reason: 'bridge event too large' });
-          // eslint-disable-next-line no-continue
-          continue;
+          throw new Error(
+            'Bridge event delivery failed; session continuity lost',
+          );
         }
       }
       if (
@@ -992,15 +1078,18 @@ const main = async () => {
         ).catch(() => {});
       }
     }
-  })().catch(error => {
-    if (inFlight) {
-      finishTurn({ type: 'abort', reason: `${error}` });
-    }
-  });
+    throw new Error('Opencode event stream ended; session continuity lost');
+  })().catch(() =>
+    shutdown(
+      1,
+      'OpenCode event continuity lost; restart from the recorded transcript',
+    ),
+  );
 
   // Commands from the host.
   const lines = createInterface({ input: process.stdin });
   lines.on('line', line => {
+    if (shuttingDown) return;
     let command;
     try {
       command = JSON.parse(line);
@@ -1056,7 +1145,7 @@ const main = async () => {
       }).catch(() => {});
       clearTimeout(interruptTimer);
       interruptTimer = setTimeout(() => {
-        finishTurn(deriveTerminal({ pendingError, interrupted: true }));
+        void shutdown(1, 'interrupted; native stop unconfirmed');
       }, INTERRUPT_GRACE_MS);
       return;
     }

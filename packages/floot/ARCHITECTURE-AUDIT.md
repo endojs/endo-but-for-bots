@@ -718,14 +718,16 @@ incomplete calls or orphan results are refused, not silently dropped.
 The canonical format remains more general, but supporting results arriving
 after a checkpoint requires the ordered-journal reconciliation below.
 The ordered journal wiring below now covers interruption before tree publication
-in synthetic storage/stream tests. There is still no native compaction producer.
+in synthetic storage/stream tests. The native producer and bridge wiring below
+are now implemented locally; Tokyo still runs the earlier image.
 No formula is created and no existing stored record is rewritten.
-Do not enable native capture until the following ordered work is complete:
+Native capture implementation/acceptance sequence (the first three are now
+implemented locally; deployment and live acceptance in the fourth remain open):
 
 1. Carry checkpoints through tree messages and protocol events without adding
    retained-tail copies to display history or usage/execution accounting.
 2. Persist full checkpoint content before its ordered journal reference, and
-   preserve surrounding text ordering. Current tool-only observations and a
+   preserve surrounding text ordering. The former tool-only observations and a
    concatenated terminal output cannot locate a recovered compaction safely.
    Failed publication must fence; repeated identical boundary delivery must be
    idempotent and a changed payload under the same identity must be refused.
@@ -769,7 +771,7 @@ The stream refuses checkpoints crossing an unsettled reported tool call rather
 than creating an orphan result after the context boundary.
 Stream/recovery validation: 529 Floot tests pass; touched lint and docs pass with
 warnings, and source typechecking reports no errors. Adversarial review approved.
-Native capture remains disabled; native boundary identity/frontier reconciliation,
+The native bridge wiring below supersedes the earlier disabled-capture status;
 live compaction and real-daemon restart acceptance remain open.
 
 Native checkpoint producer preparation (2026-09-23, local fork, not deployed):
@@ -819,13 +821,60 @@ Tool-call identifiers may repeat across user turns, not within one turn.
 Native reasoning and provider metadata remain outside the existing canonical
 text/tool contract: this is not exact provider-prompt equivalence, including
 signed-reasoning replay. Supporting that requires a separate contract extension.
-This converter is deliberately not called by event handling yet; transport
-bounds, duplicate-boundary reconciliation, continuity fencing, and actual SSE
-ordering remain gates. It adds no durable formula or stored schema.
+At this preparation checkpoint the converter was not called by event handling;
+transport bounds, duplicate-boundary reconciliation, continuity fencing, and
+actual SSE ordering remained gates, addressed by the wiring below.
+It adds no durable formula or stored schema.
 Validation: all 268 OpenCode sandbox tests pass, including eight projection
 regressions and canonical import round-trips. Scoped lint has no errors and
 seven pre-existing warnings. Adversarial review caught and corrected the
 cross-turn tool-ID restriction; re-review approved the supported subset.
+
+Native bridge wiring (2026-09-23, local, not deployed): `session.compacted`
+now projects and emits the checkpoint at its SSE position, without a later
+history fetch. A repeated native summary identity with identical encoded content
+is a no-op; conflicting content under that identity fails closed.
+Only a digest is retained per boundary, bounded to 65,536 identities per bridge.
+The producer's 16 MiB checkpoint profile has 17 MiB SSE envelope capacity and
+34 MiB host JSONL capacity (tool JSON inputs are encoded again as argument strings).
+Framing limits count UTF-8 bytes per frame rather than per coalesced network chunk.
+Malformed/truncated frames, missing checkpoints, unsupported context, identity
+conflicts and native checkpoint-publication failures stop the entire incarnation.
+No later prompt is accepted from its queue; restoration must use Endo's transcript.
+Timeout or expired cancellation grace also stops the bridge, since neither is
+proof that the old native turn ended. This prevents late old-turn checkpoints
+from being assigned to a queued new turn.
+Output delivery waits for pipe backpressure and bounded shutdown flushing, after
+a process test exposed truncation of a large checkpoint during immediate exit.
+Compaction summary model usage is reported once per native step, not hidden with
+the summary's live UI text; snapshot projection itself adds no usage or tool events.
+The source-build default now selects `kumavis/opencode` branch
+`codex/compaction-checkpoint`, containing producer `f6492ac3f9`.
+Seven actual bridge-process tests use a fixture HTTP/SSE server, including a
+2 MiB checkpoint before later answer text, duplicate delivery, conflict/native
+failure, malformed data, stream loss, and queued-send/late-checkpoint fencing
+on timeout and cancellation. These are not a live native model compaction test.
+An image rebuild, paired deployment and native compaction/restart acceptance
+are still required; this does not claim native process-loss recovery from #1323.
+Validation: all 280 OpenCode sandbox and 529 Floot tests pass.
+Root documentation/type validation has zero errors and 178 warnings.
+Scoped ESLint has no errors
+and nine warnings. The existing standalone fixture lacks an ESLint project
+mapping; its syntax check and process tests pass, but that lint invocation is
+not counted as passing. Adversarial review found the unconfirmed-stop race;
+the fix, queued-send regression and stdout-drain correction were re-reviewed.
+
+Additional native-context parity finding: when `compaction.prune` is enabled,
+native `prompt.ts:1338` forks pruning without awaiting it; `compaction.ts:286-330`
+sets old tool parts' `time.compacted` flags through ordinary part updates,
+without a new summary checkpoint. The bridge suppresses repeated completed-tool
+updates, so a later restoration could reintroduce output pruned after the last
+checkpoint. Pruning normally stops at the latest summary, but an older background
+prune can race a newer snapshot. The pinned fork defaults pruning to false;
+verify that the effective hosted configuration keeps it disabled before deployment.
+Supporting this optional mutation needs a separately identified context revision
+and safe publication boundary, not a changed payload under the existing summary ID.
+The current summary-checkpoint wiring does not claim to capture these revisions.
 
 Validation at the storage-foundation checkpoint: 515 Floot tests passed,
 including snapshot corruption, canonical payload

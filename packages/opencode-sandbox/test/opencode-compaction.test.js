@@ -8,12 +8,60 @@ import {
 } from '@endo/hosted-agent/transcript-records.js';
 import {
   makeMessageRegistry,
+  mapSseEvent,
   projectCompactionCheckpoint,
 } from '../src/opencode-bridge.mjs';
 import { importedTurnsFor } from '../src/opencode-transcript.js';
 
 const sessionID = 'ses_checkpoint';
 const registry = makeMessageRegistry({ mcpServerName: 'endo' });
+
+test('boundary duplicates are idempotent and changed identities fail closed', t => {
+  const seen = makeMessageRegistry();
+  const event = {
+    type: 'session.compacted',
+    properties: { sessionID, checkpoint: fixture() },
+  };
+  t.is(mapSseEvent(event, seen, sessionID).type, 'compaction');
+  t.is(
+    mapSseEvent(JSON.parse(JSON.stringify(event)), seen, sessionID),
+    undefined,
+  );
+  event.properties.checkpoint.messages[1].parts[0].text = 'Changed summary';
+  t.throws(() => mapSseEvent(event, seen, sessionID), {
+    message: /identity changed/,
+  });
+  t.is(mapSseEvent(event, seen, 'different-session'), undefined);
+});
+
+test('native checkpoint failure and missing checkpoints cannot continue', t => {
+  const seen = makeMessageRegistry();
+  t.throws(() =>
+    mapSseEvent(
+      { type: 'session.compacted', properties: { sessionID } },
+      seen,
+      sessionID,
+    ),
+  );
+  t.throws(
+    () =>
+      mapSseEvent(
+        {
+          type: 'session.error',
+          properties: {
+            sessionID,
+            error: {
+              name: 'UnknownError',
+              data: { message: 'Unable to publish compaction checkpoint' },
+            },
+          },
+        },
+        seen,
+        sessionID,
+      ),
+    { message: /continuity lost/ },
+  );
+});
 
 /** @param {any[]} [tail] */
 const fixture = (tail = []) => ({
