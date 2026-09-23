@@ -1981,6 +1981,20 @@ the source, tests, pins, and durability classification.
 Actual native effective input limits, dynamic-route guarantees, live compaction,
 and coordinated deployment/restart acceptance remain open.
 
+Tokyo preparation (2026-09-24, not activated): app `ab8d804ae` and native
+`9c41a9e865` were rebuilt successfully; host `9636e419` pins the resulting
+OpenCode image `sha256:21d529895cd3e68faee9d773cf5ae7039c5b3d02be92969f606284441daa94ce`.
+The source-build and extraction logs agree with the manifest's binary digest.
+All four exact candidate image pins are available as Linux amd64, the temporary
+source-export container is gone, and paired NixOS preparation passed.
+The restoration ledger correctly remains `candidate`, not verified.
+Generation 169/app `819aa18c8` still runs; no session, workspace, Secret, or
+renewal owner was retired or migrated. Fresh preservation/retirement approval
+and cross-backend live acceptance remain pending. Full provenance, build times,
+and the 24-hour candidate lease are recorded in endo-host's
+`ops/native-checkpoint-deployment-20260923.md`; revalidate protection before
+delayed activation.
+
 Implementation review gate: every new implementation must be audited against
 the Endo daemon's durable formula patterns, not only its in-memory behavior.
 Identify the durable formula owner and dependencies, what is replayed on daemon
