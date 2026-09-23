@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 157 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 181 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -96,6 +96,14 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Native import/restoration mapping (2026-09-24): 24 further entries bring coverage
+to 181 application commits (newest 15 plus earliest 166).
+The review distinguishes native import proposals from implemented behavior,
+ephemeral native stores from authoritative journals, and keep-id mapping from
+subordinate-UID containment. Local controller/client/policy suites pass as recorded
+in the ledger; they do not certify native import semantics or live confinement.
+The OpenCode cancellation-before-import-ack admission gap is fixed locally below.
 
 Native restoration/mount mapping (2026-09-24): twelve further entries bring
 coverage to 157 application commits (newest 15 plus earliest 142).
@@ -2185,6 +2193,27 @@ This source removal is recoverable from Git; it shipped in the coordinated cutov
 of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
+
+### Prompt admission after pre-execution cancellation — 2026-09-24
+
+A new regression reproduces OpenCode sending a canceled prompt after a held
+history import acknowledges success. Reader closure sent an interrupt before any
+inference was in flight, which the bridge ignored; dispatch then unconditionally
+wrote the prompt. The baseline sent `must not execute` instead of the next queued
+turn. Import refusal already fenced later prompts correctly.
+The reviewed fix retains the selected turn during startup, tracks
+whether its prompt was admitted, and checks cancellation inside the serialized
+stdin write. Pre-admission cancellation must not send an interrupt to absent stdin
+or claim the still-pending import stopped; dispatch retains that import barrier.
+Pre-admission reader closure or explicit interruption settles delivery locally,
+but the active startup/import operation still blocks later dispatch until it
+settles. An accepted import can serve the next turn; a refused import still
+poisons the incarnation. Stale native terminal events cannot release that barrier.
+This is incarnation-local admission state, not a new durable record or a change
+to native process-loss recovery. All 35 client tests pass, including seven new
+startup/import/queued-write cases independently rerun by the adversarial reviewer.
+The full OpenCode suite passes all 302 tests. Root documentation generation also
+passes. Scoped lint has no errors and formatting passes; not deployed.
 
 2026-09-24 source retirement: removed the obsolete `oci/spike/` launcher and
 direct-credential runner, plus its dedicated lint exception. Repository and host

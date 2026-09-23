@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 322 application entries and 73 host entries still need explicit ledger
+The other 298 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -595,7 +595,49 @@ provider inference, daemon restart or process-loss recovery.
 | `de8ad3a72` | OpenCode activation consolidated into shared envelope | State bind retired; supervisor still owns provider/mount/sandbox cleanup, not policy declarations |
 | `22ed11e77` | Historical mount-convergence completion note | Hosted controllers use attested make, no hosted makeResolved caller found; old nativeProfile description superseded by current schemas. Live-kernel acceptance separate |
 
+### Native import authority and restoration corrections
+
+Two independent reviewers mapped the next 24 historical changes against retained
+code. Fresh local runs: first slice 205 passed/one skipped (Claude controller 17,
+OpenCode client/controller/conformance 76, Codex client/conformance 107, shared
+policy five); second slice sandbox 158, Claude factory/writer/controller 44 and
+OpenCode MCP/client/factory 53 passed. These are injected/local tests, not fresh
+kernel confinement, native import semantics, live providers or daemon restart.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `044cae987` | Historical native-store writing rationale | Claude derives JSONL, OpenCode imports through its service, Codex injects items; lenient decoding is not restoration evidence |
+| `138ae76fc` | Historical event-projection import proposal | Current fork behavior cannot be inferred from proposed event vocabulary; payload tests are not native projector proof |
+| `4d07c1072` | Shared envelope checks authority handoff | Exact raw attestation precedes hosted-profile checks; supervisor retains resources for refusal cleanup |
+| `b718f30c9` | Historical pinned-image help observation | Not HTTP MCP integration evidence; current implementation still uses socket MCP |
+| `7b57fce58` | Historical evidence/prompt-admission distinction | Import must remain non-executing; native fork acceptance remains separate |
+| `3fb9c4252` | Old text restoration/resume fallback superseded | Current OpenCode requires fresh-session capability and structured import; native history is not authority |
+| `f7460e4dc` | Historical lesser-form status superseded | Text fallback removed; restoration failures remain visible |
+| `9d3bd7b0e` | Build-applied patch retired by `53ad6e03e` | Current image pins fork source, not retained application patch; catalog-fetch/build reproducibility limits remain |
+| `28090b4b5` | Structured import retained, fallback removed | Failed import poisons incarnation; cancellation during pending import exposed an admission gap now corrected with reviewed startup/import/queued-write fences |
+| `273f3a618` | Ephemeral OpenCode native database | Controller uses in-memory database/tmpfs; journal and workspace have separate owners, reconstruction imports authoritative records |
+| `2bbfe36eb` | Historical closure/deployment proposal | Blanket faithful-restoration and Codex-unavailable claims are not current evidence |
+| `362011c3f` | Codex protocol injection retained | Restoration failure fences session rather than degrading to text; local protocol tests are not native-server acceptance |
+| `d3b8d4cc4` | Historical restoration design | Current clients refuse unavailable structured restoration; fallback-to-text claims superseded |
+| `0cc91ef2b` | Stateless denying scratch capability | Shared makeNoHostScratch retained; old Codex entrypoint removed. Denies host scratch, adds no storage owner |
+| `dc8f883e1` | Reconstructible sandbox policy | Declared binds admitted, undeclared binds refused; trusted roots are not absence-of-host-authority proof |
+| `96c919615` | Runtime keep-id mapping | Slice maps to daemon host UID; namespace attestation does not establish subordinate-UID escape containment |
+| `c34d62bcd` | Historical deployment observations | Keep-id trade retained; assertion that none of these defects were unit-testable was overstated |
+| `006db33aa` | Original Codex volumes retired; MCP listener incarnation-owned | Reownership removed by `812f10b47`; socket unlink requires caller-exclusive ownership and predecessor reconciliation, not EADDRINUSE protection or quiescence proof |
+| `0ff5c7e9f` | Journal projection and ephemeral diagnostics | getTranscript now archive-aware; inference uses checkpoint-selected context, so views intentionally differ. Diagnostics carry counts/status, not content |
+| `35af362bb` | Text continuity retired by `24eecb8fe` | Canonical context replaces text serialization; removing arbitrary ceiling did not establish bounded memory/capacity |
+| `0f9121909` | Factory/client option forwarding | Both factories preserve transcript through options; model/persona overrides remain explicit, no new durable owner |
+| `f0cc1d541` | Historical correction of restart evidence | CLI-store survival differs from authoritative restoration; no new implementation or fresh acceptance proof |
+| `5edcf9eb3` | Disposable Claude native transcript file | Current controller writes restored content, not plan text; controller tests supplement writer roundtrip, journal remains authority |
+| `afb0fc307` | Ephemeral bridge feature negotiation | Bounded feature list and strict fresh/import requirements retained; advertisement is admission, not CLI semantic compatibility |
+
 ### Post-snapshot changes
+
+- OpenCode records prompt admission separately from startup/import ownership.
+  Pre-admission cancellation settles delivery without admitting the prompt or
+  releasing the still-pending import barrier. Seven new local race tests and
+  independent review cover reader closure and explicit interruption; failed
+  import remains poisoned. No new durable schema or native quiescence claim.
 
 - Multi-turn replay now uses turn-scoped pairing for Claude, OpenCode and Codex
   Responses items; Claude also indexes by call record rather than raw ID.
