@@ -1275,7 +1275,7 @@ testNeedsNodeWorker.serial(
   'native session stop closes a worker with a pending inert constructor',
   async t => {
     t.timeout(30_000);
-    const { host, config } = await prepareHost(t);
+    const { host, config } = await prepareHost(t, 'pend');
     const sibling = await E(host).evaluate(
       '@node',
       "makeExo('Sibling', M.interface('Sibling', { ping: M.call().returns(M.string()) }), { ping: () => 'alive' })",
@@ -1331,7 +1331,9 @@ testNeedsNodeWorker.serial(
   'native session tools are transient across daemon restart',
   async t => {
     t.timeout(30_000);
-    const { config, cancelled } = await prepareConfig(t);
+    const { config, cancelled } = await prepareConfig(t, {
+      configName: 'tool',
+    });
     const specifier = new URL('./_native-session-tools.js', import.meta.url)
       .href;
     const tools = label =>

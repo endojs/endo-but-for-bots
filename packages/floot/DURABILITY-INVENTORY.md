@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 416 application entries and 73 host entries still need explicit ledger
+The other 413 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -322,6 +322,22 @@ not abrupt native loss or current live backend acceptance.
 | `9843b3ab9` | Provider runtime owns lock/recovery/resolver/listener cleanup; shared broker service separately retains issuer revocation and runtime closure | Tests cover failed sweeps/releases, late acquisition, scoped retries and sibling preservation. Later shared-service/recovery changes supersede original composition. Injected engines/child fixtures are not live Podman or descendant-quiescence proof |
 | `e0a67872a` | Worker context registers cancellation before acquisition; native power retains child until close rather than CapTP shutdown or exit alone | Lifecycle tests exercise post-fork failure, cancelled acquisition, descriptor release, delayed stdio closure and a real child. No daemon-loss recovery or process-tree quiescence guarantee; grace expiration requests force cancellation but does not prove closure |
 | `2b7642dbe` | Session owner records worker/client identities before acquisition, lifecycle phases before activation, and native-closed acknowledgement before worker/reference release | Owner tests cover interrupted construction, fenced forwarding, exact dependencies and retry cleanup. Later staged binding revisions and transient tools are separate changes. Persistent plans do not by themselves prove native recovery or current live backend acceptance |
+
+### Cancellation fences and transient session tools
+
+Three further changes are traced to current context/host/session-owner code.
+Fresh context/formula-cancellation/native-construction-cancellation/native-session-owner
+suites pass 37 tests. Two real-daemon tests also pass after shortening only their
+socket fixture names (`pend`, `tool`): prior 120-character paths exceeded macOS's
+limit. The pending constructor's PID is absent after stop, its formula is removed,
+and a sibling remains callable. The graceful-restart test refuses old tool authority
+until explicitly reattached. These are not native process-loss recovery tests.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `dbc7e71e7` | Context cancellation fences later formula loading/evaluation and powers acquisition; cancelled dependency registration cannot revive missing controllers | Held formula-read/worker tests verify no late execution. Fence belongs to an incarnation, not durable revocation or cancellation of every already-admitted operation |
+| `0ad523414` | Host construction retains original worker/client contexts; boxed formulation completion is distinct from constructor value; stop drains formulation then cancels without revival | Injected failures and real pending-constructor test cover no premature worker cancellation, no replacement acquisition and sibling preservation. Hung persistence may hold cleanup; abrupt loss remains separate |
+| `d64ce9532` | Tool authority belongs to one activation, never persisted session references; replacement requires stop, and cleanup/reconstruction has no implicit tools | Unit and real graceful-restart tests cover identical/replacement tools, old resolver fencing and refusal of persisted tools role. Resolver fencing prevents new delivery, not revocation of a capability already handed out; controller/tool lifecycle must fence such authority |
 
 ### Post-snapshot changes
 
