@@ -113,7 +113,7 @@ export const writeClaudeTranscript = (
   // carries. Claude Code has no compaction record of its own, so the summary
   // is written as the conversation's opening exchange and the superseded span
   // is not replayed — which is what the boundary means.
-  const { superseded, active } = splitAtLastCompaction(records);
+  const { active } = splitAtLastCompaction(records);
   const { pairs } = pairToolCalls(active);
   const resultById = new Map(
     pairs
@@ -150,11 +150,11 @@ export const writeClaudeTranscript = (
     parentUuid = uuid;
   };
 
-  if (superseded.length > 0) {
-    const [compaction] = active;
+  const [compaction] = active;
+  if (compaction?.kind === 'compaction') {
     emit('user', {
       role: 'user',
-      content: compaction?.kind === 'compaction' ? compaction.summary : '',
+      content: compaction.summary,
     });
   }
 

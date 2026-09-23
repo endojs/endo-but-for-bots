@@ -1,6 +1,7 @@
 // @ts-check
 import '@endo/init';
 import test from 'ava';
+import { Far } from '@endo/far';
 
 import { prepareClaudePool, readClaudePool } from '../src/claude-pool-setup.js';
 
@@ -160,6 +161,7 @@ test('retained renewal holder cannot silently move to another Secrets record', a
         readCredential: async () => ({
           identifier: 'retained',
           secretPath: ['secrets', 'another-secret'],
+          secret: Far('Other Secret', {}),
         }),
       }),
     { message: /pinned to another secret/ },

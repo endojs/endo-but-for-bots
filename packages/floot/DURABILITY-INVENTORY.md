@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 346 application entries and 73 host entries still need explicit ledger
+The other 334 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -548,7 +548,34 @@ The remaining rows are source/disposition mapping, not fresh runtime acceptance.
 | `9b01cce7d` | Historical mount design correction/options | OpenCode no longer has a durable native-state row. Claude/Codex state binds do not establish the proposed XFS quota guarantee |
 | `7d58738c1` | Credential-free listener distinction retained; loopback MCP proposal not adopted | Current listener image is credential-free, but Claude/OpenCode still create MCP socket servers with `/endo-mcp` binds, not bearer-authenticated loopback MCP |
 
+### Transcript ownership and native reconstruction
+
+Twelve further historical diffs were compared with retained code by an independent
+reviewer. Fresh checkpoint restoration checks pass 38 Claude writer/controller/
+conformance tests, nine Codex conformance tests and 13 OpenCode conformance tests.
+These are local translations and injected-controller tests, not pinned CLI or
+Tokyo acceptance. Historical design rows are dispositions, not implementation proof.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `744af5c3c` | OpenCode native-store design superseded | Current native state is ephemeral and rebuilt from authoritative records; old persisted native-session-ID topology retired |
+| `4a71b989c` | Journal authority adopted; proposed text continuity superseded | Structured context records replace bounded text preambles |
+| `d5c90d432` | Native transcript restoration retained | Journal checkpoints select active context without arbitrary truncation; not proof of provider capacity or live compaction |
+| `ec9bfbfa7` | Claude observed JSONL format remains a coupling | Local writer/readback conformance is not actual pinned-image acceptance |
+| `817c74bf0` | Historical remote MCP feasibility discussion | Current Claude/OpenCode use socket MCP; no bearer-loopback implementation implied |
+| `2fdc08230` | Neutral transcript design adopted in private journal | Journal owns durable compaction and exceptional effects; JSONL alone establishes neither atomic persistence nor replay safety |
+| `c13ba0a7b` | Pure shared record codec and pairing helpers | Strict parsing and retained-tail expansion retained; global pairing callers have a confirmed cross-turn reuse defect, recorded in FA-01 |
+| `027e55ed4` | Original tree authority retired | Journal recovery supplies evidence; constructor refuses legacy tree state. Old tree-only/drop-orphan rationale does not describe current ownership |
+| `3e680010b` | Journal-owned checkpoint boundary | Current checkpoint validation/index and context reader retain committed boundary, tail and exceptional effects; original segment support alone did not establish this |
+| `983685820` | Structured handoff retained and strengthened | Context excludes current turn and superseded dialogue, preserves failed/uncertain evidence; full-history APIs remain separate |
+| `111904231` | Historical native format observations | Claude JSONL observation remains relevant; Codex's historical no-import limitation is superseded by Responses-item restoration |
+| `a605ac441` | Disposable Claude native transcript writer | Checkpoint-first summary loss reproduced and fixed with shared conformance. Repeated tool-ID result association is a separate confirmed follow-up |
+
 ### Post-snapshot changes
+
+- Claude restoration now carries a checkpoint-first summary even without
+  superseded input. Two regressions failed before the fix; shared checkpoint-first
+  conformance passes on Claude, Codex and OpenCode. No durable format changed.
 
 - Publication's root-index helper and diagnostic now describe file presence,
   not readability. A characterization test records the existing no-pre-read

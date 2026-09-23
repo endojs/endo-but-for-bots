@@ -145,6 +145,46 @@ test('an empty conversation writes an empty file', t => {
   t.is(writeClaudeTranscript([], options), '');
 });
 
+test('a context already trimmed to its checkpoint keeps the summary and tail once', t => {
+  const records = harden([
+    {
+      kind: 'compaction',
+      summary: 'required checkpoint summary',
+      retainedTail: [
+        { kind: 'message', role: 'assistant', content: 'retained tail' },
+      ],
+    },
+    { kind: 'message', role: 'user', content: 'continue' },
+  ]);
+  const lines = parse(writeClaudeTranscript(records, options));
+  t.deepEqual(
+    lines.map(line => line.message.content),
+    [
+      'required checkpoint summary',
+      [{ type: 'text', text: 'retained tail' }],
+      'continue',
+    ],
+  );
+  t.is(lines[0].parentUuid, null);
+  t.is(lines[1].parentUuid, lines[0].uuid);
+  t.is(lines[2].parentUuid, lines[1].uuid);
+  t.is(
+    writeClaudeTranscript(records, options),
+    writeClaudeTranscript(records, options),
+  );
+});
+
+test('a checkpoint alone restores a nonempty conversation', t => {
+  const lines = parse(
+    writeClaudeTranscript(
+      [{ kind: 'compaction', summary: 'only summary' }],
+      options,
+    ),
+  );
+  t.is(lines.length, 1);
+  t.is(lines[0].message.content, 'only summary');
+});
+
 test('the writer refuses a transcript it cannot name or place', t => {
   t.throws(() => writeClaudeTranscript([], { ...options, sessionUuid: '' }), {
     message: /needs the session id/,

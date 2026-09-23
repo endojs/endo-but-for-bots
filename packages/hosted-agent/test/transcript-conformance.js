@@ -106,6 +106,29 @@ export const testTranscriptRestoration = ({ label, restore, readBack }) => {
     t.is(await restore(conversation), await restore(conversation));
   });
 
+  test(`${label} restores context already selected at its checkpoint`, async t => {
+    const records = await readBack(
+      await restore(
+        harden([
+          { kind: 'compaction', summary: 'checkpoint-only summary' },
+          {
+            kind: 'message',
+            role: 'user',
+            content: 'continue from checkpoint',
+          },
+        ]),
+      ),
+    );
+    const text = records
+      .filter(
+        record => record.kind === 'message' || record.kind === 'compaction',
+      )
+      .map(record =>
+        record.kind === 'compaction' ? record.summary : record.content,
+      );
+    t.deepEqual(text, ['checkpoint-only summary', 'continue from checkpoint']);
+  });
+
   test(`${label} restores a compaction's explicit retained tail exactly once`, async t => {
     const retainedTail = harden([
       { kind: 'message', role: 'user', content: 'retained request' },

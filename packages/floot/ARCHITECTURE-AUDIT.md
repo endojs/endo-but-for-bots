@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 133 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 145 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -96,6 +96,11 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Transcript mapping (2026-09-24): twelve further entries bring coverage to 145
+application commits (newest 15 plus earliest 130). This exposed checkpoint-first
+Claude summary loss, fixed below, and cross-turn tool-result misassociation in
+all three native translations, still open. No native/live acceptance claimed.
 
 Publication/workspace/mount mapping (2026-09-24): eight further entries bring
 coverage to 133 application commits (newest 15 plus earliest 118).
@@ -423,6 +428,16 @@ The barrier/context/native-worker-lifecycle suites pass 28 tests.
 This closes the cancellation-reporting item above, not disconnection reporting
 or retained retry ownership. The worker failure in the new case is injected;
 adjacent real-child closure tests do not turn it into a process-loss recovery test.
+
+Disconnection review (2026-09-24): the collection handler logs synchronous
+disconnection failures without propagating them; residence cleanup also does not
+await connection close or worker termination.
+However, the current connection-close implementation already catches writer/drain
+failures, and worker termination resolves through a grace race that suppresses
+underlying failures. No supported normal-operation rejection was reproduced.
+These paths do not prove quiescence, but making them awaited would change cleanup
+semantics and could hang on a stalled close. No speculative patch was made;
+termination proof remains in the separately scoped #1323 research.
 
 Sibling cleanup draining (2026-09-24): a rejected collection callback no longer
 aborts the queue before other admitted callbacks are attempted.
@@ -1138,6 +1153,32 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
+
+### Claude checkpoint-first restoration — 2026-09-24
+
+The retrospective audit found that Claude's native transcript writer emitted a
+compaction summary only when input also contained superseded records before it.
+Floot's context reader intentionally supplies active context starting at the
+checkpoint, so restoration silently omitted that summary; a summary-only context
+became an empty file.
+Two regressions fail before the fix, which emits the summary whenever the active
+stream begins with a compaction record.
+Shared conformance now checks checkpoint-first restoration across all three CLI
+adapters. Claude writer/controller/conformance checks pass 38 tests, Codex
+conformance nine and OpenCode conformance 13.
+Independent adversarial review approved the fix and shared test.
+Source-only Claude type checking, scoped lint and root documentation generation
+pass. Full-package type checking still reports errors in unchanged test fixtures;
+the injected renewable-reader fixture was corrected to include its newly required
+Secret facet, and all seven Claude pool setup tests pass.
+This changes reconstruction of existing durable transcript records, not their
+schema, ownership or retention. Not deployed or live-compaction tested.
+
+Separate confirmed follow-up: native replay pairs tools globally by provider ID,
+so a later turn's result can answer an earlier unanswered call with the same ID.
+Claude additionally indexes paired results by raw ID, duplicating the last result
+across distinct calls. Actual-export fixtures reproduced this in all three CLI
+translations; turn-scoped pairing and call-identity indexing remain to be fixed.
 
 `agent.js`'s `getHistory()` and `getTranscript()` read `turnJournal.list()`, which
 contains the retained window, rather than an archive-aware conversation view.
@@ -4220,6 +4261,10 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Restore Claude checkpoint-first summaries; two regressions fail before
+the fix, and shared conformance covers all three CLI translations. Map twelve
+transcript changes; record separate reused-tool-ID replay defect. Not deployed.
 
 2026-09-24 — Fix renewable Secret identity in `413cea1f5`: retain exact capabilities,
 derive administration by identity, and refuse dynamic slot recipes after a cold-start
