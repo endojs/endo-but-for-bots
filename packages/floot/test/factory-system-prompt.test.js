@@ -40,6 +40,10 @@ const makeWorld = ({ promptEnvironment, fetch } = {}) => {
       storeValue: (value, name) => {
         store.set(name, value);
       },
+      makeDirectory: () => undefined,
+      storeLocator: (name, locator) => {
+        store.set(Array.isArray(name) ? name.join('/') : name, locator);
+      },
       remove: name => {
         store.delete(name);
       },
@@ -113,7 +117,7 @@ const makeWorld = ({ promptEnvironment, fetch } = {}) => {
     locate: name => `locator:${name}`,
     copy: () => undefined,
     provideGuest: (_name, { agentName }) => {
-      hostStore.set(agentName, makeGuest());
+      if (!hostStore.has(agentName)) hostStore.set(agentName, makeGuest());
     },
     storeValue: (value, name) => {
       hostStore.set(name, value);
@@ -122,7 +126,14 @@ const makeWorld = ({ promptEnvironment, fetch } = {}) => {
       hostStore.delete(name);
     },
   });
-  const factory = make(host, undefined, { fetch });
+  let disposalHook;
+  const context = () =>
+    Far('PromptFactoryContext', {
+      addDisposalHook: hook => {
+        disposalHook = hook;
+      },
+    });
+  let factory = make(host, context(), { fetch });
   /** The prompt the backend was given for a session, once a turn has run. */
   const promptOf = async session => {
     const { id } = await E(session).getInfo();
@@ -140,6 +151,7 @@ const makeWorld = ({ promptEnvironment, fetch } = {}) => {
         .catch(() => undefined);
     }
     for (const inbox of inboxes) inbox.close();
+    if (disposalHook) await E(disposalHook)();
   };
   return {
     factory,
@@ -147,6 +159,13 @@ const makeWorld = ({ promptEnvironment, fetch } = {}) => {
     specs,
     promptOf,
     close,
+    revive: async () => {
+      await factory;
+      await E(disposalHook)();
+      disposalHook = undefined;
+      factory = make(host, context(), { fetch });
+      return factory;
+    },
     duringNextTurn: act => {
       duringNextTurn = act;
     },
@@ -370,6 +389,157 @@ const registryOf = hostStore => {
     .sort();
   return /** @type {any} */ (hostStore.get(names.at(-1))).sessions;
 };
+
+for (const pinned of [false, true]) {
+  test.serial(
+    `direct provider delegation preserves explicit ${pinned ? 'colon-route pin' : 'configured-default'} identity across restoration`,
+    async t => {
+      t.timeout(10_000);
+      const originalFetch = globalThis.fetch;
+      const requests = [];
+      let sentTool = false;
+      const fakeFetch = async (url, init) => {
+        if (`${url}`.endsWith('/models/user') || `${url}`.endsWith('/models')) {
+          return Response.json({
+            data: [
+              {
+                id: 'vendor/model:free',
+                name: 'Model',
+                context_length: 200_000,
+                architecture: {
+                  input_modalities: ['text'],
+                  output_modalities: ['text'],
+                },
+                supported_parameters: ['tools'],
+              },
+            ],
+          });
+        }
+        t.is(`${url}`, 'https://openrouter.ai/api/v1/chat/completions');
+        const body = JSON.parse(init.body);
+        requests.push(body);
+        const first = !sentTool;
+        sentTool = true;
+        return Response.json({
+          choices: [
+            {
+              finish_reason: first ? 'tool_calls' : 'stop',
+              message: first
+                ? {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'spawn-1',
+                        type: 'function',
+                        function: {
+                          name: 'spawnSubagent',
+                          arguments: JSON.stringify({
+                            name: 'helper',
+                            systemPrompt: 'Find a bug.',
+                          }),
+                        },
+                      },
+                    ],
+                  }
+                : { role: 'assistant', content: 'Delegated.' },
+            },
+          ],
+        });
+      };
+      globalThis.fetch = fakeFetch;
+      t.teardown(() => {
+        globalThis.fetch = originalFetch;
+      });
+      const world = makeWorld({ fetch: fakeFetch });
+      t.teardown(world.close);
+      world.hostStore.set(
+        'llm-provider',
+        harden({
+          provider: 'openrouter',
+          model: 'vendor/model:free',
+          authToken: 'test-only-key',
+        }),
+      );
+      const parent = await E(world.factory).createSession({
+        backendId: 'provider',
+        modelId: pinned ? 'vendor/model:free' : '',
+        title: 'Direct parent',
+        spoken: true,
+      });
+      const parentId = (await E(parent).getInfo()).id;
+      const turn = await E(parent).startTurn('Please delegate this task.');
+      await E(turn).whenFinished();
+      t.falsy((await E(turn).getStatus()).error);
+      t.is(requests.length, 2);
+      t.true(requests.every(request => request.model === 'vendor/model:free'));
+      const reportedCall = requests[1].messages
+        .flatMap(message => message.tool_calls || [])
+        .find(tool => tool.function.name === 'spawnSubagent');
+      t.truthy(reportedCall);
+      t.true(
+        requests[1].messages.some(
+          message =>
+            message.role === 'tool' &&
+            message.tool_call_id === reportedCall.id &&
+            message.content.includes('helper'),
+        ),
+      );
+      const child = registryOf(world.hostStore).find(
+        entry => entry.parentSessionId === parentId,
+      );
+      t.truthy(child);
+      t.like(child, {
+        backendId: 'provider',
+        modelId: pinned ? 'vendor/model:free' : '',
+        subagentName: 'helper',
+        subagentDepth: 1,
+      });
+      t.false(Object.hasOwn(child, 'model'));
+      t.false(child.promptContext.spoken);
+      t.false(child.promptContext.containerMounts);
+      t.is(world.specs.length, 0);
+      const parentHistory = await E(parent).getHistory();
+      world.hostStore.set(
+        'llm-provider',
+        harden({
+          provider: 'openrouter',
+          model: 'vendor/new-default',
+          authToken: 'test-only-key',
+        }),
+      );
+      const revived = await world.revive();
+      const restored = await E(revived).getSession(child.id);
+      const effectiveModelId = pinned
+        ? 'vendor/model:free'
+        : 'vendor/new-default';
+      t.like(await E(restored).getInfo(), {
+        backendId: 'provider',
+        modelId: pinned ? 'vendor/model:free' : '',
+        effectiveModelId,
+      });
+      t.like(
+        (await E(revived).listSessions()).find(entry => entry.id === child.id),
+        { parentSessionId: parentId, subagentName: 'helper' },
+      );
+      t.deepEqual(await E(restored).getExecutionState(), {
+        state: 'running',
+        supported: false,
+      });
+      t.deepEqual(
+        await E(await E(revived).getSession(parentId)).getHistory(),
+        parentHistory,
+      );
+      t.is(requests.length, 2);
+      const childTurn = await E(restored).startTurn('Confirm your task.');
+      await E(childTurn).whenFinished();
+      t.falsy((await E(childTurn).getStatus()).error);
+      t.is(requests.length, 3);
+      t.is(requests[2].model, effectiveModelId);
+      t.is(world.specs.length, 0);
+    },
+  );
+}
 
 test('direct provider creation persists explicit identity for a discovered pin including a colon route', async t => {
   const world = makeWorld({

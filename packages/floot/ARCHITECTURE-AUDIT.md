@@ -914,8 +914,16 @@ All 640 Floot tests and five real-daemon journal restart/retirement tests pass.
 Focused tests cover default/pinned identity, restoration, colon-containing provider
 routes, hosted-only operation refusal, and legacy rejection without migration.
 Adversarial review approved after tightening whitespace validation and removing
-the delegation fallback. A dedicated direct-provider delegation regression remains
-useful follow-up coverage; hosted delegation and direct creation are covered.
+the delegation fallback. Follow-up direct-provider delegation regressions now
+exercise the real provider tool loop with mocked HTTP responses, including a
+colon-containing pinned route and an unpinned configured default. They dispose
+the prior factory through its lifecycle hook before reconstruction over preserved
+guest stores. After changing the default, actual restored-child requests follow
+the new default only when unpinned; pinned children retain their exact route.
+Parent history, child identity and absence of hosted acquisition are checked.
+All 645 Floot tests pass; scoped fixture lint/formatting and the documentation gate
+pass (zero documentation errors, 180 warnings). This is in-memory reconstruction
+coverage, not a new claim of live daemon or crash-loss acceptance.
 Scoped lint has no errors; documentation generation has no errors (179 warnings).
 Tokyo still runs the previous release.
 
@@ -1325,7 +1333,7 @@ Supporting this optional mutation needs a separately identified context revision
 and safe publication boundary, not a changed payload under the existing summary ID.
 The current summary-checkpoint wiring does not claim to capture these revisions.
 
-Live acceptance preparation (2026-09-23): native producer `f6492ac3f9` and app
+Historical live acceptance preparation (2026-09-23): native producer `f6492ac3f9` and app
 `347c31dee` have built successfully on Tokyo. Host `3978754` pins the candidate
 OpenCode image and has passed NixOS preparation, but generation 169 remains
 active. The scoped broker cutover is waiting for explicit permission to copy
@@ -1334,6 +1342,20 @@ have been removed. See endo-host
 `ops/native-checkpoint-deployment-20260923.md` for exact hashes and gates.
 The native Claude runtime was stopped with cleanup acknowledgement, while all
 three Floot sessions, workspace roots, Secrets and credential owners remain.
+
+Superseding preparation (2026-09-24): app `5f784fb91` is prebuilt, and the guarded
+all-overlay build published a matching manifest with native producer `f6492ac3f9`.
+The new OpenCode image is
+`sha256:a553a9a94e74f2bab261fb70f0ff508a2e4c1fbf86d80099730739613213d584`;
+the other three image pins are unchanged. Host `bc3fa5a` prepared the paired
+NixOS system successfully; `2945ed9` records that result in the host runbook.
+The old narrow OpenCode-only detachment is insufficient for this candidate:
+journal-only recovery and explicit session identity require retirement of
+incompatible Floot state using the old release, preserving host, Secrets,
+renewal owners and workspace roots. Generation 169/app `819aa18c8` remain active;
+no activation or live acceptance is claimed. Fresh retirement checks and the
+pending metadata-transfer approval are still required. See the same host runbook
+for the exact binary digest, system path, protection expiry, and preservation gates.
 
 The next live compaction test must use ordinary owned Floot turns on the free
 route, seed identifiable facts and real tool evidence, and observe reported
