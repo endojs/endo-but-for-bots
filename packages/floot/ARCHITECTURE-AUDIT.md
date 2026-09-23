@@ -223,6 +223,34 @@ These are actual persistence/in-process daemon tests with injected worker contro
 not native termination or crash-recovery proof. `formulateDirectoryForStore`,
 agent-key retirement and failed collection retry ownership remain separate checks.
 
+Agent identity-key retention — reproduced, unresolved (2026-09-24):
+all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
+record despite having no persisted formulas left under its node. The four direct
+directory cases add no keys. The 44-case fixture now characterizes this explicitly
+using record counts and owner identities, without putting private key material
+in assertions. These are temporary characterization assertions of an open defect,
+not a requirement to preserve orphan keys; replace them with reclamation assertions
+when safe retirement is implemented. This concerns daemon agent identities, not
+provider Secrets, subscription credentials or renewal ownership.
+
+Source review found no manager call to `deleteAgentKey`. Its SQLite implementation
+deletes only the key row, without retiring retention rows or live followers.
+The key is also operational metadata: `hasAgentKey` determines `isLocalId`, local
+graph dependencies and local-versus-remote evaluation; host/guest reincarnation
+finds the key by agent formula number. Startup uses it to reconstruct retention
+edges. Inbound/outbound peer-retention followers capture the agent identity once
+and continue updating retention state. A collected guest alone therefore does
+not prove that independently retained formulas or peer activity can lose the key.
+
+Next design/test boundary: distinguish a never-exposed failed construction from
+general agent retirement. The former needs exact node-wide formula absence,
+settled construction/collection cleanup and proof that identity authority was not
+published; the latter also needs active retention/connection retirement and
+surviving-formula checks. Do not add unconditional key deletion in a construction
+finally or infer these conditions from an absent guest formula. No runtime key
+deletion is implemented by this characterization; this is not a native recovery
+architecture commitment or completion of the finding.
+
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.
 The oracle fixture imports its sibling implementation explicitly without adding
