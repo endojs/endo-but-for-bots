@@ -5680,88 +5680,94 @@ const makeDaemonCore = async (
       return id;
     };
 
-    // Generate the agent keypair first so we know the agent's node number.
     const guestFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
     );
-    const keypair = await generateEd25519Keypair();
-    const agentNodeNumber = /** @type {NodeNumber} */ (
-      toHex(keypair.publicKey)
-    );
-    const guestId = formatId({
-      number: guestFormulaNumber,
-      node: agentNodeNumber,
-    });
-    persistencePowers.writeAgentKey(
-      toHex(keypair.publicKey),
-      toHex(keypair.privateKey),
-      guestId,
-    );
-
-    const handleId = pin(
-      await formulateNumberedHandle(
-        /** @type {FormulaNumber} */ (await randomHex256()),
+    try {
+      // Generate the agent keypair first so we know the agent's node number.
+      const keypair = await generateEd25519Keypair();
+      const agentNodeNumber = /** @type {NodeNumber} */ (
+        toHex(keypair.publicKey)
+      );
+      const guestId = formatId({
+        number: guestFormulaNumber,
+        node: agentNodeNumber,
+      });
+      persistencePowers.writeAgentKey(
+        toHex(keypair.publicKey),
+        toHex(keypair.privateKey),
         guestId,
-        agentNodeNumber,
-      ),
-    );
-    const mailboxStoreId = pin(
-      (
-        await formulateNumberedMailboxStore(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          agentNodeNumber,
-        )
-      ).id,
-    );
-    const mailHubId = pin(
-      (
-        await formulateNumberedMailHub(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          mailboxStoreId,
-          agentNodeNumber,
-        )
-      ).id,
-    );
+      );
 
-    const storeId = pin(
-      (
-        await formulateNumberedPetStore(
+      const handleId = pin(
+        await formulateNumberedHandle(
           /** @type {FormulaNumber} */ (await randomHex256()),
+          guestId,
           agentNodeNumber,
-        )
-      ).id,
-    );
-    const workerId = pin(
-      (
-        await formulateNumberedWorker(
-          /** @type {FormulaNumber} */ (await randomHex256()),
-          { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
-        )
-      ).id,
-    );
-    // Each guest gets its own (initially empty) networks directory that
-    // controls which connection hints appear in locators it produces.
-    const { id: networksDirectoryId } =
-      await formulateDirectory(agentNodeNumber);
-    // Adopt the pins transferred by formulateDirectory without taking more.
-    pinned.push(networksDirectoryId);
-    const { id: planesDirectoryId } = await formulateDirectory(agentNodeNumber);
-    pinned.push(planesDirectoryId);
-    return harden({
-      guestFormulaNumber,
-      guestId,
-      handleId,
-      agentNodeNumber,
-      hostAgentId,
-      hostHandleId,
-      storeId,
-      mailboxStoreId,
-      mailHubId,
-      workerId,
-      networksDirectoryId,
-      planesDirectoryId,
-      pinned,
-    });
+        ),
+      );
+      const mailboxStoreId = pin(
+        (
+          await formulateNumberedMailboxStore(
+            /** @type {FormulaNumber} */ (await randomHex256()),
+            agentNodeNumber,
+          )
+        ).id,
+      );
+      const mailHubId = pin(
+        (
+          await formulateNumberedMailHub(
+            /** @type {FormulaNumber} */ (await randomHex256()),
+            mailboxStoreId,
+            agentNodeNumber,
+          )
+        ).id,
+      );
+
+      const storeId = pin(
+        (
+          await formulateNumberedPetStore(
+            /** @type {FormulaNumber} */ (await randomHex256()),
+            agentNodeNumber,
+          )
+        ).id,
+      );
+      const workerId = pin(
+        (
+          await formulateNumberedWorker(
+            /** @type {FormulaNumber} */ (await randomHex256()),
+            { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
+          )
+        ).id,
+      );
+      // Each guest gets its own (initially empty) networks directory that
+      // controls which connection hints appear in locators it produces.
+      const { id: networksDirectoryId } =
+        await formulateDirectory(agentNodeNumber);
+      // Adopt the pins transferred by formulateDirectory without taking more.
+      pinned.push(networksDirectoryId);
+      const { id: planesDirectoryId } =
+        await formulateDirectory(agentNodeNumber);
+      pinned.push(planesDirectoryId);
+      return harden({
+        guestFormulaNumber,
+        guestId,
+        handleId,
+        agentNodeNumber,
+        hostAgentId,
+        hostHandleId,
+        storeId,
+        mailboxStoreId,
+        mailHubId,
+        workerId,
+        networksDirectoryId,
+        planesDirectoryId,
+        pinned,
+      });
+    } catch (error) {
+      await Promise.all(pinned.map(unpinTransient));
+      throw error;
+    }
   };
 
   /** @type {DaemonCore['formulateNumberedGuest']} */
@@ -5803,16 +5809,18 @@ const makeDaemonCore = async (
         workerLabel,
       );
 
-      await deferredTasks.execute({
-        agentId: identifiers.guestId,
-        handleId: identifiers.handleId,
-      });
-
-      const result = await formulateNumberedGuest(identifiers);
-      for (const id of identifiers.pinned) {
-        unpinTransient(id);
+      try {
+        // Persist and register dependency edges before publishing either name.
+        // The handle pin retains the guest's identity group through publication.
+        const result = await formulateNumberedGuest(identifiers);
+        await deferredTasks.execute({
+          agentId: identifiers.guestId,
+          handleId: identifiers.handleId,
+        });
+        return result;
+      } finally {
+        await Promise.all(identifiers.pinned.map(unpinTransient));
       }
-      return result;
     });
   };
 
@@ -6091,7 +6099,13 @@ const makeDaemonCore = async (
       hostAgentId,
       hostHandleId,
     );
-    const guestFormulation = await formulateNumberedGuest(guestFormulationData);
+    let guestFormulation;
+    try {
+      guestFormulation = await formulateNumberedGuest(guestFormulationData);
+    } catch (error) {
+      await Promise.all(guestFormulationData.pinned.map(unpinTransient));
+      throw error;
+    }
     // Return pins to the caller for deferred unpinning — the guest
     // must be named (via deferred tasks) before its pins are removed.
     return {

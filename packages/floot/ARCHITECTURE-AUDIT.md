@@ -159,18 +159,34 @@ before pins transfer to this helper remain an open rollback boundary; this fix
 must not be described as comprehensive guest-construction rollback.
 This is ordinary failed-acquisition cleanup, not the deferred native-loss design.
 
-Pre-transfer follow-up source review (2026-09-24, still open):
+Pre-transfer follow-up source review (2026-09-24, reproduced and fixed locally):
 `formulateGuestDependencies` has no rollback when a later dependency rejects after
 earlier pins were acquired; `formulateGuest` releases pins only after deferred
 publication and guest formulation succeed; `providePowersId` loses the pin list
 if guest formulation rejects before returning it to the caplet helper.
-The next regression slice must inject dependency and guest-formula write failures,
-including written-then-rejected results, and check reclamation while preserving
-published names and an unrelated guest.
+Eight injected-persistence regressions fail before the fix and pass afterward:
+direct guest and automatic powers creation, mail-hub and guest writes, and failures
+before persistence or after a completed write loses its acknowledgement.
+The builder now releases acknowledged pins on failure; direct guest construction
+releases them in finally; automatic powers construction releases them if guest
+formulation fails before transfer. Direct guest names now publish only after
+guest persistence and graph registration, avoiding a named guest whose dependency
+edges are absent when cleanup runs. Tests require failed guest aliases to be absent,
+acquired dependencies and failed guest formulas to be reclaimed, and unrelated
+guests to survive. Successful creation remains usable; partial name publication
+retains the guest and worker formulas. Removing the partial publication then
+reclaims its guest and worker.
+These tests use the daemon manager and actual persistence with injected workers,
+not a daemon process restart or native process-loss experiment.
+The four adjacent publication regressions also pass; daemon typechecking and
+changed-file formatting pass, with no changed-file ESLint errors.
 `writeAgentKey` is synchronous by contract and SQLite implementation, so its lack
 of `await` is not a defect. Releasing known pins does not by itself establish
 ownership of partial formulas whose identifiers never returned, nested directory
 construction rollback, or agent-key retirement; those remain separate checks.
+In particular, the after-write mail-hub case explicitly demonstrates an unreturned
+formula still on disk. This remains an open orphan-reclamation finding, not a
+successful cleanup claim for every failed acquisition.
 
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.
