@@ -599,6 +599,30 @@ errors, with no errors in changed production files.
 
 ## FA-02 — Model context must not be built from UI previews
 
+OpenCode import correction (2026-09-23, not deployed): the pinned fork
+`kumavis/opencode@870a58b973a2892d93c04e5db6e49757ad8237b9` uses
+`packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts` for
+`POST /session/:id/message/import`.
+It writes legacy message/part tables and represents imported compaction as
+synthetic user text, not a native boundary.
+The parallel core history implementation is not the context reader for this route.
+The adapter now selects the latest compaction and active span before import;
+Floot's full transcript remains unchanged.
+The payload round-trip decoder no longer filters its input, which previously
+hid the adapter's transmission of superseded history.
+Tests assert the exact submitted payload, repeated tool IDs, and refusal of a
+result whose call lies before the boundary.
+This is a pure replay transformation: no new durable state or formula schema.
+Native compaction capture remains open: the legacy CLI can retain a recent tail
+outside the summary, and interrupted-turn persistence must preserve the correct
+boundary and tail rather than recording a summary alone.
+Payload conformance does not prove native database/model-context behavior;
+live acceptance remains pending.
+Verification: 259 OpenCode tests pass; package lint has zero errors (37 warnings),
+documentation generation has zero errors (176 warnings), and formatting passes.
+Independent adversarial review verified the pinned route and reran all 11
+transcript conformance tests with no blockers.
+
 The direct-provider loop reconstructs input from `getHistory()` (baseline `agent.js:1321`).
 Journal fallback fields in that presentation view can be 8,192-character previews.
 Hosted restoration instead hydrates full content references through
