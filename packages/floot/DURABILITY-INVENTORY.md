@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 354 application entries and 73 host entries still need explicit ledger
+The other 346 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -530,7 +530,29 @@ confirmed mutable-path reconstruction defect described in FA-08.
 | `26287567a` | Refusing noScratch workaround for custom Codex native agent | Removed with custom agent by `812f10b47`; do not attribute that capability-construction behavior to the shared runtime |
 | `4a4749a56` | Original retained backend strategy superseded by retained broker/runtime/state and replaceable backend shell | Current setup checks exact broker powers/environment, publishes backend-next only after preparation. 60 local tests include repeat setup; no live listener or credential renewal exercised |
 
+### Publication, workspace ownership and historical mount proposals
+
+Eight further diffs were compared with retained code by an independent reviewer.
+Fresh publication checks pass 21 tests, including a characterization that a root
+file can advertise `open` yet fail when opened; publication does not pre-read it.
+The remaining rows are source/disposition mapping, not fresh runtime acceptance.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `ab9ae68be` | Floot publication record and asset-server retained route | Publication tests cover missing root index, reconstruction and lost acknowledgement. The root check establishes file shape, not readable contents; names/comments now say so |
+| `0cca82bea` | Stateless sandbox policy and attach attestation | Current policy refuses nested destinations and verifies kernel 9P evidence. No durable owner added; runtime mount acceptance is separate |
+| `4c2283cb2` | Shared profile verifier used by all three adapters | Retained fixed/attach/resolver overlap checks validate requests without acquiring resources; no new restart evidence |
+| `d418384af` | Execution envelope retains projection; supervisor orders release | Current envelope retains mounter before mounting; supervisor releases broker/mounter after sandbox. Source ordering is not proof of native quiescence after process loss |
+| `380f4aacd` | Workspace projection retained; original Codex volume owner removed | `812f10b47` removed durable-volumes; current shared directory storage preserves supplied workspace. Historical XFS quota/project-ID migration is not current behavior |
+| `2beb482f2` | Historical mount design problem statement | Current policy has a third bind kind and MCP remains socket-bound; not evidence of convergence onto volume/attach/tmpfs only |
+| `9b01cce7d` | Historical mount design correction/options | OpenCode no longer has a durable native-state row. Claude/Codex state binds do not establish the proposed XFS quota guarantee |
+| `7d58738c1` | Credential-free listener distinction retained; loopback MCP proposal not adopted | Current listener image is credential-free, but Claude/OpenCode still create MCP socket servers with `/endo-mcp` binds, not bearer-authenticated loopback MCP |
+
 ### Post-snapshot changes
+
+- Publication's root-index helper and diagnostic now describe file presence,
+  not readability. A characterization test records the existing no-pre-read
+  behavior; no route ownership, persistence or lifecycle behavior changed.
 
 - Renewable credential identity fix: versioned wrappers retain a
   marshalled host/Secret pair; the catalog derives administration authority from

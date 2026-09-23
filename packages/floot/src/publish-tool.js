@@ -86,11 +86,12 @@ const toServableFilesystem = async workspace => {
 const INDEX_FILE = 'index.html';
 
 /**
- * Whether the projected filesystem has a readable index at its root.
+ * Whether the projected filesystem has an index file at its root.
  *
  * Mirrors the asset server's own resolution: walk `root()` to the index and
  * confirm the node is a file, distinguished by `open` the way the request
  * path distinguishes it, rather than by duck-typing an attribute read.
+ * This checks entry shape, not whether opening or reading its contents succeeds.
  *
  * Only the root is required to resolve. A published mount still serves every
  * other path, so this is a requirement about the *link* — which points at the
@@ -100,7 +101,7 @@ const INDEX_FILE = 'index.html';
  * @param {any} filesystem
  * @returns {Promise<boolean>}
  */
-const hasReadableIndex = async filesystem => {
+const hasRootIndexFile = async filesystem => {
   await null;
   try {
     const node = await E(E(filesystem).root()).lookup(INDEX_FILE);
@@ -108,8 +109,8 @@ const hasReadableIndex = async filesystem => {
     const methods = await E(node).__getMethodNames__();
     return methods.includes('open');
   } catch {
-    // An absent entry, an unreadable root, or an index that is a directory:
-    // all of them mean the published root would 404.
+    // An absent entry, a root that cannot be inspected, or a directory index
+    // cannot establish the required root file's presence.
     return false;
   }
 };
@@ -235,7 +236,7 @@ export const makePublishTool = ({
     } catch (error) {
       return `Publishing failed: ${/** @type {Error} */ (error).message}`;
     }
-    if (!(await hasReadableIndex(filesystem))) {
+    if (!(await hasRootIndexFile(filesystem))) {
       // `serve()` refuses a cap it cannot walk; this refuses a cap it can walk
       // and would find nothing in. The asset server resolves a directory
       // request to its index file, so a workspace without one publishes a URL
@@ -245,7 +246,7 @@ export const makePublishTool = ({
       // the session's workspace reaches exactly this state and reports
       // success, so the check belongs here rather than in the agent's hands.
       return (
-        `Publishing failed: this workspace has no readable ${INDEX_FILE} at ` +
+        `Publishing failed: this workspace has no ${INDEX_FILE} file at ` +
         `its root. The URL this returns points at the root, which resolves to ` +
         `${INDEX_FILE}, so it would return 404. Other files are still served ` +
         'at their own paths, so a root ' +

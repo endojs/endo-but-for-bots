@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 125 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 133 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -97,15 +97,23 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Publication/workspace/mount mapping (2026-09-24): eight further entries bring
+coverage to 133 application commits (newest 15 plus earliest 118).
+Publication checks pass 21 tests; the other new rows explicitly record source
+review and disposition, not fresh native acceptance. Historical volume quotas and
+loopback MCP proposals must not be attributed to the current runtime.
+
 Image/Codex/renewable mapping (2026-09-24): eight more entries bring coverage to
 125 application commits (newest 15 plus earliest 110). Shared setup/HTTP checks
 pass 30 tests; active Codex resolver/plan checks pass 18 and shared plan checks five;
 independent Codex setup/store/state/journal checks pass 60. The unused Codex image
 reader and re-export were removed after source/caller checks; current shared pin
 validation and its rejection tests remain. No formula entrypoint was removed.
-Renewable wrapper tests pass 105 cases but missed mutable-path identity drift;
-the newly confirmed FA-08 gap below remains open and blocks claiming credential
-reconstruction correctness. No live credential access or renewal was performed.
+The original 105 wrapper/rotation/broker tests missed mutable-path identity drift;
+the FA-08 fix in `413cea1f5` now has 132 such tests and a production-provisioner
+daemon reconstruction regression, including cold dynamic-recipe refusal.
+Retirement and deployment remain pending. No live credential access or renewal
+was performed.
 
 Header/publication/reclamation mapping (2026-09-24): ten more entries bring
 coverage to 117 application commits (newest 15 plus earliest 102).
@@ -4212,6 +4220,13 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Fix renewable Secret identity in `413cea1f5`: retain exact capabilities,
+derive administration by identity, and refuse dynamic slot recipes after a cold-start
+retargeting reproduction. Reviewed tests pass; retirement and deployment pending.
+Map eight publication/workspace/mount changes, distinguishing historical proposals
+from retained implementations. Clarify publication's file-presence check without
+adding content reads; 21 publication tests pass. No Tokyo changes.
 
 2026-09-24 — Map eight image/Codex/renewable changes; remove unused image reader
 while retaining active shared validation tests. Confirm and open renewable-wrapper
