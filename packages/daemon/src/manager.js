@@ -4841,12 +4841,14 @@ const makeDaemonCore = async (
           await randomHex256()
         );
         const contentSha256 = await contentStore.store(
-          // Use a higher byte length limit to accommodate large
+          // Use a higher per-frame byte length limit to accommodate large
           // payloads like bundles.
+          // The limit is in raw bytes: 7_500_000 preserves the prior bound of
+          // 10_000_000 base64 characters (about 7.5 MB of binary) per frame.
           // `iterateBytesReader` returns the iterator synchronously; the
           // store consumes it, so no `await` here.
           iterateBytesReader(readerRef, {
-            byteLengthLimit: 10_000_000,
+            byteLengthLimit: 7_500_000,
           }),
         );
 
