@@ -4,6 +4,13 @@ Snapshot: 2026-09-24.
 This is the coverage ledger for [the architecture audit](ARCHITECTURE-AUDIT.md),
 not a claim that all listed changes are correct or reviewed.
 
+Operator scope clarification (2026-09-24): this is now a historical reference,
+not a checklist requiring every commit to be audited. Multiple rewrites retired
+earlier implementations. Further review is driven by current retained code,
+formula/state ownership, and open architecture findings. Unmapped historical
+commits are not a completion blocker; use their history only when relevant to a
+current owner, persisted reference, or regression.
+
 ## Scope and interpretation
 
 The application range is `3332f19283b38d0e75207218a30df94e44c6d98f` (excluded) through
@@ -71,8 +78,9 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 384 application entries and 73 host entries still need explicit ledger
-mapping, even where the main audit already contains relevant review evidence.
+The other 274 application entries and 69 host entries remain unmapped historical
+references. Exhaustive mapping is no longer required; current findings and
+retained implementation determine the remaining work.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
 | Commit | Owner / boundary | Recorded evidence | Remaining limit |
@@ -445,25 +453,330 @@ and sandbox/hosted-agent type checks pass. Changed-test lint has no errors and
 seven existing warnings. The initial combined listener/policy run exited nonzero;
 the listener rerun passed all 22 cases and the policy run reported 71 passes.
 No root cause is claimed for that initial nonzero result.
-The attempted generator repair remains uncommitted: independent semantic review
-found missing imported-symbol declarations and illegal recursive aliases that
-parse-only checks missed. Semantic compilation is required before accepting it.
+Independent semantic review of the initial generator repair found missing
+imported-symbol declarations and illegal recursive aliases that parse-only checks
+missed. The repair now preserves recursive interface indirection and declared
+literal property keys, with strict semantic compilation of all generated tool
+surfaces. The full agent-tools suite passes 231 tests; unsupported generic root
+and nonempty interface flattening still fails closed. No durable owner changes.
 
 | Commit | Retained owner / disposition | Evidence and remaining limit |
 |---|---|---|
 | `95bc54880` | Design-index documentation only | Retains explicit outstanding bucket recount; no execution or durability proof |
 | `32ec2be40` | Startup-gate test deadlines only | 13 tests pass with real local shells; observed-output cases use 2 seconds and intentional hangs retain 50 ms. Not live Podman |
 | `6d297f140` | Test teardown recognizes explicitly retained uncertain native cleanup | 43 controlled cleanup tests pass; Podman suite reports 39 passes but native checks return early without Podman. No live acceptance claim |
-| `91287398c` | Closeable stream type intersections and generated tool declarations; no runtime owner | Exo-stream types pass, but current extraction suites have 10 failures at generic CopyArray inheritance. This is an open generator compatibility defect, not successful declaration verification |
+| `91287398c` | Closeable stream type intersections and generated tool declarations; no runtime owner | Exo-stream types pass. Ten current generic-wrapper extraction failures led to a bounded interface/literal-key emitter repair and strict semantic generated-surface checks; full agent-tools suite passes 231 tests. No daemon restart or live tool acceptance claim |
 | `c4bcf2275` | Cached-filesystem snapshot scheduling update | 7 tests pass; existing cache/pipelining assertions remain. No new durable state |
 | `366f2c6e9` | In-slice bridge lint corrections retained amid later changes | 27 bridge tests pass; lint has zero errors and seven warnings. These checks do not establish native process-loss recovery |
 | `f006c749e` | Old client-module transport type annotations | Entire module deleted by `433a21757`; no surviving transport-helper references. Do not credit the obsolete types to the current controller |
 | `dd705e037` | Each native command receives a fresh mutable copy of captured operator environment | 93 focused tests pass; strengthened identity/extensibility assertions cover both listener and policy paths. No additional persisted state or guest authority |
 | `8e260a48e` | Fake Nix applier polling allowance | 54 deploy-performer tests pass with mocked in-process applier; not actual NixOS activation |
-| `30af6a089` | Lint excludes standalone manual OCI spike | Syntax check passes; not executed. Spike still injects a raw credential into Podman environment and has fixed settings with a paid model default; retire or update before any use as current brokered/free-route acceptance |
+| `30af6a089` | Obsolete standalone OCI spike lint exclusion, now removed with both harness files | Application/host source caller checks found only its launcher, lint rule and historical docs. Historical evidence retained; no live execution. Source deletion does not retire old deployed formulas or containers |
+
+### Provider routing, metadata and diagnostic boundaries
+
+Twelve more historical changes are mapped below. Fresh checks pass 74 UI/setup
+tests, 161 shared provider tests and 18 Claude broker/setup tests. Shared HTTP
+checks required loopback permission; their initial ten permission failures are not
+provider failures. These are local/mocked checks, not live upstream or native
+process-loss acceptance. Direct OpenRouter/provider-cache/credential/routing checks
+pass 43 lal, 19 Fae and five Floot tests without live inference.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `498654d52` | Shell quoting/spelling only in retained OCI builder; spike half removed by `bd43daec7` | Shell syntax passes; ShellCheck unavailable. No build, deployment or durable state proof |
+| `e47c6cfa3` | Test-only Linux refusal-shape matching | Lifecycle/dependency/destroy assertions retained; earlier corrected daemon evidence applies, no fresh Linux run in this slice |
+| `2731a96da` | Label-sized header journal/network controls; actions still delegate to daemon/controller | 60 component tests pass, including journal/network actions; Happy DOM is not pixel-layout verification. No new durable owner |
+| `b85e0c816` | Temporary Claude managed-credential module shim | Shim removed by `886192baf`; current mint uses shared hosted-agent module. Old persisted paths require retirement, not compatibility restoration |
+| `00ad7b6e5` | Original pre-probe directory creation | Superseded by `75bc605ee`: missing-parent probe validates before namespace mutation. 14 current setup tests pass; no native runtime replay claim |
+| `5e94e663a` | Secrets-backed direct OpenRouter provider selection; named provider config and delegated Secret capability are durable, token/provider cache ephemeral | Per-turn Secret re-read supports rotation/revocation; current discovery replaces static model choices. 67 direct-provider/credential/routing tests pass. Existing token-form submissions and plaintext compatibility fallbacks are not erased by this mapping; no form replay or daemon-loss proof |
+| `199252059` | Broker diagnostic configuration stored in formula environment; callback reconstructed on activation | Failure opt-in superseded by `676bc8341`: failures always logged, optional admission logs remain. Diagnostics are host output, not durable transcript evidence |
+| `d89c89c2f` | OAuth beta exact-route addition | Wholly reverted by `a144237cc`; no independently retained state/schema effect |
+| `a144237cc` | Reverts preceding route addition | Current bounded-query behavior comes from the following change, not this reverted implementation |
+| `8e90f65f0` | Exact bounded-query target parser shared by grant/listener; broker profile reconstructs policy | Restricted query charset and exact full-target equality; no wildcard or normalization admission. Local provider/Claude tests, not live OAuth proof |
+| `5173330d2` | First refused response chunk, bounded to 1024 bytes, reaches host diagnostics only | Audit found bare bearer-token and truncation-prefix leakage; remediation and regression evidence recorded in main audit. Does not persist logs or turn evidence |
+| `6cd58e3cc` | Listener/grant filter forwarded header shapes; broker overwrites credentials, content type and trusted adapter headers | Current transport follows generalized shape rule after `8d6fac389`; grant/quota ownership unchanged. Per-request ephemeral data, not new durable storage |
+
+### Header contracts, publication and recorded mount reclamation
+
+Ten more historical entries are mapped below. Fresh provider boundary checks pass
+134 tests; the diagnostic correction adds three regressions and its transport
+suite passes 36 tests. Current publication tests pass 20 cases, and asset-server
+tests pass 45, including five real-daemon cases with graceful reconstruction.
+Recorded-cleanup/supervisor tests pass 16 local/injected cases. The preceding
+14 setup tests are reused for unchanged probe code, not counted as a fresh run.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `418a4cffc` | Transport validates header-name shape rather than provider-name allowlist | Origin, exact route, account and credential authority remain with grant/broker; ephemeral request checks, no new durable owner |
+| `f5a4adfe3` | HTAB/printable-ASCII header values and request-stage diagnostics retained | Audit found invalid names interpolated into nominally fixed diagnostics; now fixed labels only. Exo already bounds key lengths, so this was data exposure, not demonstrated unbounded public input |
+| `f24b255bb` | Tests exact bounded-query admission/refusal | Listener teardown leak fixed later by `6a84419d1`; current tests own teardown. Local HTTP/fake fetch, no live OAuth proof |
+| `e834f15b8` | Grant headers optional through split-record guard; supplied values still validated | Current request/requestStream/requestBytes support omission. No new persistent state or authority |
+| `8d6fac389` | Redundant ChatGPT header-route branch removed | Broker policy/adaptation still owns route and credential authority; transport shape checks do not grant new origins |
+| `6d92480d8` | Tests widened header forwarding plus retained credential/host/CRLF bounds | Current 134 provider tests pass; original echo canary missed bare bearer values, fixed by `fc024770f`. No restart/native-loss claim |
+| `75bc605ee` | Missing-parent sandbox probe validates before creating namespace state | Current Claude/OpenCode setup code unchanged from preceding 14-test verification; no live host/mount probe claim |
+| `ee91b2f31` | Original Filesystem-only admission superseded by durable asset target classification/store | Current server accepts supported Filesystem/Mount/Git roots, takes read-only views and retains durable targets. 45 tests include graceful daemon restart, revocation and orphan sweep; injected cleanup failure coverage is local, not crash fault injection |
+| `c08a3c177` | Original tool-side publication projection now preflight only | Daemon-minted workspace goes to asset server for durable retention; session stores publication intent/id/url, sharing serialization across tool incarnations. 20 tool tests pass; derived views are not treated as durable owners |
+| `f76cedd1a` | Recorded-path mount reclamation retained through shared supervisor | 16 cleanup/supervisor tests pass; socket absence and missing scope observations do not prove producer quiescence. Header overclaim corrected; unresolved independent shutdown/recovery remains #1323 |
+
+### Image pins, Codex setup and renewable credential identity
+
+Eight more historical changes are mapped below. Fresh shared setup/HTTP checks
+pass 30 tests; Codex image/setup-plan checks pass 18 and shared plan checks five.
+Independent Codex setup/store/state/journal checks pass 60 tests. Renewable
+credential/rotator/broker checks pass 105 tests, but they did not cover the
+confirmed mutable-path reconstruction defect described in FA-08.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `6a84419d1` | Accepted-query listener test retains disposal; other changes are fixture typing/formatting and source catch typing | 30 shared setup/HTTP tests pass; preceding publication/asset/controller evidence remains applicable. No new runtime owner or lifetime guarantee |
+| `c811a84a9` | Shared image resolver strips tag, preserves registry port, validates resulting digest pin against runtime pattern | Injected Podman inspector tests and active plan-reader round trip pass; pin checks do not prove local image availability or build reproducibility |
+| `40ba08d3b` | Early pinned-image refusal retained through shared setup/plan readers; old hosted-subscription path removed | Unused Codex-specific reader/re-export now deleted after caller checks; current plan rejection tests and shared-resolver round trip retained. No daemon entrypoint was removed |
+| `39fd686ab` | Original Codex host configuration/quota observer/custom native agent | Removed by `812f10b47`; shared scoped runtime now owns native operations. Current exact runtime/state/store dependencies are recorded by daemon owner, not obsolete module topology |
+| `06f745f78` | Original path-only wrapper superseded by versioned marshal host/Secret powers; Secrets owns bytes/generations | FA-08 fix retains matching authority by facet identity and validates static grant recipes before mint/adoption. Production provisioning survives alias changes and graceful restart; cold dynamic-recipe retargeting reproduced then refused. Reviewed locally, old-owner retirement and deployment pending |
+| `fb641a860` | Split state/runtime and canonical journal storage survive, three-capability backend construction superseded | Current backend is a replaceable shared-provisioner shell with exact dependencies recorded by daemon; later sync/unique-allocation work strengthens original rename-only storage. 60 local tests, no native restart proof |
+| `26287567a` | Refusing noScratch workaround for custom Codex native agent | Removed with custom agent by `812f10b47`; do not attribute that capability-construction behavior to the shared runtime |
+| `4a4749a56` | Original retained backend strategy superseded by retained broker/runtime/state and replaceable backend shell | Current setup checks exact broker powers/environment, publishes backend-next only after preparation. 60 local tests include repeat setup; no live listener or credential renewal exercised |
+
+### Publication, workspace ownership and historical mount proposals
+
+Eight further diffs were compared with retained code by an independent reviewer.
+Fresh publication checks pass 21 tests, including a characterization that a root
+file can advertise `open` yet fail when opened; publication does not pre-read it.
+The remaining rows are source/disposition mapping, not fresh runtime acceptance.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `ab9ae68be` | Floot publication record and asset-server retained route | Publication tests cover missing root index, reconstruction and lost acknowledgement. The root check establishes file shape, not readable contents; names/comments now say so |
+| `0cca82bea` | Stateless sandbox policy and attach attestation | Current policy refuses nested destinations and verifies kernel 9P evidence. No durable owner added; runtime mount acceptance is separate |
+| `4c2283cb2` | Shared profile verifier used by all three adapters | Retained fixed/attach/resolver overlap checks validate requests without acquiring resources; no new restart evidence |
+| `d418384af` | Execution envelope retains projection; supervisor orders release | Current envelope retains mounter before mounting; supervisor releases broker/mounter after sandbox. Source ordering is not proof of native quiescence after process loss |
+| `380f4aacd` | Workspace projection retained; original Codex volume owner removed | `812f10b47` removed durable-volumes; current shared directory storage preserves supplied workspace. Historical XFS quota/project-ID migration is not current behavior |
+| `2beb482f2` | Historical mount design problem statement | Current policy has a third bind kind and MCP remains socket-bound; not evidence of convergence onto volume/attach/tmpfs only |
+| `9b01cce7d` | Historical mount design correction/options | OpenCode no longer has a durable native-state row. Claude/Codex state binds do not establish the proposed XFS quota guarantee |
+| `7d58738c1` | Credential-free listener distinction retained; loopback MCP proposal not adopted | Current listener image is credential-free, but Claude/OpenCode still create MCP socket servers with `/endo-mcp` binds, not bearer-authenticated loopback MCP |
+
+### Transcript ownership and native reconstruction
+
+Twelve further historical diffs were compared with retained code by an independent
+reviewer. Fresh checkpoint restoration checks pass 38 Claude writer/controller/
+conformance tests, nine Codex conformance tests and 13 OpenCode conformance tests.
+These are local translations and injected-controller tests, not pinned CLI or
+Tokyo acceptance. Historical design rows are dispositions, not implementation proof.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `744af5c3c` | OpenCode native-store design superseded | Current native state is ephemeral and rebuilt from authoritative records; old persisted native-session-ID topology retired |
+| `4a71b989c` | Journal authority adopted; proposed text continuity superseded | Structured context records replace bounded text preambles |
+| `d5c90d432` | Native transcript restoration retained | Journal checkpoints select active context without arbitrary truncation; not proof of provider capacity or live compaction |
+| `ec9bfbfa7` | Claude observed JSONL format remains a coupling | Local writer/readback conformance is not actual pinned-image acceptance |
+| `817c74bf0` | Historical remote MCP feasibility discussion | Current Claude/OpenCode use socket MCP; no bearer-loopback implementation implied |
+| `2fdc08230` | Neutral transcript design adopted in private journal | Journal owns durable compaction and exceptional effects; JSONL alone establishes neither atomic persistence nor replay safety |
+| `c13ba0a7b` | Pure shared record codec and pairing helpers | Strict parsing and retained-tail expansion retained; cross-turn reuse defect in multi-turn callers reproduced and corrected by the FA-01 replay follow-up |
+| `027e55ed4` | Original tree authority retired | Journal recovery supplies evidence; constructor refuses legacy tree state. Old tree-only/drop-orphan rationale does not describe current ownership |
+| `3e680010b` | Journal-owned checkpoint boundary | Current checkpoint validation/index and context reader retain committed boundary, tail and exceptional effects; original segment support alone did not establish this |
+| `983685820` | Structured handoff retained and strengthened | Context excludes current turn and superseded dialogue, preserves failed/uncertain evidence; full-history APIs remain separate |
+| `111904231` | Historical native format observations | Claude JSONL observation remains relevant; Codex's historical no-import limitation is superseded by Responses-item restoration |
+| `a605ac441` | Disposable Claude native transcript writer | Checkpoint-first summary loss and repeated tool-ID result misassociation reproduced and fixed with shared conformance; native/live acceptance remains separate |
+
+### Native restoration and attested mount convergence
+
+Twelve more diffs were compared with current code by an independent reviewer.
+Fresh local checks pass 92 sandbox policy/runtime cases, 15 shared policy/envelope
+cases (one skipped), 32 Claude profile/controller/conformance cases, 33 OpenCode
+profile/controller cases and 12 Codex conformance cases at that review checkpoint.
+These use injected infrastructure/local translations, not kernel confinement,
+provider inference, daemon restart or process-loss recovery.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `008febc3e` | Journal-owned Claude restoration; native file disposable | Empty-store-only behavior superseded by `3e130f7c0`, wrong file contents fixed by `5edcf9eb3`; current controller writes restored records even if native storage survives |
+| `09cf0fc78` | Codex journal-to-native restoration | Text preamble superseded by structured `thread/inject_items` in `362011c3f`; failed restoration refuses prompt start. No model-capacity guarantee |
+| `ed152dce4` | Stateless Claude translation and shared conformance | Retained/expanded; local inverse-format tests are not pinned-CLI acceptance. Reused-ID regression now addressed separately |
+| `53956f4a2` | Historical MCP transport proposal | Current Claude/OpenCode retain socket-directory binds, not loopback bearer MCP |
+| `b1de53d27` | Reconstructible sandbox policy and mount attestation | Bind source/mode/options checked against roots; attach requires 9P evidence. Policy owns neither storage nor host-bind quotas |
+| `421d1231c` | Adapter profile declarations and shared verifier | Claude state and both MCP binds retained; OpenCode durable native-state bind retired |
+| `40a10848c` | Historical migration progress note | Intermediate-state documentation, no runtime owner or current completion evidence |
+| `ec032d33c` | Existing native session scope exposes attested make | Existing runtime/scope owns cleanup; generic makeResolved remains, no new persistent owner |
+| `33ff95844` | Shared resource-profile constants/calculation | Envelope counts tmpfs/shm, not host-bind or capability workspace capacity; no new durable authority |
+| `55e6bca73` | Claude activation consolidated into shared envelope | Current envelope checks returned placement and policy; former duplicated controller assembly superseded |
+| `de8ad3a72` | OpenCode activation consolidated into shared envelope | State bind retired; supervisor still owns provider/mount/sandbox cleanup, not policy declarations |
+| `22ed11e77` | Historical mount-convergence completion note | Hosted controllers use attested make, no hosted makeResolved caller found; old nativeProfile description superseded by current schemas. Live-kernel acceptance separate |
+
+### Native import authority and restoration corrections
+
+Two independent reviewers mapped the next 24 historical changes against retained
+code. Fresh local runs: first slice 205 passed/one skipped (Claude controller 17,
+OpenCode client/controller/conformance 76, Codex client/conformance 107, shared
+policy five); second slice sandbox 158, Claude factory/writer/controller 44 and
+OpenCode MCP/client/factory 53 passed. These are injected/local tests, not fresh
+kernel confinement, native import semantics, live providers or daemon restart.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `044cae987` | Historical native-store writing rationale | Claude derives JSONL, OpenCode imports through its service, Codex injects items; lenient decoding is not restoration evidence |
+| `138ae76fc` | Historical event-projection import proposal | Current fork behavior cannot be inferred from proposed event vocabulary; payload tests are not native projector proof |
+| `4d07c1072` | Shared envelope checks authority handoff | Exact raw attestation precedes hosted-profile checks; supervisor retains resources for refusal cleanup |
+| `b718f30c9` | Historical pinned-image help observation | Not HTTP MCP integration evidence; current implementation still uses socket MCP |
+| `7b57fce58` | Historical evidence/prompt-admission distinction | Import must remain non-executing; native fork acceptance remains separate |
+| `3fb9c4252` | Old text restoration/resume fallback superseded | Current OpenCode requires fresh-session capability and structured import; native history is not authority |
+| `f7460e4dc` | Historical lesser-form status superseded | Text fallback removed; restoration failures remain visible |
+| `9d3bd7b0e` | Build-applied patch retired by `53ad6e03e` | Current image pins fork source, not retained application patch; catalog-fetch/build reproducibility limits remain |
+| `28090b4b5` | Structured import retained, fallback removed | Failed import poisons incarnation; cancellation during pending import exposed an admission gap now corrected with reviewed startup/import/queued-write fences |
+| `273f3a618` | Ephemeral OpenCode native database | Controller uses in-memory database/tmpfs; journal and workspace have separate owners, reconstruction imports authoritative records |
+| `2bbfe36eb` | Historical closure/deployment proposal | Blanket faithful-restoration and Codex-unavailable claims are not current evidence |
+| `362011c3f` | Codex protocol injection retained | Restoration failure fences session rather than degrading to text; local protocol tests are not native-server acceptance |
+| `d3b8d4cc4` | Historical restoration design | Current clients refuse unavailable structured restoration; fallback-to-text claims superseded |
+| `0cc91ef2b` | Stateless denying scratch capability | Shared makeNoHostScratch retained; old Codex entrypoint removed. Denies host scratch, adds no storage owner |
+| `dc8f883e1` | Reconstructible sandbox policy | Declared binds admitted, undeclared binds refused; trusted roots are not absence-of-host-authority proof |
+| `96c919615` | Runtime keep-id mapping | Slice maps to daemon host UID; namespace attestation does not establish subordinate-UID escape containment |
+| `c34d62bcd` | Historical deployment observations | Keep-id trade retained; assertion that none of these defects were unit-testable was overstated |
+| `006db33aa` | Original Codex volumes retired; MCP listener incarnation-owned | Reownership removed by `812f10b47`; socket unlink requires caller-exclusive ownership and predecessor reconciliation, not EADDRINUSE protection or quiescence proof |
+| `0ff5c7e9f` | Journal projection and ephemeral diagnostics | getTranscript now archive-aware; inference uses checkpoint-selected context, so views intentionally differ. Diagnostics carry counts/status, not content |
+| `35af362bb` | Text continuity retired by `24eecb8fe` | Canonical context replaces text serialization; removing arbitrary ceiling did not establish bounded memory/capacity |
+| `0f9121909` | Factory/client option forwarding | Both factories preserve transcript through options; model/persona overrides remain explicit, no new durable owner |
+| `f0cc1d541` | Historical correction of restart evidence | CLI-store survival differs from authoritative restoration; no new implementation or fresh acceptance proof |
+| `5edcf9eb3` | Disposable Claude native transcript file | Current controller writes restored content, not plan text; controller tests supplement writer roundtrip, journal remains authority |
+| `afb0fc307` | Ephemeral bridge feature negotiation | Bounded feature list and strict fresh/import requirements retained; advertisement is admission, not CLI semantic compatibility |
+
+### Retired leases and authoritative restoration
+
+Twelve subsequent changes distinguish retired custom volume leases from current
+shared workspace/state owners, and native stores from authoritative journals.
+Fresh Codex state-provider/native-controller/client tests pass 110 cases.
+Separate targeted restoration checks pass two Claude, nine Codex, and twelve
+OpenCode tests.
+These are local boundary checks, not live CLI format compatibility, kernel orphan
+recovery, or current Tokyo acceptance. Historical deployment reports remain
+evidence for their original deployment only.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `01c677576` | Recovery wiring for two custom volume-provider entry paths was removed with hosted-subscription/durable-volume ownership in `812f10b47` | Current shared supervisor/state storage has different ownership; do not attribute retired automatic lease recovery to it |
+| `6bd4882da` | Historical deployment report, including Claude/OpenCode wiped-store recall | Its OpenCode fallback and Codex volume topology are superseded; historical recall is not current image acceptance |
+| `d2e9b314a` | Historical unresolved Codex lease diagnosis, not restoration acceptance | Custom lease owner retired; current native session/scope ownership requires separate evidence |
+| `cb0cb6ddd` | Same-holder workspace reopen fix and custom-volume tests retired with the provider | Current workspace uses shared execution-envelope 9P projection; surviving CLI home is separate from host checkpoint storage |
+| `796e849dd` | Historical record of disproved lease explanations | Local lease tests did not establish correct deployed provisioning/reconstruction wiring; preceding fixes alone did not prove deployment repair |
+| `db681499c` | Rollout/index reconstruction observation and proposed writer, not a retained rollout writer | Current Codex reconciles inherited native state, rotates to a fresh thread, and injects journal records; local client tests do not certify native CLI semantics |
+| `e52376f06` | Historical comparison of fresh-thread injection with writing private rollout files | Current Codex uses injection, not rollout synthesis. The note's Claude empty-store restriction was superseded by `3e130f7c0` |
+| `a55175d78` | Codex/OpenCode refuse unavailable structured restoration; prose fallback removed | Current clients fence failed restoration and keep prompt separate from imported records. Local protocol tests are not proof that a live CLI interprets every translated record faithfully |
+| `3e130f7c0` | Claude restores authoritative records before first incarnation turn, rather than adopting a surviving native store | Within-incarnation continuation remains distinct; native JSONL is a projection, not journal authority. Four new regressions reproduced pre-admission cancellation still spawning a prompt; the reviewed local fence fixes that gap |
+| `8d915852f` | Vendored external architecture comparison, not an Endo implementation or new state owner | Report paths describe Paseo. Comparison and descendant-reaping assertions do not establish current restoration compatibility or the process-loss proof deferred to #1323 |
+| `b2a318a6b` | Historical repair ordering; custom-volume/project-ID lease leak retired with `812f10b47` | Current image acceptance and ownership gates must be checked independently; the historical plan is not present deployment evidence |
+| `53ad6e03e` | OpenCode source build moved import change from applied patch to fork commit; current default uses an immutable revision | CLI revision alone is not full-image identity: bridge comes from application context and other build inputs are not all immutable. Manifest digest pairing and live acceptance remain required |
+
+### Import integration, retained pins, and diagnostic corrections
+
+Twelve more application changes are traced to current implementations or explicit
+historical disposition. Fresh OpenCode setup/client/bridge/conformance tests pass
+87 cases; separate supervisor/controller/Codex-refusal checks pass 6/30/1 cases.
+Composite configuration drift checking also passes. These checks do not establish
+that the currently pinned native fork actually consumes every imported record.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `99fbe43ea` | Historical silently retained image-pin diagnosis; current shared setup refuses changed retained broker images before mint | Claude/OpenCode use assertRetainedBrokerImages; Codex checks retained environment/dependencies separately. Refusal requires deliberate retirement, not silent repinning; other profile changes are outside the shared image comparison |
+| `3e918d889` | OpenCode import attributes messages using ModelV2.Ref shape with providerID and id, preserving nested model routes | Exact-shape client regression passes. Model attribution is not conversation ownership; host journal remains authoritative |
+| `5c5e2d643` | Historical failed import observation distinguishes HTTP success from actual prompt consumption | Current bridge acknowledges HTTP completion, not native-row readback. Local type/protocol tests alone do not close native integration acceptance |
+| `517c0c5a7` | Historical investigation with subsequently corrected measurement interpretations | Missing-row/multi-turn explanations were superseded; synthetic-event storage observations and SIGKILL/WAL probes do not prove current restoration failure |
+| `a4297d12f` | Corrected historical v2-write/v1-read mismatch; current translator targets the pinned fork's v1 MessageTable/PartTable route | Bridge imports structured turns without prompting; fork internals are outside this repository and require native integration evidence |
+| `8744ac672` | Historical OpenCode/Claude native-store-loss recall acceptance | Current OpenCode uses a fresh in-memory session and fenced import. Historical deployment does not certify later images; local decoder tests explicitly do not prove native database readback |
+| `63d629461` | Documentation index sentence repair only | No runtime owner, persistence, or lifecycle change |
+| `86b9f7771` | Generated hosted-agent composite dependency reference to platform | Reference retained; fresh drift check passes. Generated configuration is not runtime durability evidence |
+| `dc6e8bcc1` | Historical custom Codex volume lease diagnostics removed with `812f10b47` | Added observation Set was ephemeral diagnostic state, never recovery authority; no retained custom lease owner to migrate |
+| `470c45b97` | Codex propagates app-server restoration refusal into structured failure and fences prompt dispatch | Focused unavailable-injection regression passes; remaining historical changes were test formatting. No live native-server acceptance claimed |
+| `399ffa797` | Historical lifecycle/storage consolidation plan, superseded by shared supervisor and directory storage | Old lease-clearing instructions are not current recovery procedures; directory allocation does not prove native exclusion or process-loss recovery |
+| `c966c4866` | Historical OpenCode grant leak priority; current supervisor fences broker independently and revokes after sandbox closure | Controller regression checks exactly-once grant removal with a live client. Ordinary injected cleanup does not establish #1323 process-loss quiescence |
+
+### Host acceptance evidence and historical activation
+
+Four more host commits are mapped below. Fresh cutover/restoration checks pass
+37 tests after the strict command-matching correction, with 26 cutover cases
+independently rerun. No live inference, deployment, or acceptance was performed.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `3a4bdb7` | Operator-owned manifest records disposable hosted identities/stages; journal tool pairs provide evidence rather than assistant claims | Unsafe quote normalization corrected in host `60ee154`; `62a1077` adds private-manifest publication and whole-awaited-phase locking. Tests exercise filesystem failures and runner exclusion, not remote quiescence or live acceptance |
+| `f48d95d` | Historical application revision pin for Codex image-environment verifier | Later pins supersede it; pin change creates no new durable owner and does not prove activation or current acceptance |
+| `91eb785` | Explicit direct-provider restoration coverage through generic Floot protocol | Current model selection uses acceptance policy and version-two intent ledger. Eleven coverage tests pass; Fae recall is not native sandbox/network-policy proof |
+| `336ae3d` | Historical partial cutover report, subsequently updated with later observations | Named generation/session observations belong to that run; preserved capability identity was not an independent data backup and historical pass is not current release acceptance |
 
 ### Post-snapshot changes
 
+- Host `60ee154` removes quote/backslash normalization from acceptance evidence.
+  Exact commands and inert literal bash wrappers with the exact inner command
+  remain accepted. Altered expansion/escape/whitespace semantics are refused.
+  Host `62a1077` subsequently closes the parent-sync and runner-lock gaps using
+  the existing private-manifest helper; 54 focused Node tests and five wrapper
+  tests pass. Old seed manifests cannot replay; no deployment or live acceptance.
+
+- Claude rechecks cancellation after provisioning and immediately before native
+  prompt spawn. Four held-preparation regressions fail before and pass after;
+  all 47 client tests pass independently. Preparation remains serialized and
+  already-admitted spawn cleanup is unchanged. This is ephemeral admission
+  state, not a new durable owner or native process-loss guarantee.
+
+- OpenCode records prompt admission separately from startup/import ownership.
+  Pre-admission cancellation settles delivery without admitting the prompt or
+  releasing the still-pending import barrier. Seven new local race tests and
+  independent review cover reader closure and explicit interruption; failed
+  import remains poisoned. No new durable schema or native quiescence claim.
+
+- Multi-turn replay now uses turn-scoped pairing for Claude, OpenCode and Codex
+  Responses items; Claude also indexes by call record rather than raw ID.
+  Shared regressions distinguish prior interrupted calls from later reused IDs,
+  reject cross-turn orphan results and preserve FIFO within retained tails.
+  Durable journals and single-turn recovery are unchanged; not deployed.
+
+- Claude restoration now carries a checkpoint-first summary even without
+  superseded input. Two regressions failed before the fix; shared checkpoint-first
+  conformance passes on Claude, Codex and OpenCode. No durable format changed.
+
+- Publication's root-index helper and diagnostic now describe file presence,
+  not readability. A characterization test records the existing no-pre-read
+  behavior; no route ownership, persistence or lifecycle behavior changed.
+
+- Renewable credential identity fix: versioned wrappers retain a
+  marshalled host/Secret pair; the catalog derives administration authority from
+  the exact read facet rather than a mutable name. Synthetic real-daemon testing
+  covers alias rebinding/removal and graceful reconstruction without retargeting.
+  Production provisioning/adoption now runs in that daemon test; adoption rejects
+  non-marshalled powers and non-static Secret slot recipes before evaluating stored
+  powers on adoption, or before creating a wrapper on provisioning (which already
+  resolved the configured Secret). A cold-start dynamic-slot retargeting reproduction now
+  fails closed; error-injection cases preserve provisioning and cleanup failures.
+  Independently reviewed with 35 wrapper and 19 manager tests plus the real-daemon
+  regression. Not deployed or live-renewal tested; old renewal owners must retire
+  before replacement, without altering Secrets or pending renewal intents.
+- Removed unused Codex-specific pinned-image reader and its setup-helper re-export.
+  It had no current production callers or formula entrypoint. The retained test
+  now checks the shared resolver against the actual shared session-plan reader;
+  active plan rejection tests remain. Corrected stale OpenCode state-owner comment.
+- Failed startup orphan cleanup in the durable asset store now returns an
+  unreadable entry through the existing administrator listing path instead of
+  silently hiding the uncertain target. Existing retained names remain the owner;
+  explicit release can retry and unaffected siblings continue. New injected test
+  fails before the fix; no new journal, automatic retry policy or shutdown proof.
+- Invalid provider header names/values now produce fixed diagnostic labels,
+  without request data; three regressions verify no fetch and no canary echo.
+- Public OpenRouter catalog reads use the existing bounded JSON reader at 16 MiB;
+  oversize cancels, malformed body text stays out of diagnostics, and optional
+  metadata failure preserves the reply and retry backoff. This is not an output cap.
+- Host refusal excerpts screen bare bearer tokens and withhold boundary-cut
+  credential prefixes in addition to existing full-header/API-key matching.
+  Six regressions retain one upstream read and generic grant errors; no claim of
+  arbitrary encoded/obfuscated secret screening or persistent diagnostic records.
+- Tool declaration generation preserves empty generic auxiliary interfaces and
+  declared literal property identities, retaining recursive interface indirection.
+  Filesystem/Git/HTTP declarations are regenerated. Strict semantic compilation
+  supplements parse/shape tests; unsupported inheritance remains fail-closed.
+  No runtime guard, formula, credential or replay changes.
+- Removed the obsolete direct-credential OpenCode OCI spike and its lint exception,
+  retaining clearly labeled historical design evidence. No new replacement path,
+  credential access or runtime migration; current brokered acceptance is unchanged.
+  Current OpenCode tests pass 289 cases with explicit zero exit status on rerun;
+  the first run reported the same passes but a nonzero exit without a diagnostic.
+  Scoped lint and root docs pass (zero errors, 176 documentation warnings).
 - Collection draining now attempts queued siblings after a callback rejects,
   retaining all errors until the drain ends. A guest-construction regression
   reproduces stranded mailbox cleanup before the fix; a second variant checks

@@ -74,6 +74,84 @@ export const testTranscriptRestoration = ({ label, restore, readBack }) => {
     );
   });
 
+  for (const firstCompleted of [true, false]) {
+    test(`${label} keeps reused tool ids scoped to their turn (${firstCompleted ? 'completed' : 'interrupted'})`, async t => {
+      const input = harden([
+        { kind: 'message', role: 'user', content: 'first turn' },
+        { kind: 'tool-call', id: 'reused', name: 'first', args: '{}' },
+        ...(firstCompleted
+          ? [
+              {
+                kind: 'tool-result',
+                id: 'reused',
+                content: 'first result',
+                failed: true,
+              },
+            ]
+          : []),
+        { kind: 'message', role: 'user', content: 'second turn' },
+        { kind: 'tool-call', id: 'reused', name: 'second', args: '{}' },
+        { kind: 'tool-result', id: 'reused', content: 'second result' },
+      ]);
+      const restored = await readBack(await restore(input));
+      const calls = restored.filter(record => record.kind === 'tool-call');
+      const results = restored.filter(record => record.kind === 'tool-result');
+      t.deepEqual(
+        calls.map(call => call.name),
+        ['first', 'second'],
+      );
+      t.deepEqual(
+        results.map(result => result.content),
+        [
+          firstCompleted ? 'first result' : 'Tool call did not complete.',
+          'second result',
+        ],
+      );
+      t.deepEqual(
+        results.map(result => result.id),
+        calls.map(call => call.id),
+      );
+    });
+  }
+
+  test(`${label} preserves sequential reused ids within one retained checkpoint tail`, async t => {
+    const restored = await readBack(
+      await restore(
+        harden([
+          {
+            kind: 'compaction',
+            summary: 'summary',
+            retainedTail: [
+              { kind: 'message', role: 'user', content: 'one turn' },
+              { kind: 'tool-call', id: 'same', name: 'first', args: '{}' },
+              { kind: 'tool-result', id: 'same', content: 'first answer' },
+              { kind: 'tool-call', id: 'same', name: 'second', args: '{}' },
+              { kind: 'tool-result', id: 'same', content: 'second answer' },
+            ],
+          },
+        ]),
+      ),
+    );
+    t.deepEqual(
+      restored
+        .filter(record => record.kind === 'tool-result')
+        .map(record => record.content),
+      ['first answer', 'second answer'],
+    );
+  });
+
+  test(`${label} refuses a result after a user boundary without a call in that turn`, async t => {
+    const input = harden([
+      { kind: 'message', role: 'user', content: 'first turn' },
+      { kind: 'tool-call', id: 'reused', name: 'first', args: '{}' },
+      { kind: 'message', role: 'user', content: 'second turn' },
+      { kind: 'tool-result', id: 'reused', content: 'unattributed result' },
+    ]);
+    await t.throwsAsync(async () => restore(input), {
+      message: /answers no call/,
+    });
+  });
+
   test(`${label} restores a compacted conversation at its boundary`, async t => {
     const compacted = harden([
       ...conversation,
@@ -104,6 +182,29 @@ export const testTranscriptRestoration = ({ label, restore, readBack }) => {
     // A retried revival must not fork a second conversation out of one
     // history, so restoration cannot depend on randomness or the clock.
     t.is(await restore(conversation), await restore(conversation));
+  });
+
+  test(`${label} restores context already selected at its checkpoint`, async t => {
+    const records = await readBack(
+      await restore(
+        harden([
+          { kind: 'compaction', summary: 'checkpoint-only summary' },
+          {
+            kind: 'message',
+            role: 'user',
+            content: 'continue from checkpoint',
+          },
+        ]),
+      ),
+    );
+    const text = records
+      .filter(
+        record => record.kind === 'message' || record.kind === 'compaction',
+      )
+      .map(record =>
+        record.kind === 'compaction' ? record.summary : record.content,
+      );
+    t.deepEqual(text, ['checkpoint-only summary', 'continue from checkpoint']);
   });
 
   test(`${label} restores a compaction's explicit retained tail exactly once`, async t => {

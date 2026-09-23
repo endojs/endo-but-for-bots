@@ -141,6 +141,7 @@ const defaultMakeStdinWriter = async proc =>
  * @property {object} reader - Buffered reply reader handed to the caller.
  * @property {(event: any) => void} push
  * @property {boolean} closed
+ * @property {boolean} sendAdmitted Whether the prompt reached stdin admission.
  * @property {Promise<void>} terminal - Resolves when the terminal event has
  *   been delivered (or the turn was failed); the interrupt barrier.
  * @property {() => void} settle
@@ -411,7 +412,7 @@ export const makeOpencodeClient = ({
       return;
     }
     const turn = active;
-    if (!turn) {
+    if (!turn || !turn.sendAdmitted) {
       // A trailing phase/idle (or any event after the terminal) has no
       // reader to carry it; dropping it keeps one terminal per send.
       return;
@@ -513,9 +514,10 @@ export const makeOpencodeClient = ({
 
   /**
    * @param {object} command
+   * @param {() => boolean} [admit] Checked inside the serialized write.
    * @returns {Promise<void>}
    */
-  const writeCommand = command => {
+  const writeCommand = (command, admit = () => true) => {
     writeChain = writeChain.then(async () => {
       guardLive();
       if (!stdin) {
@@ -523,6 +525,7 @@ export const makeOpencodeClient = ({
           X`OpencodeClient(${q(sessionId)}): bridge stdin is not available`,
         );
       }
+      if (!admit()) return;
       const result = await stdin.next(encodeBridgeCommand(command));
       if (result.done) {
         throw makeError(
@@ -548,14 +551,21 @@ export const makeOpencodeClient = ({
         if (turn.closed) {
           turn.settle();
         } else {
+          // Retain the turn while startup is pending so cancellation cannot
+          // lose it between the queue and the active slot. No prompt has yet
+          // been admitted, so cancellation must not write to absent stdin.
+          active = turn;
+          let startFailed = false;
           let startFailure;
           try {
             // eslint-disable-next-line no-await-in-loop
             await ensureStarted();
           } catch (error) {
+            startFailed = true;
             startFailure = error;
           }
-          if (startFailure) {
+          if (startFailed) {
+            if (active === turn) active = null;
             turn.push({
               type: 'abort',
               reason:
@@ -564,8 +574,14 @@ export const makeOpencodeClient = ({
                   : String(startFailure),
             });
             turn.settle();
+          } else if (turn.closed || terminated || active !== turn) {
+            if (active === turn) active = null;
+            turn.push({
+              type: 'abort',
+              reason: 'turn cancelled before it ran',
+            });
+            turn.settle();
           } else {
-            active = turn;
             try {
               // Composed here, not at `send`: the bridge starts lazily on
               // the first turn, so whether this incarnation has a
@@ -574,7 +590,19 @@ export const makeOpencodeClient = ({
               // the prompt it precedes.
               /* eslint-disable no-await-in-loop */
               await restoreOnce(turn);
-              await writeCommand({ op: 'send', text: turn.text });
+              await writeCommand({ op: 'send', text: turn.text }, () => {
+                if (turn.closed || active !== turn) return false;
+                turn.sendAdmitted = true;
+                return true;
+              });
+              if (!turn.sendAdmitted) {
+                if (active === turn) active = null;
+                turn.push({
+                  type: 'abort',
+                  reason: 'turn cancelled before it ran',
+                });
+                turn.settle();
+              }
               /* eslint-enable no-await-in-loop */
             } catch (error) {
               if (active === turn) active = null;
@@ -604,6 +632,12 @@ export const makeOpencodeClient = ({
       onConsumerClosed: () => {
         turn.closed = true;
         if (active === turn) {
+          if (!turn.sendAdmitted) {
+            // No prompt exists to interrupt. Keep the active slot until its
+            // startup/import settles, but cancel delivery immediately.
+            turn.settle();
+            return;
+          }
           // Consumer stopped pulling: abort the executing turn.  The pushed
           // terminal (if it still arrives) lands in a finished reader, which
           // is a no-op. Keep the separate producer-stop barrier pending until
@@ -629,6 +663,7 @@ export const makeOpencodeClient = ({
       reader: channel.reader,
       push: channel.push,
       closed: false,
+      sendAdmitted: false,
       terminal: channel.terminal,
       settle: channel.settle,
     };
@@ -853,6 +888,12 @@ export const makeOpencodeClient = ({
           throw makeError(
             X`OpencodeClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
           );
+        }
+        if (!turn.sendAdmitted) {
+          turn.closed = true;
+          turn.push({ type: 'abort', reason: 'turn cancelled before it ran' });
+          turn.settle();
+          return;
         }
         await writeCommand({ op: 'interrupt' });
         // The bridge's own grace timer is untrusted; bound the host-side wait

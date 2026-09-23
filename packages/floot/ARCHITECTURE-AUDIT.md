@@ -11,6 +11,15 @@
 
 ## Purpose and maintenance
 
+Priority current-state review (2026-09-24):
+[Refactor alignment](REFACTOR-ALIGNMENT.md) compares the retained repository with
+the intended end state, rather than reviewing historical commits. It is the
+current prioritization entry point: primary ownership is consolidated, but
+simplicity is unproven, active-context/unresolved-evidence memory bounds remain
+incomplete, account discovery retains runtime coupling, and current-release
+deployment/acceptance is outstanding. Consult that document before treating a
+historical finding introduction as current implementation status.
+
 This records the source audit and independent subagent reviews requested by the operator.
 It tracks follow-up work within the existing
 [hosted-agent sandbox unification design](../../designs/hosted-agent-sandbox-unification.md),
@@ -34,10 +43,14 @@ For every remediation commit, update the affected finding here:
 
 Every new implementation also requires a durability audit against the Endo
 daemon's formula patterns before deployment approval.
-This requirement is retrospective: audit all implementation changes already
-landed as part of this refactor, not merely future changes or open findings.
+This requirement is retrospective: audit the current retained implementation,
+including code already landed during this refactor, not merely future changes.
+Operator scope clarification (2026-09-24): auditing every historical PR commit is
+not required. Several rewrites superseded earlier implementations. Use history
+only to resolve current ownership, retained formula references, or regressions;
+do not make unmapped historical commits a completion gate.
 Existing deployed status and passing local tests do not waive this check.
-Inventory each implemented change and its durable boundary, record authoritative
+Inventory each retained component and its durable boundary, record authoritative
 replay/restart evidence, and reopen findings where that evidence is missing or
 contradicts correct ownership and recovery.
 Review durable owners and dependencies, reconstruction and replay, cancellation
@@ -53,8 +66,12 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 95 of
-479 application commits and 20 of 93 host commits to explicit semantic evidence.
+Historical reference inventory (2026-09-24): the coverage ledger maps 205 of
+479 application commits and 24 of 93 host commits to explicit semantic evidence.
+These counts are historical bookkeeping, not progress toward a required commit
+quota. Further exhaustive mapping is discontinued. Completion is judged against
+the current findings, retained owners/code paths, durability tests, and deployment
+acceptance gates. Preserve useful evidence already collected in the ledger.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
 deployment acceptance. The caplet slice exposed the pin leak fixed in `71dfde012`;
@@ -95,26 +112,135 @@ not in the current refactor branch and not ready to merge.
 Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
-### Retrospective durability audit — required, in progress
+### Current retained-code durability audit — required, in progress
+
+Next work is finding-driven, not chronological commit mapping: the hosted
+acceptance manifest correction is now committed in host `62a1077`; assess
+outstanding findings against current source, retained formula references, and the required
+cross-backend acceptance matrix. Superseded implementations need no further audit
+unless they remain reachable in persisted state or explain a current defect.
+
+Import/acceptance mapping (2026-09-24): twelve application and four host entries
+bring coverage to 205/479 and 24/93. Native import HTTP acknowledgement is not
+proof of prompt consumption; historical deployment reports are not current image
+acceptance. Host `60ee154` fixes permissive command matching; host `62a1077`
+subsequently corrects the separate manifest publication/locking gap locally.
+
+Retired lease/restoration mapping (2026-09-24): twelve further entries bring
+coverage to 193 application commits (newest 15 plus earliest 178).
+The custom Codex volume lease was retired, not inherited by today's shared
+workspace owner. Historical deployment reports and the external Paseo comparison
+are not current acceptance evidence. Fresh local Codex state/controller/client
+checks pass 110 tests. Current native image behavior remains a separate gate.
+
+Native import/restoration mapping (2026-09-24): 24 further entries bring coverage
+to 181 application commits (newest 15 plus earliest 166).
+The review distinguishes native import proposals from implemented behavior,
+ephemeral native stores from authoritative journals, and keep-id mapping from
+subordinate-UID containment. Local controller/client/policy suites pass as recorded
+in the ledger; they do not certify native import semantics or live confinement.
+The OpenCode cancellation-before-import-ack admission gap is fixed locally below.
+
+Native restoration/mount mapping (2026-09-24): twelve further entries bring
+coverage to 157 application commits (newest 15 plus earliest 142).
+The ledger records injected policy/envelope/controller evidence separately from
+live confinement and restoration acceptance; historical proposals are not counted
+as implemented authority. The reused-ID replay defect below is fixed locally.
+
+Transcript mapping (2026-09-24): twelve further entries bring coverage to 145
+application commits (newest 15 plus earliest 130). This exposed checkpoint-first
+Claude summary loss and cross-turn tool-result misassociation in all three native
+translations, both now fixed locally below. No native/live acceptance claimed.
+
+Publication/workspace/mount mapping (2026-09-24): eight further entries bring
+coverage to 133 application commits (newest 15 plus earliest 118).
+Publication checks pass 21 tests; the other new rows explicitly record source
+review and disposition, not fresh native acceptance. Historical volume quotas and
+loopback MCP proposals must not be attributed to the current runtime.
+
+Image/Codex/renewable mapping (2026-09-24): eight more entries bring coverage to
+125 application commits (newest 15 plus earliest 110). Shared setup/HTTP checks
+pass 30 tests; active Codex resolver/plan checks pass 18 and shared plan checks five;
+independent Codex setup/store/state/journal checks pass 60. The unused Codex image
+reader and re-export were removed after source/caller checks; current shared pin
+validation and its rejection tests remain. No formula entrypoint was removed.
+The original 105 wrapper/rotation/broker tests missed mutable-path identity drift;
+the FA-08 fix in `413cea1f5` now has 132 such tests and a production-provisioner
+daemon reconstruction regression, including cold dynamic-recipe refusal.
+Retirement and deployment remain pending. No live credential access or renewal
+was performed.
+
+Header/publication/reclamation mapping (2026-09-24): ten more entries bring
+coverage to 117 application commits (newest 15 plus earliest 102).
+Current asset-server tests pass 45 cases, including five real-daemon cases for
+graceful restoration, retained read-only targets, revocation and startup orphan
+sweep; Floot publication tests pass 20. The audit found that a failed orphan
+sweep silently hid a possibly retained target. The store now reports a fixed
+unreadable entry using the existing admin listing path; explicit release can
+retry, other orphan removals continue, and the cause's private text is not exposed.
+A new injected-powers regression fails before the fix and verifies reconstruction
+over retained names and later release; this is not abrupt daemon-loss testing.
+Header diagnostics also exposed caller-supplied invalid names despite promising
+fixed check labels. The transport now emits only `header name` or `header value`;
+three regressions verify no echoed data or fetch, and all 36 transport tests pass.
+Current Exo guards already cap names, so no unbounded public-input claim is made.
+The recorded-mount cleanup header now states the real limit: absent endpoints
+are not proof that producers stopped. Its 16 cleanup/supervisor tests use local
+socket probes and injected effects, not native process-loss recovery; #1323 remains
+open. No persistence format, credential owner or shutdown mechanism was added.
+
+Provider/metadata/diagnostics mapping (2026-09-24): twelve further entries bring
+coverage to 107 application commits (newest 15 plus earliest 92). Current local
+evidence includes 74 UI/setup tests, 161 shared provider tests, 18 Claude tests,
+and 67 direct OpenRouter/credential/cache/routing tests; no live inference.
+Historical shims and reverted route changes have explicit supersession entries.
+This pass found two defects: unbounded optional public-catalog buffering, and host
+diagnostics exposing a bare bearer credential or a truncated credential prefix.
+The catalog fix uses the same 16 MiB metadata transport bound as account discovery,
+not a model context or reply-output limit. A new finite-stream regression fails
+before the fix and passes afterward: oversize cancels the stream, malformed JSON
+does not log its contents, successful replies survive with unknown context size,
+and failed catalog reads retain backoff. Existing optional-usage assertions were
+type-narrowed without changing their expected values; lal typechecking passes.
+Arbitrary fetch/stream rejection-message redaction is not established by this test.
+Host refusal diagnostics now screen the carried full authorization value, bare
+bearer token and API key before publication, and withhold a suffix that could be
+a credential prefix cut by the first-chunk or 1024-byte excerpt boundary.
+Six regressions cover full/bare values and both boundaries, with exactly one
+upstream read and an unchanged generic refusal through the grant. All 161 hosted
+provider tests and hosted-agent types pass; this does not claim screening of
+arbitrarily encoded/obfuscated secrets, durable logging or hostile upstream prose.
+Credential/formula owners and transcript persistence remain unchanged.
 
 Type/fixture/environment mapping (2026-09-24): ten further changes are mapped,
 bringing coverage to 95 unique application entries (newest 15 plus earliest 80).
 Fresh command-environment tests cover object identity and extensibility as well
 as captured values: 22 listener and 71 policy tests pass with controlled effects.
-The current code-mode declaration generator fails ten focused tests because it
-tries to flatten generic CopyArray wrapper inheritance; this remains open until
-a bounded fix and regenerated declarations are verified.
+The code-mode declaration generator initially failed ten focused tests because it
+tried to flatten generic CopyArray wrapper inheritance. The repair preserves empty
+generic auxiliary interfaces through extraction and flattening, rather than
+turning load-bearing recursive indirection into aliases. Root and nonempty generic
+inheritance still refuse unsupported substitution. Declared string/number literal
+constants preserve computed property identities; unknown imported keys fail closed.
 Independent review of the first attempted fix found missing imported-symbol
 declarations and illegal recursive aliases in the generated surfaces; parsing
-alone misses these defects. Require a semantic TypeScript compilation check
-before accepting regenerated tool declarations.
+alone missed these defects. Generated filesystem, Git and HTTP declarations are
+regenerated, and a strict semantic TypeScript program now checks every generated
+tool declaration as a self-contained module. The full agent-tools suite passes
+231 tests; package types, scoped lint and formatting pass. Root documentation
+generation passes with zero errors and 176 warnings.
+This changes generated tool descriptions, not daemon formulas, runtime
+guards, credential ownership, transcript persistence or replay behavior.
 The environment test pass also exposed a sandbox resolver fixture type error:
 preserving literal types and explicitly marking its deliberately invalid writable
 resolver input restores type checking without changing either runtime assertion.
 All 20 sandbox runtime tests pass; sandbox and hosted-agent type checks pass.
-The manual OpenCode OCI spike is another legacy removal/update candidate: it
-passes a raw credential through Podman environment and defaults to a paid model.
-It was not executed and must not serve as current brokered/free-route acceptance.
+The obsolete manual OpenCode OCI spike and its lint exception are now removed:
+it passed a raw credential through Podman environment and defaulted to a paid model.
+Application and host source checks found no caller beyond its own launcher;
+historical design evidence is retained and explicitly labeled obsolete.
+This is source retirement only, not proof that old deployed formulas or containers
+were retired. It was not executed; no Secret or host resource was changed.
 The ledger records separate fixture, bridge and fake-applier evidence, including
 availability-skipped native tests rather than mislabeling them live acceptance.
 
@@ -150,7 +276,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 80 application changes, plus the first 20 host
+not. The newest 15 and earliest 110 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
@@ -334,8 +460,13 @@ both causes in the combined error; existing deletion tests now require rejection
 The final barrier/directory/marshal-publication run passes 17 tests, including
 graceful daemon restart; 44 construction-cleanup cases also passed during this
 change. Daemon types pass; changed-file lint reports zero errors and 68 warnings.
-Simultaneous deletion plus reclamation failure aggregation is source-reviewed,
-not separately fault-injected by the combined formula/pet-store test.
+Follow-up verification (2026-09-24): all eight barrier cases pass, including a
+new simultaneous formula-deletion plus scratch-reclamation fault.
+It checks original error identities in the nested aggregate, revocation before
+reclamation, retained formula/data and continued reconstruction refusal.
+Clearing the injected failures and draining unrelated graph work still does not
+retry cleanup; that remains explicitly characterized as the open defect.
+This adds fault-injection evidence, not runtime behavior or restart recovery.
 This is a prerequisite diagnostic correction, not the retry fix: failed
 cancellation and disconnection reporting, retained retry records, reentrant
 retry scheduling, stage acknowledgements and restart recovery remain open.
@@ -352,6 +483,16 @@ The barrier/context/native-worker-lifecycle suites pass 28 tests.
 This closes the cancellation-reporting item above, not disconnection reporting
 or retained retry ownership. The worker failure in the new case is injected;
 adjacent real-child closure tests do not turn it into a process-loss recovery test.
+
+Disconnection review (2026-09-24): the collection handler logs synchronous
+disconnection failures without propagating them; residence cleanup also does not
+await connection close or worker termination.
+However, the current connection-close implementation already catches writer/drain
+failures, and worker termination resolves through a grace race that suppresses
+underlying failures. No supported normal-operation rejection was reproduced.
+These paths do not prove quiescence, but making them awaited would change cleanup
+semantics and could hang on a stalled close. No speculative patch was made;
+termination proof remains in the separately scoped #1323 research.
 
 Sibling cleanup draining (2026-09-24): a rejected collection callback no longer
 aborts the queue before other admitted callbacks are attempted.
@@ -446,7 +587,26 @@ Four inert shell-wrapper tests pass; this is not live inference or power-loss pr
 Old manifests require manual inspection, not automatic migration or replay.
 Locks exclude cooperating runners, not UI activity or hostile same-UID processes;
 exclusive operator use and trusted private directory ancestry remain prerequisites.
-The local runner defect is addressed; deployment/live acceptance remain open.
+The restoration runner defect is addressed; deployment/live acceptance remain open.
+
+Hosted tool/policy acceptance runner — corrected locally (host `62a1077`,
+2026-09-24, not deployed): the older writer synced the temporary file but not
+the parent directory and held no exclusive runner lock. It now uses the same
+private-manifest helper as restoration, holding the lock across the awaited
+phase and syncing publication before remote controller lookup or stage effects.
+Existing seed manifests refuse replay without changing their contents. Read-only
+phases leave manifest content unchanged. Caller staging and cleanup include the
+new helper dependency. All 54 focused Node tests and five inert shell-wrapper
+tests pass; independent review reran the wrapper tests and earlier 43 manifest
+and cutover cases. Locking excludes cooperating runners, not UI activity or
+remote operations still settling after a timeout; stale locks require inspection.
+The command matcher also stripped quotes/backslashes, conflating shell commands
+with different expansion semantics. The reviewed correction accepts only the
+exact command or an inert literal bash wrapper preserving the exact inner string.
+Its adversarial regression fails before the fix; 26 cutover tests and 11 adjacent
+restoration tests pass, with the 26 independently rerun. No live acceptance run.
+Historical observations remain recorded, not recertified. Current deployment and
+live acceptance remain separate outstanding gates.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for
@@ -1067,6 +1227,43 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
 
 ## FA-01 — Archived failures are missing from normal history
+
+### Claude checkpoint-first restoration — 2026-09-24
+
+The retrospective audit found that Claude's native transcript writer emitted a
+compaction summary only when input also contained superseded records before it.
+Floot's context reader intentionally supplies active context starting at the
+checkpoint, so restoration silently omitted that summary; a summary-only context
+became an empty file.
+Two regressions fail before the fix, which emits the summary whenever the active
+stream begins with a compaction record.
+Shared conformance now checks checkpoint-first restoration across all three CLI
+adapters. Claude writer/controller/conformance checks pass 38 tests, Codex
+conformance nine and OpenCode conformance 13.
+Independent adversarial review approved the fix and shared test.
+Source-only Claude type checking, scoped lint and root documentation generation
+pass. Full-package type checking still reports errors in unchanged test fixtures;
+the injected renewable-reader fixture was corrected to include its newly required
+Secret facet, and all seven Claude pool setup tests pass.
+This changes reconstruction of existing durable transcript records, not their
+schema, ownership or retention. Not deployed or live-compaction tested.
+
+Native replay follow-up: replay paired tools globally by provider ID,
+so a later turn's result can answer an earlier unanswered call with the same ID.
+Claude additionally indexes paired results by raw ID, duplicating the last result
+across distinct calls. Actual-export fixtures reproduced this in all three CLI
+translations. The correction now requests turn-scoped pairing in Claude,
+OpenCode and Responses-item replay, and Claude indexes results by call record
+rather than raw ID. Single-turn journal recovery keeps its existing whole-turn
+pairing; durable records and schemas are unchanged.
+The 38 adjacent Floot context/recovery tests and 69 targeted codec/native-translation
+tests pass. New tests fail before the fix on all three adapters, and cover
+completed/interrupted reused IDs, cross-turn orphan refusal, same-turn retained-tail
+FIFO pairing, and Claude/OpenCode failure flags.
+Hosted-agent and Claude source type checks pass; scoped lint has no errors and
+root documentation generation passes. OpenCode has no package TypeScript project.
+These checks validate local translation, not native CLI or live-provider acceptance.
+Independent adversarial review approved the source and regressions; not deployed.
 
 `agent.js`'s `getHistory()` and `getTranscript()` read `turnJournal.list()`, which
 contains the retained window, rather than an archive-aware conversation view.
@@ -2052,6 +2249,50 @@ of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
+### Prompt admission after pre-execution cancellation — 2026-09-24
+
+Claude had the same admission gap across asynchronous provisioning and transcript
+restoration: four baseline regressions actually spawned the canceled prompt before
+the returned-handle kill path could run. The local fix rechecks reader closure and
+termination after provisioning and immediately before requesting the spawn.
+Pending preparation remains serialized; a spawn already requested still belongs
+to the existing returned-handle cleanup path. No durable schema, replay owner, or
+native process-loss recovery behavior changes. Independent review approves the
+fix and independently passes all 47 client tests. The full package run exposed a
+stale pooled-setup Secret fixture; its correction models exact captured host and
+Secret identities and asserts temporary alias cleanup without weakening the
+existing no-token-seeding assertions. Independent setup review and ten tests pass.
+The full Claude package now passes 237 tests; source typechecking, scoped lint,
+formatting, and root documentation generation pass. Not deployed.
+
+A new regression reproduces OpenCode sending a canceled prompt after a held
+history import acknowledges success. Reader closure sent an interrupt before any
+inference was in flight, which the bridge ignored; dispatch then unconditionally
+wrote the prompt. The baseline sent `must not execute` instead of the next queued
+turn. Import refusal already fenced later prompts correctly.
+The reviewed fix retains the selected turn during startup, tracks
+whether its prompt was admitted, and checks cancellation inside the serialized
+stdin write. Pre-admission cancellation must not send an interrupt to absent stdin
+or claim the still-pending import stopped; dispatch retains that import barrier.
+Pre-admission reader closure or explicit interruption settles delivery locally,
+but the active startup/import operation still blocks later dispatch until it
+settles. An accepted import can serve the next turn; a refused import still
+poisons the incarnation. Stale native terminal events cannot release that barrier.
+This is incarnation-local admission state, not a new durable record or a change
+to native process-loss recovery. All 35 client tests pass, including seven new
+startup/import/queued-write cases independently rerun by the adversarial reviewer.
+The full OpenCode suite passes all 302 tests. Root documentation generation also
+passes. Scoped lint has no errors and formatting passes; not deployed.
+
+2026-09-24 source retirement: removed the obsolete `oci/spike/` launcher and
+direct-credential runner, plus its dedicated lint exception. Repository and host
+caller checks found no supported caller; the historical design record remains.
+The full OpenCode suite rerun passes 289 tests with an explicit zero exit status;
+the first run reported 289 passes but returned nonzero without a diagnostic, so
+no cause or repair is claimed for that discrepancy. Lint configuration and diff
+checks pass; root docs has zero errors and 176 warnings. No live resources were
+retired, and old deployed formulas/containers remain a separate operator gate.
+
 The current native controller directly constructs `opencode-client.js`.
 The 718-line old `src/opencode-client-module.js` (at the baseline)
 has no current production mint/import path found in the repository, but is exported and
@@ -2931,6 +3172,73 @@ Completion: no absent-backend special case in session orchestration; account ide
 not depend on runtime; route selection and model capabilities have a single projection path.
 
 ## FA-08 — Separate durable identity from incarnation pins
+
+### Renewable wrapper Secret identity — fixed locally, deployment pending
+
+Confirmed 2026-09-24 while mapping `06f745f78`: the managed renewable credential
+formula stores host powers and `CREDENTIAL_SECRET_PATH`. Its `make()` looks up
+the catalog/admin and read facet again on each incarnation. An independent
+injected-host reproduction called the production entrypoint twice with identical
+configuration, rebinding the path between calls; the second wrapper read the
+replacement Secret. No real credential or network operation was used.
+This pins a Secret only within one incarnation, not across formula reconstruction.
+The catalog listing and read lookup are also separate awaits and can observe
+different bindings. A stable wrapper formula ID does not establish stable
+credential identity for a pool's authority journal.
+Claude setup's original-blob identity check partially guards later setup, but
+does not fix wrapper reconstruction; Codex account checks do not distinguish two
+Secrets for the same account. Existing 105 passing wrapper/rotator/broker tests
+do not exercise this rebind/revival boundary.
+
+Required fix: capture the matching read/administration capabilities as actual
+durable formula dependencies at provisioning, not merely mutable names or IDs
+stored in an environment string. Reconstruct from those exact dependencies;
+refuse old path-only formulas until explicitly retired/replaced. Add deterministic
+rebinding and catalog/read-race tests plus a real daemon reconstruction test.
+Preserve Secrets and renewal owners during any deployment; do not rotate, copy,
+or overwrite live credentials to repair wrapper topology.
+
+Implemented and independently reviewed, not deployed: the wrapper receives a marshalled
+`{ host, secret }` powers record instead of resolving the Secret by pet name.
+The administrator-only catalog gains `adminFor(readFacet)`, resolving only an
+exact manager-known facet to its matching administrator; it does not accept a
+public identifier or invoke a foreign/wrapped facet.
+The identity index is incarnation-local and rebuilt as persisted grants resolve;
+Secrets remains the owner of bytes and generations.
+Version-2 setup refuses legacy wrappers and changed Secret identity on adoption.
+A real-daemon test with synthetic credentials verifies reads and conditional
+writes still target the original Secret after alias replacement/removal and a
+graceful restart, leaving the replacement unchanged.
+This is not abrupt-loss or cross-worker renewal-exclusion evidence.
+Adversarial review additionally found that adoption must validate the retained
+powers recipe, not merely the object it returns; setup now refuses non-marshalled
+powers before evaluating them.
+The real-daemon test now uses production provisioning and adoption, including
+adoption after restart, and confirms setup rejects a rebound Secret name.
+Fault tests retain the original provisioning error and any separate temporary-name
+cleanup error instead of masking one with the other.
+Local verification includes 35 wrapper tests (20 invalid-topology cases), 17 Codex
+setup tests, seven Claude pool setup tests, 19 Secrets-manager tests, daemon type
+contracts, package type checks, scoped lint and root API docs.
+Source review raised a first-registration edge case: an operator
+caplet can obtain a genuine Secret facet through the special Secrets hub before
+its ordinary grant lookup is evaluated, making the dynamic caplet the canonical
+recipe used when that facet is marshalled.
+The initial warm-daemon test did not reproduce this because Secret import eagerly
+registers the stable lookup recipe.
+A cold restart between import and dynamic lookup removes that confound: inspection
+confirms the saved pair contains the dynamic `make-unconfined` recipe, and a second
+restart demonstrably retargets the wrapper from synthetic `first` to `second` bytes.
+Setup now validates the powers record before mint/adoption: exactly the current
+host and a static lookup through that host's `@secrets/use/<grant>` route.
+Adoption refuses dynamic slots before evaluating stored powers; provisioning
+refuses them before creating a wrapper, after resolving the configured Secret.
+This is a bounded provisioning guard, not a daemon-wide canonical-identity redesign.
+The real-daemon test passes with the production provisioner, four graceful daemon
+incarnations, original-Secret conditional writes and cold dynamic-recipe refusal.
+Independent adversarial review approved the source and each other's regression
+tests. Deployment still requires explicit retirement of old renewal owners and
+path-only wrappers; Secrets and pending renewal intents must be preserved.
 
 Broker configuration pins the guest image along with provider authority.
 Backend plans derive the image from that broker and treat several image/account fields
@@ -4073,6 +4381,73 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Host `62a1077` reuses the private-manifest owner for hosted acceptance,
+including phase exclusion, directory-synced publication, existing-seed refusal,
+and staged helper cleanup. Independent review passes; 54 Node and five wrapper
+tests pass. RA-01 tracing distinguishes an unused-but-exported native-profile
+feature from unreachable code; the operator approved retirement and a further
+current-code dead-code search. Deletion is in progress. No deployment.
+
+2026-09-24 — Operator clarified that exhaustive historical commit review is not
+required after multiple rewrites. Retain collected evidence but discontinue the
+commit-count completion gate; audit current retained implementation and open
+findings instead. Existing durability, preservation, review, and live acceptance
+requirements remain in force.
+
+2026-09-24 — Map twelve application import/pin/diagnostic changes and four host
+acceptance changes. Host `60ee154` fixes false shell-command equivalence after a
+failing-before regression and adversarial review; 37 adjacent tests pass. Record
+the hosted cutover manifest's missing parent sync and runner lock as a separate
+open gate. No deployment or live acceptance.
+
+2026-09-24 — Map twelve retired-lease/restoration changes, bringing application
+coverage to 193/479. Historical custom-volume recovery and deployment reports are
+not current shared-runtime acceptance. Claude cancellation during provisioning or
+restoration is reproduced by four new tests and fenced locally before spawn;
+independent review and 47 client tests pass. Corrected the stale pooled-setup
+fixture with exact captured-capability assertions; all 237 package tests, source
+types, scoped lint, formatting, and documentation generation pass. No deployment.
+
+2026-09-24 — Correct reused-tool-ID replay pairing across all three CLI backends;
+69 targeted and 38 adjacent context tests pass. Map twelve native-restoration and
+mount-convergence changes with explicit evidence limits. Not deployed.
+
+2026-09-24 — Restore Claude checkpoint-first summaries; two regressions fail before
+the fix, and shared conformance covers all three CLI translations. Map twelve
+transcript changes; record separate reused-tool-ID replay defect. Not deployed.
+
+2026-09-24 — Fix renewable Secret identity in `413cea1f5`: retain exact capabilities,
+derive administration by identity, and refuse dynamic slot recipes after a cold-start
+retargeting reproduction. Reviewed tests pass; retirement and deployment pending.
+Map eight publication/workspace/mount changes, distinguishing historical proposals
+from retained implementations. Clarify publication's file-presence check without
+adding content reads; 21 publication tests pass. No Tokyo changes.
+
+2026-09-24 — Map eight image/Codex/renewable changes; remove unused image reader
+while retaining active shared validation tests. Confirm and open renewable-wrapper
+mutable-name identity defect in FA-08; no live credentials touched or deployed.
+
+2026-09-24 — Map ten header/publication/reclamation changes; surface failed asset
+orphan cleanup for explicit release, remove request-data echoes from header-check
+diagnostics, and correct native cleanup proof wording. Local and graceful-daemon
+tests recorded above; no Tokyo deployment or new recovery architecture.
+
+2026-09-24 — Map twelve provider/UI/setup changes; bound optional OpenRouter public
+catalog reads and screen bare/truncated credential echoes from host refusal logs.
+Local mocked tests cover metadata cancellation/backoff and six diagnostic cases;
+lal/hosted-agent types pass. No live inference, deployment or durable owner change.
+
+2026-09-24 — Repair generic auxiliary interface extraction and literal computed
+keys in tool declarations; retain recursive interfaces and fail-closed unsupported
+inheritance. Regenerate filesystem/Git/HTTP surfaces and add strict semantic
+compilation coverage after adversarial review caught defects missed by parsing.
+Full agent-tools suite: 231 passed; no runtime authority or persistence change.
+
+2026-09-24 — FA-04: remove obsolete direct-credential OpenCode OCI spike and its
+lint exception after caller tracing and independent review. Full current OpenCode
+suite rerun: 289 passed, exit zero; root docs and scoped lint pass.
+Historical spike evidence retained, no Secret access or live resource retirement.
 
 2026-09-24 — Mapped five more application network/runtime changes and seven host
 retirement/acceptance changes. Found and fixed legacy cancellation-triggered

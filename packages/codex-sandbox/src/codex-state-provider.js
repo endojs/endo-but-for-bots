@@ -4,10 +4,10 @@
  * Codex's daemon-owned session state authority: one host directory per session
  * under a configured root, with the ownership markers and symlink refusals the
  * shared `@endo/hosted-agent/session-state-storage.js` already implements for
- * Claude and OpenCode.
+ * Claude. OpenCode no longer has a native state-provider formula.
  *
  * It exists as a formula of its own rather than as part of the backend for the
- * reason Claude's and OpenCode's do: the backend caplet is pinned to a release
+ * reason Claude's does: the backend caplet is pinned to a release
  * checkout and is re-minted on every setup run, and durable state must not be
  * re-created — or lose its markers — each time it is.
  *

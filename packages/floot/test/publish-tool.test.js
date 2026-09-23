@@ -456,7 +456,7 @@ test('concurrent publishes serialize into one route', async t => {
   t.deepEqual(asset.revoked, ['http://host/token-1/']);
 });
 
-test('a workspace with no readable index is refused, not published', async t => {
+test('a workspace with no root index file is refused, not published', async t => {
   // The failure this closes: a backend whose slice writes somewhere other than
   // the session's workspace leaves an empty worktree here, and publishing it
   // returned a URL that 404s on every request — indistinguishable from a
@@ -467,8 +467,40 @@ test('a workspace with no readable index is refused, not published', async t => 
     getWorkspace: async () => makeFilesystemCap({ withIndex: false }),
   });
   const message = await E(tool).execute({});
-  t.regex(String(message), /no readable index\.html at its root/);
+  t.regex(String(message), /no index\.html file at its root/);
   t.deepEqual(asset.served, []);
+});
+
+test('publication checks index shape, not whether a later file open succeeds', async t => {
+  const asset = makeAssetServer();
+  let opens = 0;
+  const index = Far('Unreadable index', {
+    open: async () => {
+      opens += 1;
+      throw Error('EACCES: index cannot be opened');
+    },
+  });
+  const workspace = Far('Filesystem with inaccessible index', {
+    root: () =>
+      Far('Directory', {
+        lookup: name => {
+          t.is(name, INDEX);
+          return index;
+        },
+      }),
+    statfs: () => harden({}),
+  });
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => workspace,
+  });
+  // The preflight intentionally classifies the root entry. A publication is
+  // a live route, not evidence that its present or future contents were read.
+  t.regex(String(await E(tool).execute({})), /http:\/\/host\/token-1\//);
+  t.is(asset.served.length, 1);
+  t.is(opens, 0);
+  await t.throwsAsync(E(index).open({ read: true }), { message: /EACCES/ });
+  t.is(opens, 1);
 });
 
 test('an empty git worktree is refused for the same reason', async t => {
@@ -477,7 +509,7 @@ test('an empty git worktree is refused for the same reason', async t => {
     getAssetServer: async () => asset.server,
     getWorkspace: async () => makeGitCap({ withIndex: false }).git,
   });
-  t.regex(String(await E(tool).execute({})), /no readable index\.html/);
+  t.regex(String(await E(tool).execute({})), /no index\.html file/);
   t.deepEqual(asset.served, []);
 });
 

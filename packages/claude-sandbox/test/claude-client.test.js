@@ -110,6 +110,77 @@ const drain = async reader => {
   return events;
 };
 
+for (const phase of ['provision', 'restore']) {
+  for (const cancellation of ['reader', 'interrupt']) {
+    test(`${cancellation} cancellation during ${phase} prevents prompt spawn`, async t => {
+      t.timeout(5000);
+      let release;
+      let entered;
+      const gate = new Promise(resolve => {
+        release = resolve;
+      });
+      const started = new Promise(resolve => {
+        entered = resolve;
+      });
+      const fake = makeFakeSlice();
+      const mount = makeFakeMount();
+      let restores = 0;
+      const client = makeClaudeClient(
+        baseArgs(fake, mount, {
+          ...(phase === 'provision'
+            ? {
+                slice: undefined,
+                mountHandle: undefined,
+                provision: async () => {
+                  entered();
+                  await gate;
+                  return { slice: fake.slice, mountHandle: mount.handle };
+                },
+              }
+            : {}),
+          restoreTranscript: async () => {
+            await null;
+            restores += 1;
+            if (phase === 'restore' && restores === 1) {
+              entered();
+              await gate;
+            }
+            return 'restored-session';
+          },
+        }),
+      );
+      t.teardown(async () => {
+        release();
+        await client.terminate();
+      });
+      const transcript = [
+        { kind: 'message', role: 'user', content: 'earlier' },
+      ];
+      const first = await client.send('must not execute', { transcript });
+      await started;
+      let interrupted;
+      if (cancellation === 'reader') await iterateReader(first).return();
+      else {
+        interrupted = client.interrupt();
+        interrupted.catch(() => {});
+        // Let the eventual close reach the selected reader before release.
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      const next = await client.send('next requested turn', { transcript });
+      await new Promise(resolve => setImmediate(resolve));
+      t.is(fake.spawned.length, 0, 'pending preparation remains serialized');
+      release();
+      if (interrupted) await interrupted;
+      t.is((await drain(next)).at(-1).type, 'end');
+      t.deepEqual(
+        fake.spawned.map(proc => proc.argv[2]),
+        ['next requested turn'],
+      );
+      t.is(restores, phase === 'restore' ? 2 : 1);
+    });
+  }
+}
+
 test('raw stream backpressures a burst larger than the delivery queue', async t => {
   t.timeout(10_000);
   const rows = Array.from({ length: 3000 }, (_, index) => ({

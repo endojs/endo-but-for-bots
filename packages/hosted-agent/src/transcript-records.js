@@ -352,7 +352,7 @@ harden(renderTranscriptDialogue);
  */
 export const responsesApiItems = records => {
   const { active } = splitAtLastCompaction(records);
-  const { pairs } = pairToolCalls(active);
+  const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
   const items = [];
   for (const record of active) {

@@ -113,13 +113,9 @@ export const writeClaudeTranscript = (
   // carries. Claude Code has no compaction record of its own, so the summary
   // is written as the conversation's opening exchange and the superseded span
   // is not replayed — which is what the boundary means.
-  const { superseded, active } = splitAtLastCompaction(records);
-  const { pairs } = pairToolCalls(active);
-  const resultById = new Map(
-    pairs
-      .filter(pair => pair.result !== undefined)
-      .map(pair => [pair.call.id, pair.result]),
-  );
+  const { active } = splitAtLastCompaction(records);
+  const { pairs } = pairToolCalls(active, { perTurn: true });
+  const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
 
   let index = 0;
   /** @type {string | null} */
@@ -150,11 +146,11 @@ export const writeClaudeTranscript = (
     parentUuid = uuid;
   };
 
-  if (superseded.length > 0) {
-    const [compaction] = active;
+  const [compaction] = active;
+  if (compaction?.kind === 'compaction') {
     emit('user', {
       role: 'user',
-      content: compaction?.kind === 'compaction' ? compaction.summary : '',
+      content: compaction.summary,
     });
   }
 
@@ -193,7 +189,7 @@ export const writeClaudeTranscript = (
       // still gets one, saying so: Claude Code refuses a `tool_use` with no
       // answering `tool_result`, and an interrupted turn must restore as an
       // interrupted turn rather than as a conversation that cannot load.
-      const result = resultById.get(record.id);
+      const result = resultFor.get(record);
       emit('user', {
         role: 'user',
         content: [

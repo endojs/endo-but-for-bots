@@ -20,6 +20,24 @@ testTranscriptRestoration({
   readBack: native => readImportedTurns(JSON.parse(native)),
 });
 
+test('reused ids retain each imported result failure status independently', t => {
+  const results = importedTurnsFor([
+    { kind: 'message', role: 'user', content: 'first' },
+    { kind: 'tool-call', id: 'same', name: 'first', args: '{}' },
+    { kind: 'tool-result', id: 'same', content: 'failed first', failed: true },
+    { kind: 'message', role: 'user', content: 'second' },
+    { kind: 'tool-call', id: 'same', name: 'second', args: '{}' },
+    { kind: 'tool-result', id: 'same', content: 'successful second' },
+  ]).filter(turn => turn.kind === 'tool');
+  t.deepEqual(
+    results.map(result => [result.output, result.failed === true]),
+    [
+      ['failed first', true],
+      ['successful second', false],
+    ],
+  );
+});
+
 test('import payload excludes superseded history before reaching the route', t => {
   const records = harden([
     { kind: 'message', role: 'user', content: 'superseded' },

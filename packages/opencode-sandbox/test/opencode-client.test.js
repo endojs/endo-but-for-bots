@@ -864,6 +864,154 @@ for (const ready of [
   });
 }
 
+for (const cancelMode of ['reader', 'interrupt']) {
+  for (const imported of [true, false]) {
+    test(`${cancelMode} cancellation during import fences prompt admission (${imported ? 'import accepted' : 'import refused'})`, async t => {
+      t.timeout(5000);
+      const bridge = makeFakeBridge();
+      const client = makeOpencodeClient(
+        baseArgs(makeFakeSlice(bridge), { model: 'openrouter/deepseek/v4' }),
+      );
+      t.teardown(async () => {
+        bridge.push(JSON.stringify({ type: 'imported', ok: false }));
+        await client.terminate();
+      });
+      bridge.push(readyLine('ses_1'));
+      const transcript = [
+        { kind: 'message', role: 'user', content: 'earlier' },
+      ];
+      const cancelled = await client.send('must not execute', { transcript });
+      await waitFor(() =>
+        bridge.commands.some(text => JSON.parse(text).op === 'import'),
+      );
+      let cancellation;
+      if (cancelMode === 'reader') await iterateReader(cancelled).return();
+      else {
+        cancellation = client.interrupt();
+        cancellation.catch(() => {});
+      }
+      if (cancellation) {
+        await cancellation;
+        t.is((await drain(cancelled)).at(-1).type, 'abort');
+      }
+      const next = await client.send('next requested turn', { transcript });
+      // A stale native terminal is not an acknowledgment of import completion.
+      bridge.push(JSON.stringify({ type: 'end' }));
+      await tick();
+      t.false(bridge.commands.some(text => JSON.parse(text).op === 'send'));
+      t.false(
+        bridge.commands.some(text => JSON.parse(text).op === 'interrupt'),
+      );
+      bridge.push(JSON.stringify({ type: 'imported', ok: imported }));
+      if (imported) {
+        await waitFor(() =>
+          bridge.commands.some(text => JSON.parse(text).op === 'send'),
+        );
+        t.deepEqual(
+          bridge.commands
+            .map(text => JSON.parse(text))
+            .filter(command => command.op === 'send'),
+          [{ op: 'send', text: 'next requested turn' }],
+        );
+        bridge.push(JSON.stringify({ type: 'end' }));
+        t.is((await drain(next)).at(-1).type, 'end');
+      } else {
+        const events = await drain(next);
+        t.is(events.at(-1).type, 'abort');
+        t.regex(
+          events.at(-1).reason,
+          /previous conversation restoration failed/,
+        );
+        t.false(bridge.commands.some(text => JSON.parse(text).op === 'send'));
+      }
+      t.is(
+        bridge.commands.filter(text => JSON.parse(text).op === 'import').length,
+        1,
+      );
+    });
+  }
+}
+
+test('reader cancellation is rechecked inside a held command write chain', async t => {
+  t.timeout(5000);
+  const bridge = makeFakeBridge();
+  const gate = makeGate(t);
+  const client = makeOpencodeClient(
+    baseArgs(makeFakeSlice(bridge), {
+      makeStdinWriter: async () => ({
+        async next(bytes) {
+          const text = dec.decode(bytes);
+          bridge.commands.push(text);
+          if (JSON.parse(text).op === 'interrupt') await gate.promise;
+          return harden({ done: false, value: undefined });
+        },
+      }),
+    }),
+  );
+  t.teardown(async () => {
+    gate.release();
+    await client.terminate();
+  });
+  bridge.push(readyLine('ses_1'));
+  const first = await client.send('first');
+  await waitFor(() => bridge.commands.length === 1);
+  const interrupted = client.interrupt();
+  interrupted.catch(() => {});
+  await waitFor(() => bridge.commands.length === 2);
+  bridge.push(JSON.stringify({ type: 'abort', reason: 'first stopped' }));
+  await drain(first);
+  const second = await client.send('must not execute');
+  await tick();
+  await iterateReader(second).return();
+  const third = await client.send('third');
+  gate.release();
+  await interrupted;
+  await waitFor(() => bridge.commands.length === 3);
+  t.deepEqual(
+    bridge.commands
+      .map(text => JSON.parse(text))
+      .filter(command => command.op === 'send')
+      .map(command => command.text),
+    ['first', 'third'],
+  );
+  bridge.push(JSON.stringify({ type: 'end' }));
+  t.is((await drain(third)).at(-1).type, 'end');
+});
+
+for (const cancelMode of ['reader', 'interrupt']) {
+  test(`${cancelMode} cancellation during startup does not import or admit a prompt`, async t => {
+    t.timeout(5000);
+    const bridge = makeFakeBridge();
+    const fake = makeFakeSlice(bridge);
+    const client = makeOpencodeClient(
+      baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
+    );
+    t.teardown(() => client.terminate());
+    const first = await client.send('must not execute', {
+      transcript: [{ kind: 'message', role: 'user', content: 'old' }],
+    });
+    await waitFor(() => fake.spawnCalls.length === 1);
+    let cancellation;
+    if (cancelMode === 'reader') await iterateReader(first).return();
+    else {
+      cancellation = client.interrupt();
+      cancellation.catch(() => {});
+    }
+    bridge.push(readyLine('ses_1'));
+    if (cancellation) await cancellation;
+    const next = await client.send('next requested turn');
+    await waitFor(() =>
+      bridge.commands.some(text => JSON.parse(text).op === 'send'),
+    );
+    t.deepEqual(
+      bridge.commands.map(text => JSON.parse(text)),
+      [{ op: 'send', text: 'next requested turn' }],
+    );
+    bridge.push(JSON.stringify({ type: 'end' }));
+    t.is((await drain(next)).at(-1).type, 'end');
+  });
+}
+
 test('an uncertain import write fences later sends without replaying', async t => {
   t.timeout(5000);
   const bridge = makeFakeBridge();

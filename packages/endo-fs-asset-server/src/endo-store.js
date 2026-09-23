@@ -130,7 +130,9 @@ export const makeEndoAssetStore = powers => {
             // Listed, not hidden: it still retains whatever it names.
             records.push({
               id,
-              unreadable: String(/** @type {Error} */ (cause)?.message || cause),
+              unreadable: String(
+                /** @type {Error} */ (cause)?.message || cause,
+              ),
             });
           }
         }
@@ -142,8 +144,15 @@ export const makeEndoAssetStore = powers => {
       for (const name of names) {
         const id = idOf(name, TARGET_PREFIX);
         if (id !== undefined && !recorded.has(id)) {
-          // eslint-disable-next-line no-await-in-loop
-          await removeIfPresent(name).catch(() => {});
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await removeIfPresent(name);
+          } catch {
+            // Target removal was not acknowledged; it may remain retained.
+            // Surface it through the existing unreadable-entry path so an
+            // administrator can retry release instead of hiding the failure.
+            records.push({ id, unreadable: 'orphaned target cleanup failed' });
+          }
         }
       }
       return records;

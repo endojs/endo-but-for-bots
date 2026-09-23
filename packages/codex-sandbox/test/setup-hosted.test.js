@@ -3,6 +3,7 @@ import '@endo/init';
 
 import test from 'ava';
 import { assert } from '@endo/errors';
+import { Far } from '@endo/far';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,6 +50,12 @@ const makeFakeHost = ({
   const environments = new Map();
   const specifiers = new Map();
   const powersIds = new Map();
+  const valuesById = new Map();
+  const secrets = new Map();
+  const secretFor = name => {
+    if (!secrets.has(name)) secrets.set(name, Far(`Secret ${name}`, {}));
+    return secrets.get(name);
+  };
   const bind = (namePath, id, specifier, env) => {
     bindings.set(key(...namePath), id);
     specifiers.set(id, specifier);
@@ -90,15 +97,44 @@ const makeFakeHost = ({
         generation: 7n,
       }),
   });
-  const host = harden({
+  const host = Far('Setup host', {
     async identify(...parts) {
       if (parts[0] === '@agent') return 'fake-host-id';
       return bindings.get(key(...parts));
     },
     async diagnostics() {
       return harden({
-        getFormula: async id =>
-          harden({
+        getFormula: async id => {
+          if (id === 'fake-host-id')
+            return harden({ type: 'host', properties: {} });
+          if (`${id}`.startsWith('secret-grant-')) {
+            return harden({
+              type: 'lookup',
+              properties: {
+                hub: { kind: 'reference', identifier: 'fake-host-id' },
+                path: { kind: 'literal', value: ['@secrets', 'use', id] },
+              },
+            });
+          }
+          if (valuesById.has(id)) {
+            const pair = valuesById.get(id);
+            const secretName = [...secrets.entries()].find(
+              ([, secret]) => secret === pair.secret,
+            )?.[0];
+            return harden({
+              type: 'marshal',
+              properties: {
+                slots: {
+                  kind: 'reference-list',
+                  entries: {
+                    0: 'fake-host-id',
+                    1: `secret-grant-${secretName}`,
+                  },
+                },
+              },
+            });
+          }
+          return harden({
             type: 'make-unconfined',
             properties: {
               powers: { kind: 'reference', identifier: powersIds.get(id) },
@@ -107,7 +143,8 @@ const makeFakeHost = ({
                 value: specifiers.get(id) ?? unsupportedSpecifier,
               },
             },
-          }),
+          });
+        },
       });
     },
     async getFormulaEnvironment(id) {
@@ -120,19 +157,30 @@ const makeFakeHost = ({
       const parts = Array.isArray(pathOrName) ? pathOrName : [pathOrName];
       if (parts[0] === '@secrets') {
         return harden({
+          adminFor: async secret => {
+            assert([...secrets.values()].includes(secret));
+            return harden({});
+          },
           list: async () =>
             harden([
               { petNamePaths: [['secrets', 'codex-subscription-auth']] },
             ]),
         });
       }
+      if (parts[0] === 'secrets') return secretFor(parts[1]);
       if (key(...parts) === key('codex-sandbox', 'credential'))
         return credential;
       return harden({ name: key(...parts) });
     },
     async storeValue(value, name) {
       stored.push({ value, name });
-      bindings.set(key(name), 'marshal');
+      const id = `marshal-${stored.length}`;
+      valuesById.set(id, harden(value));
+      bindings.set(key(name), id);
+    },
+    async lookupById(id) {
+      assert(valuesById.has(id));
+      return valuesById.get(id);
     },
     async copy(from, to) {
       copies.push({ from, to });
@@ -158,7 +206,19 @@ const makeFakeHost = ({
       );
     },
   });
-  return { host, bindings, mints, stored, copies, removed, bind };
+  return {
+    host,
+    bindings,
+    mints,
+    stored,
+    copies,
+    removed,
+    bind,
+    secrets,
+    secretFor,
+    valuesById,
+    powersIds,
+  };
 };
 
 const withEnv = (t, values) => {
@@ -234,7 +294,14 @@ test.serial(
     const credential = fake.mints.find(
       mint => mint.specifier === renewableCredentialsSpecifier,
     );
-    t.is(credential.options.powersName, '@agent');
+    t.not(credential.options.powersName, '@agent');
+    t.is(credential.options.env.CREDENTIAL_BINDING_VERSION, '2');
+    const credentialPowers = fake.valuesById.get(
+      fake.powersIds.get('credential-id'),
+    );
+    t.is(credentialPowers.host, fake.host);
+    t.is(credentialPowers.secret, fake.secretFor('codex-subscription-auth'));
+    t.false(fake.bindings.has(key(credential.options.powersName)));
     const broker = fake.mints.find(
       mint => mint.options.resultName.at(-1) === 'broker-service',
     );
@@ -247,7 +314,11 @@ test.serial(
     t.is(broker.options.powersName, 'codex.broker-service-powers');
     t.is(storage.options.powersName, 'codex.session-storage-powers');
     t.is(backend.options.powersName, '@agent');
-    t.deepEqual(fake.stored, [], 'no legacy credential/runtime powers bundle');
+    t.is(
+      fake.stored.length,
+      1,
+      'only the immutable credential binding is stored',
+    );
     const config = JSON.parse(broker.options.env.CODEX_BROKER_CONFIG);
     t.is(config.accountRef, accountId);
     t.is(config.accountAuthority, 'codex-main');
@@ -428,12 +499,16 @@ const makePooledHost = accounts => {
       fake.mints.find(mint => key(...[mint.options.resultName].flat()) === name)
         ?.options.env.CREDENTIAL_SECRET_PATH ?? '[]',
     )[1];
-  const host = harden({
+  const host = Far('Pooled setup host', {
     ...fake.host,
     async lookup(pathOrName) {
       const parts = Array.isArray(pathOrName) ? pathOrName : [pathOrName];
       if (parts[0] === '@secrets') {
         return harden({
+          adminFor: async secret => {
+            assert([...fake.secrets.values()].includes(secret));
+            return harden({});
+          },
           list: async () =>
             harden(
               Object.keys(accounts).map(name => ({
@@ -532,6 +607,21 @@ test.serial(
         ['credential-work', 'codex-work'],
         ['credential-home', 'codex-home'],
       ],
+    );
+    for (const mint of credentialMints) {
+      const name = [mint.options.resultName].flat().at(-1);
+      const pair = fake.valuesById.get(fake.powersIds.get(`${name}-id`));
+      t.is(pair.host, fake.host);
+      t.is(
+        pair.secret,
+        fake.secretFor(JSON.parse(mint.options.env.CREDENTIAL_SECRET_PATH)[1]),
+      );
+      t.is(mint.options.env.CREDENTIAL_BINDING_VERSION, '2');
+      t.false(fake.bindings.has(key(mint.options.powersName)));
+    }
+    t.not(
+      credentialMints[0].options.powersName,
+      credentialMints[1].options.powersName,
     );
     // The broker's powers are the namespace, not a credential, and its
     // configuration says so; its account is the pool's label.
