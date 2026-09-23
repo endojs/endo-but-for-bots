@@ -24,6 +24,7 @@ for (const mode of [
   'delete-failure',
   'store-failure',
   'combined-failure',
+  'cancel-failure',
   'held-read',
   'reclaim-failure',
 ]) {
@@ -111,7 +112,13 @@ for (const mode of [
             void forceCancelled.catch(() => {});
             return {
               workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
-              workerTerminated: workerCancelled.catch(() => {}),
+              workerTerminated: workerCancelled.catch(async () => {
+                if (mode === 'cancel-failure' && _id === heldNumber) {
+                  entered.resolve(undefined);
+                  await release.promise;
+                  throw Error('Injected worker disposal failure');
+                }
+              }),
             };
           },
         }),
@@ -149,6 +156,8 @@ for (const mode of [
     if (mode === 'reclaim-failure') {
       retainedMount = await E(host).provideScratchMount('victim');
       await E(retainedMount).writeText('proof.txt', 'live mount');
+    } else if (mode === 'cancel-failure') {
+      await E(host).provideWorker('victim');
     } else {
       await E(host).makeDirectory('victim');
     }
@@ -179,14 +188,19 @@ for (const mode of [
     }
     const removal = E(host).remove('victim');
     const removalOutcome =
-      mode === 'reclaim-failure' || failDeletion || failStore
+      mode === 'reclaim-failure' ||
+      mode === 'cancel-failure' ||
+      failDeletion ||
+      failStore
         ? t.throwsAsync(removal, {
             message:
-              mode === 'combined-failure' || mode === 'reclaim-failure'
-                ? 'Collected storage cleanup failed'
-                : failDeletion
-                  ? 'Injected formula deletion failure'
-                  : 'Injected pet-store deletion failure',
+              mode === 'cancel-failure'
+                ? 'Collected controller cancellation failed'
+                : mode === 'combined-failure' || mode === 'reclaim-failure'
+                  ? 'Collected storage cleanup failed'
+                  : failDeletion
+                    ? 'Injected formula deletion failure'
+                    : 'Injected pet-store deletion failure',
           })
         : removal;
     await entered.promise;
@@ -207,6 +221,28 @@ for (const mode of [
       ]);
     }
     if (failStore) t.true(storeFailureObserved);
+    if (mode === 'cancel-failure') {
+      if (!(removalError instanceof AggregateError))
+        throw Error('Expected collection cancellation aggregate');
+      t.is(removalError.errors.length, 1);
+      const [contextError] = removalError.errors;
+      if (!(contextError instanceof AggregateError))
+        throw Error('Expected context cancellation aggregate');
+      t.deepEqual(
+        contextError.errors.map(error => error.message),
+        ['Injected worker disposal failure'],
+      );
+      t.is(deletionAttempts, 0);
+      const stored = await powers.persistence.readFormula(parseId(id).number);
+      t.is(stored.formula.type, 'worker');
+      await t.throwsAsync(E(host).lookupById(id), {
+        message: /disposal|collect/i,
+      });
+      const sibling = await E(host).makeDirectory('after-cancel-failure');
+      t.deepEqual(await E(sibling).list(), []);
+      await E(host).remove('after-cancel-failure');
+      t.is(deletionAttempts, 0);
+    }
     if (mode === 'held-read') {
       // Complete the read only after collection/deletion finishes. A stale
       // successful read must not reinsert the removed formula in the graph.

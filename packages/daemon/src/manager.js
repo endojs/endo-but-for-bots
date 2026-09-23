@@ -1019,7 +1019,15 @@ const makeDaemonCore = async (
             await controller.context.cancel(cancelReason, '!');
           }),
         );
-        if (cancellations.some(result => result.status === 'rejected')) return;
+        const cancellationFailures = cancellations
+          .filter(result => result.status === 'rejected')
+          .map(result => result.reason);
+        if (cancellationFailures.length > 0) {
+          throw new AggregateError(
+            cancellationFailures,
+            'Collected controller cancellation failed',
+          );
+        }
 
         // Delete from durable storage.
         const formulaDeletions = await Promise.allSettled(

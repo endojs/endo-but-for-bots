@@ -390,6 +390,10 @@ are injected and do not establish live Linux or Tokyo behavior.
 
 ### Post-snapshot changes
 
+- Collection cancellation failures now reject before storage deletion, retaining
+  original causes and reconstruction fences. A new injected-worker regression
+  fails before the fix; 28 barrier/context/worker tests pass afterward.
+  This reports failed disposal, not native quiescence or retry recovery.
 - Collection now reports formula/pet-store deletion errors and preserves them
   alongside reclamation errors. Reconstruction fences and missing retry behavior
   are unchanged; the barrier suite adds single-store and combined-error checks.

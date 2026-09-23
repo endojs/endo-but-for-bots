@@ -303,6 +303,19 @@ This is a prerequisite diagnostic correction, not the retry fix: failed
 cancellation and disconnection reporting, retained retry records, reentrant
 retry scheduling, stage acknowledgements and restart recovery remain open.
 
+Cancellation failure reporting (2026-09-24): the collection callback now rejects
+with its cancellation failures instead of returning success when a controller's
+disposal hook rejects. It still exits before storage deletion and retains failed
+reconstruction fences; it does not retry cancellation or claim native quiescence.
+A new worker-termination fault regression fails before the change because removal
+resolves. Afterward it checks the nested original disposal cause, zero victim
+formula-deletion attempts, retained worker formula, refused lookup, and successful
+unrelated directory creation/removal.
+The barrier/context/native-worker-lifecycle suites pass 28 tests.
+This closes the cancellation-reporting item above, not disconnection reporting
+or retained retry ownership. The worker failure in the new case is injected;
+adjacent real-child closure tests do not turn it into a process-loss recovery test.
+
 Agent identity-key retention — reproduced, unresolved (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
 record despite having no persisted formulas left under its node. The four direct
