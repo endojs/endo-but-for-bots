@@ -237,6 +237,8 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
   const records = await f.stateProvider.prepareSessionDirectory(
     f.plan.sandboxSessionId,
   );
+  if (typeof records.directory !== 'string')
+    throw Error('Expected prepared state directory');
   const state = await makeCodexSessionState(records.directory);
   await state.writeThread(
     harden({

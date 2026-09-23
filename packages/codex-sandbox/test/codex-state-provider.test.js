@@ -30,6 +30,8 @@ test('prepare creates an owned 0700 directory and is idempotent', async t => {
   const root = path.join(await makeTmp(t), 'state');
   const provider = makeCodexStateProvider({ stateRoot: root });
   const first = await provider.prepareSessionDirectory('codex-abc');
+  if (typeof first.directory !== 'string')
+    throw Error('Expected prepared state directory');
   t.is(
     path.dirname(path.dirname(first.directory)),
     path.join(root, 'native_allocations'),
@@ -66,6 +68,11 @@ test('CLI home is separate from host records and both are removed together', asy
   const provider = makeCodexStateProvider({ stateRoot: root });
   const records = await provider.prepareSessionDirectory('codex-abc');
   const home = await provider.prepareCliDirectory('codex-abc');
+  if (
+    typeof records.directory !== 'string' ||
+    typeof home.directory !== 'string'
+  )
+    throw Error('Expected separate records and CLI directories');
   t.is(
     path.dirname(path.dirname(home.directory)),
     path.join(root, 'cli_homes', 'native_allocations'),
@@ -89,6 +96,11 @@ test('CLI home symlink is refused before host records are removed', async t => {
   const provider = makeCodexStateProvider({ stateRoot: root });
   const records = await provider.prepareSessionDirectory('codex-abc');
   const home = await provider.prepareCliDirectory('codex-abc');
+  if (
+    typeof records.directory !== 'string' ||
+    typeof home.directory !== 'string'
+  )
+    throw Error('Expected separate records and CLI directories');
   await writeFile(path.join(records.directory, 'checkpoint'), 'retained');
   await rm(home.directory, { recursive: true });
   await symlink(records.directory, home.directory);
@@ -108,6 +120,8 @@ test('remove takes the directory and its marker, and repeats safely', async t =>
   const root = path.join(await makeTmp(t), 'state');
   const provider = makeCodexStateProvider({ stateRoot: root });
   const { directory } = await provider.prepareSessionDirectory('codex-abc');
+  if (typeof directory !== 'string')
+    throw Error('Expected prepared state directory');
   await provider.removeSessionDirectory('codex-abc');
   await t.throwsAsync(stat(directory));
   await t.throwsAsync(stat(path.join(root, '.owners', 'codex-abc')));

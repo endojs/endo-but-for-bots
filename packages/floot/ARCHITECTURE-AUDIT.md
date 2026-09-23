@@ -134,9 +134,20 @@ injected persistence boundary, not daemon/process-loss or physical-disk recovery
 All 322 Codex sandbox tests pass, including 94 client tests; scoped lint has
 zero errors (10 warnings), and formatting passes. Independent adversarial review
 approved after the early-notification and falsy-rejection corrections.
-Full-package lint currently fails on 32 TypeScript errors in six unchanged test
+At that checkpoint, full-package lint failed on 32 TypeScript errors in six unchanged test
 fixtures (broker-service-agent, native-controller, owned-backend, state-provider,
-subscription-profile, and setup-hosted); this gate is not claimed passed.
+subscription-profile, and setup-hosted).
+
+Follow-up (2026-09-24): those six fixtures now satisfy their current contracts.
+The subscription profile fixture uses `policy.accountRef`, instead of overwriting
+that binding with a removed top-level field; the catalog credential returns the
+complete OAuth observation shape. Directory, environment, object, and namespace
+lookups are narrowed with runtime assertions, and the namespace mock declares its
+existing removal log. No production code, formula, persisted schema, or credential
+owner changes. All 322 Codex tests and full package lint pass (zero errors,
+63 warnings); formatting and root documentation generation pass (zero errors,
+176 warnings). Independent adversarial review found no blockers.
+These are local checks, not Tokyo deployment or live acceptance.
 
 | Boundary | Current evidence / defect | Required follow-up |
 |---|---|---|
