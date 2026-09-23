@@ -265,6 +265,35 @@ accumulator, the SQLite `retention` table, and the
 [`daemon-cross-peer-gc`](daemon-cross-peer-gc.md) logic are unchanged
 — only the transport beneath them changes.
 
+> **Reconciliation with the formula nonce locator (added 2026-09-05).**
+> The reusable nonce-locator mechanism that has since landed
+> (`packages/daemon/src/networks/formula-nonce-locator.js`,
+> `makeFormulaNonceLocator`) enforces non-oracularity by treating *every*
+> non-formula presentation as one uniform miss — which includes every
+> well-known swissnum *word*. So the "well-known bootstrap swissnum" this
+> section reaches for cross-peer GC (today live as
+> `PEER_ENTRY_SWISSNUM = 'endo-peer-entry'` in `networks/ocapn.js`) is
+> **foreclosed** by that mechanism: a formula locator cannot itself resolve
+> a fixed word, and because the per-session locator *is* the locator for
+> incoming `bootstrap.fetch`, it would displace any plain `locator` that
+> served one. Two ways to reconcile, both explicitly supported:
+>
+> 1. **Compose (recommended for the transition).** Keep the well-known
+>    peer-entry exo, but wire the formula locator as the *default* branch of
+>    a thin outer locator that first checks the small fixed set of
+>    well-known swissnums and delegates everything else to the formula
+>    locator's `get` / per-session `get`. The formula mechanism deliberately
+>    carries no well-known branch of its own; this composition is the
+>    embedder's (`networks/ocapn.js`'s) responsibility.
+> 2. **Migrate.** Move the peer-entry exo behind a genuine formula
+>    identifier (a 256-bit unguessable swissnum, per point 3 of the design
+>    principles below), retiring the well-known word entirely. Then no
+>    well-known branch is needed and the whole incoming surface is uniform.
+>
+> Until one is chosen and wired, `networks/ocapn.js` keeps its present plain
+> `locator` Map with `PEER_ENTRY_SWISSNUM`; `makeFormulaNonceLocator` is the
+> reusable mechanism, not yet the deployed peer-entry path.
+
 ### 3. `endo://` Locators Become OCapN Locations and Sturdyrefs
 
 Today an `endo://` URL is a query string the daemon parses itself.

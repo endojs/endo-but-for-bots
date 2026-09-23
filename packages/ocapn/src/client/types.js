@@ -356,8 +356,47 @@
  * `formatLocator`/`parseLocator` URI helpers in `@endo/daemon`, which
  * use the word `Locator` for the addressable URI form.
  *
+ * The `secret` a locator is presented is a `string` for the common
+ * canonical-ASCII wire Swiss number, so a plain `Map` (whose `get`
+ * accepts a `string` key) is a valid `NonceLocator`. On the incoming
+ * `bootstrap.fetch` path the bootstrap may instead hand a raw
+ * `Uint8Array` for a non-ASCII wire secret; the parameter stays typed
+ * `string` so `Map` and other string-keyed tables remain assignable, and
+ * a locator that wants to serve that branch simply widens its own `get`
+ * to accept `string | Uint8Array` (assignable here by contravariance),
+ * as `@endo/daemon`'s `makeFormulaNonceLocator` does. A string-only
+ * locator misses on the `Uint8Array` branch, which is the safe default.
+ *
  * @typedef {object} NonceLocator
  * @property {(secret: string) => unknown | Promise<unknown>} get
+ */
+
+/**
+ * The context `makeOcapn`'s `makeLocatorForSession` factory receives
+ * when a session is established. `remoteDesignator` is the peer's claimed
+ * designator (its stable transport identity). It is bound to the
+ * transport-authenticated identity only when the netlayer supplies
+ * {@link NetLayer.verifyPeerLocation} (e.g. iroh's QUIC-verified
+ * EndpointId); on a netlayer without transport authentication it is
+ * self-asserted and therefore spoofable, so an embedder keying durable
+ * per-peer accounting should prefer `peerPublicKey`, the session's
+ * handshake-verified public key (key on its stable `peerPublicKey.id`).
+ * `abortSession` tears this session
+ * down; a locator that has seen too many misses can call it to enforce a
+ * per-session bound.
+ *
+ * @typedef {object} SessionLocatorContext
+ * @property {string} remoteDesignator
+ * @property {OcapnPublicKey} peerPublicKey
+ * @property {() => void} abortSession
+ */
+
+/**
+ * Builds a fresh `NonceLocator` for one established session's incoming
+ * `bootstrap.fetch` calls. Called once per session with that session's
+ * {@link SessionLocatorContext}.
+ *
+ * @typedef {(context: SessionLocatorContext) => NonceLocator} MakeLocatorForSession
  */
 
 /**
