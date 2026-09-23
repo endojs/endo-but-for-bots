@@ -410,9 +410,9 @@ LLM-agent stack).*
 | [endor-git-bindings](endor-git-bindings.md) | 2026-07-15 | 2026-08-14 | Proposed |
 | [ironhorse-snapshot-schema](ironhorse-snapshot-schema.md) | 2026-09-08 | — | Reference |
 | [ironhorse-snapshot-schema-surgery](ironhorse-snapshot-schema-surgery.md) | 2026-09-08 | 2026-09-08 | Reference |
-| [ironhorse-snapshot-schema-gc](ironhorse-snapshot-schema-gc.md) | 2026-09-08 | 2026-09-08 | Proposed |
+| [ironhorse-snapshot-schema-gc](ironhorse-snapshot-schema-gc.md) | 2026-09-08 | 2026-09-23 | Proposed |
 | [ironhorse-snapshot-schema-debugging](ironhorse-snapshot-schema-debugging.md) | 2026-09-08 | 2026-09-08 | Proposed |
-| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-14 | In Progress |
+| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-23 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
 | [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-09-07 | Reference |
 | [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |

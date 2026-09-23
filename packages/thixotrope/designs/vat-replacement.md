@@ -170,7 +170,7 @@ The [SQLite backend](../../../rust/endo/ironhorse-store-sqlite/src/lib.rs) store
 | `small_state` | Encoded sections for names and keys, collections, function metadata and code segments, private elements, generators, promises, and suspended async activations. |
 | `meta` | Encoded manifest with geometry, versions, expected runtime signature, epoch, content root, and commit seal. |
 | `leaf_hashes`, `page_edges`, `free_segs` | Integrity, reachability, and allocation metadata that must agree with the edited state. |
-| `edge_pairs` | Derived page-level adjacency index, rebuilt from `page_edges` at open. |
+| `edge_pairs` | Derived page-level adjacency index, maintained from `page_edges` by each commit; open rebuilds it only when `meta.edge_pairs_epoch` does not name the committed epoch. |
 | `side_tables` | A declared table in the schema; it is not currently a relational function/property interface. The tested heap had no rows here. |
 
 The [slot codec](../../../rust/engine/ironhorse-snapshot/src/slot_codec.rs) uses 20-byte big-endian
@@ -205,7 +205,7 @@ No user heap was edited.
 | Decode slot pages to locate the captured integer | Found one matching integer-payload slot; the original row hash also matched the engine's documented hash formula. |
 | SQL `UPDATE slot_pages` replacing that integer with `40414250`, without changing row length | SQLite integrity check passed; worker restore refused: `store slot page fails its leaf hash`. |
 | Update the edited page's leaf hash as well | SQLite integrity check passed; worker restore refused with `BaselineMismatch` when the recomputed content root differed. |
-| Delete all `edge_pairs` rows on a separate copy | Restore succeeded with the original value; open rebuilt all nine derived edges. This is index repair, not an application upgrade. |
+| Delete all `edge_pairs` rows on a separate copy | Restore succeeded with the original value; open rebuilt all nine derived edges. This is index repair, not an application upgrade. Since [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330) a current build performs this repair only when the `edge_pairs_epoch` marker is missing or stale; on a heap it last checkpointed, the copy would keep its empty index, which the partial and generational collectors would trust, unless the marker were deleted too. |
 
 The probe also confirmed that inspection connections must be closed before the worker takes its
 exclusive SQLite lock.
