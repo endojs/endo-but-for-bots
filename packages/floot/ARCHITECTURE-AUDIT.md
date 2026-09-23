@@ -724,6 +724,28 @@ completed out of order with cache invalidation/reuse. Scoped lint has zero error
 (60 warnings), root docs zero errors (179 warnings), and formatting/diff checks
 pass. Adversarial review approved the private projection and concurrency tests.
 
+Journal-only history cutover (2026-09-24, locally verified, not deployed):
+the current implementation removes Floot's conversation-tree reads and writes,
+leaf cache, and obsolete hosted turn-message converter.
+Model context and UI history now project the private turn journal; thinking,
+mail metadata, tool evidence, checkpoint recovery and usage retain that same
+durable authority.
+An existing `ct-*` name refuses session construction before journal recovery or
+backend startup: retire/export affected sessions, not migrate them implicitly.
+Removing those names manually is not a supported migration or completeness proof.
+Secrets, host, renewal owners and workspace references remain outside retirement.
+Repeated typed receipts hide only the repeated display input, not execution;
+automatic mail retry policy is unchanged pending its separate decision.
+Recovered effects and interrupted reply text with unprovable ordering are marked
+explicitly unordered rather than silently discarded or presented as new effects.
+All 587 Floot tests and four real-daemon journal restart/lifecycle tests pass.
+Scoped lint has zero errors (79 warnings before the final regression addition;
+the final helper/test check has two warnings), root docs zero errors (179 warnings),
+and formatting/diff checks pass. Adversarial re-review approved after the
+interrupted reply evidence fix and receipt continuation regression.
+Bounded context reads, archive indexing and dependency cleanup remain
+open; this deletion alone does not establish bounded recovery memory.
+
 Mail metadata prerequisite (2026-09-24, local, not deployed): dispatch now
 preserves existing `meta.mail` as typed optional `{from, messageNumber}` fields
 in the private journal before receipt-tree writes or inference. At least one

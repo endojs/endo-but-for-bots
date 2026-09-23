@@ -357,7 +357,7 @@ export const makeTurnJournal = powers => {
       };
     } else if (type === 'finish') {
       !record.terminal || Fail`Duplicate terminal turn journal event`;
-      for (const key of ['output', 'error', 'conversationNodeId']) {
+      for (const key of ['output', 'error']) {
         if (event[key] !== undefined) assertText(event[key], textLimit, true);
       }
       for (const key of ['outputRef', 'errorRef']) {
@@ -395,7 +395,6 @@ export const makeTurnJournal = powers => {
           'errorRef',
           'usage',
           'servedBy',
-          'conversationNodeId',
           'backendCheckpoint',
         ]) {
           if (event[key] !== undefined) {
