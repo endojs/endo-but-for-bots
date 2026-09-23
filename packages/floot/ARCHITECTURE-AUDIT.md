@@ -699,6 +699,31 @@ warnings), and root documentation has zero errors (179 warnings).
 Formatting and diff checks pass; adversarial review approved the source, tests
 and scope after the metadata immutability test and type narrowing were corrected.
 
+Thinking presentation prerequisite (2026-09-24, local, not deployed): hosted
+turns publish a finalized, typed thinking snapshot in the same private journal
+before the successful tree mirror/finish or the partial-turn mirror.
+Delivered failed/cancelled turns retain presentation independently of whether
+their backend retains its own transcript. This is settlement-time durability,
+not a claim that every streamed thinking delta survives abrupt process loss.
+The existing preview limits remain 64 blocks and 65,536 total text characters;
+large encoded payloads use the journal's content-before-event references.
+Each block records its identity, timing, truncation and a canonical transcript
+ordinal anchor. Flushing text before a new thinking block and ending thinking
+at tool/compaction boundaries preserves placement without putting reasoning
+into model context. An omitted end time is allowed; neither presentation nor
+transcript sealing asserts successful settlement.
+Exact duplicate publication is idempotent; conflicting snapshots and malformed
+identity, timing, bounds or anchors are refused. Replay, snapshots and archive
+reads validate presentation. No formula, credential owner or second journal is
+introduced. UI history still reads the tree until the planned projection cutover.
+All 575 Floot tests pass, including sparse/malformed payloads, archive/snapshot
+corruption, exact thinking/tool/compaction ordering, before/after-publication
+failures, failed tree writes, and cancellation after the interruption barrier.
+Restored canonical context excludes reasoning in every integration fault case.
+Scoped lint has zero errors (92 warnings); root documentation has zero errors
+(179 warnings). Formatting/diff checks pass. Adversarial re-review approved
+after sparse-array validation and the tool-result thinking boundary were fixed.
+
 ## FA-02 — Model context must not be built from UI previews
 
 Deployment reconciliation (generation 169, 2026-09-23): app `819aa18c8` now
@@ -2972,6 +2997,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Tree-retirement prerequisite: persist bounded typed thinking
+presentation separately from canonical model context, with ordering anchors,
+timing and truncation. 575 Floot tests and lint/docs/format gates pass after
+adversarial review. Settlement-time durability only; UI projection cutover and
+Tokyo deployment remain pending.
 
 2026-09-24 — Tree-retirement prerequisite: journal existing mail sender/receipt
 metadata before tree writes or inference, validating it on replay and saved-state

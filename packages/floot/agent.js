@@ -978,6 +978,26 @@ export const makeStreamingAgent = async (
       }
     }
 
+    /** @param {import('./src/hosted-turn.js').HostedTurnSegment[] | undefined} segments */
+    const recordPresentation = async segments => {
+      const blocks = (segments ?? []).flatMap(segment => {
+        if (segment.type !== 'thinking') return [];
+        return [
+          {
+            id: segment.id,
+            text: segment.text,
+            startedAt: segment.startedAt,
+            ...(segment.endedAt === undefined
+              ? {}
+              : { endedAt: segment.endedAt }),
+            truncated: segment.truncated,
+            beforeTranscriptOrdinal: segment.beforeTranscriptOrdinal,
+          },
+        ];
+      });
+      await turnJournal.recordPresentation(turnId, blocks);
+    };
+
     /**
      * @param {string} replyText
      * @param {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} turnUsage
@@ -995,6 +1015,7 @@ export const makeStreamingAgent = async (
       if (backendCheckpoint !== undefined)
         assertBackendCheckpoint(backendCheckpoint);
       await assertTurnToolsSettled(turnId);
+      await recordPresentation(segments);
       const current = await loadUsage();
       const nextUsage = totalsWithTurn(current, turnUsage);
       // The completed answer always goes on record, even an empty one.
@@ -1068,6 +1089,7 @@ export const makeStreamingAgent = async (
       toolCalls = [],
       segments = undefined,
     ) => {
+      await recordPresentation(segments);
       const messages = [
         ...(receivedMail ? [] : inputMessages),
         ...hostedTurnMessages({ replyText, toolCalls, segments }),
@@ -1106,13 +1128,16 @@ export const makeStreamingAgent = async (
         // refused, stopped before dispatch) is not mirrored: the transcript
         // does not have it either.
         const partial = hostedTurnPartialOf(error);
-        if (retainsDeliveredTurns && partial?.delivered) {
+        if (partial?.delivered) {
           try {
-            await commitDeliveredTurn(
-              partial.finalContent,
-              partial.toolCalls,
-              partial.segments,
-            );
+            await recordPresentation(partial.segments);
+            if (retainsDeliveredTurns) {
+              await commitDeliveredTurn(
+                partial.finalContent,
+                partial.toolCalls,
+                partial.segments,
+              );
+            }
           } catch (commitError) {
             // The turn's own failure is the one to surface; a mirroring
             // failure must not mask it.
@@ -1135,6 +1160,7 @@ export const makeStreamingAgent = async (
       } = hosted;
       activeJournalUsage = turnUsage;
       if (signal?.aborted) {
+        if (delivered) await recordPresentation(hosted.segments);
         if (retainsDeliveredTurns && delivered) {
           // Stopped mid-turn. The backend's transcript retains the prompt and
           // whatever streamed before the kill; mirror that partial turn into

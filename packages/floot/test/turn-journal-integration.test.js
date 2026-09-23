@@ -172,6 +172,132 @@ test('oversized backend token is refused before success tree publication or ackn
   t.is(turn.backendCheckpoint, undefined);
 });
 
+test('cancelled hosted thinking is journaled after the interrupt barrier', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const controller = new AbortController();
+  const stream = makeBufferedReader();
+  let interrupted = false;
+  const hostedClient = harden({
+    async send() {
+      stream.push({ type: 'thinking-delta', text: 'partial reasoning' });
+      return stream.reader;
+    },
+    async interrupt() {
+      interrupted = true;
+      stream.close();
+    },
+  });
+  f.beforeStore(value => {
+    if (value.type === 'presentation') t.true(interrupted);
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  const writer = makeReplyChannel().writer;
+  await agent.converse(
+    'Hello',
+    harden({
+      ...writer,
+      thinking: event => {
+        writer.thinking(event);
+        controller.abort();
+      },
+    }),
+    undefined,
+    controller.signal,
+  );
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { hostedClient },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  const [turn] = await revived.getTurns();
+  t.is(turn.state, 'cancelled');
+  t.like(JSON.parse(turn.presentation.payload)[0], {
+    text: 'partial reasoning',
+    beforeTranscriptOrdinal: '0',
+  });
+  t.false(
+    JSON.stringify(await revived.getTranscript()).includes('partial reasoning'),
+  );
+});
+
+for (const fault of ['none', 'beforeStore', 'afterStore', 'abort', 'tree']) {
+  test(`hosted thinking presentation precedes tree and survives reconstruction: ${fault}`, async t => {
+    const f = fixture();
+    let acknowledges = 0;
+    f.beforeStore(value => {
+      if (value.type === 'presentation' && fault === 'beforeStore')
+        throw Error('Lost presentation');
+      if (
+        value.metadata?.turnId !== undefined &&
+        Array.isArray(value.messages)
+      ) {
+        t.true(f.events().some(event => event.type === 'presentation'));
+        if (fault === 'tree') throw Error('Tree unavailable');
+      }
+    });
+    if (fault === 'afterStore')
+      f.afterStore(value => {
+        if (value.type === 'presentation') throw Error('Lost presentation');
+      });
+    const hostedClient = harden({
+      async send() {
+        const stream = makeBufferedReader();
+        stream.push({ type: 'thinking-delta', text: 'public reasoning' });
+        stream.push(
+          fault === 'abort'
+            ? { type: 'abort', reason: 'provider failed' }
+            : { type: 'end', checkpoint: 'native-turn-1' },
+        );
+        return stream.reader;
+      },
+      async acknowledge() {
+        acknowledges += 1;
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { hostedClient },
+      'Test',
+    );
+    t.teardown(() => agent.shutdown());
+    const result = agent.converse('Hello', makeReplyChannel().writer);
+    if (fault === 'none') await result;
+    else await t.throwsAsync(result);
+    t.is(acknowledges, fault === 'none' ? 1 : 0);
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { hostedClient },
+      'Test',
+    );
+    t.teardown(() => revived.shutdown());
+    const [turn] = await revived.getTurns();
+    t.false(
+      JSON.stringify(await revived.getTranscript()).includes(
+        'public reasoning',
+      ),
+    );
+    if (fault === 'beforeStore') t.is(turn.presentation, undefined);
+    else
+      t.like(JSON.parse(turn.presentation.payload)[0], {
+        text: 'public reasoning',
+        beforeTranscriptOrdinal: '0',
+      });
+  });
+}
+
 for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
   test(`hosted acknowledgement follows checkpoint journal publication: ${fault}`, async t => {
     const f = fixture();
