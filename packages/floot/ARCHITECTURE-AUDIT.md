@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-21 |
-| **Updated** | 2026-09-22 |
+| **Updated** | 2026-09-23 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
@@ -1950,6 +1950,24 @@ their remaining work is not implied complete by this deployment sequence.
    2026-09-22 and deferred by the operator), and remaining bounded-context/compaction
    and resource-failure acceptance.
 
+### Acceptance runner correction — 2026-09-23
+
+Current acceptance-runner correction (2026-09-23, not deployed): the host's
+`run-cutover4-*` scripts now preserve driver exit codes, stop before subsequent
+phases after a failure, and refuse restart after failed seeding or recall after
+failed restart. Hosted acceptance no longer unconditionally runs the
+`verify-cancel` recovery phase after a completed cancellation (that phase
+requires a pending attempt). Raw driver output is retained in the private run
+log; transient script copies are removed on failure without deleting manifests
+or sessions. Four local test methods cover 23 injected phase failures, four
+empty-output successes, eight setup failures, and a failed restart using inert
+host substitutes.
+This changes only the one-shot operator harness, not daemon formula state or
+replay. Live cross-backend and rebind acceptance remain pending; SSH to Tokyo
+timed out before authentication during preparation. Both GitHub branches are
+pushed through app `5b8674613` and host `338d594`; no new Tokyo activation is
+claimed.
+
 ### Cutover progress — 2026-09-21
 
 Caddy ingress was stopped for exclusive maintenance and restored by activation.
@@ -2084,6 +2102,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Acceptance runners preserve driver failures and stop before later phases, restart, or session deletion; remove transient copies even on setup failure | Four local test methods, 36 scenarios; shell syntax checks pass; no daemon-state change; Tokyo acceptance pending connectivity |
 | 2026-09-23 | One binding vocabulary, slices 2 and 3: every hosted plan records `accountRef`, the operator-declared id of the account authority the broker serves (`account-authority.js`; host option `accountAuthority`, required), read by the shared reader; setup writes it into the broker's profile and refuses a retained broker serving another; a pool set carries it as `id`, the catalog snapshot as `authority`, the grant reports it, the controllers ask for it from the plan; the provider-name constants and Codex's `pool` label are gone, Codex's profile `accountRef` is the verified provider account for a single credential only, and the issuer no longer ties the id it reports to the policy's provider account; the provisioner owns the vocabulary (`rootfs` under `image`, `accountRef` under `account`, dependencies under `provider`, Claude's `credentialKind` under `account`), so every descriptor lists `['image', 'account', 'provider']` | hosted-agent 680, Codex 311, Claude 207, OpenCode 255 and the Floot factory suites pass; the shared conformance suite proves the vocabulary on every adapter over the real provisioner and rebinds `account` on Claude and OpenCode; new cases for the authority id on plans, catalogs and the issuer's split, for a profile from before (refused with the way out, all three readers) and for the Codex module's binding to the authority rather than the provider account; lint and formatting clean, the hosted-agent and Claude type checks clean, Codex's source clean with its pre-existing test-file errors; independent adversarial review, whose findings (the retained-broker message, the Codex set written before the retained comparison, the untested Codex binding, three stale documents) are fixed; not deployed (needs the three host values and the brokers retired) |
 | 2026-09-23 | One binding vocabulary, slice 1: `rootfs` is the one image field of every hosted plan, read and pinned by the shared placement reader (`readPinnedRootfs`), so the execution envelope reads the plan's image itself and the three per-adapter image hooks go; every plan reader refuses a field it does not know (each adapter declares its `fields`; the retired-name checks fold in); Codex's plan field `imageRef` is gone; from the review, setup applies the runtime's pinned-reference rule to an operator's own pin too, where the message is read, rather than at every session creation | hosted-agent 678, Codex 310, Claude 205, OpenCode 252 pass; the shared reader's new cases prove the pinned-image spellings and the refusal for the shared and each adapter's reader; lint, formatting and the hosted-agent type check clean; independent adversarial review; not deployed |
 | 2026-09-23 | Design: one binding vocabulary planned for every hosted plan (`image`, `account`, `provider`, with `rootfs` and `accountRef` in every plan, `account` naming the account authority a broker serves, a pool or a single account, by an operator-declared id the catalog, the plan and the grant share, and the credential kind bound under it), recorded in `designs/hosted-agent-sandbox-unification.md`; the grant's account reference is today the provider's name for Claude and OpenCode and the label `pool` for a Codex pool | Design note only; implementation to precede the next deploy and the live rebind cases; closes FA-07's account criterion and FA-08's account item when it lands |
