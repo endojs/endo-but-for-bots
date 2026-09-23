@@ -10,6 +10,8 @@ import { usageCounts } from './helpers/usage.js';
 const fixture = () => {
   const store = new Map();
   let refusedType;
+  let beforeStore;
+  let afterStore;
   const accessedNames = [];
   const nameOf = name => {
     const key = Array.isArray(name) ? name.join('.') : name;
@@ -31,10 +33,12 @@ const fixture = () => {
       return store.get(nameOf(name));
     },
     async storeValue(value, name) {
+      if (beforeStore) await beforeStore(value);
       if (value?.type === refusedType && refusedType)
         throw Error('Storage unavailable');
       if (store.has(nameOf(name))) throw Error('No overwrite');
       store.set(nameOf(name), value);
+      if (afterStore) await afterStore(value);
     },
     async followMessages() {
       return harden({ [Symbol.asyncIterator]: () => harden({}) });
@@ -50,6 +54,12 @@ const fixture = () => {
         .map(([, event]) => event),
     refuse: type => {
       refusedType = type;
+    },
+    beforeStore: hook => {
+      beforeStore = hook;
+    },
+    afterStore: hook => {
+      afterStore = hook;
     },
   };
 };
@@ -84,6 +94,485 @@ const callEffect = () =>
   });
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
+
+test('cancellation during transcript sealing does not commit a successful turn', async t => {
+  const f = fixture();
+  const abort = new AbortController();
+  f.beforeStore(value => {
+    if (value.type === 'transcript-complete') abort.abort();
+  });
+  const provider = harden({
+    async chatStream() {
+      return completed();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse(
+    'Hello',
+    makeReplyChannel().writer,
+    undefined,
+    abort.signal,
+  );
+  const [turn] = await agent.getTurns();
+  t.is(turn.state, 'cancelled');
+  t.true(turn.transcriptComplete);
+  t.is(turn.conversationNodeId, undefined);
+  const before = await agent.getTranscript();
+  t.is(
+    before.filter(
+      record => record.kind === 'message' && record.content === 'Done',
+    ).length,
+    1,
+  );
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), before);
+  t.is((await revived.getTurns())[0].state, 'cancelled');
+});
+
+test('parallel identical calls keep distinct results after partial transcript publication', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let releaseFirst;
+  const first = new Promise(resolve => {
+    releaseFirst = resolve;
+  });
+  t.teardown(() => releaseFirst());
+  f.afterStore(value => {
+    if (value.type === 'tool-result' && value.result === 'Second result')
+      releaseFirst();
+  });
+  let faulted = false;
+  f.beforeStore(value => {
+    if (value.type === 'transcript-record') {
+      const record = JSON.parse(value.payload);
+      if (record.kind === 'tool-result' && record.id === 'second') {
+        faulted = true;
+        throw Error('Lost second transcript result');
+      }
+    }
+  });
+  let effects = 0;
+  let requests = 0;
+  const provider = harden({
+    async chatStream() {
+      requests += 1;
+      return harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: ['first', 'second'].map(id => ({
+            ...callEffect().message.tool_calls[0],
+            id,
+          })),
+        },
+      });
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+    {
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            if (effects === 1) {
+              await first;
+              return 'First result';
+            }
+            return 'Second result';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Run twice', makeReplyChannel().writer), {
+    message: /uncertain storage/,
+  });
+  t.true(faulted);
+  t.is(effects, 2);
+  t.is(requests, 1);
+  t.deepEqual(
+    f
+      .events()
+      .filter(event => event.type === 'tool-result')
+      .map(event => event.result),
+    ['Second result', 'First result'],
+  );
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { provider },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  const transcript = await revived.getTranscript();
+  t.is(transcript.filter(record => record.kind === 'tool-call').length, 2);
+  t.deepEqual(
+    transcript
+      .filter(record => record.kind === 'tool-result')
+      .map(record => [record.id, record.content])
+      .sort(),
+    [
+      ['first', 'First result'],
+      ['second', 'Second result'],
+    ],
+  );
+});
+
+for (const missingId of [false, true]) {
+  test(`direct malformed arguments remain one refused call (missing id ${missingId})`, async t => {
+    const f = fixture();
+    let calls = 0;
+    let effects = 0;
+    const provider = harden({
+      async chatStream() {
+        calls += 1;
+        if (calls !== 1) throw Error('Later provider failure');
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                ...(missingId ? {} : { id: 'malformed' }),
+                type: 'function',
+                function: { name: 'effect', arguments: '{"broken":' },
+              },
+            ],
+          },
+        });
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { provider },
+      'Test',
+      {
+        extraTools: new Map([
+          [
+            'effect',
+            effectTool(async () => {
+              effects += 1;
+              return 'Unexpected';
+            }),
+          ],
+        ]),
+      },
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(agent.converse('Try it', makeReplyChannel().writer), {
+      message: /Later provider/,
+    });
+    const transcript = await agent.getTranscript();
+    const toolCalls = transcript.filter(record => record.kind === 'tool-call');
+    const results = transcript.filter(record => record.kind === 'tool-result');
+    t.is(effects, 0);
+    t.is(toolCalls.length, 1);
+    t.is(results.length, 1);
+    t.is(toolCalls[0].id, missingId ? 'floot-synth-0-0' : 'malformed');
+    t.is(results[0].id, toolCalls[0].id);
+    t.regex(results[0].content, /could not parse/);
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { provider },
+      'Test',
+    );
+    t.teardown(() => revived.shutdown());
+    t.deepEqual(await revived.getTranscript(), transcript);
+  });
+}
+
+for (const phase of ['beforeStore', 'afterStore']) {
+  for (const boundary of ['call', 'result', 'seal', 'tree', 'finish']) {
+    test(`direct ${boundary} ${phase} failure reconstructs its acknowledged prefix`, async t => {
+      t.timeout(5000);
+      const f = fixture();
+      let faulted = false;
+      f[phase](value => {
+        const record =
+          value.type === 'transcript-record'
+            ? JSON.parse(value.payload)
+            : undefined;
+        const matches =
+          boundary === 'call'
+            ? record?.kind === 'tool-call'
+            : boundary === 'result'
+              ? record?.kind === 'tool-result'
+              : boundary === 'seal'
+                ? value.type === 'transcript-complete'
+                : boundary === 'finish'
+                  ? value.type === 'finish'
+                  : value.metadata?.turnId !== undefined &&
+                    Array.isArray(value.messages);
+        if (matches && !faulted) {
+          faulted = true;
+          throw Error('Injected publication failure');
+        }
+      });
+      let effects = 0;
+      let calls = 0;
+      const provider = harden({
+        async chatStream() {
+          calls += 1;
+          return calls === 1 ? callEffect() : completed();
+        },
+      });
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        { provider },
+        'Test',
+        {
+          extraTools: new Map([
+            [
+              'effect',
+              effectTool(async () => {
+                effects += 1;
+                return 'Changed once';
+              }),
+            ],
+          ]),
+        },
+      );
+      t.teardown(() => agent.shutdown());
+      await t.throwsAsync(
+        agent.converse('Change it', makeReplyChannel().writer),
+      );
+      t.true(faulted);
+      t.is(effects, boundary === 'call' ? 0 : 1);
+      await agent.shutdown();
+      const revived = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        { provider },
+        'Test',
+      );
+      t.teardown(() => revived.shutdown());
+      const transcript = await revived.getTranscript();
+      const toolCalls = transcript.filter(
+        record => record.kind === 'tool-call',
+      );
+      const results = transcript.filter(
+        record => record.kind === 'tool-result',
+      );
+      t.is(
+        toolCalls.length,
+        boundary === 'call' && phase === 'beforeStore' ? 0 : 1,
+      );
+      t.is(results.length, boundary === 'call' ? 0 : 1);
+      if (results.length) t.is(results[0].content, 'Changed once');
+      if (['tree', 'finish'].includes(boundary)) {
+        t.is(
+          transcript.filter(
+            record => record.kind === 'message' && record.content === 'Done',
+          ).length,
+          1,
+        );
+        t.true((await revived.getTurns())[0].transcriptComplete);
+      }
+      t.is(calls, boundary === 'call' || boundary === 'result' ? 1 : 2);
+    });
+  }
+}
+
+for (const boundary of ['transcript-record', 'tool-intent']) {
+  test(`direct cancellation during ${boundary} publication refuses effects`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    const abort = new AbortController();
+    let effects = 0;
+    f.beforeStore(value => {
+      if (
+        value.type === boundary &&
+        (boundary !== 'transcript-record' ||
+          JSON.parse(value.payload).kind === 'tool-call')
+      )
+        abort.abort();
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      {
+        provider: harden({
+          async chatStream() {
+            return callEffect();
+          },
+        }),
+      },
+      'Test',
+      {
+        extraTools: new Map([
+          [
+            'effect',
+            effectTool(async () => {
+              effects += 1;
+              return 'Changed';
+            }),
+          ],
+        ]),
+      },
+    );
+    t.teardown(() => agent.shutdown());
+    await agent.converse(
+      'Change it',
+      makeReplyChannel().writer,
+      undefined,
+      abort.signal,
+    );
+    t.is(effects, 0);
+    const [turn] = await agent.getTurns();
+    t.is(turn.state, 'cancelled');
+    t.false(turn.transcriptComplete === true);
+    if (boundary === 'tool-intent') {
+      t.is(turn.tools.length, 1);
+      t.true(turn.tools[0].settled);
+      t.regex(turn.tools[0].result, /aborted/);
+    }
+  });
+}
+
+test('direct dialogue prefix survives a later provider failure and reconstruction', async t => {
+  const f = fixture();
+  let calls = 0;
+  const records = () =>
+    f
+      .events()
+      .filter(event => event.type === 'transcript-record')
+      .map(event => JSON.parse(event.payload));
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provider: harden({
+        async chatStream(_context, _tools, onDelta) {
+          calls += 1;
+          if (calls === 1)
+            return harden({
+              message: {
+                ...callEffect().message,
+                content: 'I will change it once.',
+              },
+            });
+          onDelta('The change succeeded, but');
+          throw Error('Disconnected');
+        },
+      }),
+    },
+    'Test',
+    {
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            t.deepEqual(
+              records().map(record => record.kind),
+              ['message', 'message', 'tool-call'],
+            );
+            return 'Changed once';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Change it', makeReplyChannel().writer), {
+    message: /Disconnected/,
+  });
+  t.deepEqual(
+    records().map(record => record.kind),
+    ['message', 'message', 'tool-call', 'tool-result', 'message'],
+  );
+  t.false(f.events().some(event => event.type === 'transcript-complete'));
+  const before = await agent.getTranscript();
+  await agent.shutdown();
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provider: harden({
+        async chatStream() {
+          return completed();
+        },
+      }),
+    },
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), before);
+  t.true(
+    before.some(
+      record =>
+        record.kind === 'message' &&
+        record.content === 'I will change it once.',
+    ),
+  );
+  t.true(
+    before.some(
+      record =>
+        record.kind === 'message' &&
+        record.content === 'The change succeeded, but',
+    ),
+  );
+  t.is(before.filter(record => record.kind === 'tool-call').length, 1);
+  t.is(before.filter(record => record.kind === 'tool-result').length, 1);
+});
+
+test('direct provider refuses effects when its dialogue cannot be journaled', async t => {
+  const f = fixture();
+  let effects = 0;
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provider: harden({
+        async chatStream() {
+          f.refuse('transcript-record');
+          return callEffect();
+        },
+      }),
+    },
+    'Test',
+    {
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            return 'Changed';
+          }),
+        ],
+      ]),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('Change it', makeReplyChannel().writer), {
+    message: /uncertain storage/,
+  });
+  t.is(effects, 0);
+  t.false(f.events().some(event => event.type === 'tool-intent'));
+});
 
 test('recorded compaction survives reconstruction into direct-provider context', async t => {
   t.timeout(10_000);
@@ -931,7 +1420,7 @@ test('failed intent persistence never dispatches the actual Endo tool', async t 
   t.is(effects, 0);
   t.deepEqual(
     f.events().map(event => event.type),
-    ['dispatch'],
+    ['dispatch', 'transcript-record', 'transcript-record'],
   );
 });
 

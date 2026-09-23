@@ -665,6 +665,44 @@ Explicit compaction/context selection remains open: this converter does not impl
 a compaction policy, and the full-history replay can grow without a context bound.
 The full-content fix is now deployed; bounded context remains open.
 
+Direct-provider journal prerequisite (2026-09-23, local, not deployed):
+Fae's assistant/tool dialogue previously remained in `stagedMessages` until the
+final tree write. A later provider failure could lose earlier assistant prose;
+putting a future summary only there would also lose its context boundary.
+The current implementation uses the existing ordered turn journal for input,
+completed model replies/calls before tool execution, tool results, and the
+acknowledged prefix before the final tree mirror. A rejected provider stream's
+available text is retained as an unsealed prefix, not claimed complete.
+No new formula, journal schema, or automatic summarization policy is introduced.
+Initial full Floot coverage passed 531 tests. Adversarial review then identified
+cancellation during transcript/intent publication as an execution-admission gap;
+new checks refuse execution after cancellation while preserving settled evidence.
+Expanded coverage also verifies malformed arguments and synthetic IDs, identical
+parallel calls settling in reverse order, and failed/lost acknowledgements at
+call, result, seal, tree, and finish publication. Model calls and external tools
+are not replayed during reconstruction. A further review check fences cancellation
+before and after sealing: complete dialogue is not necessarily a successful turn.
+Cancellation before admission of the final tree write leaves a cancelled turn,
+possibly with a complete transcript; once that immutable write is admitted, its
+completion wins the race. No implicit cancellation of already-admitted effects.
+In-memory reconstruction is not real-daemon durability acceptance, and process
+loss during a live stream can still lose its unacknowledged text. Usage whose
+terminal journal write cannot be acknowledged has no new independent durable
+owner in this slice. Real-daemon/live acceptance remains required.
+Final local validation: all 547 Floot tests pass, formatting and diff checks
+pass, scoped ESLint has zero errors (56 warnings), and root documentation has
+zero errors (179 warnings). Independent adversarial review approved the changes
+after both cancellation gaps were fixed and regression-tested.
+
+Next sequence: finish direct-provider ordered durability, then bounded active
+context admission and journal-owned suffix selection, then automatic summaries.
+Checking final request size alone does not bound assembly: `getTranscript()`
+currently hydrates all archive pages before selecting the last compaction.
+Keep full-history APIs separate from bounded model-context reads, and retain
+unresolved execution evidence. Automatic summarization still needs an explicit
+cost/trigger/headroom and unknown-window policy; do not silently truncate history
+or introduce a separate context authority to bypass those decisions.
+
 Recorded-compaction replay correction (2026-09-23, local, not deployed):
 the direct-provider converter ignored canonical compaction records, replaying
 superseded messages and omitting the summary.
@@ -2816,6 +2854,13 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-23 — FA-02 direct-provider ordered transcript durability: journal model
+replies before tools and settled results before continuation, seal before the
+final tree mirror, and fence cancellation at effect and settlement admission.
+547 Floot tests and documentation/lint/format gates pass; adversarial review
+approved. No new schema or formula. Not deployed; real-daemon acceptance and
+bounded context/automatic summaries remain open.
 
 2026-09-23 — FA-07 runtime context plumbing: selected OpenCode route context
 comes from the existing broker catalog at activation; fabricated model limits

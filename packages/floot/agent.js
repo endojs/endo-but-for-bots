@@ -1152,6 +1152,23 @@ export const makeStreamingAgent = async (
     // so getHistory can mark, e.g., turns that arrived via mail rather than the
     // local UI.
     const stagedMessages = receivedMail ? [] : [...inputMessages];
+    // The tree is a completed-turn mirror, not the only copy of a provider
+    // dialogue. Publish the ordered prefix before admitting tool effects.
+    let transcriptOrdinal = 0;
+    /** @param {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} record */
+    const recordProviderTranscript = async record => {
+      await turnJournal.recordTranscript(
+        turnId,
+        `${transcriptOrdinal}`,
+        record,
+      );
+      transcriptOrdinal += 1;
+    };
+    await recordProviderTranscript({
+      kind: 'message',
+      role: 'user',
+      content: text,
+    });
 
     // Agentic loop: stream a reply; if it calls tools, run them, persist the
     // assistant turn plus tool results, and loop again until the model returns a
@@ -1214,6 +1231,13 @@ export const makeStreamingAgent = async (
             },
           );
         } catch (error) {
+          if (streamed !== '') {
+            await recordProviderTranscript({
+              kind: 'message',
+              role: 'assistant',
+              content: streamed,
+            });
+          }
           // The turn's failure reaches the journal and the view, but this log
           // otherwise ends at the round that was asked for and never says
           // what became of it.
@@ -1247,13 +1271,28 @@ export const makeStreamingAgent = async (
           turnUsage = addUsage(turnUsage, roundUsage);
           activeJournalUsage = turnUsage;
         }
-        return harden({
-          message: message || { role: 'assistant', content: streamed },
-        });
+        const reply = message || { role: 'assistant', content: streamed };
+        const recordedReply = {
+          ...reply,
+          ...(Array.isArray(reply.tool_calls)
+            ? {
+                tool_calls: reply.tool_calls.map((call, index) => ({
+                  ...call,
+                  id: call.id || `floot-synth-${round}-${index}`,
+                })),
+              }
+            : {}),
+        };
+        for (const record of projectTranscript([recordedReply])) {
+          await recordProviderTranscript(record);
+        }
+        if (signal?.aborted) throw Error('Floot turn aborted');
+        return harden({ message: recordedReply });
       },
       getToolCalls: message =>
         Array.isArray(message.tool_calls) ? message.tool_calls : [],
       runTools: async (calls, tools, round) => {
+        if (signal?.aborted) throw Error('Floot turn aborted');
         writer.setPhase('using tools');
         const normalizedCalls = calls.map((call, index) => ({
           ...call,
@@ -1282,14 +1321,17 @@ export const makeStreamingAgent = async (
             turnId,
             name,
             args,
-            run:
-              parseError !== undefined
-                ? () => {
-                    throw Error(
-                      `could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`,
-                    );
-                  }
-                : () => tools.execute(name, args),
+            run: () => {
+              // Intent publication can yield across cancellation. Record its
+              // refused outcome without granting the tool execution authority.
+              if (signal?.aborted) throw Error('Floot turn aborted');
+              if (parseError !== undefined) {
+                throw Error(
+                  `could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`,
+                );
+              }
+              return tools.execute(name, args);
+            },
           });
           const resultText =
             'error' in outcome
@@ -1310,6 +1352,14 @@ export const makeStreamingAgent = async (
           };
         };
         const results = await Promise.all(normalizedCalls.map(runOne));
+        for (const result of results) {
+          await recordProviderTranscript({
+            kind: 'tool-result',
+            id: result.tool_call_id,
+            content: result.content,
+          });
+        }
+        if (signal?.aborted) throw Error('Floot turn aborted');
         return harden({ normalizedCalls, results });
       },
       commitStep: async (currentLeafId, message, step) => {
@@ -1336,6 +1386,11 @@ export const makeStreamingAgent = async (
       finalContent =
         "I wasn't able to finish that within my tool-step limit. Could you narrow it down or try again?";
       stagedMessages.push({ role: 'assistant', content: finalContent });
+      await recordProviderTranscript({
+        kind: 'message',
+        role: 'assistant',
+        content: finalContent,
+      });
       console.error(
         `[floot] turn hit maxToolRounds (${maxToolRounds}); sent fallback reply`,
       );
@@ -1354,6 +1409,12 @@ export const makeStreamingAgent = async (
     // Persist the complete answer and accounting in one node. A provider
     // failure leaves no partially answered branch for revival to adopt.
     await assertTurnToolsSettled(turnId);
+    if (signal?.aborted) throw Error('Floot turn aborted');
+    await turnJournal.completeTranscript(turnId, `${transcriptOrdinal}`);
+    // A complete transcript is not yet a successful turn. Cancellation up to
+    // admission of the final tree write still records a cancelled turn; once
+    // that immutable write is admitted, its completion wins the race.
+    if (signal?.aborted) throw Error('Floot turn aborted');
     const committedNode = await tree.addNode(baseLeafId, stagedMessages, {
       turnId,
       usageTotals: totals,
