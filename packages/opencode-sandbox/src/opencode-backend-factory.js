@@ -9,11 +9,10 @@
 // client's reply reader passes through untranslated, and its model list is
 // what the broker's OpenRouter account offers under opencode's route spelling.
 //
-// Continuity is opencode's own persisted session store: every turn resumes
-// the conversation recorded in the state directory, so there is no checkpoint
-// to acknowledge and `acknowledge()` is a no-op. The descriptor says so
-// (`continuity: 'transcript'`) so a consumer can mirror what that store
-// retains — a delivered prompt survives an aborted or failed turn there.
+// Continuity comes from the stack's canonical transcript, restored into a
+// fresh CLI incarnation. OpenCode's own session database is ephemeral, not
+// durable conversation authority. The descriptor declares transcript
+// continuity; it does not promise preservation of an undelivered native turn.
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
@@ -45,7 +44,7 @@ harden(OPENCODE_BACKEND_ID);
  * @param {(sessionId: string) => Promise<void>} powers.stopSession
  *   The owner's stop: fences the facet, awaits the controller's native cleanup
  *   acknowledgement, and retains failure for retry. Durable workspace and
- *   native state survive.
+ *   stack transcript survive; the CLI's ephemeral database does not.
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
  *   The owner's removal: native cleanup, then the recorded storage owner's
  *   deletion, retaining failure and refusing reuse until it succeeds.

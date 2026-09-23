@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 81 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 85 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -97,6 +97,21 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Session-service/Claude mapping (2026-09-24): two skipped OpenCode entries are now
+covered, correcting the prior consecutive-coverage claim without changing its
+previous unique count. Two further Claude changes are mapped as well.
+There are now 85 unique application mappings: newest 15 plus earliest 70,
+verified against all 479 index entries with no gap in those first 70.
+Focused package suites pass 161 tests; two real-daemon regressions also pass
+after correcting a long socket fixture path and obsolete broker configuration.
+The broker fixture now supplies a free-route catalog in an isolated worker,
+rejecting unexpected fetch requests rather than relying on live discovery.
+Original stale-owner refusal, retained dependencies and failed-activation cleanup
+assertions remain intact. This is not live Podman or native crash-recovery proof.
+Stale Claude minting and OpenCode native-store continuity comments were corrected.
+Daemon types pass without incremental output; scoped lint reports no errors,
+formatting and root documentation generation pass. No deployment occurred.
+
 Broker composition/environment/diagnostics mapping (2026-09-24): four additional
 changes have explicit ownership and supersession entries in the ledger.
 Fresh focused sandbox and provider-listener suites pass 95 tests; independent
@@ -114,7 +129,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 66 application changes, plus the first 20 host
+not. The newest 15 and earliest 70 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA

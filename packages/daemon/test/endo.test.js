@@ -1206,7 +1206,7 @@ testNeedsNodeWorker.serial(
   'native sandbox service mints over slot-free null powers and refuses stale revival after restart',
   async t => {
     t.timeout(60_000);
-    const { cancelled, config } = await prepareConfig(t);
+    const { cancelled, config } = await prepareConfig(t, { configName: 'ns' });
     const specifier = new URL(
       '../../sandbox/src/native-agent.js',
       import.meta.url,
@@ -2407,9 +2407,14 @@ testNeedsNodeManager(
       ['opencode-auth.broker-read'],
     );
     await E(host).makeUnconfined(
-      '@node',
+      undefined,
       spec('opencode-sandbox/src/opencode-broker-service-agent.js'),
       {
+        // An isolated worker keeps the real broker formula/specifier while its
+        // catalog read is deterministic and unexpected fetch requests are refused.
+        workerTrustedShims: [
+          new URL('./opencode-catalog-shim.js', import.meta.url).href,
+        ],
         powersName: 'opencode-auth.broker-read',
         resultName: ['opencode-sandbox', 'broker-service'],
         env: {
@@ -2420,12 +2425,17 @@ testNeedsNodeManager(
             imageDigest: digest,
             listenerImageRef: `localhost/listener@${digest}`,
             accountAuthority: 'openrouter-main',
-            models: ['deepseek/deepseek-v4.1-flash'],
           }),
         },
       },
     );
     await E(host).remove('opencode-auth.broker-read');
+    const brokerId = await E(host).identify(
+      'opencode-sandbox',
+      'broker-service',
+    );
+    const brokerFormula = readFormulaFromDb(config.statePath, brokerId);
+    t.not(brokerFormula.worker, await E(host).identify('@node'));
     await E(host).storeValue(null, 'opencode.storage-null-powers');
     await E(host).makeUnconfined(
       '@node',
@@ -2469,7 +2479,11 @@ testNeedsNodeManager(
     const refused = /procfs process identity|Provider grant admission failed/;
     await t.throwsAsync(
       E(backend).create(
-        harden({ sessionId: 'one', networkPolicy: 'off' }),
+        harden({
+          sessionId: 'one',
+          networkPolicy: 'off',
+          model: 'openrouter/openrouter/free',
+        }),
         tools,
       ),
       { message: refused },
@@ -2479,7 +2493,11 @@ testNeedsNodeManager(
     // refused for an unfinished startup.
     await t.throwsAsync(
       E(backend).create(
-        harden({ sessionId: 'one', networkPolicy: 'off' }),
+        harden({
+          sessionId: 'one',
+          networkPolicy: 'off',
+          model: 'openrouter/openrouter/free',
+        }),
         tools,
       ),
       { message: refused },
@@ -2493,6 +2511,7 @@ testNeedsNodeManager(
     const record = await E(host).lookup(recordPath);
     const plan = JSON.parse(await E(record).readText('plan'));
     t.is(plan.sessionId, 'one');
+    t.is(plan.model, 'openrouter/openrouter/free');
     t.is(plan.rootfs, `oci:localhost/opencode@${digest}`);
     t.false(Object.hasOwn(plan, 'nativeProfile'));
     t.is(await E(record).maybeReadText('lifecycle'), 'starting');

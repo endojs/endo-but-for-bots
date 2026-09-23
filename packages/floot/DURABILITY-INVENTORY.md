@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 398 application entries and 73 host entries still need explicit ledger
+The other 394 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -404,6 +404,33 @@ they do not establish native process quiescence or actual power-loss durability.
 | `30219602e` | Validated rootless mount-program settings travel in the passive session plan; shared workspace projection passes them to the session-owned mounter | Current plan and mount-caplet tests cover accepted/refused settings and cancellation/drain. Programs are trusted host configuration, not guest capabilities; injected mount commands do not establish live privileged unmount behavior |
 | `c91c3b8c6` | Shared plan parsing, session-storage removal and native state placement replace adapter copies; recorded plans remain owned by the daemon session owner | Shared tests exercise normalized paths, storage removal and interrupted ownership publication. Later `baecab949` replaces original fixed-directory placement with unique inode-bound allocations; `1366b2e31` removes hosted native-profile parsing and `d2959f834` removes obsolete OpenCode state-provider wiring. Current ownership records are not independent proof of native stop; stable host roots and administrative serialization remain preconditions |
 | `d96ec4e4e` | Lockfile adds only the local @endo/9p-server workspace dependency used by shared plan mount-program validation | No external version change, new formula owner or storage schema. Runtime evidence belongs to the preceding extraction and retained mount-program checks |
+
+### Session service routing and Claude adoption
+
+This pass fills two previously skipped OpenCode entries and maps the next two
+Claude changes. The previous total of 81 unique mappings was correct, but its
+description as the earliest 66 commits was not: `aabd998ba` and `b4767d5aa`
+had been skipped. They are now explicitly covered below.
+Fresh Claude native-controller/session-plan/session-storage-module suites pass
+25 tests; independent broker/backend/setup/runtime-setup suites pass 40.
+Independent OpenCode setup/runtime/plan/storage/backend suites pass 96 tests.
+Two historical daemon regressions initially failed before their target assertions:
+an overlong macOS socket path and a retired broker `models` fixture field.
+The fixture corrections use a short unique configuration name and an isolated
+broker worker with a test-only free-model catalog; no live inference is involved.
+Both corrected daemon cases pass with their original lifecycle assertions intact,
+plus broker-worker isolation and recorded free-route assertions.
+They establish graceful stale-owner refusal and failed-activation cleanup wiring,
+not successful native recovery or live Podman execution.
+Current source comments were corrected where they still described unminted
+Claude services or an authoritative durable OpenCode native conversation store.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `aabd998ba` | Setup mints daemon session services and records exact dependencies; later shared setup helpers retain this ownership boundary | Original OpenCode state-provider wiring was removed; current storage service has null powers and CLI state is ephemeral. Setup mocks do not prove process retirement or native restart |
+| `b4767d5aa` | Hosted provision requests flow through the daemon session owner, with passive plan and storage roles distinct from the native controller | Later shared provisioner and transcript restoration replace original adapter-specific construction and native-store continuity. Current plan/dependency checks are not proof that lost native resources were released |
+| `d1ede212e` | Claude passive plan, native controller, state-provider and storage roles remain; shared supervisor/envelope now own common lifecycle sequencing | 25 tests cover current parser, controller and storage behavior. Native state directories remain but restoration uses the stack's canonical transcript; original hosted native-profile field was removed. Native-effect injection is not daemon-loss recovery or live CLI acceptance |
+| `db53b1040` | Daemon owner retains Claude plan and exact service identities; broker holds credential authority and grants session-scoped inference without handing credentials to the controller | 40 tests cover setup and broker routing. Inline provisioning moved to shared code, profiles were removed, catalog discovery replaced operator model lists, and pools replaced single-account assumptions. Incarnation-local grant/listener cleanup is not stop acknowledgement after process loss; #1323 remains open |
 
 ### Post-snapshot changes
 
