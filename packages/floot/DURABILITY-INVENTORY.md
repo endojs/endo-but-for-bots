@@ -445,16 +445,19 @@ and sandbox/hosted-agent type checks pass. Changed-test lint has no errors and
 seven existing warnings. The initial combined listener/policy run exited nonzero;
 the listener rerun passed all 22 cases and the policy run reported 71 passes.
 No root cause is claimed for that initial nonzero result.
-The attempted generator repair remains uncommitted: independent semantic review
-found missing imported-symbol declarations and illegal recursive aliases that
-parse-only checks missed. Semantic compilation is required before accepting it.
+Independent semantic review of the initial generator repair found missing
+imported-symbol declarations and illegal recursive aliases that parse-only checks
+missed. The repair now preserves recursive interface indirection and declared
+literal property keys, with strict semantic compilation of all generated tool
+surfaces. The full agent-tools suite passes 231 tests; unsupported generic root
+and nonempty interface flattening still fails closed. No durable owner changes.
 
 | Commit | Retained owner / disposition | Evidence and remaining limit |
 |---|---|---|
 | `95bc54880` | Design-index documentation only | Retains explicit outstanding bucket recount; no execution or durability proof |
 | `32ec2be40` | Startup-gate test deadlines only | 13 tests pass with real local shells; observed-output cases use 2 seconds and intentional hangs retain 50 ms. Not live Podman |
 | `6d297f140` | Test teardown recognizes explicitly retained uncertain native cleanup | 43 controlled cleanup tests pass; Podman suite reports 39 passes but native checks return early without Podman. No live acceptance claim |
-| `91287398c` | Closeable stream type intersections and generated tool declarations; no runtime owner | Exo-stream types pass, but current extraction suites have 10 failures at generic CopyArray inheritance. This is an open generator compatibility defect, not successful declaration verification |
+| `91287398c` | Closeable stream type intersections and generated tool declarations; no runtime owner | Exo-stream types pass. Ten current generic-wrapper extraction failures led to a bounded interface/literal-key emitter repair and strict semantic generated-surface checks; full agent-tools suite passes 231 tests. No daemon restart or live tool acceptance claim |
 | `c4bcf2275` | Cached-filesystem snapshot scheduling update | 7 tests pass; existing cache/pipelining assertions remain. No new durable state |
 | `366f2c6e9` | In-slice bridge lint corrections retained amid later changes | 27 bridge tests pass; lint has zero errors and seven warnings. These checks do not establish native process-loss recovery |
 | `f006c749e` | Old client-module transport type annotations | Entire module deleted by `433a21757`; no surviving transport-helper references. Do not credit the obsolete types to the current controller |
@@ -464,6 +467,11 @@ parse-only checks missed. Semantic compilation is required before accepting it.
 
 ### Post-snapshot changes
 
+- Tool declaration generation preserves empty generic auxiliary interfaces and
+  declared literal property identities, retaining recursive interface indirection.
+  Filesystem/Git/HTTP declarations are regenerated. Strict semantic compilation
+  supplements parse/shape tests; unsupported inheritance remains fail-closed.
+  No runtime guard, formula, credential or replay changes.
 - Removed the obsolete direct-credential OpenCode OCI spike and its lint exception,
   retaining clearly labeled historical design evidence. No new replacement path,
   credential access or runtime migration; current brokered acceptance is unchanged.

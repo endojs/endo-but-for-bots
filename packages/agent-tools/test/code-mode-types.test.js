@@ -98,6 +98,55 @@ const assertIRMatchesGuard = (t, ir, guard, label) => {
 const declarationText = declaration =>
   `${declaration.aux}${declaration.aux === '' ? '' : '\n'}${declaration.body}`;
 
+test('generated declarations are semantically self-contained', t => {
+  const declarations = {
+    ...gitDeclarations,
+    ...fsDeclarations,
+    ...httpDeclarations,
+    ...shellDeclarations,
+    ...gitRemoteDeclarations,
+  };
+  const options = {
+    noEmit: true,
+    strict: true,
+    types: [],
+    target: ts.ScriptTarget.ES2022,
+  };
+  const host = ts.createCompilerHost(options);
+  const originalGetSourceFile = host.getSourceFile.bind(host);
+  const sources = new Map(
+    Object.entries(declarations).map(([name, declaration]) => [
+      `/code-mode-${name}.ts`,
+      `export {};\n${declaration.aux}\ndeclare const ${name}: ${declaration.body};`,
+    ]),
+  );
+  host.getSourceFile = (
+    fileName,
+    languageVersion,
+    onError,
+    shouldCreateNewSourceFile,
+  ) => {
+    const text = sources.get(fileName);
+    return text === undefined
+      ? originalGetSourceFile(
+          fileName,
+          languageVersion,
+          onError,
+          shouldCreateNewSourceFile,
+        )
+      : ts.createSourceFile(fileName, text, languageVersion, true);
+  };
+  const program = ts.createProgram([...sources.keys()], options, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  t.deepEqual(
+    diagnostics.map(
+      diagnostic =>
+        `${diagnostic.file?.fileName}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`,
+    ),
+    [],
+  );
+});
+
 /**
  * @param {import('ava').ExecutionContext} t
  * @param {import('../scripts/code-mode-type-extract.js').GlobalTypeIR} ir
@@ -478,7 +527,7 @@ test('filesystem declaration remains available to local seam helpers', t => {
   const { filesystem } = fsDeclarations;
   const text = declarationText(filesystem);
   t.true(filesystem.body.startsWith('{'));
-  t.true(text.includes('type ERef<T> = T | Promise<T>;'));
+  t.true(text.includes('type ERef<T = unknown> = PromiseLike<T> | T;'));
   t.true(text.includes('type Directory = {'));
   t.true(text.includes('lookup:'));
   t.true(text.includes('write:'));

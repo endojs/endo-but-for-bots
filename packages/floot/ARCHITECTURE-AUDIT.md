@@ -101,13 +101,21 @@ Type/fixture/environment mapping (2026-09-24): ten further changes are mapped,
 bringing coverage to 95 unique application entries (newest 15 plus earliest 80).
 Fresh command-environment tests cover object identity and extensibility as well
 as captured values: 22 listener and 71 policy tests pass with controlled effects.
-The current code-mode declaration generator fails ten focused tests because it
-tries to flatten generic CopyArray wrapper inheritance; this remains open until
-a bounded fix and regenerated declarations are verified.
+The code-mode declaration generator initially failed ten focused tests because it
+tried to flatten generic CopyArray wrapper inheritance. The repair preserves empty
+generic auxiliary interfaces through extraction and flattening, rather than
+turning load-bearing recursive indirection into aliases. Root and nonempty generic
+inheritance still refuse unsupported substitution. Declared string/number literal
+constants preserve computed property identities; unknown imported keys fail closed.
 Independent review of the first attempted fix found missing imported-symbol
 declarations and illegal recursive aliases in the generated surfaces; parsing
-alone misses these defects. Require a semantic TypeScript compilation check
-before accepting regenerated tool declarations.
+alone missed these defects. Generated filesystem, Git and HTTP declarations are
+regenerated, and a strict semantic TypeScript program now checks every generated
+tool declaration as a self-contained module. The full agent-tools suite passes
+231 tests; package types, scoped lint and formatting pass. Root documentation
+generation passes with zero errors and 176 warnings.
+This changes generated tool descriptions, not daemon formulas, runtime
+guards, credential ownership, transcript persistence or replay behavior.
 The environment test pass also exposed a sandbox resolver fixture type error:
 preserving literal types and explicitly marking its deliberately invalid writable
 resolver input restores type checking without changing either runtime assertion.
@@ -4085,6 +4093,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Repair generic auxiliary interface extraction and literal computed
+keys in tool declarations; retain recursive interfaces and fail-closed unsupported
+inheritance. Regenerate filesystem/Git/HTTP surfaces and add strict semantic
+compilation coverage after adversarial review caught defects missed by parsing.
+Full agent-tools suite: 231 passed; no runtime authority or persistence change.
 
 2026-09-24 — FA-04: remove obsolete direct-credential OpenCode OCI spike and its
 lint exception after caller tracing and independent review. Full current OpenCode

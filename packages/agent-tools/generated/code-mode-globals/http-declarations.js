@@ -38,19 +38,39 @@ export const httpDeclarations = harden({
     stream: () => HttpPassableBytesReader;
     help: () => string;
 };
-type HttpPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => unknown | undefined;
+type HttpPassable<PC = HttpPassableCap, E = Error> = void | HttpAtom | (HttpCopyArrayInterface<PC, E> | HttpCopyRecordInterface<PC, E> | HttpCopyTaggedInterface<PC, E>) | PC | E;
+type HttpPassStyled<S = unknown, I = unknown> = {
+    "Symbol(passStyle)": S;
+    [Symbol.toStringTag]: I;
 };
-type HttpERef<T> = T | Promise<T>;
+type HttpPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64: (synPromise: HttpERef<HttpStreamNode<HttpPassable, TReadReturn>>) => Promise<HttpStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => HttpPattern | undefined;
+};
+type HttpPassableCap = Promise<any> | HttpRemotableObject | unknown;
+type HttpAtom = undefined | null | boolean | number | bigint | string | Uint8Array | symbol;
+type HttpERef<T = unknown> = PromiseLike<T> | T;
 type HttpStreamNode<Y = undefined, R = undefined> = HttpStreamYieldNode<Y, R> | {
     value: R;
     promise: null;
 };
+type HttpPattern = Exclude<HttpPassable, Error | Promise<any>>;
+type HttpRemotableObject<I = string> = HttpPassStyled<'remotable', I>;
 type HttpStreamYieldNode<Y = unknown, R = undefined> = {
     value: Y;
     promise: Promise<HttpStreamNode<Y, R>>;
-};`,
+};
+type HttpCopyArray<T = any> = readonly T[];
+type HttpCopyRecord<T = any> = Record<string, T>;
+type HttpCopyTagged<Tag = string, Payload = any> = HttpPassStyled<'tagged', Tag> & {
+    payload: Payload;
+};
+interface HttpCopyArrayInterface<PC = unknown, E = unknown> extends HttpCopyArray<HttpPassable<PC, E>> {
+}
+interface HttpCopyRecordInterface<PC = unknown, E = unknown> extends HttpCopyRecord<HttpPassable<PC, E>> {
+}
+interface HttpCopyTaggedInterface<PC = unknown, E = unknown> extends HttpCopyTagged<string, HttpPassable<PC, E>> {
+}`,
     body: `{
     allowedOrigins: () => string[];
     fetch: (url: string, options?: {
