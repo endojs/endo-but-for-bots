@@ -60,8 +60,50 @@ fn page_col(v: i64) -> Result<u32, StoreError> {
 
 /// The `meta` key holding the encoded [`StoreManifest`].
 const META_MANIFEST: &str = "manifest";
+/// The `meta` key attesting that `edge_pairs` mirrors the sealed
+/// `page_edges` rows: its value is the big-endian epoch of the manifest
+/// whose commit last maintained the index. Only commits write it, in
+/// the transaction that maintains the index rows, so a marker naming
+/// the committed epoch means a commit that keeps the marker last
+/// maintained the current rows; open only reads it, and trusts it
+/// without re-deriving the rows. No migration ladder step changes the
+/// epoch or writes `page_edges`, so the marker stays valid across
+/// migration; a step that ever rewrites the summaries must rebuild the
+/// index too. A change to the index's layout must move it to a new
+/// table under a new marker key: each build then rebuilds and trusts
+/// only its own table, so neither build's open rewrites rows the
+/// other's marker attests, and a commit by either moves the epoch past
+/// the other's marker. A build that retires the old table must delete
+/// its marker in the same transaction, or an older build would recreate
+/// the table empty and trust it.
+const META_EDGE_PAIRS_EPOCH: &str = "edge_pairs_epoch";
 /// The `small_state` row name holding the encoded small state.
 const SMALL_NAME: &str = "small";
+
+/// Attest `edge_pairs` for `epoch`. The caller owns the commit
+/// transaction that brought the index rows to that epoch, so the marker
+/// commits (or rolls back) with the rows it vouches for.
+fn write_edge_pairs_epoch(conn: &Connection, epoch: u64) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![META_EDGE_PAIRS_EPOCH, &epoch.to_be_bytes()[..]],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Whether the stored marker attests `edge_pairs` for `epoch`. An absent
+/// marker, one naming another epoch, or one that is not the 8-byte
+/// big-endian blob [`write_edge_pairs_epoch`] writes all read as stale.
+fn edge_pairs_current(conn: &Connection, epoch: u64) -> Result<bool, StoreError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM meta WHERE key = ?1 AND value = ?2)",
+        params![META_EDGE_PAIRS_EPOCH, &epoch.to_be_bytes()[..]],
+        |r| r.get(0),
+    )
+    .map_err(sql_err)
+}
 
 /// The caller owns a transaction so section rows and their manifest are atomic.
 fn write_small_state(conn: &Connection, schema: u32, bytes: &[u8]) -> Result<(), StoreError> {
@@ -277,11 +319,12 @@ impl SqliteHeapStore {
             .map_err(sql_err)?;
         // Enforce the documented single-writer-per-path model instead
         // of assuming it (the collaborator review's finding): under
-        // EXCLUSIVE locking the first connection to touch the file
-        // holds it, so a stray second opener fails closed with
-        // SQLITE_BUSY at its first query (our application_id gate)
-        // rather than silently racing. In-memory databases report
-        // "exclusive" trivially (nothing shares them).
+        // EXCLUSIVE locking a connection never releases a lock it has
+        // taken, and open takes the database's exclusive lock below, so
+        // a stray second opener fails closed with SQLITE_BUSY at its
+        // first query (our application_id gate) rather than silently
+        // racing. In-memory databases report "exclusive" trivially
+        // (nothing shares them).
         let lock_mode: String = conn
             .query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| r.get(0))
             .map_err(sql_err)?;
@@ -302,6 +345,31 @@ impl SqliteHeapStore {
                 "sqlite: journal_mode=WAL refused (got {mode})"
             )));
         }
+        // Take that lock now, explicitly. SQLite acquires it at the
+        // connection's first write transaction (the application_id read
+        // above ran before EXCLUSIVE was set), and opening a current
+        // store writes nothing: its edge index is trusted below, not
+        // rebuilt. An empty IMMEDIATE transaction takes the lock without
+        // writing a page, and EXCLUSIVE keeps it until close. The
+        // per-open edge rebuild used to take it as a side effect; with
+        // neither, a second connection could open, read, and write a
+        // store this one had just opened.
+        //
+        // A read-only database (a write-protected file, or a `mode=ro`
+        // URI) cannot take it: SQLite runs BEGIN IMMEDIATE there as a
+        // plain read transaction, with no lock and no error. Such a store
+        // could never commit either, so refuse it here, as the rebuild's
+        // write used to, rather than at its first checkpoint.
+        if conn
+            .is_readonly(rusqlite::DatabaseName::Main)
+            .map_err(sql_err)?
+        {
+            return Err(StoreError::Io(
+                "sqlite: refusing read-only database (open must lock it for writing)".to_string(),
+            ));
+        }
+        conn.execute_batch("BEGIN IMMEDIATE; COMMIT;")
+            .map_err(sql_err)?;
         conn.execute_batch("PRAGMA wal_autocheckpoint = 1000")
             .map_err(sql_err)?;
         // Pin durability explicitly rather than riding the build-time
@@ -372,7 +440,10 @@ impl SqliteHeapStore {
              -- Normalized page-edge pairs (the query-driven GC layer,
              -- store seam phase 10): one row per (target, page) edge,
              -- DERIVED from page_edges — never sealed, rebuildable —
-             -- maintained in the same commit transaction. The primary
+             -- maintained in the same commit transaction. Open trusts
+             -- it while meta.edge_pairs_epoch names the committed
+             -- epoch, so an edit here that leaves that marker in place
+             -- is trusted by the collectors that read it. The primary
              -- key answers \"which pages reference target?\" (the
              -- reverse index no blob encoding can); the page index
              -- answers forward adjacency, which is what lets
@@ -388,23 +459,33 @@ impl SqliteHeapStore {
         )
         .map_err(sql_err)?;
         // Fail closed on an unsupported schema BEFORE the derived-table
-        // rebuild below writes anything: a store this build cannot use —
-        // too new to decode, or too old to migrate — must be refused
-        // with its bytes untouched, not clobbered by `rebuild_edge_pairs`
-        // (a committed DELETE+INSERT) and only THEN refused (review wave
-        // 4, F1). A supported-old store (migratable) and the current
-        // schema both pass; the DDL above is content-neutral
-        // (CREATE ... IF NOT EXISTS never drops a row) so it may precede
-        // this read, but the rebuild may not. A fresh (unstamped) store
-        // has no manifest and reads as `None`.
+        // rebuild below can write anything: a store this build cannot
+        // use — too new to decode, or too old to migrate — must be
+        // refused with its bytes untouched, not clobbered by
+        // `rebuild_edge_pairs` (a committed DELETE+INSERT) and only THEN
+        // refused (review wave 4, F1). A supported-old store (migratable)
+        // and the current schema both pass; the DDL above is
+        // content-neutral (CREATE ... IF NOT EXISTS never drops a row) so
+        // it may precede this read, but the rebuild may not. A fresh
+        // (unstamped) store has no manifest and reads as `None`.
         //
         // The DECODE is the gate: `StoreManifest::decode` already refuses
         // any schema outside [MIN_SUPPORTED, VERSION]. What this call
         // site contributes is its POSITION, so the explicit range check
         // that used to stand here was unreachable and is gone (review
         // wave 5).
-        let _ = Self::stored_manifest(&conn)?;
-        Self::rebuild_edge_pairs(&conn)?;
+        let manifest = Self::stored_manifest(&conn)?;
+        // Trust the edge index the file attests for its committed epoch
+        // (issue #1330): opening such a store reads one marker and
+        // rewrites nothing. Only a store whose current rows no
+        // marker-keeping commit wrote is rebuilt. A fresh store has
+        // nothing to rebuild; its first commit writes every page's pairs
+        // and the marker.
+        if let Some(m) = &manifest {
+            if !edge_pairs_current(&conn, m.epoch)? {
+                Self::rebuild_edge_pairs(&conn)?;
+            }
+        }
         // Open does NOT migrate. A supported-old store opens as-is and
         // the caller upgrades it with `migrate_store`, which gates the
         // restamp on the callback-table signature this connection has no
@@ -416,19 +497,40 @@ impl SqliteHeapStore {
         })
     }
 
-    /// Rebuild `edge_pairs` from the sealed `page_edges` rows,
-    /// UNCONDITIONALLY, at every open. The derived index is
-    /// decision-critical (the CTE collector reads only it) yet sits
-    /// outside the integrity root by design, so open never TRUSTS it:
-    /// any at-rest divergence — a store from before the table existed,
-    /// a wiped index, or a count-preserving content edit no cheap gate
-    /// can see (the review's finding: an earlier version rebuilt only
-    /// when cardinalities disagreed, which a moved pair defeats) — is
-    /// erased here, and between opens the EXCLUSIVE locking mode keeps
-    /// other writers out while our own commits maintain the index
-    /// transactionally. Cost is one pass over metadata-scale rows,
-    /// the same order as the dense summary read `validate_store`
-    /// already performs at resume.
+    /// Rebuild `edge_pairs` from the sealed `page_edges` rows. Open runs
+    /// this only when the store does not attest its index for the
+    /// committed epoch (see [`META_EDGE_PAIRS_EPOCH`]): a store from
+    /// before the table or the marker existed, or one last committed by
+    /// a build that does not keep the marker. A crash mid-rebuild, or
+    /// between creating the table and filling it, leaves the marker as
+    /// stale as it found it, so the next open rebuilds again.
+    ///
+    /// The rebuild leaves the marker alone. Only a commit, the store's
+    /// authorized write, attests the index, so open leaves a store it may
+    /// yet refuse (an incompatible boot layout or signature is found only
+    /// later, by the caller's `migrate_store` or `validate_store`) exactly
+    /// as every open used to: rebuilding an index that already mirrors
+    /// its summaries rewrites the same rows. A stale store therefore
+    /// rebuilds at each open until its first commit under this build
+    /// attests the index.
+    ///
+    /// A store whose marker is current is trusted instead, by decision
+    /// (issue #1330): the heap database is daemon-private state, the
+    /// same trust class as `endo.sqlite`, so the derived index alone goes
+    /// unverified rather than cost an O(edges) write transaction on every
+    /// open. While the store is open, the EXCLUSIVE locking mode keeps
+    /// other SQLite writers out as our own commits maintain the index and
+    /// its marker transactionally. This narrows the partial-tampering
+    /// defense the sealed root gives every other row class: an at-rest
+    /// edit that drops or moves a pair, leaving the marker in place, can
+    /// make the partial and generational collectors free live objects,
+    /// and the next checkpoint seals the result as a valid epoch. So can
+    /// damage SQLite itself cannot see, such as storage that ignores
+    /// write ordering on power loss, and a bug in commit-time index
+    /// maintenance now persists across reopens instead of being repaired
+    /// by the next one. Deleting the marker from a closed store forces
+    /// the next open to rebuild. The sealed rows, `page_edges` included,
+    /// keep their tamper-evidence.
     fn rebuild_edge_pairs(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(sql_err)?;
         tx.execute("DELETE FROM edge_pairs", []).map_err(sql_err)?;
@@ -583,6 +685,10 @@ impl HeapStore for SqliteHeapStore {
         // Migration runs at init, before any commit could have built
         // the ledger cache — but a restamped manifest invalidates one
         // by definition, so drop it rather than depend on ordering.
+        // The edge marker, by contrast, stays valid: no ladder step
+        // changes the epoch or writes `page_edges`. A step that rewrote
+        // the summaries would have to rebuild `edge_pairs` in its own
+        // transaction, or the next commit would attest a stale index.
         self.root_cache = None;
         self.conn
             .execute(
@@ -602,6 +708,7 @@ impl HeapStore for SqliteHeapStore {
         // The small-rewriting ladder step (6→7). One transaction: a
         // v7-stamped manifest must never be observable beside a v6
         // small — the pair recombines to the new root only together.
+        // The edge marker stays valid, as for the manifest-only restamp.
         self.root_cache = None;
         let tx = self.conn.transaction().map_err(sql_err)?;
         write_small_state(&tx, manifest.store_schema, small)?;
@@ -1264,6 +1371,10 @@ impl HeapStore for SqliteHeapStore {
                     params![pages as i64],
                 )
                 .map_err(sql_err)?;
+                // The pairs now mirror this batch's summaries: attest
+                // them for the epoch this transaction commits, so the
+                // next open trusts the index instead of rebuilding it.
+                write_edge_pairs_epoch(&tx, batch.manifest.epoch)?;
             }
 
             if stored.is_none() {
@@ -1773,6 +1884,12 @@ mod tests {
         }
         validate_store(&store, &sig()).expect("the previous epoch still validates");
         drop(resume_from_store(&store, &sig()).expect("the previous epoch still resumes"));
+        // The edge marker was rewritten inside the aborted transaction
+        // too; it must roll back with the pairs it would have attested.
+        assert!(
+            edge_pairs_current(&store.conn, prior.epoch).unwrap(),
+            "the edge marker still attests the previous epoch"
+        );
 
         store
             .conn
@@ -1783,9 +1900,54 @@ mod tests {
             .expect("the honest retry succeeds through the cold path");
         assert_eq!(store.manifest().unwrap().epoch, 2);
         assert!(
+            edge_pairs_current(&store.conn, 2).unwrap(),
+            "the durable retry attests its own epoch"
+        );
+        assert!(
             store.root_cache.is_some(),
             "the durable retry re-arms the cache"
         );
+    }
+
+    /// The edge marker is compared as the exact 8-byte big-endian
+    /// epoch: anything else a foreign hand could leave in the row — a
+    /// SQL integer holding the right number, a truncated blob — reads as
+    /// stale, so open rebuilds rather than trusting it.
+    #[test]
+    fn edge_marker_other_than_the_encoded_epoch_reads_as_stale() {
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        assert!(
+            !edge_pairs_current(&store.conn, 1).unwrap(),
+            "a fresh store attests nothing"
+        );
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
+        assert!(edge_pairs_current(&store.conn, 1).unwrap());
+        assert!(!edge_pairs_current(&store.conn, 2).unwrap());
+        for (what, value) in [
+            ("integer", rusqlite::types::Value::Integer(1)),
+            ("short blob", rusqlite::types::Value::Blob(vec![1])),
+            (
+                "little-endian blob",
+                rusqlite::types::Value::Blob(1u64.to_le_bytes().to_vec()),
+            ),
+        ] {
+            store
+                .conn
+                .execute(
+                    "UPDATE meta SET value = ?1 WHERE key = ?2",
+                    params![value, META_EDGE_PAIRS_EPOCH],
+                )
+                .unwrap();
+            assert!(
+                !edge_pairs_current(&store.conn, 1).unwrap(),
+                "{what} marker reads as stale"
+            );
+        }
     }
 
     #[test]
@@ -2077,7 +2239,9 @@ mod tests {
     /// canary `edge_pairs` row — not derivable from any `page_edges`
     /// summary, so a rebuild would delete it and never restore it —
     /// survives the refused open, proving the derived-table rebuild did
-    /// not run.
+    /// not run. The edge marker is deleted too, so the index is stale
+    /// and only the gate's position keeps the rebuild from running: an
+    /// attested index would survive any open, refused or not.
     #[test]
     fn unsupported_schema_refused_before_rebuild_touches_rows() {
         let dir = tmp_dir("unsupported-schema");
@@ -2122,6 +2286,17 @@ mod tests {
                 params![manifest.encode(), META_MANIFEST],
             )
             .unwrap();
+        assert_eq!(
+            store
+                .conn
+                .execute(
+                    "DELETE FROM meta WHERE key = ?1",
+                    params![META_EDGE_PAIRS_EPOCH],
+                )
+                .unwrap(),
+            1,
+            "the committed store carried an edge marker to delete"
+        );
         store.close().unwrap();
 
         // Reopen: the schema gate refuses before the rebuild.
