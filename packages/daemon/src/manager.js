@@ -5388,30 +5388,6 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulates a `directory` formula backed by an existing pet-store.
-   *
-   * @param {FormulaIdentifier} storeId - The existing store formula ID.
-   * @returns {FormulateResult<EndoDirectory>}
-   */
-  const formulateDirectoryForStore = async storeId => {
-    return /** @type {FormulateResult<EndoDirectory>} */ (
-      withFormulaGraphLock(async () => {
-        const formulaNumber = /** @type {FormulaNumber} */ (
-          await randomHex256()
-        );
-        /** @type {DirectoryFormula} */
-        const formula = {
-          type: 'directory',
-          petStore: storeId,
-        };
-        const result = await formulate(formulaNumber, formula);
-        pinTransient(result.id);
-        return result;
-      })
-    );
-  };
-
-  /**
    * Formulates a `worker` formula and synchronously adds it to the formula graph.
    * The returned promise is resolved after the formula is persisted.
    *
@@ -7491,7 +7467,6 @@ const makeDaemonCore = async (
     formulateGitCredential,
     formulateGitRemote,
     formulateInvitation,
-    formulateDirectoryForStore,
     getPeerIdForNodeIdentifier,
     getAllNetworkAddresses,
     getAllContentSources,

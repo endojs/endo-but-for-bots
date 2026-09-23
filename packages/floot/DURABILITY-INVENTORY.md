@@ -390,6 +390,11 @@ are injected and do not establish live Linux or Tokyo behavior.
 
 ### Post-snapshot changes
 
+- Removed unused `formulateDirectoryForStore` and its internal type/host wiring
+  after whole-repository caller and facet tracing; active directory construction
+  and replay are unchanged. The 55 construction/directory/marshal tests, daemon
+  types, changed-file formatting/lint and root docs pass; stale generated
+  declaration handling and warning counts are recorded in the main audit.
 - Application `12d79432a`, `19315967e`, `8ea9466d5`: guest and nested-directory
   construction reserve identities before writes, drain publication and release
   pins on failure. The current 44-case fault matrix passes; details and limits

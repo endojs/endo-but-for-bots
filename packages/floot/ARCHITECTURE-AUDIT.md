@@ -241,8 +241,25 @@ guest and settle the injected failed guest worker cancellation.
 Adjacent directory and marshal suites, daemon typechecking and formatting pass;
 changed-file lint reports no errors. Adversarial source and test review passed.
 These are actual persistence/in-process daemon tests with injected worker control,
-not native termination or crash-recovery proof. `formulateDirectoryForStore`,
-agent-key retirement and failed collection retry ownership remain separate checks.
+not native termination or crash-recovery proof.
+Agent-key retirement and failed collection retry ownership remain separate checks.
+
+Unused constructor removal (2026-09-24): `formulateDirectoryForStore` had no
+callers, no host facet exposure, and only unused manager-to-host plumbing.
+Removed its implementation, internal type member and host argument instead of
+adding uncertain-write rollback to dead code.
+The active `formulateDirectory` constructor and persisted directory interpreter
+are unchanged; no state migration or retained-directory retirement is needed.
+The 55 construction-cleanup/directory/marshal-publication tests pass, including
+the real-daemon graceful publication restart test.
+Daemon typechecking passes after moving a verified ignored stale `host.d.ts`
+out of source resolution; a declaration rebuild had first hit TS5055 on existing
+generated inputs. The recoverable copy is in
+`/private/tmp/endo-host-declaration.KZOzBU/host.d.ts`.
+Changed-file ESLint reports zero errors (80 warnings including the ignored type
+file); formatting and root documentation generation pass (176 documentation
+warnings). This removes one unused construction path, not the remaining key
+retirement or failed collection retry defects.
 
 Agent identity-key retention — reproduced, unresolved (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
