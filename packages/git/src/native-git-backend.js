@@ -2343,9 +2343,7 @@ export const makeNativeGitBackend = ({
               if (bytes.length > 0) yield bytes;
             })()
           ),
-        ).stream(
-          /** @type {any} */ (synPromise),
-        );
+        ).stream(/** @type {any} */ (synPromise));
       },
 
       async text() {
