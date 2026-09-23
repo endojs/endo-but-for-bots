@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 408 application entries and 73 host entries still need explicit ledger
+The other 404 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -356,6 +356,22 @@ tests and 57 hosted-agent provider-grant-issuer/provider-listener-runtime tests.
 | `c7a741462` | Runtime exposes per-session native factory scopes over one driver/storage owner; failed scope close retains lookup and successful close removes only that exact owner | Tests cover late acquisition, sibling progress, shared allocation budget and failed operator shutdown. Shared copy-data checks reject imported authority in native inputs; ephemeral scope lookup is not a durable recovery ledger |
 | `6ec0c08ac` | Provider scopes are inert until start and retain issue kits before acquisition; revoke drains observations and shared opening without owning operator shutdown | 12 tests cover failed cleanup, replacement, stale handles, sibling use and catalog read fencing. Supervisor must serialize replacement; hung admitted calls can block cleanup and absence after service loss is not release proof |
 | `ec7929c92` | Native service constructor accepts null powers only; explicit-path host-only factory avoids importing daemon scratch authority | Tests reject non-null powers/imported capabilities and preserve cancellation through pending powers. Current owned-agent uses refusing makeNoHostScratch authority rather than granting a host provider; null construction does not make trusted host paths guest-safe |
+
+### Broker composition, host environment and diagnostics
+
+Four further changes are traced to current shared service/runtime implementations.
+Fresh sandbox podman-host-environment/podman-policy suites pass 73 tests and
+hosted-agent provider-listener-runtime passes 22.
+Independent OpenCode opencode-broker-service/opencode-broker-service-agent suites
+pass 15 tests; the service test exercises the shared kit after wrapper removal.
+These are local and injected-process checks, not live Podman or daemon-loss recovery.
+
+| Commit | Retained owner / boundary | Evidence and remaining limit |
+|---|---|---|
+| `712db8fd0` | Shared provider-broker-service composes retained per-session scopes, issuer and runtime; obsolete OpenCode wrapper removed by `8aa1edc99` | Tests cover inert construction, isolated revocation, cancelled/late acquisition and failed scope/operator cleanup. Scope maps and callbacks are ephemeral; formula-backed configuration does not reconstruct lost native resources |
+| `cf9fdce82` | Broker agent uses makeOwnedNativeService to retain an inert service kit before opening; configuration comes from the formula environment and credential capabilities arrive through formula powers | Tests cover cancellation during powers acquisition, failed predecessor cleanup, duplicate live owners and replacement. Module owner registry is incarnation-local; independent workers require separate native exclusion. Later account-pool/catalog behavior is not attributed to this commit |
+| `ae19ef2f9` | Podman driver/listener capture trusted operator engine environment once and reuse it for startup and cleanup; guest environment remains separate | Environment/policy/runtime tests verify restricted inheritance and local-engine controls. Later `dd705e037` supplies fresh copies to child processes. Operator configuration/default credential files remain trusted authority; allowlisting is not complete isolation or durable process ownership |
+| `9a487b956` | Provider runtime drains stderr without giving log volume authority to close the inference pipe; diagnostics are optional observations | Runtime tests exercise repeated oversized chunks with diagnostics on/off. Later `96b32da43` replaces the original lifetime diagnostic ceiling with a copied 4096-byte prefix per chunk. No total log-volume bound, durable diagnostic journal or process-loss recovery is implied |
 
 ### Post-snapshot changes
 

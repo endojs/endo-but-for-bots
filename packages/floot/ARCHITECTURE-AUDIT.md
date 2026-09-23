@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 71 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 75 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -97,6 +97,14 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Retrospective durability audit — required, in progress
 
+Broker composition/environment/diagnostics mapping (2026-09-24): four additional
+changes have explicit ownership and supersession entries in the ledger.
+Fresh focused sandbox and provider-listener suites pass 95 tests; independent
+OpenCode broker-service and broker-agent suites pass 15.
+Captured engine environment retains trusted operator configuration authority;
+stderr diagnostics are bounded per chunk, not over the listener lifetime.
+Live-owner cleanup tests do not establish daemon-loss recovery or durable logs.
+
 The inventory starts at the unified-sandbox design commit `3332f1928` and
 includes the current branch plus associated endo-host implementation changes.
 Earlier infrastructure still used by the refactor remains in scope; this seed
@@ -106,7 +114,7 @@ all 479 commits in `3332f1928..a3a239f80` and all 93 associated host commits in
 `73405ca..5959fbf` (excluding the seeds). It includes upstream changes and reverts,
 with conservative path-based triage rather than an assumption of relevance or
 correctness. Enumeration is complete for those exact ranges; semantic review is
-not. The newest 15 and earliest 56 application changes, plus the first 20 host
+not. The newest 15 and earliest 60 application changes, plus the first 20 host
 changes, have individual owner/evidence/limitation entries based on source and
 test-diff review; other entries still need mapping to
 the evidence recorded here. Independent Git verification found exact unique SHA
