@@ -221,6 +221,15 @@ and retained old-facet/source checks. Scoped lint has no errors.
 This proves the tested formula-incarnation boundary, not cross-formula
 same-namespace exclusion or process-loss observer reclamation.
 An incarnation-local registry does not establish cross-worker exclusion.
+Revalidated the three real-daemon factory-disposal cases on 2026-09-23.
+The late-native fixture still exposed removed `listModels`, so current model
+admission failed before backend creation and the gate wait timed out.
+Updated it to `modelCatalog` and made the gate wait propagate early creation
+failure instead of hiding it behind the timeout. All three cases now pass:
+admitted write drain, lost-write-acknowledgement fencing, and late backend admin
+termination before failed disposal settles. The late-native case deliberately
+uses fake guests to isolate factory disposal; it does not prove real guest-GC
+deletion safety. No production behavior or persisted format changed.
 Pooled member retirement now has a module-local admission/drain owner.
 Removal fences retained account/model/reset/credential access, closes only that
 member's inference transports and wrapped endpoints/status reader, drains
@@ -2332,6 +2341,7 @@ New abstractions should serve the remaining current topology, not preserve both 
 
 | Date | Change | Verification / deployment |
 |---|---|---|
+| 2026-09-23 | Repair stale factory-disposal test backend after model catalog refactor | Reproduced late-native admission failure/timeout; current catalog and fail-fast gate restore all three lifecycle tests. Fake guest boundary explicit; no production change |
 | 2026-09-23 | Verify terminal journal retirement across real daemon restarts; identify guest-GC/factory termination conflict | Four restart cases pass with persisted-registry assertions and a second cold start; acknowledgement faults isolated with GC off, real-GC interruption/recovery tested separately. Smooth GC-enabled deletion and shared-session impact remain pre-merge review items; no production semantic change or Tokyo deployment |
 | 2026-09-23 | Add terminal private-journal namespace retirement after durable intent, writer drain and backend cleanup; fence delayed observation from rebuilding during deletion | Exact namespace/schema validation, uncertain-removal retry and factory reconstruction regressions; no generic-cleanup deletion; real-daemon evidence added above, Tokyo verification pending |
 | 2026-09-23 | Retrospective durability audit: include partial pool-member construction in existing core rollback, releasing unused cleanup handles if a later member fails | Direct/wrapped regressions; no credential use or persistent state; normal member ownership preserved; not deployed |

@@ -27,17 +27,26 @@ export const make = host => {
         continuity: 'explicit',
         toolOwnership: 'endo',
       }),
-    listModels: () =>
-      harden([
-        {
-          id: 'm',
-          title: 'Model',
-          description: '',
-          default: true,
-          defaultReasoningEffort: null,
-          reasoningEfforts: [],
-        },
-      ]),
+    modelCatalog: () =>
+      harden({
+        accounts: [
+          {
+            subscriptionId: 'default',
+            state: 'current',
+            observedAt: 1,
+            models: [
+              {
+                id: 'm',
+                title: 'Model',
+                description: '',
+                default: true,
+                defaultReasoningEffort: null,
+                reasoningEfforts: [],
+              },
+            ],
+          },
+        ],
+      }),
     create: async () => {
       entered();
       await gate;
@@ -75,6 +84,8 @@ export const make = host => {
     copy: (...args) => E(host).copy(...args),
     provideGuest: (...args) => {
       if (!nativeEnabled) return E(host).provideGuest(...args);
+      // Isolate late backend acquisition/disposal from guest collection's
+      // worker termination, exercised by floot-journal-retirement.test.js.
       const { agentName } = args[1];
       if (guests.has(agentName)) return undefined;
       const store = new Map([['user', harden({})]]);
