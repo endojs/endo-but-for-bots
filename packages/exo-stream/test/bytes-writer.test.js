@@ -1,8 +1,10 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { fc } from '@fast-check/ava';
 import { makePromiseKit } from '@endo/promise-kit';
 import { Far } from '@endo/pass-style';
 import { setTimeout as delay } from 'node:timers/promises';
+import assert from 'node:assert/strict';
 
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makePipe } from '@endo/stream';
@@ -434,4 +436,70 @@ test('bytes writer responder rejects a data frame over byteLengthLimit', async t
     writerRef.stream(/** @type {any} */ (Promise.resolve(synHead))),
   );
   t.deepEqual(received, []);
+});
+
+// Boundary cases for the responder-side `byteLengthLimit` guard, driven end to
+// end through `iterateBytesWriter` so each frame crosses the same
+// freeze/validate/thaw path a remote initiator's would.
+
+test('bytes writer admits a frame of exactly byteLengthLimit bytes', async t => {
+  const received = [];
+  const writerRef = bytesWriterFromIterator(makeRecordingSink(received), {
+    byteLengthLimit: 4,
+  });
+  const writer = iterateBytesWriter(writerRef);
+  await writer.next(new Uint8Array([1, 2, 3, 4]));
+  await writer.return();
+  t.is(received.length, 1);
+  t.deepEqual([...received[0]], [1, 2, 3, 4]);
+});
+
+test('bytes writer rejects a frame one byte over byteLengthLimit', async t => {
+  const received = [];
+  const writerRef = bytesWriterFromIterator(makeRecordingSink(received), {
+    byteLengthLimit: 4,
+  });
+  const writer = iterateBytesWriter(writerRef);
+  await t.throwsAsync(() => writer.next(new Uint8Array([1, 2, 3, 4, 5])));
+  t.deepEqual(received, []);
+});
+
+test('bytes writer delivers a zero-length frame end to end', async t => {
+  const received = [];
+  const writerRef = bytesWriterFromIterator(makeRecordingSink(received), {
+    byteLengthLimit: 0,
+  });
+  const writer = iterateBytesWriter(writerRef);
+  await writer.next(new Uint8Array(0));
+  await writer.return();
+  t.is(received.length, 1);
+  t.true(received[0] instanceof Uint8Array);
+  t.is(received[0].length, 0);
+});
+
+test('bytes writer round-trip preserves arbitrary chunk sequences', async t => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(fc.uint8Array({ minLength: 0, maxLength: 64 }), {
+        minLength: 0,
+        maxLength: 16,
+      }),
+      async chunks => {
+        const received = [];
+        const writerRef = bytesWriterFromIterator(makeRecordingSink(received), {
+          byteLengthLimit: 64,
+        });
+        const writer = iterateBytesWriter(writerRef);
+        await writeAll(writer, chunks);
+        // A frame-for-frame, byte-for-byte round-trip.
+        assert.equal(received.length, chunks.length);
+        for (let i = 0; i < chunks.length; i += 1) {
+          assert.ok(received[i] instanceof Uint8Array);
+          assert.deepEqual([...received[i]], [...chunks[i]]);
+        }
+      },
+    ),
+    { numRuns: 200 },
+  );
+  t.pass();
 });
