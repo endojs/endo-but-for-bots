@@ -372,9 +372,17 @@ the ceilings before allocating.
   The slot arena has the same wall, and where it falls depends on the arena's capacity history,
   which no snapshot records: a fresh wasm32 arena stops at 2^26 slots and a restored one at
   59,244,544, so two wasm32 replicas can disagree.
-  Under `consensus`, `set_chunk_ceiling` and `set_slot_ceiling` should refuse values that every
-  target can honor whatever the history: at most 2^30 bytes of chunks and 44,739,242 slots
-  (`floor((2^31 - 1) / 48)`).
+  Under `consensus`, `set_chunk_ceiling` and `set_slot_ceiling` should refuse any value that
+  some target cannot honor, whatever the history.
+  The `isize::MAX` wall alone allows at most 2^30 bytes of chunks and 44,739,242 slots
+  (`floor((2^31 - 1) / 48)`), but wasm32's 4 GiB address space binds sooner.
+  At a 2^30 chunk ceiling, B8's doubling program halts natively and traps on wasm32 when
+  `units_to_be16` cannot allocate 1 GiB.
+  At 2^29 both targets halt identically, but with the slot ceiling at 44,739,242, 44,000,000
+  kept objects take 3.23 GB of wasm32 linear memory, and the same doubling after them traps on
+  wasm32 again.
+  The two caps must be chosen together, so that both arenas' worst-case footprint (B8) fits in
+  4 GiB.
 - **`json_escape_string` (`natives/json.rs:81`)** sizes its output in `usize`, but no guest can
   build a large enough string on wasm32 today.
 - **The host floating-point environment.**
@@ -562,7 +570,7 @@ Measured:
 
 - Doubling a 1M-unit string (`var s='x'.repeat(1<<20); for(;;) s=s+s;`) until it reaches the
   256 MiB chunk ceiling left Wasmtime's linear memory at 18,516 pages (1.21 GB), and native
-  peak memory (RSS) at 1.03 GB.
+  peak memory (RSS) at 1.08 GB.
   Doubling from `'a'` halts at 9,908 pages (649 MB).
 - The same doubling stopped at 64 million code units completes normally with 945 MB of linear
   memory; `'a'.repeat(64*1024*1024)` needs 414 MB.
