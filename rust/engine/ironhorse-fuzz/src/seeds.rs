@@ -96,9 +96,11 @@ pub fn seed_corpus(target: &str) -> Vec<Vec<u8>> {
             .map(|data| ironhorse_snapshot::write_machine_unchecked(&gen_machine_image(&data)))
             .collect(),
         // HALF well-framed manifests, half the raw spread. All-manifest
-        // seeds were all exactly 276 bytes, which is a corpus with no length
+        // seeds were all one length, which is a corpus with no length
         // gradient at all — and `raw_spread`'s whole purpose is to give
-        // libFuzzer one to climb from the first iteration.
+        // libFuzzer one to climb from the first iteration. A quarter of the
+        // manifests use an older schema's layout (35, 27 and 7, whose fields
+        // differ), which migration still decodes.
         "store_decoder" => raw_spread(salt)
             .into_iter()
             .enumerate()
@@ -110,13 +112,27 @@ pub fn seed_corpus(target: &str) -> Vec<Vec<u8>> {
                 // opener decodes first, and the one a tampered database
                 // presents.
                 use ironhorse_snapshot::store::{
-                    image_to_batch_unchecked, HeapStore, HeapStoreCommit, MemoryStore,
+                    image_to_batch_unchecked, CommitToken, HeapStore, HeapStoreCommit, MemoryStore,
+                    StoreManifest,
                 };
                 let mut store = MemoryStore::new();
-                match store.commit(&image_to_batch_unchecked(&gen_machine_image(&data), 1, "")) {
+                let mut batch =
+                    image_to_batch_unchecked(&gen_machine_image(&data), 1, CommitToken::ZERO);
+                // A fixed commit token keeps the checked-in seed reproducible.
+                batch.manifest.token = CommitToken([0x5e; 16]);
+                let schema = match i {
+                    2 => Some(35),
+                    10 => Some(27),
+                    18 => Some(7),
+                    _ => None,
+                };
+                match store.commit(&batch) {
                     Ok(()) => store
                         .manifest()
-                        .map(|m| m.encode())
+                        .map(|m| match schema {
+                            Some(store_schema) => StoreManifest { store_schema, ..m }.encode(),
+                            None => m.encode(),
+                        })
                         .unwrap_or_else(|_| data.clone()),
                     Err(_) => data,
                 }
@@ -249,7 +265,7 @@ mod tests {
         // majority bar would let half the corpus silently become the noise
         // the well-framed seeds exist to replace.
         // Half the store seeds are deliberately raw bytes, so the corpus has
-        // a length gradient rather than 24 rows of the same 276-byte shape.
+        // a length gradient rather than 24 rows of one manifest's shape.
         // Every seed in the well-framed half must decode.
         assert_eq!(
             decodable * 2,

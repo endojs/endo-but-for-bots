@@ -4273,6 +4273,20 @@ impl Interp {
         self.chunks.clear_dirty_after_commit(false);
     }
 
+    /// Acknowledge the slot arena's free list as the store now holds it,
+    /// after a successful commit. See
+    /// [`crate::SlotArena::acknowledge_free_list`].
+    pub fn acknowledge_free_list(&mut self) -> crate::FreeListAck {
+        self.slots.acknowledge_free_list()
+    }
+
+    /// The slot arena's free list as it was restored from the store,
+    /// keeping what restore itself popped for the next checkpoint. See
+    /// [`crate::SlotArena::free_list_baseline`].
+    pub fn free_list_baseline(&self) -> crate::FreeListAck {
+        self.slots.free_list_baseline()
+    }
+
     /// Stop relying on a lazy backing that belongs to another store: fault
     /// every page and extent in and mark them all unbacked, so nothing is
     /// evicted and nothing faults from that store again. A store session

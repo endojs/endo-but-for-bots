@@ -24,7 +24,7 @@ Generational collection remains explicitly not resume-invariant.
 ## Integrity and compatibility
 
 Exact collection requires a quiescent interpreter and a clean, current store checkpoint.
-The adapter verifies the session epoch and seal before mutation.
+The adapter verifies the session epoch and commit token before mutation.
 It does not choose or increment the consumer's collection counter.
 The managed embedding checkpoints a successful event and rewinds on collection or checkpoint
 failure, including a collector panic.
@@ -33,8 +33,9 @@ The failure is reported separately, so the consumer can retry collection without
 Fault tests cover these counters, durable state, and retry behavior.
 
 The existing failure latch, derived side-reference indexes, corruption checks, lazy backing
-rules, the cadence succession rule, and migration's old root/seal validation (until the
-store-seam design's phase 13 retires roots and seals) remain required.
+rules, the cadence succession rule, and migration's validation of its result (which replaced its
+old root/seal validation when the store-seam design's phase 13 retired roots and seals) remain
+required.
 Raw arena collectors are isolated-graph APIs, not a supported route around Interp admission.
 Temporary promise-root ranges remain because the implementation reads settlement state from
 them and preserves their operands on host halts; removing them needs a separate execution

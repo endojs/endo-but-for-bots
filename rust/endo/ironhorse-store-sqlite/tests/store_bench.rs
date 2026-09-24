@@ -4,12 +4,13 @@
 //! around —
 //!
 //! - **checkpoint**: an incremental commit after a small crank, end to
-//!   end through WAL + `synchronous=FULL`. Since V6-c the metadata work
-//!   is **O(dirty · log n)**: the producer and the backend each hold a
-//!   live `RootLedger`, so neither re-reads nor re-hashes the untouched
-//!   leaves — before the ledger this arm measured the O(pages) seal
-//!   term the old label named (6.8 ms at 939 pages; now ~0.8 ms, flat
-//!   across the rung sizes, the residual being the row write + fsync).
+//!   end through WAL + `synchronous=FULL`. Its metadata work is
+//!   proportional to the dirty rows: since store schema 36 the store
+//!   keeps no row digests and no root, so a commit hashes nothing but the
+//!   changed small-state sections (before the V6-c root ledger this arm
+//!   measured an O(pages) seal term, 6.8 ms at 939 pages; with the ledger,
+//!   ~0.8 ms, flat across the rung sizes, the residual being the row
+//!   write + fsync).
 //! - **reach-full**: reachability from the boot/global root over an
 //!   ARENA-VISIBLE graph, both paths. `reachable_pages` reads the whole
 //!   edge set into Rust and BFSes there; `reachable_pages_sql` runs the

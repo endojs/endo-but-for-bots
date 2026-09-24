@@ -1,12 +1,13 @@
-//! Golden bytes and seal roots for nonempty carried side tables. These vectors
-//! run on the same debug/release and Linux/macOS CI lanes as the runtime corpus.
+//! Golden bytes and store manifests for nonempty carried side tables. These
+//! vectors run on the same debug/release and Linux/macOS CI lanes as the runtime
+//! corpus.
 use ironhorse_snapshot::{
     machine::{
         begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
         MachineSnapshot, MachineSnapshotError,
     },
     sha256::hex_sha256,
-    store::{HeapStore, MemoryStore},
+    store::{root_hash, CommitToken, HeapStore, MemoryStore},
     Signature,
 };
 use ironhorse_vm::{parse_symbols, Interp};
@@ -27,6 +28,17 @@ fn platform_signature(sig: &Signature) -> Signature {
     let mut encoded = sig.encode();
     encoded[4..36].copy_from_slice(include_bytes!("fixtures/math-platform-boot.bin"));
     Signature::decode(&encoded).unwrap()
+}
+
+/// The store's manifest, pinned without its random commit token: the hex
+/// SHA-256 of its encoding with the token zeroed, so the pin covers every
+/// field a commit writes (schema, signature, geometry, epoch, counters).
+/// With the export hash, which pins the content, it replaced the pinned
+/// commit seal when the seal went (store schema 36).
+fn manifest_digest(store: &dyn HeapStore) -> String {
+    let mut manifest = store.manifest().unwrap();
+    manifest.token = CommitToken::ZERO;
+    hex_sha256(&manifest.encode())
 }
 
 /// A historical format / meter stamp, as a way of asking what identity the
@@ -88,7 +100,7 @@ fn crank(m: &mut Interp, source: &str) -> String {
 }
 
 #[test]
-fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
+fn carried_state_has_frozen_bytes_manifests_costs_and_continuations() {
     assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-5");
     let corpus = corpus();
     assert!(corpus.starts_with("# ironhorse-meter-5 "));
@@ -170,9 +182,14 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
                 .map_err(|(_, e)| e)
                 .unwrap();
             assert_eq!(
-                store.borrow().manifest().unwrap().seal,
+                manifest_digest(&*store.borrow()),
                 f[6],
-                "{label}: initial seal"
+                "{label}: initial store manifest"
+            );
+            assert_eq!(
+                root_hash(&*store.borrow()).unwrap(),
+                f[5],
+                "{label}: the store exports the initial bytes"
             );
             let blob = from_snapshot_bytes(&bytes, &sig).unwrap();
             let eager = resume_from_store(&*store.borrow(), &sig).unwrap();
@@ -305,7 +322,7 @@ impl Table {
 }
 
 /// Explicit format/schema/boot-layout identity regeneration tool. Runtime costs and continuation
-/// results must remain unchanged; only persisted byte/seal identities move.
+/// results must remain unchanged; only persisted byte/manifest identities move.
 ///
 /// That sentence is the whole review. A digest is not reviewable by reading it,
 /// so what makes rewriting one safe is that this re-derives each row and
@@ -383,7 +400,7 @@ fn regenerate_persistence_identities() {
         let session = begin_store_session(machine, &sig, &mut store)
             .map_err(|(_, e)| e)
             .unwrap();
-        main.rows[index][6] = store.manifest().unwrap().seal;
+        main.rows[index][6] = manifest_digest(&store);
 
         let mut machine = session.into_machine();
         crank(&mut machine, &f[2]);

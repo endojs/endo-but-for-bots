@@ -21,7 +21,7 @@ pub struct SuspendedWorker {
     pub cas_dir: std::path::PathBuf,
     /// For a store-backed Ironhorse worker: the heap database path
     /// (designs/ironhorse-snapshot-store-seam.md). The store carries
-    /// its own (epoch, seal) succession chain, so no CAS key exists;
+    /// its own (epoch, commit token) succession, so no CAS key exists;
     /// resume reopens the database. `None` for XS snapshot workers.
     pub heap_store: Option<std::path::PathBuf>,
     /// Worker info (preserved for re-registration on resume).

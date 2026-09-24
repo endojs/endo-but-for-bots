@@ -7,6 +7,7 @@
 #[path = "common/compile.rs"]
 mod guest_compile;
 use guest_compile::compile;
+use ironhorse_snapshot::CommitToken;
 
 use std::borrow::Borrow;
 
@@ -58,14 +59,8 @@ impl<B: Borrow<MemoryStore>, C: Borrow<ironhorse_snapshot::store::CheckpointBatc
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
         self.backing.borrow().inventory()
     }
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.backing.borrow().leaf_hashes()
-    }
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
         self.backing.borrow().read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.backing.borrow().free_leaf_hashes()
     }
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.backing.borrow().page_edges()
@@ -85,15 +80,13 @@ fn expect_commit_and_external_store_refusal(
 ) {
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(honest, 1, ""))
+        .commit(&image_to_batch_unchecked(honest, 1, CommitToken::ZERO))
         .unwrap();
     let prior_manifest = store.manifest().unwrap();
     let prior_image = ironhorse_snapshot::store::store_to_image(&store).unwrap();
     let prior_small = store.read_small_state().unwrap();
-    let prior_leaves = store.leaf_hashes().unwrap();
-    let prior_free = store.free_leaf_hashes().unwrap();
     let prior_edges = store.page_edges().unwrap();
-    let batch = image_to_batch_unchecked(crafted, 2, &prior_manifest.seal);
+    let batch = image_to_batch_unchecked(crafted, 2, prior_manifest.token);
     assert!(matches!(
         store.commit(&batch),
         Err(StoreError::Snapshot(SnapshotError::Corrupt(found))) if found == message
@@ -104,8 +97,6 @@ fn expect_commit_and_external_store_refusal(
         prior_image
     );
     assert_eq!(store.read_small_state().unwrap(), prior_small);
-    assert_eq!(store.leaf_hashes().unwrap(), prior_leaves);
-    assert_eq!(store.free_leaf_hashes().unwrap(), prior_free);
     assert_eq!(store.page_edges().unwrap(), prior_edges);
     let external = CraftedSmallStore {
         backing: &store,
@@ -140,7 +131,7 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     }
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -186,7 +177,7 @@ fn a_populated_stack_section_is_refused_at_store_validation() {
     image.stack = vec![ironhorse_vm::Slot::undefined()];
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -325,7 +316,7 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
 
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -376,7 +367,7 @@ fn a_container_from_a_foreign_host_layout_is_refused() {
     let mut store = MemoryStore::new();
     let image = read_machine(&bytes, &other_build).expect("reads under its own signature");
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .expect("the raw commit models the other build's writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
@@ -408,7 +399,7 @@ fn boot_mismatch_is_distinct_and_cannot_be_bypassed_by_the_expected_signature() 
             ));
             let mut store = MemoryStore::new();
             store
-                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
                 .unwrap();
             assert!(matches!(
                 validate_store(&store, &expected),
@@ -652,7 +643,7 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
     // from it, exactly as the async-generator arm below does.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     assert!(matches!(
         validate_store(&store, &sig()),
@@ -693,7 +684,7 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
     // refuses it at adoption, like every other anchor check.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     assert!(matches!(
         validate_store(&store, &sig()),
@@ -850,7 +841,7 @@ fn a_crafted_capability_executor_home_is_refused() {
         expect_container_refusal(&mixed, "promise cluster: mixed capability executor state");
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&mixed, 1, ""))
+            .commit(&image_to_batch_unchecked(&mixed, 1, CommitToken::ZERO))
             .expect("crafted store");
         assert!(
             ironhorse_snapshot::machine::resume_from_store(&store, &sig()).is_err(),
@@ -1340,10 +1331,10 @@ fn indexed_row_refusal(case: &str, expected: &'static str) {
     }
     let mut backing = MemoryStore::new();
     backing
-        .commit(&image_to_batch_unchecked(&honest, 1, ""))
+        .commit(&image_to_batch_unchecked(&honest, 1, CommitToken::ZERO))
         .unwrap();
     let manifest = backing.manifest().unwrap();
-    let batch = image_to_batch_unchecked(&image, 2, &manifest.seal);
+    let batch = image_to_batch_unchecked(&image, 2, manifest.token);
     let mut failures = Vec::new();
     if !matches!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()),
         Err(SnapshotError::Corrupt(message)) if message == expected)
@@ -1435,7 +1426,7 @@ fn malformed_global_reconstruction_is_refused_by_vm_adoption() {
         ));
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         assert!(matches!(
             ironhorse_snapshot::machine::resume_from_store(&store, &sig()),

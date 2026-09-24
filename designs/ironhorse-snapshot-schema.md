@@ -13,7 +13,7 @@ This index collects requirements for the snapshot schema from different uses of 
 It separates observed experiments, proposed logical requirements, and future physical-layout choices.
 The existing [snapshot store seam](ironhorse-snapshot-store-seam.md) remains the implementation design;
 these contributions do not replace its format, store interface, migration rules, or trust model
-(its 2026-09-24 decision to trust the resident store, which its phase 13 is implementing by removing
+(its 2026-09-24 decision to trust the resident store, which its phase 13 implemented by removing
 the row hashes, root and seal chain).
 
 The surgery experiments are implemented in the experiment branch.
