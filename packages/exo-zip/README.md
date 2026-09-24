@@ -73,10 +73,3 @@ On hosts that omit `CompressionStream` the writer falls back to
 The companion read-side `unzip` from `@endo/exo-unzip` injects the
 matching `inflate`, so a `zip(unzip(bytes))` round-trip is symmetric
 on every host the project targets.
-
-## Hardened JavaScript
-
-The module is `// @ts-check`ed and every named export is hardened.
-The package depends only on portable `Uint8Array` / `TextDecoder`
-APIs and `@endo/zip`'s synchronous writer, so it loads in XS,
-browsers, and SES realms.

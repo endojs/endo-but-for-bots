@@ -339,10 +339,9 @@ harden(CursorInterface);
 
 export const OpenFileInterface = M.interface('OpenFile', {
   // `read(offset, length)` returns a `PassableBytesReader` over the
-  // requested slice. CapTP marshalling rejects raw mutable typed
-  // arrays, so the wire shape stays a passable byte-array reader —
-  // single-RTT pipelining via E gets the same effective cost as a
-  // bare bytes return; see designs/endo-fs-backend-seam.md
+  // requested slice, the same return shape as every other byte source
+  // here. Single-RTT pipelining via E gets the same effective cost as a
+  // bare frozen byte-array return; see designs/endo-fs-backend-seam.md
   // "Design deviation". Both args optional so a 0-arg call is a
   // "from cursor to EOF" probe.
   read: M.callWhen()

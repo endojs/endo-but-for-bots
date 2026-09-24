@@ -104,10 +104,3 @@ The symmetric write-side (readable tree to ZIP bytes) is in
 [`@endo/exo-zip`](../exo-zip), which injects the matching `deflate`
 so `zip(unzip(bytes))` is round-trip-symmetric on every host the
 project targets.
-
-## Hardened JavaScript
-
-The module is `// @ts-check`ed and every named export is hardened.
-The package depends only on portable `Uint8Array` / `TextDecoder`
-APIs and `@endo/zip`'s synchronous reader, so it loads in XS,
-browsers, and SES realms.

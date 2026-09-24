@@ -8,6 +8,7 @@ This package provides utilities for bridging async iterator protocol over CapTP.
 We introduce an [Exo Stream Protocol](PROTOCOL.md), which uses asynchronous
 promise chains to pipeline iterations forward and backward between the
 initiator and responder.
+[DESIGN.md](./DESIGN.md) records the design decisions behind it.
 
 A **reader** is a stream where data flows from responder to initiator.
 A **writer** is a stream where data flows from initiator to responder.
@@ -327,10 +328,6 @@ byteArray values directly. The four bytes-specific adapters are the one
 recommended byte API: producer-side adapters freeze mutable chunks and
 consumer-side adapters thaw them. Use the generic reader and writer adapters
 for other passables or already-passable byte arrays.
-
-## Design
-
-See [DESIGN.md](./DESIGN.md) for design documentation.
 
 ## Future Work
 

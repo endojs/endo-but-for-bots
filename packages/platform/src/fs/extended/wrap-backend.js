@@ -461,10 +461,10 @@ export const wrapBackend = (backend, opts = {}) => {
     // still in place via the interface guard.
     return makeExo('OpenFile', /** @type {any} */ (OpenFileInterface), {
       // `read(offset, length)` returns a `PassableBytesReader` that
-      // yields the slice as one chunk. Bounded; the bytes are
-      // frozen into passable byte arrays on the CapTP wire and the receiver pulls them
-      // with a single pipelined `next()`. Uint8Array can't cross
-      // CapTP directly (marshalling rejects mutable typed arrays).
+      // yields the slice as one frozen byte-array chunk, which the
+      // receiver pulls with a single pipelined `next()`. A frozen byte
+      // array could cross CapTP on its own; the reader keeps `read`'s
+      // return shape the same as every other byte source in this API.
       async read(offset, length) {
         requireOpen('read');
         requireRead('read');

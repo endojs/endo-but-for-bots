@@ -1,6 +1,9 @@
 ---
 '@endo/9p-server': major
 '@endo/agent-tools': major
+'@endo/claude-sandbox': major
+'@endo/cli': major
+'@endo/codex-sandbox': major
 '@endo/daemon': major
 '@endo/endo-fs-asset-server': major
 '@endo/endo-fs-exec': major
@@ -10,7 +13,9 @@
 '@endo/exo-unzip': major
 '@endo/exo-zip': major
 '@endo/git': major
+'@endo/host-shell': major
 '@endo/platform': major
+'@endo/sandbox': major
 '@endo/space-file-explorer': major
 '@endo/spaces-util': major
 ---
@@ -25,6 +30,7 @@ The rename keeps the generic `stream()` protocol method name for byte readers/wr
 
 `@endo/9p-server`, `@endo/endo-fs-asset-server`, and `@endo/endo-fs-exec` bump `major`: each exports an entry point whose accepted-collaborator contract broke incompatibly (`serveConnection({ filesystem })`, `makeTreeRequestHandler({ tree })`, and `drainBytesReader`'s reader ref all now drive `stream()` on the caller-supplied readers), so a downstream caller passing its own `streamBase64`-era capability breaks on upgrade.
 `@endo/space-file-explorer` is already `major` for the structurally identical call-site adaptation.
+`@endo/sandbox`, `@endo/host-shell`, `@endo/claude-sandbox`, `@endo/codex-sandbox`, and `@endo/cli` bump `major` with no source change of their own beyond comments: each builds its byte readers and writers on the `@endo/exo-stream` bytes adapters (for example the `stdin`/`stdout`/`stderr` capabilities of a sandbox driver process or a host shell), so their wire contract changes with the dependency and a peer still speaking `streamBase64` breaks on upgrade.
 
 Upgrade note (readers): `iterateBytesReader`'s option `stringLengthLimit` was renamed to `byteLengthLimit`, and its unit changed from base64 characters to raw bytes.
 A caller that renames the key mechanically keeps a ~33%-too-large bound; a caller that leaves the old key in place silently reverts to the default 100 KB frame cap (there is no compile-time error), which rejects large chunks at runtime.
@@ -39,4 +45,4 @@ A blob source must now pass the newly required export `looksLikeReadableBlob` (`
 A custom blob source that renames its only method to `stream()` and nothing else is now rejected at runtime with `Expected a ReadableBlob source`.
 
 Performance note: carrying immutable byte arrays directly (rather than base64 strings) makes the wire payload ~1.5x larger and several times slower on Node 22 than the retired base64 framing, pending a compact `byteArray` marshal path.
-See `@endo/exo-stream`'s `NEWS.md` and `DESIGN.md` for the measured figures.
+See `@endo/exo-stream`'s `BENCH.md` for the measured figures.
