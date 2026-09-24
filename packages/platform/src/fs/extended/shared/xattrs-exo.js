@@ -19,10 +19,10 @@ import { makeExo } from '@endo/exo';
 import { makeError, X, q } from '@endo/errors';
 
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { XattrsInterface } from '../type-guards.js';
+import { makeBufferedBytesWriter } from './buffered-bytes-writer.js';
 
 /** @import { Xattrs } from '../types.js' */
 
@@ -80,60 +80,14 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
     async set(name) {
       assertUserNamespace(name);
       const m = ensureMap();
-      /** @type {Uint8Array[]} */
-      const chunks = [];
-      let total = 0;
-      let rejected = false;
-      const sink = {
-        async next(chunk) {
-          if (rejected) {
-            throw makeError(X`E2BIG: xattr ${q(name)} write already rejected`);
-          }
-          if (chunk instanceof Uint8Array && chunk.length !== 0) {
-            // The writer bounds each frame; bound the concatenated value too,
-            // so many in-limit frames cannot exceed `XATTR_SIZE_MAX`.
-            if (total + chunk.length > XATTR_FRAME_BYTE_LENGTH_LIMIT) {
-              rejected = true;
-              chunks.length = 0;
-              total = 0;
-              throw makeError(
-                X`E2BIG: xattr ${q(name)} value exceeds ${q(XATTR_FRAME_BYTE_LENGTH_LIMIT)} bytes`,
-              );
-            }
-            chunks.push(chunk);
-            total += chunk.length;
-          }
-          return { done: false, value: undefined };
-        },
-        async return(value) {
-          if (rejected) {
-            return { done: true, value };
-          }
-          const merged = new Uint8Array(total);
-          let p = 0;
-          for (const c of chunks) {
-            merged.set(c, p);
-            p += c.length;
-          }
+      return makeBufferedBytesWriter({
+        label: `xattr ${JSON.stringify(name)} value`,
+        frameByteLengthLimit: XATTR_FRAME_BYTE_LENGTH_LIMIT,
+        totalByteLengthLimit: XATTR_FRAME_BYTE_LENGTH_LIMIT,
+        commit: merged => {
           m.set(name, merged);
           fireLocal(path, { kind: 'changed' });
-          return { done: true, value };
         },
-        // The pump calls `throw()` when it aborts the stream (a rejected frame
-        // or a broken initiator). Discard the buffered frames so an aborted
-        // write commits nothing.
-        async throw() {
-          rejected = true;
-          chunks.length = 0;
-          total = 0;
-          return { done: true, value: undefined };
-        },
-        [Symbol.asyncIterator]() {
-          return sink;
-        },
-      };
-      return bytesWriterFromIterator(sink, {
-        byteLengthLimit: XATTR_FRAME_BYTE_LENGTH_LIMIT,
       });
     },
     async list() {

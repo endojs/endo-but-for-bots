@@ -1,8 +1,8 @@
 // @ts-nocheck
 // Per-frame `byteLengthLimit` bounds on the extended-filesystem writer sinks
-// (`OpenFile.write`, `File.write`, `Xattrs.set`), the aggregate bound on an
-// `Xattrs.set` value, and the invariant that a
-// rejected frame leaves durable state unchanged.
+// (`OpenFile.write`, `File.write`, `Xattrs.set`), the cumulative bound each
+// sink places on the bytes it buffers, and the invariant that a rejected frame
+// leaves durable state unchanged.
 //
 // Each sink buffers frames and commits them in `return()`. The writer pump
 // aborts a stream with `throw()`, and each sink discards its buffer there, so
@@ -36,10 +36,10 @@ const drainReader = async readerRef => {
     total += c.length;
   }
   const out = new Uint8Array(total);
-  let off = 0;
+  let offset = 0;
   for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
+    out.set(c, offset);
+    offset += c.length;
   }
   return out;
 };
@@ -60,12 +60,12 @@ const pushFrames = async (writerRef, frames) => {
   await writer.return();
 };
 
-const makeFile = async (name, content) => {
-  const fs = wrapBackend(makeInMemoryBackend());
+const makeFile = async (name, content, wrapOpts = {}) => {
+  const fs = wrapBackend(makeInMemoryBackend(), wrapOpts);
   const root = await E(fs).root();
-  const oh = await E(root).create(name, { write: true });
-  await pushFrames(await E(oh).write(0n), [utf8(content)]);
-  await E(oh).close();
+  const openHandle = await E(root).create(name, { write: true });
+  await pushFrames(await E(openHandle).write(0n), [utf8(content)]);
+  await E(openHandle).close();
   return root;
 };
 
@@ -104,16 +104,91 @@ test('File.write rejects a frame one byte over the limit and leaves the file unc
 
 test('OpenFile.write rejects a frame one byte over the limit and leaves the file unchanged', async t => {
   const root = await makeFile('o.bin', 'original');
-  const oh = await E(await E(root).lookup('o.bin')).open({ write: true });
-  const writerRef = await E(oh).write(0n);
+  const openHandle = await E(await E(root).lookup('o.bin')).open({
+    write: true,
+  });
+  const writerRef = await E(openHandle).write(0n);
   await t.throwsAsync(() =>
     pushFrames(writerRef, [
       utf8('PREFIX'),
       new Uint8Array(WRITE_FRAME_BYTE_LENGTH_LIMIT + 1),
     ]),
   );
-  await E(oh).close();
+  await E(openHandle).close();
   t.is(fromUtf8(await readFile(root, 'o.bin')), 'original');
+});
+
+// ---------- cumulative file-write bound ----------
+
+// A small `writeByteLengthLimit` exercises the same check the 256 MiB default
+// applies, without allocating hundreds of MiB in a test.
+const WRITE_TOTAL = 1024;
+const wrapOpts = { writeByteLengthLimit: WRITE_TOTAL };
+
+const openForWrite = async root => {
+  const file = await E(root).lookup('c.bin');
+  return E(file).open({ write: true });
+};
+
+test('File.write rejects in-limit frames whose total exceeds the write limit', async t => {
+  const root = await makeFile('c.bin', 'original', wrapOpts);
+  const file = await E(root).lookup('c.bin');
+  const half = WRITE_TOTAL / 2;
+  await t.throwsAsync(
+    async () =>
+      pushFrames(await E(file).write(), [
+        new Uint8Array(half),
+        new Uint8Array(half),
+        new Uint8Array(1),
+      ]),
+    { message: /E2BIG/ },
+  );
+  t.is(fromUtf8(await readFile(root, 'c.bin')), 'original');
+});
+
+test('File.write admits in-limit frames totaling exactly the write limit', async t => {
+  const root = await makeFile('c.bin', 'original', wrapOpts);
+  const file = await E(root).lookup('c.bin');
+  const half = WRITE_TOTAL / 2;
+  await pushFrames(await E(file).write(), [
+    new Uint8Array(half).fill(1),
+    new Uint8Array(half).fill(2),
+  ]);
+  const got = await readFile(root, 'c.bin');
+  t.is(got.length, WRITE_TOTAL);
+  t.is(got[0], 1);
+  t.is(got[got.length - 1], 2);
+});
+
+test('OpenFile.write rejects in-limit frames whose total exceeds the write limit', async t => {
+  const root = await makeFile('c.bin', 'original', wrapOpts);
+  const openHandle = await openForWrite(root);
+  const half = WRITE_TOTAL / 2;
+  await t.throwsAsync(
+    async () =>
+      pushFrames(await E(openHandle).write(0n), [
+        new Uint8Array(half),
+        new Uint8Array(half),
+        new Uint8Array(1),
+      ]),
+    { message: /E2BIG/ },
+  );
+  await E(openHandle).close();
+  t.is(fromUtf8(await readFile(root, 'c.bin')), 'original');
+});
+
+test('OpenFile.write admits in-limit frames totaling exactly the write limit', async t => {
+  const root = await makeFile('c.bin', 'original', wrapOpts);
+  const openHandle = await openForWrite(root);
+  const half = WRITE_TOTAL / 2;
+  await pushFrames(await E(openHandle).write(0n), [
+    new Uint8Array(half).fill(1),
+    new Uint8Array(half).fill(2),
+  ]);
+  await E(openHandle).close();
+  const got = await readFile(root, 'c.bin');
+  t.is(got.length, WRITE_TOTAL);
+  t.is(got[got.length - 1], 2);
 });
 
 // ---------- Xattrs.set ----------
@@ -242,9 +317,11 @@ for (const [label, abort] of [
 
   test(`OpenFile.write aborted by the initiator's ${label} leaves the file unchanged`, async t => {
     const root = await makeFile('j.bin', 'original');
-    const oh = await E(await E(root).lookup('j.bin')).open({ write: true });
-    await abortAfterPrefix(await E(oh).write(0n), abort);
-    await E(oh).close();
+    const openHandle = await E(await E(root).lookup('j.bin')).open({
+      write: true,
+    });
+    await abortAfterPrefix(await E(openHandle).write(0n), abort);
+    await E(openHandle).close();
     t.is(fromUtf8(await readFile(root, 'j.bin')), 'original');
   });
 
