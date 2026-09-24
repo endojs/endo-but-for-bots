@@ -202,21 +202,56 @@ No old database or live thread is reused. Dynamic transport metadata is excluded
 from this comparison; real encrypted-content acceptance is not established.
 The default injection experiment retains its failing assertion.
 
-The remaining implementation gate is authenticated capture, not another history
-store. Session metadata includes instructions/provider identity and must be
-constructed from trusted host configuration rather than accepted from guest data.
-The pinned app-server stream does not expose the opaque compacted item in the
-original compaction turn, so a completed-turn notification cannot authenticate
-the rollout's replacement bytes. Investigate a pinned native export or bounded
-observation of the existing trusted provider response path before production wiring.
-Bind any observation to the admitted turn/model/thread; a valid old encrypted item
-must not substitute for this turn's result. Verify retained nonopaque items against
-host-owned prior context and observed frames, preserve ordering, and keep Floot's
-effect reconciliation authoritative.
+Scope correction (2026-09-24): the earlier requirement for provider-authenticated
+capture exceeded the approved [guest-domain decisions](../../designs/hosted-agent-sandbox-unification.md#decisions).
+The guest may modify its own native transcript and exercise its session inference
+grant; the design does not distinguish trusted CLI code from guest tool processes.
+Preserving native context across an ordinary restart does not require proving that
+a hostile guest has not poisoned its own context.
+An encrypted item accepted by the provider would not, by itself, prove current-turn
+provenance or the completion of a host effect.
+Do not add a provider response witness as a prerequisite to this refactor.
+
+The remaining implementation gate is bounded, data-only capture and faithful
+restoration, not another history store or an additional guest integrity profile.
+Session metadata includes instructions/provider identity and must be constructed
+from host configuration, not used to accept guest-selected runtime authority.
+Preserve supported native payload bytes and ordering; validate format, context cut,
+session identity and supported completion transitions to detect ordinary stale or
+incomplete exports, without claiming these authenticate a hostile guest.
+The pinned stream still does not expose the original opaque compaction item;
+a bounded in-sandbox rollout export is the next implementation candidate.
 Reuse the existing native-context journal envelope and persist-before-terminal
 contract; retain the separate operational ledger and tool-catalog binding.
 Do not await a new app-server RPC inside its serial notification pump, which would
 block the response needed to complete that same RPC.
+
+Source review explains why a provider witness is not a small existing hook:
+
+- `hosted-agent/src/provider-grant-issuer.js` and `provider-scopes.js` expose
+  session/grant attestation and lifecycle, not a host-admitted turn witness.
+  The pinned model is a creation-time catalog admission, not an exact restriction
+  on every inference request; runtime side requests may use other listed models.
+- `provider-broker.js` screens local response chunks, but `dispatchWrapped`
+  forwards a subscription's byte reader without reading it locally.
+  A transport-only observer would silently miss that supported composition.
+- Existing audit notifications contain event/count only, and usage observations
+  contain accounting data. Neither is an existing content-evidence channel.
+  Adding one would expand the shared protocol and require separate analysis of
+  authority, stream backpressure, cancellation, retention and pool composition.
+
+Next bounded slice: capture successful same-tool-catalog Codex native context,
+restore only allowlisted context data with host-generated runtime metadata, and
+test ordinary and compacted continuation through the existing journal.
+Reject unsupported export shapes rather than silently falling back to portable
+history. Never import queued operations or let native tool-result claims settle
+host effects. Existing hosted-turn admission and context-projection reconciliation
+must remain unchanged: unresolved/recovered effects still prevent native restore.
+The journal is the sole durable context owner; exported rollout files are projections.
+This correction changes the implementation plan only, not runtime behavior.
+Independent source review agrees; no deployment or new fidelity result is claimed.
+The existing Claude coverage checks remain in place; this is not authorization to
+remove effect guards or a claim that every retained coverage check is necessary.
 
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without

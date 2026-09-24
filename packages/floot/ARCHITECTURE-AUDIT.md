@@ -32,10 +32,16 @@ real-provider encrypted-context acceptance, durable restart proof or deployment.
 FA-01/FA-02 remain open; do not infer completion from the successful import RPC.
 A later minimal native-rollout control preserves the ordered synthetic request
 across a fresh process without its prior state database. This identifies a viable
-restoration mechanism, not authenticated capture: the native stream does not expose
-the opaque compaction result and guest metadata must not supply trusted instructions.
-The current alignment document records the remaining capture, instruction-binding,
-effect and operational-ledger requirements before production integration.
+restoration mechanism, not proof of native capture fidelity: the native stream does
+not expose the opaque compaction result and guest metadata must not supply trusted
+runtime authority.
+Source review corrected the subsequent authenticated-capture gate: the approved
+guest-domain design permits alteration of native conversation state, so provider
+response provenance is not a prerequisite to preserving that state across restart.
+The alignment document records the evidence and bounded data-only export plan.
+Host-controlled runtime metadata, journal persistence, independent effect
+reconciliation and the operational ledger remain required; no runtime guard was
+removed and no production Codex native capture or deployment is claimed.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
