@@ -31,7 +31,6 @@ test('per-turn Floot prompts retain the adapter instruction', t => {
   /** @type {Array<[Record<string, any>, string]>} */
   const cases = [
     [{ systemPrompt: 'Floot', model: 'sol' }, 'Floot'],
-    [{ developerInstructions: 'Developer' }, 'Developer'],
     [{}, 'Fallback'],
   ];
   for (const [options, expected] of cases) {
@@ -39,5 +38,18 @@ test('per-turn Floot prompts retain the adapter instruction', t => {
     t.true(adapted.systemPrompt.startsWith(`${expected}\n`));
     t.true(adapted.systemPrompt.includes('endo_exec'));
     t.is(adapted.model, options.model);
+  }
+});
+
+test('adapter rejects obsolete per-turn developerInstructions', t => {
+  for (const developerInstructions of ['old prompt', '', undefined]) {
+    t.throws(
+      () =>
+        withEndoToolInstructions({
+          systemPrompt: 'Current',
+          developerInstructions,
+        }),
+      { message: /Per-turn developerInstructions is unsupported/ },
+    );
   }
 });

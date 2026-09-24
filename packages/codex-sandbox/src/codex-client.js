@@ -1495,14 +1495,9 @@ export const makeCodexClient = ({
       approvalPolicy,
       sandbox: CODEX_SANDBOX_MODE,
       ...(opts.model || model ? { model: opts.model || model } : {}),
-      ...(opts.systemPrompt ||
-      opts.developerInstructions ||
-      developerInstructions
+      ...(opts.systemPrompt || developerInstructions
         ? {
-            developerInstructions:
-              opts.systemPrompt ||
-              opts.developerInstructions ||
-              developerInstructions,
+            developerInstructions: opts.systemPrompt || developerInstructions,
           }
         : {}),
     };
@@ -1669,6 +1664,11 @@ export const makeCodexClient = ({
 
   return makeExo('CodexClient', CodexClientInterface, {
     async send(prompt, opts = {}) {
+      if (Object.hasOwn(opts, 'developerInstructions')) {
+        throw Error(
+          'Per-turn developerInstructions is unsupported; use systemPrompt',
+        );
+      }
       if (terminated) throw Error('Codex session terminated');
       if (closing) throw Error('Codex session closing');
       if (new TextEncoder().encode(prompt).byteLength > maxPromptBytes) {

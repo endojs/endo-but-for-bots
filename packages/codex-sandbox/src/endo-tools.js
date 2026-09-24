@@ -32,9 +32,12 @@ harden(adaptEndoTools);
  * @param {string} [fallback]
  * @returns {Record<string, any> & {systemPrompt:string}}
  */
-export const withEndoToolInstructions = (options = {}, fallback = '') =>
-  harden({
+export const withEndoToolInstructions = (options = {}, fallback = '') => {
+  !Object.hasOwn(options, 'developerInstructions') ||
+    Fail`Per-turn developerInstructions is unsupported; use systemPrompt`;
+  return harden({
     ...options,
-    systemPrompt: `${options.systemPrompt || options.developerInstructions || fallback}\nFor Endo guest JavaScript, call endo_exec with a code string. It provides E and powers; Codex's native exec does not.`,
+    systemPrompt: `${options.systemPrompt || fallback}\nFor Endo guest JavaScript, call endo_exec with a code string. It provides E and powers; Codex's native exec does not.`,
   });
+};
 harden(withEndoToolInstructions);

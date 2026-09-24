@@ -78,10 +78,15 @@ Concrete candidates:
   empty, undefined or accompanied by canonical fields. Model IDs containing
   colons remain intact, including current OpenRouter routes; they no longer
   select a backend implicitly. All 674 Floot tests pass locally.
-  Current-source follow-ups identified in the scan: preset-prompt version
-  migration and Codex's per-turn `developerInstructions` alias. These are
-  not yet removed by this record. The Codex constructor/wire field of that name
-  is current vendor vocabulary and must not be deleted with the per-turn alias.
+  Removed Codex's per-turn `developerInstructions` alias at both the adapter and
+  direct client boundary. Presence rejects before turn reservation or transport
+  work; current callers use `systemPrompt`. The constructor configuration and
+  app-server wire field retain `developerInstructions`, which is current vendor
+  vocabulary. All 321 Codex tests pass, including 99 focused client/tool tests;
+  scoped lint passes with 13 warnings. Independent source review approves. No
+  durable state or owner changes, and no deployment, are claimed.
+  Current-source follow-up: preset-prompt version migration is not yet removed
+  by this record.
 - Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one
   refusal facade and package export. Current setup neither imports nor mints it,
   and the shared backend factory already rejects unsupported container mounts.

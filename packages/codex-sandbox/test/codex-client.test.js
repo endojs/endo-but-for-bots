@@ -15,6 +15,35 @@ const INITIALIZE_RESULT = harden({
   userAgent: 'codex-test',
 });
 
+test('obsolete per-turn instructions refuse before transport work without reserving a turn', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    clientOptions: { developerInstructions: 'Configured prompt' },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const developerInstructions of ['old prompt', '', undefined]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('hello', {
+          systemPrompt: 'Current',
+          developerInstructions,
+        }),
+      {
+        message: /Per-turn developerInstructions is unsupported/,
+      },
+    );
+  }
+  t.deepEqual(fixture.sent, []);
+  const reader = await fixture.client.send('hello', {
+    systemPrompt: 'Current',
+  });
+  const start = fixture.sent.find(message => message.method === 'thread/start');
+  t.is(start.params.developerInstructions, 'Current');
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
 test('catalog rotation restores the conversation once and reconciles the old catalog first', async t => {
   t.timeout(5000);
   const saved = [];
