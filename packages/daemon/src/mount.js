@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { SnapshotTree } from '@endo/platform/fs/lite/types' */
+/** @import { ReadableBlobSource, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { EndoMount, EndoMountControl, FilePowers, MountNameChange } from './types.js' */
@@ -68,7 +68,7 @@ const revokedSentinel = Symbol('mount-revoked');
  *
  * @param {unknown} value
  * @param {string[]} methodNames
- * @returns {asserts value is import('@endo/eventual-send').ERef<import('@endo/platform/fs/lite/types').ReadableBlobSource>}
+ * @returns {asserts value is ERef<ReadableBlobSource>}
  */
 const assertReadableBlobSource = (value, methodNames) => {
   if (!looksLikeReadableBlob(methodNames)) {
@@ -1312,10 +1312,9 @@ const makeMountExo = ctx => {
         // is a union of three) carries the `stream` responder, which is the
         // only method `iterateBytesReader` drives; the static union is wider
         // than `PassableBytesReader`, so narrow to the drain contract here.
-        const blobReader =
-          /** @type {import('@endo/eventual-send').ERef<import('@endo/exo-stream').PassableBytesReader>} */ (
-            /** @type {unknown} */ (source)
-          );
+        const blobReader = /** @type {ERef<PassableBytesReader>} */ (
+          /** @type {unknown} */ (source)
+        );
         for await (const bytes of iterateBytesReader(blobReader)) {
           // eslint-disable-next-line no-await-in-loop
           await writer.next(bytes);
