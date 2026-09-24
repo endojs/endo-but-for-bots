@@ -625,6 +625,10 @@ Work items, from the completeness critic, with Addendum A's additions:
    with `HeapExhausted` below about 100 MiB of linear memory under string, array and Map growth,
    counting the baseline (11 MiB with an 8 MiB shadow stack, about 7 MiB with E1's 4 MiB) and 2×
    vector growth.
+   The test must also checkpoint after each crank, since `checkpoint_to_store` re-encodes every
+   changed array or Map section whole: 500,000 array items that ran in 40 MB of linear memory
+   reached 122 MB at the checkpoint, and 500,000 Map entries went from 78 MB to 224 MB
+   (Wasmtime).
 7. Test heaps: first boot inside the DO, the demo counter vat through `import_from_container`,
    and synthetic sweeps (a plain list, Map and WeakMap tables, arrays, closures, a large free
    list).
@@ -641,10 +645,10 @@ Decisive measurements, ranked:
    sweep; if it matches OSS workerd's 984 KiB, accepted programs trap by tier, and the heap-stack
    refactors of WASM-BLOCKERS B3 become mandatory before any heap is shared between local and
    cloud.
-2. Peak linear memory per awake worker, co-residency per production isolate, and whether compiled
-   wasm code counts toward 128 MB (locally: 11 MiB baseline with the 8 MiB shadow stack,
-   42–78 MiB for the counter vat,
-   67–83 MiB for first boot, export and import *(Node)*).
+2. Peak linear memory per awake worker, co-residency per production isolate, whether compiled
+   wasm code counts toward 128 MB, and whether production fails `memory.grow` at the cap or only
+   replaces the isolate (locally: 11 MiB baseline with the 8 MiB shadow stack, 42–78 MiB for the
+   counter vat, 67–83 MiB for first boot, export and import *(Node)*).
 3. Cold wake for SES and OCapN heaps with today's engine, split into instantiate (Liftoff),
    resume, first crank and first commit (the lazy wasm wake of the counter vat took 781 ms
    *(Node)*).

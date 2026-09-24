@@ -55,7 +55,7 @@ What stands in the way, in order of severity:
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
 | B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap and about 6× while a snapshot of it is written, unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare replaces the whole isolate instead | engine / host | **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap and about 6× while a snapshot of it is written, unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -593,8 +593,16 @@ at 2.1–2.2×), and for heaps dominated by arrays or side tables no ceiling bou
 A whole-heap snapshot adds several copies (B7), and the worst-case footprint must count them:
 under the default ceilings, writing a 252 MB snapshot of strings took wasm32 from 557 MB to
 1.56 GB of linear memory, 5.8× the chunk ceiling, and at 2^29 the same pattern reached 3.11 GB.
-The Thixotrope worker's per-crank `checkpoint_to_store` costs less: on the same heap, into an
-in-memory store that keeps its own copy, it reached 787 MB.
+The Thixotrope worker's per-crank `checkpoint_to_store` copies only the dirty chunk extents and
+slot pages, but it re-encodes each changed section, such as all arrays' items or all Maps'
+entries, whole (`ironhorse-snapshot/src/machine.rs:1029-1034`).
+On the string heap above, its batch fit in memory the crank had already freed, and linear memory
+grew to 787 MB only because the in-memory store kept its own copy.
+For arrays and Maps it costs as much as a whole-heap snapshot or more, on every crank that
+changes them: before the store copied anything, checkpointing 500,000 kept array items took
+wasm32 from 40 MB to 122 MB, where writing their snapshot reached 92 MB, and 500,000 Map entries
+from 78 MB to 224 MB, where their snapshot reached 208 MB.
+Ceilings that admit array items and side tables must leave room for that re-encoding.
 
 Wasm linear memory never shrinks.
 On a host that enforces its memory cap by failing `memory.grow`, as Wasmtime's store limits do,
