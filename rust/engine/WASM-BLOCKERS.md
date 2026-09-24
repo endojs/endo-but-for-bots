@@ -37,19 +37,22 @@ Heap exhaustion, compiler budget refusal, and `eval`-time `SyntaxError`s are con
 are natively.
 A `wasm32-unknown-unknown` build needs **no imports at all**.
 
-It is **not** yet deterministic across targets.
-A guest program that allocates near the heap ceiling gets a different answer and a different
-computron count on wasm32 than on native x86_64, even with `consensus` on (B7).
-The probes that stay clear of that and of the host limits in B3 and B8 matched native exactly.
+It is **not** yet deterministic across targets, even with `consensus` on.
+An audit confirmed 27 sites where the same guest program gets a different answer or a
+different computron count on wasm32 than on native x86_64 (B7).
+Examples are allocating near a heap ceiling, growing arrays or side tables past wasm32's
+allocation limits, and one four-line program that crashes the wasm32 engine outright.
+The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
+exactly.
 
 What stands in the way, in order of severity:
 
 | # | Blocker | Layer | Kind |
 |---|---------|-------|------|
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
-| B7 | Heap admission and snapshot decoding depend on pointer width, so native and wasm32 diverge in results and metering | engine | **hard (consensus)** |
+| B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | Memory use is 4–5× the chunk ceiling; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap | engine / host | configuration (ceilings), **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: 4–5× the chunk ceiling for string heaps, unbounded for arrays and side tables; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -229,44 +232,136 @@ Option 1 is the only route that works without engine changes.
 Option 3 needs the `Poisoned` refactor first.
 Option 2 lifts the constraint for good.
 
-## B7: native and wasm32 diverge where accounting depends on pointer width
+## B7: native and wasm32 diverge wherever accounting or allocation depends on the host
 
-The engine's deterministic heap admission sometimes measures Rust memory rather than guest
-data.
-`admit_scratch` (`ironhorse-vm/src/interp/admission.rs:209-216`) charges
-`capacity * size_of::<T>()` against the chunk ceiling.
-`regexp_subject_bytes` (`interp/natives/regexp.rs:1011-1012`) admits a `Vec<usize>` of
-code-unit offsets through it, so each element costs 8 bytes natively and 4 on wasm32.
+A consensus build must give the same result and the same computrons on every target.
+An audit of the engine for native-versus-wasm32 divergence confirmed 27 distinct sites.
+Each was reproduced by running the same program on the native probe and on the wasm32 probe
+under Wasmtime, both with `consensus`, and comparing the full output line.
+It found them through five lenses: host-layout charges, casts, overflow points, floating point,
+and snapshots.
+The sites fall into four families.
+Floating point is not among them.
+With `consensus`, 13 of the 15 floating-point candidates were false positives, and the other two
+are latent issues listed below.
 
-A guest can observe the difference:
+### Admission charged by Rust memory layout
 
-```js
-var s = 'a'.repeat(16 * 1024 * 1024);
-var f = 'b'.repeat(64 * 1024 * 1024);
-/z/.test(s)
-```
+Deterministic heap admission sometimes measures Rust memory rather than guest data.
+`admit_scratch` and its siblings (`ironhorse-vm/src/interp/admission.rs:106`, `:208-216`,
+`:223`) charge `capacity * size_of::<T>()` against the chunk ceiling.
+The RegExp compiler and matcher do the same against their own byte budgets.
+For any `T` that contains `usize`, a `Vec` header or a pointer, native and wasm32 charge
+different amounts, so a program near a ceiling halts on one target and completes on the other.
 
-| Build (`consensus` on) | Halt | Result | Computrons |
+| Site | Element type (native / wasm32 bytes) | Program | Native | wasm32 |
+|---|---|---|---|---|
+| `natives/regexp.rs:1012` | `usize` (8 / 4) | `var s='a'.repeat(16*1024*1024); var f='b'.repeat(64*1024*1024); /z/.test(s)` | `HeapExhausted`, 20,972,860 | `Return false`, 37,750,079 |
+| `natives/regexp.rs:1393` | `usize` (8 / 4) | `'a'.repeat(30000000).replaceAll('a','c').length` | `HeapExhausted`, 14,013,699 | `Return 30000000`, 30,000,936 |
+| `natives/regexp.rs:1490` | `(Slot, usize, usize)` (40 / 32) | 134.1M-unit filler, then `'a'.repeat(5000).replace(/a/g,'b').length` | `HeapExhausted` | `Return 5000` |
+| `natives/json.rs:591`, `:708` | `Vec<u16>` (24 / 12) | 134.2M-unit filler, then `JSON.stringify(new Array(1000)).length` | `HeapExhausted`, 33,553,334 | `Return 5001` |
+| `natives/json.rs:1095` | `JsonSource` (40 / 32) | `var f='b'.repeat(134186000); var t='['+'1,'.repeat(999)+'1]'; JSON.parse(t, function(k,v){return v}).length` | `HeapExhausted`, 33,549,846 | `Return 1000`, 33,563,123 |
+| `natives/json.rs:1204` | `(ReadKey, JsonSource)` (48 / 40) | the same with a 1,000-member object | `HeapExhausted`, 33,570,307 | `Return object`, 33,583,878 |
+| `ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1717` | `Node` (64 / 40), `Vec<u32>` headers (24 / 12) | `new RegExp('a'.repeat(420000)).test('a')` | `HeapExhausted`, 288,772 | `Return false`, 321,730 |
+| `ironhorse-regexp/src/matcher.rs:129`, `:190-193` | `State` (40 / 24), `AssertionData` (16 / 8) | `new RegExp('()'.repeat(129)+'a*$').test('a'.repeat(62500))` | `HeapExhausted`, 202,597 | `Return true`, 203,696 |
+
+For `new RegExp` and RegExp literals the difference reaches guest `try`/`catch`.
+The regexp compiler's limit becomes an uncatchable `HeapExhausted` natively.
+Top-level literals become a compile-time `RegExpResourceLimit` natively but compile on wasm32.
+`json.rs:1199` (`(ReadKey, usize)`, 16 / 12) is masked today by a stricter check before it.
+
+The fix is to charge a fixed, declared width per element type instead of `size_of::<T>()`.
+Use the audited 64-bit widths, with a compile-time assertion on 64-bit targets, so native
+thresholds do not move.
+
+### Unadmitted host allocations
+
+Some guest-driven storage is never admitted against a ceiling at all.
+Its only bound is host memory, and wasm32 has less of it.
+Rust's `Vec` also refuses any single allocation larger than `isize::MAX` bytes, which is
+2 GiB on wasm32.
+Past these limits wasm32 aborts: an allocation failure or a "capacity overflow" panic becomes a
+trap.
+At the same point native completes, or halts deterministically.
+
+| Site | Program | Native | wasm32 |
 |---|---|---|---|
-| native x86_64 | `HeapExhausted` | — | 20,972,860 |
-| wasm32 (Wasmtime; also Chromium) | `Return` | `false` | 37,750,079 |
+| Map and Set entries (`ironhorse-vm/src/bulk.rs:479`) | `var m=new Map(); for (var i=0;i<N;i++) m.set(i,i); m.size`, N = 2^25 + 1 | `Return 33554433` | capacity-overflow panic, trap |
+| Array items (`bulk.rs:242`) | 80 × `JSON.parse` of a 1,000,000-element array, all kept | `Return 80:1000000` (4.4 GiB RSS) | allocation failure, trap |
+| `Intl.Segmenter` segments (`interp/locale.rs:308`) | 8 × `seg.segment()` of a 32M-unit string, all kept | `Return 8` (6.7 GiB RSS) | allocation failure, trap |
+| `Intl.ListFormat` (`natives/dispatch.rs:1966`, `intl.rs:757`) | 2,000 references to one 1.1M-unit string, then a number | catchable `TypeError` | allocation failure, trap |
+| Typed-array `join`, typed-array and array `toLocaleString` (`natives/buffer.rs:558`, `:287`, `natives/array.rs:4482`) | a long separator or long elements | `HeapExhausted` | capacity-overflow panic, trap |
+| `Function` constructor (`interp/eval.rs:226`, then `ironhorse-compile/src/lexer.rs:167`) | `Function(s,s,…,'')` with a 268.8M-code-point assembled source | `Return function12` | `EngineInvariant("eval:compiler-invariant")` |
 
-A control with a 32 MiB filler agrees on both targets.
-`(ReadKey, usize)` scratch in `json.rs:1199` has the same shape, though a stricter check
-before it currently masks it.
-There are 73 scratch-admission call sites, and an audit of every one for pointer-width
-dependence is in progress.
-The fix is to charge a fixed, specified width per element rather than `size_of::<T>()` for any
-`T` that contains `usize` or pointers.
+The same sites break native resource accounting too.
+Under the default ceilings the native process reached 4.2–6.7 GiB of RSS in these repros.
+With a slot ceiling of 50,000, one million Map entries, Set entries, array items or indexed
+properties still succeed.
+The fix is to admit side-table and array-item storage, and guest-amplified host copies, against
+the ceilings before allocating.
 
-Snapshot restore has a related cross-target hazard (*from code, not run*).
-`manifest.chunk_len` is a `u64` that decoding never bounds to 32 bits.
-It is narrowed with `as usize` at `ironhorse-snapshot/src/store.rs:3262`, `machine.rs:1379`
-and `store.rs:2931`; at `store.rs:2931` the narrowing happens before `.min(1 << 24)`.
-The default chunk ceiling is 256 MiB, but embedders can raise it (`value.rs:10-13`).
-A native heap with more than 4 GiB of chunks would then be silently truncated on a wasm32
-restore instead of refused.
-A `u32::try_from`-style refusal closes it.
+### Arithmetic on the host's `usize`
+
+- **`advance_string_index` (`natives/regexp.rs:301`)** computes `i + 1` in `usize`.
+  With `lastIndex = 2**32 - 1` that overflows on wasm32 only, and with overflow checks on it
+  panics, so a four-line guest program crashes the wasm engine:
+
+  ```js
+  var re = /(?:)/gu; var n = 0;
+  re.exec = function () { if (n++) return null; this.lastIndex = 4294967295; return ['']; };
+  re[Symbol.replace]('x', 'Q')
+  ```
+
+  Native returns `"Qx"`.
+  `@@match`, `String.prototype.replace` and `matchAll` reach the same line.
+- **`JSON.stringify` output sizing (`natives/json.rs:163`)** converts a `u64` to `usize` before
+  checking the result limit.
+  A nested array whose computed output crosses 2^32 units throws a catchable
+  `RangeError: result too large` natively, but halts with `HeapExhausted` on wasm32.
+
+### Snapshots and stores
+
+- **Checkpointing needs several copies of the heap** (`ironhorse-snapshot/src/machine.rs:163`).
+  A machine with 16 million Map entries runs identically on both targets.
+  Natively it then checkpoints into a 640 MB snapshot.
+  On wasm32 the encoder's doubling buffer fails to allocate 1 GiB and aborts.
+  Streaming the encoder, or pre-sizing one exact buffer, removes the copies.
+- **`manifest.chunk_len` is truncated** (`ironhorse-snapshot/src/store.rs:605`, narrowed with
+  `as usize` at `machine.rs:1379`, `store.rs:2931`, `store.rs:3262`).
+  A crafted store with `chunk_len = 2^32 + 65536` makes every chunk allocation halt natively.
+  On wasm32 the same store resumes as if it held 65,536 bytes and answers guest programs.
+  Decoding should refuse any `chunk_len` above the 32-bit chunk address space.
+- **Duplicate Intl bound-function rows restore nondeterministically on every target**
+  (`ironhorse-snapshot/src/snapshot_roster.rs:1762`, `ironhorse-vm/src/interp/persist.rs:1943`).
+  The same crafted snapshot gave `false,true,false` in 7 of 12 native runs and
+  `true,false,false` in the other 5, because restore picks a row by `HashMap` iteration order.
+  Decoding should refuse duplicate owners.
+- **The CAS and file-store temporary names use `std::process::id()`**
+  (`ironhorse-snapshot/src/machine.rs:114`, `store_file.rs:135`, `:730`), which panics on WASI.
+- **Error values differ by width.**
+  An overflowing HEAP, STAC or manifest count is refused on both targets, with different
+  `Corrupt` messages (`ironhorse-snapshot/src/image.rs:957`, `:4630`, `store.rs:639`).
+
+### Latent: host limits the ceilings can outrun
+
+- **Embedder-raised ceilings.**
+  With a chunk ceiling above about 1 GiB, the chunk arena's amortized doubling asks for more
+  than `isize::MAX` on wasm32 before memory runs out (`ironhorse-vm/src/value.rs:2222`).
+  So `'a'.repeat(1100000000)` returns natively and halts on wasm32.
+  Under `consensus`, `set_chunk_ceiling` and `set_slot_ceiling` should refuse values that every
+  target cannot honor: at most about 2^30 bytes of chunks and 2^26 slots.
+- **`json_escape_string` (`natives/json.rs:81`)** sizes its output in `usize`, but no guest can
+  build a large enough string on wasm32 today.
+- **The native floating-point environment.**
+  A shared library that sets flush-to-zero or a different rounding mode in MXCSR changes native
+  results; wasm is immune.
+  A start-up self-test can refuse such a host.
+- **The platform `Math` provider is the default** for every crate except the two shipping
+  binaries (B4).
+- **`ironhorse-store-sqlite` narrows stored `i64` keys without range checks**
+  (`rust/endo/ironhorse-store-sqlite/src/lib.rs:855` and siblings).
+  A crafted database could alias rows differently by width; the crate does not build for wasm
+  today.
 
 ## B3: the native-recursion budget outruns wasm stacks
 
@@ -400,7 +495,7 @@ That is a determinism break across hosts, not just a crash.
   Lowering `NATIVE_DEPTH_LIMIT` for wasm alone would not work: the limit is release-versioned
   and changes acceptance, so native and wasm workers could no longer share a release.
 
-## B8: memory headroom is 4–5× the chunk ceiling
+## B8: the ceilings do not bound memory
 
 The default ceilings (1,000,000 slots, a 256 MiB chunk arena, `value.rs:10-13`) bound the
 engine's own arenas, not the process's memory.
@@ -409,6 +504,12 @@ Measured:
 - Doubling a string until it reaches the 256 MiB chunk ceiling left Wasmtime's linear memory
   at 18,516 pages (1.21 GB), and native peak memory (RSS) at 1.03 GB.
 - A 64-million-code-unit string that completes normally used 945 MB of linear memory.
+- Array items and the Map, Set and Intl side tables are not admitted at all (B7).
+  Ten million `a.push(0)` calls grew linear memory to 583 MB while the chunk arena held 12 KB.
+  Native repros reached 4.2–6.7 GiB of RSS under the default ceilings.
+
+So for heaps dominated by strings the footprint is 4–5× the chunk ceiling, and for heaps
+dominated by arrays or side tables no ceiling bounds it.
 
 Wasm linear memory never shrinks.
 On a host whose memory cap is below that footprint, `memory.grow` fails before the engine's
