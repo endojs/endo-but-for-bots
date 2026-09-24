@@ -12,6 +12,34 @@ const sha256 = text => createHash('sha256').update(text).digest('hex');
 const emptyPrefix = sha256('');
 const makeCoverage = () => makeClaudeContextCoverage({ sha256 });
 
+test('coverage refusal identifies static phase and check without producer content', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  const error = t.throws(() =>
+    coverage.observe({
+      type: 'system',
+      subtype: 'SECRET_UNKNOWN_SUBTYPE',
+      session_id: sessionId,
+      message: 'SECRET_PRODUCER_CONTENT',
+    }),
+  );
+  t.regex(error.message, /phase=observe\/system, check=\d+/);
+  t.false(error.message.includes('SECRET_'));
+  t.throws(() =>
+    coverage.observe({
+      type: 'system',
+      subtype: 'status',
+      session_id: sessionId,
+    }),
+  );
+});
+
+test('coverage terminal refusal identifies outcome stage without widening acceptance', t => {
+  const coverage = makeCoverage();
+  const error = t.throws(() => coverage.assertOutcome('success'));
+  t.regex(error.message, /phase=outcome, check=1/);
+});
+
 const compactionFixture = async () => {
   await null;
   return JSON.parse(
