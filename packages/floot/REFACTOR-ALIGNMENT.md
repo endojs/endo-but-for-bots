@@ -573,6 +573,36 @@ cover missing/altered prompt, stale cut, native grouping changes, unmatched part
 text/thinking, missing frames, changed order and observation overflow.
 The observer does not by itself certify a failed turn or authorize restoration.
 
+The standalone coverage observer now binds the pre-turn cut to the exact restored bytes,
+not just a leaf UUID that a guest-writable file could retain while changing history.
+The importer returns a SHA-256 fingerprint of the published prefix alongside
+its session and leaf identity; the coverage observer compares that fingerprint
+before checking the admitted prompt and observed output.
+This receipt is incarnation-local validation evidence, reconstructed on restore,
+not a new journal or durable owner.
+The host must supply the hash operation and retain the receipt before admitting
+the prompt; taking either from the post-turn file would defeat the check.
+
+Production integration remains gated: portable restoration must supply the same
+receipt contract, successful and failed capture must both check coverage, and
+current-turn compaction needs a separate tested rule because it replaces the
+prefix rather than preserving it byte for byte.
+No fallback may certify a stale native file merely because the CLI exited zero.
+Cancellation still needs a post-stop delivery contract, not an event pushed into
+an already closed reader.
+Runtime/account/system/tool-prefix bindings and real signature acceptance remain
+open; this fingerprint does not establish any of those properties.
+
+Independent adversarial review approves this standalone receipt slice only.
+The receipt/coverage suites pass 48 tests; scoped lint, source types, formatting,
+and the repository documentation gate pass.
+The broader in-progress client/event/writer tests pass 101 cases and the focused
+Floot journal/context tests pass 146 cases; those results do not certify integration.
+The isolated Tokyo pinned-CLI failed-tool probe with the updated importer preserved
+historical API messages and executed the tool once across restoration.
+It used only synthetic credentials/signatures, left no containers behind, and did
+not change the deployed daemon or existing sessions.
+
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
 settled-turn window. The module header's earlier unconditional bounded-memory

@@ -2,11 +2,15 @@
 import '@endo/init';
 import test from 'ava';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { makeClaudeContextCoverage } from '../src/claude-context-coverage.js';
 
 const id = n => `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
 const sessionId = id(1);
 const prompt = 'Current prompt';
+const sha256 = text => createHash('sha256').update(text).digest('hex');
+const emptyPrefix = sha256('');
+const makeCoverage = () => makeClaudeContextCoverage({ sha256 });
 
 test('actual pinned max-turns failure proves the captured current-turn cut', async t => {
   await null;
@@ -16,13 +20,22 @@ test('actual pinned max-turns failure proves the captured current-turn cut', asy
       'utf8',
     ),
   );
-  const coverage = makeClaudeContextCoverage();
+  const coverage = makeCoverage();
   for (const event of f.events) coverage.observe(event);
   const native = `${f.rows.map(row => JSON.stringify(row)).join('\n')}\n`;
-  t.notThrows(() => coverage.assertCaptured(native, f.cut));
+  const before = f.rows.findIndex(row => row.uuid === f.cut.beforeUuid);
+  const prefixSha256 = sha256(
+    `${f.rows
+      .slice(0, before + 1)
+      .map(row => JSON.stringify(row))
+      .join('\n')}\n`,
+  );
+  t.notThrows(() =>
+    coverage.assertCaptured(native, { ...f.cut, prefixSha256 }),
+  );
 });
 const fixture = () => {
-  const coverage = makeClaudeContextCoverage();
+  const coverage = makeCoverage();
   const events = [];
   const rows = [
     {
@@ -94,8 +107,9 @@ const fixture = () => {
     stop();
   };
   const jsonl = () => `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
-  const assert = (cut = { sessionId, beforeUuid: null, prompt }) =>
-    coverage.assertCaptured(jsonl(), cut);
+  const assert = (
+    cut = { sessionId, beforeUuid: null, prefixSha256: emptyPrefix, prompt },
+  ) => coverage.assertCaptured(jsonl(), cut);
   return {
     coverage,
     events,
@@ -205,9 +219,99 @@ test('previous native cut must exist and immediately precede admitted prompt', t
     parentUuid: null,
     message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
   });
-  t.notThrows(() => f.assert({ sessionId, beforeUuid: id(9), prompt }));
-  t.throws(() => f.assert({ sessionId, beforeUuid: id(99), prompt }));
+  const prefixSha256 = sha256(`${JSON.stringify(f.rows[0])}\n`);
+  t.notThrows(() =>
+    f.assert({ sessionId, beforeUuid: id(9), prefixSha256, prompt }),
+  );
+  t.throws(() =>
+    f.assert({ sessionId, beforeUuid: id(99), prefixSha256, prompt }),
+  );
 });
+
+test('same pre-turn leaf cannot conceal modified historical prefix', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  f.rows.unshift({
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  });
+  const cut = {
+    sessionId,
+    beforeUuid: id(9),
+    prefixSha256: sha256(`${JSON.stringify(f.rows[0])}\n`),
+    prompt,
+  };
+  t.notThrows(() => f.assert(cut));
+  f.rows[0].message.content = [{ type: 'text', text: 'tampered history' }];
+  t.throws(() => f.assert(cut));
+});
+
+test('prefix receipt binds exact serialization rather than parsed row equality', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  f.rows.unshift({
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  });
+  const cut = {
+    sessionId,
+    beforeUuid: id(9),
+    prefixSha256: sha256(`${JSON.stringify(f.rows[0])}\n`),
+    prompt,
+  };
+  const changedBytes = ` ${f.jsonl()}`;
+  t.throws(() => f.coverage.assertCaptured(changedBytes, cut));
+});
+
+for (const change of ['signature', 'grouping', 'duplicate-cut']) {
+  test(`trusted receipt rejects historical ${change} mutation`, t => {
+    const f = fixture();
+    f.text();
+    f.rows[0].parentUuid = id(9);
+    const prior = {
+      type: 'assistant',
+      sessionId,
+      uuid: id(9),
+      parentUuid: null,
+      message: {
+        id: 'old-group',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'old', signature: 'old-signature' },
+        ],
+      },
+    };
+    f.rows.unshift(prior);
+    const cut = {
+      sessionId,
+      beforeUuid: id(9),
+      prefixSha256: sha256(`${JSON.stringify(prior)}\n`),
+      prompt,
+    };
+    if (change === 'signature') prior.message.content[0].signature = 'changed';
+    if (change === 'grouping') prior.message.id = 'changed';
+    if (change === 'duplicate-cut') f.rows.splice(1, 0, { ...prior });
+    t.throws(() => f.assert(cut));
+  });
+}
+
+for (const digest of [undefined, '', 'x'.repeat(64), '0'.repeat(64)]) {
+  test(`missing, malformed, or incorrect prefix receipt refuses: ${digest}`, t => {
+    const f = fixture();
+    f.text();
+    t.throws(() =>
+      f.assert({ sessionId, beforeUuid: null, prefixSha256: digest, prompt }),
+    );
+  });
+}
 
 test('complete A followed by unpersisted partial B never certifies A as full cut', t => {
   const f = fixture();
@@ -230,9 +334,10 @@ test('empty or init-only observations cannot certify a stale native file', t => 
   const f = fixture();
   t.throws(() => f.assert());
   t.throws(() =>
-    makeClaudeContextCoverage().assertCaptured(f.jsonl(), {
+    makeCoverage().assertCaptured(f.jsonl(), {
       sessionId,
       beforeUuid: null,
+      prefixSha256: emptyPrefix,
       prompt,
     }),
   );
@@ -345,6 +450,7 @@ test('caller mutation cannot rewrite retained complete frame evidence', t => {
     f.coverage.assertCaptured(captured, {
       sessionId,
       beforeUuid: null,
+      prefixSha256: emptyPrefix,
       prompt,
     }),
   );

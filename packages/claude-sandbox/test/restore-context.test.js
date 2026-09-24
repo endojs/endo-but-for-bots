@@ -2,6 +2,7 @@
 import '@endo/init';
 import test from 'ava';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   mkdtemp,
   mkdir,
@@ -117,6 +118,9 @@ test('sandbox native importer validates and publishes exact context bytes', asyn
     sessionId: f.session,
     leafUuid: JSON.parse(f.checkpoint.payload.trimEnd().split('\n').at(-1))
       .uuid,
+    prefixSha256: createHash('sha256')
+      .update(f.checkpoint.payload)
+      .digest('hex'),
   });
   t.is(await readFile(f.file, 'utf8'), f.checkpoint.payload);
 });
@@ -170,6 +174,35 @@ test('ordinary native context restores signed blocks before any compaction', asy
   t.is(await readFile(f.file, 'utf8'), f.checkpoint.payload);
 });
 
+test('published receipt hashes exact Unicode UTF-8 bytes', async t => {
+  await null;
+  t.timeout(10_000);
+  const f = await fixture(t);
+  const checkpoint = JSON.parse(
+    JSON.stringify(f.checkpoint).replaceAll('PROBE', '猫🚢'),
+  );
+  t.true(checkpoint.payload.includes('猫🚢'));
+  const result = await run(
+    t,
+    restore,
+    [],
+    f.destination,
+    f.cwd,
+    JSON.stringify(checkpoint),
+  );
+  t.is(result.code, 0, result.stderr);
+  const published = await readFile(f.file, 'utf8');
+  const receipt = JSON.parse(result.stdout);
+  t.is(
+    receipt.prefixSha256,
+    createHash('sha256').update(published, 'utf8').digest('hex'),
+  );
+  t.not(
+    receipt.prefixSha256,
+    createHash('sha256').update(published, 'utf16le').digest('hex'),
+  );
+});
+
 test('native importer atomically replaces a leaf symlink without writing its target', async t => {
   t.timeout(10_000);
   const f = await fixture(t);
@@ -221,6 +254,14 @@ test('native suffix appends dialogue without changing the captured prefix', asyn
     .map(line => JSON.parse(line));
   t.is(added.length, 1);
   t.is(JSON.parse(result.stdout).leafUuid, added[0].uuid);
+  t.is(
+    JSON.parse(result.stdout).prefixSha256,
+    createHash('sha256').update(published).digest('hex'),
+  );
+  t.not(
+    JSON.parse(result.stdout).prefixSha256,
+    createHash('sha256').update(f.checkpoint.payload).digest('hex'),
+  );
   t.like(added[0].message, {
     role: 'assistant',
     content: [{ type: 'text', text: suffix[0].content }],

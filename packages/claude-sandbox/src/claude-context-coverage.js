@@ -13,8 +13,12 @@ const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
  * shutdown. Call only after an independently confirmed stopped producer and
  * pass a transcript already validated by the sandbox capture helper.
  * Unsupported framing is an availability failure, never a partial proof.
+ * The caller must supply a trusted SHA-256 implementation and a pre-turn
+ * receipt retained outside the guest. Hashing the candidate prefix to invent
+ * its expected receipt would defeat historical coverage validation.
+ * @param {{sha256: (text: string) => string}} powers UTF-8 text to lowercase SHA-256 hex.
  */
-export const makeClaudeContextCoverage = () => {
+export const makeClaudeContextCoverage = ({ sha256 }) => {
   let refused = false;
   let bytes = 0;
   let session;
@@ -244,11 +248,12 @@ export const makeClaudeContextCoverage = () => {
 
   /**
    * @param {string} nativeTranscript Helper-validated native JSONL.
-   * @param {{sessionId: string, beforeUuid: string|null, prompt: string}} cut
+   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, prompt: string}} cut
+   * Trusted pre-turn receipt; an empty initial store uses null plus SHA-256 of empty text.
    */
   const assertCaptured = (
     nativeTranscript,
-    { sessionId, beforeUuid, prompt },
+    { sessionId, beforeUuid, prefixSha256, prompt },
   ) =>
     guarded(() => {
       requireValue(initialized && frames.length > 0 && !message && !block);
@@ -256,6 +261,8 @@ export const makeClaudeContextCoverage = () => {
         isUuid(sessionId) &&
           sessionId === session &&
           (beforeUuid === null || isUuid(beforeUuid)) &&
+          typeof prefixSha256 === 'string' &&
+          /^[a-f0-9]{64}$/.test(prefixSha256) &&
           typeof prompt === 'string',
       );
       requireValue(
@@ -263,10 +270,8 @@ export const makeClaudeContextCoverage = () => {
           nativeTranscript.endsWith('\n') &&
           new TextEncoder().encode(nativeTranscript).byteLength <= LIMIT,
       );
-      const rows = nativeTranscript
-        .trimEnd()
-        .split('\n')
-        .map(line => JSON.parse(line));
+      const lines = nativeTranscript.slice(0, -1).split('\n');
+      const rows = lines.map(line => JSON.parse(line));
       requireValue(
         rows.every(row => row.sessionId === sessionId && !row.isSidechain),
       );
@@ -275,6 +280,9 @@ export const makeClaudeContextCoverage = () => {
           ? -1
           : rows.findLastIndex(row => row.uuid === beforeUuid);
       requireValue(beforeUuid === null || before >= 0);
+      const prefix =
+        before < 0 ? '' : `${lines.slice(0, before + 1).join('\n')}\n`;
+      requireValue(sha256(prefix) === prefixSha256);
       const active = rows.slice(before + 1);
       const admitted = active.shift();
       requireValue(

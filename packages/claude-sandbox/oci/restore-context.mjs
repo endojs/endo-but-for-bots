@@ -212,7 +212,11 @@ const main = async () => {
       await rm(temporary, { force: true });
     }
     process.stdout.write(
-      `${JSON.stringify({ sessionId: session, leafUuid: parentUuid })}\n`,
+      `${JSON.stringify({
+        sessionId: session,
+        leafUuid: parentUuid,
+        prefixSha256: createHash('sha256').update(payload).digest('hex'),
+      })}\n`,
     );
   } finally {
     await rm(staging, { recursive: true, force: true });
