@@ -13,8 +13,8 @@ use ironhorse_snapshot::machine::{
 };
 use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::{
-    image_to_batch_unchecked, seal_commit, slot_page_count, store_to_image, CheckpointBatch,
-    HeapStore, MemoryStore, StoreError,
+    image_to_batch_unchecked, seal_commit, slot_page_count, store_to_image, HeapStore, MemoryStore,
+    StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
@@ -325,176 +325,11 @@ fn resume_after_incremental_checkpoint_reads_merged_state() {
     );
 }
 
-/// A `HeapStore` that delegates to a [`MemoryStore`] and applies one
-/// queued successor commit in the middle of a chosen operation — the
-/// cross-connection interleaving a shared SQLite file permits, made
-/// deterministic. `Validation` fires after serving the inventory read
-/// (coherent reads, store advances immediately after); `SlotRead`
-/// fires before serving a slot-page read (the served row belongs to
-/// the successor epoch while the fault's pre-check saw the pinned
-/// one).
-struct InterleavingStore {
-    inner: std::cell::RefCell<MemoryStore>,
-    pending: std::cell::RefCell<Option<CheckpointBatch>>,
-    fire_on: Interleave,
-    /// Lazy resume itself faults pages while rebuilding the machine
-    /// (`restore_snapshot_state`), so the row-read trigger stays
-    /// disarmed until the test has a session in hand.
-    armed: std::cell::Cell<bool>,
-}
-
-#[derive(PartialEq)]
-enum Interleave {
-    Validation,
-    RowRead,
-}
-
-impl InterleavingStore {
-    fn fire(&self) {
-        if !self.armed.get() {
-            return;
-        }
-        if let Some(batch) = self.pending.borrow_mut().take() {
-            self.inner
-                .borrow_mut()
-                .commit(&batch)
-                .expect("queued interleaved commit is a valid successor");
-        }
-    }
-}
-
-impl HeapStore for InterleavingStore {
-    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
-        self.inner.borrow().manifest()
-    }
-    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
-        self.inner.borrow().read_small_state()
-    }
-    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
-        if self.fire_on == Interleave::RowRead {
-            self.fire();
-        }
-        self.inner.borrow().read_slot_page(page)
-    }
-    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
-        if self.fire_on == Interleave::RowRead {
-            self.fire();
-        }
-        self.inner.borrow().read_chunk_extent(ext)
-    }
-    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
-        let served = self.inner.borrow().inventory();
-        if self.fire_on == Interleave::Validation {
-            self.fire();
-        }
-        served
-    }
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.inner.borrow().leaf_hashes()
-    }
-    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
-        self.inner.borrow().page_edges()
-    }
-    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
-        self.inner.borrow().read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.inner.borrow().free_leaf_hashes()
-    }
-    fn commit_verified(
-        &mut self,
-        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
-    ) -> Result<(), StoreError> {
-        self.inner.borrow_mut().commit_verified(verify)
-    }
-}
-
-/// Builds an epoch-1 store plus a queued valid epoch-2 successor batch
-/// (same image, so only the lineage advances), wrapped to fire at the
-/// chosen interleave point.
-fn interleaving_store(fire_on: Interleave) -> InterleavingStore {
-    let mut inner = MemoryStore::new();
-    let mut m = Interp::new();
-    // Restore validates boot metadata eagerly. Keep a guest object graph on
-    // additional pages so the row-read race targets a genuinely cold page.
-    let (code, names) = ironhorse_compile::compile_atoms(
-        "var cold = {}; for (var i = 0; i < 2048; i++) cold = { previous: cold }; 1",
-    )
-    .unwrap();
-    m.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
-    assert!(m.run(&code).completed);
-    let session = begin(m, &mut inner);
-    let seal1 = inner.manifest().unwrap().seal;
-    let batch2 = image_to_batch_unchecked(
-        &session
-            .machine()
-            .snapshot_image_for_testing(&sig())
-            .expect("gated image"),
-        2,
-        &seal1,
-    );
-    drop(session);
-    let armed = fire_on == Interleave::Validation;
-    InterleavingStore {
-        inner: std::cell::RefCell::new(inner),
-        pending: std::cell::RefCell::new(Some(batch2)),
-        fire_on,
-        armed: std::cell::Cell::new(armed),
-    }
-}
-
-/// A commit landing between validation's reads and the arena attach
-/// must fail the resume closed (the post-validation manifest
-/// re-check), never seed a session or its fault pin from mixed epochs.
-#[test]
-fn lazy_resume_refuses_store_advanced_during_validation() {
-    let store = std::rc::Rc::new(std::cell::RefCell::new(interleaving_store(
-        Interleave::Validation,
-    )));
-    match resume_from_store_lazy(store, &sig()) {
-        Err(StoreError::BaselineMismatch { .. }) => {}
-        other => panic!("expected baseline mismatch, got {other:?}"),
-    }
-}
-
-/// A commit landing between a fault's pin pre-check and its row read
-/// must die as the named torn-read panic (the post-read pin
-/// re-check), never install a row from the successor epoch.
-#[test]
-fn lazy_fault_refuses_row_read_across_a_foreign_commit() {
-    let store = std::rc::Rc::new(std::cell::RefCell::new(interleaving_store(
-        Interleave::RowRead,
-    )));
-    let session =
-        resume_from_store_lazy(store.clone(), &sig()).expect("resumes while store is quiet");
-    let manifest = store.borrow().manifest().unwrap();
-    store.borrow().armed.set(true);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Touch every page and extent: whichever row the resume left
-        // unfaulted trips the armed interleave first.
-        for page in 0..slot_page_count(manifest.slot_count) {
-            session.machine().slots().touch_page(page);
-        }
-        for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
-            session.machine().chunks().touch_extent(ext);
-        }
-        panic!("machine was fully resident before the interleave could fire");
-    }));
-    let payload = outcome.expect_err("fault across a foreign commit must die");
-    let msg = payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .unwrap_or("");
-    assert!(
-        msg.contains("store advanced under this machine"),
-        "expected the named torn-read panic, got: {msg}"
-    );
-}
-
 /// The two seal findings from the third review pass, locked: a seal
 /// binds the COMPLETE manifest identity (same rows under a different
-/// host signature seal differently), and a batch whose seal does not
-/// hash its own contents is refused before any backend persists it.
+/// host signature seal differently), and a batch whose rows no longer
+/// combine to its root is refused before any backend persists it (the
+/// commit writes a root only over the leaves it writes).
 #[test]
 fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
     let mut m = Interp::new();
@@ -524,82 +359,7 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
     let mut store = MemoryStore::new();
     match store.commit(&forged) {
         Err(StoreError::BaselineMismatch { .. }) => {}
-        other => panic!("expected forged-seal refusal, got {other:?}"),
-    }
-}
-
-/// Phase 5 acceptance: the row-hash tree discharges named integrity
-/// limitation 1 — a length-preserving byte flip at rest can no longer
-/// resume a different machine. A flipped ROW byte fails closed at the
-/// point of read (eager resume error; lazy fault dies as the named
-/// panic), and a flipped LEAF byte fails closed at open (the leaves no
-/// longer recombine to the sealed root).
-#[test]
-fn length_preserving_flip_at_rest_fails_closed() {
-    let (mut store, dir) = file_store("integrity");
-    let path = dir.join("heap.ihstore");
-    let mut m = Interp::new();
-    assert!(m.run(&PROG_A).completed);
-    drop(begin(m, &mut store));
-    drop(store);
-    let pristine = std::fs::read(&path).unwrap();
-
-    // 1. Flip the file's LAST byte — blob content (blobs are the tail
-    //    of the layout), so the store still loads structurally.
-    let mut flipped = pristine.clone();
-    *flipped.last_mut().unwrap() ^= 0xff;
-    std::fs::write(&path, &flipped).unwrap();
-    let store = FileStore::open(&path).expect("structural load still succeeds");
-    match resume_from_store(&store, &sig()) {
-        Err(_) => {}
-        Ok(_) => panic!("eager resume must refuse a flipped row byte"),
-    }
-
-    // The same flip under LAZY resume dies at the fault that reads the
-    // row, as the named leaf-hash panic — never a different machine.
-    let shared = std::rc::Rc::new(std::cell::RefCell::new(FileStore::open(&path).unwrap()));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let session = resume_from_store_lazy(shared.clone(), &sig())?;
-        let manifest = shared.borrow().manifest().unwrap();
-        for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
-            session.machine().chunks().touch_extent(ext);
-        }
-        for page in 0..slot_page_count(manifest.slot_count) {
-            session.machine().slots().touch_page(page);
-        }
-        Ok::<(), StoreError>(())
-    }));
-    match outcome {
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .unwrap_or("");
-            assert!(
-                msg.contains("fails its leaf hash"),
-                "expected the named leaf-hash panic, got: {msg}"
-            );
-        }
-        Ok(Err(_)) => {} // refused before attach: equally fail-closed
-        Ok(Ok(())) => panic!("lazy resume must not serve a flipped row byte"),
-    }
-
-    // 2. Flip a byte inside the LEAF-HASH region: refused at open
-    //    (leaves no longer recombine to the sealed root).
-    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-    let mlen = be32(&pristine, 8);
-    let slen = be32(&pristine, 12 + mlen);
-    let counts_at = 12 + mlen + 4 + slen;
-    let n_pages = be32(&pristine, counts_at);
-    let n_exts = be32(&pristine, counts_at + 4);
-    let leaves_at = counts_at + 8 + 12 * (n_pages + n_exts);
-    let mut leaf_flipped = pristine.clone();
-    leaf_flipped[leaves_at] ^= 0xff;
-    std::fs::write(&path, &leaf_flipped).unwrap();
-    let store = FileStore::open(&path).expect("structural load still succeeds");
-    match resume_from_store(&store, &sig()) {
-        Err(_) => {}
-        Ok(_) => panic!("a flipped leaf hash must fail closed at open"),
+        other => panic!("expected the root-agreement refusal, got {other:?}"),
     }
 }
 
@@ -672,12 +432,10 @@ fn reachability_query_reads_no_row_content() {
 }
 
 /// Phase 8 review regression: a row the session ITSELF committed is
-/// clean again — evictable — and its re-fault must verify against the
-/// leaves that commit refreshed, at the committed geometry. Frozen
-/// attach-time leaves would misdiagnose the healthy re-fault as
-/// "corrupt store"; frozen attach-time geometry would fail the tail
-/// row's length assert once the heap grew. Sequence: lazy resume →
-/// mutate + grow → checkpoint → evict everything → re-fault
+/// clean again — evictable — and its re-fault must read the committed
+/// row at the committed geometry. A frozen attach-time geometry would
+/// fail the tail row's length check once the heap grew. Sequence: lazy
+/// resume → mutate + grow → checkpoint → evict everything → re-fault
 /// everything (write_snapshot) and demand byte equality.
 #[test]
 fn evict_after_own_checkpoint_refaults_cleanly() {
@@ -732,8 +490,8 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
         "nothing was evicted — the regression is untested"
     );
 
-    // Every re-fault must verify against the REFRESHED leaves at the
-    // COMMITTED geometry and reinstall identical content.
+    // Every re-fault reads the committed row at the COMMITTED geometry
+    // and reinstalls identical content.
     assert_eq!(
         session
             .machine()
@@ -888,6 +646,134 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     );
 }
 
+/// A machine unbound from a lazy session and bound to a new store stops
+/// relying on the old one: `begin_store_session` faults every page in and
+/// abandons the lazy backing, so no page or extent is evicted (a re-fault
+/// would read the old store) and whatever happens to the old store later
+/// cannot reach the machine. The page source's epoch pin used to fence
+/// this case.
+///
+/// Bite check: without the `abandon_backing` call in `begin_store_core`
+/// the clean faulted-in pages evict.
+#[test]
+fn rebinding_an_unbound_lazy_machine_abandons_its_old_backing() {
+    use ironhorse_snapshot::store::{chunk_extent_count, export_to_container};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // Enough strings for several chunk extents.
+    let pad = "x".repeat(100);
+    let (build, names) = ironhorse_compile::compile_atoms(&format!(
+        "var backed = []; for (var i = 0; i < 2048; i++) backed.push({{name: '{pad}' + i}});"
+    ))
+    .unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+    assert!(m.run(&build).completed);
+    let old = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(m, &mut *old.borrow_mut()));
+
+    // Evict what the restore faulted in, so the rebind has rows of both
+    // arenas to read from the old store.
+    let lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    let manifest = old.borrow().manifest().unwrap();
+    for page in 0..slot_page_count(manifest.slot_count) {
+        let _ = lazy.machine().slots().evict_page(page);
+    }
+    for ext in 0..chunk_extent_count(manifest.chunk_len) {
+        let _ = lazy.machine().chunks().evict_extent(ext);
+    }
+    let machine = lazy.into_machine();
+    assert!(
+        !machine.slots().is_fully_resident() && !machine.chunks().is_fully_resident(),
+        "the rebind has pages and extents left to fault in"
+    );
+    let mut new = MemoryStore::new();
+    let session = begin(machine, &mut new);
+    let manifest = new.manifest().unwrap();
+    for page in 0..slot_page_count(manifest.slot_count) {
+        assert!(
+            !session.machine().slots().evict_page(page),
+            "page {page} no longer has a backing to re-fault from"
+        );
+    }
+    for ext in 0..chunk_extent_count(manifest.chunk_len) {
+        assert!(
+            !session.machine().chunks().evict_extent(ext),
+            "extent {ext} no longer has a backing to re-fault from"
+        );
+    }
+
+    // The old store is emptied; nothing reads it again.
+    *old.borrow_mut() = MemoryStore::new();
+    assert_eq!(
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        export_to_container(&new).expect("export the new store"),
+    );
+}
+
+/// The rebind reads the machine in full from its old store; when that
+/// store can no longer produce a row, the read unwinds as a store fault
+/// carrying the old store's error, and the machine goes with it, instead
+/// of returning half read beside an error that would name the new store.
+#[test]
+fn rebinding_a_machine_whose_old_store_fails_a_read_unwinds_with_that_stores_error() {
+    use ironhorse_snapshot::machine::store_fault_of;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let (build, names) = ironhorse_compile::compile_atoms(
+        "var backed = []; for (var i = 0; i < 2048; i++) backed.push({v: i});",
+    )
+    .unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+    assert!(m.run(&build).completed);
+    let (store, dir) = file_store("rebind-fault");
+    let old = Rc::new(RefCell::new(store));
+    drop(begin(m, &mut *old.borrow_mut()));
+    let lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    let manifest = old.borrow().manifest().unwrap();
+    let mut evicted = 0;
+    for page in 0..slot_page_count(manifest.slot_count) {
+        evicted += lazy.machine().slots().evict_page(page) as u32;
+    }
+    assert!(
+        evicted > 0,
+        "the rebind has pages to read from the old store"
+    );
+    let machine = lazy.into_machine();
+
+    // Empty the old store's file under its open handle: every row read now
+    // fails as I/O.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("heap.ihstore"))
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    let mut new = MemoryStore::new();
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        begin_store_session(machine, &sig(), &mut new)
+            .map(drop)
+            .map_err(|(_, error)| error)
+    }))
+    .expect_err("the failed read unwinds out of the rebind");
+    match store_fault_of(payload) {
+        Ok(StoreError::Io(_)) => {}
+        Ok(other) => panic!("expected the old store's I/O error, got {other:?}"),
+        Err(_) => panic!("expected a store fault"),
+    }
+    assert_eq!(
+        new.manifest(),
+        Err(StoreError::Empty),
+        "nothing was committed"
+    );
+}
+
 /// A store wrapper whose next `commit` fails with an injected I/O
 /// error AFTER the shared verification would have passed — the
 /// durable-write failure a real backend can hit at any time.
@@ -937,10 +823,10 @@ impl HeapStore for FailOnceStore {
 
 /// V6-c recovery lock: a failed commit drops the session's root
 /// ledger (never advancing it past a store that did not move), the
-/// NEXT checkpoint takes the slow path — stored-metadata read,
-/// laundering pre-verify, full recombination — and succeeds, and the
-/// one after that is back on the fast path. Every surviving epoch
-/// must validate and resume identically to an unbroken history.
+/// NEXT checkpoint takes the slow path — it rebuilds the ledger from
+/// the stored metadata — and succeeds, and the one after that is back
+/// on the fast path. Every surviving epoch must validate and resume
+/// identically to an unbroken history.
 #[test]
 fn checkpoint_recovers_through_a_failed_commit() {
     let mut store = FailOnceStore {
@@ -982,6 +868,9 @@ fn checkpoint_recovers_through_a_failed_commit() {
     let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     assert_eq!(epoch, 3);
     ironhorse_snapshot::store::validate_store(&store, &sig()).unwrap();
+    // The recovery path keeps the digests the build before stage 1
+    // verifies at open.
+    ironhorse_snapshot::store::check_stored_digests(&store).unwrap();
     let resumed = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(
         resumed

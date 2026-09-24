@@ -10,9 +10,10 @@
 
 **The resident store is trusted (decided 2026-09-24).**
 *This entry describes the target of phase 13, in progress in
-[#1331](https://github.com/endojs/endo-but-for-bots/pull/1331) (§ Phased Implementation); until
-each stage lands, the code behaves as the older passages describe, and none of the additions below
-exist yet.*
+[#1331](https://github.com/endojs/endo-but-for-bots/pull/1331) (§ Phased Implementation).
+Stage 1 is implemented; until stage 2 lands, the machinery it removes (the leaf hashes, the root,
+the seal and the root ledgers) still exists and is still written, and the random commit token, the
+low-water mark and the in-memory migration below do not exist yet.*
 Phase 13 lands in two stages, each reviewed before it lands.
 Stage 1 takes the checks off the run-time path without changing the store format: a store it
 writes still opens and verifies on the previous build, so it could ship alone.
@@ -40,12 +41,12 @@ Phase 13 retires the integrity machinery the store accumulated:
   segments (phase 9), the sealed root, the schema-5 extension that folded the page summaries into
   it, the schema-28 section tree that binds the small state into it, and the `RootLedger` caches
   that maintain it (stage 2);
-- the commit seal as a hash; its pairing role survives as a random commit token (stage 2, below);
+- the commit seal as a hash, with the commit's recomputation of each batch's seal; its pairing
+  role survives as a random commit token (stage 2, below);
 - every check made against them (stage 1): open-time root recombination and seal re-derivation,
   the leaf check on every eager row read, lazy fault and free-segment read, SQLite's digest check
-  on every small-state read, the recombination and seal re-derivation before a checkpoint that
-  refused to launder an at-rest edit into a new root, and the recomputation of each batch's seal at
-  commit;
+  on every small-state read, and the recombination and seal re-derivation before a checkpoint that
+  refused to launder an at-rest edit into a new root;
 - the torn-read re-checks, a manifest re-read before and after each fault and after resume's
   reads, which guarded against a second writer, and with them the pin's epoch, seal and leaves
   (stage 1);
@@ -85,14 +86,19 @@ What stays is what makes a store usable, not what would make it tamper-evident:
   fingerprint, and the cost table.
   They ask whether this build can read the store and refuse before anything is restored: a
   signature, boot-layout or cost-table mismatch, or an older schema that needs migrating, with a
-  typed refusal, and a foreign or unsupported file as a corrupt-store or I/O error.
+  typed refusal; a foreign file (another application's database, a file that is not a database, or
+  a foreign file-store magic) as a corrupt store; a read-only SQLite database as unsupported; and a
+  file the backend cannot read as an I/O error.
 - **The decoding restore needs**: the manifest, the small state and the free list, with the
   decoders' ordinary refusals, and the VM's own restore checks (the free list and live/free
   accounting as it builds the slot arena, the symbol-key table, the empty stack).
+  Lazy resume sizes its arenas from the manifest's geometry before it reads a row, so its open
+  also checks the live/free accounting and reads the last slot page and chunk extent, refusing a
+  geometry the stored rows do not back before it can size an allocation.
   Stage 1 makes a fault on a missing row or a failed read (I/O) come back as the store's own error
   instead of a panic: from resume when restore itself faults (the global-object walk, say), and
-  from a crank, which the host then rewinds, so a store with a missing row is refused where the
-  row is needed rather than crash-looping the worker.
+  from a crank or a collection, which the host then rewinds, so a store with a missing row is
+  refused where the row is needed rather than crash-looping the worker.
 - **Cheap guards against engine and caller bugs**: the session/store pairing at checkpoint and
   collection (on epoch and seal, and from stage 2 on epoch and commit token), the commit's batch
   geometry checks (with a row-index range check from stage 2) and its succession rules (epoch,
@@ -101,11 +107,13 @@ What stays is what makes a store usable, not what would make it tamper-evident:
   store its own resume cannot read), the collectors' summary-count check, epoch overflow, and the
   bounds checks that run inside a decode.
   Each fault checks its row's exact length and its records' references (W6-14), against the live
-  free map instead of the backing-generation copy.
-  It catches a reference to a slot that is free or out of range when the page faults, including one
-  freed earlier in the same session, but no longer one to a slot that was free at the last commit
-  and has been reused since, or out of range then and covered by growth since; an honest store
-  never holds either, because no live record references a free slot.
+  free map instead of the backing-generation copy and against the geometry last committed.
+  It catches a reference to a slot that is free when the page faults, including one freed earlier
+  in the same session, and one beyond the committed range.
+  It no longer catches a reference to a slot that was free in the store and has been reused since,
+  nor, once a later commit has grown the committed range, one that was out of range when its row
+  was committed; an honest store holds neither, because no live record references a free slot or a
+  slot beyond the arena.
   Restore bounds-checks the small state (the wave-5 gate) and, on the eager path, the decoded heap
   (W6-14).
 - **The container path.**
@@ -126,7 +134,8 @@ What stays is what makes a store usable, not what would make it tamper-evident:
   SQLite backend implements for `edge_pairs`.
   Both check by decoding and cross-checking, the first over metadata and the small state and the
   second over everything; neither takes a stored digest as evidence about the content.
-  Tests and fuzz targets run either level, and `migrate_store` ends with the metadata-scale level.
+  Tests and fuzz targets run either level, and a migration that ran ends with the metadata-scale
+  level.
 
 Change detection uses flags and counters, plus one hash kept for performance, the small-state
 section digest; § Incremental checkpoint has the detail.
@@ -1645,7 +1654,7 @@ which retires the integrity machinery under the trust model.
 *Seam and daemon:*
 
 - [ ] Phase 13, trust the resident store (stages 1 and 2, in
-  [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331)); see
+  [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331); stage 1 is implemented); see
   the 2026-09-24 entry at the top and § Phased Implementation.
 - [ ] The Ironhorse worker ENVELOPE protocol (`endor worker -e
   ironhorse`): DEPENDENCY-GATED on ironhorse-engine.md roadmap
@@ -4327,17 +4336,15 @@ CREATE TABLE small_sections (id INTEGER PRIMARY KEY, bytes BLOB NOT NULL,
   A second session on the same connection is a caller bug the lock
   cannot see; `PersistentMachine` drops a session before resuming
   another and never unbinds a machine.
-- Under the trust model (phase 13), open trusts what it reads: the
-  maintained `page_edges` summaries, the `edge_pairs` index and the
-  small-state section digests are state like the rows they derive
-  from.
-  An offline edit of a source row must bring what derives from it
-  along: recompute `page_edges` for an edited slot page and delete the
-  `edge_pairs` marker, and recompute the digest (`section_hash`) of an
-  edited section, which SQLite checks on read until stage 1 and the
-  validator's full level re-derives after it.
-  Until stage 1 lands, an edit must also re-seal the store, or resume
-  or the first fault refuses it.
+- Under the trust model (phase 13), open trusts what it reads: the maintained `page_edges`
+  summaries, the `edge_pairs` index and the small-state section digests are state like the rows
+  they derive from.
+  An offline edit of a source row must bring what derives from it along: recompute `page_edges`
+  for an edited slot page and delete the `edge_pairs` marker, and recompute the digest
+  (`section_hash`) of an edited section, which the validator's full level re-derives (SQLite
+  checked it on every read before stage 1).
+  An edit that leaves the seal or a leaf hash stale opens on stage 1, but the build before it
+  refuses the store at open or at the first fault.
 - Full close before any state-directory suspension or handoff, per the
   shutdown-checkpoint contract, after which the worker-heap DB is a
   single self-contained file.
@@ -4781,85 +4788,78 @@ Phase 13 (added 2026-09-24) mostly removes machinery rather than adding it;
 the 2026-09-24 trust-model entry at the top records the decision:
 
 13. **Trust the resident store.** *In progress in
-    [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331).*
-    Stage 1 takes the checks off the run-time path and leaves the store
-    format alone, so a store it writes still opens and verifies on the
-    previous build.
-    Open runs the compatibility gates, the decoding restore needs and
-    the bounds checks that run inside it; the small-state bounds gate,
-    which `validate_store` keeps as a validator check, also runs in lazy
-    resume (eager resume keeps it in `store_to_image`).
-    A fault reads its row and checks its length and its records'
-    references against the live free map; the pin's epoch, seal and
-    leaves, the torn-read re-checks and the leaf checks go.
-    The page source reports a failed row read as a typed store fault,
-    which resume turns into its error when restore faults and which a
-    crank turns into a store error that the host rewinds on.
-    A checkpoint no longer reads and checks never-faulted pages, keeps
-    no backing-generation free map, and no longer re-verifies stored
-    leaves or the stored root; the commit validates each batch once,
-    keeps the canonical-payload check in release and moves the summary
-    re-derivation to debug builds; SQLite stops re-hashing the small
-    state on read.
-    `validate_store` becomes the explicit validator, at a metadata-scale
-    level and a full level, with a `HeapStore` hook for derived-index
-    parity, and `migrate_store` ends with its metadata-scale level.
-    Starting a session on an existing machine detaches its old
-    backing once it has read what it needs, which the pin's epoch and
-    seal used to fence; a commit to the old store between unbinding and
-    that point falls under the second-session case given up in the
-    trust-model entry.
-    Leaf hashes and roots are still written, and seals still pair
-    sessions by equality, but none is recomputed or verified against
-    content until stage 2 removes them, so open and the first checkpoint
-    still build the hash trees.
-    *Stage 1 bar:* no open of a current store, fault or checkpoint
-    verifies a stored digest or root against content (the seal's
-    equality check as a pairing token, and the migration steps' checks,
-    stay until stage 2); a test-only check of the roots, leaves, seals and
-    digests over every store the suites write, and a committed fixture
-    written by stage 1, show the previous build still opens what stage 1
-    writes; the seven-way metamorphic suite agrees on every backend; and
-    the validator refuses each structural defect the retired integrity
-    suites planted, with crafted-store tests forcing residency so a
-    fault-time refusal does not depend on when a page faults.
+    [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331): stage 1 is implemented,
+    stage 2 is not yet.*
+    Stage 1 takes the checks off the run-time path and leaves the store format alone, so a store
+    it writes still opens and verifies on the previous build.
+    Open runs the compatibility gates, the decoding restore needs and the bounds checks that run
+    inside it; the small-state bounds gate, which `validate_store` keeps as a validator check,
+    also runs in lazy resume (eager resume keeps it in `store_to_image`), and lazy resume, which
+    sizes its arenas from the manifest's geometry, first checks the live/free accounting and reads
+    the last slot page and chunk extent.
+    A fault reads its row and checks its length and its records' references against the live free
+    map and the committed geometry; the pin's epoch, seal and leaves, the torn-read re-checks and
+    the leaf checks go.
+    The page source reports a failed row read as a typed store fault, which resume turns into its
+    error when restore faults, which a crank, a collection or a flush turns into a store error
+    that the host rewinds on, and which unwinds out of a session begun on a machine unbound from a
+    lazy session, taking the half-read machine with it.
+    A fault while the caller holds the store for a commit, an engine defect, is reported the same
+    way, as an engine-invariant store fault rather than a borrow panic.
+    A checkpoint no longer reads and checks never-faulted pages, keeps no backing-generation free
+    map, and no longer re-verifies stored leaves or the stored root; the commit validates each
+    batch once, keeps the canonical-payload check in release and moves the summary re-derivation
+    to debug builds; SQLite stops re-hashing the small state on read.
+    `validate_store` becomes the explicit validator, at a metadata-scale level and a full level,
+    with a `HeapStore` hook for derived-index parity, and a migration that ran ends with its
+    metadata-scale level.
+    Starting a session on an existing machine detaches its old backing once it has read what it
+    needs, which the pin's epoch and seal used to fence; a commit to the old store between
+    unbinding and that point falls under the second-session case given up in the trust-model
+    entry.
+    Leaf hashes, roots and seals are still written, and seals still pair sessions by equality,
+    but nothing on the run-time path verifies a stored one against the content until stage 2
+    removes them.
+    For the previous build's sake a commit still checks that the root it writes combines from the
+    leaves it writes and that its seal derives from its manifest, migration still checks an old
+    store's root and seal before restamping it, and the first checkpoint after a resume still
+    reads the stored leaves to build the hash trees.
+    *Stage 1 bar:* no open of a current store, fault or checkpoint verifies a stored digest or
+    root against content (the seal's equality check as a pairing token, and the migration steps'
+    checks, stay until stage 2); a test-only check of the roots, leaves, seals and digests over
+    every store the backend and collection suites write, and a committed fixture written by stage
+    1, show the previous build still opens what stage 1 writes; the seven-way metamorphic suite
+    agrees on every backend; and the validator refuses each structural defect the retired
+    integrity suites planted, with crafted-store tests forcing residency so a fault-time refusal
+    does not depend on when a page faults.
     Stage 2 removes the machinery behind a store schema bump.
-    It drops the leaf hashes of slot pages, chunk extents and free
-    segments (SQLite's `leaf_hashes` rows, and the file store's three
-    leaf sections, re-laid out behind a new file magic), the manifest's
-    root, seal and parent seal, the small-state section tree, and the
-    `RootLedger` caches, whose leaf maintenance also refused
-    out-of-range batch rows, so `check_batch` gains that row-index check
-    for rows and summaries alike.
-    A random commit token replaces the seal in succession and in the
-    session and collector pairing.
-    It is minted for every commit, epoch 1 included, by whoever builds
-    the batch (the session, or `import_from_container`) from an injected
-    source, is named by the next batch, and must be nonzero and differ
-    from its predecessor.
-    The free-list diff becomes a low-water mark on the arena's free
-    list, updated at its pops and pushes, starting at the list's length
-    when an arena is built, and reset only by a session-owned
-    acknowledgement, so a replaced arena or a stray acknowledgement
-    cannot claim that nothing changed.
-    Migration runs the ladder in memory over the manifest and small
-    state (no step touches rows), seeds the first token from the seal
-    stored before the ladder ran, validates the result against the
-    store's rows, and writes it once through a new atomic hook that
-    compares the manifest it read and empties the leaf storage.
-    The small-state section digests stay, as change detection that
-    nothing verifies.
-    *Stage 2 bar:* no production open, fault or checkpoint computes a
-    slot-page, chunk-extent, free-segment or root digest (the small-state
-    section digests excepted); checkpoint work stays proportional to
-    dirty rows, with the free-list term the touched suffix instead of
-    the O(free list) encode-and-hash; a schema-35 store written by stage
-    1 (committed SQLite and file-store fixtures) migrates, resumes and
-    passes both validator levels, while the older committed fixtures keep
-    refusing on their boot layout as they do today; the golden pins that
-    fixed the store's seals move to the export hash and explicit
-    manifest fields; and the well-formed, consistent edits the retired
-    integrity suites planted resume as the machine they describe.
+    It drops the leaf hashes of slot pages, chunk extents and free segments (SQLite's
+    `leaf_hashes` rows, and the file store's three leaf sections, re-laid out behind a new file
+    magic), the manifest's root, seal and parent seal, the small-state section tree, and the
+    `RootLedger` caches, whose leaf maintenance also refused out-of-range batch rows, so
+    `check_batch` gains that row-index check for rows and summaries alike.
+    A random commit token replaces the seal in succession and in the session and collector
+    pairing.
+    It is minted for every commit, epoch 1 included, by whoever builds the batch (the session, or
+    `import_from_container`) from an injected source, is named by the next batch, and must be
+    nonzero and differ from its predecessor.
+    The free-list diff becomes a low-water mark on the arena's free list, updated at its pops and
+    pushes, starting at the list's length when an arena is built, and reset only by a
+    session-owned acknowledgement, so a replaced arena or a stray acknowledgement cannot claim that
+    nothing changed.
+    Migration runs the ladder in memory over the manifest and small state (no step touches rows),
+    seeds the first token from the seal stored before the ladder ran, validates the result against
+    the store's rows, and writes it once through a new atomic hook that compares the manifest it
+    read and empties the leaf storage.
+    The small-state section digests stay, as change detection that nothing verifies.
+    *Stage 2 bar:* no production open, fault or checkpoint computes a slot-page, chunk-extent,
+    free-segment or root digest (the small-state section digests excepted); checkpoint work stays
+    proportional to dirty rows, with the free-list term the touched suffix instead of the O(free
+    list) encode-and-hash; a schema-35 store written by stage 1 (committed SQLite and file-store
+    fixtures) migrates, resumes and passes both validator levels, while the older committed
+    fixtures keep refusing on their boot layout as they do today; the golden pins that fixed the
+    store's seals move to the export hash and explicit manifest fields; and the well-formed,
+    consistent edits the retired integrity suites planted resume as the machine they describe.
 
 ### Plan: counted side-table ref-page accessors (phase 10 remainder, its own PR)
 

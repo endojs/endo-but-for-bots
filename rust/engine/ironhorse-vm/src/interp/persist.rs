@@ -4273,6 +4273,17 @@ impl Interp {
         self.chunks.clear_dirty_after_commit(false);
     }
 
+    /// Stop relying on a lazy backing that belongs to another store: fault
+    /// every page and extent in and mark them all unbacked, so nothing is
+    /// evicted and nothing faults from that store again. A store session
+    /// calls this when it binds a machine unbound from an earlier session,
+    /// the case the lazy page source's epoch pin used to fence. No-op on a
+    /// detached machine.
+    pub fn abandon_backing(&mut self) {
+        self.slots.abandon_backing();
+        self.chunks.abandon_backing();
+    }
+
     /// Check the store session's backing authority before committing bytes.
     /// This exposes no authority and does not read or mutate any heap page.
     pub fn check_backing_authority(
@@ -4285,9 +4296,9 @@ impl Interp {
         Ok(())
     }
 
-    /// Acknowledge a commit to the pinned backing and advance its geometry.
-    /// The store adapter must update its page source to the committed state
-    /// first. Only the authority minted with these arenas can authorize this.
+    /// Acknowledge a commit to the pinned backing and advance its geometry,
+    /// after the commit has landed in the store the page source reads. Only
+    /// the authority minted with these arenas can authorize this.
     /// A capability for any other pair is refused before changing metadata.
     pub fn acknowledge_backing_commit(
         &mut self,

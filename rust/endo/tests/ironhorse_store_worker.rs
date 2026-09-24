@@ -776,3 +776,193 @@ fn scheduled_collection_checkpoint_failure_preserves_the_committed_delivery() {
     assert_eq!(machine.eval("deliveries").unwrap().result, "1");
     machine.close().unwrap();
 }
+
+/// A worker store whose committed string spans several chunk extents, with
+/// one extent inside the string's payload deleted while the store is
+/// closed. Open trusts the store (the store-seam design's trust model), so
+/// it finds nothing wrong with a row it does not read. Returns the options
+/// and the missing extent's index.
+fn store_with_a_missing_extent(dir: &std::path::Path) -> (HeapStoreOptions, u32) {
+    let options = HeapStoreOptions {
+        path: dir.join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    let outcome = machine
+        .eval("var s = 0; var n = 0; var j = 0; s = 'x'.repeat(150000); s.length")
+        .expect("crank 1");
+    assert_eq!(outcome.result, "150000");
+    machine.close().expect("close");
+
+    // The string is the last large allocation, so the extent before the
+    // last one lies inside it.
+    let conn = rusqlite::Connection::open(&options.path).unwrap();
+    let extents: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunk_exts", [], |r| r.get(0))
+        .unwrap();
+    assert!(extents >= 3, "the string spans several extents: {extents}");
+    let missing = extents - 2;
+    assert_eq!(
+        conn.execute("DELETE FROM chunk_exts WHERE ext = ?1", [missing])
+            .unwrap(),
+        1
+    );
+    drop(conn);
+    (options, missing as u32)
+}
+
+/// The store's own error for a missing chunk extent, as `PersistentMachine`
+/// reports it.
+fn assert_missing_extent(error: &MachineError, missing: u32) {
+    assert_eq!(error.store_failure(), Some(StoreFailure::Poisoned));
+    let MachineError::Store(source) = error else {
+        panic!("expected the store's error, got {error:?}");
+    };
+    assert_eq!(
+        **source,
+        StoreError::MissingRow("chunk extent", missing),
+        "the store's own error: {source}"
+    );
+}
+
+/// A row the store cannot produce, found by a crank's lazy fault, comes
+/// back as the store's own error instead of crashing the worker; the
+/// machine rewinds to its last checkpoint and keeps serving cranks that do
+/// not need the row.
+#[test]
+fn a_crank_that_faults_a_missing_row_gets_the_stores_error_and_rewinds() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (options, missing) = store_with_a_missing_extent(dir.path());
+    let mut machine = PersistentMachine::open(&options).expect("open does not read the extent");
+    let epoch = machine.epoch().expect("epoch");
+    // The crank writes `n` before it faults, so only a rewind brings `n`
+    // back to its committed 0.
+    let error = machine
+        .eval(
+            "var s; var n; var j; n = 1000; \
+             for (j = 0; j < s.length; j = j + 1000) { n = n + s.charCodeAt(j); } n",
+        )
+        .expect_err("the crank faults the missing extent");
+    assert_missing_extent(&error, missing);
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        epoch,
+        "the failed crank committed nothing"
+    );
+    assert_eq!(
+        machine
+            .eval("var s; var n; var j; n + 2")
+            .expect("the rewound machine keeps serving")
+            .result,
+        "2",
+        "the machine rewound to its last checkpoint"
+    );
+    machine.close().expect("close");
+}
+
+/// A collection's chunk compaction walks every block header, so it reads
+/// every extent that holds one, including extents no crank touched. With
+/// one of them deleted while the store was closed (open reads only the
+/// first and the tail extents), the collection reports the store's own
+/// error rather than a collector panic, and rewinds like a failed crank.
+#[test]
+fn a_collection_that_faults_a_missing_row_gets_the_stores_error_and_rewinds() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let options = HeapStoreOptions {
+        path: dir.path().join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    // Thousands of small strings: block headers in every extent they span.
+    let outcome = machine
+        .eval(
+            "var s = []; var n = 0; var i = 0; \
+             for (i = 0; i < 6000; i = i + 1) { s.push('str-' + i + '-padding-padding'); } \
+             for (i = 0; i < 6000; i = i + 2) { s[i] = 0; } s.length",
+        )
+        .expect("crank 1");
+    assert_eq!(outcome.result, "6000");
+    machine.close().expect("close");
+    let conn = rusqlite::Connection::open(&options.path).unwrap();
+    let extents: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunk_exts", [], |r| r.get(0))
+        .unwrap();
+    assert!(extents >= 4, "the strings span several extents: {extents}");
+    let missing = extents / 2;
+    assert_eq!(
+        conn.execute("DELETE FROM chunk_exts WHERE ext = ?1", [missing])
+            .unwrap(),
+        1
+    );
+    drop(conn);
+
+    let mut machine = PersistentMachine::open(&options).expect("open does not read the extent");
+    let epoch = machine.epoch().expect("epoch");
+    let error = machine
+        .collect()
+        .expect_err("the collection faults the missing extent");
+    assert_missing_extent(&error, missing as u32);
+    assert_eq!(
+        machine.epoch().expect("epoch"),
+        epoch,
+        "the failed collection committed nothing"
+    );
+    assert_eq!(
+        machine
+            .eval("var n; n + 2")
+            .expect("the rewound machine keeps serving")
+            .result,
+        "2"
+    );
+    machine.close().expect("close");
+}
+
+/// A row read that fails while open restores the machine (the restore
+/// faults the pages it walks) comes back from open as the store's own
+/// error, as one a crank's fault finds does.
+#[test]
+fn an_open_that_faults_a_missing_row_gets_the_stores_error() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let options = HeapStoreOptions {
+        path: dir.path().join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
+        global_names: None,
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    assert_eq!(
+        machine.eval("var x = 41; x + 1").expect("crank 1").result,
+        "42"
+    );
+    machine.close().expect("close");
+
+    // Page 0, not the tail page that open itself reads: the restore
+    // faults it.
+    let conn = rusqlite::Connection::open(&options.path).unwrap();
+    assert_eq!(
+        conn.execute("DELETE FROM slot_pages WHERE page = 0", [])
+            .unwrap(),
+        1
+    );
+    drop(conn);
+
+    let Err(error) = PersistentMachine::open(&options) else {
+        panic!("open restored a machine without its first slot page");
+    };
+    assert_eq!(error.store_failure(), Some(StoreFailure::Poisoned));
+    let MachineError::Store(source) = &error else {
+        panic!("expected the store's error, got {error:?}");
+    };
+    assert_eq!(
+        **source,
+        StoreError::MissingRow("slot page", 0),
+        "the store's own error: {source}"
+    );
+}

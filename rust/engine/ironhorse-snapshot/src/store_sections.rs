@@ -175,11 +175,14 @@ pub fn batch_updates(
         .collect())
 }
 
+/// The section digests after `batch`. The batch is not validated again:
+/// the commit gate's `check_succession` validates each batch's section
+/// payloads once, and the checkpoint producer builds its batches from the
+/// machine's own state.
 pub fn updated_leaves(
     prior: Option<&SectionLeaves>,
     batch: &crate::store::CheckpointBatch,
 ) -> Result<SectionLeaves, StoreError> {
-    validate_batch(batch, prior.is_none())?;
     if let Some(updates) = &batch.small_updates {
         let mut leaves = prior
             .cloned()
@@ -193,12 +196,12 @@ pub fn updated_leaves(
     }
 }
 
-/// Merge only for whole-state adapters such as the reference FileStore.
+/// Merge only for whole-state adapters such as the reference FileStore,
+/// over a batch the commit gate has already validated.
 pub fn merge_framed(
     prior: Option<&[u8]>,
     batch: &crate::store::CheckpointBatch,
 ) -> Result<Vec<u8>, StoreError> {
-    validate_batch(batch, prior.is_none())?;
     if let Some(updates) = &batch.small_updates {
         let mut sections = match prior {
             Some(bytes) => split_small_state(bytes)?,
