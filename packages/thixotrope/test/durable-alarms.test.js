@@ -1,4 +1,6 @@
 // @ts-check
+/** @import { SyncStringAtom } from '../src/store/sync-string-atom.js' */
+/** @import { TimerPowers } from '../src/platform/timers.js' */
 /**
  * The manual-persistence alarm: a guest waits on a host promise, the host dies,
  * and the wait survives it. See designs/manual-persistence-vats.md.
@@ -41,19 +43,25 @@ const tickUntil = async predicate => {
  * waiting for it.
  * @param {string} statePath
  * @param {() => bigint} now
+ * @param {{storage?: SyncStringAtom, timers?: TimerPowers}} [options]
  */
-const makeHost = async (statePath, now) => {
+const makeHost = async (statePath, now, options = {}) => {
   /** @type {any} */
   let daemonRef;
-  const alarms = makeDurableAlarms(nodePowers, {
-    storage: makeFileSyncStringAtom(
-      nodePowers.syncFiles,
-      join(statePath, 'alarms.json'),
-    ),
-    makeResource: (name, description) =>
-      daemonRef.makeResource(name, description),
-    now,
-  });
+  const alarms = makeDurableAlarms(
+    { timers: options.timers ?? nodePowers.timers },
+    {
+      storage:
+        options.storage ??
+        makeFileSyncStringAtom(
+          nodePowers.syncFiles,
+          join(statePath, 'alarms.json'),
+        ),
+      makeResource: (name, description) =>
+        daemonRef.makeResource(name, description),
+      now,
+    },
+  );
   const daemon = await makeThixotropeDaemon(nodePowers, {
     store: makeFsStore(nodePowers, statePath),
     engine: makePeerSnapshottingReplayEngine(nodePowers),
@@ -309,3 +317,98 @@ test.serial(
     t.regex(got[1], /cancelled/);
   },
 );
+
+for (const cancelled of [false, true]) {
+  test.serial(
+    `alarm ${cancelled ? 'cancellation' : 'fulfillment'} survives crash after terminal commit`,
+    async t => {
+      t.timeout(30_000);
+      const statePath = await mkdtemp(
+        join(tmpdir(), 'thixotrope-alarm-commit-'),
+      );
+      t.teardown(() => rm(statePath, { recursive: true, force: true }));
+      let saved = '{"version":2,"alarms":[]}';
+      let interrupt = false;
+      let fire = () => {};
+      let now = 1000n;
+      const storage = {
+        read: () => saved,
+        write: text => {
+          saved = text;
+          if (interrupt) throw Error('crash after terminal commit');
+        },
+      };
+      const first = await makeHost(statePath, () => now, {
+        storage,
+        timers: {
+          ...nodePowers.timers,
+          setTimer: callback => {
+            fire = callback;
+            return 1;
+          },
+          clearTimer: () => {
+            fire = () => {};
+          },
+        },
+      });
+      t.teardown(() => first.alarms.shutdown());
+      t.teardown(() => first.daemon.crash());
+      const owner = await first.daemon.createWorker({
+        debugLabel: 'clock-owner',
+      });
+      const facet = first.daemon.makeResource('alarms', {
+        workerId: owner.workerId,
+      });
+      const clock = await owner.evaluate(
+        `(${makeGuestClock.toString()})(alarms)`,
+        { alarms: facet },
+      );
+      const other = await first.daemon.createWorker({
+        debugLabel: 'clock-observer',
+      });
+      const observer = await other.evaluate(`(() => {
+      let got = null;
+      return Far('Observer', {
+        watch: ({ settlement }) => {
+          Promise.resolve(settlement).then(
+            at => { got = ['settled', String(at)]; },
+            error => { got = ['broken', error.message]; },
+          );
+          return true;
+        },
+        get: () => got,
+      });
+    })()`);
+      const alarm = await E(clock).arm(2000n);
+      await E(observer).watch(alarm);
+      first.daemon.publish(observer, 'observer');
+      await parkWorkers(first.daemon);
+      now = 3000n;
+      interrupt = true;
+      if (cancelled) {
+        await t.throwsAsync(() => E(facet).cancel('1'), {
+          message: 'crash after terminal commit',
+        });
+      } else {
+        t.throws(() => fire(), { message: 'crash after terminal commit' });
+      }
+      first.alarms.shutdown();
+      await first.daemon.crash();
+      interrupt = false;
+      const second = await makeHost(statePath, () => now, { storage });
+      t.teardown(() => second.alarms.shutdown());
+      t.teardown(() => second.daemon.shutdown());
+      const restored = await second.daemon.lookup('observer');
+      t.true(await tickUntil(async () => (await E(restored).get()) !== null));
+      t.deepEqual(
+        await E(restored).get(),
+        cancelled ? ['broken', 'Alarm cancelled'] : ['settled', '3000'],
+      );
+      t.true(
+        await tickUntil(async () => second.alarms.status().retained === 0n),
+        'guest acknowledges the outcome after recording its own settlement',
+      );
+      t.deepEqual(JSON.parse(saved), { version: 2, alarms: [] });
+    },
+  );
+}

@@ -1,7 +1,7 @@
 // @ts-check
 import { Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
-import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -9,10 +9,43 @@ import {
   makeLocalControl,
 } from '../src/control/local-control.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
+import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
+
+test.serial(
+  'old workspace clocks are rejected before restoring workers',
+  async t => {
+    t.timeout(5000);
+    const path = await mkdtemp('/tmp/thix-old-clock-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const metadata = '{"version":2}';
+    await writeFile(join(path, 'workspace.json'), metadata);
+    let released = false;
+    let started = false;
+    await t.throwsAsync(
+      () =>
+        serveThixotrope(nodePowers, path, {
+          engine: {
+            ...makePeerSnapshottingReplayEngine(nodePowers),
+            acquireStore: async () => async () => {
+              released = true;
+            },
+            start: async () => {
+              started = true;
+              throw Error('must not start');
+            },
+          },
+        }),
+      { message: /alarm acknowledgements require version 3/ },
+    );
+    t.true(released);
+    t.false(started);
+    t.is(await readFile(join(path, 'workspace.json'), 'utf8'), metadata);
+  },
+);
 const controlPowers = {
   sockets: nodePowers.sockets,
   random: nodePowers.random,
