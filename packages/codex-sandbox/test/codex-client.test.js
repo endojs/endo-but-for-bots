@@ -492,6 +492,7 @@ const makeQueue = () => {
  *   network?: any,
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
+ *   restoredTurnIds?: string[],
  *   turnCounterStart?: number,
  *   announceTurns?: boolean,
  *   closeFailures?: number,
@@ -520,6 +521,7 @@ const makeFixture = ({
   turnCounterStart = existingTurnIds.length,
   announceTurns = true,
   closeFailures = 0,
+  restoredTurnIds = [],
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
@@ -568,9 +570,22 @@ const makeFixture = ({
         break;
       case 'thread/resume':
         activeThread = message.params.threadId;
+        if (message.params.path)
+          turnIds.splice(0, turnIds.length, ...restoredTurnIds);
         push({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
+        });
+        break;
+      case 'thread/read':
+        push({
+          id: message.id,
+          result: {
+            thread: {
+              id: activeThread,
+              path: '/codex-home/sessions/rollout-test.jsonl',
+            },
+          },
         });
         break;
       case 'thread/inject_items':
@@ -599,7 +614,7 @@ const makeFixture = ({
         push({
           id: message.id,
           result: {
-            data: latest ? [{ id: latest }] : [],
+            data: latest ? [{ id: latest, status: 'completed' }] : [],
             nextCursor: null,
             backwardsCursor: null,
           },
@@ -714,6 +729,397 @@ const drain = async reader => {
 // Everything the fixture does is microtask-driven, so one trip through the
 // timer queue is enough to know that nothing else is going to happen.
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const nativeTestBinding = harden({
+  model: '',
+  systemPrompt: '',
+  toolSetId: '',
+  cwd: '/workspace',
+  cliVersion: '0.152.0',
+  modelProvider: 'endo_broker',
+});
+const nativeTestSnapshot = (binding = nativeTestBinding) =>
+  harden({
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    context: [],
+    payload: JSON.stringify({
+      capture: {
+        sessionId: 'old-native',
+        turnId: 'old-turn',
+        baseInstructions: 'native base',
+        payload: 'native bytes\n',
+      },
+      binding,
+    }),
+  });
+const nativeTestTransport = (overrides = {}) => ({
+  capture: async request => ({
+    sessionId: request.sessionId,
+    turnId: request.turnId,
+    baseInstructions: 'native base',
+    payload: 'native bytes\n',
+  }),
+  restore: async request => ({
+    sessionId: request.target.sessionId,
+    rolloutPath: '/codex-home/sessions/fresh-native.jsonl',
+    sha256: 'digest',
+  }),
+  cancel: async () => {},
+  close: async () => {},
+  ...overrides,
+});
+
+test('native capture completes outside the notification pump and precedes end', async t => {
+  t.timeout(5000);
+  const captures = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        capture: async request => {
+          captures.push(request);
+          return nativeTestTransport().capture(request);
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.deepEqual(
+    events.filter(event => event.type !== 'phase').map(event => event.type),
+    ['native-context', 'end'],
+  );
+  t.deepEqual(captures, [
+    {
+      rolloutPath: '/codex-home/sessions/rollout-test.jsonl',
+      sessionId: 'thread-new',
+      turnId: 'turn-1',
+    },
+  ]);
+  const checkpoint = events.find(
+    event => event.type === 'native-context',
+  ).checkpoint;
+  t.deepEqual(checkpoint.context, []);
+  t.deepEqual(JSON.parse(checkpoint.payload).binding, nativeTestBinding);
+});
+
+for (const cancel of ['interrupt', 'terminate']) {
+  test(`native capture ${cancel} drains helper and cannot publish late success`, async t => {
+    t.timeout(5000);
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let capturing = false;
+    let reaped = false;
+    const fixture = makeFixture({
+      clientOptions: {
+        nativeContext: nativeTestTransport({
+          capture: async request => {
+            capturing = true;
+            await gate;
+            return nativeTestTransport().capture(request);
+          },
+          cancel: async () => {
+            reaped = true;
+            release();
+          },
+          close: async () => {
+            reaped = true;
+            release();
+          },
+        }),
+      },
+    });
+    t.teardown(async () => {
+      release();
+      await fixture.client.terminate();
+    });
+    const reader = await fixture.client.send('hello');
+    fixture.push({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-new',
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    });
+    while (!capturing) {
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+    await fixture.client[cancel]();
+    const events = await drain(reader);
+    t.true(reaped);
+    t.false(
+      events.some(event => ['end', 'native-context'].includes(event.type)),
+    );
+    t.is(events.at(-1).type, 'abort');
+  });
+}
+
+test('native restoration reconciles inherited ledger and persists actual resumed baseline', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const fixture = makeFixture({
+    threadId: 'old-native',
+    existingTurnIds: ['turn-1'],
+    restoredTurnIds: ['rollout-1'],
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      saveThreadState: async state => {
+        writes.push(state);
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+  });
+  const methods = fixture.sent.map(message => message.method);
+  const resume = fixture.sent.findIndex(
+    message => message.method === 'thread/resume' && message.params.path,
+  );
+  t.true(methods.indexOf('thread/revert') < resume);
+  t.false(methods.includes('thread/inject_items'));
+  t.like(
+    writes.find(state => state.threadId === 'fresh-native'),
+    { recovery: { baseTurnId: 'rollout-1' } },
+  );
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'fresh-native',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('native snapshot binding mismatch refuses before any transport work', async t => {
+  const fixture = makeFixture({
+    clientOptions: { nativeContext: nativeTestTransport() },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const binding of [
+    { ...nativeTestBinding, model: 'changed' },
+    { ...nativeTestBinding, systemPrompt: 'changed' },
+    { ...nativeTestBinding, toolSetId: 'changed' },
+    { ...nativeTestBinding, cwd: '/other' },
+    { ...nativeTestBinding, cliVersion: 'old' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('hello', {
+          transcript: [nativeTestSnapshot(binding)],
+        }),
+      { message: /binding changed/ },
+    );
+  }
+  t.deepEqual(fixture.sent, []);
+});
+
+test('malformed native capture refuses before restoration or protocol effects', async t => {
+  let restored = 0;
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        restore: async () => {
+          restored += 1;
+          throw Error('unexpected restore');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const capture of [
+    undefined,
+    null,
+    {},
+    { sessionId: 'old', turnId: 'turn', baseInstructions: '', payload: 'torn' },
+  ]) {
+    const checkpoint = {
+      ...nativeTestSnapshot(),
+      payload: JSON.stringify({ binding: nativeTestBinding, capture }),
+    };
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => fixture.client.send('hello', { transcript: [checkpoint] }),
+      { message: /capture is malformed/ },
+    );
+  }
+  t.is(restored, 0);
+  t.deepEqual(fixture.sent, []);
+});
+
+test('native restoration cancellation drains held helper before any prompt dispatch', async t => {
+  t.timeout(5000);
+  let restoring = false;
+  let closed = false;
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const fixture = makeFixture({
+    clientOptions: {
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      nativeContext: nativeTestTransport({
+        restore: async request => {
+          restoring = true;
+          await gate;
+          return nativeTestTransport().restore(request);
+        },
+        close: async () => {
+          closed = true;
+          release();
+        },
+      }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const sending = fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+  });
+  void sending.catch(() => {});
+  while (!restoring) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  await t.throwsAsync(() => fixture.client.interrupt(), {
+    message: /interrupted during startup/,
+  });
+  await t.throwsAsync(sending, { message: /restoration cancelled/ });
+  t.true(closed);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
+test('restored nonempty baseline retains exact prior checkpoint lineage after reconstruction', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'interrupted-projection',
+    existingTurnIds: ['rollout-1'],
+    restoredTurnIds: ['rollout-1'],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: 'rollout-1',
+        previousCheckpoint: 'prior-host-checkpoint',
+      },
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      nativeContext: nativeTestTransport(),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+    acknowledgedCheckpoint: 'prior-host-checkpoint',
+  });
+  t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'fresh-native',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('native capture failure aborts without an incomplete checkpoint or success', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        capture: async () => {
+          throw Error('Synthetic capture failure');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.false(events.some(event => ['end', 'native-context'].includes(event.type)));
+  t.regex(events.at(-1).reason, /Synthetic capture failure/);
+});
+
+test('interrupt during held terminal audit settles naturally completed turn without capture', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let auditing = false;
+  let captures = 0;
+  const fixture = makeFixture({
+    interruptTerminal: false,
+    clientOptions: {
+      auditEvent: async kind => {
+        if (kind === 'turn-terminal') {
+          auditing = true;
+          await gate;
+        }
+      },
+      nativeContext: nativeTestTransport({
+        capture: async request => {
+          captures += 1;
+          return nativeTestTransport().capture(request);
+        },
+      }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  while (!auditing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  const interrupted = fixture.client.interrupt();
+  void interrupted.catch(() => {});
+  await flush();
+  release();
+  await interrupted;
+  const events = await drain(reader);
+  t.is(captures, 0);
+  t.is(events.at(-1).type, 'abort');
+  t.false(events.some(event => event.type === 'end'));
+});
 
 const supervise = async client => {
   const events = [];
@@ -3044,13 +3450,13 @@ for (const phase of ['thread/start', 'thread/inject_items']) {
 }
 
 test('interrupt during ledger admission fences the prompt and terminal-microtask successor', async t => {
-  let release;
+  let release = () => {};
   const gate = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
-  let entered;
+  let entered = () => {};
   const held = new Promise(resolve => {
-    entered = resolve;
+    entered = () => resolve(undefined);
   });
   const saved = [];
   const fixture = makeFixture({

@@ -66,6 +66,17 @@ The reviewed helper transport/OCI slice now supplies bounded in-sandbox commands
 with cancellation that drains late acquisition and all I/O. Twenty focused tests
 pass; full Floot passes 700 tests. Client/journal integration and deployed
 acceptance remain outstanding.
+The subsequent Codex client slice connects successful-turn native capture and
+fresh-identity restoration to the existing journal/ledger contract. It validates
+runtime bindings, records the restored native baseline, retains prior-checkpoint
+lineage, and fences helper cancellation. Independent review fixed a terminal
+audit/cancellation race; full Codex passes 421 tests. Unknown native tool-event
+kinds and unprojected suffixes still refuse explicitly. Native-tool compatibility,
+real-provider acceptance and deployed restart tests remain open; RA-02 is not done.
+Pinned synthetic native `exec_command` ordinary/compacted-suffix probes now pass
+without parser changes: one execution, preserved modeled context, and successful
+re-export. This narrows the native-tool gap but does not cover every tool or live
+Floot restart.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred

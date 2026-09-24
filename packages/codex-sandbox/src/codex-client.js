@@ -3,7 +3,10 @@ import { clearTimeout, setTimeout } from 'node:timers';
 
 import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
-import { responsesApiItems } from '@endo/hosted-agent/transcript-records.js';
+import {
+  responsesApiItems,
+  selectActiveTranscript,
+} from '@endo/hosted-agent/transcript-records.js';
 import {
   awaitBarrier,
   makeHostedTurnChannel,
@@ -131,6 +134,8 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @property {(event: any) => void} push
  * @property {boolean} interrupted
  * @property {boolean} startAdmitted Whether turn/start crossed the transport-write boundary.
+ * @property {boolean} [capturing]
+ * @property {any} [nativeBinding]
  * @property {string} [interruptReason]
  * @property {string} [errorReason]
  * @property {Promise<void>} terminal
@@ -171,6 +176,8 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @param {(name: string, args: Record<string, unknown>) => Promise<unknown>} [options.callTool]
  * @param {string} [options.toolSetId]
  * @param {string} [options.savedToolSetId]
+ * @param {{capture: (request: any) => Promise<any>, restore: (request: any) => Promise<any>, cancel: () => Promise<void>, close: () => Promise<void>}} [options.nativeContext]
+ * @param {() => {sessionId: string, timestamp: string}} [options.makeNativeIdentity]
  * @param {{ baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string }} [options.savedRecovery]
  * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} [options.saveThreadState]
  * @param {number} [options.requestTimeoutMs]
@@ -211,6 +218,8 @@ export const makeCodexClient = ({
   callTool,
   toolSetId,
   savedToolSetId,
+  nativeContext,
+  makeNativeIdentity,
   savedRecovery,
   requestTimeoutMs = 30_000,
   maxTurnItems = 16_384,
@@ -324,6 +333,7 @@ export const makeCodexClient = ({
   );
   let nextRequestId = 1;
   let threadId = savedThreadId;
+  const nativeCaptures = new Set();
   let boundToolSetId = savedToolSetId;
   let threadReady = false;
   let replayContinuity =
@@ -333,8 +343,9 @@ export const makeCodexClient = ({
   // incarnation, so resuming it would let the CLI's own store decide the
   // conversation -- the behaviour the stack's records exist to replace, and
   // the one Claude's client stopped doing for the same reason. There is no
-  // "resume what we rebuilt" for Codex the way there is for Claude, because
-  // the rebuild *is* the injection into a thread. So an inherited thread is
+  // ambient resume shortcut: native checkpoints rebuild under fresh identity,
+  // and portable records are injected when there is no native checkpoint.
+  // An inherited thread is
   // reconciled and then rotated away from, which is the path a changed tool
   // catalog already takes. Cleared once this incarnation owns a thread.
   let inheritedThread = Boolean(savedThreadId);
@@ -509,6 +520,14 @@ export const makeCodexClient = ({
       shutdown = (async () => {
         await null;
         const failures = [];
+        if (nativeContext) {
+          try {
+            await nativeContext.close();
+          } catch (cleanupError) {
+            failures.push(cleanupError);
+          }
+        }
+        await Promise.allSettled([...nativeCaptures]);
         if (transport && !transportClosed) {
           try {
             await transport.close();
@@ -653,6 +672,15 @@ export const makeCodexClient = ({
     }
     turn.interrupted = true;
     turn.interruptReason = reason;
+    if (turn.capturing) {
+      try {
+        await nativeContext?.cancel();
+        await settleTurn(turn, { type: 'aborted', reason });
+      } catch (error) {
+        await failSession(error);
+      }
+      return undefined;
+    }
     if (!turn.startAdmitted) {
       // Restoration and write-ahead preparation are not native execution.
       // Let their owned work settle; send() fences the prompt and settles the
@@ -1205,6 +1233,7 @@ export const makeCodexClient = ({
         }
         break;
       case 'turn/completed': {
+        const completedTurn = active;
         const status = params.turn?.status;
         await audit('turn-terminal', {
           threadId: params.threadId,
@@ -1215,6 +1244,94 @@ export const makeCodexClient = ({
           }),
         });
         if (status === 'completed') {
+          if (nativeContext) {
+            const turn = completedTurn;
+            if (!turn || active !== turn || closing || terminated) break;
+            if (turn.interrupted) {
+              await settleTurn(turn, {
+                type: 'aborted',
+                reason: turn.interruptReason || 'Codex turn interrupted',
+              });
+              break;
+            }
+            if (turn.capturing) break;
+            turn.capturing = true;
+            // Never await an RPC from the serial notification pump.
+            const capture = (async () => {
+              await null;
+              const assertCapture = () => {
+                if (
+                  closing ||
+                  terminated ||
+                  active !== turn ||
+                  turn.interrupted
+                )
+                  throw Error('Codex native capture cancelled');
+              };
+              try {
+                assertCapture();
+                const read = await request('thread/read', {
+                  threadId: turn.threadId,
+                  includeTurns: false,
+                });
+                assertCapture();
+                if (
+                  read?.thread?.id !== turn.threadId ||
+                  typeof read.thread.path !== 'string'
+                )
+                  throw Error(
+                    'Codex native capture requires its explicit rollout path',
+                  );
+                const captured = await nativeContext.capture({
+                  rolloutPath: read.thread.path,
+                  sessionId: turn.threadId,
+                  turnId: eventTurnId,
+                });
+                assertCapture();
+                if (
+                  captured?.sessionId !== turn.threadId ||
+                  captured?.turnId !== eventTurnId ||
+                  typeof captured.baseInstructions !== 'string' ||
+                  typeof captured.payload !== 'string' ||
+                  !captured.payload.endsWith('\n')
+                )
+                  throw Error('Codex native capture identity mismatch');
+                turn.push(
+                  harden({
+                    type: 'native-context',
+                    checkpoint: {
+                      kind: 'native-context',
+                      format: 'codex-rollout-v1',
+                      context: [],
+                      payload: JSON.stringify({
+                        capture: captured,
+                        binding: turn.nativeBinding,
+                      }),
+                    },
+                  }),
+                );
+                await settleTurn(turn, {
+                  type: 'completed',
+                  checkpoint: `${eventTurnId}`,
+                });
+              } catch (error) {
+                await settleTurn(turn, {
+                  type: 'failed',
+                  reason:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            })();
+            nativeCaptures.add(capture);
+            void capture.catch(error => {
+              failSession(error);
+            });
+            void capture.then(
+              () => nativeCaptures.delete(capture),
+              () => nativeCaptures.delete(capture),
+            );
+            break;
+          }
           // Floot persists this checkpoint with its conversation node, then
           // acknowledges it. Until then the next send conservatively rolls the
           // backend turn out. The ledger records the commit only if this is the
@@ -1491,6 +1608,43 @@ export const makeCodexClient = ({
     Array.isArray(opts.transcript)
       ? /** @type {TranscriptRecord[]} */ (opts.transcript)
       : [];
+  const nativeBinding = opts =>
+    harden({
+      model: opts.model || model || '',
+      systemPrompt: opts.systemPrompt || developerInstructions || '',
+      toolSetId: toolSetId || '',
+      cwd,
+      cliVersion: '0.152.0',
+      modelProvider: 'endo_broker',
+    });
+  const nativeSnapshot = opts => {
+    const records = selectActiveTranscript(transcriptRecords(opts)).active;
+    if (records[0]?.kind !== 'native-context') return undefined;
+    if (!nativeContext || records[0].format !== 'codex-rollout-v1')
+      throw Error('Codex cannot restore this native context format');
+    if (records.length !== 1)
+      throw Error('Codex native context cannot restore an unprojected suffix');
+    const snapshot = JSON.parse(records[0].payload);
+    if (
+      !snapshot ||
+      typeof snapshot !== 'object' ||
+      !snapshot.capture ||
+      typeof snapshot.capture !== 'object' ||
+      typeof snapshot.capture.sessionId !== 'string' ||
+      !snapshot.capture.sessionId ||
+      typeof snapshot.capture.turnId !== 'string' ||
+      !snapshot.capture.turnId ||
+      typeof snapshot.capture.baseInstructions !== 'string' ||
+      typeof snapshot.capture.payload !== 'string' ||
+      !snapshot.capture.payload.endsWith('\n')
+    )
+      throw Error('Codex native context capture is malformed');
+    if (
+      JSON.stringify(snapshot.binding) !== JSON.stringify(nativeBinding(opts))
+    )
+      throw Error('Codex native context binding changed');
+    return snapshot.capture;
+  };
   // Records are the only channel. `continuityContext` used to stand in for
   // them as text; it carried nothing a tool call survives, and gating on it
   // let a rotation proceed on a conversation that could not actually be
@@ -1568,10 +1722,61 @@ export const makeCodexClient = ({
         throw failure;
       }
     } else {
-      const response = await request('thread/start', {
-        ...common,
-        ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
-      });
+      const snapshot = nativeSnapshot(opts);
+      let response;
+      let restoredBase = null;
+      if (snapshot) {
+        if (!makeNativeIdentity || !nativeContext)
+          throw Error('Codex native identity allocator missing');
+        const target = {
+          ...makeNativeIdentity(),
+          cwd,
+          modelProvider: 'endo_broker',
+          dynamicTools,
+        };
+        const restored = await nativeContext.restore({
+          capture: snapshot,
+          target,
+        });
+        if (closing || terminated)
+          throw Error('Codex native restoration cancelled');
+        if (
+          restored?.sessionId !== target.sessionId ||
+          typeof restored.rolloutPath !== 'string'
+        )
+          throw Error('Codex native restoration identity mismatch');
+        response = await request('thread/resume', {
+          ...common,
+          threadId: target.sessionId,
+          path: restored.rolloutPath,
+          excludeTurns: true,
+        });
+        if (response?.thread?.id !== target.sessionId)
+          throw Error('Codex native resume identity mismatch');
+        const baseline = await request('thread/turns/list', {
+          threadId: target.sessionId,
+          cursor: null,
+          limit: 1,
+          sortDirection: 'desc',
+          itemsView: 'notLoaded',
+        });
+        if (
+          !Array.isArray(baseline?.data) ||
+          /** @type {any[]} */ (baseline.data).length > 1 ||
+          (baseline.data.length &&
+            (typeof baseline.data[0].id !== 'string' ||
+              baseline.data[0].status !== 'completed'))
+        )
+          throw Error('Codex native restoration baseline unavailable');
+        restoredBase = baseline.data[0]?.id ?? null;
+        threadHasTurns = restoredBase !== null;
+        replayContinuity = false;
+      } else {
+        response = await request('thread/start', {
+          ...common,
+          ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+        });
+      }
       const created = response?.thread?.id;
       if (typeof created !== 'string' || created === '') {
         const failure = Error('Codex app-server did not return a thread id');
@@ -1589,7 +1794,7 @@ export const makeCodexClient = ({
               // A crash after creation but before first dispatch must not
               // revive this empty thread as though it retained the dialogue.
               recovery: {
-                baseTurnId: null,
+                baseTurnId: restoredBase,
                 ...(continuityCheckpoint
                   ? { previousCheckpoint: continuityCheckpoint }
                   : {}),
@@ -1670,7 +1875,7 @@ export const makeCodexClient = ({
   const acknowledgeContinuityCheckpoint = async checkpoint => {
     if (
       checkpoint === continuityCheckpoint &&
-      ledger.getRecord()?.baseCheckpoint === null
+      ledger.getRecord() !== undefined
     ) {
       // This exact checkpoint belongs to the prior catalog's native thread.
       // It remains Floot's committed checkpoint until a replacement turn commits.
@@ -1688,6 +1893,8 @@ export const makeCodexClient = ({
       }
       if (terminated) throw Error('Codex session terminated');
       if (closing) throw Error('Codex session closing');
+      // Validate journal/native binding before resuming or mutating any thread.
+      nativeSnapshot(opts);
       if (new TextEncoder().encode(prompt).byteLength > maxPromptBytes) {
         throw makeError(X`Codex prompt exceeded ${maxPromptBytes} bytes`);
       }
@@ -1744,6 +1951,7 @@ export const makeCodexClient = ({
       );
       turn = {
         threadId: currentThreadId,
+        nativeBinding: nativeBinding(opts),
         push: channel.push,
         interrupted: false,
         startAdmitted: false,

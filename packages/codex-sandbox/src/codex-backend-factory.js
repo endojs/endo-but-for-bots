@@ -55,6 +55,7 @@ export const makeCodexBackendFactory = ({
       id: 'codex',
       title: 'Codex',
       continuity: 'opaque-reconciled',
+      nativeContextFormat: 'codex-rollout-v1',
       // Whose credential a session here spends, and, when the broker holds
       // several, which a session may be pinned to.
       providerId: 'codex',

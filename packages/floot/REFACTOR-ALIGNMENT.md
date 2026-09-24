@@ -343,6 +343,29 @@ The full Floot suite passes 700 tests; production Codex types and the root
 documentation gate pass after quarantining a stale ignored generated declaration.
 Client wiring remains a separate in-progress slice, not production acceptance.
 
+Codex client integration (2026-09-24): successful native completion now launches
+capture outside the serial notification pump, emits the native journal envelope
+before the terminal event, and settles through the existing operational ledger.
+Capture failure/cancellation cannot publish a successful terminal checkpoint.
+Restoration checks model, system prompt, tool-catalog identity, workspace and
+pinned protocol bindings before native operations, reconciles the old ledger,
+then imports into a fresh native identity and records its queried baseline.
+The prior committed checkpoint remains recognizable across a crash between
+restoration and the next dispatch, including nonempty synthetic baselines.
+The factory now declares the required native format; unsupported suffixes and
+native event kinds refuse rather than silently use portable history.
+Independent adversarial review caught a completion/cancellation race during
+terminal audit; it is fixed with an owned-turn check and aborted settlement.
+Full Codex passes 421 tests, and client/controller tests independently pass 117.
+This is bounded source integration, not deployed or full native-tool acceptance.
+Follow-up pinned-runtime ordinary and post-compaction-suffix probes execute the
+built-in `exec_command` once, retain the ordinary call/output, preserve modeled
+request equality and permit re-export. Its persisted `item_completed` observation
+is already supported; no unknown-event guard was loosened. Capture uses the
+explicit path returned by `thread/read` with `includeTurns: false`.
+Other native tools, real-provider continuation and end-to-end Floot restart
+acceptance remain gates; Secrets and the live daemon have not been changed.
+
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
 credentials or host mounts. Manual compaction emits a boundary with retained

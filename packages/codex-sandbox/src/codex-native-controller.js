@@ -1,4 +1,5 @@
 // @ts-check
+import { randomUUID } from 'node:crypto';
 
 import { assertCopyData } from '@endo/hosted-agent/copy-data.js';
 import { Fail } from '@endo/errors';
@@ -19,6 +20,7 @@ import {
   startAppServerTransport,
 } from './app-server-transport.js';
 import { makeCodexClient } from './codex-client.js';
+import { makeNativeContextTransport } from './native-context-transport.js';
 import {
   assertHostedAgentPolicyV1,
   hostedPolicyFromSlice,
@@ -193,6 +195,14 @@ export const makeCodexNativeController = ({
       });
       owner.assertOpen();
       return makeClient({
+        nativeContext: makeNativeContextTransport({
+          slice,
+          cwd: WORKSPACE_PATH,
+        }),
+        makeNativeIdentity: () => ({
+          sessionId: randomUUID(),
+          timestamp: new Date().toISOString(),
+        }),
         start: () => startTransport({ slice, brokerLease: brokerScope }),
         sessionId: plan.sessionId,
         ...(typeof saved.threadId === 'string'
