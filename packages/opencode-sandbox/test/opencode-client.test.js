@@ -171,7 +171,7 @@ const legacyReadyLine = sessionId =>
   JSON.stringify({ type: 'ready', sessionId, port: 4096 });
 
 for (const wireType of ['commentary-delta', 'thinking-delta']) {
-  test(`OpenCode normalizes public reasoning from ${wireType}`, async t => {
+  test(`OpenCode preserves the explicit ${wireType} event kind`, async t => {
     const bridge = makeFakeBridge();
     const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
     bridge.push(readyLine('ses_1'));
@@ -181,7 +181,7 @@ for (const wireType of ['commentary-delta', 'thinking-delta']) {
     bridge.push(JSON.stringify({ type: 'text-delta', text: 'Answer' }));
     bridge.push(JSON.stringify({ type: 'end' }));
     t.deepEqual(await drain(reader), [
-      { type: 'thinking-delta', text: 'Public reasoning' },
+      { type: wireType, text: 'Public reasoning' },
       { type: 'text-delta', text: 'Answer' },
       { type: 'end' },
     ]);

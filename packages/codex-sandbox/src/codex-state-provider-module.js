@@ -5,8 +5,7 @@
  *
  * Constructed with slot-free `null` powers: this provider is filesystem
  * authority over one configured root and imports no daemon host authority.
- * OpenCode's equivalent takes `@agent` because its legacy client facade needs
- * `provideMount`; Codex's state never becomes a daemon Mount, so it needs none.
+ * Codex's state never becomes a daemon Mount, so it needs no host powers.
  *
  * @module
  */

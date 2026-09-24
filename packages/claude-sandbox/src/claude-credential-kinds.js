@@ -10,7 +10,7 @@ import { Fail, q } from '@endo/errors';
  * the header the provider broker sends the real credential under: `x-api-key`
  * for an API key, a Bearer token for a subscription token. Shared by the
  * broker policy, the hosted setup, the session plan, the daemon-owned native
- * controller, and the legacy per-session client module.
+ * controller.
  */
 export const CREDENTIAL_ENV_VARS = harden({
   apiKey: 'ANTHROPIC_API_KEY',

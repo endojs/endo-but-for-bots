@@ -423,16 +423,7 @@ export const makeOpencodeClient = ({
     // requests cancellation); what the host keeps of a turn is bounded where
     // it is kept (Floot's hosted turn). A cumulative cap on top of those
     // ended long healthy turns for nothing.
-    // Wire compatibility with the baked OpenCode bridge at 12c637a73: its
-    // only commentary-delta producers were visible assistant reasoning parts
-    // (both incremental and completed-part fallback). New bridges name these
-    // thinking-delta explicitly. Normalize only at this OpenCode boundary;
-    // other backends' ordinary progress commentary must remain commentary.
-    turn.push(
-      event.type === 'commentary-delta'
-        ? harden({ ...event, type: 'thinking-delta' })
-        : event,
-    );
+    turn.push(event);
     if (event.type === 'end' || event.type === 'abort') {
       active = null;
       turn.settle();

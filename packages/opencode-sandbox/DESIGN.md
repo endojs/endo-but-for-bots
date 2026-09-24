@@ -303,11 +303,11 @@ server as a child (`opencode serve --hostname 127.0.0.1 --port <N>`), waits for
 the `opencode server listening on http://…` line, subscribes to `GET /event`,
 and relays an nd-JSON protocol over stdin/stdout to the host-side client.
 
-Event mapping, pinned by source review and live capture on 2026-09-11:
+Current bridge event mapping (initial protocol review and capture: 2026-09-11):
 
 | server event | payload | normalized hosted event |
 |---|---|---|
-| `message.part.delta` | `{partID, messageID, field:'text', delta}` — `field` is never `'reasoning'`; the part's type comes from its `message.part.updated` | `text-delta`, or `commentary-delta` when the `partID` is registered as a reasoning part; only for assistant, non-summary messages |
+| `message.part.delta` | `{partID, messageID, field:'text', delta}` — `field` is never `'reasoning'`; the part's type comes from its `message.part.updated` | `text-delta`, or `thinking-delta` when the `partID` is registered as a reasoning part; only for assistant, non-summary messages |
 | `message.part.updated` | start (empty) and end (full) snapshots of text/reasoning parts; tool parts with `callID` and `state.status` (`pending`/`running`/`completed`/`error`) | `tool-call` on `running`, `tool-result` on `completed`/`error`; end-snapshot text is idempotent (deltas are the stream), and only for assistant, non-summary messages |
 | `step-finish` part | per-model-call `tokens` and `cost` | `usage` (sum `tokens.input`/`tokens.output`, matching Floot) |
 | `message.updated` | `info` registry (`role`, `summary`, `agent`, `time`) | message registry only; **never** usage (it fires per step, cost is cumulative, tokens are last-step) |

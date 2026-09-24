@@ -57,6 +57,13 @@ Do not add another broad framework to satisfy a line-count target.
 
 Concrete candidates:
 
+- Backward-compatibility cleanup is explicitly in scope (operator, 2026-09-24):
+  obsolete internal option/property names, state formats and old-image shims need
+  no compatibility layer. Keep genuine requirements of current vendor protocols.
+  Removed locally the OpenCode client rewrite from old bridge commentary events
+  to thinking events. Current bridge output names thinking explicitly; generic
+  commentary stays commentary. All 302 OpenCode tests pass and independent
+  review approves. Retire old images before activation; no deployment claimed.
 - Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one
   refusal facade and package export. Current setup neither imports nor mints it,
   and the shared backend factory already rejects unsupported container mounts.

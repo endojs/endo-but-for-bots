@@ -2249,6 +2249,16 @@ of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
+Old-image compatibility cleanup (2026-09-24, local): remove the OpenCode client's
+`12c637a73` commentary-to-thinking event rewrite. The current bridge emits
+explicit thinking events on both incremental and completed-part paths; the
+client now preserves event kinds. Both commentary and thinking pass-through
+regressions and all 302 package tests pass; independent review approves. Two
+stale comments referring to removed credential/state implementations are also
+corrected. No durable format or live state was changed; old images need retirement
+before deployment. The operator explicitly requests removal of obsolete internal
+options/properties/fallbacks rather than backward compatibility.
+
 Current-state dead-code deletion (2026-09-24, local): removed OpenCode's exported
 phase-one `container-mount-bridge.js` refusal facade and obsolete design inventory
 row. No tracked production/test importer, setup producer, or local host-config
