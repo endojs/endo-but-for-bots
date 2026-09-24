@@ -1,7 +1,7 @@
 # Configurable Ironhorse limits
 
 This implements the daemon configuration work tracked in #1314.
-The parser issue #1313 remains separate.
+The separate parser issue #1313 is fixed by upstream commit `242b339b8`, included in `llm`.
 
 Thixotrope exposes one set of daemon-wide defaults through environment settings,
 and reports the effective settings through `thix status`.
