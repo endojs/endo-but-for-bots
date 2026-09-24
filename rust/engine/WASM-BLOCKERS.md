@@ -9,10 +9,16 @@ Hosts:
 - Wasmtime 49.0.0 (through the `wasmtime` Python bindings).
 - Headless Chromium 141.0.7390.37 (through Playwright), on the page's main thread and in a
   dedicated Web Worker.
+- Local workerd 1.20260923.1 (V8 15.4.80.5), in a request handler and in a SQLite-backed
+  Durable Object.
+  These runs come from the verification of the Cloudflare design
+  ([review](../../designs/thixotrope-on-cloudflare-review.md)); local workerd enforces no CPU or
+  memory limits.
 
 The motivating target is [Thixotrope on Cloudflare](../../designs/thixotrope-on-cloudflare.md):
-Ironhorse compiled to wasm inside Durable Objects, which run on workerd (V8).
-The findings for V8 and browsers apply there directly; workerd itself was not measured here.
+Ironhorse compiled to wasm inside Durable Objects, which run on workerd.
+[Cloudflare-specific considerations](#cloudflare-workerd-specific-considerations) follow the
+browser section.
 
 Every claim below was checked by building and running something unless it is marked
 *inferred*.
@@ -534,13 +540,16 @@ Firefox and Safari were not available to test.
   Long cranks belong in a Worker so they do not freeze the page, and the Worker is where the
   stack is smallest.
   In practice, browser support depends on the refactors in B3.
-- **A trap does not poison the instance.**
+- **A trap poisons the instance, cumulatively.**
   After a stack-overflow `RangeError`, the same instance accepted another call and returned
-  `2` for `1+1`.
-  Rust state at the moment of the trap is not rolled back (*inferred*): no destructors run, and
-  borrows and the shadow-stack pointer are left as they were.
+  `2` for `1+1`, so nothing in the platform forces the embedder to notice.
+  But a trap skips function epilogues, so the shadow-stack pointer is not restored, and each
+  trap leaks shadow stack.
+  In workerd (request handler and Durable Object) a loop of trap, then `1+1`, kept working for
+  10 iterations; on the 11th, and from then on, even `1+1` trapped (Node: the 12th).
+  No destructors run either, so any `RefCell` borrowed at the trap stays borrowed
+  (*inferred* for the browser).
   The embedder must discard the instance after **any** trap and restore from a snapshot.
-  Nothing in the platform enforces this.
 - **Synchronous compilation is capped.**
   Chromium refuses `new WebAssembly.Module(bytes)` on the main thread above 8 MB
   ("WebAssembly.Compile is disallowed on the main thread, if the buffer size is larger than
@@ -578,6 +587,73 @@ Firefox and Safari were not available to test.
   The module is 6.9 MB before `wasm-opt` and compression, including ICU normalizer and
   segmenter data.
 
+## Cloudflare (workerd)-specific considerations
+
+Everything in the browser section about V8 applies, because workerd embeds V8.
+The following was measured in local workerd 1.20260923.1 (V8 15.4.80.5), in a request handler
+and in a SQLite-backed Durable Object.
+Local workerd enforces no memory or CPU limit (`NullIsolateLimitEnforcer`,
+`src/workerd/server/server.c++:3305`), so production limits are cited from the Cloudflare
+documentation, not measured.
+
+- **The module must be bundled.**
+  `new WebAssembly.Module(bytes)`, `WebAssembly.compile(bytes)` and
+  `WebAssembly.instantiate(bytes)` all fail with "Wasm code generation disallowed by embedder"
+  (`src/workerd/jsg/setup.c++:623-627`).
+  `WebAssembly.instantiate` of a module bundled with the Worker succeeds.
+  The browser advice to use `compileStreaming` does not apply.
+- **Exception handling.**
+  Both encodings load by default.
+  With `--no-wasm-legacy-eh`, the legacy build fails at startup ("Invalid opcode 0x06") while the
+  `exnref` build runs, so `exnref` is the encoding to ship (B2).
+- **The stack cannot be raised** (B3).
+  - In a request handler 24 of the 25 B3 cases match native; in a Durable Object, 23.
+  - The `JSON.stringify` ceiling traps in both.
+  - The Proxy `[[Call]]` chain passes on a cold run and traps after V8 tiers up: `--liftoff-only`
+    passed 6 of 6 runs, `--no-liftoff` trapped 6 of 6.
+  - `JSON.stringify` first traps at depth 1,529 under Liftoff (the same with an explicit
+    `--stack-size=984`, V8's default) and at 1,343–1,376 after tier-up.
+    Native accepts 2,000.
+  - Every case passes with `--stack-size=2000`, but that is a `v8Flags` setting of self-hosted
+    workerd ("Use at your own risk", `workerd.capnp:70`).
+    The Cloudflare documentation describes no stack setting for Workers.
+
+  So on Cloudflare, as in browsers, the stack refactors in
+  [STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) are required, not optional.
+- **A trap poisons the instance, cumulatively** (see the browser section).
+  In a Durable Object this is a guest-triggerable wedge: an embedder that caches the instance
+  across events will fail every event after about ten traps, until the object is evicted.
+- **Unwinding across the JS boundary needs `extern "C-unwind"`.**
+  A Durable Object's transaction callback re-enters wasm from JS.
+  A Rust unwind crossing an `extern "C"` export or import aborts (`RuntimeError: unreachable`).
+  With `extern "C-unwind"` on both, an outer `catch_unwind` receives the original payload and the
+  transaction rolls back.
+  A JS exception thrown by an import (for example `sql.exec`) unwinds through Rust frames without
+  running destructors, so a `RefCell` borrowed at that moment stays borrowed and later calls trap.
+  Host imports should catch JS exceptions and return error codes.
+- **Memory** (B8).
+  An instance starts at 11,468,800 bytes of linear memory, 8 MiB of it the shadow stack.
+  Under the default ceilings, the slot ceiling halts at 66,912,256 bytes of linear memory.
+  The chunk ceiling halts at 599,392,256 bytes, with the same computrons natively.
+  Cloudflare's 128 MB limit is per isolate, "including the JavaScript heap and WebAssembly
+  allocations", and one isolate can host several Durable Objects (Workers limits and Durable
+  Object in-memory-state documentation).
+  Ceilings for Cloudflare must be set well below the defaults, and the instance should be
+  recycled when its linear memory passes a threshold, since it never shrinks.
+- **CPU.**
+  Computrons do not bound CPU time uniformly: 14.55 million per second on a tight loop against
+  0.119 million per second on `indexOf` over a 2 MB string (Node).
+  Nothing can preempt a synchronous wasm call.
+  A crank that exceeds the per-event CPU limit (30 s by default) resets the object instead of
+  halting (*inferred* from the documentation; local workerd enforces no CPU limit).
+- **Speed.**
+  A RegExp-backtracking workload ran 1.5–2.7× slower than native, on a contended host
+  (indicative only).
+  The first evaluation in a fresh isolate took 78–174 ms under Liftoff, and later ones 3–19 ms.
+- **Size.**
+  The module is 6.9 MB raw, 3.2 MB with gzip and 2.6 MB with Brotli.
+  Workers allow 64 MiB uncompressed, and global scope must finish within 1 second.
+
 ## Not blockers (verified)
 
 - **Host imports.**
@@ -595,10 +671,17 @@ Firefox and Safari were not available to test.
 ## Not investigated
 
 - Restoring a snapshot taken natively on wasm, and the reverse (see the B7 decode hazard).
+  For Thixotrope heaps a higher-level check refuses it first.
+  The engine's boot fingerprints match between native and wasm builds, but Thixotrope's runtime
+  profile hashes the worker executable (`packages/thixotrope/src/ironhorse-runtime.js:117-129`)
+  and resume requires an exact signature match (`ironhorse-snapshot/src/format.rs:437-438`).
+  Moving heaps between builds needs a platform-neutral profile first.
 - Performance relative to native.
-- Firefox, Safari and workerd.
+- Firefox and Safari.
 - `wasm32-wasip2` and the component model, `wasm64`, and `wasm32-wasip1-threads`.
 - An abort-mode build (B1 option 3) was not built.
+- Production Cloudflare: its stack size, memory enforcement and CPU enforcement cannot be
+  measured in local workerd.
 
 ## Appendix: reproduction
 
