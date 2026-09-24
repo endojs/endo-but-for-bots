@@ -12,11 +12,21 @@
  *   frames cannot grow the buffer without bound before `return()`,
  * - `throw()` (the pump's abort) and an over-limit frame discard the buffer,
  *   so an aborted write commits nothing, while `return()` commits.
+ *
+ * Each `stream()` call gets its own buffer and running total. So a second
+ * write on the same writer starts empty instead of inheriting the first
+ * one's state. Two holders that stream at once also cannot interleave frames
+ * or discard each other's buffer. A sink latches after its first terminal
+ * `return()` or `throw()`, so it never commits twice.
  */
 
 import { makeError, X, b, q } from '@endo/errors';
+import { makeExo } from '@endo/exo';
 
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
+import { PassableBytesWriterInterface } from '@endo/exo-stream/type-guards.js';
+
+/** @import { PassableBytesWriter } from '@endo/exo-stream' */
 
 /**
  * @param {object} opts
@@ -25,16 +35,18 @@ import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iter
  * @param {number} opts.totalByteLengthLimit
  * @param {(bytes: Uint8Array) => Promise<void> | void} opts.commit
  */
-export const makeBufferedBytesWriter = ({
-  label,
-  frameByteLengthLimit,
-  totalByteLengthLimit,
-  commit,
-}) => {
+/**
+ * @param {object} opts
+ * @param {string} opts.label
+ * @param {number} opts.totalByteLengthLimit
+ * @param {(bytes: Uint8Array) => Promise<void> | void} opts.commit
+ */
+const makeBufferingSink = ({ label, totalByteLengthLimit, commit }) => {
   /** @type {Uint8Array[]} */
   const chunks = [];
   let total = 0;
   let rejected = false;
+  let settled = false;
   const discard = () => {
     rejected = true;
     chunks.length = 0;
@@ -43,6 +55,9 @@ export const makeBufferedBytesWriter = ({
   const sink = {
     /** @param {Uint8Array} chunk */
     async next(chunk) {
+      if (settled) {
+        throw makeError(X`${b(label)} already closed`);
+      }
       if (rejected) {
         throw makeError(X`E2BIG: ${b(label)} already rejected`);
       }
@@ -59,9 +74,11 @@ export const makeBufferedBytesWriter = ({
       return { done: false, value: undefined };
     },
     async return(value) {
-      if (rejected) {
+      if (settled || rejected) {
+        settled = true;
         return { done: true, value };
       }
+      settled = true;
       const merged = new Uint8Array(total);
       let p = 0;
       for (const c of chunks) {
@@ -69,6 +86,7 @@ export const makeBufferedBytesWriter = ({
         p += c.length;
       }
       chunks.length = 0;
+      total = 0;
       await commit(merged);
       return { done: true, value };
     },
@@ -76,6 +94,7 @@ export const makeBufferedBytesWriter = ({
     // a broken initiator). Discard the buffered frames so an aborted write
     // commits nothing.
     async throw() {
+      settled = true;
       discard();
       return { done: true, value: undefined };
     },
@@ -83,8 +102,38 @@ export const makeBufferedBytesWriter = ({
       return sink;
     },
   };
-  return bytesWriterFromIterator(sink, {
-    byteLengthLimit: frameByteLengthLimit,
-  });
+  return sink;
 };
+
+/**
+ * @param {object} opts
+ * @param {string} opts.label  names the write in `E2BIG` errors
+ * @param {number} opts.frameByteLengthLimit
+ * @param {number} opts.totalByteLengthLimit
+ * @param {(bytes: Uint8Array) => Promise<void> | void} opts.commit
+ * @returns {PassableBytesWriter}
+ */
+export const makeBufferedBytesWriter = ({
+  label,
+  frameByteLengthLimit,
+  totalByteLengthLimit,
+  commit,
+}) =>
+  /** @type {PassableBytesWriter} */ (
+    /** @type {unknown} */ (
+      makeExo('PassableBytesWriter', PassableBytesWriterInterface, {
+        /** @param {any} synPromise */
+        stream(synPromise) {
+          const writer = bytesWriterFromIterator(
+            makeBufferingSink({ label, totalByteLengthLimit, commit }),
+            { byteLengthLimit: frameByteLengthLimit },
+          );
+          return writer.stream(synPromise);
+        },
+        writeReturnPattern() {
+          return undefined;
+        },
+      })
+    )
+  );
 harden(makeBufferedBytesWriter);

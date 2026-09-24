@@ -333,3 +333,57 @@ for (const [label, abort] of [
     t.is(fromUtf8(await getXattr(xattrs, 'user.x')), 'old');
   });
 }
+
+// ---------- reusing one writer ----------
+
+// Each `stream()` on a buffered writer starts with an empty buffer. A second
+// write on the same writer commits only its own bytes, never a zero-padded
+// buffer sized by the first write.
+
+test('File.write reused for a second stream commits only the second bytes', async t => {
+  const root = await makeFile('r.bin', 'original');
+  const file = await E(root).lookup('r.bin');
+  const writerRef = await E(file).write();
+  await pushFrames(writerRef, [Uint8Array.of(1, 2, 3)]);
+  await pushFrames(writerRef, [Uint8Array.of(9)]);
+  t.deepEqual([...(await readFile(root, 'r.bin'))], [9]);
+  await pushFrames(writerRef, []);
+  t.deepEqual([...(await readFile(root, 'r.bin'))], []);
+});
+
+test('OpenFile.write reused for a second stream commits only the second bytes', async t => {
+  const root = await makeFile('s.bin', '');
+  const openHandle = await E(await E(root).lookup('s.bin')).open({
+    write: true,
+  });
+  const writerRef = await E(openHandle).write(0n);
+  await pushFrames(writerRef, [Uint8Array.of(1, 2, 3)]);
+  await pushFrames(writerRef, [Uint8Array.of(9)]);
+  await E(openHandle).close();
+  t.deepEqual([...(await readFile(root, 's.bin'))], [9, 2, 3]);
+});
+
+test('Xattrs.set reused for a second stream commits only the second bytes', async t => {
+  const root = await makeFile('t.txt', 'data');
+  const xattrs = await E(await E(root).lookup('t.txt')).xattrs();
+  const writerRef = await E(xattrs).set('user.x', {});
+  await pushFrames(writerRef, [utf8('first')]);
+  await pushFrames(writerRef, [utf8('2nd')]);
+  t.is(fromUtf8(await getXattr(xattrs, 'user.x')), '2nd');
+});
+
+test('File.write streams from two holders at once do not interleave', async t => {
+  const root = await makeFile('c.bin', 'original');
+  const file = await E(root).lookup('c.bin');
+  const writerRef = await E(file).write();
+  const a = iterateBytesWriter(writerRef);
+  const b = iterateBytesWriter(writerRef);
+  await a.next(utf8('AAA'));
+  await b.next(utf8('BB'));
+  await a.next(utf8('aaa'));
+  // One holder's abort must not discard the other's frames.
+  await b.throw(Error('abort')).catch(() => undefined);
+  await settle();
+  await a.return();
+  t.is(fromUtf8(await readFile(root, 'c.bin')), 'AAAaaa');
+});
