@@ -42,6 +42,53 @@ The alignment document records the evidence and bounded data-only export plan.
 Host-controlled runtime metadata, journal persistence, independent effect
 reconciliation and the operational ledger remain required; no runtime guard was
 removed and no production Codex native capture or deployment is claimed.
+The follow-up selector/probe slice preserves both native context-baseline records:
+dropping either changes ordinary restored requests. The candidate selector passes
+synthetic ordinary and post-compaction-suffix continuation under a fresh identity
+in the same pinned app-server, plus re-export after another native turn.
+It has 29 focused tests and remains unwired to the production client/journal.
+The alignment document records exact scope and remaining integration gates.
+The next reviewed slice adds exact native rendering and bounded sandbox-only
+file export/no-clobber import. Actual helper probes preserve ordinary and
+post-compaction-suffix context with one synthetic dynamic-tool execution and no
+replay. All 381 Codex tests pass. Client/journal/image wiring remains unfinished;
+source-file bounds, host runtime bindings and effect reconciliation remain
+explicit limits, not completed acceptance claims.
+
+The current integration slice removes the physical-rollout size cap in favor of
+streamed per-row/current-context bounds. It keeps unknown-row refusal and the
+journal's independent effect checks, including native envelopes with no invented
+portable summary. New pinned probes show that fresh restored identities may have
+a synthetic completed `rollout-1` baseline after compaction, so the integration
+must query that baseline rather than assume an empty turn list. Production
+helper/client wiring is in progress; see the alignment document for current scope.
+The reviewed helper transport/OCI slice now supplies bounded in-sandbox commands
+with cancellation that drains late acquisition and all I/O. Twenty focused tests
+pass; full Floot passes 700 tests. Client/journal integration and deployed
+acceptance remain outstanding.
+The subsequent Codex client slice connects successful-turn native capture and
+fresh-identity restoration to the existing journal/ledger contract. It validates
+runtime bindings, records the restored native baseline, retains prior-checkpoint
+lineage, and fences helper cancellation. Independent review fixed a terminal
+audit/cancellation race; full Codex passes 421 tests. Unknown native tool-event
+kinds and unprojected suffixes still refuse explicitly. Native-tool compatibility,
+real-provider acceptance and deployed restart tests remain open; RA-02 is not done.
+Pinned synthetic native `exec_command` ordinary/compacted-suffix probes now pass
+without parser changes: one execution, preserved modeled context, and successful
+re-export. This narrows the native-tool gap but does not cover every tool or live
+Floot restart.
+Caller-level review then found and fixed missing committed-checkpoint lineage
+when restoring into entirely fresh native state. Crash-before-dispatch regressions
+cover empty and synthetic restored baselines; 111 client tests and independent
+132 client/context tests pass. Guest-rollout-only loss remains a separate check;
+unresolved operational recovery must never be skipped to make restoration pass.
+Acknowledged Codex projection loss is now handled without resuming the old guest
+rollout; outstanding ledger recovery still requires the original native history.
+Independent client/controller tests pass 122 cases. A new actual-client Floot
+daemon regression verifies journal-before-ack ordering, exact checkpoint delivery,
+restored baseline persistence and one tool effect across two cold restarts.
+It uses deterministic app-server/helper boundaries, not a real CLI/provider;
+independent review, the focused daemon test and daemon types pass.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred

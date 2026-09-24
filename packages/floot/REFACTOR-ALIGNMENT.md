@@ -168,6 +168,20 @@ lines 75–129 reconstruct and flatten them. Its own read-view comment explicitl
 states that archive I/O and active output still grow with history. Checkpoints
 permit skipping superseded content, but do not create themselves or bound a long
 active tail. Direct Fae currently has no automatic compaction producer.
+
+Direct-provider implementation preparation (2026-09-24): use the existing
+portable compaction record and journal, not another conversation store.
+The producer belongs at Floot's settled provider-round boundary; summarization
+must disable tools, preserve whole tool pairs and unresolved/recovered evidence,
+record its usage, and durably publish before selecting the shorter context.
+The current pending turn is excluded from journal context reads and added through
+`stagedMessages`, so merely writing a checkpoint would not change the active loop.
+Threshold/output reserve, current-route capacity and pending-turn selection still
+need implementation. OpenRouter already reports the serving model's capacity,
+but merged usage intentionally retains old capacity when a new reading is unknown;
+that display aggregate cannot be an admission/compaction authority, especially
+for the auto-free route. This is a scoped implementation investigation, not an
+implemented compaction producer or a new evidence-storage budget.
 OpenCode has explicit checkpoint capture, while the current Claude/Codex event
 translators do not produce equivalent canonical compaction boundaries. Supporting
 restoration from a supplied checkpoint is not proof of capturing native changes.
@@ -252,6 +266,151 @@ This correction changes the implementation plan only, not runtime behavior.
 Independent source review agrees; no deployment or new fidelity result is claimed.
 The existing Claude coverage checks remain in place; this is not authorization to
 remove effect guards or a claim that every retained coverage check is necessary.
+
+Codex capture preparation (2026-09-24): a pure bounded selector now preserves
+the latest native compaction plus following context rows, or ordinary context
+before any compaction. It preserves exact JSONL bytes, opaque item fields and
+base instruction text, excludes operational event rows and session metadata,
+and requires the requested completed turn. Unsupported row/item/event kinds,
+interruptions, rollback, stale or torn cuts refuse rather than degrade silently.
+It is not yet wired into the client, OCI image or journal checkpoint producer.
+
+Pinned `0.152.0` probes disproved a response-items-only projection: ordinary
+restoration duplicates generated developer/environment instructions unless both
+`world_state` and `turn_context` baseline records are retained in order.
+Each baseline record alone also fails the strict comparison.
+These are native context data; production launch authority must remain host-bound.
+The actual selector now passes ordinary and post-compaction-suffix continuation
+with fresh native IDs in the same app-server process, including another capture
+after restoration. This avoids assuming that resuming an already cached ID
+reloads a replaced file. Pinned resumed rollouts omit ordinals on appended rows;
+the selector validates supplied ordinals without requiring their presence.
+Host probe source and evidence scope are in
+`endo-host/ops/codex-context-probe-20260924.{mjs,md}`.
+All inference is synthetic Luna on loopback in disposable, network-disabled,
+credential-free containers without host mounts. Equality covers ordered native
+input type/role/content/encrypted-content and the previously listed request
+settings, not real provider validity, native tool execution or Endo effects.
+Twenty-nine focused selector tests pass; independent review caught and corrected
+silent acceptance of unknown operational events. The full Codex suite passes
+354 tests; production types, scoped lint, formatting and root docs pass.
+The original injection negative control still fails exact prefix equality;
+the final container inventory is empty. Full client integration still
+needs bounded in-sandbox file I/O, host-configured metadata, ledger reconciliation,
+cancel-during-capture handling, journal-before-terminal wiring and acceptance.
+No production deployment, automatic/repeated native compaction or completed
+RA-02 claim follows from this selector/probe slice.
+
+Codex export/import preparation (2026-09-24): the pure renderer now constructs a
+fresh native identity and provider/tool metadata from explicit host configuration,
+while preserving the captured base instruction text and exact context row bytes.
+The sandbox-only I/O helper reads one explicit rollout, never discovers a newest
+session, rejects nonregular/final-symlink files, bounds fatal UTF-8 decoding and
+checks for concurrent mutation. It publishes rendered projections with an
+exclusive temporary file and no-clobber hard link, not an overwrite of a loaded
+native thread. Existing files/symlinks remain untouched, including concurrent
+publication attempts. Parent realpath checks are diagnostics, not race-safe host
+confinement: this I/O module must run inside the existing sandbox.
+
+The actual renderer and file helpers pass pinned-runtime ordinary and
+post-compaction-suffix probes with a host-selected synthetic dynamic tool,
+using fresh native identities in the same app-server process.
+The handler runs once before restoration, never again; ordinary restored context
+retains its function call and output. Equality now also covers tool call IDs,
+names, arguments and outputs. Both cases permit another native context capture.
+This is a no-effect synthetic handler, not Endo-tool settlement or real provider
+acceptance. All 381 Codex tests pass, including 56 focused selector/render/I/O
+tests; production types and scoped lint pass. Independent source review approves.
+These helpers remain unwired to the client, OCI image and journal producer.
+
+Codex integration in progress (2026-09-24): capture now streams the physical
+rollout, bounding each row and the selected current context rather than refusing
+a small compacted context because discarded history exceeds 16 MiB.
+Unknown earlier rows still refuse; compaction is not permission to skip validation.
+The native envelope may use an empty portable `context` array: the opaque payload
+is retained atomically, while ordinary conversation and tool evidence continue
+to be journaled independently. A focused Floot regression confirms that this
+does not conceal unresolved or host-recovered effects.
+Pinned fresh-ID restoration has different operational baselines: ordinary
+context yields no native turns, whereas a compacted context plus suffix yields
+the synthetic completed turn `rollout-1`. The client must query and persist that
+baseline instead of inferring it from fresh identity. Both isolated probes
+preserve the modeled request prefix, invoke the synthetic tool exactly once and
+permit re-export. Helper transport and production client wiring are in progress;
+this is not deployed acceptance or completion of RA-02.
+The former 16 MiB physical-file cap is removed. Current rows and retained context
+remain bounded, and the helper's separate 16 MiB serialized JSON limit can refuse
+a smaller raw context after escaping; it never truncates a capture.
+Sixty-six selector/render/I/O tests and 21 Floot context-projection tests pass.
+This is not proof of indefinitely bounded healthy continuation.
+Next is helper transport and client integration with the existing catalog binding,
+operational reconciliation, cancellation fence and journal-before-terminal rule.
+No production deployment is claimed.
+
+Codex helper transport (2026-09-24): the OCI image now includes a one-shot,
+sandbox-only JSON command for capture/restore. Its controller-side transport
+uses the already-owned slice, fixed home/environment, bounded serialized I/O
+and sanitized diagnostics. Cancel/close retain late-spawn custody through
+kill/reap and every pending reader/writer settlement; cleanup failures remain
+retryable. Twenty focused helper tests pass, and independent review approves.
+The full Floot suite passes 700 tests; production Codex types and the root
+documentation gate pass after quarantining a stale ignored generated declaration.
+Client wiring remains a separate in-progress slice, not production acceptance.
+
+Codex client integration (2026-09-24): successful native completion now launches
+capture outside the serial notification pump, emits the native journal envelope
+before the terminal event, and settles through the existing operational ledger.
+Capture failure/cancellation cannot publish a successful terminal checkpoint.
+Restoration checks model, system prompt, tool-catalog identity, workspace and
+pinned protocol bindings before native operations, reconciles the old ledger,
+then imports into a fresh native identity and records its queried baseline.
+The prior committed checkpoint remains recognizable across a crash between
+restoration and the next dispatch, including nonempty synthetic baselines.
+The factory now declares the required native format; unsupported suffixes and
+native event kinds refuse rather than silently use portable history.
+Independent adversarial review caught a completion/cancellation race during
+terminal audit; it is fixed with an owned-turn check and aborted settlement.
+Full Codex passes 421 tests, and client/controller tests independently pass 117.
+This is bounded source integration, not deployed or full native-tool acceptance.
+Follow-up pinned-runtime ordinary and post-compaction-suffix probes execute the
+built-in `exec_command` once, retain the ordinary call/output, preserve modeled
+request equality and permit re-export. Its persisted `item_completed` observation
+is already supported; no unknown-event guard was loosened. Capture uses the
+explicit path returned by `thread/read` with `includeTurns: false`.
+Other native tools, real-provider continuation and end-to-end Floot restart
+acceptance remain gates; Secrets and the live daemon have not been changed.
+
+Caller-contract follow-up (2026-09-24): fresh native-state restoration now records
+the journal's acknowledged checkpoint lineage before importing/persisting its new
+baseline, not only when rotating an inherited native thread. Without this, a
+crash after saving the new baseline but before dispatch made the next incarnation
+reject Floot's still-current checkpoint. Regressions reconstruct both empty and
+`rollout-1` baseline markers after that boundary. All 111 client tests pass;
+independent client/Floot-context review passes 132 tests, and production types
+and scoped lint pass. This covers recreated native state, not loss of only the
+guest rollout while retaining an old host ledger; that case is being checked
+separately without bypassing unresolved recovery markers.
+
+Disposable-projection recovery (2026-09-24): an inherited Codex thread no longer
+has to resume before the exact journal checkpoint can acknowledge its completed
+ledger marker. When no recovery remains, restoration builds from the journal
+without opening the old guest rollout. Missing native history with an outstanding
+marker still refuses; there is no catch-and-ignore recovery fallback.
+All 114 client tests pass, with 122 client/controller tests independently passing.
+The full Codex suite passes 426 tests; production types and scoped lint pass.
+This changes ordinary acknowledged restoration, not process-loss guarantees.
+
+Actual-client daemon regression (2026-09-24): a new fixture runs the production
+Codex client, tool/prompt adapters, Floot agent and private journal across two cold
+daemon restarts. It checks that a complete native transcript and finished turn
+precede checkpoint acknowledgement, exact externalized native payloads reach
+restoration, the synthetic `rollout-1` baseline is persisted, and a mediated tool
+effect happens only once. The restored turn captures another checkpoint; the
+next restart preserves history, transcript and turns without startup inference.
+Independent review and the focused test pass; daemon package types pass.
+The combined serial Floot daemon durability/lifecycle suite passes 11 tests.
+The app-server/helper are deterministic mocks: this verifies the client/journal
+seam and real daemon durability, not CLI parsing or live provider acceptance.
 
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without

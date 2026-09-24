@@ -135,8 +135,8 @@ test('a thread inherited across incarnations is superseded, not resumed', async 
   // thread it started; across incarnations the stack's records decide. A
   // thread id in the saved state can only have been written by a previous
   // incarnation, so it names the CLI's own surviving store -- which is
-  // exactly what the records exist to replace. It is reconciled under its
-  // original catalog and then left behind, intact, for audit.
+  // exactly what the records exist to replace. With no outstanding marker,
+  // it need not be present or opened before replacement.
   //
   // With no records handed in there is nothing to replay, and that is not a
   // refusal: an empty stack claim honestly means no conversation, so the
@@ -148,9 +148,9 @@ test('a thread inherited across incarnations is superseded, not resumed', async 
     clientOptions: { savedToolSetId: 'same', toolSetId: 'same' },
   });
   const reader = await fixture.client.send('continue', {});
-  t.true(
+  t.false(
     fixture.sent.some(message => message.method === 'thread/resume'),
-    'the inherited thread is resumed so it can be reconciled',
+    'acknowledged native history is not required for journal restoration',
   );
   t.true(
     fixture.sent.some(message => message.method === 'thread/start'),
@@ -492,6 +492,8 @@ const makeQueue = () => {
  *   network?: any,
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
+ *   restoredTurnIds?: string[],
+ *   missingInheritedRollout?: boolean,
  *   turnCounterStart?: number,
  *   announceTurns?: boolean,
  *   closeFailures?: number,
@@ -520,6 +522,8 @@ const makeFixture = ({
   turnCounterStart = existingTurnIds.length,
   announceTurns = true,
   closeFailures = 0,
+  restoredTurnIds = [],
+  missingInheritedRollout = false,
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
@@ -567,10 +571,30 @@ const makeFixture = ({
         });
         break;
       case 'thread/resume':
+        if (missingInheritedRollout && !message.params.path) {
+          push({
+            id: message.id,
+            error: { code: -32_000, message: 'Native rollout missing' },
+          });
+          break;
+        }
         activeThread = message.params.threadId;
+        if (message.params.path)
+          turnIds.splice(0, turnIds.length, ...restoredTurnIds);
         push({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
+        });
+        break;
+      case 'thread/read':
+        push({
+          id: message.id,
+          result: {
+            thread: {
+              id: activeThread,
+              path: '/codex-home/sessions/rollout-test.jsonl',
+            },
+          },
         });
         break;
       case 'thread/inject_items':
@@ -599,7 +623,7 @@ const makeFixture = ({
         push({
           id: message.id,
           result: {
-            data: latest ? [{ id: latest }] : [],
+            data: latest ? [{ id: latest, status: 'completed' }] : [],
             nextCursor: null,
             backwardsCursor: null,
           },
@@ -714,6 +738,535 @@ const drain = async reader => {
 // Everything the fixture does is microtask-driven, so one trip through the
 // timer queue is enough to know that nothing else is going to happen.
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const nativeTestBinding = harden({
+  model: '',
+  systemPrompt: '',
+  toolSetId: '',
+  cwd: '/workspace',
+  cliVersion: '0.152.0',
+  modelProvider: 'endo_broker',
+});
+const nativeTestSnapshot = (binding = nativeTestBinding) =>
+  harden({
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    context: [],
+    payload: JSON.stringify({
+      capture: {
+        sessionId: 'old-native',
+        turnId: 'old-turn',
+        baseInstructions: 'native base',
+        payload: 'native bytes\n',
+      },
+      binding,
+    }),
+  });
+const nativeTestTransport = (overrides = {}) => ({
+  capture: async request => ({
+    sessionId: request.sessionId,
+    turnId: request.turnId,
+    baseInstructions: 'native base',
+    payload: 'native bytes\n',
+  }),
+  restore: async request => ({
+    sessionId: request.target.sessionId,
+    rolloutPath: '/codex-home/sessions/fresh-native.jsonl',
+    sha256: 'digest',
+  }),
+  cancel: async () => {},
+  close: async () => {},
+  ...overrides,
+});
+
+test('native capture completes outside the notification pump and precedes end', async t => {
+  t.timeout(5000);
+  const captures = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        capture: async request => {
+          captures.push(request);
+          return nativeTestTransport().capture(request);
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.deepEqual(
+    events.filter(event => event.type !== 'phase').map(event => event.type),
+    ['native-context', 'end'],
+  );
+  t.deepEqual(captures, [
+    {
+      rolloutPath: '/codex-home/sessions/rollout-test.jsonl',
+      sessionId: 'thread-new',
+      turnId: 'turn-1',
+    },
+  ]);
+  const checkpoint = events.find(
+    event => event.type === 'native-context',
+  ).checkpoint;
+  t.deepEqual(checkpoint.context, []);
+  t.deepEqual(JSON.parse(checkpoint.payload).binding, nativeTestBinding);
+});
+
+for (const cancel of ['interrupt', 'terminate']) {
+  test(`native capture ${cancel} drains helper and cannot publish late success`, async t => {
+    t.timeout(5000);
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let capturing = false;
+    let reaped = false;
+    const fixture = makeFixture({
+      clientOptions: {
+        nativeContext: nativeTestTransport({
+          capture: async request => {
+            capturing = true;
+            await gate;
+            return nativeTestTransport().capture(request);
+          },
+          cancel: async () => {
+            reaped = true;
+            release();
+          },
+          close: async () => {
+            reaped = true;
+            release();
+          },
+        }),
+      },
+    });
+    t.teardown(async () => {
+      release();
+      await fixture.client.terminate();
+    });
+    const reader = await fixture.client.send('hello');
+    fixture.push({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-new',
+        turn: { id: 'turn-1', status: 'completed' },
+      },
+    });
+    while (!capturing) {
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+    await fixture.client[cancel]();
+    const events = await drain(reader);
+    t.true(reaped);
+    t.false(
+      events.some(event => ['end', 'native-context'].includes(event.type)),
+    );
+    t.is(events.at(-1).type, 'abort');
+  });
+}
+
+test('native restoration reconciles inherited ledger and persists actual resumed baseline', async t => {
+  t.timeout(5000);
+  const writes = [];
+  const fixture = makeFixture({
+    threadId: 'old-native',
+    existingTurnIds: ['turn-1'],
+    restoredTurnIds: ['rollout-1'],
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+      nativeContext: nativeTestTransport(),
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      saveThreadState: async state => {
+        writes.push(state);
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+  });
+  const methods = fixture.sent.map(message => message.method);
+  const resume = fixture.sent.findIndex(
+    message => message.method === 'thread/resume' && message.params.path,
+  );
+  t.true(methods.indexOf('thread/revert') < resume);
+  t.false(methods.includes('thread/inject_items'));
+  t.like(
+    writes.find(state => state.threadId === 'fresh-native'),
+    { recovery: { baseTurnId: 'rollout-1' } },
+  );
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'fresh-native',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('native snapshot binding mismatch refuses before any transport work', async t => {
+  const fixture = makeFixture({
+    clientOptions: { nativeContext: nativeTestTransport() },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const binding of [
+    { ...nativeTestBinding, model: 'changed' },
+    { ...nativeTestBinding, systemPrompt: 'changed' },
+    { ...nativeTestBinding, toolSetId: 'changed' },
+    { ...nativeTestBinding, cwd: '/other' },
+    { ...nativeTestBinding, cliVersion: 'old' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('hello', {
+          transcript: [nativeTestSnapshot(binding)],
+        }),
+      { message: /binding changed/ },
+    );
+  }
+  t.deepEqual(fixture.sent, []);
+});
+
+test('malformed native capture refuses before restoration or protocol effects', async t => {
+  let restored = 0;
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        restore: async () => {
+          restored += 1;
+          throw Error('unexpected restore');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const capture of [
+    undefined,
+    null,
+    {},
+    { sessionId: 'old', turnId: 'turn', baseInstructions: '', payload: 'torn' },
+  ]) {
+    const checkpoint = {
+      ...nativeTestSnapshot(),
+      payload: JSON.stringify({ binding: nativeTestBinding, capture }),
+    };
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => fixture.client.send('hello', { transcript: [checkpoint] }),
+      { message: /capture is malformed/ },
+    );
+  }
+  t.is(restored, 0);
+  t.deepEqual(fixture.sent, []);
+});
+
+test('native restoration cancellation drains held helper before any prompt dispatch', async t => {
+  t.timeout(5000);
+  let restoring = false;
+  let closed = false;
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const fixture = makeFixture({
+    clientOptions: {
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      nativeContext: nativeTestTransport({
+        restore: async request => {
+          restoring = true;
+          await gate;
+          return nativeTestTransport().restore(request);
+        },
+        close: async () => {
+          closed = true;
+          release();
+        },
+      }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const sending = fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+  });
+  void sending.catch(() => {});
+  while (!restoring) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  await t.throwsAsync(() => fixture.client.interrupt(), {
+    message: /interrupted during startup/,
+  });
+  await t.throwsAsync(sending, { message: /restoration cancelled/ });
+  t.true(closed);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
+test('restored nonempty baseline retains exact prior checkpoint lineage after reconstruction', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'interrupted-projection',
+    existingTurnIds: ['rollout-1'],
+    restoredTurnIds: ['rollout-1'],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: 'rollout-1',
+        previousCheckpoint: 'prior-host-checkpoint',
+      },
+      makeNativeIdentity: () => ({
+        sessionId: 'fresh-native',
+        timestamp: '2026-09-24T00:00:00.000Z',
+      }),
+      nativeContext: nativeTestTransport(),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('continue', {
+    transcript: [nativeTestSnapshot()],
+    acknowledgedCheckpoint: 'prior-host-checkpoint',
+  });
+  t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'fresh-native',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+for (const restoredBase of [null, 'rollout-1']) {
+  test(`fresh native restoration retains journal lineage across setup crash (${restoredBase})`, async t => {
+    t.timeout(5000);
+    let persisted;
+    const restoredTurnIds = restoredBase === null ? [] : [restoredBase];
+    const options = {
+      transcript: [nativeTestSnapshot()],
+      acknowledgedCheckpoint: 'prior-host-checkpoint',
+    };
+    const first = makeFixture({
+      restoredTurnIds,
+      clientOptions: {
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'fresh-native',
+          timestamp: '2026-09-24T00:00:00.000Z',
+        }),
+        saveThreadState: async state => {
+          persisted = state;
+          throw Error('Synthetic crash after projection persistence');
+        },
+      },
+    });
+    t.teardown(() => first.client.terminate());
+    await t.throwsAsync(() => first.client.send('continue', options), {
+      message: /Synthetic crash after projection persistence/,
+    });
+    t.deepEqual(persisted, {
+      threadId: 'fresh-native',
+      recovery: {
+        baseTurnId: restoredBase,
+        previousCheckpoint: 'prior-host-checkpoint',
+      },
+    });
+    t.false(first.sent.some(message => message.method === 'turn/start'));
+    const second = makeFixture({
+      threadId: persisted.threadId,
+      existingTurnIds: restoredTurnIds,
+      restoredTurnIds,
+      clientOptions: {
+        savedRecovery: persisted.recovery,
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'fresh-successor',
+          timestamp: '2026-09-24T00:00:01.000Z',
+        }),
+      },
+    });
+    t.teardown(() => second.client.terminate());
+    const reader = await second.client.send('continue', options);
+    t.false(second.sent.some(message => message.method === 'thread/revert'));
+    t.is(
+      second.sent.find(message => message.method === 'turn/start').params
+        .threadId,
+      'fresh-successor',
+    );
+    await second.client.interrupt();
+    await drain(reader);
+  });
+}
+
+for (const acknowledged of [false, true]) {
+  test(`missing disposable native rollout restores from journal after acknowledgement (${acknowledged})`, async t => {
+    t.timeout(5000);
+    const fixture = makeFixture({
+      threadId: 'missing-native',
+      missingInheritedRollout: true,
+      restoredTurnIds: ['rollout-1'],
+      clientOptions: {
+        ...(acknowledged
+          ? {
+              savedRecovery: {
+                baseTurnId: null,
+                turnId: 'prior-host-checkpoint',
+                status: 'completed',
+              },
+            }
+          : {}),
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'restored-native',
+          timestamp: '2026-09-24T00:00:00.000Z',
+        }),
+      },
+    });
+    t.teardown(() => fixture.client.terminate());
+    const reader = await fixture.client.send('continue', {
+      transcript: [nativeTestSnapshot()],
+      acknowledgedCheckpoint: 'prior-host-checkpoint',
+    });
+    t.false(
+      fixture.sent.some(
+        message => message.method === 'thread/resume' && !message.params.path,
+      ),
+    );
+    t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+    t.is(
+      fixture.sent.find(message => message.method === 'turn/start').params
+        .threadId,
+      'restored-native',
+    );
+    await fixture.client.interrupt();
+    await drain(reader);
+  });
+}
+
+test('missing native rollout with outstanding work refuses before replacement or dispatch', async t => {
+  let restored = 0;
+  const fixture = makeFixture({
+    threadId: 'missing-native',
+    missingInheritedRollout: true,
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: 'prior-host-checkpoint',
+        turnId: 'uncommitted-turn',
+      },
+      nativeContext: nativeTestTransport({
+        restore: async () => {
+          restored += 1;
+          throw Error('Unexpected restoration');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot()],
+        acknowledgedCheckpoint: 'prior-host-checkpoint',
+      }),
+    { message: /Native rollout missing/ },
+  );
+  t.is(restored, 0);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.true((await fixture.client.status()).needsReconciliation);
+});
+
+test('native capture failure aborts without an incomplete checkpoint or success', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    clientOptions: {
+      nativeContext: nativeTestTransport({
+        capture: async () => {
+          throw Error('Synthetic capture failure');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.false(events.some(event => ['end', 'native-context'].includes(event.type)));
+  t.regex(events.at(-1).reason, /Synthetic capture failure/);
+});
+
+test('interrupt during held terminal audit settles naturally completed turn without capture', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let auditing = false;
+  let captures = 0;
+  const fixture = makeFixture({
+    interruptTerminal: false,
+    clientOptions: {
+      auditEvent: async kind => {
+        if (kind === 'turn-terminal') {
+          auditing = true;
+          await gate;
+        }
+      },
+      nativeContext: nativeTestTransport({
+        capture: async request => {
+          captures += 1;
+          return nativeTestTransport().capture(request);
+        },
+      }),
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
+  });
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  while (!auditing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  const interrupted = fixture.client.interrupt();
+  void interrupted.catch(() => {});
+  await flush();
+  release();
+  await interrupted;
+  const events = await drain(reader);
+  t.is(captures, 0);
+  t.is(events.at(-1).type, 'abort');
+  t.false(events.some(event => event.type === 'end'));
+});
 
 const supervise = async client => {
   const events = [];
@@ -1264,7 +1817,7 @@ test('unconsumed thread-scoped notifications do not poison an active turn', asyn
   t.is((await drain(reader)).at(-1).type, 'end');
 });
 
-test('a persisted thread is resumed under its own sandbox before it is superseded', async t => {
+test('an acknowledged persisted thread is superseded under the current sandbox policy', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const reader = await fixture.client.send('continue');
   fixture.push({
@@ -1276,13 +1829,13 @@ test('a persisted thread is resumed under its own sandbox before it is supersede
   });
   await drain(reader);
   t.is(
-    fixture.sent.find(message => message.method === 'thread/resume').params
+    fixture.sent.find(message => message.method === 'thread/start').params
       .sandbox,
     'danger-full-access',
   );
-  // The inherited thread is resumed -- that is what carries the sandbox
-  // setting above -- and then superseded, so the turn runs on a thread this
-  // incarnation owns rather than on the CLI's surviving store.
+  // No outstanding marker needs reconciliation against the disposable old
+  // projection. The replacement still receives the current sandbox policy.
+  t.falsy(fixture.sent.find(message => message.method === 'thread/resume'));
   t.truthy(fixture.sent.find(message => message.method === 'thread/start'));
   const models = await fixture.client.models();
   t.is(models[0].id, 'gpt-test');
@@ -1657,12 +2210,9 @@ test('a failed thread-binding audit is retried before dispatch', async t => {
     },
   });
   await drain(reader);
-  // Three, not two: the first attempt fails, and the retry binds twice --
-  // once to the inherited thread it resumes in order to reconcile, and once
-  // to the thread that supersedes it. What the test pins is that a failed
-  // binding audit is retried before anything is dispatched, not the number
-  // of threads a turn touches.
-  t.is(bindingAttempts, 3);
+  // The failed binding audit must be retried before dispatch. No outstanding
+  // marker requires an extra binding to the old inherited projection.
+  t.is(bindingAttempts, 2);
   await fixture.client.acknowledge('turn-1');
   await fixture.client.terminate();
 });
@@ -3044,13 +3594,13 @@ for (const phase of ['thread/start', 'thread/inject_items']) {
 }
 
 test('interrupt during ledger admission fences the prompt and terminal-microtask successor', async t => {
-  let release;
+  let release = () => {};
   const gate = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
-  let entered;
+  let entered = () => {};
   const held = new Promise(resolve => {
-    entered = resolve;
+    entered = () => resolve(undefined);
   });
   const saved = [];
   const fixture = makeFixture({

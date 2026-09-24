@@ -33,6 +33,7 @@ RUN cd /opt/codex-install \
   && test "$(codex --version)" = "codex-cli 0.152.0" \
   && rm -rf /root/.npm /root/.codex /tmp/node-compile-cache
 
+COPY native-context.mjs context-io.mjs context-command.mjs /opt/endo/
 # CODEX_HOME is session-durable until teardown, not a credential boundary.
 # Commands launched by Codex run as this same node UID and may read and write
 # it within the shared outer container boundary. Never put auth.json, a reusable
