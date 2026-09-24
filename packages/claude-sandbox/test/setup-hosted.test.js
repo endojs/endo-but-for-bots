@@ -80,6 +80,29 @@ const makeFakeHost = ({ failMint } = {}) => {
     bindings.set(key('claude-sandbox', name), `${name}-id`);
   }
   bindings.set(key('floot', 'controller-profile'), 'dir');
+  const profileValues = new Map();
+  const publications = [];
+  const profile = Far('TestFlootProfile', {
+    has: async name => profileValues.has(key(name)),
+    makeDirectory: async name => {
+      profileValues.set(key(name), 'dir');
+    },
+    storeValue: async (value, name) => {
+      publications.push({ value, name });
+      profileValues.set(key(name), value);
+    },
+  });
+  const oracle = Far('TestAccountOracle', {});
+  const oraclePowers = Far('TestOraclePowers', {
+    storeLocator: async (name, locator) => {
+      bindings.set(
+        key('claude-sandbox', 'account-oracle-powers', name),
+        locator,
+      );
+    },
+  });
+  bindings.set(key('claude-sandbox', 'account-oracle'), oracle);
+  bindings.set(key('claude-sandbox', 'account-oracle-powers'), oraclePowers);
   const host = /** @type {EndoHost} */ (
     /** @type {unknown} */ ({
       async identify(...parts) {
@@ -117,8 +140,20 @@ const makeFakeHost = ({ failMint } = {}) => {
       async has(...parts) {
         return bindings.has(key(...parts));
       },
+      async locate(...parts) {
+        if (!bindings.has(key(...parts))) throw Error('Missing locator target');
+        return `test:${parts.join('/')}`;
+      },
       async lookup(...parts) {
         const pathParts = parts.flat();
+        if (key(pathParts) === key('floot', 'controller-profile'))
+          return profile;
+        if (
+          pathParts[0] === 'claude-sandbox' &&
+          pathParts[1]?.startsWith('account-oracle')
+        ) {
+          return bindings.get(key(pathParts));
+        }
         if (pathParts[0] === '@secrets' && pathParts[1] === 'catalog') {
           return harden({
             list: async () =>
@@ -202,6 +237,8 @@ const makeFakeHost = ({ failMint } = {}) => {
     specifiers,
     secrets,
     credentialKinds,
+    profileValues,
+    publications,
     seedCredential,
     seedBroker,
   };
@@ -327,6 +364,21 @@ test.serial(
     });
     const f = makeFakeHost();
     const entries = new Map();
+    // Retained per-member observation owners are re-pointed at fresh sources.
+    for (const id of ['first', 'second']) {
+      f.bindings.set(
+        key('claude-sandbox', `account-oracle-${id}`),
+        Far(`Oracle ${id}`, {}),
+      );
+      f.bindings.set(
+        key('claude-sandbox', `account-oracle-${id}-powers`),
+        Far(`Oracle powers ${id}`, {
+          storeLocator: async (name, locator) => {
+            entries.set(`${id}/${name}`, locator);
+          },
+        }),
+      );
+    }
     const capturedPowers = new Map();
     const secretFacets = new Map(
       ['claude-one', 'claude-two'].map(name => [
@@ -434,6 +486,25 @@ test.serial(
       )
     );
     await main(host, { exec: refuseInspect });
+    t.deepEqual(
+      f.publications.map(({ value }) => value.unavailable),
+      [true, undefined],
+    );
+    const publication = f.profileValues.get(
+      key('account-bindings', 'claude-sandbox'),
+    );
+    t.is(publication.accounts.length, 2);
+    for (const [index, id] of ['first', 'second'].entries()) {
+      t.like(publication.accounts[index], {
+        accountId: JSON.stringify(['anthropic', 'claude-main', id]),
+        uses: [{ backendId: 'claude', subscriptionId: id }],
+      });
+      t.is(
+        publication.accounts[index].oracle,
+        f.bindings.get(key('claude-sandbox', `account-oracle-${id}`)),
+      );
+      t.true(entries.has(`${id}/account-source`));
+    }
     t.like(JSON.parse(brokerMint(f.mints).options.env.CLAUDE_BROKER_CONFIG), {
       pool: true,
       credentialKind: 'oauthToken',
@@ -619,6 +690,25 @@ test.serial(
     });
     const fake = makeFakeHost();
     await main(fake.host, { exec: refuseInspect });
+
+    t.deepEqual(
+      fake.publications.map(({ value }) => value.unavailable),
+      [true, undefined],
+    );
+    const publication = fake.profileValues.get(
+      key('account-bindings', 'claude-sandbox'),
+    );
+    t.is(publication.version, 1);
+    t.is(publication.accounts.length, 1);
+    t.like(publication.accounts[0], {
+      accountId: JSON.stringify(['anthropic', 'claude-main', null]),
+      providerId: 'anthropic',
+      uses: [{ backendId: 'claude' }],
+    });
+    t.is(
+      publication.accounts[0].oracle,
+      fake.bindings.get(key('claude-sandbox', 'account-oracle')),
+    );
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().join('/')),
       [

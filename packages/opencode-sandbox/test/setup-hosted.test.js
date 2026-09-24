@@ -1,5 +1,6 @@
 // @ts-check
 import '@endo/init';
+import { Far } from '@endo/far';
 import { createHash } from 'node:crypto';
 import test from 'ava';
 import { access, mkdir, mkdtemp, rm, stat, symlink } from 'node:fs/promises';
@@ -34,6 +35,29 @@ const makeFakeHost = ({
   const copies = [];
   const removed = [];
   const stored = [];
+  const profileValues = new Map();
+  const publications = [];
+  const profile = Far('TestFlootProfile', {
+    has: async name => profileValues.has(key(name)),
+    makeDirectory: async name => {
+      profileValues.set(key(name), 'dir');
+    },
+    storeValue: async (value, name) => {
+      publications.push({ value, name });
+      profileValues.set(key(name), value);
+    },
+  });
+  const oracle = Far('TestAccountOracle', {});
+  const oraclePowers = Far('TestOraclePowers', {
+    storeLocator: async (name, locator) => {
+      bindings.set(
+        key('opencode-sandbox', 'account-oracle-powers', name),
+        locator,
+      );
+    },
+  });
+  bindings.set(key('opencode-sandbox', 'account-oracle'), oracle);
+  bindings.set(key('opencode-sandbox', 'account-oracle-powers'), oraclePowers);
   /** @type {Map<string, Record<string, string | undefined>>} */
   const environments = new Map();
   environments.set(
@@ -54,6 +78,8 @@ const makeFakeHost = ({
     copies,
     removed,
     stored,
+    profileValues,
+    publications,
     environments,
     reads,
     specifiers,
@@ -86,7 +112,20 @@ const makeFakeHost = ({
         async has(...parts) {
           return bindings.has(key(...parts));
         },
+        async locate(...parts) {
+          if (!bindings.has(key(...parts)))
+            throw Error('Missing locator target');
+          return `test:${parts.join('/')}`;
+        },
         async lookup(pathParts) {
+          if (key(pathParts) === key('floot', 'controller-profile'))
+            return profile;
+          if (
+            pathParts[0] === 'opencode-sandbox' &&
+            pathParts[1]?.startsWith('account-oracle')
+          ) {
+            return bindings.get(key(pathParts));
+          }
           if (pathParts[1] === 'catalog') {
             return harden({ list: async () => [] });
           }
@@ -271,8 +310,35 @@ test.serial(
   'mints the backend under a temp name and rebinds the Floot profile',
   async t => {
     await baseEnv(t);
-    const { host, bindings, mints, copies, removed } = preflightHost();
+    const {
+      host,
+      bindings,
+      mints,
+      copies,
+      removed,
+      publications,
+      profileValues,
+    } = preflightHost();
     await main(host);
+
+    t.deepEqual(
+      publications.map(({ value }) => value.unavailable),
+      [true, undefined],
+    );
+    const publication = profileValues.get(
+      key('account-bindings', 'opencode-sandbox'),
+    );
+    t.is(publication.version, 1);
+    t.is(publication.accounts.length, 1);
+    t.like(publication.accounts[0], {
+      accountId: JSON.stringify(['openrouter', 'openrouter-main', null]),
+      providerId: 'openrouter',
+      uses: [{ backendId: 'opencode' }],
+    });
+    t.is(
+      publication.accounts[0].oracle,
+      bindings.get(key('opencode-sandbox', 'account-oracle')),
+    );
 
     // The fifth is the broker's read-only account source, minted again over
     // the broker on every run for the account oracle.
