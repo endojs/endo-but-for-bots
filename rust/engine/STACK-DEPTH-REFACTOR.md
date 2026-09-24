@@ -36,9 +36,9 @@ Per-area files are under `$S/stack/<area>/`: `dispatch-reentry`, `mop-proxy`, `w
 `compiler`, `regexp`, `measure` and `prior-art`.
 Re-runs made while revising this report are under `$S/stack/revise2/`, `$S/stack/revise3/` and
 `$S/stack/revise4/` (`revise4/README.txt` names the binaries each script uses).
-Files a reviewer produced are under `$S/stack/review2/` and `$S/stack/review3/`; where this
-report relies on one, it was re-run into `revise3/` or `revise4/` unless the text says
-otherwise.
+Files a reviewer produced are under `$S/stack/review2/`, `$S/stack/review3/`,
+`$S/review-r2/stack/` and `$S/review-r3/stack/`; where this report relies on one from the first
+two, it was re-run into `revise3/` or `revise4/` unless the text says otherwise.
 That directory is session scratch and is not preserved; `$S/…` references record where each
 figure came from.
 The six prototype patches are kept in [`stack-depth-prototypes/`](stack-depth-prototypes/),
@@ -99,8 +99,8 @@ The prototype patches were measured in a scratch copy of the engine.
 - **The budget is a counter, not a byte bound, and wasm breaks the calibration.**
   `NATIVE_DEPTH_LIMIT = 2048` units was sized so that its two corners fit the 8 MiB native
   stack.
-  On wasm, one budget unit costs between 34 and 1,088 B depending on the family and the host
-  tier, a spread of 32×.
+  On wasm, one budget unit costs between about 55 and 1,088 B depending on the family and the
+  host tier, a spread of about 20×.
   All 25 recursion-family cases need 1,252-1,551 KiB on V8 and 1,855 KiB on Wasmtime to match
   native.
   The smallest measured host limits are 500 KiB (Chromium Worker) and 512 KiB (Wasmtime
@@ -547,12 +547,15 @@ and for TF from `walkers/max_node_turbofan.jsonl`):
 | Proxy get (1) | 240 | 400 | 328 | 480 | 272 |
 | `flat` (1) | 442 | 390 | 388 | 395 | 219 |
 | `join` (32) | 592 | 99 | 99 | 176 | 476 |
-| `forEach` (32) | 435 | 101 | 63 | 422 | 331 |
-| sync `async` (16) | 336 | 125 | 34 | 700 | 229 |
+| `forEach` (32) | 435 | 101 | 69 | 422 | 331 |
+| sync `async` (16) | 336 | 134 | 68 | 700 | 229 |
 | getter (17) | 416 | 197 | 128 | 771 | – |
 | `valueOf` (16) | 378 | – | – | 786 | – |
 
 The getter and `valueOf` rows divide the per-level figures of §2.1 by the units per level.
+The `forEach` TF and sync `async` LO and TF figures were re-measured above Node's 46 KiB floor
+(`$S/review-r3/stack/heavy_slopes_v8.jsonl`); `slopes.json` took their lower depth at that
+floor, which understated them (63, 125 and 34 B).
 The `JSON.stringify` LO slopes are `--liftoff-only` two-depth slopes.
 Arrays are 632 B per level both over 500 to 2,000 levels (`measure/cases.py:18`) and over
 1,000 to 2,014 levels (`revise4/lo_walkers_liftoff_only.jsonl`: 626 → 1,252 KiB).
@@ -616,18 +619,24 @@ V8 tiers wasm code lazily, and the frame sizes depend on the tier:
   1197 is `json_stringify_array`'s index (`measure/v8_turbofan_all.jsonl`), and 1,540 traps.
 - Summing max(Liftoff, TurboFan) per frame over each measured recursion chain gives the worst
   per-function mix (`$S/stack/revise2/worst_mix.txt`, from `measure/wcycles.txt`).
-  It exceeds the worse pure tier by 0-12% per level: +2% for `JSON.stringify` (784 against
-  768 B, which predicts the measured 1,551 KiB), +4% for Proxy construct, +6% for `forEach`
-  and +12% for nested `join` and `toString`.
+  Summed over one whole level, it exceeds the worse pure tier by 0-13.4%: +2% for
+  `JSON.stringify` (784 against 768 B, which predicts the measured 1,551 KiB), +4% for Proxy
+  construct, +6% for `forEach` and +13.4% for nested `join` and `toString` (3,584 against
+  3,160 B; `worst_mix.txt` gives +12% for a 5-frame piece of that 14-frame level,
+  `$S/review-r3/stack/join_full_level_model.txt`).
   The model covers the light walkers, Proxy forwarding and three heavy chains (`forEach`,
   `async`, `join`/`toString`) only.
   It does not cover the getter, `valueOf`, `eval` or other heavy chains, the scoper, the coder,
   or any compiler pin except parentheses, blocks and `?:`.
-  Where it was checked against a compiler chain it is unreliable: for `parse-parens@90` it
-  gives TurboFan 1,920 B per level against a measured slope of 2,372 B (§2.4), about 19% too
-  low.
-  (The 456 B that `measure/wcycles.txt` reports for that trace is a 3-frame fragment the cycle
-  finder matched 180 times, not a level.)
+  Where it was checked against a compiler chain, it matches measurement once a whole level is
+  summed.
+  A `parse-parens` level is 17 frames with two `binary_ladder` frames, and the cycle finder cut
+  it at both: `worst_mix.txt`'s 1,920 B (TurboFan) is the 14-frame piece, and the 456 B of
+  `measure/wcycles.txt` is the 3-frame piece.
+  The whole level gives 2,376 B under TurboFan and 1,480 B under Liftoff, against measured
+  slopes of 2,372 and 1,468 B (§2.4); for blocks, the coder level gives 712 B under Liftoff and
+  the scoper level 952 B under TurboFan, against measured 712 and 952 B
+  (`$S/review-r3/stack/*_full_level_model.txt`).
 - A 2,016-layer Proxy `[[Call]]` chain completes on Node's default stack when cold.
   It traps after 10,000 warm-up calls in the same instance (`$S/stack/mop-proxy`,
   `call-2016-warm10k`).
@@ -710,9 +719,9 @@ The Target 1 set is:
 - the renderer ceiling (2,048 nested arrays) and 2,049;
 - the trapped-Proxy ceilings, `getOwnPropertyDescriptor`-trapped at 1,999 and 2,000 layers and
   `get`-trapped at 2,016 and 2,017 (§1.3).
-  They are **expected traps** until B10 lands (Phase 4): no earlier phase removes their
-  432 B per unit on WT, and they trap on WT, in the Worker stand-in and on workerd with
-  TurboFan pinned.
+  They are **expected traps** until B10 lands (Phase 4): no earlier phase lowers their cost on
+  WT, 432 B per unit today and 512 B once B1 lands (§4.4), and they trap on WT, in the Worker
+  stand-in and on workerd with TurboFan pinned.
 
 Each must produce native-identical `Halt`, result and computrons under each of:
 
@@ -726,10 +735,11 @@ Each must produce native-identical `Halt`, result and computrons under each of:
   *(inferred equivalence; confirm with the next item)*;
 - a Chromium dedicated Worker.
 
-The 12% covers the worst per-function mix modelled in §1.5 *(est.)*.
-For the compiler pins, the tagged-template chain and the unmodelled heavy families that margin
-is **unsupported**: §1.5's model does not cover them, and where it was checked on a compiler
-chain it was about 19% too low.
+Lane B's 440 and 866 KiB leave 13.6% below 500 and 984 KiB, which covers the worst
+per-function mix modelled in §1.5, 13.4% per level for nested `join` and `toString` *(est.)*.
+For most compiler pins, the tagged-template chain and the unmodelled heavy families that margin
+is **unsupported**: §1.5's model does not cover them, although on the three compiler chains it
+was checked against it matches the measured slopes to within 1% once a whole level is summed.
 Lane B's eager tier-up runs must include the parser, scoper and coder functions of those
 chains before the margin is relied on for them.
 
@@ -798,14 +808,14 @@ The native dispatchers charge at `invoke.rs:199` (`call_native`) and `invoke.rs:
 
 | Family | Cycle (frames per level, native) | Units | Ceiling | N | WT | LO | TF |
 |---|---|---|---|---|---|---|---|
-| Array callbacks: `forEach`, `map`, `reduce`, `Reflect.apply` | `call_native_method` → `call_native_method_inner` → `run_callback` → `invoke_value` → `run_user_callback` → `dispatch_at` (7) | 32 | 63 | 13,926 | 13,517 | 3,231 | 2,025 |
+| Array callbacks: `forEach`, `map`, `reduce`, `Reflect.apply` | `call_native_method` → `call_native_method_inner` → `run_callback` → `invoke_value` → `run_user_callback` → `dispatch_at` (7) | 32 | 63 | 13,926 | 13,517 | 3,231 | 2,219 |
 | `sort` / `replace` / `Array.from` | same shape | 32 | 63 | 14,928 / 14,416 / 15,184 | – | – | – |
 | Nested `join` / `toString`, native → native | `call_native_method` → `array_generic_join` → `to_string_units` → `ordinary_to_primitive` → `invoke_value` → `call_native_method` (7 per activation, 2 per level) | 32 | 63 | 18,933 | 5,621 | 3,163 | 3,163 |
 | Iterator-helper chains: `it.take(5)`, `it.map(…)` nested, native → native | one charged native activation per level (127 levels halt at depth 2,064) | 16 | 126 | – | at ceiling 399,361-401,408 B (`take`), 409,601-411,648 B (`map`) | – | – |
 | `String(x)`; Promise executor | `call_native` → `call_native_inner` → … → `dispatch_at` | 32 | 63 | 10,576 / 10,496 | 14,687 / 14,332 | – | – |
 | `Promise.resolve` of a thenable whose `then` is a getter (`tagged-then`) | getter re-entry inside a native activation (62 levels halt at depth 2,062) | 33 *(derived from the halt depth)* | 61 | – | at ceiling 899,073-902,144 B | – | – |
-| Sync `async` nest | START_ASYNC (`dispatch.rs:3266`) → `step_async` → `dispatch_at` (`suspend.rs:871`) (2) | 16 | 126 | 5,370 | 11,196 | 2,002 | 546 |
-| Generator `next`, for-of, `yield*`; async generator | `call_native_method` → `resume_generator` → `dispatch_at` (`suspend.rs:322`, `:656`) | 32 | 62 | 13,664 / 14,224 | 12,720 / 13,147 | 2,796 | – |
+| Sync `async` nest | START_ASYNC (`dispatch.rs:3266`) → `step_async` → `dispatch_at` (`suspend.rs:871`) (2) | 16 | 126 | 5,370 | 11,196 | 2,150 | 1,092 |
+| Generator `next`, for-of, `yield*`; async generator | `call_native_method` → `resume_generator` → `dispatch_at` (`suspend.rs:322`, `:656`) | 32 | 62 | 13,664 / 14,224 | 12,720 / 13,147 | 2,940 | 1,751 |
 | Accessor get / set | GET_PROPERTY → `mop_get` (light) → `ordinary_get` → `invoke_getter` → `invoke_value` → `dispatch_at` | 17 | 119 | 7,066 / 6,736 | 13,100 | 3,354 | 2,176 |
 | `valueOf`, `@@toPrimitive`, `@@hasInstance`, `@@iterator` | opcode arm → `invoke_value` → `dispatch_at` | 16 | 126 | 5,632-6,048 | 12,158-12,577 | – | – |
 | Bound `[[Call]]` from RUN | `dispatch.rs:1663` `self.invoke_value(code, func, this, &args)` → `run_user_callback` | 16 | 126 | 5,632 | 11,997 | – | – |
@@ -923,12 +933,12 @@ The rebuilt harness reproduces `stage_wt.jsonl`'s `callchain`-2044 figure (1,999
 
 | Recursion | Site | Guard | Pin | N (release) | WT | V8 |
 |---|---|---|---|---|---|---|
-| Expression cascade: parens, array, object, call arguments, arrow bodies, template | `parser.rs:810-1400`, about 14 frames per paren level | `PARSER_STACK_BUDGET`, 11 units per paren | 91 | 2,662 (debug 25.4 KiB) | 2,526 | LO 1,468, TF 2,372 |
+| Expression cascade: parens, array, object, call arguments, arrow bodies, template | `parser.rs:810-1400`, 17 frames per paren level in V8's traces | `PARSER_STACK_BUDGET`, 11 units per paren | 91 | 2,662 (debug 25.4 KiB) | 2,526 | LO 1,468, TF 2,372 |
 | Statements, blocks, function bodies | `parser/stmt.rs:285` ↔ `statement_inner:289` | `STATEMENT_COST = 2` | 512 / 512 / 505 | parser 336-640; whole compile of block-512 667 KiB | 479-782; block-512 675 KiB | block-512 462 KiB |
 | `new new … f` | `parser.rs:2026-2046` | `STATEMENT_COST` | 505 | 797 (debug 9.1 KiB; 4.66 MiB at the pin, the largest debug corner) | 339 | – |
 | Binding patterns | `stmt.rs:1025-1180` | `STATEMENT_COST` | 510 | 241 | 321 | – |
-| Scoper hoist / bind | `scoper.rs:1147` (20-function strongly connected component, SCC) and `:2061` (32-function SCC) | `TREE_DEPTH_LIMIT` backstop, never reached (`scoper.rs:1136-1138`) | tree ≤ 2,048 | 592 / 448 per tree level; 1.19 MiB at 2,045 | 607; 1.22 MB | 821 KiB |
-| Coder | `coder.rs:1415-1439` (71-function SCC) | backstop (`coder.rs:1424-1433`) | tree ≤ 2,048 | ≈464 | whole compile 720-1,105 per level; callchain-2044 1.95 MB, tagged-2043 2.26 MB | LO 964 KiB, TF 1,123 KiB (callchain-2044) |
+| Scoper hoist / bind | `scoper.rs:1147` (20-function strongly connected component, SCC) and `:2061` (32-function SCC) | `TREE_DEPTH_LIMIT` backstop, never reached (`scoper.rs:1136-1138`) | tree ≤ 2,048 | 592 / 448 per tree level; 1,221,632 B at 2,045 | 607; 1,246,872 B | 821 KiB |
+| Coder | `coder.rs:1415-1439` (71-function SCC) | backstop (`coder.rs:1424-1433`) | tree ≤ 2,048 | ≈464 | whole compile 720-1,105 per level; callchain-2044 1,999,064 B, tagged-2043 2.26 MB | LO 964 KiB, TF 1,123 KiB (callchain-2044) |
 | Tagged-template chain (not pinned) | `code_template` → `code_tagged_template` (`coder.rs:5637`) → `self.code_this(&node.children[0], 0)` (`:5679`), not a call or member arm, so not covered by the call-chain spine | tree depth; 2,043 compile at top level | none today | 1,202-1,216 KiB (whole probe, 2,038 in a function) | whole compile 2,258,344 B at 2,043 (about 1,105 B per level): parse 330,544, parse + scope 1,246,504 | whole compile at 2,043: LO 1,026 KiB, TF 1,283 KiB |
 | `duplicate_proto_setter_line` | `parser.rs:141-170` | **none** | tree ≤ 2,048 | 96 | 160 (321 KiB, the whole parse-only peak for flat chains) | – |
 | AST drop glue | `ast.rs:136`, `:170` derive; no `Drop` impl | **none** | tree ≤ 2,048 | 64 | 160 | – |
@@ -1082,7 +1092,7 @@ All three compile through `eval_source`, uncharged, on top of the current depth:
 The compiler's stack adds to whatever depth the VM has reached.
 Its measured peak is the tagged-template chain of §2.4: at least 2.26 MB on WT, 1,284 KiB under
 Node's TurboFan, 1,026 KiB under Liftoff and about 1.2 MiB natively.
-`callchain`-2044 needs 1.95 MB on WT.
+`callchain`-2044 needs 1,999,064 B on WT.
 41 nested `eval`s need 1,038,356 B on WT with a trivial source at the bottom
 (`$S/stack/dispatch-reentry/wt_evalnest+trivial_evalnest+block512_evalnest+cond1011_evalnes.json`).
 With a `function`-512 compile there they need 2,111,488 B (`$S/stack/compiler/evalnest_wt.jsonl`),
@@ -1254,7 +1264,7 @@ the Chromium Worker or on workerd.
 | 13 | C1-C7: in-place re-entry (bound, `Reflect.*`, intrinsic `@@replace`, cross-segment, generators, START_ASYNC, accessors) with virtual charges | c | S-M each | after A2, about 1-3 KB per level each *(est.)* | Target 2 margin | no, if virtually charged |
 | 14 | B9: Tier 1b, alternating ordinary/Proxy chains | b | M | 688 B → ≈0 per 2 units (WT) *(est.)* | Target 2 | no |
 | 15 | D3: parser (`new` loop, precedence climbing, closure-free `nested`) | d | S-M | about 30-45% of a cascade level *(est.)* | debug corners | no |
-| 16 | B10: Tier 2, continuation stack for trapped Proxy layers | b | L | 432 B per unit → ≈0 (WT) *(est.)* | the trapped-Proxy ceilings (WT, Worker stand-in, workerd TurboFan); Target 2 | no |
+| 16 | B10: Tier 2, continuation stack for trapped Proxy layers | b | L | 432 B per unit today, 512 B after B1 → ≈0 (WT) *(est.)* | the trapped-Proxy ceilings (WT, Worker stand-in, workerd TurboFan); Target 2 | no |
 | 17 | C8: native continuation frames (`lua_callk` style) or self-hosted callback built-ins | c | L-XL | removes the remaining heavy frames *(est.)* | only if still needed | no, if virtually charged |
 | – | E2-E6: host escape hatches | e | S-L | see §4.7 | host-dependent | no |
 | – | F1: reweight or lower the budget | – | S | changes acceptance | – | **yes** |
@@ -1497,6 +1507,11 @@ The common recipe is a `Vec<Frame>` loop in which:
   The accepted `get`-trapped 2,016-layer chain then traps on WT at 1 MiB, where the repository
   build returns; the prototype returns at 1,100,000 B (re-run for this revision with the kept
   `probe.cwasm` and `probe-mod.cwasm`, `$S/review-r2/stack/verify_get2016.py`).
+  The prototype's trapped layers were not measured on V8: `mop-proxy/modnode.jsonl` has only
+  the trap-absent `get`, `call` and `define` chains.
+  workerd passes both trapped-Proxy ceilings today under `--liftoff-only` and default tiering,
+  and its `--no-liftoff` lane traps them, so no lane B run bounds default tiering for them.
+  Measure B1's trapped layers on workerd with default tiering before B1 lands.
 - **Meter and ReentryLimit:** 570 differential cases were identical, covering every family
   around its ceiling, `families.json`, trap order, revocation mid-chain, invariant
   violations and array-iterator metering.
@@ -2140,12 +2155,13 @@ Checks:
   Default tiering is timing-dependent, and a per-function mix needs more stack than either pure
   tier (§1.5), so the two pinned extremes alone do not bound it.
   The initial expected traps are what Phase 1 leaves *(est.)*:
-  - on the Node lanes until D2 lands, `function`-512, `callchain`-2044 and `elseif`-2044 at
-    440 KiB under both tiers, `callchain`-2044 and `elseif`-2044 at 500 KiB, and `function`-512
-    at 500 KiB when a function on its chain is tiered up; after D1 they need 601, 741 and
-    516 KiB under TurboFan and 510, 803 and about 549 KiB under default tiering
-    (`compiler/exp/v8_e3.jsonl`), and 462, 787 and 533 KiB under `--liftoff-only` (the
-    `revise3/cstl_e3.wasm` compile harness, `$S/review-r2/stack/lane_b_lo_after_d1.jsonl`);
+  - on the Node lanes until D2 lands, `function`-512, `member`-2045, `callchain`-2044 and
+    `elseif`-2044 at 440 KiB under both tiers, `callchain`-2044 and `elseif`-2044 at 500 KiB,
+    and `function`-512 and possibly `member`-2045 at 500 KiB when a function on their chain is
+    tiered up; after D1 they need 601, 453, 741 and 516 KiB under TurboFan, 462, 484, 787 and
+    533 KiB under `--liftoff-only`, and, all but `member`, 510, 803 and about 549 KiB under
+    default tiering (`compiler/exp/v8_e3.jsonl`; the `revise3/cstl_e3.wasm` compile harness,
+    `$S/review-r2/stack/lane_b_lo_after_d1.jsonl` and `$S/review-r3/stack/member_node_d1.jsonl`);
   - the tagged-template chain on every tier and host of lane B, including workerd with either
     tier pinned, until D2 lands (1,042 KiB LO and 1,058 KiB TF on Node after D1);
   - on the Node lanes, `||`-2043 and `&&`-2043 (500 KiB TF and 516 KiB LO after D1) and
@@ -2168,11 +2184,12 @@ Checks:
   TurboFan frames, native `-Z emit-stack-sizes`) and the per-family bytes-per-unit slopes at two
   depths.
   For each recursion chain, also report the worst per-function tier mix, the sum of
-  max(Liftoff, TurboFan) frames, against each pure tier; today the excess is 0-12% for the
-  chains modelled (`$S/stack/revise2/worst_mix.txt`).
-  Extend the model to the scoper, coder and parser chains and to every heavy family, and check
-  it against measurement: for `parse-parens` it is about 19% too low today (§1.5).
-  If the excess grows past lane B's 12% margin, widen the margin.
+  max(Liftoff, TurboFan) frames over one whole level, against each pure tier; today the excess
+  is 0-13.4% for the chains modelled (§1.5).
+  Extend the model to the scoper, coder and parser chains and to every heavy family, cut each
+  chain at its repeating period rather than between two occurrences of one frame, and check it
+  against measurement, as §1.5 does for `parse-parens` and blocks.
+  If the excess grows past the 13.6% that lane B's 440 and 866 KiB leave, widen the margin.
   Post the top-N diff on PRs.
   The per-unit slope is the direct measure of Target 2 (≤ 200 B).
 - **Native tests.**
@@ -2213,13 +2230,15 @@ B6 estimated)*:
   The 37 heavy ceilings already pass.
   The tagged-template chain still traps under both pinned tiers until D2 (1,042 and 1,058 KiB
   on Node after D1), and the trapped-Proxy ceilings still trap under `--no-liftoff` until B10.
+  Whether B1's costlier trapped layers (§4.4) keep them passing under `--liftoff-only` and
+  default tiering was not measured.
   The `&&`, `||`, `??` and `else if`-with-blocks chains that trap with `--no-liftoff` today were
   not measured on workerd after D1, so they stay expected traps until D2 or a post-D1 run.
 - **Chromium Worker:** the 11 family traps and the walker-ceiling traps clear.
   `function`-512 (601 KiB after D1 under Node's TurboFan), `callchain`-2044 (741 KiB),
   `elseif`-2044 (516 KiB), `||`-2043 (500 KiB), `??`-2043 (675 KiB), the tagged-template chain
-  and the `eval-*` compositions probably remain until D2, and the trapped-Proxy ceilings until
-  B10.
+  and the `eval-*` compositions probably remain until D2, `member`-2045 (453 KiB, and 484 KiB
+  under Liftoff) may remain until D2, and the trapped-Proxy ceilings remain until B10.
 - **WT 512 KiB:** the remaining traps among the 25 are:
   - `async-64/10k`;
   - `foreach-63/10k`;
@@ -2231,9 +2250,10 @@ B6 estimated)*:
   compile harness (`compiler/exp/wt_e1.jsonl`), whose baseline, 690,904 B, matches the probe's
   674 KiB, and the probe's floor is 14 KiB.
   The five pin+1 refusal traps, tagged-2044 included, clear with D1c.
-  Every heavy ceiling of §1.3 except the iterator helpers still traps until A2, the
-  tagged-template chain (1,279,144 B after D1) until D2, and the trapped-Proxy ceilings until
-  B10.
+  Every heavy ceiling of §1.3 except the iterator helpers still traps until A2.
+  `function`-512, `member`-2045, `callchain`-2044 and `elseif`-2044 (747, 707, 962 and 834 KiB
+  after D1, §4.6) and the tagged-template chain (1,279,144 B after D1) still trap until D2, and
+  the trapped-Proxy ceilings until B10.
 - **Not yet measured:** the unpinned chain kinds of §1.3 on Wasmtime and workerd after D1, and
   the `else if`-with-blocks chain on any host after D1.
   On Node after D1, `||` and `&&` need 500-516 KiB and `??` 580-675 KiB
