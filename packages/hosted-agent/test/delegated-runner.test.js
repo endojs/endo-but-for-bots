@@ -32,6 +32,7 @@ const makeBeneath = () => {
     failCreate: '',
     failDestroy: false,
     bounded: false,
+    nativeContextFormat: '',
     /** @type {Promise<void> | undefined} */
     hang: undefined,
     stopped: new Set(),
@@ -47,6 +48,9 @@ const makeBeneath = () => {
         providerId: 'codex',
         subscriptions: [{ id: 'work', label: 'Work' }],
         supportedNetworkPolicies: ['off', 'public-internet'],
+        ...(state.nativeContextFormat
+          ? { nativeContextFormat: state.nativeContextFormat }
+          : {}),
         ...(state.bounded ? { enforcesStorageBound: true } : {}),
       }),
     modelCatalog: async subscriptionId =>
@@ -270,6 +274,15 @@ test('a delegated runner never exposes operator binding identities', async t => 
     message: /do not expose operator bindings/,
   });
   t.is(beneath.calls.length, 0);
+});
+
+test('delegation preserves native restoration requirements', async t => {
+  const { factory, beneath } = makeHarness();
+  beneath.state.nativeContextFormat = 'claude-code-jsonl-v1';
+  t.is(
+    (await E(factory).describe()).nativeContextFormat,
+    'claude-code-jsonl-v1',
+  );
 });
 
 test('stop and destroy reach only this runner’s sessions', async t => {

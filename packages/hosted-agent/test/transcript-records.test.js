@@ -8,8 +8,9 @@ import {
   pairToolCalls,
   parseTranscript,
   readResponsesApiItems,
+  renderTranscriptDialogue,
   responsesApiItems,
-  splitAtLastCompaction,
+  selectActiveTranscript,
 } from '../src/transcript-records.js';
 
 /** @typedef {import('../src/transcript-records.js').TranscriptRecord} TranscriptRecord */
@@ -111,7 +112,7 @@ test('a compaction record is the context boundary, by position', t => {
     { kind: 'compaction', summary: 'built the page and read a' },
     { kind: 'message', role: 'user', content: 'now add a footer' },
   ]);
-  const { superseded, active } = splitAtLastCompaction(compacted);
+  const { superseded, active } = selectActiveTranscript(compacted);
   t.is(superseded.length, conversation.length);
   // The compaction itself opens the active span — OpenCode selects messages
   // at or after the latest compaction row, so the summary is context, not
@@ -125,10 +126,10 @@ test('a compaction record is the context boundary, by position', t => {
     ...compacted,
     { kind: 'compaction', summary: 'and added a footer' },
   ]);
-  t.is(splitAtLastCompaction(twice).active.length, 1);
+  t.is(selectActiveTranscript(twice).active.length, 1);
 
   // A CLI with no compaction concept sees the whole stream as active.
-  t.deepEqual(splitAtLastCompaction(conversation), {
+  t.deepEqual(selectActiveTranscript(conversation), {
     superseded: [],
     active: [...conversation],
   });
@@ -146,15 +147,15 @@ test('retained context is canonical, immutable, and expanded exactly once', t =>
   );
   t.deepEqual(parseTranscript(encodeTranscript([checkpoint])), [checkpoint]);
   const records = harden([...conversation, checkpoint]);
-  const { active, superseded } = splitAtLastCompaction(records);
+  const { active, superseded } = selectActiveTranscript(records);
   t.deepEqual(active, [
     { kind: 'compaction', summary: 'older context' },
     { kind: 'message', role: 'user', content: 'recent' },
   ]);
   t.deepEqual(superseded, conversation);
-  t.deepEqual(splitAtLastCompaction(active).active, active);
+  t.deepEqual(selectActiveTranscript(active).active, active);
   t.deepEqual(
-    splitAtLastCompaction([...records, { kind: 'compaction', summary: 'new' }])
+    selectActiveTranscript([...records, { kind: 'compaction', summary: 'new' }])
       .active,
     [{ kind: 'compaction', summary: 'new' }],
   );
@@ -178,6 +179,118 @@ test('retained context refuses nested boundaries and non-record authority', t =>
       }),
     );
   }
+});
+
+const native = harden({
+  kind: 'native-context',
+  format: 'claude-code-jsonl-v1',
+  payload: '{"signed":"native context"}\n',
+  context: harden([
+    { kind: 'compaction', summary: 'portable summary' },
+    ...conversation,
+  ]),
+});
+
+test('native context round-trips atomically with deterministic nested ordering', t => {
+  const ordered = assertTranscriptRecord(native);
+  t.deepEqual(parseTranscript(encodeTranscript([native])), [ordered]);
+  t.is(
+    encodeTranscriptRecord({
+      context: native.context.map(record =>
+        Object.fromEntries(Object.entries(record).reverse()),
+      ),
+      payload: native.payload,
+      format: native.format,
+      kind: native.kind,
+    }),
+    encodeTranscriptRecord(native),
+  );
+  t.true(Object.isFrozen(ordered));
+  t.true(Object.isFrozen(ordered.context));
+  t.true(Object.isFrozen(ordered.context[1]));
+});
+
+test('native context replaces the entire active prefix without expansion', t => {
+  const checkpoint = assertTranscriptRecord(native);
+  const later = assertTranscriptRecord({
+    kind: 'message',
+    role: 'user',
+    content: 'continue',
+  });
+  const records = [...conversation, checkpoint, later];
+  const { superseded, active } = selectActiveTranscript(records);
+  t.deepEqual(superseded, conversation);
+  t.deepEqual(active, [checkpoint, later]);
+  t.deepEqual(selectActiveTranscript(active).active, active);
+  const replacement = assertTranscriptRecord({
+    ...native,
+    payload: 'new native snapshot',
+  });
+  t.deepEqual(selectActiveTranscript([...records, replacement]).active, [
+    replacement,
+  ]);
+  t.deepEqual(
+    selectActiveTranscript([
+      ...records,
+      { kind: 'compaction', summary: 'new summary' },
+    ]).active,
+    [{ kind: 'compaction', summary: 'new summary' }],
+  );
+});
+
+test('native context has only one nonnested portable projection', t => {
+  for (const context of [
+    undefined,
+    {},
+    [null],
+    [native],
+    [{ kind: 'compaction', summary: 'a', retainedTail: [] }],
+    [conversation[0], { kind: 'compaction', summary: 'late summary' }],
+    [
+      { kind: 'compaction', summary: 'a' },
+      { kind: 'compaction', summary: 'b' },
+    ],
+    [{ kind: 'message', role: 'system', content: 'authority' }],
+    [{ kind: 'tool-result', id: 'x', content: 'result', capability: {} }],
+  ])
+    t.throws(() => assertTranscriptRecord({ ...native, context }));
+  for (const field of ['format', 'payload']) {
+    for (const value of ['', undefined, {}, () => {}]) {
+      t.throws(() => assertTranscriptRecord({ ...native, [field]: value }));
+    }
+  }
+  t.throws(() =>
+    assertTranscriptRecord({
+      kind: 'compaction',
+      summary: 'outer',
+      retainedTail: [native],
+    }),
+  );
+  t.notThrows(() => assertTranscriptRecord({ ...native, context: [] }));
+});
+
+test('portable translators explicitly refuse native context instead of dropping it', t => {
+  const checkpoint = assertTranscriptRecord(native);
+  t.throws(() => responsesApiItems([checkpoint]), {
+    message: /native-context/,
+  });
+  t.throws(() => renderTranscriptDialogue([checkpoint]), {
+    message: /native-context/,
+  });
+});
+
+test('native projection is not evidence that an external host tool settled', t => {
+  const call = assertTranscriptRecord({
+    kind: 'tool-call',
+    id: 'call_1',
+    name: 'readFile',
+    args: '{}',
+  });
+  const checkpoint = assertTranscriptRecord(native);
+  const { pairs, unanswered } = pairToolCalls([call, checkpoint]);
+  t.is(pairs.length, 1);
+  t.is(pairs[0].result, undefined);
+  t.deepEqual(unanswered, [call]);
 });
 
 test('tool calls pair with their results by id, earliest unanswered first', t => {

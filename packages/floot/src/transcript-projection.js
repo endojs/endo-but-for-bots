@@ -16,7 +16,7 @@ import { Fail } from '@endo/errors';
 import {
   assertTranscriptRecord,
   pairToolCalls,
-  splitAtLastCompaction,
+  selectActiveTranscript,
 } from '@endo/hosted-agent/transcript-records.js';
 
 import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
@@ -140,7 +140,9 @@ harden(projectTranscript);
  * @param {readonly TranscriptRecord[]} records
  */
 export const transcriptToProviderMessages = records => {
-  const { active } = splitAtLastCompaction(records);
+  const { active } = selectActiveTranscript(records);
+  if (active.some(record => record.kind === 'native-context'))
+    Fail`Direct provider cannot restore backend-native context`;
   // Pair within each turn: an unanswered call stays unanswered when a later
   // turn reuses its native id.
   const { pairs } = pairToolCalls(active, { perTurn: true });
@@ -184,7 +186,7 @@ harden(transcriptToProviderMessages);
  *
  * @param {any} turn
  * @param {(ref: any) => Promise<string>} readContent
- * @param {{ startOrdinal?: number, evidenceAfter?: string }} [selection]
+ * @param {{ startOrdinal?: number, evidenceAfter?: string, reportNativeSafety?: (safe: boolean) => void }} [selection]
  */
 export const recoverTurnTranscript = async (
   turn,
@@ -279,6 +281,20 @@ export const recoverTurnTranscript = async (
       result: raw.settled ? await text(raw.result, raw.resultRef) : undefined,
     }),
   });
+  const nativeSafe =
+    turn.transcriptComplete === true &&
+    ['completed', 'failed', 'cancelled'].includes(turn.state) &&
+    (turn.nativeContextFormat === undefined ||
+      records.some(
+        record =>
+          record.kind === 'native-context' &&
+          record.format === turn.nativeContextFormat,
+      )) &&
+    rows.every(row => row.source === 'tree' && row.settled && !row.settledBy);
+  selection.reportNativeSafety?.(nativeSafe);
+  // Forensic reads must still expose a checkpoint published before a failure,
+  // along with any recovered evidence. Model-context selection owns the
+  // refusal to restore unsafe native bytes; history is not that authority.
   if (selection.evidenceAfter !== undefined) {
     const after = positionOf(selection.evidenceAfter);
     const evidence = [];

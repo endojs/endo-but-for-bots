@@ -20,6 +20,29 @@ incomplete, account discovery retains runtime coupling, and current-release
 deployment/acceptance is outstanding. Consult that document before treating a
 historical finding introduction as current implementation status.
 
+RA-02 continuation evidence (2026-09-24): Claude's reviewed single-boundary
+native compaction coverage is committed in `f9bb99e5e`; the current alignment
+document records 415 Claude and 699 Floot passing tests and the remaining limits.
+Codex's isolated pinned-runtime probe now proves that an opaque compaction item
+survives original-thread continuation, but fresh-thread injection changes the
+placement of generated runtime instructions and fails strict prefix equivalence.
+The reproduction lives in `endo-host/ops/codex-context-probe-20260924.mjs` with
+its companion findings document. This is synthetic protocol evidence, not
+real-provider encrypted-context acceptance, durable restart proof or deployment.
+FA-01/FA-02 remain open; do not infer completion from the successful import RPC.
+A later minimal native-rollout control preserves the ordered synthetic request
+across a fresh process without its prior state database. This identifies a viable
+restoration mechanism, not proof of native capture fidelity: the native stream does
+not expose the opaque compaction result and guest metadata must not supply trusted
+runtime authority.
+Source review corrected the subsequent authenticated-capture gate: the approved
+guest-domain design permits alteration of native conversation state, so provider
+response provenance is not a prerequisite to preserving that state across restart.
+The alignment document records the evidence and bounded data-only export plan.
+Host-controlled runtime metadata, journal persistence, independent effect
+reconciliation and the operational ledger remain required; no runtime guard was
+removed and no production Codex native capture or deployment is claimed.
+
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
 until actual pressure warrants them. Keep the known growth limits documented;
@@ -138,6 +161,17 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Current retained-code durability audit — required, in progress
+
+Native-context journal follow-up (2026-09-24): a real daemon/worker reconstruction
+regression now exercises the production Floot agent and private immutable storage
+with an inert hosted backend. It verifies exact externalized native payloads,
+an archived successful checkpoint, a sealed failed checkpoint, persisted format
+requirements despite omission from new options, and no repeated mediated test effect.
+Turns missing checkpoints stay visible for inspection but cannot restore model context.
+This is evidence for the journal/formula boundary, not real-provider opaque-content
+acceptance, native process recovery, Podman behavior or deployment.
+See `packages/daemon/test/floot-native-context.test.js` and the current alignment
+document for validation and remaining gates.
 
 Next work is finding-driven, not chronological commit mapping: the hosted
 acceptance manifest correction is now committed in host `62a1077`; assess

@@ -1,5 +1,4 @@
 // @ts-check
-/* global process */
 
 /**
  * The per-session native controller the daemon session owner starts for a
@@ -50,7 +49,7 @@ import {
   hostedPolicyFromSlice,
 } from './claude-hosted-policy.js';
 import { writeClaudeTranscript } from './claude-transcript-writer.js';
-import { makeTranscriptResume } from './claude-transcripts.js';
+import { renderNativeContext } from '../oci/native-context-projection.mjs';
 import { makeMcpSocketServer } from './mcp-socket-server.js';
 import { rootfsLabel } from './parse-rootfs.js';
 
@@ -110,23 +109,25 @@ const CREDENTIAL_PLACEHOLDER = 'claude-broker-placeholder';
  *   worker's recorded kernel mount. Never mounts anything.
  * @param {typeof makeMcpSocketServer} [powers.makeMcp]
  * @param {typeof makeClaudeClient} [powers.makeClient]
- * @param {typeof makeTranscriptResume} [powers.makeResume]
  * @param {Record<string,string>} [powers.env] Trusted native runner configuration.
  * @param {any} [powers.context] Original daemon context, only for cancellation.
  * @param {(error: unknown) => void} [powers.reportError]
  */
-export const makeClaudeNativeController = ({
-  makeMounter = makeDefaultMounter,
-  makeFilesystem,
-  makeBridge = makeMcpBridgeForToolSet,
-  reclaimMount = reclaimRecordedMount,
-  makeMcp = makeMcpSocketServer,
-  makeClient = makeClaudeClient,
-  makeResume = makeTranscriptResume,
-  env = {},
-  context,
-  reportError = error => console.error('Claude native cleanup pending', error),
-} = {}) => {
+export const makeClaudeNativeController = (powers = {}) => {
+  if ('makeResume' in powers)
+    throw Error('Obsolete Claude ambient resume hook is not supported');
+  const {
+    makeMounter = makeDefaultMounter,
+    makeFilesystem,
+    makeBridge = makeMcpBridgeForToolSet,
+    reclaimMount = reclaimRecordedMount,
+    makeMcp = makeMcpSocketServer,
+    makeClient = makeClaudeClient,
+    env = {},
+    context,
+    reportError = error =>
+      console.error('Claude native cleanup pending', error),
+  } = powers;
   return makeHostedSessionSupervisor({
     name: 'Claude',
     readPlan: readClaudeSessionPlan,
@@ -216,9 +217,6 @@ export const makeClaudeNativeController = ({
         },
       );
       const { slice, rootfs, prepared: state, tools: mcp } = envelope;
-      const resume = makeResume(state.directory, {
-        debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),
-      });
       return makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
@@ -246,9 +244,20 @@ export const makeClaudeNativeController = ({
           CLAUDE_CONFIG_DIR: CONFIG_PATH,
           IS_SANDBOX: '1',
         }),
-        detectPriorConversation: resume.detectPriorConversation,
-        resolveResumeSessionId: resume.resolveResumeSessionId,
-        describeTranscripts: resume.describeTranscripts,
+        sha256: text => createHash('sha256').update(text).digest('hex'),
+        projectNativeContext: (checkpoint, suffix) => {
+          const rows = checkpoint.payload
+            .slice(0, -1)
+            .split('\n')
+            .map(line => JSON.parse(line));
+          const leafUuid = [...new Set(rows.map(row => row.uuid))].at(-1);
+          return renderNativeContext({
+            cwd: WORKSPACE_PATH,
+            payload: checkpoint.payload,
+            leafUuid,
+            suffix,
+          });
+        },
         // A new incarnation restores what the stack holds, even when the CLI
         // store survived. Claude Code names a conversation's file for its session id
         // and its directory for the cwd it ran in, so both are derived rather
@@ -277,7 +286,15 @@ export const makeClaudeNativeController = ({
             restored,
             { mode: 0o600 },
           );
-          return sessionUuid;
+          // Retain identity of exactly the projection we wrote before prompt
+          // admission, never derive expected history from a later guest file.
+          const leafStart = restored.lastIndexOf('\n', restored.length - 2) + 1;
+          return harden({
+            payload: restored,
+            sessionId: sessionUuid,
+            leafUuid: JSON.parse(restored.slice(leafStart)).uuid,
+            prefixSha256: createHash('sha256').update(restored).digest('hex'),
+          });
         },
       });
     },

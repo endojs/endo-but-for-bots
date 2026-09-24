@@ -1,0 +1,605 @@
+// @ts-check
+import { Fail } from '@endo/errors';
+
+const LIMIT = 16 * 1024 * 1024;
+const isUuid = value =>
+  typeof value === 'string' &&
+  /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * Conservative coverage proof for the pinned CLI's mainline partial stream.
+ * This does not establish signature validity, effect settlement, or producer
+ * shutdown. Call only after an independently confirmed stopped producer and
+ * pass a transcript already validated by the sandbox capture helper.
+ * Unsupported framing is an availability failure, never a partial proof.
+ * The caller must supply a trusted SHA-256 implementation and a pre-turn
+ * receipt retained outside the guest. Hashing the candidate prefix to invent
+ * its expected receipt would defeat historical coverage validation.
+ * @param {{sha256: (text: string) => string}} powers UTF-8 text to lowercase SHA-256 hex.
+ */
+export const makeClaudeContextCoverage = ({ sha256 }) => {
+  let refused = false;
+  let bytes = 0;
+  let session;
+  let initialized = false;
+  let terminal = false;
+  /** @type {'success'|'failure'|undefined} */
+  let outcome;
+  /** @type {any} */
+  let message;
+  /** @type {any} */
+  let block;
+  let nextIndex = 0;
+  /** @type {any} */
+  let boundary;
+  let boundaryPosition = -1;
+  /** @type {Array<{uuid: string, role: string, content: any, messageId?: string, model?: string, messageType?: string}>} */
+  const frames = [];
+  const frameIds = new Set();
+  const requireValue = condition => {
+    if (!condition) {
+      refused = true;
+      throw Fail`Claude native context coverage unavailable`;
+    }
+  };
+  const guarded = operation => {
+    requireValue(!refused);
+    try {
+      return operation();
+    } catch (error) {
+      refused = true;
+      throw error;
+    }
+  };
+  const charge = value => {
+    bytes += new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    requireValue(bytes <= LIMIT);
+  };
+  const validateUserContent = content => {
+    requireValue(
+      typeof content === 'string' ||
+        (Array.isArray(content) &&
+          content.every(item =>
+            item.type === 'text'
+              ? typeof item.text === 'string'
+              : item.type === 'tool_result' &&
+                typeof item.tool_use_id === 'string' &&
+                (typeof item.content === 'string' ||
+                  (Array.isArray(item.content) &&
+                    item.content.every(
+                      part =>
+                        part.type === 'text' && typeof part.text === 'string',
+                    ))),
+          )),
+    );
+  };
+  const completedBlock = () => {
+    if (block.value.type !== 'tool_use') return block.value;
+    requireValue(block.json !== '');
+    const input = JSON.parse(block.json);
+    requireValue(input && typeof input === 'object' && !Array.isArray(input));
+    return { ...block.value, input };
+  };
+  /** @param {any} event */
+  const observe = event =>
+    guarded(() => {
+      charge(event);
+      requireValue(event && typeof event === 'object');
+      // Subagent events are not mainline dialogue. They cannot certify coverage.
+      if (event.parent_tool_use_id) return;
+      requireValue(!terminal && isUuid(event.session_id));
+      if (session === undefined) session = event.session_id;
+      requireValue(event.session_id === session);
+      if (event.type === 'system') {
+        if (event.subtype === 'init') {
+          requireValue(!initialized && frames.length === 0 && !message);
+          initialized = true;
+        } else if (event.subtype === 'compact_boundary') {
+          requireValue(initialized && !boundary && !message && !block);
+          requireValue(isUuid(event.uuid) && isUuid(event.logical_parent_uuid));
+          requireValue(event.compact_metadata?.trigger === 'auto');
+          boundary = JSON.parse(JSON.stringify(event));
+          boundaryPosition = frames.length;
+        } else {
+          requireValue(
+            initialized &&
+              ['status', 'thinking_tokens'].includes(event.subtype),
+          );
+        }
+        return;
+      }
+      requireValue(initialized);
+      if (boundary && frames.length === boundaryPosition) {
+        requireValue(
+          event.type === 'user' &&
+            event.isSynthetic === true &&
+            event.uuid ===
+              boundary.compact_metadata?.preserved_segment?.anchor_uuid,
+        );
+      }
+      if (event.type === 'result') {
+        requireValue(
+          (event.is_error === false && event.subtype === 'success') ||
+            (event.is_error === true &&
+              typeof event.subtype === 'string' &&
+              /^error_[a-z_]+$/.test(event.subtype)),
+        );
+        // A result's text can be separately displayed by the translator when
+        // nothing streamed. Do not certify an unrepresented synthetic answer.
+        requireValue(!message && !block && frames.length > 0);
+        if (
+          !event.is_error &&
+          typeof event.result === 'string' &&
+          event.result !== ''
+        ) {
+          requireValue(
+            frames.some(
+              frame =>
+                frame.role === 'assistant' &&
+                Array.isArray(frame.content) &&
+                frame.content.some(
+                  item => item.type === 'text' && item.text === event.result,
+                ),
+            ),
+          );
+        }
+        terminal = true;
+        outcome = event.is_error ? 'failure' : 'success';
+        return;
+      }
+      if (event.type === 'assistant' || event.type === 'user') {
+        requireValue(isUuid(event.uuid) && !frameIds.has(event.uuid));
+        requireValue(event.message?.role === event.type);
+        const content = event.message.content;
+        if (event.type === 'assistant') {
+          requireValue(
+            message &&
+              block &&
+              !block.matched &&
+              event.message.id === message.id &&
+              event.message.type === 'message' &&
+              event.message.model === message.model,
+          );
+          requireValue(Array.isArray(content) && content.length === 1);
+          requireValue(same(content[0], completedBlock()));
+          block.matched = true;
+        } else {
+          requireValue(!message && !block);
+          validateUserContent(content);
+        }
+        frameIds.add(event.uuid);
+        // Copy so a caller cannot mutate an observation after acceptance.
+        frames.push(
+          JSON.parse(
+            JSON.stringify({
+              uuid: event.uuid,
+              role: event.type,
+              content,
+              ...(event.type === 'assistant'
+                ? {
+                    messageId: event.message.id,
+                    messageType: event.message.type,
+                    model: event.message.model,
+                  }
+                : {}),
+            }),
+          ),
+        );
+        return;
+      }
+      requireValue(event.type === 'stream_event');
+      const stream = event.event;
+      requireValue(stream && typeof stream === 'object');
+      if (stream.type === 'message_start') {
+        requireValue(
+          !message &&
+            !block &&
+            stream.message?.role === 'assistant' &&
+            typeof stream.message.id === 'string' &&
+            stream.message.id !== '' &&
+            stream.message.type === 'message' &&
+            typeof stream.message.model === 'string' &&
+            stream.message.model !== '' &&
+            Array.isArray(stream.message.content) &&
+            stream.message.content.length === 0,
+        );
+        message = { id: stream.message.id, model: stream.message.model };
+        nextIndex = 0;
+        return;
+      }
+      requireValue(message);
+      if (stream.type === 'content_block_start') {
+        requireValue(!block && stream.index === nextIndex);
+        const value = stream.content_block;
+        requireValue(value && typeof value === 'object');
+        requireValue(
+          (value.type === 'text' && typeof value.text === 'string') ||
+            (value.type === 'thinking' && typeof value.thinking === 'string') ||
+            (value.type === 'redacted_thinking' &&
+              typeof value.data === 'string' &&
+              value.data !== '') ||
+            (value.type === 'tool_use' &&
+              typeof value.id === 'string' &&
+              typeof value.name === 'string' &&
+              same(value.input, {})),
+        );
+        block = {
+          value: JSON.parse(JSON.stringify(value)),
+          json: '',
+          matched: false,
+        };
+        if (value.type === 'thinking')
+          block.value.signature = value.signature ?? '';
+        return;
+      }
+      if (stream.type === 'content_block_delta') {
+        requireValue(block && !block.matched && stream.index === nextIndex);
+        const delta = stream.delta;
+        if (block.value.type === 'text') {
+          requireValue(
+            delta?.type === 'text_delta' && typeof delta.text === 'string',
+          );
+          block.value.text += delta.text;
+        } else if (block.value.type === 'thinking') {
+          requireValue(
+            ['thinking_delta', 'signature_delta'].includes(delta?.type),
+          );
+          const key =
+            delta.type === 'thinking_delta' ? 'thinking' : 'signature';
+          requireValue(typeof delta[key] === 'string');
+          block.value[key] += delta[key];
+        } else {
+          requireValue(block.value.type === 'tool_use');
+          requireValue(
+            delta?.type === 'input_json_delta' &&
+              typeof delta.partial_json === 'string',
+          );
+          block.json += delta.partial_json;
+        }
+        return;
+      }
+      if (stream.type === 'content_block_stop') {
+        requireValue(block?.matched && stream.index === nextIndex);
+        block = undefined;
+        nextIndex += 1;
+        return;
+      }
+      requireValue(!block && nextIndex > 0);
+      if (stream.type === 'message_stop') message = undefined;
+      else
+        requireValue(
+          stream.type === 'message_delta' &&
+            Object.keys(stream.delta ?? {}).every(key =>
+              ['stop_reason', 'stop_sequence'].includes(key),
+            ),
+        );
+    });
+
+  /** @param {'success'|'failure'} expected */
+  const assertOutcome = expected =>
+    guarded(() => {
+      requireValue(
+        initialized &&
+          terminal &&
+          frames.length > 0 &&
+          !message &&
+          !block &&
+          (expected === 'success' || expected === 'failure') &&
+          outcome === expected,
+      );
+    });
+
+  // Only these loader-generated attachments are known inert context. They do
+  // not certify a tool result or settle an effect.
+  const inert = row =>
+    row.type === 'attachment' &&
+    (row.attachment?.type === 'total_tokens_reminder' ||
+      (row.attachment?.type === 'max_turns_reached' &&
+        [row.attachment.maxTurns, row.attachment.turnCount].every(
+          value =>
+            typeof value === 'number' && Number.isInteger(value) && value > 0,
+        )));
+  const ordinaryFlags = row =>
+    ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
+      key => row[key] === undefined || row[key] === false,
+    );
+  const identity = row => ({
+    type: row.type,
+    parentUuid: row.parentUuid,
+    role: row.message?.role,
+    id: row.message?.id,
+    messageType: row.message?.type,
+    model: row.message?.model,
+    content: row.message?.content,
+    attachment: row.attachment,
+    isCompactSummary: row.isCompactSummary === true,
+    isMeta: row.isMeta === true,
+    isVisibleInTranscriptOnly: row.isVisibleInTranscriptOnly === true,
+  });
+  const matches = (row, frame) =>
+    frame &&
+    row.uuid === frame.uuid &&
+    row.type === frame.role &&
+    row.message?.role === frame.role &&
+    (frame.role !== 'assistant' ||
+      (row.message.id === frame.messageId &&
+        row.message.type === frame.messageType &&
+        row.message.model === frame.model)) &&
+    same(row.message.content, frame.content);
+  const parseRows = (text, sessionId) => {
+    requireValue(
+      typeof text === 'string' &&
+        (text === '' || text.endsWith('\n')) &&
+        new TextEncoder().encode(text).byteLength <= LIMIT,
+    );
+    const rows =
+      text === '' ? [] : text.slice(0, -1).split('\n').map(JSON.parse);
+    requireValue(
+      rows.every(
+        row =>
+          row.sessionId === sessionId && !row.isSidechain && isUuid(row.uuid),
+      ),
+    );
+    return rows;
+  };
+  const uniqueRows = rows => {
+    const byId = new Map();
+    for (const row of rows) {
+      const prior = byId.get(row.uuid);
+      requireValue(!prior || same(identity(prior), identity(row)));
+      if (!prior) byId.set(row.uuid, row);
+    }
+    return byId;
+  };
+  const assertChain = (rows, parent, expectedFrames) => {
+    let position = 0;
+    for (const row of rows) {
+      requireValue(row.parentUuid === parent && ordinaryFlags(row));
+      parent = row.uuid;
+      if (!inert(row)) {
+        requireValue(matches(row, expectedFrames[position]));
+        position += 1;
+      }
+    }
+    requireValue(position === expectedFrames.length);
+    return parent;
+  };
+
+  const assertCompacted = (rows, cut) => {
+    // A compaction transition intentionally replaces dropped history with its
+    // streamed summary. This proves retained row identity and current prompt /
+    // frame coverage, not summary semantics or unchanged dropped guest bytes.
+    const {
+      beforePayload,
+      beforeUuid,
+      prefixSha256,
+      compactionWitness,
+      sessionId,
+      prompt,
+    } = cut;
+    const oldRows = parseRows(beforePayload, sessionId);
+    requireValue(sha256(beforePayload) === prefixSha256);
+    const known = uniqueRows(oldRows);
+    requireValue(([...known.keys()].at(-1) ?? null) === beforeUuid);
+    const witness = uniqueRows(parseRows(compactionWitness, sessionId));
+    requireValue(witness.size > 0);
+    for (const uuid of witness.keys()) requireValue(!known.has(uuid));
+    const [admitted, ...active] = witness.values();
+    requireValue(
+      admitted.type === 'user' &&
+        admitted.message?.role === 'user' &&
+        admitted.parentUuid === beforeUuid &&
+        ordinaryFlags(admitted) &&
+        (admitted.message.content === prompt ||
+          same(admitted.message.content, [{ type: 'text', text: prompt }])),
+    );
+    requireValue(
+      assertChain(active, admitted.uuid, frames.slice(0, boundaryPosition)) ===
+        boundary.logical_parent_uuid,
+    );
+    for (const [uuid, row] of witness) known.set(uuid, row);
+
+    const boundaries = rows.filter(
+      row => row.type === 'system' && row.subtype === 'compact_boundary',
+    );
+    requireValue(boundaries.length === 1);
+    const capturedBoundary = boundaries[0];
+    const metadata = boundary.compact_metadata;
+    const segment = metadata.preserved_segment;
+    const preserved = metadata.preserved_messages;
+    requireValue(segment && preserved && isUuid(segment.anchor_uuid));
+    requireValue(
+      Array.isArray(preserved.all_uuids) && Array.isArray(preserved.uuids),
+    );
+    requireValue(preserved.anchor_uuid === segment.anchor_uuid);
+    requireValue(
+      new Set(preserved.all_uuids).size === preserved.all_uuids.length &&
+        preserved.all_uuids.every(isUuid),
+    );
+    requireValue(
+      same(
+        preserved.all_uuids.filter(uuid => preserved.uuids.includes(uuid)),
+        preserved.uuids,
+      ),
+    );
+    requireValue(
+      segment.head_uuid === preserved.uuids[0] &&
+        segment.tail_uuid === preserved.uuids.at(-1),
+    );
+    requireValue(!known.has(boundary.uuid) && !known.has(segment.anchor_uuid));
+    requireValue(
+      capturedBoundary.uuid === boundary.uuid &&
+        capturedBoundary.parentUuid === null &&
+        capturedBoundary.logicalParentUuid === boundary.logical_parent_uuid,
+    );
+    const nativeMetadata = capturedBoundary.compactMetadata;
+    requireValue(
+      nativeMetadata?.trigger === metadata.trigger &&
+        nativeMetadata.preTokens === metadata.pre_tokens &&
+        nativeMetadata.postTokens === metadata.post_tokens &&
+        nativeMetadata.cumulativeDroppedTokens ===
+          metadata.cumulative_dropped_tokens &&
+        nativeMetadata.durationMs === metadata.duration_ms &&
+        same(nativeMetadata.preservedSegment, {
+          headUuid: segment.head_uuid,
+          anchorUuid: segment.anchor_uuid,
+          tailUuid: segment.tail_uuid,
+        }) &&
+        same(nativeMetadata.preservedMessages, {
+          anchorUuid: preserved.anchor_uuid,
+          uuids: preserved.uuids,
+          allUuids: preserved.all_uuids,
+        }),
+    );
+    const boundaryIndex = rows.indexOf(capturedBoundary);
+    const retained = uniqueRows(rows.slice(0, boundaryIndex));
+    requireValue(same([...retained.keys()], preserved.all_uuids));
+    for (const [uuid, row] of retained) {
+      requireValue(
+        (row.type === 'user' || row.type === 'assistant' || inert(row)) &&
+          known.has(uuid) &&
+          same(identity(row), identity(known.get(uuid))),
+      );
+    }
+    // The actual loader writes a string for the exact one-text-block summary
+    // emitted on its stream. No general message normalization is permitted.
+    const summary = rows[boundaryIndex + 1];
+    const summaryFrame = frames[boundaryPosition];
+    requireValue(
+      summary?.uuid === segment.anchor_uuid &&
+        summary.parentUuid === boundary.uuid &&
+        summary.type === 'user' &&
+        summary.message?.role === 'user' &&
+        summary.isCompactSummary === true &&
+        !summary.isMeta &&
+        summary.isVisibleInTranscriptOnly === true &&
+        summaryFrame?.uuid === summary.uuid &&
+        summaryFrame.role === 'user' &&
+        same(summaryFrame.content, [
+          { type: 'text', text: summary.message.content },
+        ]) &&
+        typeof summary.message.content === 'string',
+    );
+    const suffix = rows.slice(boundaryIndex + 2);
+    requireValue(new Set(suffix.map(row => row.uuid)).size === suffix.length);
+    requireValue(
+      suffix.every(
+        row =>
+          !known.has(row.uuid) &&
+          row.uuid !== summary.uuid &&
+          row.uuid !== boundary.uuid,
+      ),
+    );
+    assertChain(suffix, summary.uuid, frames.slice(boundaryPosition + 1));
+  };
+
+  /**
+   * @param {string} nativeTranscript Helper-validated native JSONL.
+   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, beforePayload: string, compactionWitness?: string, prompt: string, outcome: 'success'|'failure'}} cut
+   * Trusted pre-turn receipt; an empty initial store uses null plus SHA-256 of empty text.
+   */
+  const assertCaptured = (nativeTranscript, cut) =>
+    guarded(() => {
+      const {
+        sessionId,
+        beforeUuid,
+        prefixSha256,
+        beforePayload,
+        prompt,
+        outcome: expectedOutcome,
+      } = cut;
+      assertOutcome(expectedOutcome);
+      requireValue(
+        isUuid(sessionId) &&
+          sessionId === session &&
+          (beforeUuid === null || isUuid(beforeUuid)) &&
+          typeof prefixSha256 === 'string' &&
+          /^[a-f0-9]{64}$/.test(prefixSha256) &&
+          typeof prompt === 'string',
+      );
+      requireValue(
+        typeof nativeTranscript === 'string' &&
+          nativeTranscript.endsWith('\n') &&
+          new TextEncoder().encode(nativeTranscript).byteLength <= LIMIT,
+      );
+      const lines = nativeTranscript.slice(0, -1).split('\n');
+      const rows = lines.map(line => JSON.parse(line));
+      requireValue(
+        rows.every(
+          row =>
+            row.sessionId === sessionId && !row.isSidechain && isUuid(row.uuid),
+        ),
+      );
+      if (boundary) {
+        assertCompacted(rows, cut);
+        return;
+      }
+      const priorRows = parseRows(beforePayload, sessionId);
+      const prior = uniqueRows(priorRows);
+      requireValue(([...prior.keys()].at(-1) ?? null) === beforeUuid);
+      requireValue(nativeTranscript.startsWith(beforePayload));
+      requireValue(sha256(beforePayload) === prefixSha256);
+      const active = rows.slice(priorRows.length);
+      // The ordinary-turn stream does not attest loader-only visibility or
+      // summary roles. Matching message content cannot certify those changes.
+      requireValue(
+        active.every(row =>
+          ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
+            key => row[key] === undefined || row[key] === false,
+          ),
+        ),
+      );
+      const admitted = active.shift();
+      requireValue(
+        admitted?.type === 'user' &&
+          admitted.message?.role === 'user' &&
+          admitted.parentUuid === beforeUuid &&
+          isUuid(admitted.uuid),
+      );
+      requireValue(
+        admitted.message.content === prompt ||
+          same(admitted.message.content, [{ type: 'text', text: prompt }]),
+      );
+      let parent = admitted.uuid;
+      let position = 0;
+      const ids = new Set([parent]);
+      for (const row of active) {
+        requireValue(
+          isUuid(row.uuid) && !ids.has(row.uuid) && row.parentUuid === parent,
+        );
+        ids.add(row.uuid);
+        parent = row.uuid;
+        if (row.type === 'attachment') {
+          const attachment = row.attachment;
+          requireValue(
+            attachment?.type === 'total_tokens_reminder' ||
+              (attachment?.type === 'max_turns_reached' &&
+                [attachment.maxTurns, attachment.turnCount].every(
+                  value =>
+                    typeof value === 'number' &&
+                    Number.isInteger(value) &&
+                    value > 0,
+                )),
+          );
+        } else {
+          const frame = frames[position];
+          requireValue(
+            frame &&
+              row.uuid === frame.uuid &&
+              row.type === frame.role &&
+              row.message?.role === frame.role &&
+              (frame.role !== 'assistant' ||
+                (row.message.id === frame.messageId &&
+                  row.message.type === frame.messageType &&
+                  row.message.model === frame.model)) &&
+              same(row.message.content, frame.content),
+          );
+          position += 1;
+        }
+      }
+      requireValue(position === frames.length);
+    });
+  return harden({ observe, assertOutcome, assertCaptured });
+};
+harden(makeClaudeContextCoverage);

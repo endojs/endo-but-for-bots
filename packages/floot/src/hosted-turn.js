@@ -8,7 +8,11 @@ import { makeError } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { addUsage } from '@endo/hosted-agent/token-usage.js';
-import { encodeTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
+import {
+  assertTranscriptRecord,
+  encodeTranscriptRecord,
+  pairToolCalls,
+} from '@endo/hosted-agent/transcript-records.js';
 
 import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
 
@@ -176,7 +180,9 @@ export const runHostedTurn = async ({
   let transcriptOrdinal = 0;
   let journalText = '';
   let journalFailed = false;
+  let finalNativeContext = false;
   const recordContext = async record => {
+    finalNativeContext = false;
     if (!recordTranscript) return;
     try {
       await recordTranscript(`${transcriptOrdinal}`, record);
@@ -342,6 +348,9 @@ export const runHostedTurn = async ({
       if ('aborted' in nextOutcome) break;
       if (nextOutcome.result.done) break;
       const event = /** @type {any} */ (nextOutcome.result.value);
+      if (!['abort', 'end', 'usage', 'phase'].includes(event?.type)) {
+        finalNativeContext = false;
+      }
       // Anything the backend emits before a terminal means it took the prompt;
       // a spawn refusal or a stop before dispatch arrives as a leading abort.
       if (event?.type !== 'abort') delivered = true;
@@ -483,6 +492,34 @@ export const runHostedTurn = async ({
           });
           break;
         }
+        case 'native-context': {
+          if (!recordTranscript) {
+            throw Error('Native context requires durable transcript recording');
+          }
+          if (toolCalls.some(call => call.result === null)) {
+            throw Error(
+              'Native context cannot cross an unsettled hosted tool call',
+            );
+          }
+          flushText();
+          await flushContextText();
+          const nativeContext = assertTranscriptRecord(event.checkpoint);
+          if (nativeContext.kind !== 'native-context') {
+            throw Error('Expected native context checkpoint');
+          }
+          if (
+            pairToolCalls(nativeContext.context, { perTurn: true }).unanswered
+              .length
+          ) {
+            throw Error('Native context must contain settled tool calls');
+          }
+          retain(encodeTranscriptRecord(nativeContext));
+          // Native state is context data, not presentation and never evidence
+          // that a host effect completed. Persist the whole unit before end.
+          await recordContext(nativeContext);
+          finalNativeContext = true;
+          break;
+        }
         case 'compaction': {
           if (toolCalls.some(call => call.result === null)) {
             throw Error(
@@ -527,6 +564,24 @@ export const runHostedTurn = async ({
           terminal = true;
           await flushContextText();
           flushText();
+          // A normalized abort is a stopped-producer boundary. A final,
+          // durably recorded native snapshot can be complete even though the
+          // inference failed. Reader failures and cancellation never take this
+          // path; neither silence nor a partial transcript proves completeness.
+          if (
+            finalNativeContext &&
+            !journalFailed &&
+            !signal?.aborted &&
+            toolCalls.every(call => call.result !== null) &&
+            completeTranscript
+          ) {
+            try {
+              await completeTranscript(`${transcriptOrdinal}`);
+            } catch (error) {
+              journalFailed = true;
+              throw error;
+            }
+          }
           throw failTurn(`${event.reason || 'hosted turn aborted'}`, {
             delivered,
             finalContent,

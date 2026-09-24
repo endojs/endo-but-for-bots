@@ -18,6 +18,9 @@
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeHostedTurnChannel } from '@endo/hosted-agent/turn-channel.js';
 import { projectContext, tokenCount } from '@endo/hosted-agent/token-usage.js';
+import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
+
+/** @import { TranscriptContextRecord, TranscriptNativeContext } from '@endo/hosted-agent/transcript-records.js' */
 
 /**
  * @typedef {(
@@ -25,6 +28,8 @@ import { projectContext, tokenCount } from '@endo/hosted-agent/token-usage.js';
  *   | { type: 'text-delta', text: string }
  *   | { type: 'tool-call', id: string, name: string, args: string }
  *   | { type: 'tool-result', id: string, name: string, result: string }
+ *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }
+ *   | { type: 'native-context', checkpoint: TranscriptNativeContext }
  *   | ({ type: 'usage' } & Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>)
  *   | { type: 'end' }
  *   | { type: 'abort', reason: string }
@@ -192,6 +197,17 @@ export const makeClaudeHostedTranslator = () => {
     // stream — a consumer would otherwise persist it as the assistant's answer.
     if (event.parent_tool_use_id) return out;
     switch (event.type) {
+      case 'endo_native_context': {
+        const checkpoint = assertTranscriptRecord(event.checkpoint);
+        if (checkpoint.kind !== 'native-context') {
+          throw Error('Expected Claude native context checkpoint');
+        }
+        out.push({
+          type: 'native-context',
+          checkpoint,
+        });
+        break;
+      }
       case 'system': {
         // Lifecycle diagnostics (subtype 'init' etc.) — surface as a phase so
         // the UI shows sandbox startup instead of dead air.

@@ -45,6 +45,7 @@ const RECORD_FIELDS = harden({
   'tool-call': harden(['kind', 'id', 'name', 'args']),
   'tool-result': harden(['kind', 'id', 'content', 'failed']),
   compaction: harden(['kind', 'summary', 'retainedTail']),
+  'native-context': harden(['kind', 'format', 'payload', 'context']),
 });
 
 /** Fields a kind may omit. Everything else is required. */
@@ -53,6 +54,7 @@ const OPTIONAL_FIELDS = harden({
   'tool-call': harden([]),
   'tool-result': harden(['failed']),
   compaction: harden(['retainedTail']),
+  'native-context': harden([]),
 });
 
 const KINDS = harden(Object.keys(RECORD_FIELDS));
@@ -63,7 +65,8 @@ const KINDS = harden(Object.keys(RECORD_FIELDS));
  * @typedef {{ kind: 'tool-result', id: string, content: string, failed?: boolean }} TranscriptToolResult
  * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult} TranscriptContextRecord
  * @typedef {{ kind: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} TranscriptCompaction
- * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult | TranscriptCompaction} TranscriptRecord
+ * @typedef {{ kind: 'native-context', format: string, payload: string, context: readonly (TranscriptContextRecord | {kind: 'compaction', summary: string})[] }} TranscriptNativeContext
+ * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult | TranscriptCompaction | TranscriptNativeContext} TranscriptRecord
  */
 
 /**
@@ -115,7 +118,7 @@ export const assertTranscriptRecord = candidate => {
   }
   const textFields = fields.filter(
     key =>
-      !['kind', 'failed', 'role', 'retainedTail'].includes(key) &&
+      !['kind', 'failed', 'role', 'retainedTail', 'context'].includes(key) &&
       Object.hasOwn(record, key),
   );
   for (const key of textFields) {
@@ -124,6 +127,10 @@ export const assertTranscriptRecord = candidate => {
   }
   if (kind === 'tool-call' || kind === 'tool-result') {
     record.id !== '' || Fail`transcript ${q(kind)} needs a tool call id`;
+  }
+  if (kind === 'native-context') {
+    (record.format !== '' && record.payload !== '') ||
+      Fail`native-context format and payload must be nonempty`;
   }
   // Rebuilt in declared field order rather than returned as given, so two
   // records with the same content encode to the same bytes whatever order
@@ -138,8 +145,22 @@ export const assertTranscriptRecord = candidate => {
       throw Fail`compaction retainedTail must be an array`;
     }
     ordered.retainedTail = Array.from(record.retainedTail, item => {
-      item?.kind !== 'compaction' ||
-        Fail`compaction retainedTail must not contain compactions`;
+      (item?.kind !== 'compaction' && item?.kind !== 'native-context') ||
+        Fail`compaction retainedTail must not contain context replacements`;
+      return assertTranscriptRecord(item);
+    });
+  }
+  if (kind === 'native-context') {
+    if (!Array.isArray(record.context)) {
+      throw Fail`native-context context must be an array`;
+    }
+    ordered.context = Array.from(record.context, (item, index) => {
+      item?.kind !== 'native-context' ||
+        Fail`native-context must not be nested`;
+      if (item?.kind === 'compaction') {
+        (index === 0 && !Object.hasOwn(item, 'retainedTail')) ||
+          Fail`native-context allows only an initial summary without retainedTail`;
+      }
       return assertTranscriptRecord(item);
     });
   }
@@ -209,7 +230,7 @@ export const parseTranscript = text => {
 harden(parseTranscript);
 
 /**
- * Split a stream at its last compaction.
+ * Select active context at its last replacement snapshot.
  *
  * A `compaction` record's position is the boundary: what precedes it is
  * history the model no longer carries, except for the explicit retainedTail
@@ -223,21 +244,31 @@ harden(parseTranscript);
  *
  * Expansion happens here only: the active summary omits retainedTail, so
  * selecting active context a second time cannot duplicate the tail.
+ * A native-context snapshot replaces the whole active context atomically and
+ * stays opaque here. Its portable context is not a substitute for its native
+ * payload, and neither grants authority to execute tools or settle effects.
  * Adapters must restore active context even if their CLI has no compaction
  * concept. Superseded records remain available separately for history.
  *
  * @param {readonly TranscriptRecord[]} records
  * @returns {{ superseded: readonly TranscriptRecord[], active: readonly TranscriptRecord[] }}
  */
-export const splitAtLastCompaction = records => {
+export const selectActiveTranscript = records => {
   let boundary = -1;
   for (const [index, record] of records.entries()) {
-    if (record.kind === 'compaction') boundary = index;
+    if (record.kind === 'compaction' || record.kind === 'native-context')
+      boundary = index;
   }
   if (boundary < 0) {
     return harden({ superseded: harden([]), active: harden([...records]) });
   }
   const checkpoint = assertTranscriptRecord(records[boundary]);
+  if (checkpoint.kind === 'native-context') {
+    return harden({
+      superseded: harden(records.slice(0, boundary)),
+      active: harden([checkpoint, ...records.slice(boundary + 1)]),
+    });
+  }
   if (checkpoint.kind !== 'compaction')
     throw Fail`Expected compaction boundary`;
   return harden({
@@ -249,7 +280,7 @@ export const splitAtLastCompaction = records => {
     ]),
   });
 };
-harden(splitAtLastCompaction);
+harden(selectActiveTranscript);
 
 /**
  * Pair each `tool-call` with its `tool-result` by id, in stream order.
@@ -311,6 +342,8 @@ harden(pairToolCalls);
  * @param {readonly TranscriptRecord[]} records
  */
 export const renderTranscriptDialogue = records => {
+  records.every(record => record.kind !== 'native-context') ||
+    Fail`Cannot render native-context without its format-specific adapter`;
   const lines = [];
   /** @type {Map<string, string>} */
   const calledNames = new Map();
@@ -351,7 +384,9 @@ harden(renderTranscriptDialogue);
  * @param {readonly TranscriptRecord[]} records
  */
 export const responsesApiItems = records => {
-  const { active } = splitAtLastCompaction(records);
+  records.every(record => record.kind !== 'native-context') ||
+    Fail`Cannot translate native-context to Responses API items`;
+  const { active } = selectActiveTranscript(records);
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
   const items = [];

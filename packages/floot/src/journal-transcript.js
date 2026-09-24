@@ -3,6 +3,7 @@ import { Fail } from '@endo/errors';
 import {
   assertTranscriptRecord,
   encodeTranscriptRecord,
+  pairToolCalls,
 } from '@endo/hosted-agent/transcript-records.js';
 
 import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
@@ -16,6 +17,10 @@ import { assertCompactionCheckpoint } from './compaction-checkpoint.js';
 export const encodeJournalTranscript = record => {
   const valid = assertTranscriptRecord(record);
   if (valid.kind === 'compaction') assertCompactionCheckpoint(valid);
+  if (valid.kind === 'native-context') {
+    const { unanswered } = pairToolCalls(valid.context, { perTurn: true });
+    if (unanswered.length) Fail`Native context must contain settled tool calls`;
+  }
   const payload = encodeTranscriptRecord(valid);
   payload.length <= 16 * 1024 * 1024 || Fail`Transcript content bound exceeded`;
   return payload;

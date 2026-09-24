@@ -941,51 +941,61 @@ for (const cancelMode of ['reader', 'interrupt']) {
   }
 }
 
-test('reader cancellation is rechecked inside a held command write chain', async t => {
-  t.timeout(5000);
-  const bridge = makeFakeBridge();
-  const gate = makeGate(t);
-  const client = makeOpencodeClient(
-    baseArgs(makeFakeSlice(bridge), {
-      makeStdinWriter: async () => ({
-        async next(bytes) {
-          const text = dec.decode(bytes);
-          bridge.commands.push(text);
-          if (JSON.parse(text).op === 'interrupt') await gate.promise;
-          return harden({ done: false, value: undefined });
-        },
+for (const cancelMode of ['reader', 'interrupt']) {
+  test(`${cancelMode} cancellation is rechecked inside a held command write chain`, async t => {
+    t.timeout(5000);
+    const bridge = makeFakeBridge();
+    const gate = makeGate(t);
+    const client = makeOpencodeClient(
+      baseArgs(makeFakeSlice(bridge), {
+        makeStdinWriter: async () => ({
+          async next(bytes) {
+            const text = dec.decode(bytes);
+            bridge.commands.push(text);
+            if (JSON.parse(text).op === 'interrupt') await gate.promise;
+            return harden({ done: false, value: undefined });
+          },
+        }),
       }),
-    }),
-  );
-  t.teardown(async () => {
+    );
+    t.teardown(async () => {
+      gate.release();
+      await client.terminate();
+    });
+    bridge.push(readyLine('ses_1'));
+    const first = await client.send('first');
+    await waitFor(() => bridge.commands.length === 1);
+    const interrupted = client.interrupt();
+    interrupted.catch(() => {});
+    await waitFor(() => bridge.commands.length === 2);
+    bridge.push(JSON.stringify({ type: 'abort', reason: 'first stopped' }));
+    await drain(first);
+    const second = await client.send('must not execute');
+    await tick();
+    if (cancelMode === 'reader') await iterateReader(second).return();
+    else {
+      await client.interrupt();
+      t.is((await drain(second)).at(-1).type, 'abort');
+    }
+    // Cancellation completion must not free the held writer to execute its
+    // canceled prompt. A successor may queue now, but may not overtake the gate.
+    const third = await client.send('third');
+    await tick();
+    t.is(bridge.commands.length, 2);
     gate.release();
-    await client.terminate();
+    await interrupted;
+    await waitFor(() => bridge.commands.length === 3);
+    t.deepEqual(
+      bridge.commands
+        .map(text => JSON.parse(text))
+        .filter(command => command.op === 'send')
+        .map(command => command.text),
+      ['first', 'third'],
+    );
+    bridge.push(JSON.stringify({ type: 'end' }));
+    t.is((await drain(third)).at(-1).type, 'end');
   });
-  bridge.push(readyLine('ses_1'));
-  const first = await client.send('first');
-  await waitFor(() => bridge.commands.length === 1);
-  const interrupted = client.interrupt();
-  interrupted.catch(() => {});
-  await waitFor(() => bridge.commands.length === 2);
-  bridge.push(JSON.stringify({ type: 'abort', reason: 'first stopped' }));
-  await drain(first);
-  const second = await client.send('must not execute');
-  await tick();
-  await iterateReader(second).return();
-  const third = await client.send('third');
-  gate.release();
-  await interrupted;
-  await waitFor(() => bridge.commands.length === 3);
-  t.deepEqual(
-    bridge.commands
-      .map(text => JSON.parse(text))
-      .filter(command => command.op === 'send')
-      .map(command => command.text),
-    ['first', 'third'],
-  );
-  bridge.push(JSON.stringify({ type: 'end' }));
-  t.is((await drain(third)).at(-1).type, 'end');
-});
+}
 
 for (const cancelMode of ['reader', 'interrupt']) {
   test(`${cancelMode} cancellation during startup does not import or admit a prompt`, async t => {

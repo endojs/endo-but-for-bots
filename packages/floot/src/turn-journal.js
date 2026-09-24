@@ -138,6 +138,8 @@ harden(assertBackendCheckpoint);
 const assertCheckpointState = record => {
   (record !== null && typeof record === 'object') ||
     Fail`Invalid turn journal checkpoint record`;
+  if (record.nativeContextFormat !== undefined)
+    assertText(record.nativeContextFormat, 128);
   if (record.backendCheckpoint === undefined) return;
   assertBackendCheckpoint(record.backendCheckpoint);
   (record.terminal === true && record.state === 'completed') ||
@@ -202,9 +204,13 @@ const assertContentRef = ref => {
  */
 const assertTranscriptKind = entry => {
   (typeof entry.kind === 'string' &&
-    ['message', 'tool-call', 'tool-result', 'compaction'].includes(
-      entry.kind,
-    )) ||
+    [
+      'message',
+      'tool-call',
+      'tool-result',
+      'compaction',
+      'native-context',
+    ].includes(entry.kind)) ||
     Fail`Missing or invalid transcript kind index; retire legacy session`;
   (typeof entry.payload === 'string' &&
     entry.payload.startsWith(`{"kind":"${entry.kind}",`)) ||
@@ -261,6 +267,8 @@ export const makeTurnJournal = powers => {
       assertText(event.input, textLimit, true);
       assertText(event.backendId);
       assertText(event.modelId, 1024, true);
+      if (event.nativeContextFormat !== undefined)
+        assertText(event.nativeContextFormat, 128);
       if (event.reasoningEffort !== undefined)
         assertText(event.reasoningEffort);
       if (event.inputRef !== undefined) assertContentRef(event.inputRef);
@@ -271,6 +279,9 @@ export const makeTurnJournal = powers => {
         ...(event.inputRef === undefined ? {} : { inputRef: event.inputRef }),
         backendId: event.backendId,
         modelId: event.modelId,
+        ...(event.nativeContextFormat === undefined
+          ? {}
+          : { nativeContextFormat: event.nativeContextFormat }),
         ...(event.mail === undefined ? {} : { mail: event.mail }),
         ...(event.reasoningEffort === undefined
           ? {}
@@ -574,7 +585,7 @@ export const makeTurnJournal = powers => {
         const entry = turn?.transcript?.[Number(checkpoint.ordinal)];
         (turn !== undefined &&
           archivable(turn) &&
-          entry?.kind === 'compaction' &&
+          (entry?.kind === 'compaction' || entry?.kind === 'native-context') &&
           entry.ordinal === checkpoint.ordinal &&
           entry.sequence === checkpoint.sequence) ||
           Fail`Archived checkpoint index does not match archive`;
@@ -707,7 +718,7 @@ export const makeTurnJournal = powers => {
     for (const record of excess) {
       for (const entry of record.transcript ?? []) {
         if (
-          entry.kind === 'compaction' &&
+          (entry.kind === 'compaction' || entry.kind === 'native-context') &&
           (archivedCheckpoint === null ||
             BigInt(record.turnId) > BigInt(archivedCheckpoint.turnId) ||
             (record.turnId === archivedCheckpoint.turnId &&
@@ -973,7 +984,7 @@ export const makeTurnJournal = powers => {
           payload,
         });
       }),
-    /** @param {{ input: string, backendId: string, modelId: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
+    /** @param {{ input: string, backendId: string, modelId: string, nativeContextFormat?: string, reasoningEffort?: string, mail?: {from?: string, messageNumber?: string} }} options */
     begin: options =>
       serialized(async () => {
         // Unknown historical effects are evidence, not a session-wide

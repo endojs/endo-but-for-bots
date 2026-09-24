@@ -9,6 +9,103 @@ import {
   transcriptToProviderMessages,
 } from '../src/transcript-projection.js';
 import { encodeJournalTranscript } from '../src/journal-transcript.js';
+import { projectContextTranscript } from '../src/context-transcript.js';
+
+test('a sealed failed native checkpoint restores with its failure notice, not as success', async t => {
+  const native = {
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'signed bytes',
+    context: [],
+  };
+  const turn = {
+    turnId: '1',
+    input: 'go',
+    state: 'failed',
+    error: 'provider failed',
+    transcriptComplete: true,
+    transcript: [
+      {
+        kind: native.kind,
+        ordinal: '0',
+        sequence: '2',
+        payload: encodeJournalTranscript(native),
+      },
+    ],
+  };
+  const read = async () => {
+    throw Error('Unexpected content read');
+  };
+  t.deepEqual(await projectContextTranscript([turn], read), [
+    native,
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: '[Floot turn failed: provider failed]',
+    },
+  ]);
+  await t.throwsAsync(
+    projectContextTranscript([{ ...turn, state: 'outcome-unknown' }], read),
+    {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    },
+  );
+});
+
+test('forensic recovery preserves a native checkpoint after failure without authorizing restoration', async t => {
+  const native = {
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'signed native bytes',
+    context: [],
+  };
+  const turn = {
+    turnId: '1',
+    input: 'Continue',
+    state: 'failed',
+    transcriptComplete: false,
+    transcript: [
+      {
+        kind: native.kind,
+        ordinal: '0',
+        sequence: '2',
+        payload: encodeJournalTranscript(native),
+      },
+    ],
+    tools: [
+      {
+        callId: 'host-only',
+        name: 'effect',
+        args: '{}',
+        settled: false,
+        sequence: '3',
+      },
+    ],
+  };
+  const read = async () => {
+    throw Error('Unexpected content read');
+  };
+  const records = await recoverJournalTurnTranscript(turn, read);
+  t.deepEqual(
+    records.find(record => record.kind === 'native-context'),
+    native,
+  );
+  t.true(
+    records.some(
+      record => record.kind === 'tool-call' && record.name === 'effect',
+    ),
+  );
+  t.true(
+    records.some(
+      record =>
+        record.kind === 'message' &&
+        record.content.includes('durable transcript prefix'),
+    ),
+  );
+  await t.throwsAsync(projectContextTranscript([turn], read), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
 
 // Build canonical journal fixtures from readable provider-message examples.
 // Production recovery has no alternate conversation-tree input.

@@ -192,6 +192,7 @@ const OPTIONAL_DESCRIPTOR_KEYS = harden([
   // The bindings a reopen of a session on this backend may be authorized
   // to change, as its provisioner names them (`image`, `provider`, ...).
   'rebindableBindings',
+  'nativeContextFormat',
   'subscriptions',
   'supportedNetworkPolicies',
 ]);
@@ -279,6 +280,14 @@ export const assertHostedBackendDescriptor = descriptor => {
   descriptor.enforcesStorageBound === undefined ||
     typeof descriptor.enforcesStorageBound === 'boolean' ||
     Fail`Hosted backend descriptor has an invalid storage bound flag`;
+  const nativeContextFormat = /** @type {unknown} */ (
+    descriptor.nativeContextFormat
+  );
+  nativeContextFormat === undefined ||
+    (typeof nativeContextFormat === 'string' &&
+      nativeContextFormat.length > 0 &&
+      nativeContextFormat.length <= 128) ||
+    Fail`Hosted backend descriptor has an invalid native context format`;
   if (descriptor.rebindableBindings !== undefined) {
     const declared = /** @type {unknown} */ (descriptor.rebindableBindings);
     (Array.isArray(declared) &&
@@ -296,6 +305,9 @@ export const assertHostedBackendDescriptor = descriptor => {
     kind: descriptor.kind,
     continuity: descriptor.continuity,
     toolOwnership: descriptor.toolOwnership,
+    ...(descriptor.nativeContextFormat === undefined
+      ? {}
+      : { nativeContextFormat: descriptor.nativeContextFormat }),
     // Which provider's credential the backend spends (`codex`), as distinct
     // from the backend's own id, and which of that provider's subscriptions
     // a session may be pinned to.

@@ -8,17 +8,12 @@
  * Turn model: each `send(prompt)` runs one
  * `claude -p <prompt> --output-format stream-json` process inside the
  * slice. Turns **queue** on an internal chain so two processes never
- * race the same workspace conversation; `--continue` on every turn
- * after the first resumes the conversation persisted in the session's
- * Claude config dir (a dedicated per-session mount that survives daemon
- * restarts — see `claude-native-controller.js`), letting a sequence of
- * `send()` calls build on each other (no long-lived stdin plumbing).
- * A client reincarnated after a restart does **not** resume that config
- * dir. The store outlives the daemon, so it is still sitting there, but a
- * store that survived is not the same claim as a record the stack owns:
- * across incarnations the stack's records decide and the conversation is
- * rebuilt from them. Within one incarnation a session resumes what it
- * started, which is what `--continue` is for.
+ * race the same workspace conversation. Every turn restores the supplied
+ * host-journal context and uses the restoration receipt's explicit session
+ * identifier. The CLI config directory is a working projection, never a
+ * source of continuation authority, including within one incarnation.
+ * Once a prompt has been admitted, another send without journal context
+ * is refused rather than silently beginning a fresh conversation.
  *
  * `send()` returns a **buffered reply reader** immediately (consume it
  * with `makeRefIterator`): it yields the parsed stream-json events, then
@@ -43,13 +38,20 @@ import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { mapReader } from '@endo/stream';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
 import {
   awaitBarrier,
   makeHostedTurnChannel,
 } from '@endo/hosted-agent/turn-channel.js';
 
+import {
+  assertTranscriptRecord,
+  selectActiveTranscript,
+} from '@endo/hosted-agent/transcript-records.js';
+
 import { assertClaudeEffort } from './claude-effort.js';
+import { makeClaudeContextCoverage } from './claude-context-coverage.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -217,35 +219,13 @@ const defaultStderrIterable = proc =>
  *   runs under the caller's persona/instructions in addition to Claude
  *   Code's built-in prompt. Overridable per turn via `send(prompt, {
  *   systemPrompt })`. Omitted argv when neither is set.
- * @property {() => boolean} [detectPriorConversation] - Ground-truth
- *   check for a persisted transcript, consulted before *every* spawn
- *   (not once at construction). When provided it decides `--continue`
- *   directly, which closes two gaps the in-memory flag cannot: a first
- *   turn killed before Claude persisted anything must NOT make the next
- *   turn pass `--continue` (there is nothing to resume — the CLI would
- *   error or silently fork a fresh conversation), and a post-restart
- *   turn must resume whenever a transcript exists even if the one-shot
- *   construction-time detection raced or failed. A detector throw falls
- *   back to the in-memory flag.
- * @property {(records: readonly any[]) => Promise<string | undefined>} [restoreTranscript] -
+ * @property {(records: readonly any[]) => Promise<{payload: string, sessionId: string, leafUuid: string, prefixSha256: string} | undefined>} [restoreTranscript] -
  *   Write this conversation into the session's config directory from the
- *   stack's own transcript records, and answer the session id the CLI should
- *   resume. Consulted only when the config directory holds no conversation of
- *   its own, so a live conversation is continued rather than overwritten.
- *   Without it the session starts context-free, which is what happens today
- *   whenever a revived worker finds an empty store.
- * @property {() => string | undefined} [resolveResumeSessionId] - The id
- *   of the newest persisted conversation, read from the session's config
- *   dir before every spawn. When it yields an id the turn resumes that
- *   conversation by name (`--resume <id>`) rather than asking the CLI to
- *   infer "the most recent conversation" (`--continue`); a named resume
- *   that cannot be honoured fails loudly instead of silently forking a
- *   fresh, context-free conversation. Absent for sessions with no
- *   persistent config dir, which fall back to `--continue`.
- * @property {() => unknown} [describeTranscripts] - Opt-in resume
- *   diagnostic for callers supplying this hook. When set, every spawn reports the
- *   resume decision, Claude's own `system/init` event, and whether the
- *   turn's prompt chained onto earlier ones. Absent in production.
+ *   stack's own transcript records, and return the published session/leaf/digest
+ *   receipt. Native turns restore from host records before the next prompt;
+ *   a surviving guest store is not authority to bypass that restoration.
+ * @property {(text: string) => string} [sha256] Trusted UTF-8 SHA-256 for prefix coverage.
+ * @property {(checkpoint: any, suffix: readonly any[]) => {payload: string, sessionId: string, leafUuid: string, prefixSha256: string}} [projectNativeContext] Trusted exact native restoration projection.
  * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
  *   config file (see the floot package's mcp-socket-server). When set,
  *   every spawn passes `--mcp-config` (with this path) and
@@ -259,6 +239,7 @@ const defaultStderrIterable = proc =>
  *   - Adapter from a `ProcessHandle` to its stdout byte stream.
  *   Injectable for tests; defaults to the `@endo/exo-stream` reader.
  * @property {(proc: ProcessHandle) => AsyncIterable<Uint8Array>} [makeStderrIterable]
+ * @property {(proc: ProcessHandle) => Promise<any>} [makeStdinWriter]
  *   - Adapter from a `ProcessHandle` to its stderr byte stream, read
  *   best-effort to enrich an `abort` reason. Injectable for tests;
  *   defaults to the `@endo/exo-stream` reader.
@@ -277,31 +258,46 @@ const defaultStderrIterable = proc =>
  *
  * @param {ClaudeClientArgs} args
  */
-export const makeClaudeClient = ({
-  sessionId,
-  createdAt,
-  slice,
-  mountHandle,
-  provision,
-  workspaceMountPoint,
-  workspacePath = '/workspace',
-  backend,
-  rootfsLabel = '',
-  model,
-  reasoningEffort,
-  systemPrompt,
-  mcpConfigPath,
-  env = {},
-  detectPriorConversation,
-  resolveResumeSessionId,
-  restoreTranscript,
-  describeTranscripts,
-  makeStdoutIterable = defaultStdoutIterable,
-  makeStderrIterable = defaultStderrIterable,
-  stderrReadLimit = 16_384,
-  stderrTailLength = 2000,
-  stderrReadTimeoutMs = 1000,
-}) => {
+export const makeClaudeClient = args => {
+  if (
+    [
+      'detectPriorConversation',
+      'resolveResumeSessionId',
+      'describeTranscripts',
+      'conversationStarted',
+    ].some(key => key in args)
+  )
+    throw Error(
+      'Obsolete Claude ambient-continuation options are not supported',
+    );
+  const {
+    sessionId,
+    createdAt,
+    slice,
+    mountHandle,
+    provision,
+    workspaceMountPoint,
+    workspacePath = '/workspace',
+    backend,
+    rootfsLabel = '',
+    model,
+    reasoningEffort,
+    systemPrompt,
+    mcpConfigPath,
+    env = {},
+    restoreTranscript,
+    projectNativeContext,
+    sha256,
+    makeStdoutIterable = defaultStdoutIterable,
+    makeStderrIterable = defaultStderrIterable,
+    makeStdinWriter = async processHandle =>
+      iterateBytesWriter(/** @type {any} */ (await E(processHandle).stdin()), {
+        buffer: 0,
+      }),
+    stderrReadLimit = 16_384,
+    stderrTailLength = 2000,
+    stderrReadTimeoutMs = 1000,
+  } = args;
   // Node timers accept delays only through the signed 32-bit millisecond
   // range. Validate before starting any asynchronous diagnostic work.
   if (
@@ -354,33 +350,8 @@ export const makeClaudeClient = ({
     return text.trim().slice(-stderrTailLength);
   };
   let terminated = false;
-  // `--continue` resumes the most recent conversation persisted in the
-  // session's Claude config dir. A brand-new session has nothing to
-  // resume, so `--continue` is omitted until one prompt has been
-  // Sends this incarnation made, and nothing else. It is deliberately not
-  // seeded from the surviving store: seeding it from a detector that reads
-  // that store makes `liveConversation` true on the first post-restart turn,
-  // which skips the restore branch below and resumes the stale store --
-  // precisely the behaviour the records exist to replace.
-  let conversationStarted = false;
-  // Whether the *next* spawn should resume at all.
-  // The detector, when present, is the ground truth
-  // (it reads the persisted transcript), so a turn killed before Claude
-  // persisted anything does not poison the next turn with a resume that has
-  // nothing to resume, and a post-restart turn resumes whenever a transcript
-  // actually exists. Which conversation to resume is a separate question,
-  // answered by `resolveResumeSessionId`. Without a detector (tests, ephemeral
-  // tmpfs config dirs) the in-memory flag is all we have.
-  const priorConversation = () => {
-    if (detectPriorConversation) {
-      try {
-        return detectPriorConversation();
-      } catch {
-        // Unreadable backing dir (transient fs race): fall back to the flag.
-      }
-    }
-    return conversationStarted;
-  };
+  // Once a prompt is admitted, retries require explicit journal context.
+  let requiresJournalContext = false;
   /** @type {ProcessHandle | null} */
   let inFlight = null;
   // How long an interrupt waits for the killed process to end before it is
@@ -512,9 +483,17 @@ export const makeClaudeClient = ({
    * @param {string} prompt
    * @param {{ model?: string, reasoningEffort?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
    * @param {() => void} [assertAdmission] Recheck cancellation after preparation.
+   * @param {(checkpoint: any, suffix: readonly any[]) => Promise<any>} [restoreNative]
+   * @param {(cut: { sessionId?: string, beforeUuid: string|null, prefixSha256: string, beforePayload: string }) => void} [recordCut]
    * @returns {Promise<ProcessHandle>}
    */
-  const spawnClaude = async (prompt, opts = {}, assertAdmission = () => {}) => {
+  const spawnClaude = async (
+    prompt,
+    opts = {},
+    assertAdmission = () => {},
+    restoreNative = undefined,
+    recordCut = () => {},
+  ) => {
     const { slice: activeSlice } = await ensureProvisioned();
     assertAdmission();
     const argv = [
@@ -549,80 +528,92 @@ export const makeClaudeClient = ({
     // system prompt so the CLI's own agent loop honors them (the CLI never
     // sees the conversation-tree system message the API path injects). Sent
     // on every spawn — each `claude -p` is a fresh process — so a resumed
-    // (`--continue`) turn keeps the same persona as the first.
+    // (`--resume`) turn keeps the same persona as the first.
     const useSystemPrompt = opts.systemPrompt || systemPrompt;
     if (useSystemPrompt) {
       argv.push('--append-system-prompt', String(useSystemPrompt));
     }
-    // Which conversation this turn continues, and whose copy of it decides.
-    //
-    // Within one incarnation the CLI holds the live conversation: this client
-    // started it, every turn since has appended to it, and continuing it is
-    // the only correct thing to do — rewriting it underneath the model would
-    // be editing a conversation it is holding.
-    //
-    // Across incarnations the stack's records decide. The CLI's store is a
-    // host bind and outlives the daemon, so it is still sitting there after a
-    // restart and `--continue` would find it; that is exactly the behaviour
-    // this design exists to replace. A store that survives is not the same
-    // claim as a record the stack owns, and when they disagree the stack is
-    // right — it is the one that saw every turn, including the ones that
-    // failed before the CLI persisted anything.
+    // Every send derives its conversation solely from supplied journal context.
     let resumeSessionId;
-    const liveConversation = conversationStarted && priorConversation();
-    if (liveConversation && resolveResumeSessionId) {
-      // Name the live conversation by its id rather than asking `--continue`
-      // to pick "the most recent" by its own reckoning: naming it fails
-      // loudly instead of silently continuing a different one.
-      try {
-        resumeSessionId = resolveResumeSessionId();
-      } catch {
-        // Unreadable backing dir (transient fs race): fall back to --continue.
-      }
+    let restoredReceipt;
+    const records = Array.isArray(opts.transcript) ? opts.transcript : [];
+    if (requiresJournalContext && records.length === 0) {
+      throw Error('Claude continuation requires host-journal context');
     }
-    if (!liveConversation) {
-      const records = Array.isArray(opts.transcript) ? opts.transcript : [];
-      if (records.length > 0) {
-        if (!restoreTranscript) {
-          throw makeError(
-            X`ClaudeClient(${q(sessionId)}): this session holds ${q(records.length)} records and this incarnation cannot write them into the CLI's store, so the conversation cannot be handed over.`,
-          );
+    if (records.length > 0) {
+      const { active } = selectActiveTranscript(records);
+      if (active[0]?.kind === 'native-context') {
+        if (
+          !restoreNative ||
+          active.slice(1).some(record => record.kind !== 'message')
+        ) {
+          throw Error('Claude native context supports only a dialogue suffix');
         }
-        resumeSessionId = await restoreTranscript(records);
-        if (resumeSessionId === undefined) {
-          throw makeError(
-            X`ClaudeClient(${q(sessionId)}): restoring ${q(records.length)} records produced no conversation to resume.`,
+        if (!projectNativeContext || !sha256)
+          throw Error(
+            'Claude native restoration requires a trusted projection',
           );
-        }
+        const expected = projectNativeContext(active[0], active.slice(1));
+        if (
+          typeof expected.payload !== 'string' ||
+          sha256(expected.payload) !== expected.prefixSha256
+        )
+          throw Error('Invalid Claude native restoration projection');
+        const actual = await restoreNative(active[0], active.slice(1));
+        if (
+          ['sessionId', 'leafUuid', 'prefixSha256'].some(
+            key => actual[key] !== expected[key],
+          )
+        )
+          throw Error('Claude native restoration differs from host projection');
+        restoredReceipt = expected;
+      } else if (!restoreTranscript) {
+        throw makeError(
+          X`ClaudeClient(${q(sessionId)}): this session holds ${q(records.length)} records and this incarnation cannot write them into the CLI's store, so the conversation cannot be handed over.`,
+        );
+      } else {
+        restoredReceipt = await restoreTranscript(records);
       }
+      if (restoredReceipt === undefined) {
+        throw makeError(
+          X`ClaudeClient(${q(sessionId)}): restoring ${q(records.length)} records produced no conversation to resume.`,
+        );
+      }
+      if (
+        ![restoredReceipt.sessionId, restoredReceipt.leafUuid].every(
+          value =>
+            typeof value === 'string' &&
+            /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value),
+        ) ||
+        typeof restoredReceipt.prefixSha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(restoredReceipt.prefixSha256) ||
+        typeof restoredReceipt.payload !== 'string' ||
+        !sha256 ||
+        sha256(restoredReceipt.payload) !== restoredReceipt.prefixSha256
+      )
+        throw Error('Invalid Claude restoration receipt');
+      resumeSessionId = restoredReceipt.sessionId;
+      recordCut({
+        sessionId: restoredReceipt.sessionId,
+        beforeUuid: restoredReceipt.leafUuid,
+        prefixSha256: restoredReceipt.prefixSha256,
+        beforePayload: restoredReceipt.payload,
+      });
+    } else if (sha256) {
+      recordCut({
+        beforeUuid: null,
+        prefixSha256: sha256(''),
+        beforePayload: '',
+      });
     }
     if (resumeSessionId !== undefined) {
       argv.push('--resume', resumeSessionId);
-    } else if (liveConversation) {
-      argv.push('--continue');
-    }
-    if (describeTranscripts) {
-      // The prompt is user content; report only its length so the journal
-      // carries the resume decision without the conversation itself.
-      console.error(
-        '[claude-sandbox] spawn',
-        JSON.stringify({
-          sessionId,
-          liveConversation,
-          resumeSessionId,
-          detector: Boolean(detectPriorConversation),
-          conversationStarted,
-          records: Array.isArray(opts.transcript) ? opts.transcript.length : 0,
-          promptChars: String(prompt).length,
-          argv: argv.filter(arg => arg !== String(prompt)),
-          transcripts: describeTranscripts(),
-        }),
-      );
     }
     // Provisioning/restoration can outlive reader closure. Recheck immediately
     // before admitting the spawn; after admission the existing returned-handle
     // kill path remains responsible, even if acquisition is still pending.
     assertAdmission();
+    requiresJournalContext = true;
     const proc = await E(activeSlice).spawn(
       harden(argv),
       harden({
@@ -632,7 +623,6 @@ export const makeClaudeClient = ({
         captureStderr: true,
       }),
     );
-    conversationStarted = true;
     return proc;
   };
 
@@ -656,6 +646,14 @@ export const makeClaudeClient = ({
     /** @type {ProcessHandle | null} */
     let proc = null;
     let closed = false;
+    /** @type {any} Last native boundary observed during this turn. */
+    let compactBoundary;
+    /** @type {string | undefined} */
+    let nativeSessionId;
+    /** @type {{sessionId?: string, beforeUuid: string|null, prefixSha256: string, beforePayload: string}|undefined} */
+    let contextCut;
+    const coverage = sha256 ? makeClaudeContextCoverage({ sha256 }) : undefined;
+    let coverageFailure;
     const channel = makeHostedTurnChannel({
       name: `claude-raw:${sessionId}`,
       onConsumerClosed: () => {
@@ -675,6 +673,15 @@ export const makeClaudeClient = ({
       try {
         await runQueuedTurn();
       } finally {
+        if (inFlight === proc) {
+          inFlight = null;
+          inFlightClose = null;
+          inFlightTerminal = null;
+        }
+        if (currentClose === close) {
+          currentClose = null;
+          currentTerminal = null;
+        }
         // Whatever ended the turn — a terminal delivered, a bail before the
         // spawn, a kill — its process is gone or never was.
         channel.settle();
@@ -692,12 +699,75 @@ export const makeClaudeClient = ({
         return;
       }
       try {
-        proc = await spawnClaude(prompt, opts, () => {
+        const assertAdmission = () => {
           if (closed || terminated) {
             throw makeError(X`Claude turn cancelled before prompt admission`);
           }
-        });
+        };
+        proc = await spawnClaude(
+          prompt,
+          opts,
+          assertAdmission,
+          async (checkpoint, suffix) => {
+            const { slice: activeSlice } = await ensureProvisioned();
+            assertAdmission();
+            const payload = new TextEncoder().encode(
+              JSON.stringify({ checkpoint, suffix }),
+            );
+            if (payload.byteLength > 16 * 1024 * 1024) {
+              throw Error('Claude native restore exceeds transport limit');
+            }
+            proc = await E(activeSlice).spawn(
+              harden(['node', '/opt/endo/restore-context.mjs']),
+              harden({
+                cwd: workspacePath,
+                env: { ...env },
+                captureStdout: true,
+                captureStderr: true,
+              }),
+            );
+            inFlight = proc;
+            inFlightClose = close;
+            inFlightTerminal = channel.terminal;
+            assertAdmission();
+            const stdin = await makeStdinWriter(proc);
+            assertAdmission();
+            if ((await stdin.next(payload)).done)
+              throw Error('Claude native restore stdin closed');
+            await stdin.return();
+            assertAdmission();
+            let output = '';
+            const decoder = new TextDecoder('utf-8', { fatal: true });
+            for await (const chunk of makeStdoutIterable(proc)) {
+              output += decoder.decode(chunk, { stream: true });
+              if (output.length > 1024)
+                throw Error('Invalid Claude native restore response');
+            }
+            output += decoder.decode();
+            const status = await E(proc).wait();
+            assertAdmission();
+            if (status?.code !== 0 || status?.signal)
+              throw Error('Claude native restoration failed');
+            const restored = JSON.parse(output);
+            if (
+              typeof restored?.sessionId !== 'string' ||
+              !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(
+                restored.sessionId,
+              )
+            ) {
+              throw Error('Invalid Claude restored session identity');
+            }
+            return restored;
+          },
+          cut => {
+            contextCut = cut;
+          },
+        );
       } catch (error) {
+        if (proc)
+          await E(proc)
+            .kill()
+            .catch(() => {});
         // A recreate disposes the slice a queued spawn may be about to use;
         // label that failure the same way an in-flight kill is labelled.
         push({
@@ -718,40 +788,57 @@ export const makeClaudeClient = ({
       inFlight = proc;
       inFlightClose = close;
       inFlightTerminal = channel.terminal;
+      let nativeReportedFailure = false;
+      /** @type {string|undefined} */
+      let producerFailureReason;
       try {
         for await (const event of parseStreamJsonLines(
           makeStdoutIterable(proc),
         )) {
+          if (coverage && coverageFailure === undefined) {
+            try {
+              coverage.observe(event);
+            } catch (error) {
+              coverageFailure = error;
+            }
+          }
           if (
-            describeTranscripts &&
+            event?.type === 'result' &&
+            event.is_error &&
+            !event.parent_tool_use_id
+          )
+            nativeReportedFailure = true;
+          if (event?.type === 'endo_native_context') {
+            throw Error('Unexpected compaction capture in native CLI stream');
+          }
+          if (
             event?.type === 'system' &&
-            event?.subtype === 'init'
+            event.subtype === 'init' &&
+            !event.parent_tool_use_id
           ) {
-            // What the CLI itself believes it opened. A `session_id` other than
-            // the one we asked to resume means the resume did not take.
-            console.error(
-              '[claude-sandbox] init',
-              JSON.stringify({
-                sessionId,
-                claudeSessionId: event.session_id,
-                cwd: event.cwd,
-                model: event.model,
-                version: event.claude_code_version,
-                apiKeySource: event.apiKeySource,
-              }),
-            );
+            if (
+              typeof event.session_id !== 'string' ||
+              !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(
+                event.session_id,
+              )
+            ) {
+              throw Error('Invalid Claude native session identity');
+            }
+            nativeSessionId = event.session_id;
+          }
+          // Capture at the completed-turn cut, including all messages after
+          // this boundary. Never publish the incomplete native notification
+          // as a summary-only checkpoint.
+          if (
+            event?.type === 'system' &&
+            event.subtype === 'compact_boundary' &&
+            !event.parent_tool_use_id
+          ) {
+            compactBoundary = event;
           }
           // Stop pulling stdout while delivery is full. In particular, a
           // large streamed tool argument can emit thousands of tiny events.
           if (!(await channel.write(event))) break;
-        }
-        if (describeTranscripts) {
-          // Ground truth for the turn: whether the prompt Claude just persisted
-          // chained onto the conversation, or started a fresh root.
-          console.error(
-            '[claude-sandbox] after-turn',
-            JSON.stringify({ sessionId, transcripts: describeTranscripts() }),
-          );
         }
         // Stdout EOF alone does not mean the turn succeeded: `claude` exits
         // non-zero on auth failure, an internal error, or an external kill,
@@ -762,22 +849,142 @@ export const makeClaudeClient = ({
         // A failed exit observation is not evidence of success. Let the
         // error path kill the process and preserve diagnostics in an abort.
         const status = await E(proc).wait();
-        if (status && (status.code === null ? status.signal : status.code)) {
-          const how =
-            status.code === null
-              ? `killed by ${status.signal}`
-              : `exited with code ${status.code}`;
+        if (status?.code !== 0 || status?.signal || nativeReportedFailure) {
+          let how;
+          if (typeof status?.signal === 'string' && status.signal !== '') {
+            how = `killed by ${status.signal}`;
+          } else if (
+            typeof status?.code === 'number' &&
+            Number.isInteger(status.code) &&
+            status.code > 0
+          ) {
+            how = `exited with code ${status.code}`;
+          } else if (status?.code === 0 && !status?.signal) {
+            how = 'reported a failed turn';
+          } else {
+            // Unknown completion is not a stopped-producer boundary. The
+            // catch path kills before diagnostics; never start capture here.
+            throw Error('Claude process completion status was not confirmed');
+          }
           const stderrText = await readStderrBrief(proc);
           const base = abortReasonInContext(`claude ${how}`);
-          push({
-            type: 'abort',
-            reason: stderrText
-              ? `${base}\n--- stderr ---\n${stderrText}`
-              : base,
-          });
-        } else {
-          push({ type: 'end' });
+          producerFailureReason = stderrText
+            ? `${base}\n--- stderr ---\n${stderrText}`
+            : base;
+          // Exit alone is insufficient: only a complete mainline terminal
+          // failure can authorize capture after a known, unsignalled exit.
+          if (status?.signal || !nativeReportedFailure) {
+            push({ type: 'abort', reason: producerFailureReason });
+            return;
+          }
         }
+        if (nativeSessionId) {
+          if (!coverage || !contextCut)
+            throw Error(
+              'Claude native coverage requires a trusted pre-turn receipt and hash',
+            );
+          if (coverageFailure !== undefined) throw coverageFailure;
+          coverage.assertOutcome(nativeReportedFailure ? 'failure' : 'success');
+          if (
+            contextCut.sessionId !== undefined &&
+            contextCut.sessionId !== nativeSessionId
+          )
+            throw Error(
+              'Claude native session differs from restoration receipt',
+            );
+          const { slice: activeSlice } = await ensureProvisioned();
+          if (closed || terminated) throw Error('Claude capture cancelled');
+          // The file is guest-writable. Read it inside the existing sandbox,
+          // never by following a guest-controlled path from the host worker.
+          proc = await E(activeSlice).spawn(
+            harden([
+              'node',
+              '/opt/endo/capture-compaction.mjs',
+              JSON.stringify({
+                type: 'endo_capture',
+                session_id: compactBoundary?.session_id ?? nativeSessionId,
+                // Keep argv bounded independently of retained history size.
+                expected_boundary_uuid: compactBoundary?.uuid,
+                coverage_before_uuid: contextCut.beforeUuid,
+              }),
+            ]),
+            harden({
+              cwd: workspacePath,
+              env: { ...env },
+              captureStdout: true,
+              captureStderr: true,
+            }),
+          );
+          inFlight = proc;
+          if (closed || terminated) throw Error('Claude capture cancelled');
+          // Bound this new data-only transfer, not transcript storage or a
+          // session's lifetime. No partial checkpoint is ever published.
+          const captureProc = proc;
+          const captureBytes = async function* () {
+            let bytes = 0;
+            for await (const chunk of makeStdoutIterable(captureProc)) {
+              bytes += chunk.byteLength;
+              if (bytes > 16 * 1024 * 1024) {
+                throw Error(
+                  'Claude compaction capture exceeds transport limit',
+                );
+              }
+              yield chunk;
+            }
+          };
+          let captured;
+          let compactionWitness;
+          for await (const event of parseStreamJsonLines(captureBytes())) {
+            if (
+              captured ||
+              !['endo_compaction', 'endo_context'].includes(event?.type)
+            ) {
+              throw Error('Invalid Claude compaction capture');
+            }
+            captured = assertTranscriptRecord({
+              kind: 'native-context',
+              format: event.nativeContext?.format,
+              payload: event.nativeContext?.transcript,
+              context: [
+                ...(event.type === 'endo_compaction'
+                  ? [{ kind: 'compaction', summary: event.summary }]
+                  : []),
+                ...(event.retainedTail ?? []),
+              ],
+            });
+            compactionWitness = event.compactionWitness;
+          }
+          const captureStatus = await E(proc).wait();
+          if (
+            !captured ||
+            captureStatus?.code !== 0 ||
+            captured.kind !== 'native-context' ||
+            captured.format !== 'claude-code-jsonl-v1' ||
+            captureStatus?.signal ||
+            closed ||
+            terminated
+          ) {
+            throw Error('Claude compaction capture did not complete');
+          }
+          coverage.assertCaptured(captured.payload, {
+            sessionId: nativeSessionId,
+            beforeUuid: contextCut.beforeUuid,
+            prefixSha256: contextCut.prefixSha256,
+            beforePayload: contextCut.beforePayload,
+            compactionWitness,
+            prompt: String(prompt),
+            outcome: nativeReportedFailure ? 'failure' : 'success',
+          });
+          await channel.write({
+            type: 'endo_native_context',
+            checkpoint: captured,
+          });
+        }
+        push(
+          producerFailureReason
+            ? { type: 'abort', reason: producerFailureReason }
+            : { type: 'end' },
+        );
       } catch (error) {
         const base = abortReasonInContext(
           error instanceof Error ? error.message : String(error),
@@ -792,21 +999,12 @@ export const makeClaudeClient = ({
         const stderrText = await readStderrBrief(proc);
         push({
           type: 'abort',
-          reason: stderrText ? `${base}\n--- stderr ---\n${stderrText}` : base,
+          reason: producerFailureReason
+            ? `${producerFailureReason}\nContext capture failed: ${base}${stderrText ? `\n--- capture stderr ---\n${stderrText}` : ''}`
+            : stderrText
+              ? `${base}\n--- stderr ---\n${stderrText}`
+              : base,
         });
-      } finally {
-        if (inFlight === proc) {
-          inFlight = null;
-          inFlightClose = null;
-          inFlightTerminal = null;
-        }
-        // Drop the finished turn's closer so a later `interrupt()` reports
-        // "nothing in flight" instead of silently no-op'ing against a closed
-        // channel.
-        if (currentClose === close) {
-          currentClose = null;
-          currentTerminal = null;
-        }
       }
     }
     // Keep the chain alive even if a turn rejects (errors are surfaced as
@@ -1135,7 +1333,6 @@ export const makeClaudeClient = ({
         workspaceMountPoint,
         backend,
         rootfs: rootfsLabel,
-        conversationStarted,
         terminated,
         extraMounts: extraMounts.map(({ innerPath, mode }) => ({
           innerPath,
@@ -1162,7 +1359,7 @@ export const makeClaudeClient = ({
           '                        (the in-flight turn aborts)',
           '  terminate()         → dispose the slice + unmount + revoke creds',
           '  status()            → { sessionId, createdAt, workspaceMountPoint,',
-          '                          backend, rootfs, conversationStarted,',
+          '                          backend, rootfs,',
           '                          terminated, extraMounts }',
         ].join('\n');
       }
