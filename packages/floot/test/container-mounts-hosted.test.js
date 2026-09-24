@@ -20,12 +20,12 @@ import { make } from '../agent.js';
 
 /**
  * A world with one floot session on a fake hosted backend. The backend
- * records every `create` spec and can refuse to terminate once, the way a
- * real one does under an unsettled Endo tool call.
+ * records every `create` spec and can hold termination while an admitted
+ * tool settles, as the real native owner does.
  *
- * @param {{ refuseTerminateOnce?: boolean }} [options]
+ * @param {{ terminateGate?: Promise<void> }} [options]
  */
-const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
+const makeWorld = ({ terminateGate } = {}) => {
   let factory;
   let toolTurn;
   let toolTurnStarting = false;
@@ -85,7 +85,6 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   const sends = [];
   /** @type {string[]} */
   const terminated = [];
-  let refusals = refuseTerminateOnce ? 1 : 0;
   /** @type {Promise<void> | undefined} */
   let createGate;
   let rejectDeclared = false;
@@ -112,10 +111,7 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
       const index = creates.length;
       const admin = Far('TestAdmin', {
         terminate: async () => {
-          if (refusals > 0) {
-            refusals -= 1;
-            throw Error('Codex session has 1 unsettled Endo tool call(s)');
-          }
+          await terminateGate;
           terminated.push(spec.sessionId);
         },
       });
@@ -381,9 +377,14 @@ const untilCreates = (world, count) =>
 
 test('the mount tools reach a hosted session and an attach recreates it with the declaration', async t => {
   t.timeout(10_000);
-  const world = makeWorld({ refuseTerminateOnce: true });
+  let release = () => {};
+  const terminateGate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const world = makeWorld({ terminateGate });
   const factory = make(world.host);
   t.teardown(async () => {
+    release();
     world.closeInboxes();
     await E(factory).deleteSession('one');
   });
@@ -402,9 +403,8 @@ test('the mount tools reach a hosted session and an attach recreates it with the
 
   // The backend calls the tool the way a model would. Possession is proved
   // against the session guest, the bridge is minted, and the recreate is
-  // scheduled — it cannot run inside this call, because the backend refuses
-  // to stop under an unsettled tool call (the fake refuses once, as a real
-  // one does until the result is back).
+  // scheduled, not awaited inside this call: termination may be waiting for
+  // this very tool result. The held termination must not block that result.
   const reply = await E(world.hostedTools()).execute('attachContainerMount', {
     petName: 'project',
     innerPath: '/mnt/project',
@@ -413,6 +413,8 @@ test('the mount tools reach a hosted session and an attach recreates it with the
   t.deepEqual(world.bridged, [
     { key: world.bridged[0].key, capId: 'formula-project', mode: 'rw' },
   ]);
+  t.is(world.creates.length, 1, 'no successor before termination completes');
+  release();
   await untilCreates(world, 2);
   t.deepEqual(world.terminated, ['one']);
   // The successor was created with the attach declared, by the bridge's

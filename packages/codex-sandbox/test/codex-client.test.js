@@ -2114,6 +2114,7 @@ test('teardown synchronously rejects a new turn before its close audit', async t
 });
 
 test('a timed-out Endo tool poisons the session until late settlement', async t => {
+  t.timeout(5000);
   /** @type {(value?: any) => void} */
   let settle = () => {};
   const audit = [];
@@ -2150,9 +2151,16 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   });
   t.is((await drain(reader)).at(-1).type, 'abort');
   t.true(fixture.isClosed());
-  await t.throwsAsync(() => fixture.client.terminate(), {
-    message: /unsettled Endo tool call/,
+  let stopped = false;
+  const stopping = fixture.client.terminate().then(() => {
+    stopped = true;
   });
+  t.teardown(async () => {
+    settle('late result');
+    await stopping;
+  });
+  await flush();
+  t.false(stopped);
   settle('late result');
   for (let tries = 0; tries < 20; tries += 1) {
     if (audit.some(entry => entry.kind === 'tool-late-settled')) break;
@@ -2161,7 +2169,72 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   }
   t.true(audit.some(entry => entry.kind === 'tool-outcome-unknown'));
   t.true(audit.some(entry => entry.kind === 'tool-late-settled'));
-  await fixture.client.terminate();
+  await stopping;
+  t.true(stopped);
+});
+
+test('supervisor fences independently while Codex termination drains an admitted tool', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve('tool result');
+  });
+  let entered = false;
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 0,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'Test tool.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: () => {
+        entered = true;
+        return held;
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  t.teardown(async () => {
+    release();
+    await owner.stop();
+  });
+  await owner.controller.send('hello');
+  fixture.push({
+    id: 953,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'wait-drain',
+      tool: 'wait',
+      arguments: {},
+    },
+  });
+  while (!entered) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  let stopped = false;
+  const stopping = owner.stop().then(() => {
+    stopped = true;
+  });
+  void stopping.catch(() => {});
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.true(owner.events.includes('sandbox-close'));
+  t.true(owner.events.includes('revoke'));
+  t.false(stopped);
+  t.throws(() => owner.controller.send('too late'), {
+    message: /stopping/,
+  });
+  release();
+  await stopping;
+  t.true(stopped);
+  t.true((await owner.controller.status()).stopped);
 });
 
 test('a failed late tool audit remains a shutdown failure after the tool settles', async t => {

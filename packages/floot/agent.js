@@ -2876,12 +2876,6 @@ export const make = async (
   const hostedMountClients = new Map();
   const privateJournals = new Map();
 
-  // A hosted backend refuses to stop under an unsettled Endo tool call — and
-  // the attach that asks for a recreate IS one until its result is back —
-  // so a recreate waits for the call to settle rather than deadlocking on it.
-  const HOSTED_RECREATE_SETTLE_INTERVAL_MS = 50;
-  const HOSTED_RECREATE_SETTLE_ATTEMPTS = 200;
-
   /**
    * The registrar's view of a hosted backend session: a client whose bind
    * set is the `containerMounts` its next `create` declares. The attested
@@ -2892,8 +2886,8 @@ export const make = async (
    * the design accepts (attach is disruptive by design).
    *
    * The recreate is scheduled, never awaited by `setExtraMounts`: the
-   * registrar calls it from inside the attach tool, and the backend will not
-   * stop while that tool call is unsettled. A recreate the sandbox refuses —
+   * registrar calls it from inside the attach tool, and backend termination
+   * drains admitted calls. A recreate the sandbox refuses —
    * its attestation would not prove an attach — drops this session's binds
    * (their records and bridges included) so no record claims a bind the
    * container lacks, recreates without them, and reports why on the next
@@ -2968,24 +2962,7 @@ export const make = async (
     const terminateLive = async () => {
       if (!live) return;
       const { admin } = live;
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          await E(admin).terminate();
-          break;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : `${error}`;
-          if (
-            !/unsettled Endo tool call/.test(message) ||
-            attempt >= HOSTED_RECREATE_SETTLE_ATTEMPTS
-          ) {
-            throw error;
-          }
-
-          await new Promise(resolve => {
-            setTimeout(resolve, HOSTED_RECREATE_SETTLE_INTERVAL_MS);
-          });
-        }
-      }
+      await E(admin).terminate();
       live = undefined;
     };
     const recreate = async () => {

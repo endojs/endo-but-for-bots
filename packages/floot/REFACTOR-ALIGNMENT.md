@@ -125,14 +125,22 @@ Concrete candidates:
 - Attachment-driven recreation in `floot/agent.js:2930` onward coordinates
   declared mounts, live incarnation forwarding and cleanup retries. It is not
   proven to be a duplicate durable owner. Its string-matched
-  `unsettled Endo tool call` retry at `3024` is a concrete cross-layer coupling.
-  Further tracing confirms that the shared supervisor wraps this refusal in
-  `AggregateError('Codex native cleanup pending')`, so Floot's top-level message
-  matcher misses it. The mount test's fake admin throws the unwrapped error and
-  does not cover this production composition. Prefer draining admitted calls in
-  the existing native owner and awaiting ordinary termination, rather than
-  expanding text matching. This cleanup remains open; independent fencing must
-  continue even when an admitted tool never settles.
+  old `unsettled Endo tool call` retry was a concrete cross-layer coupling.
+  The shared supervisor wraps this refusal in
+  `AggregateError('Codex native cleanup pending')`, so the top-level message
+  matcher missed it; the test's fake admin incorrectly threw an unwrapped error.
+  Removed the polling timer, retry limit and message matcher. Codex now drains
+  already-admitted calls in its existing termination path, and Floot awaits
+  ordinary termination. The previous actual-dispatch fence prevents late intent
+  audit continuations from starting new effects during this drain.
+  A real-supervisor test verifies independent grant fencing, sandbox closure and
+  revocation while the tool is held; stop completes only after settlement.
+  The attachment test holds termination and proves the tool can return before
+  the successor is created, avoiding a self-deadlock. Late audit failures remain
+  failures, and a genuinely hung call keeps completion pending, not containment.
+  Independent adversarial review approves; full Codex/Floot suites pass 325/677
+  tests, production Codex types pass, scoped lint has no errors (73 warnings).
+  No new owner or schema, no process-loss claim, and no deployment.
 
 ### RA-02 — Finish the bounded-context requirement
 
@@ -253,7 +261,8 @@ microtask, with no await before the effect. The test uses the real shared
 supervisor and proves independent fencing, pending stop during the held write,
 and zero tool calls after release. No storage schema or durable owner changes;
 an intent alone is still not evidence of execution or success. This does not yet
-change the separate termination/refusal contract described under RA-01.
+by itself change the separate termination/refusal contract described under RA-01;
+the subsequent drain cleanup there builds on this fence.
 The full Codex package passes 324 tests and the client suite passes 98;
 production-source types and scoped lint pass (15 warnings, no errors).
 The regression failed before the fix with an observed `lookup` execution.

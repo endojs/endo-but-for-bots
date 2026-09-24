@@ -423,10 +423,10 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
   `permission.asked` with `{response:'once'}`; a `"*": "allow"` wildcard would
   override the built-in `ask`/`deny` rules and is deliberately not used. The
   outer slice is the enforcement boundary, matching the codex stance.
-- **Unsettled-call barrier:** `terminate()`/`destroy()` must refuse while
-  `bridge.pendingCalls() > 0`, with the exact message substring
-  `unsettled Endo tool call` that Floot retries on
-  (`agent.js:2932-2950`; precedent `claude-backend-factory.js:238-241,252,274`).
+- **Admitted-call barrier:** the shared supervisor fences admission and closes
+  native resources independently, but does not acknowledge completed cleanup
+  until admitted calls and required writes settle. Floot awaits termination;
+  it does not interpret backend error text or poll for tool completion.
 - The socket has no explicit mode and no peer-uid check today; any in-slice
   process can drive the pinned `HostedToolSet`. A follow-up, not a security
   claim.

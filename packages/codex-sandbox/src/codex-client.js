@@ -1946,9 +1946,11 @@ export const makeCodexClient = ({
           });
           closeDeferredAudited = true;
         }
-        throw Error(
-          `Codex session has ${pendingToolOperations.size} unsettled Endo tool call(s)`,
-        );
+        // Closing fences new effects at dispatch. Drain admitted calls rather
+        // than requiring callers to recognize and retry an English error.
+        // The supervisor independently fences grants and closes the sandbox;
+        // this wait is a completion barrier, not a delay to that containment.
+        await Promise.allSettled([...pendingToolOperations]);
       }
       if (!terminated && !closeRequestedAudited) {
         await audit('session-close-requested', {
