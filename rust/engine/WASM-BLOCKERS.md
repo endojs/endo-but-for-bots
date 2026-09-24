@@ -363,6 +363,20 @@ the ceilings before allocating.
   A crafted database could alias rows differently by width; the crate does not build for wasm
   today.
 
+### Fix prototypes
+
+Two of the audit's fixes are kept in [`determinism-prototypes/`](determinism-prototypes/):
+- fixed per-element admission widths, with the matcher's charges pinned the same way;
+- the `advance_string_index` overflow;
+- the `JSON.stringify` output sizing.
+
+With both applied, eight of the repros above print exactly the native line on wasm32.
+Patched native output is byte-identical to unpatched native output, so native thresholds do
+not move.
+A control repro in the RegExp compiler, which neither patch touches, still diverges.
+The engine's test suites pass, except for one source-mutation test whose anchor line the JSON
+patch rewrites.
+
 ## B3: the native-recursion budget outruns wasm stacks
 
 `NATIVE_DEPTH_LIMIT = 2048` (`interp.rs`) bounds host recursion by a counter, so the halt depth
