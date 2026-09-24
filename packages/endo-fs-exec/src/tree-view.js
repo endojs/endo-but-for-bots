@@ -61,9 +61,9 @@ const normalizeSegments = pathArg => {
 
 /**
  * Drain a `PassableBytesReader` into a single `Uint8Array`. The
- * `stringLengthLimit` accommodates backings (e.g.
+ * `byteLengthLimit` accommodates backings (e.g.
  * `makeBytesReaderFromBytes`) that emit the whole payload in one
- * base64 frame; without it the default 100 KB cap on `M.string()`
+ * byte-array frame; without it the default 100 KB cap on `M.byteArray()`
  * would reject anything bigger.
  *
  * @param {unknown} readerRef
@@ -73,12 +73,12 @@ const normalizeSegments = pathArg => {
 const drainBytesReader = async (readerRef, expectedSize) => {
   const size =
     typeof expectedSize === 'bigint' ? Number(expectedSize) : expectedSize;
-  const stringLengthLimit = Math.max(100_000, Math.ceil((size * 4) / 3) + 1024);
+  const byteLengthLimit = Math.max(100_000, size + 1024);
   /** @type {Uint8Array[]} */
   const chunks = [];
   let total = 0;
   for await (const chunk of iterateBytesReader(/** @type {any} */ (readerRef), {
-    stringLengthLimit,
+    byteLengthLimit,
   })) {
     chunks.push(chunk);
     total += chunk.length;

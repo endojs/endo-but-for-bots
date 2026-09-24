@@ -27,9 +27,12 @@
  *   `Filesystem` the caller hands in (in-memory, node-fs, a zip-backed
  *   `FsBackend`, …).
  *
- * Bytes ride inside frames as base64 strings because CapTP marshalling
- * rejects raw mutable typed arrays (see DESIGN.md §5 / §6); this mirrors
- * how `@endo/exo-stream`'s byte reader/writer haul bytes today.
+ * Bytes ride inside `CloneFrame` records as base64 strings. The
+ * `CloneFrame` record shape (`CloneFrameShape`) is its own wire contract,
+ * separate from the exo-stream bytes protocol that now hauls immutable
+ * `Uint8Array` byteArrays. Moving the `chunk` payload to `M.byteArray()`
+ * would break peers that still send base64 frames, so it is left for a
+ * separate breaking change rather than folded into the exo-stream one.
  */
 
 import { E } from '@endo/eventual-send';

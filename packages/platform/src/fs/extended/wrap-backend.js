@@ -21,7 +21,6 @@ import { makeExo } from '@endo/exo';
 import { makeError, X, q } from '@endo/errors';
 
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 
 import {
   DirectoryInterface,
@@ -48,9 +47,32 @@ import {
   transplantPathTables,
 } from './shared/path-tables.js';
 import { makeXattrsExo } from './shared/xattrs-exo.js';
+import { makeBufferedBytesWriter } from './shared/buffered-bytes-writer.js';
 import { makeCursorExo } from './shared/cursor-exo.js';
 import { makeNodeWatcherExo } from './shared/watcher-exo.js';
 import { makeFilesystem } from './posture.js';
+
+/**
+ * Per-frame byte bound for the `PassableBytesWriter` sinks this module
+ * returns (`OpenFile.write`, `File.write`).
+ * Without an explicit bound `bytesWriterFromIterator` admits frames up to
+ * `Number.MAX_SAFE_INTEGER` bytes.
+ * The frame has already been unmarshalled by the time the bound is checked,
+ * so the bound does not limit that transient allocation; it limits how much a
+ * single frame can add to the buffer held until `return()`.
+ * 16 MiB is well above any frame the in-tree initiators send (for example
+ * `layer.js` emits 1 MiB chunks).
+ */
+const WRITE_FRAME_BYTE_LENGTH_LIMIT = 16 * 1024 * 1024;
+
+/**
+ * Default bound on the running total one `OpenFile.write` or `File.write`
+ * buffers before `return()` commits it. Holding a write capability on a path
+ * does not entitle the holder to unbounded host memory, so the sink throws
+ * `E2BIG` and discards its buffer once the total would exceed this.
+ * Override it with `wrapBackend`'s `writeByteLengthLimit` option.
+ */
+const WRITE_BYTE_LENGTH_LIMIT = 256 * 1024 * 1024;
 
 /**
  * @import { FsBackend } from './backend-types.js'
@@ -160,6 +182,7 @@ const narrowStatPatch = patch => {
  *   description?: string,
  *   namedDirs?: Record<string, string[]>,
  *   posture?: FilesystemPosture | 'unknown',
+ *   writeByteLengthLimit?: number,
  * }} [opts]
  * @returns {Filesystem}
  */
@@ -168,6 +191,8 @@ export const wrapBackend = (backend, opts = {}) => {
   const posture = opts.posture ?? 'readWrite';
   const description = opts.description ?? 'wrapBackend-built Filesystem';
   const namedDirs = harden({ ...(opts.namedDirs ?? {}) });
+  const writeByteLengthLimit =
+    opts.writeByteLengthLimit ?? WRITE_BYTE_LENGTH_LIMIT;
 
   // `getQid` is a synchronous getter — `readOnly()` forwards it sync
   // and 9p-server pipelines it — so its QID source must be sync too.
@@ -446,10 +471,10 @@ export const wrapBackend = (backend, opts = {}) => {
     // still in place via the interface guard.
     return makeExo('OpenFile', /** @type {any} */ (OpenFileInterface), {
       // `read(offset, length)` returns a `PassableBytesReader` that
-      // yields the slice as one chunk. Bounded; the bytes are
-      // base64-encoded on the CapTP wire and the receiver pulls them
-      // with a single pipelined `next()`. Uint8Array can't cross
-      // CapTP directly (marshalling rejects mutable typed arrays).
+      // yields the slice as one frozen byte-array chunk, which the
+      // receiver pulls with a single pipelined `next()`. A frozen byte
+      // array could cross CapTP on its own; the reader keeps `read`'s
+      // return shape the same as every other byte source in this API.
       async read(offset, length) {
         requireOpen('read');
         requireRead('read');
@@ -471,36 +496,17 @@ export const wrapBackend = (backend, opts = {}) => {
         requireOpen('write');
         requireWrite('write');
         const off = offset === undefined ? cursor : BigInt(offset);
-        /** @type {Uint8Array[]} */
-        const chunks = [];
-        const sinkIterator = {
-          /** @param {Uint8Array} chunk */
-          async next(chunk) {
-            if (chunk instanceof Uint8Array && chunk.length !== 0) {
-              chunks.push(chunk);
-            }
-            return { done: false, value: undefined };
-          },
-          async return(value) {
-            let total = 0;
-            for (const c of chunks) total += c.length;
-            const merged = new Uint8Array(total);
-            let p = 0;
-            for (const c of chunks) {
-              merged.set(c, p);
-              p += c.length;
-            }
+        return makeBufferedBytesWriter({
+          label: 'OpenFile.write',
+          frameByteLengthLimit: WRITE_FRAME_BYTE_LENGTH_LIMIT,
+          totalByteLengthLimit: writeByteLengthLimit,
+          commit: async merged => {
             await backend.write(path, merged, off);
             cursor = off + BigInt(merged.length);
             // POSIX: writing updates mtime (and ctime via touch).
             touch(path, { mtime: true });
-            return { done: true, value };
           },
-          [Symbol.asyncIterator]() {
-            return sinkIterator;
-          },
-        };
-        return bytesWriterFromIterator(sinkIterator);
+        });
       },
       async truncate(size) {
         requireOpen('truncate');
@@ -734,24 +740,11 @@ export const wrapBackend = (backend, opts = {}) => {
           throw notSupported('File.write (whole-file overwrite)');
         }
         const off = offset === undefined ? 0n : BigInt(offset);
-        /** @type {Uint8Array[]} */
-        const chunks = [];
-        const sinkIterator = {
-          async next(chunk) {
-            if (chunk instanceof Uint8Array && chunk.length !== 0) {
-              chunks.push(chunk);
-            }
-            return { done: false, value: undefined };
-          },
-          async return(value) {
-            let total = 0;
-            for (const c of chunks) total += c.length;
-            const merged = new Uint8Array(total);
-            let p = 0;
-            for (const c of chunks) {
-              merged.set(c, p);
-              p += c.length;
-            }
+        return makeBufferedBytesWriter({
+          label: 'File.write',
+          frameByteLengthLimit: WRITE_FRAME_BYTE_LENGTH_LIMIT,
+          totalByteLengthLimit: writeByteLengthLimit,
+          commit: async merged => {
             if (truncating) {
               // @ts-expect-error caps.setStat checked above
               await backend.setStat(path, { size: 0n });
@@ -759,13 +752,8 @@ export const wrapBackend = (backend, opts = {}) => {
             await backend.write(path, merged, off);
             // POSIX: writing updates mtime.
             touch(path, { mtime: true });
-            return { done: true, value };
           },
-          [Symbol.asyncIterator]() {
-            return sinkIterator;
-          },
-        };
-        return bytesWriterFromIterator(sinkIterator);
+        });
       },
       async snapshot() {
         const k = await backend.kind(path);

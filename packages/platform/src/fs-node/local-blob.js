@@ -4,9 +4,7 @@ import fs from 'node:fs';
 import harden from '@endo/harden';
 import { encodeBase64 } from '@endo/base64';
 import { makeExo } from '@endo/exo';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { mapReader } from '@endo/stream';
 import { makeNodeReader } from '@endo/stream-node';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { sha256 } from '@endo/sha256';
@@ -19,6 +17,7 @@ import { sha256 } from '@endo/sha256';
 // which returns a new `LocalBlob` over a selected byte or line interval — the
 // same interface, so ranges compose. See
 // designs/readableblob-range-attenuation.md.
+import { byteChunks } from '../blob.js';
 import { ReadableBlobRangeInterface } from '../fs/interfaces.js';
 import {
   assertByteRange,
@@ -79,7 +78,7 @@ const bytesFromRange = bytes => {
 
 /**
  * Creates a ReadableBlob Exo from a local file.
- * Streams file content as base64 via @endo/stream-node.
+ * Streams file content as passable immutable byte arrays.
  *
  * `interval` is the absolute byte interval over the file this handle exposes:
  * `{ start, end }` with `end === undefined` meaning "to EOF" — an unattenuated
@@ -106,26 +105,18 @@ export const makeLocalBlob = (
   /** @satisfies {ReadableBlobRange} */
   const localBlobMethods = {
     /** @param {ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
+    stream(synPromise) {
       if (isFull) {
         const nodeReadStream = fs.createReadStream(filePath);
         const reader = makeNodeReader(nodeReadStream);
-        const pump = makeReaderPump(mapReader(reader, encodeBase64));
-        return pump(/** @type {any} */ (synPromise));
+        return bytesReaderFromIterator(reader).stream(
+          /** @type {any} */ (synPromise),
+        );
       }
-      // Attenuated view: stream the selected bytes as one base64 chunk.
-      const pump = makeReaderPump(
-        mapReader(
-          /** @type {any} */ (
-            (async function* selected() {
-              const bytes = await readSelected();
-              if (bytes.length > 0) yield bytes;
-            })()
-          ),
-          encodeBase64,
-        ),
+      // Attenuated view: stream the selected bytes in reader-sized frames.
+      return bytesReaderFromIterator(byteChunks(readSelected())).stream(
+        /** @type {any} */ (synPromise),
       );
-      return pump(/** @type {any} */ (synPromise));
     },
     text: async () =>
       isFull
@@ -184,7 +175,7 @@ export const makeLocalBlob = (
     },
     help: method =>
       method === undefined
-        ? 'LocalBlob: read-only handle to a host file (bytes, byteRange, text, textRange, json, sha256, size, streamBase64).'
+        ? 'LocalBlob: read-only handle to a host file (bytes, byteRange, text, textRange, json, sha256, size, stream).'
         : `No documentation for method ${method}.`,
   };
 

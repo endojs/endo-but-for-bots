@@ -179,10 +179,11 @@ export const makeWorkerFacet = ({ cancel }) => {
        * @param {Record<string, string>} env
        */
       makeArchive: async (readableP, powersP, contextP, env) => {
-        // Stream the archive via the existing base64-encoded reader so
-        // we never hand a mutable Uint8Array across CapTP (which would
-        // be rejected by @endo/marshal).  Concatenate the chunks into
-        // a single Uint8Array for compartment-mapper.parseArchive.
+        // Stream the archive via the bytes reader so we never hand a
+        // mutable Uint8Array across CapTP (which would be rejected by
+        // @endo/marshal); each chunk crosses as an immutable byteArray.
+        // Concatenate the chunks into a single Uint8Array for
+        // compartment-mapper.parseArchive.
         /** @type {Uint8Array[]} */
         const chunks = [];
         let total = 0;

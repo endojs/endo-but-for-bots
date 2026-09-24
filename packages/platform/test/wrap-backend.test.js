@@ -349,7 +349,7 @@ test('collectBytes drains an OpenFile.read result', async t => {
   const oh2 = await E(file).open({ read: true });
   const reader = await E(oh2).read(0n, 17n);
   // collectBytes uses iterateBytesReader from @endo/exo-stream to
-  // decode the base64-encoded chunks the wire emits.
+  // thaw the passable byte-array chunks the wire emits.
   const bytes = await collectBytes(reader);
   await E(oh2).close();
   t.is(fromUtf8(bytes), 'streaming content');

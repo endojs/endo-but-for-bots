@@ -2,7 +2,7 @@
 /* eslint-disable no-await-in-loop */
 
 import { E } from '@endo/eventual-send';
-import { decodeBase64 } from '@endo/base64';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 import { M, mustMatch } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
@@ -19,7 +19,7 @@ const { freeze } = Object;
  * This is the Consumer for a bytes Reader: it initiates streaming and consumes
  * bytes from the remote Responder/Producer.
  *
- * Base64 strings are automatically decoded to bytes.
+ * Passable immutable byte arrays are copied into mutable local chunks.
  * Uses the bidirectional promise chain protocol for streaming with flow control.
  * When the initiator calls `return(value)` to close early, the final syn node
  * carries that argument value to the responder. If the responder is backed by a
@@ -28,10 +28,8 @@ const { freeze } = Object;
  * terminates with the original argument value.
  * With buffer > 0, nodes propagate via CapTP before I/O yields, keeping the responder busy.
  *
- * Calls streamBase64() on the responder, which allows future migration to direct
- * bytes transport when CapTP supports it. At that time, bytes-streamable Exos can
- * implement stream() directly, and initiators can gracefully transition to using
- * iterateReader() instead of iterateBytesReader().
+ * Calls the generic stream() method on the responder. The bytes-specific
+ * adapter owns the passability boundary.
  *
  * The interface implies Uint8Array yields. Only readReturnPattern can be customized.
  *
@@ -44,23 +42,26 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
   const {
     buffer = 0,
     readReturnPattern,
-    stringLengthLimit = undefined,
+    byteLengthLimit = undefined,
   } = options;
 
   // Create synchronize chain - we hold the resolver
   const { promise: synHead, resolve: initialSynResolve } = makePromiseKit();
   let synResolve = initialSynResolve;
+  /** @type {Promise<unknown>} */
+  let synTail = synHead;
 
   // Pre-resolve 'buffer' synchronize nodes to prime the pump
   for (let i = 0; i < buffer; i += 1) {
     const { promise, resolve } = makePromiseKit();
     synResolve(freeze({ value: undefined, promise }));
     synResolve = resolve;
+    synTail = promise;
   }
 
-  // Call streamBase64() - returns a promise for the acknowledge chain head
-  /** @type {Promise<StreamNode<string, TReadReturn>>} */
-  let nodePromise = E(bytesReaderRef).streamBase64(synHead);
+  // Call stream() - returns a promise for the acknowledge chain head
+  /** @type {Promise<StreamNode<Uint8Array, TReadReturn>>} */
+  let nodePromise = E(bytesReaderRef).stream(synHead);
 
   /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>> | null} */
   let terminalPromise = null;
@@ -78,10 +79,15 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
     }
   };
 
+  // Abort by rejecting the syn tail, as `iterateBytesWriter` does, so the
+  // responder can tell an abort from an early close.
   const fail = error => {
     if (!terminalPromise) {
       setTerminalError(error);
-      synResolve(freeze({ value: undefined, promise: null }));
+      // The rejection is delivered to the responder; locally it is expected.
+      synTail.catch(() => undefined);
+      nodePromise.catch(() => undefined);
+      synResolve(Promise.reject(error));
     }
     // terminalPromise is guaranteed to be set after setTerminalError
     return /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>>} */ (
@@ -112,13 +118,13 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         const { promise, resolve } = makePromiseKit();
         synResolve(freeze({ value: undefined, promise }));
         synResolve = resolve;
+        synTail = promise;
       }
 
       // Await the current node
       const node = await nodePromise;
 
-      // Extract value (base64 string)
-      const base64Value = await E.get(node).value;
+      const wireValue = await E.get(node).value;
 
       // Get the promise to next node - DON'T await, just access the property
       const nextPromiseOrNull = node.promise;
@@ -129,32 +135,28 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         // Validate return value if readReturnPattern provided
         if (readReturnPattern !== undefined) {
           try {
-            mustMatch(base64Value, readReturnPattern);
+            mustMatch(wireValue, readReturnPattern);
           } catch (error) {
             return fail(error);
           }
         }
-        setTerminalDone(base64Value);
+        setTerminalDone(wireValue);
         return /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>>} */ (
           /** @type {unknown} */ (terminalPromise)
         );
       }
 
-      // Validate yielded value (should be string for base64).
-      // Only pass limits when stringLengthLimit is defined, as M.string()
-      // requires numeric values in the limits object.
-      const stringPattern =
-        stringLengthLimit !== undefined
-          ? M.string({ stringLengthLimit })
-          : M.string();
+      const byteArrayPattern =
+        byteLengthLimit !== undefined
+          ? M.byteArray({ byteLengthLimit })
+          : M.byteArray();
       try {
-        mustMatch(base64Value, stringPattern);
+        mustMatch(wireValue, byteArrayPattern);
       } catch (error) {
         return fail(error);
       }
 
-      // Decode base64 to Uint8Array
-      const value = decodeBase64(/** @type {string} */ (base64Value));
+      const value = thawedBytes(/** @type {Uint8Array} */ (wireValue));
 
       // With pre-buffering, send sync AFTER consuming ack to maintain the pipeline
       if (preBufferRemaining > 0) {
@@ -162,12 +164,14 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         const { promise, resolve } = makePromiseKit();
         synResolve(freeze({ value: undefined, promise }));
         synResolve = resolve;
+        synTail = promise;
       }
 
       // Store the next node promise for next iteration
-      nodePromise = /** @type {Promise<StreamNode<string, TReadReturn>>} */ (
-        nextPromiseOrNull
-      );
+      nodePromise =
+        /** @type {Promise<StreamNode<Uint8Array, TReadReturn>>} */ (
+          nextPromiseOrNull
+        );
 
       return harden({ done: false, value });
     } catch (error) {
@@ -209,12 +213,7 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         },
 
         async throw(error) {
-          setTerminalError(error);
-          // Abort: signal close and propagate error
-          synResolve(freeze({ value: undefined, promise: null }));
-          return /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>>} */ (
-            /** @type {unknown} */ (terminalPromise)
-          );
+          return fail(error);
         },
 
         [Symbol.asyncIterator]() {

@@ -62,6 +62,16 @@ test('LocalBlob bytes and byteRange read the selected bytes', async t => {
   t.is(await E(await E(blob).byteRange(100n, 104n)).text(), '');
 });
 
+test('LocalBlob byteRange streams a large selection in reader-sized frames', async t => {
+  // 200_000 bytes exceeds the default 100_000-byte `M.byteArray()` reader
+  // limit, so the selection must arrive as several frames.
+  const payload = new Uint8Array(250_000).map((_, i) => i % 251);
+  const blob = makeLocalBlob(makeTemporaryFile(t, payload));
+  const range = await E(blob).byteRange(0n, 200_000n);
+  const bytes = await collectBytes(range);
+  t.deepEqual(bytes, payload.subarray(0, 200_000));
+});
+
 test('LocalBlob still exposes the whole-value surface', async t => {
   const blob = makeLocalBlob(makeTemporaryFile(t, '{"k":1}'));
   t.is(await E(blob).text(), '{"k":1}');
@@ -79,7 +89,7 @@ test('LocalBlob exposes only the rich public ReadableBlob Exo surface', async t 
     'json',
     'sha256',
     'size',
-    'streamBase64',
+    'stream',
     'text',
     'textRange',
   ]);
@@ -176,7 +186,7 @@ test('LocalBlob.byteRange reflects live file changes; a snapshot does not', asyn
   t.is(await E(suffix).text(), 'globe');
 });
 
-test('LocalBlob.streamBase64 confines an attenuated view to its selected bytes', async t => {
+test('LocalBlob.stream confines an attenuated view to its selected bytes', async t => {
   const payload = 'hello world\n'; // 12 bytes
   const blob = makeLocalBlob(makeTemporaryFile(t, payload));
   // The unattenuated blob streams the whole file straight off disk.

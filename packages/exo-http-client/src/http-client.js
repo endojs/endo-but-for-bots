@@ -52,7 +52,7 @@ const DEFAULT_AUDIT_LIMIT = 1024;
 const DEFAULT_BINDING_LIMIT = 1024;
 
 /**
- * Chunk size for `HttpResponse.stream()`. The already-bounded body is hauled
+ * Chunk size for `HttpResponse.body()`. The already-bounded body is hauled
  * over CapTP in fixed-size frames rather than as one string; the value trades
  * per-frame overhead against memory residency and is not security-relevant
  * (the response byte cap is enforced upstream by the confinement).
@@ -124,7 +124,7 @@ export const HttpResponseInterface = M.interface('HttpResponse', {
   maxResponseBytes: M.call().returns(M.number()),
   text: M.callWhen().returns(M.string()),
   json: M.callWhen().returns(M.any()),
-  stream: M.call().returns(M.remotable('PassableBytesReader')),
+  body: M.call().returns(M.remotable('PassableBytesReader')),
   help: M.call().returns(M.string()),
 });
 
@@ -166,10 +166,10 @@ const httpResponseHelp = `\
 HttpResponse - A bounded HTTP response.
 
 Use status(), headers(), text(), json(), and truncated() to inspect the response.
-Use stream() to consume the body incrementally as an @endo/exo-stream bytes
+Use body() to consume the body incrementally as an @endo/exo-stream bytes
 reader (haul it with iterateBytesReader) instead of buffering the whole body as
 one string. The body is already capped by the HttpClient's maxResponseBytes
-setting, so a stream cannot exceed that bound.`;
+setting, so a body stream cannot exceed that bound.`;
 
 const httpClientControlHelp = `\
 HttpClientControl - The host-side companion to an HttpClient.
@@ -601,11 +601,11 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
   const text = new TextDecoder().decode(bytes);
 
   /**
-   * Yield the already-bounded body in fixed-size chunks so `stream()` hauls it
-   * over CapTP incrementally (base64-framed with flow control) instead of
-   * returning the whole body as one string. A fresh generator per `stream()`
+   * Yield the already-bounded body in fixed-size chunks so `body()` hauls it
+   * over CapTP incrementally (as byteArrays with flow control) instead of
+   * returning the whole body as one value. A fresh generator per `body()`
    * call keeps each reader independent of `text()`/`json()` and of any other
-   * concurrent `stream()` reader over the same response.
+   * concurrent `body()` reader over the same response.
    */
   const chunkBody = async function* chunkBody() {
     await null;
@@ -639,7 +639,7 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
         throw err;
       }
     },
-    stream: () => bytesReaderFromIterator(chunkBody()),
+    body: () => bytesReaderFromIterator(chunkBody()),
     help: () => httpResponseHelp,
   });
 };

@@ -13,16 +13,22 @@ From `@endo/daemon/reader-ref.js` (REMOVED):
 - `makeIteratorRef(iterable)` to `FarRef<Reader<T>>` -
   Wrap local iterator as remote reference
 - `makeReaderRef(readable)` to `FarRef<Reader<string>>` -
-  Wrap local bytes iterator, encode to base64
+  Wrap local bytes iterator as passable byte arrays
   (now `PassableBytesReader`)
 
 From `@endo/daemon/ref-reader.js` (REMOVED):
 - `makeRefIterator(iteratorRef)` to `AsyncIterableIterator<T>` -
   Wrap remote iterator as local
 - `makeRefReader(readerRef)` to `AsyncIterableIterator<Uint8Array>` -
-  Wrap remote bytes iterator, decode from base64
+  Wrap remote passable byte arrays as mutable local chunks
 
 ### New API in `@endo/exo-stream`
+
+The new API pipelines bidirectional promise chains: with `buffer > 0`, chain
+nodes propagate over CapTP before the event loop yields to I/O, keeping the
+responder busy. Each function is imported from its own module (there is no
+barrel export). The initiator-side `iterate*` functions return their iterator
+synchronously, not in a promise, and accept `buffer` and pattern options.
 
 #### Readers (data flows responder to initiator)
 
@@ -38,63 +44,19 @@ From `@endo/daemon/ref-reader.js` (REMOVED):
 | `writerFromIterator(iterator)` | `writer-from-iterator.js` | Returns `PassableWriter` Exo with `stream()` method |
 | `iterateWriter(writerRef, options?)` | `iterate-writer.js` | Returns a local writer iterator; use `next(value)` to send and `return()` to close |
 
-#### Bytes Readers (base64 encoding over CapTP)
+#### Bytes Readers (passable byte arrays over CapTP)
 
 | Old Function | New Function | Module | Notes |
 |---|---|---|---|
-| `makeReaderRef(readable)` | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `streamBase64()` method |
+| `makeReaderRef(readable)` | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `stream()` method |
 | `makeRefReader(readerRef)` | `iterateBytesReader(readerRef)` | `iterate-bytes-reader.js` | Synchronous; returns `AsyncIterableIterator<Uint8Array>` |
 
-#### Bytes Writers (base64 encoding over CapTP)
+#### Bytes Writers (passable byte arrays over CapTP)
 
 | New Function | Module | Notes |
 |---|---|---|
-| `bytesWriterFromIterator(iterator)` | `bytes-writer-from-iterator.js` | Returns `PassableBytesWriter` Exo with `streamBase64()` method |
+| `bytesWriterFromIterator(iterator)` | `bytes-writer-from-iterator.js` | Returns `PassableBytesWriter` Exo with `stream()` method |
 | `iterateBytesWriter(writerRef, options?)` | `iterate-bytes-writer.js` | Returns a local bytes writer iterator; use `next(chunk)` to send and `return()` to close |
-
-### Key Differences
-
-1. **New protocol**: The new API uses bidirectional promise chains.
-   The initiator sends synchronizes to induce the responder to send
-   data.
-   Unlike naive protocols that require a method invocation to cause
-   progress, with buffer > 0, promise chain nodes propagate via CapTP
-   before the event loop yields to I/O, keeping the responder busy
-   while the initiator processes values.
-
-2. **Import paths**: No barrel exports; each function imported from
-   its own module:
-   ```javascript
-   // Readers
-   import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
-   import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-
-   // Writers
-   import { writerFromIterator } from '@endo/exo-stream/writer-from-iterator.js';
-   import { iterateWriter } from '@endo/exo-stream/iterate-writer.js';
-
-   // Bytes Readers
-   import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-   import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
-
-   // Bytes Writers
-   import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
-   import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
-   ```
-
-3. **Synchronous consumer functions**: `iterateReader` and
-   `iterateBytesReader` return `AsyncIterableIterator` directly (not
-   wrapped in a Promise).
-
-4. **New options**: Consumer functions accept options for buffering
-   and pattern validation:
-   ```javascript
-   import { M } from '@endo/patterns';
-   const reader = iterateReader(readerRef, {
-     buffer: 3,
-     readPattern: M.number(),
-   });
-   ```
 
 ## Migration Examples
 

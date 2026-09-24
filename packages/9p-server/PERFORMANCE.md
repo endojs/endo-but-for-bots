@@ -10,6 +10,16 @@
 Every file path and line number below refers to the tree at that commit.
 Line numbers drift; the commit is the basis.
 
+Note (2026-09-24): the measurements and analysis predate the byte-stream
+change (endojs/endo-but-for-bots#1100), which replaced `streamBase64` with a
+single `stream` method carrying raw bytes.
+Where this document describes base64 chunks, base64 encode/decode cost on the
+`Twrite`/`Tread` path, or `base64LimitFor` (removed; the 9P server now passes
+the requested byte count as `byteLengthLimit` directly), read it as a
+description of the tree at the commit above.
+The per-byte cost on that path is now the marshal encoding that
+`packages/exo-stream/BENCH.md` measures.
+
 This document maps the whole path a file operation takes from a process inside
 an `@endo/sandbox` podman slice to the bytes on the host, names what each layer
 contributes to latency and throughput today, and lists what could be changed at
@@ -159,8 +169,8 @@ backend then does, where each `confine` is a `realpath` walk
 | `Tgetattr`                    | `getAttrs()`                                     | 1   | confine + `stat`, confine + `stat`            | `server.js:672`, `wrap-backend.js:591-602` |
 | `Tlopen` (file)               | `open()`                                         | 1   | confine + `stat` (+ `truncate`)               | `server.js:559`, `wrap-backend.js:681-704` |
 | `Tlopen` (dir)                | `list()`                                         | 1   | none (cursor is lazy)                         | `server.js:545`          |
-| `Tread`                       | `read()`, then `streamBase64()` + 2 stream nodes | 2   | confine + `open` + `pread` + `close`          | `server.js:611-640`, `node-fs-backend.js:136-164` |
-| `Twrite`                      | `write()`, then `streamBase64()` + 1 syn + terminal ack | 2 | confine + `open` + `pwrite` + `close`    | `server.js:913-922`, `node-fs-backend.js:166-197` |
+| `Tread`                       | `read()`, then `stream()` + 2 stream nodes | 2   | confine + `open` + `pread` + `close`          | `server.js:611-640`, `node-fs-backend.js:136-164` |
+| `Twrite`                      | `write()`, then `stream()` + 1 syn + terminal ack | 2 | confine + `open` + `pwrite` + `close`    | `server.js:913-922`, `node-fs-backend.js:166-197` |
 | `Treaddir` (first on a fid)   | `stream()` + one node per entry                  | ≈ N/64 | confine + `readdir`                        | `server.js:733-734`      |
 | `Tlcreate`                    | `create()`, then `lookup()` + `getQid()`         | 2   | confine + `open(wx)`; confine + `stat`        | `server.js:853-858`      |
 | `Tmkdir`                      | `mkdir()` + `getQid()`                           | 1   | confine + `stat` + `mkdir`                    | `server.js:943-944`      |
@@ -689,7 +699,7 @@ used for every workspace and config mount.
 `Mount` caps and `EndoGit` worktrees
 (`container-mount-bridge.js:182-196`).
 
-- `read(path, offset, length)` fetches the whole file over `streamBase64`
+- `read(path, offset, length)` fetches the whole file over `stream`
   and slices (`:209-221`); a sequential read of an F-byte file costs
   F²/msize bytes of base64 through the daemon.
 - `write` reads the whole file, patches, and rewrites it (`:228-254`); a
@@ -700,7 +710,7 @@ used for every workspace and config mount.
 
 | Option                                                                                                    | Effect                                                            | Effort | Risk                                                          |
 | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------ | ------------------------------------------------------------- |
-| Add ranged read and write to the daemon `Mount`/`MountFile` (offset and length on `streamBase64`, a positional write) and use them here | Attached caps get linear I/O | M | Daemon API addition |
+| Add ranged read and write to the daemon `Mount`/`MountFile` (offset and length on `stream`, a positional write) and use them here | Attached caps get linear I/O | M | Daemon API addition |
 | Project an `EndoGit` worktree as a node-fs `Filesystem` over its directory instead of through `Mount`    | The worktree is a host directory; this removes the daemon hop and the whole-file I/O | S | Must keep the read-only attenuation a read-only git yields (`container-mount-bridge.js:182-187`) |
 | Return `kind` in `Mount.list()` entries                                                                   | `list` becomes one message                                        | S      | Daemon API addition                                           |
 

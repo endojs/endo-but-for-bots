@@ -6,7 +6,7 @@
  * TypeScript source.
  *
  * Every type in the rendered declaration comes from a checked type source:
- * `HttpResponse.stream()` returns
+ * `HttpResponse.body()` returns
  * `import('@endo/exo-stream').PassableBytesReader`, which the shared extractor
  * (`code-mode-type-extract.js`) follows into `@endo/exo-stream`'s own
  * `types.d.ts` along with the stream-node types it reaches. The types those

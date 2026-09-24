@@ -19,12 +19,22 @@ import { makeExo } from '@endo/exo';
 import { makeError, X, q } from '@endo/errors';
 
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { XattrsInterface } from '../type-guards.js';
+import { makeBufferedBytesWriter } from './buffered-bytes-writer.js';
 
 /** @import { Xattrs } from '../types.js' */
+
+/**
+ * Byte bound for the `set(name)` writer sink, enforced both per frame and on
+ * the running total across all frames of one `set`.
+ * Matches Linux `XATTR_SIZE_MAX` (64 KiB), the largest value a single
+ * extended attribute may hold, so no legitimate value exceeds it.
+ * Without an explicit bound `bytesWriterFromIterator` admits frames up to
+ * `Number.MAX_SAFE_INTEGER` bytes.
+ */
+const XATTR_FRAME_BYTE_LENGTH_LIMIT = 64 * 1024;
 
 /**
  * @param {object} opts
@@ -70,33 +80,15 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
     async set(name) {
       assertUserNamespace(name);
       const m = ensureMap();
-      /** @type {Uint8Array[]} */
-      const chunks = [];
-      const sink = {
-        async next(chunk) {
-          if (chunk instanceof Uint8Array && chunk.length !== 0) {
-            chunks.push(chunk);
-          }
-          return { done: false, value: undefined };
-        },
-        async return(value) {
-          let total = 0;
-          for (const c of chunks) total += c.length;
-          const merged = new Uint8Array(total);
-          let p = 0;
-          for (const c of chunks) {
-            merged.set(c, p);
-            p += c.length;
-          }
+      return makeBufferedBytesWriter({
+        label: `xattr ${JSON.stringify(name)} value`,
+        frameByteLengthLimit: XATTR_FRAME_BYTE_LENGTH_LIMIT,
+        totalByteLengthLimit: XATTR_FRAME_BYTE_LENGTH_LIMIT,
+        commit: merged => {
           m.set(name, merged);
           fireLocal(path, { kind: 'changed' });
-          return { done: true, value };
         },
-        [Symbol.asyncIterator]() {
-          return sink;
-        },
-      };
-      return bytesWriterFromIterator(sink);
+      });
     },
     async list() {
       const m = xattrTable.get(key);

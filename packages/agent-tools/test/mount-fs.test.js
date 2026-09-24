@@ -1,7 +1,6 @@
 // @ts-check
 
 // Establish a SES perimeter (provides the `harden` global).
-// eslint-disable-next-line import/order
 import '@endo/init/debug.js';
 
 /** @import { ExecutionContext } from 'ava' */
@@ -12,8 +11,8 @@ import test from 'ava';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-import { Buffer } from 'buffer';
 import { E } from '@endo/eventual-send';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { Far } from '@endo/pass-style';
 
 import {
@@ -50,9 +49,9 @@ const makeTempRoot = t => {
  */
 const makeFakeBytesReader = bytes =>
   Far('FakeBytesReader', {
-    streamBase64() {
+    stream() {
       return harden({
-        value: Buffer.from(bytes).toString('base64'),
+        value: frozenBytes(bytes),
         promise: Promise.resolve(harden({ value: undefined, promise: null })),
       });
     },

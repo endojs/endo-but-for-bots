@@ -13,7 +13,6 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { makeError, q, X } from '@endo/errors';
 import { ZipWriter } from '@endo/zip/writer.js';
 import { encodeBase64 } from '@endo/base64';
-import { mapReader } from '@endo/stream';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import {
@@ -39,7 +38,6 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import {
   tarFileHeader,
   tarFilePadding,
@@ -424,6 +422,26 @@ const compareMessageNames = (left, right) => {
   }
   return BigInt(left) < BigInt(right) ? -1 : 1;
 };
+
+/**
+ * Per-frame raw-byte bound for readable-blob uploads, higher than the
+ * `iterateBytesReader` default to accommodate large payloads like bundles.
+ * 7_500_000 bytes preserves the prior bound of 10_000_000 base64 characters
+ * (about 7.5 MB of binary) per frame.
+ */
+export const READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT = 7_500_000;
+
+/**
+ * Drains a remote bytes reader for a readable-blob upload, rejecting any frame
+ * larger than `READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT`.
+ * `formulateReadableBlob` feeds the returned iterator to the content store.
+ *
+ * @param {Parameters<typeof iterateBytesReader>[0]} readerRef
+ */
+export const iterateReadableBlobUpload = readerRef =>
+  iterateBytesReader(readerRef, {
+    byteLengthLimit: READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT,
+  });
 
 /** @type {PetName} */
 const PROMISE_STATUS_NAME = /** @type {PetName} */ ('status');
@@ -2017,26 +2035,21 @@ const makeDaemonCore = async (
      */
     const readableBlobMethods = {
       /** @param {ERef<unknown>} synPromise */
-      streamBase64(synPromise) {
+      stream(synPromise) {
         if (isFull) {
-          const pump = makeReaderPump(
-            mapReader(makeFileReader(), encodeBase64),
+          return bytesReaderFromIterator(makeFileReader()).stream(
+            /** @type {any} */ (synPromise),
           );
-          return pump(/** @type {any} */ (synPromise));
         }
-        // Attenuated view: stream the selected bytes as one base64 chunk.
-        const pump = makeReaderPump(
-          mapReader(
-            /** @type {any} */ (
-              (async function* selected() {
-                const bytes = await readSelected();
-                if (bytes.length > 0) yield bytes;
-              })()
-            ),
-            encodeBase64,
+        // Attenuated view: stream the selected bytes as one chunk.
+        return bytesReaderFromIterator(
+          /** @type {any} */ (
+            (async function* selected() {
+              const bytes = await readSelected();
+              if (bytes.length > 0) yield bytes;
+            })()
           ),
-        );
-        return pump(/** @type {any} */ (synPromise));
+        ).stream(/** @type {any} */ (synPromise));
       },
       text: isFull ? text : async () => decodeUtf8(await readSelected()),
       json: isFull
@@ -2460,7 +2473,7 @@ const makeDaemonCore = async (
 
   /**
    * Wrap an in-memory Uint8Array as a transient blob exo that
-   * implements the `EndoBlob` surface (sha256 / streamBase64 / text
+   * implements the `EndoBlob` surface (sha256 / stream / text
    * / json) just well enough for the worker's `makeArchive` method
    * to consume it.  The blob is not persisted in CAS — its lifetime
    * is the duration of the eventual-send.
@@ -2496,14 +2509,10 @@ const makeDaemonCore = async (
         /** @type {any} */ ({
           help: () => 'Transient in-memory blob',
           /** @param {ERef<unknown>} synPromise */
-          streamBase64(synPromise) {
-            const pump = makeReaderPump(
-              mapReader(
-                /** @type {any} */ ([view][Symbol.iterator]()),
-                encodeBase64,
-              ),
+          stream(synPromise) {
+            return bytesReaderFromIterator([view]).stream(
+              /** @type {any} */ (synPromise),
             );
-            return pump(/** @type {any} */ (synPromise));
           },
           text: async () => decodeUtf8(view),
           json: async () => JSON.parse(decodeUtf8(view)),
@@ -4852,13 +4861,9 @@ const makeDaemonCore = async (
           await randomHex256()
         );
         const contentSha256 = await contentStore.store(
-          // Use a higher string length limit to accommodate large
-          // payloads like bundles. 10MB base64 ~= 7.5MB binary.
-          // `iterateBytesReader` returns the iterator synchronously; the
-          // store consumes it, so no `await` here.
-          iterateBytesReader(readerRef, {
-            stringLengthLimit: 10_000_000,
-          }),
+          // `iterateReadableBlobUpload` returns the iterator synchronously;
+          // the store consumes it, so no `await` here.
+          iterateReadableBlobUpload(readerRef),
         );
 
         await deferredTasks.execute({

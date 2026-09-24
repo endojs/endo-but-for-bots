@@ -103,7 +103,7 @@ export const helpTextEntries = harden([
         'define(source, slots) -> Promise<any>\nPropose code with named capability slots for the host to endow.\nThe guest specifies code and named slots with descriptions.\nThe host sees the code and slot descriptions, then decides which capabilities\nto provide for each slot using the endow() command.\n\n- source: JavaScript code to evaluate\n- slots: Record of slot descriptions, e.g. { counter: { label: "A counter to increment" } }\n\nThe host reviews the code and slots, then calls endow() to bind capabilities\nand trigger evaluation. This separates code proposal from capability binding.\n\nExample: define("E(counter).incr()", { counter: { label: "A counter capability" } })',
       form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name of the recipient (e.g., "@host")\n- description: Human-readable description of the form\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Your name" }])',
       storeBlob:
-        'storeBlob(readerRef, petName?) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',
+        'storeBlob(readerRef, petName?) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: A PassableBytesReader (a remotable whose stream() yields immutable Uint8Array chunks)\n- petName: Name to store the blob under\nReturns a readable blob reference.',
       storeValue:
         'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) in your directory.\n- storeValue(42, "answer") stores the number 42 as "answer"\n- storeValue({x: 1, y: 2}, "point") stores a record as "point"\n- storeValue(["a", "b"], ["subdir", "items"]) stores in a subdirectory\nValues must be passable (no functions or non-transferable objects).',
       submit:
@@ -128,7 +128,7 @@ export const helpTextEntries = harden([
       '': 'EndoHost - A privileged agent with full Endo capabilities.\n\nA host has all guest capabilities plus:\n- Create workers for running code\n- Evaluate JavaScript code\n- Create confined guests\n- Store blobs and values\n- Make unconfined or bundled caplets\n- Manage network peers\n- Manage secret blobs through `@secrets` without revealing them in inventory\n\n`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are management\nfacets on the daemon\'s root host only; a host made with provideHost does not\ncarry `@secrets`.\nCreated read capabilities are bound beneath the ordinary `secrets` directory.\nPrefer endowing a formula with a secret capability instead of calling its\n`readBase64()` method in an agent session.\n\nUse help("methodName") for details on specific methods.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the host capabilities\n- help("evaluate") returns documentation for code evaluation',
       storeBlob:
-        'storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',
+        'storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: A PassableBytesReader (a remotable whose stream() yields immutable Uint8Array chunks)\n- petName: Name to store the blob under\nReturns a readable blob reference.',
       storeValue:
         'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
       provideGuest:
@@ -185,15 +185,15 @@ export const helpTextEntries = harden([
   [
     'EndoReadable',
     {
-      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstreamBase64() for base64 streaming, bytes() for byte streaming,\nor byteRange() / textRange() for attenuation.',
+      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstream() to stream immutable byte-array chunks, bytes() for a\nPassableBytesReader over the selected bytes,\nor byteRange() / textRange() for attenuation.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       sha256:
         'sha256() -> Promise<string>\nReturn the SHA-256 digest of the selected bytes as base64.',
       size: 'size() -> Promise<bigint>\nReturn the selected byte length.',
       bytes:
         'bytes() -> Promise<PassableBytesReader>\nStream all selected bytes.',
-      streamBase64:
-        'streamBase64(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
+      stream:
+        'stream(syndicationPromise) -> Promise\nStream the blob content as immutable byte-array chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
       text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
       json: 'json() -> Promise<any>\nRead and parse the blob as JSON.',
       byteRange:
@@ -236,10 +236,10 @@ export const helpTextEntries = harden([
       sha256:
         "sha256() -> string\nThe content address of the tree's manifest, as base64.",
       size: "size() -> Promise<bigint>\nReturn the byte length of the tree's own manifest.",
-      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
-      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
+      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
+      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [
@@ -286,7 +286,7 @@ export const helpTextEntries = harden([
   [
     'EndoMountFile',
     {
-      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and read it with sha256() / size() / bytes(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
+      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / stream(),\ninspect and read it with sha256() / size() / bytes(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       kind: 'kind() -> "file"\nReturn the structural kind of this lookup result.',
       list: 'list() -> never\nNot available on a file.\nUse text() to read its contents.',
@@ -300,8 +300,8 @@ export const helpTextEntries = harden([
       textRange:
         "textRange(startLine, endLine) -> Promise<ReadableBlobView>\nAttenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,\nCRLF preserved) of the live file's current bytes.\nReturns a read-only ReadableBlob view over the corresponding byte slice; it\nreads bytes to find the line boundaries, so it resolves asynchronously.",
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
-      streamBase64:
-        'streamBase64(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
+      stream:
+        'stream(syndicationPromise) -> Promise\nStream the file content as immutable byte-array chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
       json: 'json() -> Promise<any>\nRead and parse the file as JSON.',
       writeText:
         'writeText(content) -> Promise<void>\nWrite a string to the file. Throws if read-only.',
@@ -310,7 +310,7 @@ export const helpTextEntries = harden([
       writeBytes:
         'writeBytes(readableRef) -> Promise<void>\nWrite bytes from an async iterator. Throws if read-only.',
       readOnly:
-        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, streamBase64, sha256,\nsize, bytes) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
+        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, stream, sha256,\nsize, bytes) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
     },
   ],
 ]);

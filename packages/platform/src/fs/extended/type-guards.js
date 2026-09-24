@@ -339,10 +339,9 @@ harden(CursorInterface);
 
 export const OpenFileInterface = M.interface('OpenFile', {
   // `read(offset, length)` returns a `PassableBytesReader` over the
-  // requested slice. CapTP marshalling rejects raw mutable typed
-  // arrays, so the wire shape stays a base64-streamed reader —
-  // single-RTT pipelining via E gets the same effective cost as a
-  // bare bytes return; see designs/endo-fs-backend-seam.md
+  // requested slice, the same return shape as every other byte source
+  // here. Single-RTT pipelining via E gets the same effective cost as a
+  // bare frozen byte-array return; see designs/endo-fs-backend-seam.md
   // "Design deviation". Both args optional so a 0-arg call is a
   // "from cursor to EOF" probe.
   read: M.callWhen()
@@ -398,9 +397,9 @@ harden(NodeWatcherInterface);
  *
  * `text()` / `json()` are whole-value conveniences mirroring the daemon
  * `EndoBlob` / lite `SnapshotBlob` surface, so a `BlobRef` and a daemon blob
- * are mutually interchangeable for the common read shapes. `streamBase64`
+ * are mutually interchangeable for the common read shapes. `stream`
  * stays daemon-only; the extended layer streams via `bytes()`
- * rather than the CapTP base64 pump. See
+ * rather than the daemon-side `stream` pump. See
  * designs/fs-interface-consolidation.md § C4.
  */
 export const BlobRefInterface = M.interface('BlobRef', {
