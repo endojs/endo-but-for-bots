@@ -612,14 +612,13 @@ test('hosted provisioning receives the session delegation and account catalog', 
     'test prompt',
     {
       spawner: harden({}),
-      accountOracle: harden({
-        getPlan: () =>
-          harden({ title: 'Test', source: 'declared', observedAt: '' }),
-        getRateLimits: () =>
-          harden({ windows: [], source: 'unavailable', observedAt: '' }),
-        getRateCard: () =>
-          harden({ rates: [], source: 'unavailable', observedAt: '' }),
-      }),
+      readAccounts: async () =>
+        harden({
+          accounts: [],
+          complete: true,
+          selection: 'eligible-accounts',
+          costUnavailable: 'No per-account usage attribution.',
+        }),
     },
   );
   t.teardown(() => agent.shutdown());

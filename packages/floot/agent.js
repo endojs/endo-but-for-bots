@@ -43,17 +43,14 @@ import {
   makeOpenRouterModelRead,
   modelsFromOpenRouterCatalog,
 } from '@endo/hosted-agent/openrouter-model-read.js';
-import {
-  addUsage,
-  priceableUsage,
-  projectUsage,
-} from '@endo/hosted-agent/token-usage.js';
+import { addUsage, projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
 import { discoverAccounts } from './src/account-discovery.js';
+import { readSessionAccounts } from './src/session-account.js';
 import { assertRuntimeConfig } from './src/runtime-config.js';
 import {
   assertSessionIdentity,
@@ -476,11 +473,9 @@ const provisionPresetObjects = async (
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
  *   session at the delegation bound, which withholds the subagent tools.
- * @param {any} [options.accountOracle] - A read-only `HostedAccount`. Absent
- *   when the deployment has provisioned no oracle, which withholds
- *   `accountStatus`.
- * @param {string} [options.modelId] - The model this session runs, used to
- *   price its usage.
+ * @param {(refresh?: boolean) => Promise<any>} [options.readAccounts] - Current
+ *   explicitly published configured accounts; no reset authority.
+ * @param {string} [options.modelId] - The model this session runs.
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
@@ -526,7 +521,7 @@ export const makeStreamingAgent = async (
   systemPrompt,
   {
     spawner,
-    accountOracle,
+    readAccounts,
     modelId,
     backendId,
     nativeContextFormat,
@@ -735,13 +730,13 @@ export const makeStreamingAgent = async (
     settledMail,
     ...(extraTools ? { extraTools } : {}),
     ...(spawner ? { spawner, delegations } : {}),
-    ...(accountOracle
+    ...(readAccounts
       ? {
-          accountOracle,
-          // The oracle prices what this session actually spent, so the tool
-          // reads the same totals the UI shows rather than a second tally.
-          getUsage: () => getUsage(),
-          getModelId: () => modelId || '',
+          readAccounts: async refresh =>
+            harden({
+              ...(await readAccounts(refresh)),
+              usage: await getUsage(),
+            }),
         }
       : {}),
   });
@@ -3953,7 +3948,6 @@ export const make = async (
         // spawner is rebuilt on every revival rather than persisted, so the
         // durable record of the tree is the session registry alone.
         const sessionDepth = Number(entry?.subagentDepth) || 0;
-        const oracle = await getAccountOracle();
         const agent = await makeStreamingAgent(
           sessionGuest,
           undefined,
@@ -4001,9 +3995,10 @@ export const make = async (
             ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),
-            ...(oracle
-              ? { accountOracle: oracle, modelId: await sessionModelId(entry) }
-              : {}),
+            readAccounts: async refresh => {
+              const current = await assertSessionReady(id);
+              return readSessionAccounts(powers, current, refresh);
+            },
           }),
         );
         constructedAgent = agent;
@@ -4423,43 +4418,28 @@ export const make = async (
           return agent.getUsage();
         },
         /**
-         * This session's share of the account: the deployment-wide plan and
-         * rate limits, plus what this conversation has spent at the current
-         * list price. Reported per session because that is the granularity a
-         * user asks about ("what is this chat costing?").
+         * Explicit configured accounts, not attribution of past usage.
+         * Session totals have no per-account billing provenance.
          *
          * @param {boolean} [refresh]
          */
         async getAccount(refresh) {
           const entry = await assertSessionReady(id);
-          const oracle = await getAccountOracle();
-          if (!oracle) {
-            return harden({
-              available: false,
-              reason: `No account oracle is bound to "${accountOracleName}".`,
-            });
-          }
-          if (refresh) await E(oracle).refresh();
-          const agent = await getAgent(id, { observeOnly: true });
-          const [plan, rateLimits, rateCard, usage] = await Promise.all([
-            E(oracle).getPlan(),
-            E(oracle).getRateLimits(),
-            E(oracle).getRateCard(),
-            agent.getUsage(),
-          ]);
-          const modelId = await sessionModelId(entry);
-          const cost = modelId
-            ? await E(oracle).estimateCost(
-                harden({ modelId, ...priceableUsage(usage) }),
-              )
+          const accounts = await readSessionAccounts(powers, entry, refresh);
+          await assertSessionReady(id);
+          const existingAgent = agents.get(id);
+          const usage = existingAgent
+            ? await (await existingAgent).getUsage()
             : undefined;
+          await assertSessionReady(id);
           return harden({
-            available: true,
-            plan,
-            rateLimits,
-            rateCard,
-            usage,
-            ...(cost ? { cost } : {}),
+            ...accounts,
+            ...(usage === undefined
+              ? {
+                  usageUnavailable:
+                    'Session is not open; account inspection does not open an agent or acquire a backend.',
+                }
+              : { usage }),
           });
         },
         help(methodName) {
@@ -4501,7 +4481,7 @@ export const make = async (
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, turns, incompleteTurns, context? } — the five counts are disjoint (a token is in exactly one) and include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; `context` is { usedTokens, windowTokens }, what the last model request put in the model’s window and the window’s size (0 when the backend does not say), also published by watch() as "usage"; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, turns, incompleteTurns, context? } — the five counts are disjoint (a token is in exactly one) and include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; `context` is { usedTokens, windowTokens }, what the last model request put in the model’s window and the window’s size (0 when the backend does not say), also published by watch() as "usage"; getAccount(refresh?) returns configured accounts and quotas, discovery completeness, and optional unattributed usage for an already-open session (otherwise usageUnavailable); it does not open a backend, identify the payer, or estimate aggregate cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);

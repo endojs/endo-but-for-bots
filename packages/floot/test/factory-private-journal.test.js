@@ -9,7 +9,7 @@ import { makePromiseKit } from './_promise-kit.js';
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ existing?: boolean, schema?: boolean,
+ * @param {{ existing?: boolean, schema?: boolean, stopped?: boolean,
  *   beforeStore?: (value: any, name: string) => Promise<void>,
  *   afterStore?: (value: any, name: string) => Promise<void>,
  *   beforeRemove?: (name: string) => Promise<void>,
@@ -20,6 +20,7 @@ const makeWorld = (
   {
     existing = true,
     schema = true,
+    stopped = false,
     beforeStore = async () => {},
     afterStore = async () => {},
     beforeRemove = async () => {},
@@ -112,6 +113,7 @@ const makeWorld = (
                   systemPrompt: 'Captured fixture prompt.',
                   presetId: 'general',
                   lifecycle: 'ready',
+                  ...(stopped ? { executionState: 'stopped' } : {}),
                   backendId: 'test',
                   modelId: 'm',
                 },
@@ -200,13 +202,32 @@ test('an admitted account read cannot recreate a journal while deletion is retir
   });
   const session = await E(world.factory).getSession('one');
   await E(session).getTurns();
+  const oracle = Far('HeldOracle', {
+    refresh: async () => {
+      refreshEntered.resolve(undefined);
+      await releaseRefresh.promise;
+    },
+    getPlan: () => harden({}),
+    getRateLimits: () => harden({}),
+    getRateCard: () => harden({}),
+  });
   world.hostStore.set(
-    'account-oracle',
-    Far('HeldOracle', {
-      refresh: async () => {
-        refreshEntered.resolve(undefined);
-        await releaseRefresh.promise;
-      },
+    'account-bindings',
+    Far('AccountBindings', {
+      list: () => harden(['arbitrary-source']),
+      lookup: () =>
+        harden({
+          version: 1,
+          accounts: [
+            {
+              accountId: 'test-account',
+              providerId: 'test-provider',
+              title: 'Test',
+              oracle,
+              uses: [{ backendId: 'test' }],
+            },
+          ],
+        }),
     }),
   );
   const reading = E(session).getAccount(true);
@@ -218,11 +239,77 @@ test('an admitted account read cannot recreate a journal while deletion is retir
   const before = world.counts();
   releaseRefresh.resolve(undefined);
   await t.throwsAsync(reading, {
-    message: /cannot open an incarnation during or after deletion/,
+    message: /not operable while lifecycle is deleting/,
   });
   t.deepEqual(world.counts(), before);
   releaseRemoval.resolve(undefined);
   await deleting;
+});
+
+test('session account reporting follows explicit backend publications, never the factory oracle', async t => {
+  // A stopped entry does not undergo background startup reconstruction.
+  const world = makeWorld(t, { stopped: true });
+  world.hostStore.set(
+    'account-oracle',
+    Far('WrongDirectOracle', {
+      getPlan: () => {
+        throw Error('Wrong account selected');
+      },
+    }),
+  );
+  const makeBinding = accountId =>
+    harden({
+      version: 1,
+      accounts: [
+        {
+          accountId,
+          providerId: 'test-provider',
+          title: accountId,
+          oracle: Far('SessionOracle', {
+            getPlan: () => harden({ title: accountId }),
+            getRateLimits: () => harden({ windows: [] }),
+            getRateCard: () => harden({ rates: [] }),
+            estimateCost: () => {
+              throw Error('No billing attribution');
+            },
+          }),
+          uses: [{ backendId: 'test' }],
+        },
+      ],
+    });
+  let binding = makeBinding('first');
+  world.hostStore.set(
+    'account-bindings',
+    Far('SessionBindings', {
+      list: () => harden(['unrelated-petname']),
+      lookup: () => binding,
+    }),
+  );
+  const session = await E(world.factory).getSession('one');
+  const first = await E(session).getAccount();
+  t.deepEqual(
+    first.accounts.map(row => row.accountId),
+    ['first'],
+  );
+  t.false('usage' in first);
+  t.regex(first.usageUnavailable, /does not open an agent/);
+  t.false('cost' in first);
+  binding = makeBinding('replacement');
+  const next = await E(session).getAccount();
+  t.deepEqual(
+    next.accounts.map(row => row.accountId),
+    ['replacement'],
+  );
+  t.is(world.counts().sends, 0);
+  t.is(world.counts().creates, 0);
+  world.hostStore.delete('account-bindings');
+  const unavailable = await E(session).getAccount();
+  t.false(unavailable.available);
+  t.false('usage' in unavailable);
+  t.is(world.counts().creates, 0);
+  await E(session).getTurns();
+  const opened = await E(session).getAccount();
+  t.is(opened.usage.turns, 0);
 });
 
 test('failed durable deletion intent leaves private journal intact', async t => {

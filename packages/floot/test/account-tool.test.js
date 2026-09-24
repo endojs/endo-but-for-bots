@@ -30,46 +30,9 @@ const snapshotWith = rates =>
     }),
   });
 
-const usage = harden({ inputTokens: 1000n, outputTokens: 500n });
-
-test('a session with no model id says why it cannot be priced', t => {
-  const text = renderAccountStatus(
-    snapshotWith([
-      {
-        modelId: 'claude-sonnet-4-6',
-        currency: 'USD',
-        inputPerMillion: 3_000_000n,
-        outputPerMillion: 15_000_000n,
-        cachedInputPerMillion: null,
-      },
-    ]),
-    usage,
-    undefined,
-    '',
-  );
-  // Silently omitting the cost line reads as "this session is free".
-  t.true(text.includes('not identified'));
-});
-
-test('a model the rate card does not price is named', t => {
-  const text = renderAccountStatus(
-    snapshotWith([
-      {
-        modelId: 'claude-sonnet-4-6',
-        currency: 'USD',
-        inputPerMillion: 3_000_000n,
-        outputPerMillion: 15_000_000n,
-        cachedInputPerMillion: null,
-      },
-    ]),
-    usage,
-    undefined,
-    'some-other-model',
-  );
-  t.true(text.includes('does not price "some-other-model"'));
-});
-
-test('an empty rate card still reports that no price is configured', t => {
-  const text = renderAccountStatus(snapshotWith([]), usage, undefined, 'any');
-  t.true(text.includes('No list price is configured'));
+test('account rendering preserves plan and quota provenance without billing claims', t => {
+  const text = renderAccountStatus(snapshotWith([]));
+  t.regex(text, /Plan: Max on anthropic/);
+  t.regex(text, /read from the provider as of/);
+  t.false(text.includes('cost'));
 });

@@ -247,23 +247,29 @@ read once and would otherwise need a restart.
 
 ## Plan and rate limits
 
-`getAccount(refresh?)` on the factory, and on each session facet, reports the
-subscription plan behind this deployment's credential, how much of each rate
-limit is left, and — per session — what the conversation has cost at the current
-list price.
-A provider-backed session also gets an `accountStatus` tool, so the model can
-answer those questions where the user asked them.
-A session on a hosted backend does not: it runs the backend's own tool loop over
-a tool set projected before the session agent exists.
-`getAccount(refresh?)` answers the same questions to a UI either way.
+`getAccount(refresh?)` on the factory reports the configured direct-provider
+oracle's subscription plan and rate limits.
+On a session, it instead reports explicitly published accounts matching the
+session's backend and optional subscription pin, plus separate session usage
+when the session is already open.
+Otherwise `usageUnavailable` explains the omission: account inspection does not
+open a session agent or acquire a backend solely to read usage.
+`accounts` contains data only; `selection` is `subscription-pin` or
+`configured-accounts`, and `complete: false` identifies unavailable sources.
+Automatic pools can list several configured accounts; these mappings do not
+prove current runtime eligibility, routing, or which account paid for past turns.
+No aggregate session cost is estimated without per-account usage attribution.
+Both provider-backed and hosted factory sessions expose the same read-only
+`accountStatus` tool over this session-specific report.
 
 Every figure carries `observedAt` and a source of `observed`, `declared`,
 `remembered`, or `unavailable`, so a declared figure is never mistaken for a
 measured one.
 Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile and setting
 `FLOOT_ACCOUNT_AUTHORITY` to the operator's explicit account identifier when running
-setup; without a profile, `getAccount()` reports that no oracle is available and
-the tool is absent.
+setup; without a profile, the factory's `getAccount()` reports no direct oracle.
+Session reports and tools return no matching accounts when none are published,
+without falling back to the factory's direct-provider oracle.
 Account discovery identifies accounts by provider, declared authority and optional
 pool member, separately from runtime names and read-only observer formulas.
 Multiple runtimes sharing that declared identity share one capacity card.
