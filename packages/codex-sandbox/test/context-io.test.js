@@ -239,3 +239,60 @@ test('restoration refuses a static parent symlink escape before descending', asy
   );
   t.deepEqual(await readdir(outside), []);
 });
+
+for (const mode of [
+  'small-final-cut',
+  'no-compaction',
+  'oversized-final-cut',
+  'unknown-before-cut',
+]) {
+  test(`streaming capture handles large physical history: ${mode}`, async t => {
+    const f = await fixture(t);
+    const base = rows();
+    const large = {
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'x'.repeat(1024 * 1024) }],
+      },
+    };
+    const compacted = {
+      type: 'compacted',
+      payload: {
+        message: '',
+        replacement_history: [
+          { type: 'compaction', encrypted_content: 'small cut' },
+        ],
+      },
+    };
+    const history = [base[0], base[1], ...Array(17).fill(large)];
+    if (mode === 'unknown-before-cut')
+      history.push({ type: 'unknown_context', payload: {} });
+    if (mode !== 'no-compaction') history.push(compacted);
+    if (mode === 'oversized-final-cut') history.push(...Array(17).fill(large));
+    history.push(base[3]);
+    await writeFile(f.rolloutPath, text(history));
+    if (mode === 'small-final-cut') {
+      const result = await captureCodexContext(f);
+      t.true(result.payload.includes('small cut'));
+      t.true(result.payload.length < 1000);
+    } else await t.throwsAsync(() => captureCodexContext(f));
+  });
+}
+
+test('streaming UTF-8 framing preserves multibyte characters across read chunks', async t => {
+  const f = await fixture(t);
+  const data = rows();
+  const content = '猫'.repeat(80_000);
+  data[2].payload.content = [{ type: 'input_text', text: content }];
+  await writeFile(f.rolloutPath, text(data));
+  const result = await captureCodexContext(f);
+  t.is(JSON.parse(result.payload).payload.content[0].text, content);
+});
+
+test('streaming capture refuses an incomplete trailing line', async t => {
+  const f = await fixture(t);
+  await writeFile(f.rolloutPath, text(rows()).slice(0, -1));
+  await t.throwsAsync(() => captureCodexContext(f));
+});

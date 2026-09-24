@@ -68,14 +68,11 @@ const observationEvents = new Set([
 ]);
 
 /**
- * Select the supported native context at a completed rollout cut. This detects
- * ordinary stale/torn exports; it does not authenticate a hostile guest's data.
- * The caller supplies runtime identity. Returned base instructions are context
- * text, never authority to select a provider, model, tools, paths, or policies.
- * @param {string} jsonl Complete, bounded UTF-8 JSONL from the guest.
+ * Incrementally select context, bounding rows and the current retained cut,
+ * not the physical lifetime of a rollout. No guest authenticity is implied.
  * @param {{sessionId: string, turnId: string, cwd: string, cliVersion: string}} expected
  */
-export const selectCodexNativeContext = (jsonl, expected) => {
+export const makeCodexNativeContextSelector = expected => {
   requireValue(
     record(expected) &&
       uuid(expected.sessionId) &&
@@ -84,99 +81,147 @@ export const selectCodexNativeContext = (jsonl, expected) => {
       expected.cwd.startsWith('/') &&
       expected.cliVersion === '0.152.0',
   );
-  requireValue(
-    typeof jsonl === 'string' &&
-      jsonl.endsWith('\n') &&
-      new TextEncoder().encode(jsonl).byteLength <= LIMIT,
-  );
-  const lines = jsonl.slice(0, -1).split('\n');
-  const rows = lines.map(line => JSON.parse(line));
-  requireValue(rows.length > 1);
-  // Pinned 0.152.0 omits ordinals on rows appended after native restore.
-  rows.forEach(assertRow);
-  const meta = rows[0];
-  requireValue(
-    meta.type === 'session_meta' &&
-      (!Object.hasOwn(meta, 'ordinal') || meta.ordinal === 0) &&
-      meta.payload.id === expected.sessionId &&
-      meta.payload.session_id === expected.sessionId &&
-      meta.payload.cli_version === expected.cliVersion &&
-      meta.payload.cwd === expected.cwd &&
-      record(meta.payload.base_instructions) &&
-      typeof meta.payload.base_instructions.text === 'string',
-  );
+  let initialized = false;
+  let refused = false;
+  let finished = false;
+  let started = false;
+  let seenExpected = false;
   /** @type {string|undefined} */
   let active;
   /** @type {string|undefined} */
   let completed;
-  const turns = new Set();
+  let baseInstructions = '';
+  let baseBytes = 0;
+  let selectedBytes = 0;
+  let overflow = false;
   /** @type {string[]} */
   let selected = [];
-  for (let index = 1; index < rows.length; index += 1) {
-    const row = rows[index];
-    const { payload } = row;
-    if (row.type === 'event_msg') {
-      requireValue(typeof payload.type === 'string');
-      if (payload.type === 'task_started') {
-        requireValue(
-          active === undefined &&
-            uuid(payload.turn_id) &&
-            !turns.has(payload.turn_id),
-        );
-        active = payload.turn_id;
-        turns.add(active);
-      } else if (payload.type === 'task_complete') {
-        requireValue(active !== undefined && payload.turn_id === active);
-        completed = active;
-        active = undefined;
-      } else {
-        // Rollback, interruption and unknown transitions require their own
-        // reconstruction rule; they are not harmless event omissions.
-        requireValue(observationEvents.has(payload.type));
-        if (payload.turn_id !== undefined)
-          requireValue(payload.turn_id === active);
-        if (payload.thread_id !== undefined)
-          requireValue(payload.thread_id === expected.sessionId);
-      }
-    } else if (row.type === 'turn_context') {
-      assertContextRow(row, expected.cwd);
-      requireValue(
-        active === undefined ? turns.size === 0 : payload.turn_id === active,
-      );
-      // Pinned replay uses both baseline records to avoid injecting duplicate
-      // environment/developer messages. They are context, not launch authority.
-      selected.push(lines[index]);
-    } else if (row.type === 'world_state') {
-      requireValue(active !== undefined || turns.size === 0);
-      selected.push(lines[index]);
-    } else if (row.type === 'response_item' || row.type === 'compacted') {
-      assertContextRow(row, expected.cwd);
-      // Imported context may precede the first turn. New context after an
-      // already completed turn requires a new explicit task_started record.
-      requireValue(active !== undefined || turns.size === 0);
-      if (row.type === 'response_item') {
-        selected.push(lines[index]);
-      } else {
-        selected = [lines[index]];
-      }
-    } else {
-      // Unknown rows might change context (including queued/rollback state).
-      requireValue(false);
+  const retain = (line, bytes, reset = false) => {
+    if (reset) {
+      selected = [];
+      selectedBytes = 0;
+      overflow = false;
     }
-  }
-  requireValue(
-    active === undefined &&
-      completed === expected.turnId &&
-      selected.length > 0,
-  );
-  return Object.freeze({
-    sessionId: expected.sessionId,
-    turnId: expected.turnId,
-    baseInstructions: meta.payload.base_instructions.text,
-    payload: `${selected.join('\n')}\n`,
-  });
+    if (overflow) return;
+    if (baseBytes + selectedBytes + bytes > LIMIT) {
+      // Discard the unsupported current cut, but continue structural parsing:
+      // a later compaction may replace it with a bounded supported context.
+      selected = [];
+      selectedBytes = 0;
+      overflow = true;
+      return;
+    }
+    selected.push(line);
+    selectedBytes += bytes;
+  };
+  /** @param {string} line A complete JSONL row, without its newline. */
+  const accept = line => {
+    requireValue(!refused && !finished);
+    try {
+      requireValue(typeof line === 'string' && !line.includes('\n'));
+      const bytes = new TextEncoder().encode(line).byteLength + 1;
+      requireValue(bytes <= LIMIT);
+      const row = JSON.parse(line);
+      assertRow(row);
+      const { payload } = row;
+      if (!initialized) {
+        requireValue(
+          row.type === 'session_meta' &&
+            (!Object.hasOwn(row, 'ordinal') || row.ordinal === 0) &&
+            payload.id === expected.sessionId &&
+            payload.session_id === expected.sessionId &&
+            payload.cli_version === expected.cliVersion &&
+            payload.cwd === expected.cwd &&
+            record(payload.base_instructions) &&
+            typeof payload.base_instructions.text === 'string',
+        );
+        baseInstructions = payload.base_instructions.text;
+        baseBytes = new TextEncoder().encode(baseInstructions).byteLength;
+        initialized = true;
+        return;
+      }
+      if (row.type === 'event_msg') {
+        requireValue(typeof payload.type === 'string');
+        if (payload.type === 'task_started') {
+          requireValue(
+            active === undefined &&
+              uuid(payload.turn_id) &&
+              payload.turn_id !== completed,
+          );
+          if (payload.turn_id === expected.turnId) {
+            requireValue(!seenExpected);
+            seenExpected = true;
+          }
+          active = payload.turn_id;
+          started = true;
+        } else if (payload.type === 'task_complete') {
+          requireValue(active !== undefined && payload.turn_id === active);
+          completed = active;
+          active = undefined;
+        } else {
+          requireValue(observationEvents.has(payload.type));
+          if (payload.turn_id !== undefined)
+            requireValue(payload.turn_id === active);
+          if (payload.thread_id !== undefined)
+            requireValue(payload.thread_id === expected.sessionId);
+        }
+      } else if (row.type === 'turn_context') {
+        assertContextRow(row, expected.cwd);
+        requireValue(
+          active === undefined ? !started : payload.turn_id === active,
+        );
+        retain(line, bytes);
+      } else if (row.type === 'world_state') {
+        requireValue(active !== undefined || !started);
+        retain(line, bytes);
+      } else if (row.type === 'response_item' || row.type === 'compacted') {
+        assertContextRow(row, expected.cwd);
+        requireValue(active !== undefined || !started);
+        retain(line, bytes, row.type === 'compacted');
+      } else requireValue(false);
+    } catch (error) {
+      refused = true;
+      throw error;
+    }
+  };
+  const finish = () => {
+    requireValue(!refused && !finished);
+    finished = true;
+    requireValue(
+      initialized &&
+        active === undefined &&
+        completed === expected.turnId &&
+        !overflow &&
+        selected.length > 0,
+    );
+    return Object.freeze({
+      sessionId: expected.sessionId,
+      turnId: expected.turnId,
+      baseInstructions,
+      payload: `${selected.join('\n')}\n`,
+    });
+  };
+  return Object.freeze({ accept, finish });
 };
-// Also loaded by plain Node inside OCI images, which has no SES globals.
+if (typeof harden === 'function') harden(makeCodexNativeContextSelector);
+
+/**
+ * Whole-string convenience API; capture I/O uses the incremental selector.
+ * @param {string} jsonl Complete native JSONL.
+ * @param {{sessionId: string, turnId: string, cwd: string, cliVersion: string}} expected
+ */
+export const selectCodexNativeContext = (jsonl, expected) => {
+  requireValue(typeof jsonl === 'string' && jsonl.endsWith('\n'));
+  const selector = makeCodexNativeContextSelector(expected);
+  let start = 0;
+  for (;;) {
+    const end = jsonl.indexOf('\n', start);
+    if (end < 0) break;
+    selector.accept(jsonl.slice(start, end));
+    start = end + 1;
+  }
+  return selector.finish();
+};
 if (typeof harden === 'function') harden(selectCodexNativeContext);
 
 /**

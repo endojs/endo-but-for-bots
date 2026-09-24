@@ -2,8 +2,10 @@
 import '@endo/init';
 import test from 'ava';
 // Test the standalone image helper without adding it to the runtime API.
-// eslint-disable-next-line import/no-relative-packages
-import { selectCodexNativeContext } from '../oci/native-context.mjs';
+import {
+  makeCodexNativeContextSelector,
+  selectCodexNativeContext,
+} from '../oci/native-context.mjs'; // eslint-disable-line import/no-relative-packages
 
 const sessionId = '01a0d26e-d933-71c1-a255-d6f7c2e256f0';
 const first = '01a0d26e-d945-7253-afcf-857ec39f0136';
@@ -291,4 +293,72 @@ test('known observation events do not enter the exported native context', t => {
   const result = selectCodexNativeContext(jsonl(rows), expected);
   t.false(result.payload.includes('event_msg'));
   t.true(result.payload.includes('Synthetic answer'));
+});
+
+test('incremental selector resets discarded oversized history at compaction', t => {
+  const selector = makeCodexNativeContextSelector(expected);
+  const emit = value =>
+    selector.accept(
+      JSON.stringify({ timestamp: '2026-09-24T08:01:15Z', ...value }),
+    );
+  emit(fixture()[0]);
+  emit(event('task_started', first));
+  const large = message('assistant', 'x'.repeat(1024 * 1024));
+  for (let i = 0; i < 17; i += 1) emit(large);
+  emit(
+    row('compacted', {
+      message: '',
+      replacement_history: [
+        { type: 'compaction', encrypted_content: 'small final cut' },
+      ],
+    }),
+  );
+  emit(event('task_complete', first));
+  const result = selector.finish();
+  t.true(result.payload.includes('small final cut'));
+  t.true(result.payload.length < 1000);
+});
+
+test('an oversized current context is refused without silent truncation', t => {
+  const selector = makeCodexNativeContextSelector(expected);
+  const emit = value =>
+    selector.accept(
+      JSON.stringify({ timestamp: '2026-09-24T08:01:15Z', ...value }),
+    );
+  emit(fixture()[0]);
+  emit(event('task_started', first));
+  const large = message('assistant', 'x'.repeat(1024 * 1024));
+  for (let i = 0; i < 17; i += 1) emit(large);
+  emit(event('task_complete', first));
+  t.throws(() => selector.finish());
+});
+
+test('structural refusal stays sticky even when later history could compact', t => {
+  const selector = makeCodexNativeContextSelector(expected);
+  selector.accept(JSON.stringify(fixture()[0]));
+  t.throws(() => selector.accept(JSON.stringify(row('unknown_context', {}))));
+  t.throws(() =>
+    selector.accept(
+      JSON.stringify(
+        row('compacted', {
+          message: '',
+          replacement_history: [{ type: 'compaction' }],
+        }),
+      ),
+    ),
+  );
+  t.throws(() => selector.finish());
+});
+
+test('requested turn cannot recur after an intervening completed turn', t => {
+  const rows = [
+    ...fixture(),
+    event('task_started', second),
+    message('assistant', 'Intervening turn'),
+    event('task_complete', second),
+    event('task_started', first),
+    message('assistant', 'Ambiguous repeated target'),
+    event('task_complete', first),
+  ];
+  t.throws(() => selectCodexNativeContext(jsonl(rows), expected));
 });

@@ -55,6 +55,14 @@ replay. All 381 Codex tests pass. Client/journal/image wiring remains unfinished
 source-file bounds, host runtime bindings and effect reconciliation remain
 explicit limits, not completed acceptance claims.
 
+The current integration slice removes the physical-rollout size cap in favor of
+streamed per-row/current-context bounds. It keeps unknown-row refusal and the
+journal's independent effect checks, including native envelopes with no invented
+portable summary. New pinned probes show that fresh restored identities may have
+a synthetic completed `rollout-1` baseline after compaction, so the integration
+must query that baseline rather than assume an empty turn list. Production
+helper/client wiring is in progress; see the alignment document for current scope.
+
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
 until actual pressure warrants them. Keep the known growth limits documented;

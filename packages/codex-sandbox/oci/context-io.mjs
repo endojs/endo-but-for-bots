@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import {
   renderCodexNativeContext,
-  selectCodexNativeContext,
+  makeCodexNativeContextSelector,
 } from './native-context.mjs';
 
 const LIMIT = 16 * 1024 * 1024;
@@ -70,34 +70,56 @@ export const captureCodexContext = async expected => {
   );
   try {
     const before = await file.stat({ bigint: true });
-    requireValue(before.isFile() && before.size <= BigInt(LIMIT));
-    const decoder = new TextDecoder('utf-8', { fatal: true });
-    const buffer = new Uint8Array(64 * 1024);
-    let bytes = 0;
-    let text = '';
-    for (;;) {
-      // The loop is deliberately sequential on one descriptor.
-      // eslint-disable-next-line no-await-in-loop
-      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      bytes += bytesRead;
-      requireValue(bytes <= LIMIT);
-      text += decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-    }
-    text += decoder.decode();
-    const after = await file.stat({ bigint: true });
-    requireValue(
-      before.size === BigInt(bytes) &&
-        before.size === after.size &&
-        before.mtimeNs === after.mtimeNs &&
-        before.ctimeNs === after.ctimeNs,
-    );
-    return selectCodexNativeContext(text, {
+    requireValue(before.isFile());
+    const selector = makeCodexNativeContextSelector({
       sessionId,
       turnId,
       cwd,
       cliVersion,
     });
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    const encoder = new TextEncoder();
+    const buffer = new Uint8Array(64 * 1024);
+    let bytes = 0n;
+    /** @type {string[]} */
+    let fragments = [];
+    let lineBytes = 0;
+    const consume = text => {
+      let start = 0;
+      for (;;) {
+        const end = text.indexOf('\n', start);
+        const part = text.slice(start, end < 0 ? undefined : end);
+        lineBytes += encoder.encode(part).byteLength;
+        requireValue(lineBytes + 1 <= LIMIT);
+        if (part !== '') fragments.push(part);
+        if (end < 0) break;
+        selector.accept(fragments.join(''));
+        fragments = [];
+        lineBytes = 0;
+        start = end + 1;
+      }
+    };
+    for (;;) {
+      // The loop is deliberately sequential on one descriptor.
+      // eslint-disable-next-line no-await-in-loop
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      bytes += BigInt(bytesRead);
+      // Refuse growth immediately instead of following an appending writer
+      // indefinitely. Only the completed snapshot size is in scope.
+      requireValue(bytes <= before.size);
+      consume(decoder.decode(buffer.subarray(0, bytesRead), { stream: true }));
+    }
+    consume(decoder.decode());
+    requireValue(fragments.length === 0 && lineBytes === 0);
+    const after = await file.stat({ bigint: true });
+    requireValue(
+      before.size === bytes &&
+        before.size === after.size &&
+        before.mtimeNs === after.mtimeNs &&
+        before.ctimeNs === after.ctimeNs,
+    );
+    return selector.finish();
   } finally {
     await file.close();
   }

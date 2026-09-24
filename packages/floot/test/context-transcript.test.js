@@ -102,6 +102,59 @@ test('native context remains atomic with its suffix and refuses direct-provider 
   });
 });
 
+test('opaque Codex context needs no portable projection but cannot conceal tool evidence', async t => {
+  const native = {
+    kind: 'native-context',
+    format: 'codex-rollout-v1',
+    payload: 'opaque native rollout',
+    context: [],
+  };
+  const records = [
+    call('effect', 'exec'),
+    result('effect', 'completed'),
+    native,
+  ];
+  const complete = turn(10, records, { nativeContextFormat: native.format });
+  t.deepEqual(await projectContextTranscript([complete], noRead), [native]);
+  // Projection must not mutate the original canonical conversation/effect rows.
+  t.is(complete.transcript.length, 3);
+  t.throws(() => transcriptToProviderMessages([native]), {
+    message: /cannot restore backend-native/,
+  });
+  for (const unsafe of [
+    turn(10, [call('effect', 'exec'), native]),
+    turn(10, [native], {
+      tools: [
+        {
+          callId: 'effect',
+          name: 'exec',
+          args: '{}',
+          settled: false,
+          sequence: '11',
+        },
+      ],
+    }),
+    turn(10, [native], {
+      tools: [
+        {
+          callId: 'effect',
+          name: 'exec',
+          args: '{}',
+          settled: true,
+          result: 'host-only recovery',
+          sequence: '11',
+          resultSequence: '12',
+        },
+      ],
+    }),
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(projectContextTranscript([unsafe], noRead), {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    });
+  }
+});
+
 test('native context refuses unresolved later turns without hiding their evidence', async t => {
   const native = turn(10, [nativeCheckpoint()]);
   for (const later of [

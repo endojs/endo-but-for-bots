@@ -308,10 +308,27 @@ This is a no-effect synthetic handler, not Endo-tool settlement or real provider
 acceptance. All 381 Codex tests pass, including 56 focused selector/render/I/O
 tests; production types and scoped lint pass. Independent source review approves.
 These helpers remain unwired to the client, OCI image and journal producer.
-Their 16 MiB source-file bound refuses an oversized physical rollout rather than
-truncating it, even if its latest compacted context is small. Streaming selection
-or another justified source-allocation policy is still needed for that case;
-do not call this proof of indefinitely bounded healthy continuation.
+
+Codex integration in progress (2026-09-24): capture now streams the physical
+rollout, bounding each row and the selected current context rather than refusing
+a small compacted context because discarded history exceeds 16 MiB.
+Unknown earlier rows still refuse; compaction is not permission to skip validation.
+The native envelope may use an empty portable `context` array: the opaque payload
+is retained atomically, while ordinary conversation and tool evidence continue
+to be journaled independently. A focused Floot regression confirms that this
+does not conceal unresolved or host-recovered effects.
+Pinned fresh-ID restoration has different operational baselines: ordinary
+context yields no native turns, whereas a compacted context plus suffix yields
+the synthetic completed turn `rollout-1`. The client must query and persist that
+baseline instead of inferring it from fresh identity. Both isolated probes
+preserve the modeled request prefix, invoke the synthetic tool exactly once and
+permit re-export. Helper transport and production client wiring are in progress;
+this is not deployed acceptance or completion of RA-02.
+The former 16 MiB physical-file cap is removed. Current rows and retained context
+remain bounded, and the helper's separate 16 MiB serialized JSON limit can refuse
+a smaller raw context after escaping; it never truncates a capture.
+Sixty-six selector/render/I/O tests and 21 Floot context-projection tests pass.
+This is not proof of indefinitely bounded healthy continuation.
 Next is helper transport and client integration with the existing catalog binding,
 operational reconciliation, cancellation fence and journal-before-terminal rule.
 No production deployment is claimed.
