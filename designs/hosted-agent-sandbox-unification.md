@@ -20,7 +20,10 @@ The persistent config mount has not yet moved to tmpfs.
 Durable dispatch records require Claude's native format so failed capture cannot
 silently restore a plain-text-only conversation after journal reconstruction.
 Forensic history remains readable.
-Compaction, failed/cancelled native capture, real-provider signature acceptance,
+Verified terminal failures can now publish complete native checkpoints while
+retaining their failed outcome and diagnostics; partial or unconfirmed failures
+cannot.
+Compaction, cancelled native capture, real-provider signature acceptance,
 and coordinated deployment remain open; see the current
 [refactor alignment audit](../packages/floot/REFACTOR-ALIGNMENT.md).
 Older sections below describe intermediate plans and are not current acceptance.

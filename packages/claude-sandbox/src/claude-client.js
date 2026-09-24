@@ -762,6 +762,8 @@ export const makeClaudeClient = args => {
       inFlightClose = close;
       inFlightTerminal = channel.terminal;
       let nativeReportedFailure = false;
+      /** @type {string|undefined} */
+      let producerFailureReason;
       try {
         for await (const event of parseStreamJsonLines(
           makeStdoutIterable(proc),
@@ -820,7 +822,7 @@ export const makeClaudeClient = args => {
         // A failed exit observation is not evidence of success. Let the
         // error path kill the process and preserve diagnostics in an abort.
         const status = await E(proc).wait();
-        if (status?.code !== 0 || status?.signal) {
+        if (status?.code !== 0 || status?.signal || nativeReportedFailure) {
           let how;
           if (typeof status?.signal === 'string' && status.signal !== '') {
             how = `killed by ${status.signal}`;
@@ -830,6 +832,8 @@ export const makeClaudeClient = args => {
             status.code > 0
           ) {
             how = `exited with code ${status.code}`;
+          } else if (status?.code === 0 && !status?.signal) {
+            how = 'reported a failed turn';
           } else {
             // Unknown completion is not a stopped-producer boundary. The
             // catch path kills before diagnostics; never start capture here.
@@ -837,22 +841,15 @@ export const makeClaudeClient = args => {
           }
           const stderrText = await readStderrBrief(proc);
           const base = abortReasonInContext(`claude ${how}`);
-          push({
-            type: 'abort',
-            reason: stderrText
-              ? `${base}\n--- stderr ---\n${stderrText}`
-              : base,
-          });
-          return;
-        }
-        // A stopped producer can leave an older, structurally valid transcript.
-        // Until capture can prove coverage of this turn's admitted prompt and
-        // observed stream, never supersede journal evidence after failed exit.
-        if (nativeReportedFailure) {
-          // The translator retains the result's error and converts this raw
-          // terminal to an abort. No native checkpoint certifies the failure.
-          push({ type: 'end' });
-          return;
+          producerFailureReason = stderrText
+            ? `${base}\n--- stderr ---\n${stderrText}`
+            : base;
+          // Exit alone is insufficient: only a complete mainline terminal
+          // failure can authorize capture after a known, unsignalled exit.
+          if (status?.signal || !nativeReportedFailure) {
+            push({ type: 'abort', reason: producerFailureReason });
+            return;
+          }
         }
         if (compactBoundary)
           throw Error('Claude native coverage refuses current-turn compaction');
@@ -862,6 +859,7 @@ export const makeClaudeClient = args => {
               'Claude native coverage requires a trusted pre-turn receipt and hash',
             );
           if (coverageFailure !== undefined) throw coverageFailure;
+          coverage.assertOutcome(nativeReportedFailure ? 'failure' : 'success');
           if (
             contextCut.sessionId !== undefined &&
             contextCut.sessionId !== nativeSessionId
@@ -945,13 +943,18 @@ export const makeClaudeClient = args => {
             beforeUuid: contextCut.beforeUuid,
             prefixSha256: contextCut.prefixSha256,
             prompt: String(prompt),
+            outcome: nativeReportedFailure ? 'failure' : 'success',
           });
           await channel.write({
             type: 'endo_native_context',
             checkpoint: captured,
           });
         }
-        push({ type: 'end' });
+        push(
+          producerFailureReason
+            ? { type: 'abort', reason: producerFailureReason }
+            : { type: 'end' },
+        );
       } catch (error) {
         const base = abortReasonInContext(
           error instanceof Error ? error.message : String(error),
@@ -966,7 +969,11 @@ export const makeClaudeClient = args => {
         const stderrText = await readStderrBrief(proc);
         push({
           type: 'abort',
-          reason: stderrText ? `${base}\n--- stderr ---\n${stderrText}` : base,
+          reason: producerFailureReason
+            ? `${producerFailureReason}\nContext capture failed: ${base}${stderrText ? `\n--- capture stderr ---\n${stderrText}` : ''}`
+            : stderrText
+              ? `${base}\n--- stderr ---\n${stderrText}`
+              : base,
         });
       }
     }

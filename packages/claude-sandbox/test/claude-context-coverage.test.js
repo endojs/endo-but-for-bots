@@ -31,7 +31,11 @@ test('actual pinned max-turns failure proves the captured current-turn cut', asy
       .join('\n')}\n`,
   );
   t.notThrows(() =>
-    coverage.assertCaptured(native, { ...f.cut, prefixSha256 }),
+    coverage.assertCaptured(native, {
+      ...f.cut,
+      prefixSha256,
+      outcome: 'failure',
+    }),
   );
 });
 const fixture = () => {
@@ -107,9 +111,21 @@ const fixture = () => {
     stop();
   };
   const jsonl = () => `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+  let finished = false;
+  const finish = (
+    result = { type: 'result', subtype: 'success', is_error: false },
+  ) => {
+    if (!finished) {
+      emit(result);
+      finished = true;
+    }
+  };
   const assert = (
     cut = { sessionId, beforeUuid: null, prefixSha256: emptyPrefix, prompt },
-  ) => coverage.assertCaptured(jsonl(), cut);
+  ) => {
+    finish();
+    return coverage.assertCaptured(jsonl(), { ...cut, outcome: 'success' });
+  };
   return {
     coverage,
     events,
@@ -122,6 +138,7 @@ const fixture = () => {
     text,
     jsonl,
     assert,
+    finish,
   };
 };
 
@@ -130,6 +147,42 @@ test('complete block before stop matches native prompt and dialogue', t => {
   f.text();
   t.notThrows(() => f.assert());
   t.notThrows(() => f.assert());
+});
+
+for (const expected of ['success', 'failure']) {
+  test(`capture requires observed mainline ${expected} terminal evidence`, t => {
+    const f = fixture();
+    f.text();
+    f.finish({
+      type: 'result',
+      subtype: expected === 'success' ? 'success' : 'error_max_turns',
+      is_error: expected === 'failure',
+    });
+    t.notThrows(() =>
+      f.coverage.assertCaptured(f.jsonl(), {
+        sessionId,
+        beforeUuid: null,
+        prefixSha256: emptyPrefix,
+        prompt,
+        outcome: /** @type {'success'|'failure'} */ (expected),
+      }),
+    );
+    t.throws(() =>
+      f.coverage.assertOutcome(expected === 'success' ? 'failure' : 'success'),
+    );
+  });
+}
+
+test('complete dialogue without mainline terminal result cannot certify a cut', t => {
+  const f = fixture();
+  f.text();
+  f.emit({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    parent_tool_use_id: 'child',
+  });
+  t.throws(() => f.coverage.assertOutcome('success'));
 });
 
 test('opaque redacted thinking matches exact complete block without deltas', t => {
@@ -268,7 +321,10 @@ test('prefix receipt binds exact serialization rather than parsed row equality',
     prompt,
   };
   const changedBytes = ` ${f.jsonl()}`;
-  t.throws(() => f.coverage.assertCaptured(changedBytes, cut));
+  f.finish();
+  t.throws(() =>
+    f.coverage.assertCaptured(changedBytes, { ...cut, outcome: 'success' }),
+  );
 });
 
 for (const change of ['signature', 'grouping', 'duplicate-cut']) {
@@ -339,6 +395,7 @@ test('empty or init-only observations cannot certify a stale native file', t => 
       beforeUuid: null,
       prefixSha256: emptyPrefix,
       prompt,
+      outcome: 'success',
     }),
   );
 });
@@ -472,12 +529,14 @@ test('caller mutation cannot rewrite retained complete frame evidence', t => {
   const captured = f.jsonl();
   const event = f.events.find(e => e.type === 'assistant');
   event.message.content[0].text = 'changed externally';
+  f.finish();
   t.notThrows(() =>
     f.coverage.assertCaptured(captured, {
       sessionId,
       beforeUuid: null,
       prefixSha256: emptyPrefix,
       prompt,
+      outcome: 'success',
     }),
   );
 });

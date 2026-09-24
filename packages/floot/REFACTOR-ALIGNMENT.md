@@ -641,8 +641,10 @@ and formatting passes.
 
 This integration is not RA-02 completion or deployment approval.
 Current-turn compaction explicitly refuses checkpoint publication until its
-replacement-prefix coverage rule is established; failed/cancelled capture remains
+replacement-prefix coverage rule is established; cancelled capture remains
 disabled, and real signature/account/runtime/system/tool binding remains open.
+Verified terminal failure capture is now enabled as described below; an arbitrary
+failed exit or a partially written native file is not sufficient.
 The obsolete no-init standalone live-continuation branch is now removed.
 Every continuation uses supplied journal records; no `--continue`, newest-file
 selection, detector/resolver fallback, or host-side diagnostic scanner remains.
@@ -659,13 +661,39 @@ All earlier request messages and tool-result fields remain exact; four mutations
 of signature/result/notice/padding refuse.
 The probe reports a semantic difference, not identical full request prefixes.
 One synthetic thinking block survived and the tool executed once across resumes.
-This does not enable failed-turn capture or establish real signature acceptance.
-The next capture gate must certify a mainline terminal failure in the observer,
-not just a loose raw `is_error` flag, and retain the producer's diagnostics if the
-capture helper fails.
-Known exited status, exact prefix/current-turn coverage and reconciled tool
-evidence remain necessary; unknown status, signals and cancellation cannot seal
-a replacement checkpoint through this path.
+This probe alone does not establish production failure recovery or real signature
+acceptance.
+The subsequent client implementation now certifies a mainline terminal failure in
+the observer, not just a loose raw `is_error` flag, and retains the producer's
+diagnostics if the capture helper fails.
+Both successful and failed capture require an explicit matching terminal outcome;
+EOF with complete-looking frames is insufficient.
+Failure capture permits a known numeric exit (including zero with a native error
+result), exact prefix/current-turn coverage and reconciled tool evidence.
+It publishes the verified checkpoint before an abort, never converting failure
+to success; unknown status, signals and cancellation cannot seal a replacement
+checkpoint through this path.
+
+Independent adversarial review approves this bounded extension.
+The real client and translator, with simulated process/helper transport, now have
+an integration regression through the Floot agent and journal: the turn remains
+failed, original diagnostics survive, the native checkpoint seals, and a rebuilt
+agent receives the exact payload plus failure notice without replaying history.
+This is journal reconstruction, not a real daemon restart or live-provider test.
+The full Claude suite passes 378 tests; source types and scoped lint pass.
+The full Floot suite passes 699 tests, and the repository documentation gate passes.
+
+Compaction remains the next coverage problem: a digest of the whole pre-turn
+prefix cannot authenticate an arbitrary retained subset after legitimate pruning.
+The bounded direction is an incarnation-local row index derived from the exact
+host-owned checkpoint plus a deterministically constructed dialogue suffix,
+verified against the import receipt before prompt admission.
+No additional durable owner is needed.
+Retained UUIDs must resolve to that index or complete observed current-turn frames;
+the boundary, summary anchor, post-boundary order and permitted metadata rewrites
+need pinned-runtime conformance tests.
+This is a reviewed direction, not implemented support; multiple/interrupted
+compactions and omission of the admitted prompt require explicit evidence rules.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the

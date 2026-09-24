@@ -266,8 +266,8 @@ export const readClaudeTranscript = text => {
             ...(block.is_error ? { failed: true } : {}),
           });
         }
-        // `thinking` blocks are the model's own reasoning, which the stack
-        // does not record and so cannot restore.
+        // This portable projection omits reasoning. Faithful restoration uses
+        // the separately preserved native-context payload, never this alone.
       }
     }
   }

@@ -187,7 +187,12 @@ const nativeWire = (prompt = 'hello') => {
     { type: 'assistant', uuid: assistant, message },
     { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
     { type: 'stream_event', event: { type: 'message_stop' } },
-    { type: 'result', is_error: false, result: 'Latest answer' },
+    {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Latest answer',
+    },
   ].map(event => ({ ...event, session_id: restoredUuid }));
   const rows = [
     {
@@ -476,7 +481,7 @@ test('failed native exit does not certify an unverified capture cut', async t =>
   t.regex(events.at(-1).reason, /original failure/);
 });
 
-test('failed native result with zero exit does not certify context', async t => {
+test('incomplete failed native result with zero exit does not certify context', async t => {
   const fake = makeFakeSlice(
     [
       [
@@ -502,6 +507,98 @@ test('failed native result with zero exit does not certify context', async t => 
   t.true(events.some(event => event.type === 'result' && event.is_error));
   t.is(fake.spawned.length, 1);
 });
+
+for (const exitCode of [0, 1, 7]) {
+  for (const helperFails of [false, true]) {
+    test(`covered failure exit ${exitCode} ${helperFails ? 'retains original diagnostics when capture fails' : 'checkpoints then aborts'}`, async t => {
+      const wire = nativeWire();
+      wire.raw.at(-1).is_error = true;
+      wire.raw.at(-1).subtype = 'error_max_turns';
+      wire.raw.at(-1).result = 'diagnostic only, not dialogue';
+      let waits = 0;
+      const fake = makeFakeSlice(
+        [
+          wire.raw.map(jsonBytes),
+          helperFails ? [] : [jsonBytes(wire.captured)],
+        ],
+        async () => {
+          waits += 1;
+          return { code: waits === 1 ? exitCode : 0, signal: null };
+        },
+      );
+      const client = makeClaudeClient(
+        baseArgs(fake, makeFakeMount(), {
+          makeStderrIterable: proc =>
+            bytesIterable([
+              enc.encode(
+                proc.argv[0] === 'node'
+                  ? 'helper diagnostic'
+                  : 'producer diagnostic',
+              ),
+            ]),
+        }),
+      );
+      t.teardown(() => client.terminate());
+      const events = await drain(await client.send('hello'));
+      t.is(fake.spawned.length, 2);
+      t.is(events.at(-1).type, 'abort');
+      t.regex(events.at(-1).reason, /producer diagnostic/);
+      t.regex(
+        events.at(-1).reason,
+        exitCode === 0
+          ? /reported a failed turn/
+          : new RegExp(`exited with code ${exitCode}`),
+      );
+      t.is(
+        events.some(event => event.type === 'endo_native_context'),
+        !helperFails,
+      );
+      if (helperFails) t.regex(events.at(-1).reason, /Context capture failed/);
+      else t.is(events.at(-2).type, 'endo_native_context');
+    });
+  }
+}
+
+for (const invalid of [
+  'missing',
+  'subagent-only',
+  'wrong-subtype',
+  'missing-boolean',
+  'nonzero-success',
+  'signal-failure',
+  'partial-failure',
+]) {
+  test(`terminal evidence ${invalid} never publishes native context`, async t => {
+    const wire = nativeWire();
+    if (invalid === 'missing') wire.raw.pop();
+    if (invalid === 'subagent-only')
+      wire.raw.at(-1).parent_tool_use_id = 'child';
+    if (invalid === 'wrong-subtype') wire.raw.at(-1).subtype = 'unsupported';
+    if (invalid === 'missing-boolean') delete wire.raw.at(-1).is_error;
+    if (invalid.endsWith('failure')) {
+      wire.raw.at(-1).is_error = true;
+      wire.raw.at(-1).subtype = 'error_max_turns';
+    }
+    if (invalid === 'partial-failure') wire.raw.splice(-2, 1);
+    const fake = makeFakeSlice(
+      [wire.raw.map(jsonBytes), [jsonBytes(wire.captured)]],
+      async () => ({
+        code: invalid === 'nonzero-success' ? 1 : 0,
+        signal: invalid === 'signal-failure' ? 'SIGTERM' : null,
+      }),
+    );
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('hello'));
+    t.false(events.some(event => event.type === 'endo_native_context'));
+    t.is(events.at(-1).type, 'abort');
+    t.is(fake.spawned.length, 1);
+  });
+}
 
 test('native restore sends terminal notice suffix to helper without replaying it as prompt', async t => {
   const fake = makeFakeSlice([[jsonBytes(restoredReceipt)], []]);
@@ -694,46 +791,53 @@ for (const captureSucceeds of [false, true]) {
   });
 }
 
-test('interrupt during capture kills its process and publishes no checkpoint', async t => {
-  t.timeout(5000);
-  let release;
-  const held = new Promise(resolve => {
-    release = resolve;
-  });
-  let entered;
-  const started = new Promise(resolve => {
-    entered = resolve;
-  });
-  const fake = makeFakeSlice([nativeWire().output]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      makeStderrIterable: () => bytesIterable([]),
-      makeStdoutIterable: proc =>
-        proc.argv[0] === 'node'
-          ? {
-              async *[Symbol.asyncIterator]() {
-                entered();
-                await held;
-                yield jsonBytes(capturedContext);
-              },
-            }
-          : makeStdoutIterable(proc),
-    }),
-  );
-  t.teardown(async () => {
+for (const failedTurn of [false, true]) {
+  test(`interrupt during ${failedTurn ? 'failed' : 'successful'} turn capture kills its process and publishes no checkpoint`, async t => {
+    t.timeout(5000);
+    let release;
+    const held = new Promise(resolve => {
+      release = resolve;
+    });
+    let entered;
+    const started = new Promise(resolve => {
+      entered = resolve;
+    });
+    const wire = nativeWire();
+    if (failedTurn) {
+      wire.raw.at(-1).is_error = true;
+      wire.raw.at(-1).subtype = 'error_max_turns';
+    }
+    const fake = makeFakeSlice([wire.raw.map(jsonBytes)]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: () => bytesIterable([]),
+        makeStdoutIterable: proc =>
+          proc.argv[0] === 'node'
+            ? {
+                async *[Symbol.asyncIterator]() {
+                  entered();
+                  await held;
+                  yield jsonBytes(capturedContext);
+                },
+              }
+            : makeStdoutIterable(proc),
+      }),
+    );
+    t.teardown(async () => {
+      release();
+      await client.terminate();
+    });
+    const reading = drain(await client.send('hello'));
+    await started;
+    const stopping = client.interrupt();
+    await Promise.resolve();
     release();
-    await client.terminate();
+    await stopping;
+    const events = await reading;
+    t.true(procKilled.get(fake.spawned[1]));
+    t.false(events.some(event => event.type === 'endo_native_context'));
   });
-  const reading = drain(await client.send('hello'));
-  await started;
-  const stopping = client.interrupt();
-  await Promise.resolve();
-  release();
-  await stopping;
-  const events = await reading;
-  t.true(procKilled.get(fake.spawned[1]));
-  t.false(events.some(event => event.type === 'endo_native_context'));
-});
+}
 
 for (const phase of ['provision', 'restore']) {
   for (const cancellation of ['reader', 'interrupt']) {

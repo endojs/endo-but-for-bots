@@ -24,6 +24,8 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   let session;
   let initialized = false;
   let terminal = false;
+  /** @type {'success'|'failure'|undefined} */
+  let outcome;
   /** @type {any} */
   let message;
   /** @type {any} */
@@ -100,10 +102,20 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       }
       requireValue(initialized);
       if (event.type === 'result') {
+        requireValue(
+          (event.is_error === false && event.subtype === 'success') ||
+            (event.is_error === true &&
+              typeof event.subtype === 'string' &&
+              /^error_[a-z_]+$/.test(event.subtype)),
+        );
         // A result's text can be separately displayed by the translator when
         // nothing streamed. Do not certify an unrepresented synthetic answer.
         requireValue(!message && !block && frames.length > 0);
-        if (typeof event.result === 'string' && event.result !== '') {
+        if (
+          !event.is_error &&
+          typeof event.result === 'string' &&
+          event.result !== ''
+        ) {
           requireValue(
             frames.some(
               frame =>
@@ -116,6 +128,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
           );
         }
         terminal = true;
+        outcome = event.is_error ? 'failure' : 'success';
         return;
       }
       if (event.type === 'assistant' || event.type === 'user') {
@@ -246,17 +259,31 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         );
     });
 
+  /** @param {'success'|'failure'} expected */
+  const assertOutcome = expected =>
+    guarded(() => {
+      requireValue(
+        initialized &&
+          terminal &&
+          frames.length > 0 &&
+          !message &&
+          !block &&
+          (expected === 'success' || expected === 'failure') &&
+          outcome === expected,
+      );
+    });
+
   /**
    * @param {string} nativeTranscript Helper-validated native JSONL.
-   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, prompt: string}} cut
+   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, prompt: string, outcome: 'success'|'failure'}} cut
    * Trusted pre-turn receipt; an empty initial store uses null plus SHA-256 of empty text.
    */
   const assertCaptured = (
     nativeTranscript,
-    { sessionId, beforeUuid, prefixSha256, prompt },
+    { sessionId, beforeUuid, prefixSha256, prompt, outcome: expectedOutcome },
   ) =>
     guarded(() => {
-      requireValue(initialized && frames.length > 0 && !message && !block);
+      assertOutcome(expectedOutcome);
       requireValue(
         isUuid(sessionId) &&
           sessionId === session &&
@@ -343,6 +370,6 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       }
       requireValue(position === frames.length);
     });
-  return harden({ observe, assertCaptured });
+  return harden({ observe, assertOutcome, assertCaptured });
 };
 harden(makeClaudeContextCoverage);

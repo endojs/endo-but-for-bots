@@ -2,6 +2,17 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { makeOpenRouterProvider } from '@endo/lal/providers/index.js';
+import { E } from '@endo/eventual-send';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+
+// Internal adapter conformance: exercise real translation and journal wiring.
+// eslint-disable-next-line import/no-relative-packages
+import { makeClaudeClient } from '../../claude-sandbox/src/claude-client.js';
+// eslint-disable-next-line import/no-relative-packages
+import { translateClaudeTurn } from '../../claude-sandbox/src/claude-hosted-events.js';
+// eslint-disable-next-line import/no-relative-packages
+import { readClaudeTranscript } from '../../claude-sandbox/src/claude-transcript-writer.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
@@ -101,6 +112,148 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
+test('verified Claude failure journals native context and restores without becoming success', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  const wire = JSON.parse(
+    await readFile(
+      new URL(
+        '../../claude-sandbox/test/fixtures/coverage-failed-turn.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  );
+  // Start at the fixture's admitted prompt, without its unrelated seeded past.
+  const before = wire.rows.findIndex(row => row.uuid === wire.cut.beforeUuid);
+  const rows = wire.rows.slice(before + 1);
+  rows[0].parentUuid = null;
+  const payload = `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+  const captured = {
+    type: 'endo_context',
+    retainedTail: readClaudeTranscript(payload),
+    nativeContext: {
+      format: 'claude-code-jsonl-v1',
+      transcript: payload,
+      leafUuid: rows.at(-1).uuid,
+    },
+  };
+  const outputs = new WeakMap();
+  const spawned = [];
+  const slice = harden({
+    async spawn(argv) {
+      const index = spawned.length;
+      const proc = harden({
+        async wait() {
+          return { code: index === 0 ? 1 : 0, signal: null };
+        },
+        async kill() {
+          /* No native resources in this transport fixture. */
+        },
+      });
+      outputs.set(proc, index === 0 ? wire.events : [captured]);
+      spawned.push([...argv]);
+      return proc;
+    },
+    async dispose() {
+      /* No native resources in this transport fixture. */
+    },
+  });
+  const native = makeClaudeClient({
+    sessionId: 'verified-failure',
+    createdAt: '2026-09-24T00:00:00Z',
+    // Deliberately partial transport double: stdout/stderr are injected below.
+    slice: /** @type {any} */ (slice),
+    workspaceMountPoint: '/unused-fixture',
+    backend: 'podman',
+    sha256: value => createHash('sha256').update(value).digest('hex'),
+    makeStdoutIterable: proc =>
+      harden({
+        async *[Symbol.asyncIterator]() {
+          for (const event of outputs.get(proc))
+            yield new TextEncoder().encode(`${JSON.stringify(event)}\n`);
+        },
+      }),
+    makeStderrIterable: () =>
+      harden({
+        async *[Symbol.asyncIterator]() {
+          yield new TextEncoder().encode('original producer diagnostic');
+        },
+      }),
+  });
+  const client = harden({
+    async send(prompt, options) {
+      return translateClaudeTurn(await E(native).send(prompt, options));
+    },
+    async terminate() {
+      await E(native).terminate();
+    },
+  });
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => client },
+    'Test',
+    { nativeContextFormat: 'claude-code-jsonl-v1' },
+  );
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(
+    agent.converse(wire.cut.prompt, makeReplyChannel().writer),
+    {
+      message: /error_max_turns/,
+    },
+  );
+  t.is(spawned.length, 2);
+  t.is(spawned[1][1], '/opt/endo/capture-compaction.mjs');
+  const turn = (await agent.getTurns())[0];
+  t.is(turn.state, 'failed');
+  t.true(turn.transcriptComplete);
+  t.regex(turn.error, /original producer diagnostic/);
+  t.true(
+    (await agent.getTranscript()).some(
+      record => record.kind === 'native-context' && record.payload === payload,
+    ),
+  );
+  await agent.shutdown();
+  /** @type {readonly any[] | undefined} */
+  let restored;
+  const next = harden({
+    async send(prompt, options) {
+      t.true(prompt.includes('continue'));
+      restored = options.transcript;
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'abort',
+        reason: 'stop after inspecting restored context',
+      });
+      return channel.reader;
+    },
+    async terminate() {
+      /* No resource owned by this observer. */
+    },
+  });
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => next },
+    'Test',
+    { nativeContextFormat: 'claude-code-jsonl-v1' },
+  );
+  t.teardown(() => revived.shutdown());
+  await t.throwsAsync(revived.converse('continue', makeReplyChannel().writer), {
+    message: /stop after inspecting restored context/,
+  });
+  if (restored === undefined) throw Error('Restored context was not supplied');
+  t.is(restored[0].kind, 'native-context');
+  t.is(restored[0].payload, payload);
+  t.regex(restored.at(-1).content, /Floot turn failed.*error_max_turns/s);
+  t.is(
+    spawned.length,
+    2,
+    'history inspection and restoration did not rerun the native tool',
+  );
+});
+
 test('first native-required failure stays readable but cannot resume portably after revival', async t => {
   t.timeout(10_000);
   const f = fixture();
@@ -121,6 +274,7 @@ test('first native-required failure stays readable but cannot resume portably af
       // This fixture owns no native process or other external resource.
     },
   });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
   const runtime = { kind: 'hosted', provideHostedClient: () => client };
   const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
     nativeContextFormat: 'claude-code-jsonl-v1',
