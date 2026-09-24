@@ -22,6 +22,27 @@ git apply --directory=rust/engine rust/engine/stack-depth-prototypes/<patch>
 | `d1a-compiler-outline-only.patch` | D1a | `#[inline(never)]` on the scoper's and coder's recursive arms, to shrink their frames |
 | `d1a-d1c-compiler-worklists.patch` | D1a–D1c | D1a, plus worklists for two tree walks, explicit stacks in the scoper's hoist and bind arms, a coder spine for binary operators, and an iterative `Drop` for AST nodes |
 
+Each patch was also built and tested on its own against the unpatched tree, with
+`cargo test --release -p <crate> --no-fail-fast`:
+
+| Patch | Crate | Tests |
+|---|---|---|
+| (none) | `ironhorse-vm` | 1,117 passed |
+| (none) | `ironhorse-compile` | 221 passed |
+| `a1-thin-native-dispatch.patch` | `ironhorse-vm` | 1,117 passed |
+| `a2-dispatch-split-table.patch` | `ironhorse-vm` | 1,111 passed, **6 failed** |
+| `b1-b2-proxy-cursor-loops.patch` | `ironhorse-vm` | 1,117 passed |
+| `b3-b4-json-parse-and-flat.patch` | `ironhorse-vm` | 1,117 passed |
+| `d1a-compiler-outline-only.patch` | `ironhorse-compile` | 221 passed |
+| `d1a-d1c-compiler-worklists.patch` | `ironhorse-compile` | 221 passed |
+
+A2's six failures are all in `ironhorse-vm/tests/dispatch_loop_control_transfer.rs`.
+That file scans the source of `interp/dispatch.rs` to check that every exit from the dispatch
+loop goes through the depth and meter guards.
+The prototype copies `macro_rules! dispatch_halt` into its group functions ("declaration must
+be unique"), and it leaves one raw return the scan cannot classify.
+A production version of A2 must satisfy those checks or deliberately update the scanner.
+
 `d1a-d1c-compiler-worklists.patch` contains D1a, so apply one or the other, not both.
 The VM patches (`a*`, `b*`) were measured one at a time; whether they combine cleanly was not
 checked.

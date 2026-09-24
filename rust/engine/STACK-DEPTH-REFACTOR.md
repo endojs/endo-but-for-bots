@@ -145,9 +145,12 @@ The prototype patches were measured in a scratch copy of the engine.
 - **Most of the fix is release-neutral and already prototyped.**
   The recipe: move frames onto explicit heap stacks, or shrink them, while charging
   `native_depth` at the same logical points.
-  Six prototype patches, kept in [`stack-depth-prototypes/`](stack-depth-prototypes/), kept
-  `Halt`, result, `ReentryLimit` depth and computrons
-  identical wherever they were checked, in differential suites of 74 to 61,246 cases.
+  Six prototype patches, now in [`stack-depth-prototypes/`](stack-depth-prototypes/), kept
+  `Halt`, result, `ReentryLimit` depth and computrons identical wherever they were checked,
+  in differential suites of 74 to 61,246 cases.
+  All six build.
+  Applied one at a time to the repository tree, all but A2 pass their crate's full test
+  suite; A2 fails only six source scans of the dispatch loop (§4.3).
   Among them:
   - Proxy forwarding: 0 B per layer.
   - `JSON.parse`: 855,159 → 17,836 B on WT at the ceiling.
@@ -1376,6 +1379,13 @@ stacks as well.
 - **Meter and ReentryLimit:** an earlier revision cited 147 differential cases and 24/24
   `native_recursion_budget` tests; no command or log for either is in `$S`
   (`ls $S/stack/dispatch-reentry` shows no differential or test log).
+  The kept patch, applied to the repository tree, passes all 24 `native_recursion_budget`
+  tests and 1,111 of 1,117 `ironhorse-vm` tests (`cargo test --release -p ironhorse-vm`).
+  The six failures are the source scans in `tests/dispatch_loop_control_transfer.rs`, which
+  check that every exit from the dispatch loop goes through the depth and meter guards.
+  The prototype copies `macro_rules! dispatch_halt` into its group functions and leaves one
+  raw return the scan cannot classify, so a production A2 must satisfy those scans or
+  deliberately update them.
   Re-run for this revision (`$S/stack/revise4/a2_diff.py`): the native probe on the repository
   crate against each native build of the prototype, over every `ceilings.json` entry at its
   ceiling and ceiling+1 plus all 25 `families.json` cases.
