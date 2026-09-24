@@ -605,6 +605,35 @@ test('thinking/signature and tool JSON deltas must match complete frames', t => 
   t.notThrows(() => f.assert());
 });
 
+for (const [name, complete, category] of [
+  ['text', { type: 'text', text: 'SECRET_CHANGED' }, 'text-value'],
+  [
+    'citations',
+    { type: 'text', text: 'ok', citations: [] },
+    'citations-presence',
+  ],
+  [
+    'unknown',
+    { type: 'text', text: 'ok', SECRET_FIELD: 'SECRET_VALUE' },
+    'block-other',
+  ],
+]) {
+  test(`assistant mismatch diagnostics expose only fixed categories: ${name}`, t => {
+    const f = fixture();
+    f.start();
+    const error = t.throws(() =>
+      f.block(
+        { type: 'text', text: '' },
+        [{ type: 'text_delta', text: 'ok' }],
+        complete,
+      ),
+    );
+    t.true(error.message.includes(`phase=observe/assistant/${category}`));
+    t.false(error.message.includes('SECRET'));
+    t.throws(() => f.assert());
+  });
+}
+
 test('tool frames and captured blocks accept only object-property reordering', t => {
   const f = fixture();
   const input = {

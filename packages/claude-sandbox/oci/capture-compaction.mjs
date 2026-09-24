@@ -6,16 +6,24 @@ import process from 'node:process';
 import { Buffer } from 'node:buffer';
 
 const LIMIT = 16 * 1024 * 1024;
+// Only errors minted here from static local messages may explain a refusal.
+// Native JSON parsing and filesystem errors can contain transcript/path data.
+const diagnosticErrors = new WeakMap();
+const diagnosticError = message => {
+  const error = Error(message);
+  diagnosticErrors.set(error, message);
+  return error;
+};
 const uuid = value => {
   if (
     typeof value !== 'string' ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)
   )
-    throw Error('Invalid capture identity');
+    throw diagnosticError('Invalid capture identity');
   return value;
 };
 const requireValue = (condition, message) => {
-  if (!condition) throw Error(message);
+  if (!condition) throw diagnosticError(message);
 };
 const projection = row => {
   if (row.type === 'attachment') {
@@ -116,7 +124,7 @@ const projection = row => {
         ...(block.is_error ? { failed: true } : {}),
       };
     }
-    throw Error('Unsupported context block');
+    throw diagnosticError('Unsupported context block');
   });
 };
 
@@ -163,7 +171,7 @@ const main = async () => {
   const session = uuid(expected.session_id);
   const config = process.env.CLAUDE_CONFIG_DIR;
   if (typeof config !== 'string' || !path.isAbsolute(config)) {
-    throw Error('Missing sandbox config directory');
+    throw diagnosticError('Missing sandbox config directory');
   }
   const filename = path.join(
     config,
@@ -347,7 +355,7 @@ const main = async () => {
         return;
       }
       if (seenBoundary && row.subtype === 'compact_boundary')
-        throw Error('A newer boundary exists');
+        throw diagnosticError('A newer boundary exists');
       const needed = wanted.has(row.uuid);
       requireValue(
         row.uuid !== anchor || seenBoundary,
@@ -494,8 +502,9 @@ const main = async () => {
     await file.close();
   }
 };
-main().catch(() => {
+main().catch(error => {
   // Never leak transcript contents, paths, or native parse errors to stderr.
-  process.stderr.write('Claude compaction capture failed\n');
+  const reason = diagnosticErrors.get(error) ?? 'Unclassified capture failure';
+  process.stderr.write(`Claude compaction capture failed: ${reason}\n`);
   process.exitCode = 1;
 });

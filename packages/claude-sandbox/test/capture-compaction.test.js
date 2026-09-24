@@ -382,7 +382,7 @@ for (const [name, mutate] of [
   test(`capture refuses ${name} without partial output`, async t => {
     const error = await t.throwsAsync(run(t, mutate(records())));
     t.is(error.stdout, '');
-    t.is(error.stderr, 'Claude compaction capture failed\n');
+    t.regex(error.stderr, /^Claude compaction capture failed: [A-Za-z ]+\n$/);
   });
 }
 
@@ -524,7 +524,40 @@ test('combined native and portable checkpoint size is bounded before output', as
   rows[6].message.content = 'x'.repeat(9 * 1024 * 1024);
   const error = await t.throwsAsync(run(t, rows));
   t.is(error.stdout, '');
-  t.is(error.stderr, 'Claude compaction capture failed\n');
+  t.is(
+    error.stderr,
+    'Claude compaction capture failed: Capture output exceeds limit\n',
+  );
+});
+
+test('capture reports only its static local validation reason', async t => {
+  const error = await t.throwsAsync(
+    run(t, records(), {
+      ...boundary,
+      session_id: 'SECRET_PRODUCER_ID',
+    }),
+  );
+  t.is(error.stdout, '');
+  t.is(
+    error.stderr,
+    'Claude compaction capture failed: Invalid capture identity\n',
+  );
+});
+
+test('native parse errors cannot expose transcript fragments or masquerade as diagnostics', async t => {
+  const error = await t.throwsAsync(
+    run(
+      t,
+      records(),
+      boundary,
+      '\n{"SECRET_TRANSCRIPT": "Invalid capture identity"\n',
+    ),
+  );
+  t.is(error.stdout, '');
+  t.is(
+    error.stderr,
+    'Claude compaction capture failed: Unclassified capture failure\n',
+  );
 });
 
 test('native checkpoint excludes operational records after validating active leaf', async t => {

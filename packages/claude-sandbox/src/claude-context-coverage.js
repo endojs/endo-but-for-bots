@@ -323,7 +323,40 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
               event.message.model === message.model,
           );
           requireValue(Array.isArray(content) && content.length === 1);
-          requireValue(same(content[0], completedBlock()));
+          const completed = completedBlock();
+          const matches = same(content[0], completed);
+          if (!matches) {
+            // Describe only a fixed protocol field and mismatch category,
+            // never producer values, tool arguments or unknown field names.
+            diagnosticPhase = 'observe/assistant/block-other';
+            if (content[0] && typeof content[0] === 'object') {
+              for (const key of [
+                'type',
+                'text',
+                'thinking',
+                'signature',
+                'data',
+                'id',
+                'name',
+                'input',
+                'caller',
+                'citations',
+              ]) {
+                if (
+                  Object.hasOwn(content[0], key) !==
+                  Object.hasOwn(completed, key)
+                ) {
+                  diagnosticPhase = `observe/assistant/${key}-presence`;
+                  break;
+                }
+                if (!same(content[0][key], completed[key])) {
+                  diagnosticPhase = `observe/assistant/${key}-value`;
+                  break;
+                }
+              }
+            }
+          }
+          requireValue(matches);
           block.matched = true;
         } else {
           requireValue(!message && !block);
