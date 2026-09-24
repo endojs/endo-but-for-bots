@@ -511,10 +511,12 @@ export const makeClaudeClient = ({
    *
    * @param {string} prompt
    * @param {{ model?: string, reasoningEffort?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
+   * @param {() => void} [assertAdmission] Recheck cancellation after preparation.
    * @returns {Promise<ProcessHandle>}
    */
-  const spawnClaude = async (prompt, opts = {}) => {
+  const spawnClaude = async (prompt, opts = {}, assertAdmission = () => {}) => {
     const { slice: activeSlice } = await ensureProvisioned();
+    assertAdmission();
     const argv = [
       'claude',
       '-p',
@@ -617,6 +619,10 @@ export const makeClaudeClient = ({
         }),
       );
     }
+    // Provisioning/restoration can outlive reader closure. Recheck immediately
+    // before admitting the spawn; after admission the existing returned-handle
+    // kill path remains responsible, even if acquisition is still pending.
+    assertAdmission();
     const proc = await E(activeSlice).spawn(
       harden(argv),
       harden({
@@ -686,7 +692,11 @@ export const makeClaudeClient = ({
         return;
       }
       try {
-        proc = await spawnClaude(prompt, opts);
+        proc = await spawnClaude(prompt, opts, () => {
+          if (closed || terminated) {
+            throw makeError(X`Claude turn cancelled before prompt admission`);
+          }
+        });
       } catch (error) {
         // A recreate disposes the slice a queued spawn may be about to use;
         // label that failure the same way an in-flight kill is labelled.

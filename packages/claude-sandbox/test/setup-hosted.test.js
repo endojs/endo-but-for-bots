@@ -2,6 +2,7 @@
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 import { access, mkdir, mkdtemp, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -326,6 +327,13 @@ test.serial(
     });
     const f = makeFakeHost();
     const entries = new Map();
+    const capturedPowers = new Map();
+    const secretFacets = new Map(
+      ['claude-one', 'claude-two'].map(name => [
+        name,
+        Far(`Secret ${name}`, {}),
+      ]),
+    );
     const namespace = harden({
       has: async name => entries.has(name),
       identify: async name => entries.get(name)?.replace(/^test:/, ''),
@@ -344,38 +352,86 @@ test.serial(
       f.bindings.set(key('secrets', name), `secret-${name}`);
     }
     const host = /** @type {EndoHost} */ (
-      /** @type {unknown} */ ({
-        ...f.host,
-        identify: async (...parts) =>
-          parts[0] === 'secrets'
-            ? f.bindings.get(key(...parts))
-            : E(f.host).identify(...parts),
-        lookup: async (...parts) => {
-          if (key(...parts) === key('claude-sandbox', 'broker-powers'))
-            return namespace;
-          if (key(...parts) === key('@secrets', 'catalog'))
-            return harden({
-              list: async () =>
-                ['claude-one', 'claude-two'].map(name => ({
-                  petNamePaths: [['secrets', name]],
-                })),
-            });
-          return E(f.host).lookup(...parts);
-        },
-        locate: async (...parts) => {
-          const value = f.bindings.get(key(...parts));
-          if (value === undefined) throw Error('not bound');
-          return `test:${value}`;
-        },
-        provideGuest: async (name, { agentName }) => {
-          f.bindings.set(key(name), 'handle');
-          f.bindings.set(key(agentName), 'namespace');
-        },
-        move: async (from, to) => {
-          f.bindings.set(key(...to), f.bindings.get(key(...from)));
-          f.bindings.delete(key(...from));
-        },
-      })
+      /** @type {unknown} */ (
+        Far('Pooled setup host', {
+          ...f.host,
+          identify: async (...parts) =>
+            parts.flat()[0] === 'secrets' ||
+            capturedPowers.has(f.bindings.get(key(...parts)))
+              ? f.bindings.get(key(...parts))
+              : E(f.host).identify(...parts),
+          storeValue: async (value, name) => {
+            const id = `marshal-${capturedPowers.size}`;
+            capturedPowers.set(id, value);
+            f.bindings.set(key(name), id);
+          },
+          diagnostics: async () =>
+            Far('Pooled diagnostics', {
+              getFormula: async id => {
+                if (id === 'fake-host-id') return harden({ type: 'host' });
+                if (String(id).startsWith('secret-'))
+                  return harden({
+                    type: 'lookup',
+                    properties: {
+                      hub: { kind: 'reference', identifier: 'fake-host-id' },
+                      path: { kind: 'literal', value: ['@secrets', 'use', id] },
+                    },
+                  });
+                if (capturedPowers.has(id)) {
+                  const pair = capturedPowers.get(id);
+                  const name = [...secretFacets].find(
+                    ([, secret]) => secret === pair.secret,
+                  )?.[0];
+                  if (name === undefined)
+                    throw Error('Unknown captured Secret');
+                  return harden({
+                    type: 'marshal',
+                    properties: {
+                      slots: {
+                        kind: 'reference-list',
+                        entries: { 0: 'fake-host-id', 1: `secret-${name}` },
+                      },
+                    },
+                  });
+                }
+                return E(E(f.host).diagnostics()).getFormula(id);
+              },
+            }),
+          lookup: async (...parts) => {
+            const pathParts = parts.flat();
+            if (pathParts[0] === 'secrets' && secretFacets.has(pathParts[1]))
+              return secretFacets.get(pathParts[1]);
+            if (key(...parts) === key('claude-sandbox', 'broker-powers'))
+              return namespace;
+            if (key(...parts) === key('@secrets', 'catalog'))
+              return harden({
+                adminFor: async secret => {
+                  if (![...secretFacets.values()].includes(secret))
+                    throw Error('Unknown Secret facet');
+                  return Far('Secret admin', {});
+                },
+                list: async () =>
+                  ['claude-one', 'claude-two'].map(name => ({
+                    petNamePaths: [['secrets', name]],
+                  })),
+              });
+            return E(f.host).lookup(...parts);
+          },
+          locate: async (...parts) => {
+            const value = f.bindings.get(key(...parts));
+            if (value === undefined) throw Error('not bound');
+            return `test:${value}`;
+          },
+          provideGuest: async (name, { agentName }) => {
+            f.bindings.set(key(name), 'handle');
+            f.bindings.set(key(agentName), 'namespace');
+          },
+          move: async (from, to) => {
+            f.bindings.set(key(...to), f.bindings.get(key(...from)));
+            f.bindings.delete(key(...from));
+          },
+        })
+      )
     );
     await main(host, { exec: refuseInspect });
     t.like(JSON.parse(brokerMint(f.mints).options.env.CLAUDE_BROKER_CONFIG), {
@@ -388,6 +444,17 @@ test.serial(
       ),
     );
     t.is(credentialMint(f.mints), undefined);
+    t.is(capturedPowers.size, 2);
+    for (const [index, name] of ['claude-one', 'claude-two'].entries()) {
+      const pair = capturedPowers.get(`marshal-${index}`);
+      t.is(pair.host, host);
+      t.is(pair.secret, secretFacets.get(name));
+    }
+    t.false(
+      [...f.bindings.keys()].some(name =>
+        name.includes('renewable-credential-powers.'),
+      ),
+    );
     t.deepEqual(f.secrets, []);
     t.is(entries.get('secret-first'), 'test:secret-claude-one');
     t.is(entries.get('secret-second'), 'test:secret-claude-two');

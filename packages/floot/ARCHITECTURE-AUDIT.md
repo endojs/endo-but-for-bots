@@ -53,7 +53,7 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 181 of
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 193 of
 479 application commits and 20 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
@@ -96,6 +96,13 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Retired lease/restoration mapping (2026-09-24): twelve further entries bring
+coverage to 193 application commits (newest 15 plus earliest 178).
+The custom Codex volume lease was retired, not inherited by today's shared
+workspace owner. Historical deployment reports and the external Paseo comparison
+are not current acceptance evidence. Fresh local Codex state/controller/client
+checks pass 110 tests. Current native image behavior remains a separate gate.
 
 Native import/restoration mapping (2026-09-24): 24 further entries bring coverage
 to 181 application commits (newest 15 plus earliest 166).
@@ -2195,6 +2202,20 @@ of 2026-09-21 (generation 157) after the retirement below.
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
 ### Prompt admission after pre-execution cancellation — 2026-09-24
+
+Claude had the same admission gap across asynchronous provisioning and transcript
+restoration: four baseline regressions actually spawned the canceled prompt before
+the returned-handle kill path could run. The local fix rechecks reader closure and
+termination after provisioning and immediately before requesting the spawn.
+Pending preparation remains serialized; a spawn already requested still belongs
+to the existing returned-handle cleanup path. No durable schema, replay owner, or
+native process-loss recovery behavior changes. Independent review approves the
+fix and independently passes all 47 client tests. The full package run exposed a
+stale pooled-setup Secret fixture; its correction models exact captured host and
+Secret identities and asserts temporary alias cleanup without weakening the
+existing no-token-seeding assertions. Independent setup review and ten tests pass.
+The full Claude package now passes 237 tests; source typechecking, scoped lint,
+formatting, and root documentation generation pass. Not deployed.
 
 A new regression reproduces OpenCode sending a canceled prompt after a held
 history import acknowledges success. Reader closure sent an interrupt before any
@@ -4312,6 +4333,14 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Map twelve retired-lease/restoration changes, bringing application
+coverage to 193/479. Historical custom-volume recovery and deployment reports are
+not current shared-runtime acceptance. Claude cancellation during provisioning or
+restoration is reproduced by four new tests and fenced locally before spawn;
+independent review and 47 client tests pass. Corrected the stale pooled-setup
+fixture with exact captured-capability assertions; all 237 package tests, source
+types, scoped lint, formatting, and documentation generation pass. No deployment.
 
 2026-09-24 — Correct reused-tool-ID replay pairing across all three CLI backends;
 69 targeted and 38 adjacent context tests pass. Map twelve native-restoration and

@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 298 application entries and 73 host entries still need explicit ledger
+The other 286 application entries and 73 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -631,7 +631,39 @@ kernel confinement, native import semantics, live providers or daemon restart.
 | `5edcf9eb3` | Disposable Claude native transcript file | Current controller writes restored content, not plan text; controller tests supplement writer roundtrip, journal remains authority |
 | `afb0fc307` | Ephemeral bridge feature negotiation | Bounded feature list and strict fresh/import requirements retained; advertisement is admission, not CLI semantic compatibility |
 
+### Retired leases and authoritative restoration
+
+Twelve subsequent changes distinguish retired custom volume leases from current
+shared workspace/state owners, and native stores from authoritative journals.
+Fresh Codex state-provider/native-controller/client tests pass 110 cases.
+Separate targeted restoration checks pass two Claude, nine Codex, and twelve
+OpenCode tests.
+These are local boundary checks, not live CLI format compatibility, kernel orphan
+recovery, or current Tokyo acceptance. Historical deployment reports remain
+evidence for their original deployment only.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `01c677576` | Recovery wiring for two custom volume-provider entry paths was removed with hosted-subscription/durable-volume ownership in `812f10b47` | Current shared supervisor/state storage has different ownership; do not attribute retired automatic lease recovery to it |
+| `6bd4882da` | Historical deployment report, including Claude/OpenCode wiped-store recall | Its OpenCode fallback and Codex volume topology are superseded; historical recall is not current image acceptance |
+| `d2e9b314a` | Historical unresolved Codex lease diagnosis, not restoration acceptance | Custom lease owner retired; current native session/scope ownership requires separate evidence |
+| `cb0cb6ddd` | Same-holder workspace reopen fix and custom-volume tests retired with the provider | Current workspace uses shared execution-envelope 9P projection; surviving CLI home is separate from host checkpoint storage |
+| `796e849dd` | Historical record of disproved lease explanations | Local lease tests did not establish correct deployed provisioning/reconstruction wiring; preceding fixes alone did not prove deployment repair |
+| `db681499c` | Rollout/index reconstruction observation and proposed writer, not a retained rollout writer | Current Codex reconciles inherited native state, rotates to a fresh thread, and injects journal records; local client tests do not certify native CLI semantics |
+| `e52376f06` | Historical comparison of fresh-thread injection with writing private rollout files | Current Codex uses injection, not rollout synthesis. The note's Claude empty-store restriction was superseded by `3e130f7c0` |
+| `a55175d78` | Codex/OpenCode refuse unavailable structured restoration; prose fallback removed | Current clients fence failed restoration and keep prompt separate from imported records. Local protocol tests are not proof that a live CLI interprets every translated record faithfully |
+| `3e130f7c0` | Claude restores authoritative records before first incarnation turn, rather than adopting a surviving native store | Within-incarnation continuation remains distinct; native JSONL is a projection, not journal authority. Four new regressions reproduced pre-admission cancellation still spawning a prompt; the reviewed local fence fixes that gap |
+| `8d915852f` | Vendored external architecture comparison, not an Endo implementation or new state owner | Report paths describe Paseo. Comparison and descendant-reaping assertions do not establish current restoration compatibility or the process-loss proof deferred to #1323 |
+| `b2a318a6b` | Historical repair ordering; custom-volume/project-ID lease leak retired with `812f10b47` | Current image acceptance and ownership gates must be checked independently; the historical plan is not present deployment evidence |
+| `53ad6e03e` | OpenCode source build moved import change from applied patch to fork commit; current default uses an immutable revision | CLI revision alone is not full-image identity: bridge comes from application context and other build inputs are not all immutable. Manifest digest pairing and live acceptance remain required |
+
 ### Post-snapshot changes
+
+- Claude rechecks cancellation after provisioning and immediately before native
+  prompt spawn. Four held-preparation regressions fail before and pass after;
+  all 47 client tests pass independently. Preparation remains serialized and
+  already-admitted spawn cleanup is unchanged. This is ephemeral admission
+  state, not a new durable owner or native process-loss guarantee.
 
 - OpenCode records prompt admission separately from startup/import ownership.
   Pre-admission cancellation settles delivery without admitting the prompt or
