@@ -14,8 +14,8 @@ Process-loss recovery remains the separate investigation tracked in PR #1323.
 | Floot lifecycle registry; daemon session record | The registry stores application identity, captured configuration and references. The daemon record stores the execution plan, dependency identities and incarnation lifecycle. | Retain. Neither is a second conversation store; runtime removal and conversation deletion are different operations. |
 | Pending queue; Floot turn journal | The queue holds submissions not yet admitted to inference. The journal records admitted turns, dialogue, mediated effects, outcomes and context. | Retain the admission boundary. Do not discard queued submissions to avoid a separate durable record. |
 | Floot journal; native turn ledger/thread checkpoint | Floot owns conversation and effect evidence. Native checkpoints reconcile adapter requests and native acknowledgement after restoration. | Retain reconciliation, not a competing source of conversation truth. Native context is projected from host-selected journal records. |
-| Codex audit writer; Floot journal | Native approvals, denials, identifiers and late-result diagnostics are not all mediated Endo effects. Audit write failure currently fences the adapter. | Retain unique diagnostics and current writer integrity checks; remove the unused reader API. A broader diagnostic replacement requires an explicit contract, not deletion disguised as deduplication. |
-| Codex audit entries; audit anchors | Append recovery checks chain continuity and detects missing/changed entries before continuing. | Operationally used, not dead code. Both trust the host; this is not protection from a host writer. The extra mechanism's cost remains a candidate for a separately reviewed diagnostic simplification. |
+| Codex diagnostic writer; Floot journal | Native approvals, denials, identifiers and late-result diagnostics are not all mediated Endo effects. Required diagnostic write failure fences the adapter. | Retain diagnostic events and full payload storage, not a second effect authority. The V2 writer serializes writes and fences its incarnation after any uncertain write. |
+| Codex diagnostic entries; former audit anchors | Both were under the same trusted host; a separate anchor was not an independent security boundary. | Remove anchors, chain hashes and prepared-head replay. Existing atomic entry storage is the commit boundary. Reconstruct from contiguous entry names and the V2 tail. Historical tamper/suffix-deletion detection and prepared-anchor repair are explicitly no longer promised. |
 | Session provisioner; supervisor; execution envelope | The provisioner creates/reopens durable plans. The supervisor owns one live incarnation and its cleanup. The envelope acquires and verifies granted execution resources. | Retain these phases. All three backends already call the shared implementations. Do not create a fourth lifecycle abstraction. |
 | Cleanup scope/resource registry; recorded cleanup | Live registries retain acquired handles and failed release attempts. Recorded cleanup acts on recorded paths when those handles no longer exist. | Retain the distinction. Recorded-path probes do not prove native process shutdown; #1323 remains open. |
 | Session storage; native state storage | Session storage removes plan-owned directories and preserves external workspaces. Native state storage owns CLI state placement and private records. | Retain the authority/placement distinction. Do not treat naming similarity as duplicate ownership. |
@@ -66,30 +66,45 @@ recorded in the alignment audit.
 
 ## Remaining findings, not hidden by the deletions
 
-1. Direct-provider setup can fall back to plaintext `authToken` after Secrets
-   provisioning fails; `fae/src/credentials.js` accepts that old configuration.
-   This is real compatibility code, not a provider protocol requirement.
-   Remove it in a dedicated credential-contract change, preserving explicitly
-   unauthenticated local providers and testing failure before persistence.
-   This is independent of the held compaction work.
-2. Session `getAccount()` still uses the factory-wide direct-provider oracle even
-   for hosted sessions, while settings use explicit account bindings.
-   Define session reporting for pinned and automatically pooled accounts; do not
-   misrepresent the direct account as the selected runtime's account.
+1. Completed: remove plaintext `authToken` fallback from both provider setup
+   paths, the credential resolver and the provider cache.
+   Inline runtime-config fields reject even when empty or beside a Secret.
+   A failed Secret import cannot publish a replacement provider config.
+   Tokenless local-provider configurations remain supported.
+   Explicit raw-token form imports are still stored in daemon form messages before
+   import; use an existing Secret reference to avoid that separate ingestion path.
+   No historical credential erasure or compaction work is claimed.
+2. Completed: session `getAccount()` and `accountStatus` select published accounts
+   by the session's backend and optional subscription pin on the same use binding.
+   Automatic pools report configured candidates, not current eligibility, route
+   or the payer of past turns.
+   Available usage remains session-wide and is not priced against an unrelated
+   account; an unloaded session reports usage unavailable rather than starting a
+   backend merely to read account status.
+   Factory-level direct-provider observation remains a distinct API.
 3. The exported streaming-agent constructor still defaults journal storage to
    guest powers, although the factory supplies private journal storage.
    Require explicit storage in a bounded API-contract change with test-fixture
    conversion; do not quietly change durable ownership during cleanup.
-4. Codex's `locateSessionDirectory` state-provider method has no production caller.
-   It is another exported API retirement candidate, not evidence that the state
-   provider or its directory ownership checks are unnecessary.
-5. The audit writer's integrity/anchor mechanism is live but not proven minimal.
-   A simpler diagnostic contract must decide what write failure means and which
-   diagnostics must survive before removing its operational checks.
+4. Completed: removed Codex's unused `locateSessionDirectory` method and its
+   exclusive test.
+   Current controllers prepare the host-record directory before reading the
+   checkpoint; the old pre-provision lookup explanation no longer applied.
+   State ownership, separate CLI homes, symlink refusal and removal checks remain.
+5. Completed: Codex's V2 diagnostic writer retains event kinds, full payload
+   storage and awaited required writes, but removes hash-chain/head machinery.
+   Any rejected write permanently fences that writer instance, since the write
+   may have landed; a reconstructed writer cannot overwrite a landed entry.
+   Contiguous filenames and the last entry's binding/version are checked without
+   scanning every historical payload.
+   This assumes one writer per session under the existing owner, not new
+   cross-process exclusion or process-loss recovery.
+   Old anchored layouts and V1 tails refuse and require session retirement.
+   Floot effects and the operational native thread checkpoint are unchanged.
 
 ## Validation and conclusion
 
-Independent adversarial review approved each deletion slice and this inventory.
+Initial deletion pass: independent adversarial review approved each deletion slice and this inventory.
 The five affected full package suites pass 2,593 tests, with one hosted-agent test
 skipped; scoped lint has no errors.
 Full-suite verification also corrected old account-publication setup fixtures in
@@ -99,7 +114,14 @@ Further type-check limitations and test results are recorded in the parent
 Runtime JavaScript has 291 fewer lines in this pass (including comments, excluding
 tests and documentation).
 This pass removes concrete parallel and unused APIs without adding a framework.
-It does not prove that the entire refactor is smaller than its original baseline,
-nor close the remaining credential, account-reporting, storage-contract or
-diagnostic decisions above.
+Follow-up implementation closes items 1, 2, 4 and 5 above under their stated
+contracts; item 3 (requiring explicit private journal storage) remains deferred.
+The follow-up full suites pass: Floot 713, Codex 423, and Fae 174 plus two
+expected failures (successful exit). Two real-daemon account-publication and
+Codex context-restoration regressions pass. Independent adversarial review
+approved each follow-up slice, including a final 26-test passive-account check.
+Scoped lint has no errors, and the root documentation/API gate passes.
+Test-inclusive type checks retain unrelated fixture errors; no changed production
+source type errors were reported. Fae compaction remains on hold.
+It does not prove that the entire refactor is smaller than its original baseline.
 No deployment or new crash-recovery guarantee is claimed.

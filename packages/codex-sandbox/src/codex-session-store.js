@@ -1,26 +1,7 @@
 // @ts-check
 /* global process */
 
-/**
- * Codex's per-session durable state, kept in host files under a directory the
- * daemon-owned state provider hands out.
- *
- * This is what replaces the `codex-subscription-state/<sessionId>/{entries,
- * anchors,thread}` petstore subtree. That subtree was the reason the backend
- * caplet held `@agent`: writing it needed `makeDirectory`, `storeValue`,
- * `lookup` and `remove` on the host agent, which is the whole of an agent's
- * naming authority, granted for the sake of three directories. The journal
- * itself never wanted a petstore — `makeStoredAuditJournal` asks only for
- * `list`, `has`, `lookup` and `storeValue`, four methods a directory answers
- * just as well.
- *
- * Values are stored in the audit journal's own canonical encoding rather than
- * plain JSON: an entry's `sequence` is a bigint, and the canonical form is the
- * form the hash chain is computed over, so a file on disk is verifiable against
- * the chain exactly as written.
- *
- * @module
- */
+/** Host-private diagnostic values and operational thread checkpoint storage. */
 
 import { Fail, b, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
@@ -43,21 +24,16 @@ import {
   parseCanonicalAuditJson,
 } from './audit-journal.js';
 
-/**
- * The methods `makeStoredAuditJournal` asks of its powers. `remove` is what
- * lets the anchor store keep only the newest head, so it stops being a second
- * copy of the whole journal.
- */
+/** Host-private value storage for diagnostics and the thread checkpoint. */
 export const ValueStoreInterface = M.interface('CodexValueStore', {
   list: M.call().returns(M.promise()),
   has: M.call(M.string()).returns(M.promise()),
   lookup: M.call(M.string()).returns(M.promise()),
   storeValue: M.call(M.any(), M.string()).returns(M.promise()),
-  remove: M.call(M.string()).returns(M.promise()),
 });
 
-// Journal names are `<prefix>-<20 digits>` and `<prefix>-head-<20 digits>`
-// where the prefix carries a session id, so this admits the whole shape while
+// Diagnostic names are `<prefix>-<20 digits>` or `<prefix>-content-<hash>`;
+// the prefix carries a session id, so this admits the whole shape while
 // excluding a separator, a leading dot, and anything that could name a parent.
 const VALUE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/;
 const SUFFIX = '.json';
@@ -126,7 +102,7 @@ const providePrivateSubdirectory = async (directory, label, sync) => {
  *
  * Writes go to a fresh exclusive temporary file and are renamed into place, so
  * a crash mid-write cannot leave a half-written entry the journal would later
- * fail to decode — an append-only chain has no way to repair one.
+ * fail to decode.
  *
  * @param {string} directory
  * @param {string} [label]
@@ -218,53 +194,32 @@ export const makeDirectoryValueStore = async (
     await sync(root);
   };
 
-  /** @param {string} name */
-  const remove = async name => {
-    // Never through a symlink, and absent is not an error: a removal is only
-    // ever of a value a newer one has superseded.
-    const path = pathFor(name);
-    const info = await lstat(path).catch(error => {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
-        return undefined;
-      throw error;
-    });
-    if (info === undefined) {
-      // A retry may follow an unlink whose directory flush failed.
-      await sync(root);
-      return;
-    }
-    info.isFile() || Fail`Codex value ${q(name)} is not a stored value`;
-    await rm(path, { force: true });
-    await sync(root);
-  };
-
   return makeExo('CodexValueStore', ValueStoreInterface, {
     list,
     has,
     lookup,
     storeValue,
-    remove,
   });
 };
 harden(makeDirectoryValueStore);
 
 /**
- * The three stores one Codex session keeps: the audit journal's entries, its
- * independently protected anchors, and the opaque thread checkpoint Floot
- * acknowledges each turn.
- *
- * Entries and anchors are deliberately separate directories, because
- * `makeStoredAuditJournal` refuses to take the same powers for both: an
- * anchor that could be written through the entry store would not be an
- * independent witness of the chain.
- *
+ * Diagnostics and the distinct operational thread checkpoint.
+ * Old anchored layouts require deliberate session retirement.
  * @param {string} directory The session's own state directory.
  */
 export const makeCodexSessionState = async directory => {
-  const [entries, anchors] = await Promise.all([
-    makeDirectoryValueStore(join(directory, 'entries'), 'journal entries'),
-    makeDirectoryValueStore(join(directory, 'anchors'), 'journal anchors'),
-  ]);
+  const oldAnchor = await lstat(join(directory, 'anchors')).catch(error => {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
+      return undefined;
+    throw error;
+  });
+  oldAnchor === undefined ||
+    Fail`Old Codex audit layout; session reset required`;
+  const entries = await makeDirectoryValueStore(
+    join(directory, 'entries'),
+    'diagnostic entries',
+  );
   const thread = await makeDirectoryValueStore(
     join(directory, 'thread'),
     'thread checkpoint',
@@ -272,7 +227,6 @@ export const makeCodexSessionState = async directory => {
   const THREAD = 'checkpoint';
   return harden({
     entries,
-    anchors,
     /** @returns {Promise<Record<string, unknown>>} */
     readThread: async () => {
       if (!(await thread.has(THREAD))) return harden({});

@@ -111,14 +111,11 @@ export const makeCodexNativeController = ({
           const state = await openState(records.directory);
           const saved = await state.readThread();
           assertOpen();
-          // No lifetime ceiling: a session's journal grows with what it did,
-          // large payloads are stored by reference, and the anchor store
-          // keeps only the newest head. See the bounds note in
-          // audit-journal.js.
+          // Required host-private diagnostics remain distinct from Floot's
+          // effect journal and the operational thread checkpoint.
           const journal = makeStoredAuditJournal(state.entries, {
             journalId: `codex-${approved.sessionId}`,
             sessionId: approved.sessionId,
-            anchorPowers: state.anchors,
           });
           return { home, state, saved, journal };
         },

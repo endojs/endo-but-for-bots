@@ -17,7 +17,6 @@ import path from 'node:path';
 import {
   canonicalAuditJson,
   makeStoredAuditJournal,
-  verifyAuditEntries,
   parseCanonicalAuditJson,
 } from '../src/audit-journal.js';
 import {
@@ -147,7 +146,7 @@ test('write acknowledgement waits for the directory flush after rename', async t
   t.true(acknowledged);
 });
 
-test('failed directory flush rejects an uncertain write and deletion retry flushes absence', async t => {
+test('failed directory flush rejects an uncertain write despite visible bytes', async t => {
   const dir = await makeTmp(t);
   let fail = false;
   let flushes = 0;
@@ -166,17 +165,13 @@ test('failed directory flush rejects an uncertain write and deletion retry flush
     message: 'directory flush refused',
   });
   t.deepEqual(await store.lookup('checkpoint'), { value: 1 });
-  await t.throwsAsync(store.remove('checkpoint'), {
-    message: 'directory flush refused',
-  });
-  t.false(await store.has('checkpoint'));
   fail = false;
   const before = flushes;
-  await store.remove('checkpoint');
+  await store.storeValue(harden({ value: 2 }), 'checkpoint');
   t.is(
     flushes,
     before + 1,
-    'absence is not a substitute for flushing a prior unlink',
+    'a later checkpoint replacement also waits for directory durability',
   );
 });
 
@@ -238,13 +233,12 @@ test('a symlink where a value should be is not a stored value', async t => {
   t.false((await lstat(path.join(root, 'planted.json'))).isSymbolicLink());
 });
 
-test('the journal runs on a directory exactly as it did on a petstore', async t => {
+test('diagnostic entries survive atomic-file reconstruction', async t => {
   const dir = await makeTmp(t);
   const session = await makeCodexSessionState(path.join(dir, 'abc'));
   const journal = makeStoredAuditJournal(session.entries, {
     journalId: 'codex-abc',
     sessionId: 'abc',
-    anchorPowers: session.anchors,
   });
   await journal.writer.append('session-opened', harden({ turn: 1 }));
   await journal.writer.append('turn-admitted', harden({ turn: 2n }));
@@ -258,33 +252,23 @@ test('the journal runs on a directory exactly as it did on a petstore', async t 
   t.is(entries.length, 2);
   t.like(entries[0], { kind: 'session-opened' });
   t.like(entries[1], { sequence: 1n });
-  t.like(verifyAuditEntries(entries), { ok: true });
 
-  // Reopening reads the same chain back off disk.
+  // Reopening reads the final binding before appending after retained entries.
   const reopened = makeStoredAuditJournal(session.entries, {
     journalId: 'codex-abc',
     sessionId: 'abc',
-    anchorPowers: session.anchors,
   });
   await reopened.writer.append('session-closed', harden({}));
   const reopenedEntries = await readEntries();
   t.is(reopenedEntries.length, 3);
-  t.like(verifyAuditEntries(reopenedEntries), { ok: true });
 });
 
-test('entries and anchors are distinct stores, as the journal requires', async t => {
+test('old anchored layouts refuse instead of silently adopting uncommitted diagnostics', async t => {
   const dir = await makeTmp(t);
-  const session = await makeCodexSessionState(path.join(dir, 'abc'));
-  t.not(session.entries, session.anchors);
-  t.throws(
-    () =>
-      makeStoredAuditJournal(session.entries, {
-        journalId: 'codex-abc',
-        sessionId: 'abc',
-        anchorPowers: session.entries,
-      }),
-    { message: /must be distinct/ },
-  );
+  await makeDirectoryValueStore(path.join(dir, 'anchors'));
+  await t.throwsAsync(makeCodexSessionState(dir), {
+    message: /session reset required/,
+  });
 });
 
 test('a thread checkpoint is absent until written, then read back', async t => {
