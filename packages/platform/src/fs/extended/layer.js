@@ -163,14 +163,12 @@ const enumerateLayerOps = async function* (layerFs) {
               p += piece.length;
             }
             // `write-bytes` ops travel across CapTP when a remote
-            // consumer drains `Layer.diff()`. A `LayerOp` is a plain
-            // serializable record, so it carries its payload as a
-            // base64-encoded string field rather than as a `byteArray`
-            // value: `applyOp` and any consumer (e.g. the chat
-            // layer-diff viewer) decode via `decodeBase64`. This is the
-            // LayerOp record format, distinct from the exo-stream bytes
-            // protocol, which now hauls raw immutable `Uint8Array`
-            // byteArrays on the wire rather than base64.
+            // consumer drains `Layer.diff()`. The `LayerOp` record shape
+            // is its own wire contract, separate from the exo-stream
+            // bytes protocol that now hauls immutable `Uint8Array`
+            // byteArrays, so `bytesBase64` stays base64: moving it to a
+            // byteArray would break consumers that decode it, and is
+            // left for a separate breaking change.
             yield harden({
               kind: 'write-bytes',
               path: childPath,

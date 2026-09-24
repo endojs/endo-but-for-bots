@@ -27,12 +27,12 @@
  *   `Filesystem` the caller hands in (in-memory, node-fs, a zip-backed
  *   `FsBackend`, …).
  *
- * Bytes ride inside `CloneFrame` records as base64 strings: a `CloneFrame`
- * is a plain serializable record threaded through one `PassableReader`, so it
- * carries its payload as a base64 string field rather than as a `byteArray`
- * value (see DESIGN.md §5 / §6). This is the CloneFrame record format,
- * distinct from the exo-stream bytes protocol, which now hauls raw immutable
- * `Uint8Array` byteArrays on the wire rather than base64.
+ * Bytes ride inside `CloneFrame` records as base64 strings. The
+ * `CloneFrame` record shape (`CloneFrameShape`) is its own wire contract,
+ * separate from the exo-stream bytes protocol that now hauls immutable
+ * `Uint8Array` byteArrays. Moving the `chunk` payload to `M.byteArray()`
+ * would break peers that still send base64 frames, so it is left for a
+ * separate breaking change rather than folded into the exo-stream one.
  */
 
 import { E } from '@endo/eventual-send';
