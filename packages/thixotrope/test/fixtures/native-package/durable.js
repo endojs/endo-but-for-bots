@@ -5,7 +5,12 @@ globals.nativeModuleInitializations = (globals.nativeModuleInitializations ?? 0)
 export const make = ({Far}) => {
   let starts = 0;
   return harden({
-    registration: Far('Registration', {starts: () => starts}),
+    registration: Far('Registration', {
+      starts: () => starts,
+      initializations: () => globals.nativeModuleInitializations,
+      setMarker: value => { globals.marker = value; },
+      getMarker: () => globals.marker,
+    }),
     lifecycle: Far('Lifecycle', {started: () => { starts += 1; }}),
   });
 };
