@@ -104,6 +104,7 @@ const baseArgs = (fake, mount, extra = {}) => ({
   backend: 'podman',
   rootfsLabel: 'oci:example/claude:latest',
   makeStdoutIterable,
+  restoreTranscript: async () => restoredReceipt,
   sha256,
   ...extra,
 });
@@ -142,6 +143,9 @@ const nativeCheckpoint = harden({
   context: [{ kind: 'compaction', summary: 'earlier' }],
 });
 const restoredUuid = '00000000-0000-4000-8000-000000000001';
+const continuedTranscript = harden([
+  { kind: 'message', role: 'user', content: 'Journal-owned previous turn' },
+]);
 const restoredReceipt = harden({
   sessionId: restoredUuid,
   leafUuid: '00000000-0000-4000-8000-000000000002',
@@ -670,8 +674,6 @@ for (const captureSucceeds of [false, true]) {
     const restored = [];
     const client = makeClaudeClient(
       baseArgs(fake, makeFakeMount(), {
-        detectPriorConversation: () => true,
-        resolveResumeSessionId: () => 'stale-native',
         restoreTranscript: async records => {
           restored.push(records);
           return restoredReceipt;
@@ -883,7 +885,6 @@ test('parseStreamJsonLines yields a trailing line with no newline', async t => {
 test('parseStreamJsonLines throws on a malformed line', async t => {
   await t.throwsAsync(
     async () => {
-      // eslint-disable-next-line no-unused-vars
       for await (const _ of parseStreamJsonLines(
         bytesIterable([enc.encode('not json\n')]),
       )) {
@@ -964,7 +965,7 @@ test('without an mcpConfigPath no MCP flags are passed', async t => {
   t.false(fake.spawned[0].argv.includes('--mcp-config'));
 });
 
-test('send() adds --continue after the first turn and forwards --model', async t => {
+test('send() restores journal context after first turn and forwards --model', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
     baseArgs(fake, makeFakeMount(), {
@@ -974,11 +975,12 @@ test('send() adds --continue after the first turn and forwards --model', async t
   );
 
   await drain(await client.send('first'));
-  await drain(await client.send('second'));
+  await drain(await client.send('second', { transcript: continuedTranscript }));
 
   t.is(fake.spawned.length, 2);
   t.false(fake.spawned[0].argv.includes('--continue'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--resume'));
+  t.false(fake.spawned[1].argv.includes('--continue'));
   for (const proc of fake.spawned) {
     t.true(proc.argv.includes('--model'));
     t.true(proc.argv.includes('claude-sonnet-4-6'));
@@ -993,7 +995,7 @@ test('a constructor systemPrompt adds --append-system-prompt to every spawn', as
   );
 
   await drain(await client.send('first'));
-  await drain(await client.send('second'));
+  await drain(await client.send('second', { transcript: continuedTranscript }));
 
   t.is(fake.spawned.length, 2);
   for (const proc of fake.spawned) {
@@ -1027,17 +1029,17 @@ test('overlapping sends queue and run in order (serialized)', async t => {
 
   // Fire both sends before draining the first; they must serialize, not race.
   const r1 = await client.send('first');
-  const r2 = await client.send('second');
+  const r2 = await client.send('second', { transcript: continuedTranscript });
   await drain(r1);
   await drain(r2);
 
   t.is(fake.spawned.length, 2);
   t.is(fake.spawned[0].argv[2], 'first');
   t.is(fake.spawned[1].argv[2], 'second');
-  // The second turn ran strictly after the first, so it resumes with
-  // --continue. A concurrent race would not guarantee this.
+  // Queued sends restore their explicitly supplied context independently.
   t.false(fake.spawned[0].argv.includes('--continue'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--resume'));
+  t.false(fake.spawned[1].argv.includes('--continue'));
 });
 
 test('a stream error surfaces as an abort terminal event', async t => {
@@ -1364,6 +1366,7 @@ test('a lazy provision thunk runs once on first send and is reused', async t => 
     workspaceMountPoint: '/tmp/claude-sandbox-sess-lazy',
     backend: 'podman',
     makeStdoutIterable,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
       return { slice: fake.slice, mountHandle: mount.handle };
@@ -1373,7 +1376,7 @@ test('a lazy provision thunk runs once on first send and is reused', async t => 
   // Not provisioned until first use.
   t.is(provisionCount, 0);
   await drain(await client.send('one'));
-  await drain(await client.send('two'));
+  await drain(await client.send('two', { transcript: continuedTranscript }));
   t.is(provisionCount, 1);
   t.is(fake.spawned.length, 2);
 
@@ -1391,6 +1394,7 @@ test('terminate() before any lazy provision creates nothing', async t => {
     workspaceMountPoint: '/tmp/claude-sandbox-sess-noop',
     backend: 'podman',
     makeStdoutIterable,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
       return { slice: makeFakeSlice().slice };
@@ -1410,7 +1414,7 @@ test('status() reports session metadata', async t => {
   t.is(status.rootfs, 'oci:example/claude:latest');
   t.is(status.workspaceMountPoint, '/tmp/claude-sandbox-sess-0001');
   t.false(status.terminated);
-  t.false(status.conversationStarted);
+  t.false(Object.hasOwn(status, 'conversationStarted'));
 });
 
 test('help() describes the ClaudeClient surface', async t => {
@@ -1419,147 +1423,64 @@ test('help() describes the ClaudeClient surface', async t => {
   t.regex(client.help(), /send\(prompt/);
 });
 
-test('detectPriorConversation decides --continue per spawn', async t => {
-  const fake = makeFakeSlice([[], [], []]);
-  let persisted = false;
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => persisted,
-    }),
-  );
+for (const option of [
+  'detectPriorConversation',
+  'resolveResumeSessionId',
+  'describeTranscripts',
+  'conversationStarted',
+]) {
+  test(`obsolete ${option} presence is rejected before resources`, t => {
+    const fake = makeFakeSlice();
+    let provisions = 0;
+    t.throws(
+      () =>
+        makeClaudeClient(
+          baseArgs(fake, makeFakeMount(), {
+            [option]: undefined,
+            provision: async () => {
+              provisions += 1;
+              return { slice: fake.slice };
+            },
+          }),
+        ),
+      { message: /Obsolete Claude ambient-continuation/ },
+    );
+    t.is(provisions, 0);
+    t.is(fake.spawned.length, 0);
+  });
+}
 
-  // First turn: no transcript yet → fresh conversation.
-  await drain(await client.send('first'));
-  t.false(fake.spawned[0].argv.includes('--continue'));
-
-  // Simulate claude having persisted the first turn's transcript.
-  persisted = true;
-  await drain(await client.send('second'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
-
-  // Transcript gone again (e.g. config dir wiped) → detector wins over the
-  // in-memory conversationStarted flag, so the turn does not pass a
-  // --continue that has nothing to resume.
-  persisted = false;
-  await drain(await client.send('third'));
-  t.false(fake.spawned[2].argv.includes('--continue'));
-});
-
-test('a first turn killed before claude persisted does not poison the next with --continue', async t => {
-  // The in-memory flag alone would flip to true after the first spawn even
-  // when the process was killed before writing a transcript; the detector
-  // (still reporting no transcript) must override it.
+test('every send restores supplied journal context, never ambient continuation', async t => {
+  const restored = [];
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
     baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => false,
-    }),
-  );
-  await drain(await client.send('killed early'));
-  await drain(await client.send('retry'));
-  t.is(fake.spawned.length, 2);
-  t.false(fake.spawned[0].argv.includes('--continue'));
-  t.false(fake.spawned[1].argv.includes('--continue'));
-});
-
-test('a detector throw falls back to the in-memory flag', async t => {
-  const fake = makeFakeSlice([[], []]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => {
-        throw new Error('EACCES');
-      },
-    }),
-  );
-  await drain(await client.send('first'));
-  await drain(await client.send('second'));
-  t.false(fake.spawned[0].argv.includes('--continue'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
-});
-
-test('construction with a prior conversation waits for an explicit send', async t => {
-  const fake = makeFakeSlice([[]]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => true,
-    }),
-  );
-  await new Promise(resolve => setImmediate(resolve));
-  t.is(fake.spawned.length, 0);
-  await drain(await client.send('next'));
-  t.is(fake.spawned.length, 1);
-  t.is(fake.spawned[0].argv[2], 'next');
-});
-
-test('within one incarnation a session resumes what it started, not the records again', async t => {
-  // The other half of the rule. Across incarnations the records decide, and
-  // the test above pins that. Within one, the conversation this incarnation
-  // built is the live one, so a second turn continues it rather than
-  // rewriting the store underneath a model that is holding it -- restoring
-  // twice would fork a second conversation out of the same history.
-  const written = [];
-  const fake = makeFakeSlice([[], []]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => true,
-      resolveResumeSessionId: () => 'the-one-this-incarnation-made',
       restoreTranscript: async records => {
-        written.push(records.length);
+        restored.push(records);
         return restoredReceipt;
       },
     }),
   );
-  const transcript = [{ kind: 'message', role: 'user', content: 'earlier' }];
-  await drain(await client.send('first', { transcript }));
-  t.deepEqual(written, [1], 'the first turn of the incarnation restores');
-  t.true(fake.spawned[0].argv.includes(restoredUuid));
-
-  await drain(await client.send('second', { transcript }));
-  t.deepEqual(written, [1], 'the second turn does not restore again');
-  t.true(
-    fake.spawned[1].argv.includes('the-one-this-incarnation-made'),
-    'it resumes the conversation this incarnation created',
-  );
-  t.false(fake.spawned[1].argv.includes(restoredUuid));
+  t.teardown(() => client.terminate());
+  await drain(await client.send('first', { transcript: continuedTranscript }));
+  await drain(await client.send('second', { transcript: continuedTranscript }));
+  t.deepEqual(restored, [continuedTranscript, continuedTranscript]);
+  for (const proc of fake.spawned) {
+    t.true(proc.argv.includes('--resume'));
+    t.true(proc.argv.includes(restoredUuid));
+    t.false(proc.argv.includes('--continue'));
+  }
 });
 
-test('a store that outlived the daemon does not decide the conversation', async t => {
-  // The config directory is a host bind, so after a restart the CLI's own
-  // copy is still sitting there and `--continue` would find it. That is the
-  // behaviour this design replaces: a store that survives is not the same
-  // claim as a record the stack owns. With records in hand the stack's copy
-  // is written and resumed by id; with none, there is no conversation to
-  // continue and the turn starts clean rather than adopting whatever the
-  // store happens to hold.
-  const written = [];
-  const make = extra =>
-    makeClaudeClient(
-      baseArgs(fake, makeFakeMount(), {
-        detectPriorConversation: () => true,
-        resolveResumeSessionId: () => 'stale-from-the-store',
-        restoreTranscript: async records => {
-          written.push(records.length);
-          return restoredReceipt;
-        },
-        ...extra,
-      }),
-    );
-  let fake = makeFakeSlice([[]]);
-  await drain(
-    await make({}).send('next', {
-      transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
-    }),
-  );
-  t.deepEqual(written, [1]);
-  t.true(fake.spawned[0].argv.includes('--resume'));
-  t.true(fake.spawned[0].argv.includes(restoredUuid));
-  t.false(fake.spawned[0].argv.includes('stale-from-the-store'));
-  t.false(fake.spawned[0].argv.includes('--continue'));
-
-  fake = makeFakeSlice([[]]);
-  await drain(await make({}).send('next'));
-  t.false(fake.spawned[0].argv.includes('--continue'));
-  t.false(fake.spawned[0].argv.includes('--resume'));
+test('admitted prompt without native init still fences a later context-free send', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  await drain(await client.send('first'));
+  const result = await drain(await client.send('missing history'));
+  t.is(result.at(-1).type, 'abort');
+  t.regex(result.at(-1).reason, /requires host-journal context/);
+  t.is(fake.spawned.length, 1);
 });
 
 test('fresh construction does not dispatch an unobserved prompt', async t => {
@@ -1615,6 +1536,7 @@ test('terminate() racing a mount recreate never re-provisions', async t => {
     workspacePath: '/workspace',
     backend: 'podman',
     makeStdoutIterable,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
       return {
@@ -1689,6 +1611,7 @@ test('a send racing a mount recreate waits for the teardown gate', async t => {
     workspacePath: '/workspace',
     backend: 'podman',
     makeStdoutIterable,
+    restoreTranscript: async () => restoredReceipt,
     provision: async extras => {
       provisionCount += 1;
       const n = provisionCount;
@@ -1714,7 +1637,7 @@ test('a send racing a mount recreate waits for the teardown gate', async t => {
     harden([{ cap: harden({}), innerPath: '/mnt/r', mode: 'rw' }]),
   );
   await unmountStartedP; // the old workspace unmount is in progress
-  const sendP = client.send('two'); // races the recreate
+  const sendP = client.send('two', { transcript: continuedTranscript }); // races the recreate
   await new Promise(r => setTimeout(r, 20));
   // The gate holds: no provision may overlap the teardown, or the fresh 9P
   // mounts could be unmounted by the old slice's teardown.
@@ -1823,6 +1746,7 @@ test('setExtraMounts refuses eager and terminated clients without recording', as
     workspaceMountPoint: '/tmp/x',
     backend: 'podman',
     makeStdoutIterable,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisions += 1;
       return { slice: makeFakeSlice([]).slice };

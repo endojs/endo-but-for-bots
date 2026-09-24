@@ -44,7 +44,7 @@ const makeFakeSession = () => {
       idle = true;
     },
     async status() {
-      return harden({ sessionId: 'x', conversationStarted: turns.length > 0 });
+      return harden({ sessionId: 'x' });
     },
   });
   return { facet, turns, interrupts: () => interrupts };
@@ -495,7 +495,7 @@ test('interrupt() tolerates an idle session; acknowledge() is a no-op; status() 
   t.is(interrupts(), 2);
   t.is(turns.length, 1);
   await t.notThrowsAsync(() => E(run).acknowledge('whatever'));
-  t.like(await E(run).status(), { sessionId: 'x', conversationStarted: true });
+  t.like(await E(run).status(), { sessionId: 'x' });
 });
 
 test('terminate() stops once through the owner and a second create stops the first', async t => {

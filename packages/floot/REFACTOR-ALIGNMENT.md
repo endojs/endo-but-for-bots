@@ -197,10 +197,10 @@ can repeat retained UUIDs with identical context payloads but changed metadata.
 Production projection must account for attachments and distinguish such repeats
 from conflicting payloads. One automatic native-tool fixture is not proof of
 Endo-effect reconciliation, repeated/interrupted capture or durable replay.
-The existing host-side `makeTranscriptResume` helper is not a symlink-race-safe
-reader of guest-writable content; do not extend it to ingest checkpoints.
-An in-sandbox data-only capture using the existing process transport is the
-bounded direction under review, not a new durable storage/lifecycle owner.
+The former host-side `makeTranscriptResume` helper was not a symlink-race-safe
+reader of guest-writable content and is now removed with the ambient resume path.
+Checkpoint ingestion uses in-sandbox data-only capture over the existing process
+transport, not a new durable storage/lifecycle owner.
 
 Implementation in progress: an image-baked helper reads the native JSONL inside
 the sandbox after the CLI exits and returns a complete summary/retained-tail
@@ -643,8 +643,29 @@ This integration is not RA-02 completion or deployment approval.
 Current-turn compaction explicitly refuses checkpoint publication until its
 replacement-prefix coverage rule is established; failed/cancelled capture remains
 disabled, and real signature/account/runtime/system/tool binding remains open.
-The old no-init standalone live-continuation branch cannot publish checkpoints
-without a trusted cut; remove that obsolete path next rather than expanding it.
+The obsolete no-init standalone live-continuation branch is now removed.
+Every continuation uses supplied journal records; no `--continue`, newest-file
+selection, detector/resolver fallback, or host-side diagnostic scanner remains.
+The client fences context-free repeats when prompt admission starts, even if no
+native init event arrives; retired constructor hooks reject before acquisition.
+Independent review approves the deletion; the full Claude suite passes 361 tests,
+source types, formatting and documentation gates pass, and scoped lint has no errors.
+The deleted scanner remains recoverable from Git history; no daemon state was removed.
+
+Failed-turn notice conformance now has an explicit pinned-loader contract in the
+isolated host probe: the Floot failure notice replaces only the exact native
+continuation-text/`No response requested.` padding observed after a tool result.
+All earlier request messages and tool-result fields remain exact; four mutations
+of signature/result/notice/padding refuse.
+The probe reports a semantic difference, not identical full request prefixes.
+One synthetic thinking block survived and the tool executed once across resumes.
+This does not enable failed-turn capture or establish real signature acceptance.
+The next capture gate must certify a mainline terminal failure in the observer,
+not just a loose raw `is_error` flag, and retain the producer's diagnostics if the
+capture helper fails.
+Known exited status, exact prefix/current-turn coverage and reconciled tool
+evidence remain necessary; unknown status, signals and cancellation cannot seal
+a replacement checkpoint through this path.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the

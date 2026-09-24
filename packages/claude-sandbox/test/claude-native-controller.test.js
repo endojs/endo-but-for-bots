@@ -22,6 +22,16 @@ import {
 
 const SANDBOX_A = makeSandboxSessionId('a');
 
+test('controller rejects obsolete resume hook presence before acquisition', t => {
+  t.throws(
+    () =>
+      makeClaudeNativeController(
+        /** @type {any} */ ({ makeResume: undefined }),
+      ),
+    { message: 'Obsolete Claude ambient resume hook is not supported' },
+  );
+});
+
 /**
  * What a slice reports about itself, synthesized from the policy it was asked
  * for. The controller restates this as its hosted policy and checks it at the
@@ -354,14 +364,6 @@ const fixture = (
           },
         });
       },
-      makeResume(directory, options) {
-        events.push(['resume', directory, options]);
-        return harden({
-          listTranscripts: () => [],
-          resolveResumeSessionId: () => undefined,
-          detectPriorConversation: () => false,
-        });
-      },
       makeClient(options) {
         clients.push(options);
         if (realClient) return makeClaudeClient(options);
@@ -567,10 +569,9 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
     'the controller hands the client no verdict derived from the surviving store',
   );
   t.false(Object.hasOwn(client, 'initialPrompt'));
-  t.deepEqual(
-    f.events.find(event => Array.isArray(event) && event[0] === 'resume'),
-    ['resume', `/state/${SANDBOX_A}`, { debug: false }],
-  );
+  t.false(Object.hasOwn(client, 'detectPriorConversation'));
+  t.false(Object.hasOwn(client, 'resolveResumeSessionId'));
+  t.false(Object.hasOwn(client, 'describeTranscripts'));
   // The grant is started and its evidence checked before any local effect.
   const order = f.events.filter(
     event =>

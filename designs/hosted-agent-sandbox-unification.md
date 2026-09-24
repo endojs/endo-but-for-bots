@@ -3,12 +3,27 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-23 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
+
+### Native context ownership — 2026-09-24
+
+Claude ordinary-turn native checkpoints now use the Floot journal as authority,
+with exact restored-prefix and current-stream coverage checked before publication.
+The host-side `makeTranscriptResume` scanner and ambient `--continue` fallback
+are removed; all continuation is projected from supplied journal records.
+The persistent config mount has not yet moved to tmpfs.
+Durable dispatch records require Claude's native format so failed capture cannot
+silently restore a plain-text-only conversation after journal reconstruction.
+Forensic history remains readable.
+Compaction, failed/cancelled native capture, real-provider signature acceptance,
+and coordinated deployment remain open; see the current
+[refactor alignment audit](../packages/floot/REFACTOR-ALIGNMENT.md).
+Older sections below describe intermediate plans and are not current acceptance.
 
 ### One session provisioner and factory — 2026-09-22
 
