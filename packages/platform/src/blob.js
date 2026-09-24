@@ -10,9 +10,12 @@ import { ReadableBlobInterface } from './fs/interfaces.js';
 const CHUNK_BYTES = 48 * 1024;
 
 /**
+ * Yield the bytes as frames of at most 48 KiB, so each frame stays under the
+ * default `M.byteArray()` reader limit of 100_000 bytes.
+ *
  * @param {Uint8Array | Promise<Uint8Array>} bytesOrPromise
  */
-async function* byteChunks(bytesOrPromise) {
+export async function* byteChunks(bytesOrPromise) {
   const bytes = await bytesOrPromise;
   for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
     const end = Math.min(offset + CHUNK_BYTES, bytes.length);
@@ -44,3 +47,4 @@ export const blobFromBytes = bytesOrPromise => {
   });
 };
 harden(blobFromBytes);
+harden(byteChunks);

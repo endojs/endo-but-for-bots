@@ -24,6 +24,7 @@ import {
   lineRangeToByteSlice,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
+import { byteChunks } from '@endo/platform/blob';
 import { sha256 } from '@endo/sha256';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -78,19 +79,13 @@ const assertReadableBlobSource = (value, methodNames) => {
 harden(assertReadableBlobSource);
 
 /**
- * Wrap a byte range as a `PassableBytesReader` (what `fetch` returns). An empty
- * range yields a reader that is immediately done.
+ * Wrap a byte range as a `PassableBytesReader` (what `fetch` returns), in
+ * reader-sized frames. An empty range yields a reader that is immediately
+ * done.
  *
  * @param {Uint8Array} bytes
  */
-const bytesFromRange = bytes => {
-  function* generator() {
-    if (bytes.length > 0) {
-      yield bytes;
-    }
-  }
-  return bytesReaderFromIterator(generator());
-};
+const bytesFromRange = bytes => bytesReaderFromIterator(byteChunks(bytes));
 harden(bytesFromRange);
 
 /**
@@ -1878,15 +1873,10 @@ const makeReadableBlobView = (
       if (isFull) {
         return E(readOnlyFile).stream(synPromise);
       }
-      // Attenuated view: stream the selected bytes as one chunk.
-      return bytesReaderFromIterator(
-        /** @type {any} */ (
-          (async function* selected() {
-            const bytes = await readSelected();
-            if (bytes.length > 0) yield bytes;
-          })()
-        ),
-      ).stream(/** @type {any} */ (synPromise));
+      // Attenuated view: stream the selected bytes in reader-sized frames.
+      return bytesReaderFromIterator(byteChunks(readSelected())).stream(
+        /** @type {any} */ (synPromise),
+      );
     },
     async text() {
       return isFull ? E(readOnlyFile).text() : decodeUtf8(await readSelected());

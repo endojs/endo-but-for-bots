@@ -230,6 +230,21 @@ test('readOnly() blob view exposes named reads over the live file', async t => {
   t.false(viewMethods.includes('writeText'));
 });
 
+test('EndoMountFile.byteRange streams a large selection in reader-sized frames', async t => {
+  const rootPath = makeTemporaryRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  // 200_000 bytes exceeds the default 100_000-byte `M.byteArray()` reader
+  // limit, so the selection must arrive as several frames.
+  fs.writeFileSync(path.join(rootPath, 'big.txt'), 'x'.repeat(250_000));
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('big.txt'));
+  const range = await E(file).byteRange(0n, 200_000n);
+  let total = 0;
+  for await (const chunk of iterateBytesReader(/** @type {any} */ (range))) {
+    total += chunk.length;
+  }
+  t.is(total, 200_000);
+});
+
 test('EndoMountFile.byteRange attenuates to a read-only byte-interval view', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });

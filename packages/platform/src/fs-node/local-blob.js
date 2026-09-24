@@ -17,6 +17,7 @@ import { sha256 } from '@endo/sha256';
 // which returns a new `LocalBlob` over a selected byte or line interval — the
 // same interface, so ranges compose. See
 // designs/readableblob-range-attenuation.md.
+import { byteChunks } from '../blob.js';
 import { ReadableBlobRangeInterface } from '../fs/interfaces.js';
 import {
   assertByteRange,
@@ -112,15 +113,10 @@ export const makeLocalBlob = (
           /** @type {any} */ (synPromise),
         );
       }
-      // Attenuated view: stream the selected bytes as one chunk.
-      return bytesReaderFromIterator(
-        /** @type {any} */ (
-          (async function* selected() {
-            const bytes = await readSelected();
-            if (bytes.length > 0) yield bytes;
-          })()
-        ),
-      ).stream(/** @type {any} */ (synPromise));
+      // Attenuated view: stream the selected bytes in reader-sized frames.
+      return bytesReaderFromIterator(byteChunks(readSelected())).stream(
+        /** @type {any} */ (synPromise),
+      );
     },
     text: async () =>
       isFull
