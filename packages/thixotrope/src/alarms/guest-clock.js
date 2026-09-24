@@ -5,10 +5,9 @@ import harden from '@endo/harden';
 /**
  * A clock that lives in the guest vat that uses it.
  *
- * This replaces a host-side clock service. There is
- * no host-side registry of alarms, no control facet the host calls into, and
- * no reconciliation: the map below is the only record, and orthogonal
- * persistence keeps it — resolvers included — across sleep and host restart.
+ * Orthogonal persistence keeps this clock's promises and outstanding cleanup
+ * acknowledgements across sleep and restart. The host retains deadlines and
+ * outcomes only until this vat has recorded a local settlement.
  *
  * The host contributes one thing a vat cannot do for itself: a promise that
  * settles at a deadline and survives the host's own restart. Listening on it
@@ -21,8 +20,45 @@ import harden from '@endo/harden';
  */
 export const makeGuestClock = alarms => {
   let nextId = 0n;
-  /** @type {Map<string, bigint>} */
-  const pending = new Map();
+  /** @type {Set<string>} */
+  const releases = new Set();
+  /** @type {Map<string, Promise<void>>} */
+  const releasing = new Map();
+
+  /** @param {string} id @returns {Promise<void>} */
+  const release = id => {
+    const existing = releasing.get(id);
+    if (existing) return existing;
+    const job = (async () => {
+      for (;;) {
+        try {
+          // Idempotent even if the host committed this call before restart.
+          // eslint-disable-next-line no-await-in-loop
+          await E(alarms).release(id);
+          releases.delete(id);
+          return;
+        } catch (error) {
+          if (
+            /** @type {Error} */ (error).message !==
+            'session resumed after restart; pending answer aborted'
+          ) {
+            // Storage or other persistent failures retry on the next clock
+            // use, rather than spinning. Only restart aborts retry immediately.
+            return;
+          }
+        }
+      }
+    })().finally(() => releasing.delete(id));
+    releasing.set(id, job);
+    return job;
+  };
+
+  const retryReleases = () => Promise.all([...releases].map(release));
+  /** @param {string} id */
+  const queueRelease = id => {
+    releases.add(id);
+    void release(id);
+  };
 
   /** @param {unknown} deadline */
   const assertDeadline = deadline => {
@@ -37,16 +73,32 @@ export const makeGuestClock = alarms => {
   /** @param {bigint} deadline */
   const arm = async deadline => {
     assertDeadline(deadline);
+    await retryReleases();
     nextId += 1n;
     const id = `${nextId}`;
-    // The host hands the promise over inside a record; see durable-alarms.js.
-    const { settlement } = await E(alarms).arm(id, deadline);
-    pending.set(id, deadline);
-    // Forget the record once it settles, however it settles; the host has
-    // already dropped its own row.
-    const forget = () => pending.delete(id);
-    void Promise.resolve(settlement).then(forget, forget);
-    return harden({ id, settlement });
+    try {
+      // Only this vat observes the host promise. Callers, including other vats,
+      // receive a local promise whose settlement persists before the outbound
+      // release is delivered to the host.
+      const { settlement: hostSettlement } = await E(alarms).arm(id, deadline);
+      const settlement = Promise.resolve(hostSettlement).then(
+        at => {
+          queueRelease(id);
+          return at;
+        },
+        error => {
+          queueRelease(id);
+          throw error;
+        },
+      );
+      // A discarded alarm must not produce an unhandled rejection.
+      void settlement.catch(() => {});
+      return harden({ id, settlement });
+    } catch (error) {
+      // An interrupted answer does not prove the host failed to arm it.
+      queueRelease(id);
+      throw error;
+    }
   };
 
   return Far('GuestClock', {
@@ -58,8 +110,8 @@ export const makeGuestClock = alarms => {
      * deadline, with the host time it settled at.
      *
      * Arming is an ordinary host call, so a host restart in the middle of it
-     * rejects — the caller learns the alarm was not armed, which is true. The
-     * waiting afterwards is durable, which is the part that matters.
+     * rejects. The clock releases any host row left by that interrupted call.
+     * Once arming succeeds, the waiting afterwards is durable.
      *
      * @param {bigint} deadline
      * @returns {Promise<bigint>}
@@ -84,15 +136,18 @@ export const makeGuestClock = alarms => {
       return harden({
         settlement,
         canceller: Far('AlarmCanceller', {
-          cancel: () => {
-            pending.delete(id);
+          cancel: async () => {
+            await retryReleases();
             return E(alarms).cancel(id);
           },
         }),
       });
     },
 
-    now: () => E(alarms).now(),
+    now: async () => {
+      await retryReleases();
+      return E(alarms).now();
+    },
   });
 };
 harden(makeGuestClock);
