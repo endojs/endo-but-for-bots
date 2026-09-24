@@ -5,7 +5,55 @@ const LIMIT = 16 * 1024 * 1024;
 const isUuid = value =>
   typeof value === 'string' &&
   /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
-const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+// Compare JSON structure, not object insertion order. Arrays, fields and
+// scalar values remain exact. The byte-prefix receipt below is deliberately
+// separate and still compares historical serialization byte for byte.
+// Explicit traversal frames avoid recursive comparison on deeply nested tool
+// input, and avoid queuing every child of a wide object at once.
+const same = (left, right) => {
+  const ancestorsLeft = new WeakSet();
+  const ancestorsRight = new WeakSet();
+  const stack = [];
+  let a = left;
+  let bValue = right;
+  for (;;) {
+    if (a !== bValue) {
+      if (!a || !bValue || typeof a !== 'object' || typeof bValue !== 'object')
+        return false;
+      if (Array.isArray(a) !== Array.isArray(bValue)) return false;
+      if (Array.isArray(a) && a.length !== bValue.length) return false;
+      const keys = Object.keys(a);
+      if (
+        keys.length !== Object.keys(bValue).length ||
+        keys.some(name => !Object.hasOwn(bValue, name))
+      )
+        return false;
+      // Inputs are JSON records; reject cycles rather than inventing cyclic
+      // equivalence if an internal caller violates that boundary.
+      if (ancestorsLeft.has(a) || ancestorsRight.has(bValue)) return false;
+      ancestorsLeft.add(a);
+      ancestorsRight.add(bValue);
+      stack.push({ left: a, right: bValue, keys, index: 0 });
+    }
+    let next = false;
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      if (frame.index === frame.keys.length) {
+        ancestorsLeft.delete(frame.left);
+        ancestorsRight.delete(frame.right);
+        stack.pop();
+      } else {
+        const name = frame.keys[frame.index];
+        frame.index += 1;
+        a = frame.left[name];
+        bValue = frame.right[name];
+        next = true;
+        break;
+      }
+    }
+    if (!next) return true;
+  }
+};
 
 // Anthropic SDKRateLimitEvent / SDKRateLimitInfo is a capacity notification,
 // not dialogue or a terminal result. Closed shape prevents hidden message or
@@ -395,8 +443,14 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       else
         requireValue(
           stream.type === 'message_delta' &&
-            Object.keys(stream.delta ?? {}).every(key =>
-              ['stop_reason', 'stop_sequence'].includes(key),
+            Object.keys(stream.delta ?? {}).every(
+              key =>
+                ['stop_reason', 'stop_sequence'].includes(key) ||
+                // Anthropic's message delta also carries nullable container
+                // and refusal metadata. Only absence is inert here; populated
+                // metadata needs its own coverage contract before acceptance.
+                (['container', 'stop_details'].includes(key) &&
+                  stream.delta[key] === null),
             ),
         );
     });
