@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-08 |
-| **Updated** | 2026-09-22 |
+| **Updated** | 2026-09-24 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
@@ -13,6 +13,8 @@ Not started. A single stdio MCP server, spawned by `claude` from `--mcp-config`,
 that speaks for exactly one Endo guest: it receives the guest's 64-hex formula id
 out of band, resolves that one guest's facet through a daemon connection, and
 serves **all** `tools/list`/`tools/call` traffic against that facet and no other.
+Its tool catalog is the static guest-agent interface, declared in code as Lal's
+catalog is today; the server does not discover an interface by inspecting a guest.
 Where the daemon connection lives — a harness-owned process outside the confined
 tree, or the claude-spawned server itself — depends on the confinement posture
 (§ *Scoping*). The broker model is the multi-tenant hardening path (§ *Design
@@ -29,8 +31,8 @@ server, speaking MCP over **stdio**, that projects exactly **one guest's**
 tool-call surface and no other's, with the guest denoted by its 64-hex formula
 identifier. This document specifies that server: how the formula id is threaded
 from the configuration into the server process, how the server reaches the guest
-capability through the ordinary daemon client, how the tool catalog is derived and
-pinned, what happens when the child dies, how the tool names survive the denied
+capability through the ordinary daemon client, how the static guest-agent tool
+catalog is served and enforced, what happens when the child dies, how the tool names survive the denied
 built-in set without colliding with the reconciled reserved names, and which
 confinement properties are structural under this transport and which become
 runtime.
@@ -53,8 +55,8 @@ part endo-claude leaves as a bare prerequisite: **how the formula id is threaded
 from an MCP configuration entry into the spawned server** (§ *Threading the formula
 id from configuration*), **how that server reaches the one guest through the
 ordinary daemon client and what authority that hands it** (§ *Scoping*), the
-**server half** of catalog pinning and the dispatch check (§ *Tool catalog
-derivation*), the request- and construction-time **error-code taxonomy**
+**server half** of the static catalog and dispatch check (*Static tool catalog*),
+the request- and construction-time **error-code taxonomy**
 (§ *Fail-closed behavior*), and the **naming** rules. This document composes with
 the [endo-agent-tools](endo-agent-tools.md) MCP-adapter projection rather than
 reinventing it, and does not re-derive endo-claude's client flags.
@@ -85,14 +87,14 @@ for one guest's daemon-side object surface.
 ```mermaid
 flowchart LR
   subgraph claude["@endo/claude (arc item 4): the client + harness"]
-    HARNESS["harness: generates --mcp-config<br/>(env carries the guest formula id)<br/>and --allowedTools from the pinned catalog"]
+    HARNESS["harness: generates --mcp-config<br/>(env carries the guest formula id)<br/>and --allowedTools from the static catalog"]
     CLAUDE["claude -p (confined): MCP client<br/>spawns the server named in --mcp-config"]
   end
   subgraph thisdoc["THIS design: the stdio MCP server (one process)"]
-    SERVER["stdio MCP server (claude-spawned, per call)<br/>reads formula id from env<br/>connects via the daemon client<br/>resolves the one facet; pins pruned catalog<br/>MCP framing + dispatch check"]
+    SERVER["stdio MCP server (claude-spawned, per call)<br/>reads formula id from env<br/>connects via the daemon client<br/>resolves the one facet; serves static catalog<br/>MCP framing + dispatch check"]
   end
   subgraph proj["@endo/agent-tools: the projection"]
-    ADP["MCP adapter: ToolRecord -> MCP Tool<br/>tools/call -> E(facet).method"]
+    ADP["MCP adapter: static ToolRecord -> MCP Tool<br/>tools/call -> guest-bound operation"]
   end
   DAEMON["Endo daemon<br/>bootstrap root host resolves formula id -> guest facet"]
   HARNESS -->|"1. spawns with --mcp-config (env: formula id)"| CLAUDE
@@ -108,16 +110,16 @@ broker, or a daemon-issued guest-scoped bootstrap) holds the daemon connection
 outside the slice, and the claude-spawned server speaks MCP over a channel it is
 given rather than opening the socket — because the sandbox denies the confined
 `claude` tree the daemon socket (§ *Scoping*). The server-side contract (resolve to
-one facet, pin the pruned catalog, dispatch check) is identical either way.
+one facet, serve the static catalog, dispatch check) is identical either way.
 
 [endo-claude](endo-claude.md) decides **when** to spawn, **with what flags**, and
-generates the per-guest `--allowedTools` from the same pinned catalog this server
-pins. [endo-agent-tools](endo-agent-tools.md) owns the **projection** (mapping a
-facet's tool set to an MCP `tools/list` catalog, and an MCP `tools/call` to
-`E(facet).<method>(args)`), present today as a declared stub at
+generates `--allowedTools` from the same static catalog this server serves.
+[endo-agent-tools](endo-agent-tools.md) owns the **projection** (mapping the fixed
+guest-agent interface to an MCP `tools/list` catalog, and an MCP `tools/call` to
+the corresponding operation bound to one guest facet), present today as a declared stub at
 `packages/agent-tools/src/adapters/mcp.js`. This document owns the **server** that
 hosts that projection over stdio: how it is told which guest, how it reaches that
-one guest's facet, the catalog pinning and server-side dispatch
+one guest's facet, the static catalog and server-side dispatch
 check, the fail-closed rules, and the naming.
 
 ## Scoping by formula identifier (the confinement boundary)
@@ -205,13 +207,13 @@ available only where it is not. Stated honestly, per property:
   spawns its own MCP server process (§ *The stdio transport*); each inference has its
   own daemon connection — held by the claude-spawned server in the single-tenant
   shape, or by a per-inference harness-owned broker in the confined shape — and its
-  own freshly-pinned catalog. There is **no shared multi-guest server** (that is the
-  HTTP shape) and no long-lived multiplexed connection across guests. Isolation is per
-  process, not per bearer, exactly as [endo-claude](endo-claude.md) names.
-- **Fail-closed on empty/underivable catalog — preserved.** Unchanged: an
-  unresolvable formula id, a facet projecting zero tools, or an empty post-prune
-  catalog is a construction throw before any tool is served (§ *Fail-closed
-  behavior*).
+  own binding of the static catalog to that guest. There is **no shared multi-guest
+  server** (that is the HTTP shape) and no long-lived multiplexed connection across
+  guests. Isolation is per process, not per bearer, exactly as
+  [endo-claude](endo-claude.md) names.
+- **Fail-closed construction: preserved.** An unresolvable formula id, an
+  unreachable daemon, or an invalid static guest-agent declaration is a construction
+  throw before any tool is served (*Fail-closed behavior*).
 - **Cross-guest isolation — where the daemon connection lives is the boundary, and
   it is not negotiable.** The confinement premise ([endo-posix-sandbox](endo-posix-sandbox.md),
   [endo-claude](endo-claude.md) Design Decision 6) is that the sandbox slice denies
@@ -313,10 +315,10 @@ MCP.)
 ```
 
 The formula id and (when non-default) the daemon socket path ride in `env`. The
-catalog is **not** in the config — the server derives it live from the resolved
-facet (§ *Tool catalog derivation*) — and the client's `--allowedTools` is generated
-separately by the harness from the same pinned catalog. `--strict-mcp-config` pins
-`claude` to exactly this one server.
+catalog is **not** in the config. The server and harness import the same static
+guest-agent interface declaration (*Static tool catalog*); the harness renders
+its names into `--allowedTools`, and the server renders its schemas in `tools/list`.
+`--strict-mcp-config` pins `claude` to exactly this one server.
 
 **Avoiding a temporary config file — decided, not left open.** The maintainer asked
 to prefer process substitution over a temp config file and, in PR #1226, to pin the
@@ -351,91 +353,41 @@ No `0600` on-disk fallback is needed on the pinned platform (Linux, `memfd`/`/de
 available); it survives only as the degenerate carrier for a platform without an
 fd-path form, and even there the id itself stays in `env`.
 
-## Tool catalog derivation
+## Static tool catalog
 
-The catalog is derived **once, at server startup, and pinned**: the single pinned,
-pre-pruned `tools/list` snapshot that [endo-claude](endo-claude.md) Design Decision
-2 requires, driving **both** the client-side `--allowedTools` and the **server-side
-dispatch check**. This document owns the server half of that contract.
+The MCP tool surface is **static and corresponds to the guest-agent interface**.
+It follows the pattern already used by Lal: `packages/lal/tools/index.js` aggregates
+hardened declarative tool records from fixed family modules, and
+`packages/lal/tool-dispatch.js` binds the fixed names to operations over one guest's
+powers. This server similarly imports one hardened declaration of names,
+descriptions, parameter schemas, and dispatch keys. It does not call a guest to
+infer, enumerate, or synthesize the catalog.
 
-- **One snapshot, pruned before pinning.** At startup the server takes one
-  `tools/list` from the projection over the resolved facet, then prunes (in the
-  snapshot itself, before it is pinned) any name containing `__`, any
-  dunder/reserved-property name (`__proto__`, `constructor`, `prototype`,
-  `__getMethodNames__`), and any code-evaluation name (`evaluate`, `eval`,
-  `define`). The pinned value is a `harden`ed null-prototype record, never a bare
-  `Map` (freezing a `Map` leaves `set`/`delete` reachable on internal slots, so a
-  "pinned" `Map` could be re-populated with `evaluate` after pinning).
-- **The dispatch check is the boundary; `--allowedTools` is the belt.** The server
-  **rejects any `tools/call` whose name is not in the pinned snapshot**, server-side,
-  so a leak that ignores the client-side `--allowedTools` still cannot reach a
-  withheld or code-eval tool. Withholding a tool is *pruning its name from the pinned
-  snapshot*, not subtracting it from the client flag.
-- **Client/server agreement by shared derivation.** The client's `--allowedTools`
-  and the server's pinned snapshot must name the same tools. Both derive from the
-  **same facet** with the **same deterministic prune**, so they agree by
-  construction: the harness (which already holds daemon authority) derives the
-  catalog to generate `--allowedTools`, and the server independently re-derives the
-  same catalog from the same facet and pins it. Any drift between the harness's
-  derivation and the server's is bounded by "pinned at startup" (below).
-- **Arguments, not only names (the argument-scope check), as defense in depth.**
-  Surviving petname-designating tools (`lookup`, `list`, `move`, `copy`, `remove`)
-  take **petname** arguments (a petname being a guest-local nickname bound to a
-  capability in that guest's own name table), and `executeTool(name, args)` does not
-  itself constrain `args`. The facet is **not** otherwise open here:
-  [daemon-agent-tools](daemon-agent-tools.md) § Granting already resolves
-  capability-valued petname arguments **fail-closed against the guest's own
-  petstore**, and path arguments are authenticated by the mount or git capability at
-  that boundary. So a guest can only ever name capabilities and paths already inside
-  its one facet's attenuated surface, and cross-facet reach *by argument* is
-  foreclosed at the facet before the server looks. The server's **argument-scope
-  check** is therefore **defense in depth**: it re-checks, server-side, that a
-  `tools/call`'s arguments fall within the facet's attenuated surface and **rejects**
-  (never silently narrows) one that does not, returning the same visible `-32001`
-  JSON-RPC error a name-level rejection returns. To avoid a second, independently-
-  maintained copy of the facet's scope policy (which would drift from the facet's own
-  petstore resolution), the check derives its answer from the **same lookup the facet
-  already owns**: the server resolves each argument's petname through the facet's own
-  fail-closed petstore resolution as a **pre-flight call**, and treats a resolution
-  failure as the rejection, rather than maintaining a separate authorization table.
-  This keeps a single source of truth for "which capabilities are in scope"; its
-  distinct value over the facet failing on its own is a **uniform, reject-only wire
-  shape**: an out-of-scope argument surfaces as the same visible failure the caller
-  can see, never as a narrower success it mistakes for what it asked. (Where
-  [endo-claude](endo-claude.md) Design Decision 2 describes this same server-side
-  check as one that "rejects **or attenuates**" an out-of-scope-argument call, this
-  document's reject-only rule is the narrower, authoritative form for the server half
-  of the contract it owns: the "or attenuates" branch is **superseded** — an
-  out-of-scope argument is always a visible rejection here, never a silently
-  attenuated success.) This is explicitly a **per-call policy** check that
-  re-confirms, at the server, that a call stays *within* the one facet's attenuated
-  surface.
-- **Projection source.** The membership set is the server's own pinned catalog
-  against whichever surface is live: the static Lal tool set today
-  ([endo-gateway-mcp](endo-gateway-mcp.md) *Tool catalog*), or the capability-scoped
-  [daemon-agent-tools](daemon-agent-tools.md) surface once it composes in via the
-  projection's `extra` seam. The server does not invent a derivation; it is the same
-  enumeration the projection already performs for `tools/list`.
+- **One declaration drives both sides.** The harness renders
+  `mcp__endo__<tool>` allow-list entries from the static declaration. The server
+  renders `tools/list` from it and rejects any `tools/call` whose name is absent.
+  There is no duplicated list and no client/server discovery race.
+- **Guest authority remains dynamic; interface shape does not.** A server instance
+  binds the fixed dispatcher to exactly one resolved guest facet. A tool whose
+  operation needs a capability the guest lacks fails through that guest interface;
+  its absence does not reshape `tools/list`. Grant changes therefore affect what a
+  call can do, not which method names exist.
+- **The declaration contains no ambient escape tools.** Code-evaluation operations
+  such as `evaluate`, `eval`, and `define` are not members of this interface. Names
+  containing `__`, dunder/reserved-property names (`__proto__`, `constructor`,
+  `prototype`, `__getMethodNames__`), malformed names, and duplicate or
+  case-confusable names are rejected when the declaration is loaded. This is a
+  build-time/interface invariant, not pruning of a guest-shaped value.
+- **Arguments remain scoped by the guest interface.** Petname-designating
+  operations resolve petnames through the bound guest's own fail-closed petstore,
+  and path operations rely on the bound mount or git capability. An out-of-scope
+  designation returns the visible `-32001` `tool-not-permitted` error with
+  `data.reason = argument-scope`; it is never silently narrowed.
 
-**Pinned at startup, not discovered live; mid-session capability change is
-deliberately not honored.** `tools.listChanged` is advertised **false**. If the
-guest's granted capabilities change while a server is live, the pinned catalog does
-**not** change, and the server emits no `notifications/tools/list_changed`. Two
-reasons make this correct rather than a limitation:
-
-1. **Client/server agreement.** The client's `--allowedTools` was generated from
-   the same snapshot the server pinned. A catalog that grew live would expose,
-   server-side, tools the client's allow-list does not name; a catalog that shrank
-   live would leave the client naming tools the server now rejects. Pinning keeps
-   both halves derived from one value that never moves within a call.
-2. **Staleness is bounded by process lifetime.** Because the server is **per call**
-   — a fresh process per `claude -p` inference (§ *The stdio transport*) — a
-   legitimately changed grant is simply picked up by the **next** inference's fresh
-   snapshot. There is no long-lived broker whose pinned value could outlast a grant
-   change, so no "tear down and reconstruct the broker on
-   reprovision" obligation and no capability-gated-re-pin question arise:
-   staleness cannot exceed one inference's lifetime. Continuity of a long
-   line of thought is an Endo-side capability, never live catalog mutation.
+`tools.listChanged` is **false** and the server emits no
+`notifications/tools/list_changed`: the interface is versioned with the package,
+so changing it requires a package release and a corresponding harness update, not a
+mid-session discovery event.
 
 ## The stdio transport
 
@@ -455,7 +407,7 @@ clients.
 `initialize` **response shape** [endo-gateway-mcp](endo-gateway-mcp.md) uses. The
 two sibling transports share the handshake *shape*, not the label *string*: each
 pins its own `serverInfo.name` (`endo` here, `endo-gateway` there). It further sets
-`tools: { listChanged: false }` (reflecting the pinned catalog) and advertises
+`tools: { listChanged: false }` (reflecting the static interface) and advertises
 `logging: {}` so facet diagnostics ship back as `notifications/message`. A **logging
 facet is exposed** (maintainer, PR #1226); *how* the logs are obtained is immaterial,
 so the server is free to source them from stderr, from the facet's own diagnostics,
@@ -468,7 +420,7 @@ call.** `claude` spawns it as the command its `--mcp-config` names; it lives for
 one `claude -p` process's lifetime and exits on EOF when `claude` closes its stdin
 or exits. Because [endo-claude](endo-claude.md) spawns a fresh `claude -p` per
 inference, there is one server process per inference, each with its own daemon
-connection and freshly-pinned catalog. Concurrent inferences for the same guest are
+connection and fresh binding of the static catalog. Concurrent inferences for the same guest are
 **separate processes**, each with its own connection — no shared, long-lived,
 multiplexed server. So the answer to "spawned per agent or shared" is: **spawned per
 call**, one guest per process, never a shared multi-guest server (that is the HTTP
@@ -488,43 +440,69 @@ shape).
   never an ambient or re-widened surface, and the next inference's fresh process
   re-establishes the connection.
 
+### Structured signals from the `claude` child
+
+The MCP server's stdout belongs to MCP and is consumed by `claude`. Separately, the
+`@endo/claude` harness consumes the stdout of the `claude -p` child. That invocation
+uses `--output-format stream-json --verbose`, so the harness receives a
+newline-delimited JSON event stream instead of treating exit status or human-readable
+text as the only signal.
+
+The harness validates every line and requires exactly one terminal `result` event
+for its prompt. A `result` whose `origin.kind` is `task-notification` belongs to a
+background-task notification and is excluded from that terminal count. A malformed
+line, a truncated stream, no terminal result, or multiple terminal results is a
+`parse-error`/transient failure, never a successful inference.
+
+The terminal event supplies the inference text plus structured status and accounting:
+`is_error`, `subtype`, `api_error_status`, `stop_reason`, `terminal_reason`,
+`permission_denials`, `num_turns`, `duration_ms`, `duration_api_ms`, `ttft_ms`,
+`usage`, `total_cost_usd`, `subagent_stats`, `queued_turn_count`, and
+`fast_mode_state` when present. The harness copies primitives into the hardened
+result record. It classifies a non-error terminal event as `ok`; HTTP 429 or an
+explicit rate/usage-limit terminal reason as `rate-limited`; permission denials as a
+policy refusal; and other API statuses or explicit overload, connection, or timeout
+reasons as typed API/availability failures. Classification uses these fields before any
+compatibility text match.
+
+The stream can also contain `rate_limit_event`. The harness retains
+`rate_limit_info.status`, `rateLimitType`, `resetsAt`, overage status, and the
+`unifiedWindows.five_hour` and `unifiedWindows.seven_day` utilization/reset records.
+These are the deterministic quota and retry inputs for pool admission. Absence of a
+rate-limit event means quota telemetry is unknown; it does not mean zero utilization.
+This parsing contract is part of the harness/server integration test even though the
+events are emitted by the `claude` child rather than by the MCP server.
+
 ## Fail-closed behavior
 
-An empty or underivable catalog is an **error at startup**, never a running server
-that exposes zero tools. Concretely, the server **refuses to construct** (throws
-before answering `initialize`, so the harness/client observe a dead server rather
-than a zero-tool one) when:
+The server **refuses to construct** (throws before answering `initialize`) when:
 
 - the formula id is missing or not 64-hex, or does not resolve to a guest facet;
-- the daemon is unreachable (the client cannot open a session);
-- the projection over the resolved facet yields **no** tools; or
-- the catalog is **empty after pruning** (every projected name was unsafe/code-eval).
+- the daemon is unreachable (the client cannot open a session); or
+- the static guest-agent declaration is empty or violates its name invariants.
 
 **A discriminated construction throw, matching the request-time shape.** The
 construction throw carries the same `reason`-style discriminant the request-time
 table below models, so an operator or harness reading a construction failure gets
 the same "why, and what to do about it" clarity a request-time failure gives, and
-can branch on config bug versus attacker-shaped guest versus implementation bug. The
+can branch on configuration versus deployment versus implementation bugs. The
 discriminant values are `invalid-formula-id` (missing, not 64-hex, or unresolvable),
 `daemon-unreachable` (the daemon client could not open a session),
-`empty-facet` (the projection yields zero tools), `empty-after-prune` (every
-projected name was unsafe/code-eval), and — for the two well-formedness failure
-classes of § *Naming* — `malformed-name` (a projected name that is structurally
-invalid, `__`-containing, dunder/reserved, or code-eval reaching the guard unpruned:
-an **implementation bug in the projection**) and `catalog-name-conflict` (two
-projected names that are internally duplicate or case-confusable twins: a
-**naming-hygiene collision** within the catalog). These are kept distinct on
+`empty-interface` (the static declaration contains no tools), and, for the two
+well-formedness failure classes of *Naming*, `malformed-name` (a declared name
+that is structurally invalid, `__`-containing, dunder/reserved, or code-eval) and
+`catalog-name-conflict` (two declared names that are duplicate or case-confusable
+twins). These are kept distinct on
 purpose: collapsing them would defeat the discriminant's stated goal of letting the
 reader branch on why the catalog is bad. Both surfaces use the same compound
 hyphenated-kebab grammar (`name-scope`/`argument-scope` at request time; the values
 above at construction), so a single harness parser reads the same string shape on
 both.
 
-A zero-tool server that "passes confinement by exposing nothing" is the exact
+A zero-tool interface that "passes confinement by exposing nothing" is the exact
 anti-pattern this rule rejects: confinement must be demonstrated positively (the
-guest's real tools can be invoked), not by an empty surface. This mirrors
-[endo-claude](endo-claude.md) Design Decision 2's empty-catalog throw and its
-positive-confinement test. At **request** time the same posture holds: an unknown
+guest's real tools can be invoked), not by an empty surface. At **request** time the
+same posture holds: an unknown
 `tools/call` name is a JSON-RPC error, a malformed frame is an error, and the server
 never falls back to an unscoped surface on any error path.
 
@@ -537,7 +515,7 @@ class carries its own JSON-RPC error, not one undifferentiated error:
 |---|---|---|
 | Malformed frame / not valid JSON-RPC | `-32700` parse error / `-32600` invalid request | client bug: fix and resend |
 | Unknown method (not `tools/list`/`tools/call`) | `-32601` method not found | no |
-| Policy rejection (name or arguments outside the pinned catalog / facet scope: the dispatch check, including the argument-scope check) | application code `-32001` `tool-not-permitted`, `data.reason` = `name-scope` \| `argument-scope` | no (the surface will not widen) |
+| Policy rejection (name outside the static interface or arguments outside the facet scope) | application code `-32001` `tool-not-permitted`, `data.reason` = `name-scope` \| `argument-scope` | no (the surface will not widen) |
 | Daemon connection down (the harness-side `bridge-down`) | application code `-32010` `bridge-down`, `data.detail` mirroring the harness's `{type: 'bridge-down', detail}` | transient (the harness may respawn on the next call) |
 | **Facet method threw** (an in-catalog, in-scope `tools/call` that *reached* the facet and the target application code raised, for example `readText` on a missing path) | **not** a JSON-RPC error: a successful `tools/call` **result** with `isError: true` and the failure in the result `content`, the standard MCP "the tool ran and failed" shape; the harness settles it to `{type: 'facet-threw', method, error}` ([endo-claude](endo-claude.md) Design Decision 8), carrying `error: toPassableError(caught)` | application-level: up to the model, given the surfaced error |
 
@@ -566,25 +544,24 @@ baseline is fail-closed*). Two naming obligations follow.
 
 - **The server label is a fixed harness literal**, `endo`, so every tool lands as
   `mcp__endo__<tool>` and the client's `--allowedTools` entries are computable from
-  the pinned catalog. It is not guest-derived and cannot be influenced by the
-  confined process.
+  the static interface declaration. It is not guest-derived and cannot be influenced
+  by the confined process.
 - **The `<tool>` portion is the flat, interface-native name from the reconciled
   namespace**, carrying **no transport or category prefix** (never `endo_readText`,
   never `stdio__readText`). The `mcp__<server>__` prefix is added by Claude Code, not
   baked into the tool name, so the tool name itself stays in the bare camelCase
-  grammar. The `__`-containing names pruned above are pruned partly for this reason:
-  a tool named `foo__bar` would render `mcp__endo__foo__bar` and parse ambiguously
-  against the CLI's own `mcp__<server>__<tool>` grammar.
+  grammar. The static declaration rejects `__`-containing names partly for this
+  reason: a tool named `foo__bar` would render `mcp__endo__foo__bar` and parse
+  ambiguously against the CLI's own `mcp__<server>__<tool>` grammar.
 
 **Well-formed names, and no collision the server can actually cause.** The
-construction guard enforces exactly the invariants this server *owns*: the projected
+construction guard enforces exactly the invariants this server *owns*: the declared
 catalog must carry no `__`-containing name, no dunder/reserved-property name, no
-code-eval name (all pruned above), no two names that duplicate or are
+code-eval name, no two names that duplicate or are
 case-confusable twins of each other (`readtext` beside `readText`), and no malformed
-name. A projected catalog that violates any of these **throws before the server
-ships** (a fail-closed construction refusal, of a piece with the empty-catalog rule
-above). These are all properties of *this catalog against itself*, decidable from
-the projection alone.
+name. A declaration that violates any of these **throws before the server ships**.
+These are properties of the versioned interface itself and are testable without a
+guest or daemon connection.
 
 What the guard deliberately does **not** do is fail construction on a bare-name
 collision against a *different* MCP server's reserved namespace. The flat naming
@@ -616,11 +593,11 @@ adapter-implementation prerequisite [endo-claude](endo-claude.md) already names.
 **stdio server** (the claude-spawned command named by `--mcp-config`) is a single
 process that, at startup: reads and validates `ENDO_GUEST_FORMULA_ID` from its
 environment, opens a daemon session with the usual client, resolves the one guest's
-facet at the bootstrap root host (`E(host).lookupById(formulaId)`), takes and pins
-the pruned `tools/list` snapshot,
-then runs the MCP framing loop — decoding `tools/list`/`tools/call` frames off
+facet at the bootstrap root host (`E(host).lookupById(formulaId)`), imports the
+static guest-agent declaration, then runs the MCP framing loop: decoding
+`tools/list`/`tools/call` frames off
 stdin, applying the name- and argument-scope dispatch check, invoking the projection
-(`tools/call -> E(facet).method`), and writing replies to stdout.
+through operations bound to that guest facet, and writing replies to stdout.
 
 **Who holds the daemon connection depends on the confinement posture** (§ *Scoping*).
 In the **single-tenant** shape the claude-spawned server itself resolves the facet and
@@ -628,13 +605,13 @@ holds the daemon reach; in the **confined** shape the connection is held by a
 harness-owned process outside the slice (a broker, or a daemon-issued scoped
 bootstrap) and the claude-spawned side holds only MCP over the channel it is given —
 never the raw fd, never a socket path. Either way the server-side contract this
-document owns is the same: resolve to **one** guest facet, pin the pruned catalog,
+document owns is the same: resolve to **one** guest facet, serve the static catalog,
 apply the name- and argument-scope dispatch check, and dispatch `tools/call` to that
 one facet and no other. The exact split of the resolution-and-dispatch logic between
 `@endo/agent-tools` (the projection), `@endo/claude` (the harness that generates the
 config and, in the confined shape, owns the connection), and the claude-spawned stdio
 process follows the ordinary module boundary and is settled at build time; this design
-fixes the *contract* (one pinned pruned catalog, server-side dispatch check, one-guest
+fixes the *contract* (one static guest-agent catalog, server-side dispatch check, one-guest
 dispatch) and the *confinement invariant* (the daemon connection never inside the
 confined tree when `claude` is confined against the socket), not the module boundary.
 
@@ -651,16 +628,21 @@ positive-confinement test. An implementation is accepted only when these pass.
 
 **Positive confinement (the surface actually works):**
 
-- **Real tools invoke.** With a server started for a guest whose facet projects a
-  non-empty catalog, a `tools/list` returns exactly the pinned, pruned catalog, and a
-  `tools/call` for an in-catalog name reaches `E(facet).<method>(args)` and returns
+- **Real tools invoke.** With a server started for a guest, `tools/list` returns
+  exactly the static guest-agent interface, and a `tools/call` for a declared name
+  reaches the corresponding operation bound to that guest facet and returns
   its result. Confinement is shown by real tools working, not by an empty surface.
 - **Catalog parity.** The `tools/list` the server serves and the `--allowedTools`
-  the harness generated for the same guest derive from one facet under one
-  deterministic prune: every name in one appears in the other, with no live drift
-  after a simulated mid-session grant change (`tools.listChanged` stays false, no
-  `notifications/tools/list_changed` is emitted), and the changed grant is reflected
-  only by the **next** server process's fresh snapshot.
+  the harness generated come from the same static declaration: every name in one
+  appears in the other. A simulated mid-session grant change does not reshape either
+  list (`tools.listChanged` stays false and no
+  `notifications/tools/list_changed` is emitted); it changes only whether the bound
+  guest operation can fulfill a call.
+- **Structured child signals.** A fixture stream containing ordinary events, one
+  terminal `result`, and a `rate_limit_event` produces the expected tagged outcome,
+  usage fields, and five-hour/seven-day quota record. Truncated, missing-result, and
+  multiple-result streams fail closed. A task-notification result is ignored when
+  counting the prompt's one terminal result.
 
 **Negative confinement (the boundary holds):**
 
@@ -685,8 +667,8 @@ positive-confinement test. An implementation is accepted only when these pass.
   deployment does not confine `claude` against the socket; there the corresponding
   assertion is only that the server resolves solely its configured id, with no
   enumeration code path.)
-- **Name-scope rejection.** A `tools/call` for a name not in the pinned catalog (a
-  pruned code-eval name, a `__`-containing name, or an unknown name) returns the
+- **Name-scope rejection.** A `tools/call` for a name not in the static interface
+  (a code-eval name, a `__`-containing name, or an unknown name) returns the
   `-32001` `tool-not-permitted` error with `data.reason = name-scope`, and never
   reaches the facet.
 - **Argument-scope rejection.** A `tools/call` for an in-catalog petname-designating
@@ -695,10 +677,9 @@ positive-confinement test. An implementation is accepted only when these pass.
   never a silently narrowed success.
 - **Fail-closed construction.** Construction throws (the server never serves
   `initialize`) for: a missing/non-64-hex/unresolvable formula id
-  (`invalid-formula-id`); an unreachable daemon (`daemon-unreachable`); a facet
-  projecting zero tools (`empty-facet`); a catalog empty after pruning
-  (`empty-after-prune`); a projected catalog carrying a `__`-containing or otherwise
-  malformed name (`malformed-name`); and a projected catalog carrying an internally
+  (`invalid-formula-id`); an unreachable daemon (`daemon-unreachable`); an empty
+  static declaration (`empty-interface`); a declared `__`-containing or otherwise
+  malformed name (`malformed-name`); and a declaration carrying an internally
   duplicate or case-confusable name (`catalog-name-conflict`) — the two
   well-formedness classes asserted as **distinct** discriminant values, not one
   collapsed `malformed-catalog`. A bare-name collision against minion.town's reserved
@@ -719,10 +700,10 @@ positive-confinement test. An implementation is accepted only when these pass.
 
 | Design | Relationship |
 |---|---|
-| [endo-claude](endo-claude.md) | **Consumer / harness.** Generates `--mcp-config` (with the guest formula id in `env`) and `--allowedTools` from the catalog this server pins, spawns the confined `claude -p`, and settles inference outcomes on this server's errors. Names this server as its "adapter-implementation prerequisite," and — in the confined shape — owns the harness-side connection process (broker) that holds the daemon reach outside the confined tree. **No consolidation owed** (PR #1226): endo-claude keeps its harness-owned broker (the confined, structural shape) and this document keeps the server-held connection (the single-tenant shape); both topologies stand, per the maintainer's "more than one way to use Claude" steer (Open Questions). |
-| [endo-agent-tools](endo-agent-tools.md) | **Projection.** The MCP adapter (`packages/agent-tools/src/adapters/mcp.js`, a declared stub) that maps a `ToolRecord`'s name/description/parameters/invoke to an MCP tool and dispatches `tools/call` to the facet. This server hosts it over stdio; it does not reinvent it. |
+| [endo-claude](endo-claude.md) | **Consumer / harness.** Generates `--mcp-config` (with the guest formula id in `env`) and `--allowedTools` from the static guest-agent declaration, spawns the confined `claude -p` with structured stream output, and parses terminal, availability, usage, and quota events. Names this server as its "adapter-implementation prerequisite" and, in the confined shape, owns the harness-side connection process (broker) that holds the daemon reach outside the confined tree. **No consolidation owed** (PR #1226): endo-claude keeps its harness-owned broker (the confined, structural shape) and this document keeps the server-held connection (the single-tenant shape); both topologies stand, per the maintainer's "more than one way to use Claude" steer (Open Questions). |
+| [endo-agent-tools](endo-agent-tools.md) | **Projection.** The MCP adapter (`packages/agent-tools/src/adapters/mcp.js`, a declared stub) that maps the static guest-agent `ToolRecord` declarations to MCP tools and binds `tools/call` dispatch to one guest facet. This server hosts it over stdio; it does not reinvent it. |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, the `initialize` response *shape*, and the `mcp__<server>__<tool>` naming *grammar* (each transport pins its own `serverInfo.name`, `endo` here vs `endo-gateway` there); differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
-| [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
+| [daemon-agent-tools](daemon-agent-tools.md) | **Guest-interface implementation.** Supplies operations over the guest's attenuated powers. It may change whether a declared operation succeeds, but it does not dynamically reshape the MCP catalog. |
 | Endo daemon (`@endo/daemon`, `packages/where`) | **Session substrate.** Provides the client (`makeEndoClient` over `whereEndoSock(...)`, `getBootstrap`, `E(bootstrap).host()`) and the bootstrap root host against which `E(host).lookupById(formulaId)` (guarded `M.call(IdShape)` on `HostInterface`) resolves the formula id to a facet — the existing surface that reaches one guest with no new daemon method. A **daemon obligation for the confined shape** (direction set, PR #1226): publish a per-session, formula-id-scoped bootstrap (the ocapn offset-0 gateway brought forward) so the connection resolves only the one guest and carries no host authority into the confined tree; until then the confined shape rides the harness-owned broker narrowing a host-root connection (Open Questions). |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | **The confinement boundary (load-bearing).** Owns the per-spawn `bwrap` slice confining `claude`. The premise (PR #1226): the slice must **deny the confined `claude` tree the daemon socket and all system resources** — via the `none`/`private` network profile and filesystem-namespace isolation that keep the socket path out of the slice — forcing all authority through the MCP surface; **if `claude` can open an arbitrary domain socket, this design is forfeit**. Consequence: in the confined shape the daemon-connection process runs **outside** the slice (§ *Scoping*). This design carries no per-guest-socket re-mount or per-guest-uid `SO_PEERCRED` machinery; the remaining obligation is to confirm the slice denies `claude` the socket while the harness-owned connection process reaches it from outside. |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
@@ -757,16 +738,16 @@ positive-confinement test. An implementation is accepted only when these pass.
    trusted stdin intermediary (a broker-shaped process interposed on the server's
    stdin). The environment variable has neither problem, and the id can avoid an
    on-disk file entirely (§ *Threading the formula id from configuration*).
-3. **One pinned, pre-pruned catalog drives the server dispatch check (boundary) and
-   the client allow-list (belt).** Both derive from one hardened null-prototype
-   snapshot taken once at startup, from the same facet under the same deterministic
-   prune. The server rejects any `tools/call` outside it, names and arguments alike.
-   `tools.listChanged` is false; because the server is per-call, a changed grant is
-   seen on the next inference's fresh snapshot, and staleness never exceeds one call.
+3. **One static guest-agent interface drives the server dispatch check (boundary)
+   and the client allow-list (belt).** The harness and server import the same
+   hardened declaration, following Lal's fixed tool records and bound dispatcher.
+   The server rejects any `tools/call` outside it, names and arguments alike.
+   `tools.listChanged` is false; grant changes affect the authority behind an
+   operation, never the interface shape.
 4. **Fail closed at construction and at request time.** A missing/unresolvable
-   formula id, an unreachable daemon, a facet with no projectable tools, or an empty
-   post-prune catalog is a construction throw (the server never serves `initialize`);
-   a projected catalog whose own names are malformed, `__`-containing, or internally
+   formula id, an unreachable daemon, or an empty static declaration is a
+   construction throw (the server never serves `initialize`); a declared catalog
+   whose own names are malformed, `__`-containing, or internally
    duplicate/case-confusable is likewise a construction throw; an unknown or malformed
    request is a JSON-RPC error. The construction throw keys only on properties of
    *this catalog against itself*, never on an unmerged, externally-owned reservation
@@ -776,9 +757,14 @@ positive-confinement test. An implementation is accepted only when these pass.
    fixed literal `endo`; tool names follow the interface-native camelCase convention
    shared with the minion.town PR #79 manifest, with **no** transport/category prefix
    ever added. What is fixed here is the well-formedness the server enforces on its own
-   projected catalog (no `__`, no dunder, no code-eval, no internal
+   declared catalog (no `__`, no dunder, no code-eval, no internal
    duplicate/case-confusable/malformed name); the shared *naming convention* is
    adopted while the foreign *reservation list* stays advisory.
+6. **The harness consumes structured child-process signals.** It invokes
+   `claude -p` with `--output-format stream-json --verbose`, validates the complete
+   event stream and its single terminal prompt result, and retains structured usage,
+   availability, and `rate_limit_event` quota fields. Missing telemetry remains
+   unknown rather than being read as availability or zero quota use.
 
 ## Open Questions
 
