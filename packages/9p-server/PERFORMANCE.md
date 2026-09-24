@@ -10,6 +10,16 @@
 Every file path and line number below refers to the tree at that commit.
 Line numbers drift; the commit is the basis.
 
+Note (2026-09-24): the measurements and analysis predate the byte-stream
+change (endojs/endo-but-for-bots#1100), which replaced `streamBase64` with a
+single `stream` method carrying raw bytes.
+Where this document describes base64 chunks, base64 encode/decode cost on the
+`Twrite`/`Tread` path, or `base64LimitFor` (removed; the 9P server now passes
+the requested byte count as `byteLengthLimit` directly), read it as a
+description of the tree at the commit above.
+The per-byte cost on that path is now the marshal encoding that
+`packages/exo-stream/BENCH.md` measures.
+
 This document maps the whole path a file operation takes from a process inside
 an `@endo/sandbox` podman slice to the bytes on the host, names what each layer
 contributes to latency and throughput today, and lists what could be changed at
