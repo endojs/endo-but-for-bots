@@ -479,7 +479,9 @@ const provisionPresetObjects = async (
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
- * @param {any} [options.journalPowers] - Factory-private journal storage. Standalone callers that omit this retain cooperative guest storage.
+ * @param {any} options.journalPowers - Explicit journal storage. The caller must
+ *   supply private storage not exposed to the session guest. Capability identity
+ *   alone does not establish that confinement.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
@@ -529,11 +531,14 @@ export const makeStreamingAgent = async (
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
-    journalPowers = powers,
+    journalPowers,
     onChange,
-  } = {},
+  } = { journalPowers: undefined },
 ) => {
   assertRuntimeConfig(runtime);
+  if (journalPowers === undefined || journalPowers === null) {
+    throw Error('Explicit journalPowers storage is required');
+  }
   const runtimeKind = runtime.kind;
   const provideProvider =
     runtime.kind === 'provider' ? runtime.provideProvider : undefined;
@@ -1886,7 +1891,7 @@ export const makeStreamingAgent = async (
   const getJournalStatus = async () =>
     harden({
       ...(await turnJournal.status()),
-      storage: journalPowers === powers ? 'legacy' : 'private',
+      storage: 'explicit',
     });
   const resolveTurn = (turnId, note) =>
     turnChain.then(async () => {

@@ -191,6 +191,7 @@ test('a completed turn shows each tool call once, however the provider wrote it'
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
   await say(agent, 'do three things');
   const history = await agent.getHistory();
@@ -245,6 +246,7 @@ test('a failed turn’s tokens are counted, and it records what served it', asyn
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
   await t.throwsAsync(say(agent, 'fail on the second round'));
   const [turn] = await agent.getTurns();
@@ -294,6 +296,7 @@ test('a call whose arguments never parsed is still shown once', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
   await say(agent, 'two malformed calls');
   const tools = (await agent.getHistory()).filter(
@@ -322,6 +325,7 @@ test('the usage a view is told is the usage the session reports', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
   await t.throwsAsync(say(agent, 'this one fails'));
   const events = await say(agent, 'this one completes');

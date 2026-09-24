@@ -96,7 +96,7 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   const controller = new AbortController();
   const { writer, reader } = makeReplyChannel(() => controller.abort());
@@ -162,7 +162,7 @@ test('a failed turn on a transcript backend keeps the delivered prompt', async t
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   const { writer, reader } = makeReplyChannel();
   const replyP = (async () => {
@@ -221,7 +221,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   const { writer } = makeReplyChannel();
   const turnP = agent.converse('build it', writer);
@@ -301,7 +301,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   t.deepEqual(await restored.getTranscript(), transcript);
 });
@@ -318,7 +318,7 @@ test('a leading backend refusal remains a durable failed dispatch', async t => {
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   const { writer } = makeReplyChannel();
   const turnP = agent.converse('do it', writer);
@@ -344,7 +344,7 @@ test('a checkpoint-reconciled backend retains a cancelled turn in the journal', 
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'opaque-reconciled' },
+    { journalPowers: powers, hostedContinuity: 'opaque-reconciled' },
   );
   const controller = new AbortController();
   const { writer, reader } = makeReplyChannel(() => controller.abort());
@@ -382,7 +382,7 @@ test('public thinking persists after failure and restart but is absent from mode
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   const run = agent.converse('go', makeReplyChannel().writer);
   await waitForTurn(1);
@@ -403,7 +403,7 @@ test('public thinking persists after failure and restart but is absent from mode
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   t.deepEqual(await restored.getHistory(), history);
 });

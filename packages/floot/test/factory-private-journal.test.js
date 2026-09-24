@@ -426,7 +426,7 @@ for (const binding of [undefined, 'session-one', 'session-agent-one']) {
 test('factory private journal ignores guest forgeries across revival', async t => {
   const { factory, host, guestStore, counts } = makeWorld(t);
   const session = await E(factory).getSession('one');
-  t.is((await E(session).getJournalStatus()).storage, 'private');
+  t.is((await E(session).getJournalStatus()).storage, 'explicit');
   t.deepEqual(await E(session).getArchivedTurnsPage(), {
     records: [],
     next: null,

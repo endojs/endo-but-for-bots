@@ -75,6 +75,7 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
+    { journalPowers: powers },
   );
   const { writer, reader } = makeReplyChannel();
   const replyP = (async () => {
@@ -176,6 +177,7 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
+    { journalPowers: powers },
   );
   t.deepEqual(
     await revived.getUsage(),
@@ -206,6 +208,7 @@ test('failed hosted turns revive before later successful history', async t => {
     undefined,
     { kind: 'hosted', provideHostedClient: () => failedClient },
     'test prompt',
+    { journalPowers: powers },
   );
   const failedReply = makeReplyChannel();
   await t.throwsAsync(() => first.converse('orphan me', failedReply.writer), {
@@ -227,6 +230,7 @@ test('failed hosted turns revive before later successful history', async t => {
     undefined,
     { kind: 'hosted', provideHostedClient: () => successfulClient },
     'test prompt',
+    { journalPowers: powers },
   );
   const successfulReply = makeReplyChannel();
   await revived.converse('new turn', successfulReply.writer);
@@ -269,7 +273,7 @@ test('failed transcript-backed turns keep text/tool interleaving in history', as
     undefined,
     { kind: 'hosted', provideHostedClient: () => failedClient },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers, hostedContinuity: 'transcript' },
   );
   const reply = makeReplyChannel();
   await t.throwsAsync(() => agent.converse('review it', reply.writer), {
@@ -311,6 +315,7 @@ test('a leading backend refusal fails cleanly without fencing the next turn', as
     undefined,
     { kind: 'hosted', provideHostedClient: () => refusing },
     'test prompt',
+    { journalPowers: powers },
   );
   await t.throwsAsync(
     () => agent.converse('blocked', makeReplyChannel().writer),
@@ -340,6 +345,7 @@ test('a leading backend refusal fails cleanly without fencing the next turn', as
     undefined,
     { kind: 'hosted', provideHostedClient: () => accepting },
     'test prompt',
+    { journalPowers: powers },
   );
   const reply = makeReplyChannel();
   await revived.converse('retry', reply.writer);
@@ -386,6 +392,7 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
+    { journalPowers: powers },
   );
   const reply = makeReplyChannel();
   const turn = agent.converse('keep working', reply.writer);
@@ -432,6 +439,7 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test prompt',
+    { journalPowers: powers },
   );
   const active = agent.converse('mutate', makeReplyChannel().writer);
   await sent.waitFor(1);
@@ -475,6 +483,7 @@ test('failed containment after EOF quarantines without an abort signal, includin
         }),
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
   const first = agent.converse('work', makeReplyChannel().writer);
   const firstFailure = t.throwsAsync(first, {
@@ -518,6 +527,7 @@ test('shutdown cancels inbox startup delayed before iterator creation', async t 
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: powers },
   );
   agent.startInbox();
   const shutdown = agent.shutdown();
@@ -558,6 +568,7 @@ test('failed provider tool loops revive their known tool effects', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: powers },
   );
   const reply = makeReplyChannel();
   await t.throwsAsync(() => first.converse('partial', reply.writer), {
@@ -572,6 +583,7 @@ test('failed provider tool loops revive their known tool effects', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
+    { journalPowers: powers },
   );
   const history = await revived.getHistory();
   t.is(history[0].content, 'partial');
@@ -611,6 +623,7 @@ test('hosted provisioning receives the session delegation and account catalog', 
     },
     'test prompt',
     {
+      journalPowers: powers,
       spawner: harden({}),
       readAccounts: async () =>
         harden({

@@ -82,10 +82,14 @@ recorded in the alignment audit.
    account; an unloaded session reports usage unavailable rather than starting a
    backend merely to read account status.
    Factory-level direct-provider observation remains a distinct API.
-3. The exported streaming-agent constructor still defaults journal storage to
-   guest powers, although the factory supplies private journal storage.
-   Require explicit storage in a bounded API-contract change with test-fixture
-   conversion; do not quietly change durable ownership during cleanup.
+3. Completed: the exported streaming-agent constructor requires explicit
+   `journalPowers`; missing or null storage refuses before guest access.
+   Callers must supply private storage, not a guest-visible namespace.
+   Capability identity cannot establish privacy, so status reports `explicit`
+   rather than inferring private ownership from unequal objects.
+   The factory still supplies its existing private storage adapter; no durable
+   owner, storage format or formula dependency changes.
+   Standalone test fixtures explicitly supply their intended storage.
 4. Completed: removed Codex's unused `locateSessionDirectory` method and its
    exclusive test.
    Current controllers prepare the host-record directory before reading the
@@ -114,8 +118,8 @@ Further type-check limitations and test results are recorded in the parent
 Runtime JavaScript has 291 fewer lines in this pass (including comments, excluding
 tests and documentation).
 This pass removes concrete parallel and unused APIs without adding a framework.
-Follow-up implementation closes items 1, 2, 4 and 5 above under their stated
-contracts; item 3 (requiring explicit private journal storage) remains deferred.
+Follow-up implementation closes items 1 through 5 above under their stated
+contracts.
 The follow-up full suites pass: Floot 713, Codex 423, and Fae 174 plus two
 expected failures (successful exit). Two real-daemon account-publication and
 Codex context-restoration regressions pass. Independent adversarial review
@@ -123,5 +127,8 @@ approved each follow-up slice, including a final 26-test passive-account check.
 Scoped lint has no errors, and the root documentation/API gate passes.
 Test-inclusive type checks retain unrelated fixture errors; no changed production
 source type errors were reported. Fae compaction remains on hold.
+Item 3 subsequently passes all 714 Floot tests and seven real-daemon journal,
+retirement and native-context restart tests. Scoped lint and the root
+documentation/API gate pass; the factory's existing storage ownership is retained.
 It does not prove that the entire refactor is smaller than its original baseline.
 No deployment or new crash-recovery guarantee is claimed.

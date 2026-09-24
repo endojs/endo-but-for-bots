@@ -17,11 +17,14 @@ Uncertain storage writes fence the incarnation; revival reads durable evidence.
 
 This boundary excludes ordinary guests, not administrators: full-control and
 machine-admin presets deliberately receive factory-host powers. Standalone
-`makeStreamingAgent` callers must supply separate `journalPowers` for isolation;
-the compatibility default uses cooperative guest storage.
+`makeStreamingAgent` callers must explicitly supply `journalPowers`; omission
+or null is refused before guest storage or backend access.
+Callers are responsible for keeping this storage private from the session guest;
+capability identity alone cannot establish isolation.
+Journal status reports `storage: 'explicit'`, not an inferred privacy guarantee.
 
 `getJournalStatus()` reports the event count as a decimal string, the retained and
-archived turn counts, and `private` or `legacy` storage. There is no event limit:
+archived turn counts, and explicit storage provision. There is no event limit:
 long text is stored by reference (`getTurnContent`), replay is bounded by
 snapshots, and settled turns beyond the retained window are archived
 (`getArchivedTurns`). Outcome acknowledgement consumes an event.

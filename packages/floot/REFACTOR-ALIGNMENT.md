@@ -83,8 +83,11 @@ V2 writer. Independent adversarial reviews approve each slice. Full suites pass
 Floot 713, Codex 423, and Fae 174 with two expected failures; two real-daemon
 durability regressions also pass. Scoped lint and the root documentation/API gate
 pass; unrelated test-fixture type errors remain. Old anchored Codex diagnostic
-layouts require deliberate session retirement before deployment. Explicit private
-journal storage (item 3) is deferred, and Fae compaction remains on hold.
+layouts require deliberate session retirement before deployment.
+Item 3 now requires explicit journal storage at the streaming-agent boundary;
+the factory retains its existing private adapter and durable owner unchanged.
+Missing/null storage refuses before guest access, and standalone fixtures opt in
+explicitly. Fae compaction remains on hold.
 
 Concrete candidates and historical completion evidence:
 
