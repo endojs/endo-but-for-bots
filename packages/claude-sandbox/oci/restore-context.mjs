@@ -1,7 +1,7 @@
 // @ts-check
 // Runs inside the model sandbox. No transcript-provided path is used for I/O.
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, open, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -27,9 +27,19 @@ const main = async () => {
     requireValue(bytes <= LIMIT);
     chunks.push(chunk);
   }
-  const input = JSON.parse(
+  const request = JSON.parse(
     new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)),
   );
+  const { checkpoint: input, suffix } = request;
+  requireValue(Array.isArray(suffix));
+  for (const record of suffix) {
+    requireValue(
+      record?.kind === 'message' &&
+        ['user', 'assistant'].includes(record.role) &&
+        typeof record.content === 'string' &&
+        Object.keys(record).length === 3,
+    );
+  }
   requireValue(
     input?.kind === 'native-context' && input.format === 'claude-code-jsonl-v1',
   );
@@ -113,13 +123,84 @@ const main = async () => {
           ...validated.retainedTail,
         ]),
     );
+    // Append only synthetic dialogue. Keep the captured bytes, signatures and
+    // message identities untouched; native tool evidence must never be forged
+    // or repaired through this suffix path.
+    let payload = input.payload;
+    let parentUuid = validated.nativeContext.leafUuid;
+    requireValue(
+      typeof parentUuid === 'string' &&
+        rows.some(row => row.uuid === parentUuid),
+    );
+    const prefixHash = createHash('sha256').update(input.payload).digest('hex');
+    const ids = new Set(rows.map(row => row.uuid));
+    const leaf = rows.findLast(row => row.uuid === parentUuid);
+    if (suffix.length) requireValue(typeof leaf?.timestamp === 'string');
+    const model = rows.findLast(row => row.type === 'assistant')?.message
+      ?.model;
+    for (const [index, record] of suffix.entries()) {
+      const hash = createHash('sha256')
+        .update(JSON.stringify([prefixHash, index, record]))
+        .digest('hex');
+      const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+      requireValue(!ids.has(uuid));
+      ids.add(uuid);
+      payload += `${JSON.stringify({
+        type: record.role,
+        sessionId: session,
+        cwd: process.cwd(),
+        version: 'endo-restored',
+        isSidechain: false,
+        userType: 'external',
+        gitBranch: leaf?.gitBranch ?? '',
+        // Synthetic projection time is the durable context cut, not a new
+        // historical event. Retried restoration remains byte-identical.
+        timestamp: leaf?.timestamp,
+        parentUuid,
+        uuid,
+        message:
+          record.role === 'user'
+            ? { role: 'user', content: record.content }
+            : {
+                type: 'message',
+                role: 'assistant',
+                model: model ?? 'unknown',
+                content: [{ type: 'text', text: record.content }],
+                stop_reason: 'end_turn',
+                stop_sequence: null,
+              },
+      })}\n`;
+      parentUuid = uuid;
+    }
+    requireValue(Buffer.byteLength(payload) <= LIMIT);
+    if (suffix.length) {
+      await writeFile(path.join(source, `${session}.jsonl`), payload, {
+        mode: 0o600,
+      });
+      const { stdout: extendedOutput } = await execute(
+        process.execPath,
+        [capture, JSON.stringify(notice)],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, CLAUDE_CONFIG_DIR: staging },
+          maxBuffer: LIMIT,
+          timeout: 30_000,
+        },
+      );
+      const extended = JSON.parse(extendedOutput);
+      requireValue(extended.nativeContext?.transcript === payload);
+      requireValue(
+        JSON.stringify(extended.retainedTail) ===
+          JSON.stringify([...validated.retainedTail, ...suffix]),
+      );
+    }
     const destination = path.join(config, 'projects', project);
     await mkdir(destination, { recursive: true, mode: 0o700 });
     const temporary = path.join(destination, `.endo-restore-${randomUUID()}`);
     try {
       const file = await open(temporary, 'wx', 0o600);
       try {
-        await file.writeFile(input.payload);
+        await file.writeFile(payload);
         await file.sync();
       } finally {
         await file.close();

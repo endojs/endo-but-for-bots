@@ -426,6 +426,7 @@ const main = async () => {
       nativeContext: {
         format: 'claude-code-jsonl-v1',
         transcript: `${nativeRows.join('\n')}\n`,
+        leafUuid: frontier,
       },
     });
     requireValue(

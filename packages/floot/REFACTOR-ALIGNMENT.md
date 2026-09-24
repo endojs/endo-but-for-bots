@@ -494,6 +494,41 @@ This slice does not add the helpers to an image or activate them in production.
 Containerfile/client/shared-record/journal wiring remains uncommitted work;
 the open continuation and signed-prefix gates above still block deployment.
 
+Dialogue-suffix implementation WIP: the native importer now takes an explicit
+`{checkpoint, suffix}` request, rather than accepting alternate legacy shapes.
+It appends only message records using deterministic IDs chained to the capture
+validator's leaf, preserves every original native byte, and revalidates the
+combined projection before atomic publication.
+Tool calls/results and opaque reasoning cannot be introduced through this suffix.
+The first pinned-runtime test rejected synthetic rows lacking loader metadata;
+the writer now includes the native envelope fields and uses the context leaf's
+timestamp as the stable projection cut, not an invented new event time.
+The rerun consumed exactly one separate assistant failure notice while retaining
+the original complete API message prefix and synthetic signed-thinking block.
+Real provider signature acceptance is still not established.
+
+Adversarial review rejected the proposed failed-exit capture shortcut.
+Producer exit plus structural validity is not a covered cut: the file may omit
+the admitted prompt or streamed output that did not reach a complete native row.
+Matching only the last complete frame also fails if a subsequent response streams
+partial text before the process dies.
+That enabling change was removed; nonzero exit and native `is_error` results
+(including exit zero) do not publish replacement checkpoints.
+The client tests assert no capture helper is spawned on those paths.
+Recovery needs positive evidence of the admitted prompt after the pre-turn leaf,
+all observed mainline complete frames, and no unmatched partial stream content.
+Current-turn compaction needs its own tested coverage rule, not a guessed match.
+The tentative journal complete-checkpoint/abort sealing tests are not evidence
+that the real client can yet supply a certified failed-turn checkpoint.
+
+Scoped suffix review approves the unwired helper/probe slice.
+The strict auto-compaction probe selected 9 of 60 rows including the one synthetic
+assistant notice, preserved two signed-thinking fixtures in unchanged API messages,
+and verified one native tool execution across both continuations.
+The combined Claude client/helper suite passes 105 tests and production types pass.
+The bounded hosted-turn/projection slice passes 87 focused tests but remains
+uncommitted integration work; its mock producer contract is not real capture proof.
+
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
 settled-turn window. The module header's earlier unconditional bounded-memory

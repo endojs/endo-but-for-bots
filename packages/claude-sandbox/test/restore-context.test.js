@@ -22,7 +22,7 @@ const capture = fileURLToPath(
 const restore = fileURLToPath(
   new URL('../oci/restore-context.mjs', import.meta.url),
 );
-const run = (t, script, args, config, cwd, input = '') =>
+const run = (t, script, args, config, cwd, input = '', suffix = []) =>
   new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script, ...args], {
       cwd,
@@ -40,7 +40,11 @@ const run = (t, script, args, config, cwd, input = '') =>
     });
     child.on('error', reject);
     child.on('close', code => resolve({ code, stdout, stderr }));
-    child.stdin.end(input);
+    child.stdin.end(
+      script === restore
+        ? JSON.stringify({ checkpoint: JSON.parse(input), suffix })
+        : input,
+    );
   });
 
 const fixture = async t => {
@@ -180,6 +184,55 @@ test('native importer atomically replaces a leaf symlink without writing its tar
   t.is(result.code, 0, result.stderr);
   t.is(await readFile(target, 'utf8'), 'must remain unchanged');
   t.is(await readFile(f.file, 'utf8'), f.checkpoint.payload);
+});
+
+test('native suffix appends dialogue without changing the captured prefix', async t => {
+  t.timeout(10_000);
+  const f = await fixture(t);
+  const suffix = [
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: '[Floot turn failed: synthetic failure]',
+    },
+  ];
+  const invoke = () =>
+    run(
+      t,
+      restore,
+      [],
+      f.destination,
+      f.cwd,
+      JSON.stringify(f.checkpoint),
+      suffix,
+    );
+  const result = await invoke();
+  t.is(result.code, 0, result.stderr);
+  const published = await readFile(f.file, 'utf8');
+  t.true(published.startsWith(f.checkpoint.payload));
+  const added = published
+    .slice(f.checkpoint.payload.length)
+    .trimEnd()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  t.is(added.length, 1);
+  t.like(added[0].message, {
+    role: 'assistant',
+    content: [{ type: 'text', text: suffix[0].content }],
+  });
+  t.is((await invoke()).code, 0);
+  t.is(await readFile(f.file, 'utf8'), published);
+  const refused = await run(
+    t,
+    restore,
+    [],
+    f.destination,
+    f.cwd,
+    JSON.stringify(f.checkpoint),
+    [{ kind: 'tool-call', id: 'forged', name: 'Bash', args: '{}' }],
+  );
+  t.not(refused.code, 0);
+  t.is(await readFile(f.file, 'utf8'), published);
 });
 
 test('portable-restored prefix and new native thinking survive the next import', async t => {
