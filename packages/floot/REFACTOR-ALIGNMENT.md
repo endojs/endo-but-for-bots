@@ -253,6 +253,40 @@ Independent source review agrees; no deployment or new fidelity result is claime
 The existing Claude coverage checks remain in place; this is not authorization to
 remove effect guards or a claim that every retained coverage check is necessary.
 
+Codex capture preparation (2026-09-24): a pure bounded selector now preserves
+the latest native compaction plus following context rows, or ordinary context
+before any compaction. It preserves exact JSONL bytes, opaque item fields and
+base instruction text, excludes operational event rows and session metadata,
+and requires the requested completed turn. Unsupported row/item/event kinds,
+interruptions, rollback, stale or torn cuts refuse rather than degrade silently.
+It is not yet wired into the client, OCI image or journal checkpoint producer.
+
+Pinned `0.152.0` probes disproved a response-items-only projection: ordinary
+restoration duplicates generated developer/environment instructions unless both
+`world_state` and `turn_context` baseline records are retained in order.
+Each baseline record alone also fails the strict comparison.
+These are native context data; production launch authority must remain host-bound.
+The actual selector now passes ordinary and post-compaction-suffix continuation
+with fresh native IDs in the same app-server process, including another capture
+after restoration. This avoids assuming that resuming an already cached ID
+reloads a replaced file. Pinned resumed rollouts omit ordinals on appended rows;
+the selector validates supplied ordinals without requiring their presence.
+Host probe source and evidence scope are in
+`endo-host/ops/codex-context-probe-20260924.{mjs,md}`.
+All inference is synthetic Luna on loopback in disposable, network-disabled,
+credential-free containers without host mounts. Equality covers ordered native
+input type/role/content/encrypted-content and the previously listed request
+settings, not real provider validity, native tool execution or Endo effects.
+Twenty-nine focused selector tests pass; independent review caught and corrected
+silent acceptance of unknown operational events. The full Codex suite passes
+354 tests; production types, scoped lint, formatting and root docs pass.
+The original injection negative control still fails exact prefix equality;
+the final container inventory is empty. Full client integration still
+needs bounded in-sandbox file I/O, host-configured metadata, ledger reconciliation,
+cancel-during-capture handling, journal-before-terminal wiring and acceptance.
+No production deployment, automatic/repeated native compaction or completed
+RA-02 claim follows from this selector/probe slice.
+
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
 credentials or host mounts. Manual compaction emits a boundary with retained

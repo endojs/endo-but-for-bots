@@ -42,6 +42,12 @@ The alignment document records the evidence and bounded data-only export plan.
 Host-controlled runtime metadata, journal persistence, independent effect
 reconciliation and the operational ledger remain required; no runtime guard was
 removed and no production Codex native capture or deployment is claimed.
+The follow-up selector/probe slice preserves both native context-baseline records:
+dropping either changes ordinary restored requests. The candidate selector passes
+synthetic ordinary and post-compaction-suffix continuation under a fresh identity
+in the same pinned app-server, plus re-export after another native turn.
+It has 29 focused tests and remains unwired to the production client/journal.
+The alignment document records exact scope and remaining integration gates.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
