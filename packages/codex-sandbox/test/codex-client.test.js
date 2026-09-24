@@ -1044,6 +1044,67 @@ test('restored nonempty baseline retains exact prior checkpoint lineage after re
   await drain(reader);
 });
 
+for (const restoredBase of [null, 'rollout-1']) {
+  test(`fresh native restoration retains journal lineage across setup crash (${restoredBase})`, async t => {
+    t.timeout(5000);
+    let persisted;
+    const restoredTurnIds = restoredBase === null ? [] : [restoredBase];
+    const options = {
+      transcript: [nativeTestSnapshot()],
+      acknowledgedCheckpoint: 'prior-host-checkpoint',
+    };
+    const first = makeFixture({
+      restoredTurnIds,
+      clientOptions: {
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'fresh-native',
+          timestamp: '2026-09-24T00:00:00.000Z',
+        }),
+        saveThreadState: async state => {
+          persisted = state;
+          throw Error('Synthetic crash after projection persistence');
+        },
+      },
+    });
+    t.teardown(() => first.client.terminate());
+    await t.throwsAsync(() => first.client.send('continue', options), {
+      message: /Synthetic crash after projection persistence/,
+    });
+    t.deepEqual(persisted, {
+      threadId: 'fresh-native',
+      recovery: {
+        baseTurnId: restoredBase,
+        previousCheckpoint: 'prior-host-checkpoint',
+      },
+    });
+    t.false(first.sent.some(message => message.method === 'turn/start'));
+    const second = makeFixture({
+      threadId: persisted.threadId,
+      existingTurnIds: restoredTurnIds,
+      restoredTurnIds,
+      clientOptions: {
+        savedRecovery: persisted.recovery,
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'fresh-successor',
+          timestamp: '2026-09-24T00:00:01.000Z',
+        }),
+      },
+    });
+    t.teardown(() => second.client.terminate());
+    const reader = await second.client.send('continue', options);
+    t.false(second.sent.some(message => message.method === 'thread/revert'));
+    t.is(
+      second.sent.find(message => message.method === 'turn/start').params
+        .threadId,
+      'fresh-successor',
+    );
+    await second.client.interrupt();
+    await drain(reader);
+  });
+}
+
 test('native capture failure aborts without an incomplete checkpoint or success', async t => {
   t.timeout(5000);
   const fixture = makeFixture({

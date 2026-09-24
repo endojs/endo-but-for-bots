@@ -1726,6 +1726,11 @@ export const makeCodexClient = ({
       let response;
       let restoredBase = null;
       if (snapshot) {
+        // A newly allocated native store has no inherited thread to rotate,
+        // but the journal still names its previous committed checkpoint.
+        // Persist that lineage with the new projection's distinct baseline.
+        continuityCheckpoint =
+          opts.acknowledgedCheckpoint || continuityCheckpoint;
         if (!makeNativeIdentity || !nativeContext)
           throw Error('Codex native identity allocator missing');
         const target = {

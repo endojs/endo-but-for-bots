@@ -366,6 +366,17 @@ explicit path returned by `thread/read` with `includeTurns: false`.
 Other native tools, real-provider continuation and end-to-end Floot restart
 acceptance remain gates; Secrets and the live daemon have not been changed.
 
+Caller-contract follow-up (2026-09-24): fresh native-state restoration now records
+the journal's acknowledged checkpoint lineage before importing/persisting its new
+baseline, not only when rotating an inherited native thread. Without this, a
+crash after saving the new baseline but before dispatch made the next incarnation
+reject Floot's still-current checkpoint. Regressions reconstruct both empty and
+`rollout-1` baseline markers after that boundary. All 111 client tests pass;
+independent client/Floot-context review passes 132 tests, and production types
+and scoped lint pass. This covers recreated native state, not loss of only the
+guest rollout while retaining an old host ledger; that case is being checked
+separately without bypassing unresolved recovery markers.
+
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
 credentials or host mounts. Manual compaction emits a boundary with retained

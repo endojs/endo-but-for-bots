@@ -77,6 +77,11 @@ Pinned synthetic native `exec_command` ordinary/compacted-suffix probes now pass
 without parser changes: one execution, preserved modeled context, and successful
 re-export. This narrows the native-tool gap but does not cover every tool or live
 Floot restart.
+Caller-level review then found and fixed missing committed-checkpoint lineage
+when restoring into entirely fresh native state. Crash-before-dispatch regressions
+cover empty and synthetic restored baselines; 111 client tests and independent
+132 client/context tests pass. Guest-rollout-only loss remains a separate check;
+unresolved operational recovery must never be skipped to make restoration pass.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
