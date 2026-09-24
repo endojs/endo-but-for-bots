@@ -12,7 +12,7 @@ import harden from '@endo/harden';
  *
  * @param {object} host
  * @param {object} host.readPowers compartment-mapper read powers
- * @param {(path: string) => URL} host.pathToFileURL
+ * @param {(path: string) => string} host.pathToFileURL
  * @param {(...parts: string[]) => string} host.resolve
  * @param {(bytes: Uint8Array) => string} host.sha256Hex
  * @returns {BundlerPowers}
@@ -27,7 +27,7 @@ export const makeBundlerPowers = ({
     bundle: async file => {
       const bundle = await makeBundle(
         readPowers,
-        pathToFileURL(resolve(file)).href,
+        pathToFileURL(resolve(file)),
       );
       return harden({
         bundle,

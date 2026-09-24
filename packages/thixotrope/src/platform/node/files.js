@@ -53,8 +53,15 @@ export const makeFilePowers = ({ fsp, createReadStream, dirname }) => {
 
   return harden({
     readText: path => fsp.readFile(path, 'utf8'),
-    readBytes: path => fsp.readFile(path),
-    readChunks: path => createReadStream(path),
+    readBytes: async path => new Uint8Array(await fsp.readFile(path)),
+    readChunks: path =>
+      harden({
+        async *[Symbol.asyncIterator]() {
+          for await (const chunk of createReadStream(path)) {
+            yield new Uint8Array(chunk);
+          }
+        },
+      }),
     writeTextAtomic: async (path, text, { mode } = {}) => {
       const temporary = `${path}.tmp`;
       try {

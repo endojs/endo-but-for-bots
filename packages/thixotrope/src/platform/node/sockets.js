@@ -31,13 +31,16 @@ export const makeSocketPowers = ({ net, chmod }) => {
       },
       isDestroyed: () => closed || socket.destroyed,
       onData: listener => {
-        socket.on('data', listener);
+        // No encoding is set on the private socket, so Node emits bytes.
+        socket.on('data', bytes =>
+          listener(new Uint8Array(/** @type {Uint8Array} */ (bytes))),
+        );
       },
       onError: listener => {
-        socket.on('error', listener);
+        socket.on('error', error => listener(error));
       },
       onClose: listener => {
-        socket.once('close', listener);
+        socket.once('close', () => listener());
       },
     });
   };
@@ -55,7 +58,9 @@ export const makeSocketPowers = ({ net, chmod }) => {
         });
       });
       const listener = harden({
-        close: () => server.close(),
+        close: () => {
+          server.close();
+        },
         closed: new Promise(resolve =>
           server.once('close', () => resolve(undefined)),
         ),
@@ -68,7 +73,7 @@ export const makeSocketPowers = ({ net, chmod }) => {
           throw error;
         }
       }
-      server.on('error', onError);
+      server.on('error', error => onError(error));
       return listener;
     },
   });
