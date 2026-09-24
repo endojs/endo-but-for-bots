@@ -117,6 +117,46 @@ const run = async (t, entries, event = boundary, suffix = '\n') => {
   });
 };
 
+test('compaction coverage retains only current preboundary context', async t => {
+  const entries = records();
+  const { stdout } = await run(t, entries, {
+    ...boundary,
+    coverage_before_uuid: id(9),
+  });
+  const output = JSON.parse(stdout);
+  t.deepEqual(
+    output.compactionWitness.trimEnd().split('\n').map(JSON.parse),
+    entries.slice(1, 3),
+  );
+  const without = JSON.parse((await run(t, entries)).stdout);
+  t.deepEqual(output.nativeContext, without.nativeContext);
+  t.false(Object.hasOwn(without, 'compactionWitness'));
+});
+
+test('fresh compaction coverage includes the initial prompt', async t => {
+  const entries = records();
+  const { stdout } = await run(t, entries, {
+    type: 'endo_capture',
+    session_id: session,
+    coverage_before_uuid: null,
+  });
+  t.deepEqual(
+    JSON.parse(stdout).compactionWitness.trimEnd().split('\n').map(JSON.parse),
+    entries.slice(0, 3),
+  );
+});
+
+test('compaction coverage refuses missing and repeated cuts', async t => {
+  await t.throwsAsync(
+    run(t, records(), { ...boundary, coverage_before_uuid: id(99) }),
+  );
+  const entries = records();
+  entries.splice(1, 0, entries[0]);
+  await t.throwsAsync(
+    run(t, entries, { ...boundary, coverage_before_uuid: id(9) }),
+  );
+});
+
 test('ordinary completed context preserves native thinking without inventing compaction', async t => {
   const entries = [
     { ...contextRow(9, 'user', 'hello'), parentUuid: null },

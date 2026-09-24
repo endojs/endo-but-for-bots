@@ -151,6 +151,11 @@ const frames = async function* (file) {
 const main = async () => {
   requireValue(process.argv.length === 3, 'Expected boundary record');
   let expected = JSON.parse(process.argv[2]);
+  const coverageRequested = Object.hasOwn(expected, 'coverage_before_uuid');
+  const coverageBefore =
+    coverageRequested && expected.coverage_before_uuid !== null
+      ? uuid(expected.coverage_before_uuid)
+      : null;
   const expectedBoundary =
     expected.expected_boundary_uuid === undefined
       ? undefined
@@ -269,6 +274,36 @@ const main = async () => {
     const selected = new Map();
     const tail = [];
     const nativeRows = [];
+    // Ephemeral admission evidence, not part of the restoration checkpoint.
+    // The host checks these rows against its prompt and complete live frames.
+    const witnessRows = [];
+    let witnessBytes = 0;
+    let foundCoverageCut = coverageBefore === null;
+    const witness = (row, text) => {
+      if (!coverageRequested || ordinary || seenBoundary) return;
+      if (row.isSidechain) return;
+      if (row.uuid === coverageBefore) {
+        requireValue(!foundCoverageCut, 'Repeated coverage cut');
+        requireValue(row.sessionId === session, 'Coverage session mismatch');
+        foundCoverageCut = true;
+        return;
+      }
+      if (!foundCoverageCut || row.uuid === boundary) return;
+      if (
+        [
+          'queue-operation',
+          'last-prompt',
+          'file-history-snapshot',
+          'progress',
+          'mode',
+        ].includes(row.type)
+      )
+        return;
+      requireValue(row.sessionId === session, 'Coverage session mismatch');
+      witnessBytes += Buffer.byteLength(text) + 1;
+      requireValue(witnessBytes <= LIMIT, 'Coverage exceeds capture limit');
+      witnessRows.push(text);
+    };
     let nativeBytes = 0;
     const retainNative = text => {
       nativeBytes += Buffer.byteLength(text) + 1;
@@ -288,6 +323,7 @@ const main = async () => {
         'Transcript frame exceeds capture limit',
       );
       const row = JSON.parse(text);
+      witness(row, text);
       if (row.uuid === boundary) {
         requireValue(!seenBoundary, 'Repeated compaction boundary');
         requireValue(
@@ -432,12 +468,23 @@ const main = async () => {
       type: ordinary ? 'endo_context' : 'endo_compaction',
       ...(ordinary ? {} : { summary: summary.records[0].content }),
       retainedTail,
+      ...(coverageRequested && !ordinary
+        ? {
+            compactionWitness: `${witnessRows.join('\n')}\n`,
+          }
+        : {}),
       nativeContext: {
         format: 'claude-code-jsonl-v1',
         transcript: `${nativeRows.join('\n')}\n`,
         leafUuid: frontier,
       },
     });
+    requireValue(
+      !coverageRequested ||
+        ordinary ||
+        (foundCoverageCut && witnessRows.length > 0),
+      'Missing compaction coverage',
+    );
     requireValue(
       Buffer.byteLength(output) + 1 <= LIMIT,
       'Capture output exceeds limit',

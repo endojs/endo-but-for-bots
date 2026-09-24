@@ -463,6 +463,7 @@ test('portable restoration returns the exact pre-turn projection receipt', async
     .split('\n')
     .map(line => JSON.parse(line));
   t.deepEqual(receipt, {
+    payload: published,
     sessionId: rows[0].sessionId,
     leafUuid: rows.at(-1).uuid,
     prefixSha256: createHash('sha256').update(published).digest('hex'),

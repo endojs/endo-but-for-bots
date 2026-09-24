@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeClaudeTranscript } from '../src/claude-transcript-writer.js';
+import { renderNativeContext } from '../oci/native-context-projection.mjs';
 
 const capture = fileURLToPath(
   new URL('../oci/capture-compaction.mjs', import.meta.url),
@@ -101,6 +102,39 @@ const fixture = async t => {
     session: data.boundary.session_id,
   };
 };
+
+test('shared projection and importer agree with a duplicate tail identity', async t => {
+  const f = await fixture(t);
+  const rows = f.checkpoint.payload
+    .trimEnd()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  const leafUuid = [...new Set(rows.map(row => row.uuid))].at(-1);
+  const boundary = rows.findIndex(row => row.subtype === 'compact_boundary');
+  f.checkpoint.payload += `${JSON.stringify(rows[boundary + 1])}\n`;
+  const suffix = [
+    { kind: 'message', role: 'assistant', content: 'Retry notice 猫' },
+  ];
+  const expected = renderNativeContext({
+    cwd: f.cwd,
+    payload: f.checkpoint.payload,
+    leafUuid,
+    suffix,
+  });
+  const result = await run(
+    t,
+    restore,
+    [],
+    f.destination,
+    f.cwd,
+    JSON.stringify(f.checkpoint),
+    suffix,
+  );
+  t.is(result.code, 0, result.stderr);
+  const { payload, ...receipt } = expected;
+  t.is(await readFile(f.file, 'utf8'), payload);
+  t.deepEqual(JSON.parse(result.stdout), receipt);
+});
 
 test('sandbox native importer validates and publishes exact context bytes', async t => {
   t.timeout(10_000);
@@ -247,6 +281,22 @@ test('native suffix appends dialogue without changing the captured prefix', asyn
   t.is(result.code, 0, result.stderr);
   const published = await readFile(f.file, 'utf8');
   t.true(published.startsWith(f.checkpoint.payload));
+  const projection = renderNativeContext({
+    cwd: f.cwd,
+    payload: f.checkpoint.payload,
+    leafUuid: [
+      ...new Set(
+        f.checkpoint.payload
+          .trimEnd()
+          .split('\n')
+          .map(line => JSON.parse(line).uuid),
+      ),
+    ].at(-1),
+    suffix,
+  });
+  const { payload, ...receipt } = projection;
+  t.is(payload, published);
+  t.deepEqual(JSON.parse(result.stdout), receipt);
   const added = published
     .slice(f.checkpoint.payload.length)
     .trimEnd()

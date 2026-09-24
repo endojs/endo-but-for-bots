@@ -31,6 +31,9 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   /** @type {any} */
   let block;
   let nextIndex = 0;
+  /** @type {any} */
+  let boundary;
+  let boundaryPosition = -1;
   /** @type {Array<{uuid: string, role: string, content: any, messageId?: string, model?: string, messageType?: string}>} */
   const frames = [];
   const frameIds = new Set();
@@ -92,6 +95,12 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         if (event.subtype === 'init') {
           requireValue(!initialized && frames.length === 0 && !message);
           initialized = true;
+        } else if (event.subtype === 'compact_boundary') {
+          requireValue(initialized && !boundary && !message && !block);
+          requireValue(isUuid(event.uuid) && isUuid(event.logical_parent_uuid));
+          requireValue(event.compact_metadata?.trigger === 'auto');
+          boundary = JSON.parse(JSON.stringify(event));
+          boundaryPosition = frames.length;
         } else {
           requireValue(
             initialized &&
@@ -101,6 +110,14 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         return;
       }
       requireValue(initialized);
+      if (boundary && frames.length === boundaryPosition) {
+        requireValue(
+          event.type === 'user' &&
+            event.isSynthetic === true &&
+            event.uuid ===
+              boundary.compact_metadata?.preserved_segment?.anchor_uuid,
+        );
+      }
       if (event.type === 'result') {
         requireValue(
           (event.is_error === false && event.subtype === 'success') ||
@@ -273,16 +290,225 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       );
     });
 
+  // Only these loader-generated attachments are known inert context. They do
+  // not certify a tool result or settle an effect.
+  const inert = row =>
+    row.type === 'attachment' &&
+    (row.attachment?.type === 'total_tokens_reminder' ||
+      (row.attachment?.type === 'max_turns_reached' &&
+        [row.attachment.maxTurns, row.attachment.turnCount].every(
+          value =>
+            typeof value === 'number' && Number.isInteger(value) && value > 0,
+        )));
+  const ordinaryFlags = row =>
+    ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
+      key => row[key] === undefined || row[key] === false,
+    );
+  const identity = row => ({
+    type: row.type,
+    parentUuid: row.parentUuid,
+    role: row.message?.role,
+    id: row.message?.id,
+    messageType: row.message?.type,
+    model: row.message?.model,
+    content: row.message?.content,
+    attachment: row.attachment,
+    isCompactSummary: row.isCompactSummary === true,
+    isMeta: row.isMeta === true,
+    isVisibleInTranscriptOnly: row.isVisibleInTranscriptOnly === true,
+  });
+  const matches = (row, frame) =>
+    frame &&
+    row.uuid === frame.uuid &&
+    row.type === frame.role &&
+    row.message?.role === frame.role &&
+    (frame.role !== 'assistant' ||
+      (row.message.id === frame.messageId &&
+        row.message.type === frame.messageType &&
+        row.message.model === frame.model)) &&
+    same(row.message.content, frame.content);
+  const parseRows = (text, sessionId) => {
+    requireValue(
+      typeof text === 'string' &&
+        (text === '' || text.endsWith('\n')) &&
+        new TextEncoder().encode(text).byteLength <= LIMIT,
+    );
+    const rows =
+      text === '' ? [] : text.slice(0, -1).split('\n').map(JSON.parse);
+    requireValue(
+      rows.every(
+        row =>
+          row.sessionId === sessionId && !row.isSidechain && isUuid(row.uuid),
+      ),
+    );
+    return rows;
+  };
+  const uniqueRows = rows => {
+    const byId = new Map();
+    for (const row of rows) {
+      const prior = byId.get(row.uuid);
+      requireValue(!prior || same(identity(prior), identity(row)));
+      if (!prior) byId.set(row.uuid, row);
+    }
+    return byId;
+  };
+  const assertChain = (rows, parent, expectedFrames) => {
+    let position = 0;
+    for (const row of rows) {
+      requireValue(row.parentUuid === parent && ordinaryFlags(row));
+      parent = row.uuid;
+      if (!inert(row)) {
+        requireValue(matches(row, expectedFrames[position]));
+        position += 1;
+      }
+    }
+    requireValue(position === expectedFrames.length);
+    return parent;
+  };
+
+  const assertCompacted = (rows, cut) => {
+    // A compaction transition intentionally replaces dropped history with its
+    // streamed summary. This proves retained row identity and current prompt /
+    // frame coverage, not summary semantics or unchanged dropped guest bytes.
+    const {
+      beforePayload,
+      beforeUuid,
+      prefixSha256,
+      compactionWitness,
+      sessionId,
+      prompt,
+    } = cut;
+    const oldRows = parseRows(beforePayload, sessionId);
+    requireValue(sha256(beforePayload) === prefixSha256);
+    const known = uniqueRows(oldRows);
+    requireValue(([...known.keys()].at(-1) ?? null) === beforeUuid);
+    const witness = uniqueRows(parseRows(compactionWitness, sessionId));
+    requireValue(witness.size > 0);
+    for (const uuid of witness.keys()) requireValue(!known.has(uuid));
+    const [admitted, ...active] = witness.values();
+    requireValue(
+      admitted.type === 'user' &&
+        admitted.message?.role === 'user' &&
+        admitted.parentUuid === beforeUuid &&
+        ordinaryFlags(admitted) &&
+        (admitted.message.content === prompt ||
+          same(admitted.message.content, [{ type: 'text', text: prompt }])),
+    );
+    requireValue(
+      assertChain(active, admitted.uuid, frames.slice(0, boundaryPosition)) ===
+        boundary.logical_parent_uuid,
+    );
+    for (const [uuid, row] of witness) known.set(uuid, row);
+
+    const boundaries = rows.filter(
+      row => row.type === 'system' && row.subtype === 'compact_boundary',
+    );
+    requireValue(boundaries.length === 1);
+    const capturedBoundary = boundaries[0];
+    const metadata = boundary.compact_metadata;
+    const segment = metadata.preserved_segment;
+    const preserved = metadata.preserved_messages;
+    requireValue(segment && preserved && isUuid(segment.anchor_uuid));
+    requireValue(
+      Array.isArray(preserved.all_uuids) && Array.isArray(preserved.uuids),
+    );
+    requireValue(preserved.anchor_uuid === segment.anchor_uuid);
+    requireValue(
+      new Set(preserved.all_uuids).size === preserved.all_uuids.length &&
+        preserved.all_uuids.every(isUuid),
+    );
+    requireValue(
+      same(
+        preserved.all_uuids.filter(uuid => preserved.uuids.includes(uuid)),
+        preserved.uuids,
+      ),
+    );
+    requireValue(
+      segment.head_uuid === preserved.uuids[0] &&
+        segment.tail_uuid === preserved.uuids.at(-1),
+    );
+    requireValue(!known.has(boundary.uuid) && !known.has(segment.anchor_uuid));
+    requireValue(
+      capturedBoundary.uuid === boundary.uuid &&
+        capturedBoundary.parentUuid === null &&
+        capturedBoundary.logicalParentUuid === boundary.logical_parent_uuid,
+    );
+    const nativeMetadata = capturedBoundary.compactMetadata;
+    requireValue(
+      nativeMetadata?.trigger === metadata.trigger &&
+        nativeMetadata.preTokens === metadata.pre_tokens &&
+        nativeMetadata.postTokens === metadata.post_tokens &&
+        nativeMetadata.cumulativeDroppedTokens ===
+          metadata.cumulative_dropped_tokens &&
+        nativeMetadata.durationMs === metadata.duration_ms &&
+        same(nativeMetadata.preservedSegment, {
+          headUuid: segment.head_uuid,
+          anchorUuid: segment.anchor_uuid,
+          tailUuid: segment.tail_uuid,
+        }) &&
+        same(nativeMetadata.preservedMessages, {
+          anchorUuid: preserved.anchor_uuid,
+          uuids: preserved.uuids,
+          allUuids: preserved.all_uuids,
+        }),
+    );
+    const boundaryIndex = rows.indexOf(capturedBoundary);
+    const retained = uniqueRows(rows.slice(0, boundaryIndex));
+    requireValue(same([...retained.keys()], preserved.all_uuids));
+    for (const [uuid, row] of retained) {
+      requireValue(
+        (row.type === 'user' || row.type === 'assistant' || inert(row)) &&
+          known.has(uuid) &&
+          same(identity(row), identity(known.get(uuid))),
+      );
+    }
+    // The actual loader writes a string for the exact one-text-block summary
+    // emitted on its stream. No general message normalization is permitted.
+    const summary = rows[boundaryIndex + 1];
+    const summaryFrame = frames[boundaryPosition];
+    requireValue(
+      summary?.uuid === segment.anchor_uuid &&
+        summary.parentUuid === boundary.uuid &&
+        summary.type === 'user' &&
+        summary.message?.role === 'user' &&
+        summary.isCompactSummary === true &&
+        !summary.isMeta &&
+        summary.isVisibleInTranscriptOnly === true &&
+        summaryFrame?.uuid === summary.uuid &&
+        summaryFrame.role === 'user' &&
+        same(summaryFrame.content, [
+          { type: 'text', text: summary.message.content },
+        ]) &&
+        typeof summary.message.content === 'string',
+    );
+    const suffix = rows.slice(boundaryIndex + 2);
+    requireValue(new Set(suffix.map(row => row.uuid)).size === suffix.length);
+    requireValue(
+      suffix.every(
+        row =>
+          !known.has(row.uuid) &&
+          row.uuid !== summary.uuid &&
+          row.uuid !== boundary.uuid,
+      ),
+    );
+    assertChain(suffix, summary.uuid, frames.slice(boundaryPosition + 1));
+  };
+
   /**
    * @param {string} nativeTranscript Helper-validated native JSONL.
-   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, prompt: string, outcome: 'success'|'failure'}} cut
+   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, beforePayload?: string, compactionWitness?: string, prompt: string, outcome: 'success'|'failure'}} cut
    * Trusted pre-turn receipt; an empty initial store uses null plus SHA-256 of empty text.
    */
-  const assertCaptured = (
-    nativeTranscript,
-    { sessionId, beforeUuid, prefixSha256, prompt, outcome: expectedOutcome },
-  ) =>
+  const assertCaptured = (nativeTranscript, cut) =>
     guarded(() => {
+      const {
+        sessionId,
+        beforeUuid,
+        prefixSha256,
+        beforePayload,
+        prompt,
+        outcome: expectedOutcome,
+      } = cut;
       assertOutcome(expectedOutcome);
       requireValue(
         isUuid(sessionId) &&
@@ -300,15 +526,30 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       const lines = nativeTranscript.slice(0, -1).split('\n');
       const rows = lines.map(line => JSON.parse(line));
       requireValue(
-        rows.every(row => row.sessionId === sessionId && !row.isSidechain),
+        rows.every(
+          row =>
+            row.sessionId === sessionId && !row.isSidechain && isUuid(row.uuid),
+        ),
       );
-      const before =
+      if (boundary) {
+        assertCompacted(rows, cut);
+        return;
+      }
+      let before =
         beforeUuid === null
           ? -1
           : rows.findLastIndex(row => row.uuid === beforeUuid);
       requireValue(beforeUuid === null || before >= 0);
-      const prefix =
+      let prefix =
         before < 0 ? '' : `${lines.slice(0, before + 1).join('\n')}\n`;
+      if (beforePayload !== undefined) {
+        const priorRows = parseRows(beforePayload, sessionId);
+        const prior = uniqueRows(priorRows);
+        requireValue(([...prior.keys()].at(-1) ?? null) === beforeUuid);
+        requireValue(nativeTranscript.startsWith(beforePayload));
+        prefix = beforePayload;
+        before = priorRows.length - 1;
+      }
       requireValue(sha256(prefix) === prefixSha256);
       const active = rows.slice(before + 1);
       // The ordinary-turn stream does not attest loader-only visibility or

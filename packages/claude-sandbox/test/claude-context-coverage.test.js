@@ -12,6 +12,194 @@ const sha256 = text => createHash('sha256').update(text).digest('hex');
 const emptyPrefix = sha256('');
 const makeCoverage = () => makeClaudeContextCoverage({ sha256 });
 
+const compactionFixture = async () => {
+  await null;
+  return JSON.parse(
+    await readFile(
+      new URL('./fixtures/coverage-compaction-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+};
+const checkCompaction = f => {
+  const coverage = makeCoverage();
+  for (const event of f.events) coverage.observe(event);
+  coverage.assertCaptured(f.nativeTranscript, {
+    sessionId: f.sessionId,
+    beforeUuid: f.beforeUuid,
+    beforePayload: f.beforePayload,
+    prefixSha256: f.prefixSha256 ?? sha256(f.beforePayload),
+    compactionWitness: f.compactionWitness,
+    prompt: f.prompt,
+    outcome: 'success',
+  });
+};
+test('actual partial-stream auto compaction certifies prompt, retained tool frames and summary', async t => {
+  const f = await compactionFixture();
+  t.notThrows(() => checkCompaction(f));
+});
+const changeRows = (f, field, change) => {
+  const rows = f[field].trimEnd().split('\n').map(JSON.parse);
+  change(rows);
+  f[field] = `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+};
+test('compaction accepts identical duplicate prior tail without changing the trusted cut', async t => {
+  const f = await compactionFixture();
+  changeRows(f, 'beforePayload', rows => rows.push(rows[0]));
+  t.notThrows(() => checkCompaction(f));
+});
+// Synthetic parser variation of the recorded transition: preserve one old
+// signed block too. This is not an additional live-loader behavior claim.
+const retainPrior = f => {
+  const prior = f.beforePayload
+    .trimEnd()
+    .split('\n')
+    .map(JSON.parse)
+    .find(row => row.message?.content?.[0]?.type === 'thinking');
+  const boundary = f.events.find(event => event.subtype === 'compact_boundary');
+  boundary.compact_metadata.preserved_messages.all_uuids.unshift(prior.uuid);
+  changeRows(f, 'nativeTranscript', rows => {
+    rows.unshift(prior);
+    rows
+      .find(row => row.subtype === 'compact_boundary')
+      .compactMetadata.preservedMessages.allUuids.unshift(prior.uuid);
+  });
+};
+test('compaction retained historical signed block must match trusted host projection', async t => {
+  const f = await compactionFixture();
+  retainPrior(f);
+  t.notThrows(() => checkCompaction(f));
+  changeRows(f, 'nativeTranscript', rows => {
+    rows[0].message.content[0].signature = 'rewritten';
+  });
+  t.throws(() => checkCompaction(f));
+});
+test('compaction refuses changed old grouping under the trusted retained UUID', async t => {
+  const f = await compactionFixture();
+  retainPrior(f);
+  changeRows(f, 'nativeTranscript', rows => {
+    rows[0].message.id = 'regrouped';
+  });
+  t.throws(() => checkCompaction(f));
+});
+test('compaction validates exact trusted beforePayload receipt even when old rows were dropped', async t => {
+  const f = await compactionFixture();
+  f.prefixSha256 = sha256(f.beforePayload);
+  changeRows(f, 'beforePayload', rows => {
+    rows[0].message.content = 'rewritten old prompt';
+  });
+  t.throws(() => checkCompaction(f));
+});
+test('compaction fresh cut proves its admitted prompt without inventing prior history', async t => {
+  const f = await compactionFixture();
+  f.beforePayload = '';
+  f.beforeUuid = null;
+  changeRows(f, 'compactionWitness', rows => {
+    rows[0].parentUuid = null;
+  });
+  t.notThrows(() => checkCompaction(f));
+});
+for (const [name, mutate] of Object.entries({
+  'missing witness': f => {
+    f.compactionWitness = undefined;
+  },
+  'missing prior payload': f => {
+    f.beforePayload = undefined;
+  },
+  'changed admitted prompt': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows[0].message.content = 'other prompt';
+    }),
+  'changed summary visibility': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(row => row.isCompactSummary).isVisibleInTranscriptOnly = false;
+    }),
+  'unknown witness attachment': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows[1].attachment.type = 'unknown';
+    }),
+  'duplicate witness mutation': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows.at(-1).attachment.text = 'changed';
+    }),
+  'unknown retained UUID in observed metadata': f => {
+    const boundary = f.events.find(
+      event => event.subtype === 'compact_boundary',
+    );
+    boundary.compact_metadata.preserved_messages.all_uuids.unshift(id(905));
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.unshift({ ...rows[0], uuid: id(905) });
+      rows
+        .find(row => row.subtype === 'compact_boundary')
+        .compactMetadata.preservedMessages.allUuids.unshift(id(905));
+    });
+  },
+  'changed witness parent': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows[0].parentUuid = id(900);
+    }),
+  'missing preboundary frame': f =>
+    changeRows(f, 'compactionWitness', rows => {
+      rows.splice(2, 1);
+    }),
+  'changed retained signature': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows[0].message.content[0].signature = 'other';
+    }),
+  'changed retained grouping': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows[0].message.id = 'other';
+    }),
+  'changed duplicate retained content': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows[4].message.content = 'other';
+    }),
+  'changed boundary identity': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(r => r.subtype === 'compact_boundary').uuid = id(901);
+    }),
+  'changed boundary metadata': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(
+        r => r.subtype === 'compact_boundary',
+      ).compactMetadata.preTokens += 1;
+    }),
+  'changed boundary parent': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(r => r.subtype === 'compact_boundary').parentUuid = id(902);
+    }),
+  'changed summary': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.find(r => r.isCompactSummary).message.content = 'invented summary';
+    }),
+  'missing suffix': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.pop();
+    }),
+  'extra unknown history': f =>
+    changeRows(f, 'nativeTranscript', rows => {
+      rows.unshift({ ...rows[0], uuid: id(903) });
+    }),
+  'second streamed compaction': f => {
+    const index = f.events.findIndex(e => e.subtype === 'compact_boundary');
+    f.events.splice(index + 1, 0, f.events[index]);
+  },
+  'missing streamed summary': f => {
+    const index = f.events.findIndex(e => e.subtype === 'compact_boundary');
+    f.events.splice(index + 1, 1);
+  },
+  'partial message at boundary': f => {
+    const index = f.events.findIndex(e => e.event?.type === 'message_stop');
+    f.events.splice(index, 1);
+  },
+})) {
+  test(`compaction refuses ${name}`, async t => {
+    const f = await compactionFixture();
+    mutate(f);
+    t.throws(() => checkCompaction(f));
+  });
+}
+
 test('actual pinned max-turns failure proves the captured current-turn cut', async t => {
   await null;
   const f = JSON.parse(
@@ -300,6 +488,39 @@ test('same pre-turn leaf cannot conceal modified historical prefix', t => {
   };
   t.notThrows(() => f.assert(cut));
   f.rows[0].message.content = [{ type: 'text', text: 'tampered history' }];
+  t.throws(() => f.assert(cut));
+});
+
+test('ordinary cut uses exact trusted bytes including duplicate older tail', t => {
+  const f = fixture();
+  f.text();
+  f.rows[0].parentUuid = id(9);
+  const older = {
+    type: 'user',
+    sessionId,
+    uuid: id(8),
+    parentUuid: null,
+    message: { role: 'user', content: 'old prompt' },
+  };
+  const leaf = {
+    type: 'assistant',
+    sessionId,
+    uuid: id(9),
+    parentUuid: id(8),
+    message: { role: 'assistant', content: [{ type: 'text', text: 'old' }] },
+  };
+  const beforePayload = `${[older, leaf, older].map(row => JSON.stringify(row)).join('\n')}\n`;
+  f.rows.unshift(older, leaf, older);
+  const cut = {
+    sessionId,
+    beforeUuid: id(9),
+    beforePayload,
+    prefixSha256: sha256(beforePayload),
+    prompt,
+  };
+  t.notThrows(() => f.assert(cut));
+  // Identical parsed rows with changed bytes still fail the trusted prefix.
+  f.rows[0] = { ...older, extra: 'changed' };
   t.throws(() => f.assert(cut));
 });
 

@@ -10,5 +10,6 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.233 \
 
 COPY capture-compaction.mjs /opt/endo/capture-compaction.mjs
 COPY restore-context.mjs /opt/endo/restore-context.mjs
+COPY native-context-projection.mjs /opt/endo/native-context-projection.mjs
 
 WORKDIR /workspace

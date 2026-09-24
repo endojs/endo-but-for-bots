@@ -4,6 +4,7 @@
 import '@endo/init';
 import test from 'ava';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 // Internal test harness, deliberately not a runtime package export.
 // eslint-disable-next-line import/no-relative-packages
@@ -105,6 +106,7 @@ const baseArgs = (fake, mount, extra = {}) => ({
   rootfsLabel: 'oci:example/claude:latest',
   makeStdoutIterable,
   restoreTranscript: async () => restoredReceipt,
+  projectNativeContext: () => restoredReceipt,
   sha256,
   ...extra,
 });
@@ -147,6 +149,7 @@ const continuedTranscript = harden([
   { kind: 'message', role: 'user', content: 'Journal-owned previous turn' },
 ]);
 const restoredReceipt = harden({
+  payload: 'restored prefix',
   sessionId: restoredUuid,
   leafUuid: '00000000-0000-4000-8000-000000000002',
   prefixSha256: sha256('restored prefix'),
@@ -224,6 +227,35 @@ const nativeWire = (prompt = 'hello') => {
   return { raw, output: raw.map(jsonBytes), rows, captured };
 };
 
+for (const field of ['sessionId', 'leafUuid', 'prefixSha256']) {
+  test(`native restore refuses altered ${field} receipt before prompt admission`, async t => {
+    const receipt = {
+      ...restoredReceipt,
+      [field]:
+        field === 'prefixSha256'
+          ? sha256('different')
+          : '00000000-0000-4000-8000-000000000099',
+    };
+    const fake = makeFakeSlice([[jsonBytes(receipt)], []]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStdinWriter: async () => ({
+          next: async () => ({ done: false }),
+          return: async () => ({ done: true }),
+        }),
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(
+      await client.send('must not run', { transcript: [nativeCheckpoint] }),
+    );
+    t.is(fake.spawned.length, 1);
+    t.is(fake.spawned[0].argv[0], 'node');
+    t.regex(events.at(-1).reason, /differs from host projection/);
+  });
+}
+
 test('ordinary completed native turn captures covered context without a compaction event', async t => {
   const wire = nativeWire();
   const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
@@ -233,10 +265,76 @@ test('ordinary completed native turn captures covered context without a compacti
   t.deepEqual(JSON.parse(fake.spawned[1].argv[2]), {
     type: 'endo_capture',
     session_id: restoredUuid,
+    coverage_before_uuid: null,
   });
   t.deepEqual(events.at(-2).checkpoint.context, wire.captured.retainedTail);
   t.is(events.at(-1).type, 'end');
 });
+
+for (const witnessMode of ['valid', 'missing', 'changed']) {
+  test(`pinned compaction ${witnessMode} witness is verified but never journaled`, async t => {
+    const f = JSON.parse(
+      await readFile(
+        new URL('./fixtures/coverage-compaction-turn.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const rows = f.nativeTranscript.trimEnd().split('\n').map(JSON.parse);
+    const captured = {
+      type: 'endo_compaction',
+      summary: rows.find(row => row.isCompactSummary).message.content,
+      retainedTail: [],
+      nativeContext: {
+        format: 'claude-code-jsonl-v1',
+        transcript: f.nativeTranscript,
+      },
+      ...(witnessMode === 'missing'
+        ? {}
+        : {
+            compactionWitness:
+              witnessMode === 'valid'
+                ? f.compactionWitness
+                : f.compactionWitness.replace(f.prompt, 'tampered prompt'),
+          }),
+    };
+    const receipt = {
+      sessionId: f.sessionId,
+      leafUuid: f.beforeUuid,
+      payload: f.beforePayload,
+      prefixSha256: sha256(f.beforePayload),
+    };
+    const fake = makeFakeSlice([
+      f.events.map(jsonBytes),
+      [jsonBytes(captured)],
+    ]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        restoreTranscript: async () => receipt,
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(
+      await client.send(f.prompt, { transcript: continuedTranscript }),
+    );
+    const checkpoint = events.find(
+      event => event.type === 'endo_native_context',
+    );
+    if (witnessMode === 'valid') {
+      t.is(events.at(-1).type, 'end', events.at(-1).reason);
+      t.is(checkpoint.checkpoint.payload, f.nativeTranscript);
+      t.false(Object.hasOwn(checkpoint.checkpoint, 'compactionWitness'));
+      t.false(Object.hasOwn(checkpoint, 'compactionWitness'));
+      t.is(
+        JSON.parse(fake.spawned[1].argv[2]).coverage_before_uuid,
+        f.beforeUuid,
+      );
+    } else {
+      t.is(events.at(-1).type, 'abort');
+      t.is(checkpoint, undefined);
+    }
+  });
+}
 
 test('subagent failure does not replace mainline coverage or fail its completed turn', async t => {
   const wire = nativeWire();
@@ -329,8 +427,7 @@ for (const failure of [
     t.is(events.at(-1).type, 'abort');
     if (failure === 'missing-hash' || failure === 'compaction')
       t.is(fake.spawned.length, 1);
-    if (failure === 'compaction')
-      t.regex(events.at(-1).reason, /current-turn compaction/);
+    if (failure === 'compaction') t.regex(events.at(-1).reason, /coverage/);
   });
 }
 
@@ -351,7 +448,12 @@ for (const mode of [
       message: { role: 'user', content: 'trusted historical prompt' },
     };
     const prefix = `${JSON.stringify(oldRecord)}\n`;
-    const receipt = { ...restoredReceipt, prefixSha256: sha256(prefix) };
+    const receipt = {
+      ...restoredReceipt,
+      payload: prefix,
+      prefixSha256: sha256(prefix),
+    };
+    const expected = { ...receipt };
     const checkpoint = {
       kind: 'native-context',
       format: 'claude-code-jsonl-v1',
@@ -384,6 +486,7 @@ for (const mode of [
     const client = makeClaudeClient(
       baseArgs(fake, makeFakeMount(), {
         restoreTranscript: async () => receipt,
+        projectNativeContext: () => expected,
         makeStdinWriter: async () => ({
           next: async () => ({ done: false }),
           return: async () => ({ done: true }),
@@ -713,6 +816,7 @@ test('ordinary capture runs inside the slice and publishes only after clean comp
     JSON.stringify({
       type: 'endo_capture',
       session_id: restoredUuid,
+      coverage_before_uuid: null,
     }),
   ]);
   t.is(fake.spawned[1].opts.cwd, '/workspace');
@@ -1470,6 +1574,7 @@ test('a lazy provision thunk runs once on first send and is reused', async t => 
     workspaceMountPoint: '/tmp/claude-sandbox-sess-lazy',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
     restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
@@ -1498,6 +1603,7 @@ test('terminate() before any lazy provision creates nothing', async t => {
     workspaceMountPoint: '/tmp/claude-sandbox-sess-noop',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
     restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
@@ -1640,6 +1746,7 @@ test('terminate() racing a mount recreate never re-provisions', async t => {
     workspacePath: '/workspace',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
     restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
@@ -1715,6 +1822,7 @@ test('a send racing a mount recreate waits for the teardown gate', async t => {
     workspacePath: '/workspace',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
     restoreTranscript: async () => restoredReceipt,
     provision: async extras => {
       provisionCount += 1;
@@ -1850,6 +1958,7 @@ test('setExtraMounts refuses eager and terminated clients without recording', as
     workspaceMountPoint: '/tmp/x',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
     restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisions += 1;

@@ -1,7 +1,7 @@
 // @ts-check
 // Runs inside the model sandbox. No transcript-provided path is used for I/O.
 import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, open, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import process from 'node:process';
 import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { renderNativeContext } from './native-context-projection.mjs';
 
 const LIMIT = 16 * 1024 * 1024;
 const execute = promisify(execFile);
@@ -123,56 +124,13 @@ const main = async () => {
           ...validated.retainedTail,
         ]),
     );
-    // Append only synthetic dialogue. Keep the captured bytes, signatures and
-    // message identities untouched; native tool evidence must never be forged
-    // or repaired through this suffix path.
-    let payload = input.payload;
-    let parentUuid = validated.nativeContext.leafUuid;
-    requireValue(
-      typeof parentUuid === 'string' &&
-        rows.some(row => row.uuid === parentUuid),
-    );
-    const prefixHash = createHash('sha256').update(input.payload).digest('hex');
-    const ids = new Set(rows.map(row => row.uuid));
-    const leaf = rows.findLast(row => row.uuid === parentUuid);
-    if (suffix.length) requireValue(typeof leaf?.timestamp === 'string');
-    const model = rows.findLast(row => row.type === 'assistant')?.message
-      ?.model;
-    for (const [index, record] of suffix.entries()) {
-      const hash = createHash('sha256')
-        .update(JSON.stringify([prefixHash, index, record]))
-        .digest('hex');
-      const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-      requireValue(!ids.has(uuid));
-      ids.add(uuid);
-      payload += `${JSON.stringify({
-        type: record.role,
-        sessionId: session,
-        cwd: process.cwd(),
-        version: 'endo-restored',
-        isSidechain: false,
-        userType: 'external',
-        gitBranch: leaf?.gitBranch ?? '',
-        // Synthetic projection time is the durable context cut, not a new
-        // historical event. Retried restoration remains byte-identical.
-        timestamp: leaf?.timestamp,
-        parentUuid,
-        uuid,
-        message:
-          record.role === 'user'
-            ? { role: 'user', content: record.content }
-            : {
-                type: 'message',
-                role: 'assistant',
-                model: model ?? 'unknown',
-                content: [{ type: 'text', text: record.content }],
-                stop_reason: 'end_turn',
-                stop_sequence: null,
-              },
-      })}\n`;
-      parentUuid = uuid;
-    }
-    requireValue(Buffer.byteLength(payload) <= LIMIT);
+    const projection = renderNativeContext({
+      cwd: process.cwd(),
+      payload: input.payload,
+      leafUuid: validated.nativeContext.leafUuid,
+      suffix,
+    });
+    const { payload } = projection;
     if (suffix.length) {
       await writeFile(path.join(source, `${session}.jsonl`), payload, {
         mode: 0o600,
@@ -213,9 +171,9 @@ const main = async () => {
     }
     process.stdout.write(
       `${JSON.stringify({
-        sessionId: session,
-        leafUuid: parentUuid,
-        prefixSha256: createHash('sha256').update(payload).digest('hex'),
+        sessionId: projection.sessionId,
+        leafUuid: projection.leafUuid,
+        prefixSha256: projection.prefixSha256,
       })}\n`,
     );
   } finally {

@@ -219,12 +219,13 @@ const defaultStderrIterable = proc =>
  *   runs under the caller's persona/instructions in addition to Claude
  *   Code's built-in prompt. Overridable per turn via `send(prompt, {
  *   systemPrompt })`. Omitted argv when neither is set.
- * @property {(records: readonly any[]) => Promise<{sessionId: string, leafUuid: string, prefixSha256: string} | undefined>} [restoreTranscript] -
+ * @property {(records: readonly any[]) => Promise<{payload: string, sessionId: string, leafUuid: string, prefixSha256: string} | undefined>} [restoreTranscript] -
  *   Write this conversation into the session's config directory from the
  *   stack's own transcript records, and return the published session/leaf/digest
  *   receipt. Native turns restore from host records before the next prompt;
  *   a surviving guest store is not authority to bypass that restoration.
  * @property {(text: string) => string} [sha256] Trusted UTF-8 SHA-256 for prefix coverage.
+ * @property {(checkpoint: any, suffix: readonly any[]) => {payload: string, sessionId: string, leafUuid: string, prefixSha256: string}} [projectNativeContext] Trusted exact native restoration projection.
  * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
  *   config file (see the floot package's mcp-socket-server). When set,
  *   every spawn passes `--mcp-config` (with this path) and
@@ -285,6 +286,7 @@ export const makeClaudeClient = args => {
     mcpConfigPath,
     env = {},
     restoreTranscript,
+    projectNativeContext,
     sha256,
     makeStdoutIterable = defaultStdoutIterable,
     makeStderrIterable = defaultStderrIterable,
@@ -482,7 +484,7 @@ export const makeClaudeClient = args => {
    * @param {{ model?: string, reasoningEffort?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
    * @param {() => void} [assertAdmission] Recheck cancellation after preparation.
    * @param {(checkpoint: any, suffix: readonly any[]) => Promise<any>} [restoreNative]
-   * @param {(cut: { sessionId?: string, beforeUuid: string|null, prefixSha256: string }) => void} [recordCut]
+   * @param {(cut: { sessionId?: string, beforeUuid: string|null, prefixSha256: string, beforePayload: string }) => void} [recordCut]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (
@@ -547,7 +549,24 @@ export const makeClaudeClient = args => {
         ) {
           throw Error('Claude native context supports only a dialogue suffix');
         }
-        restoredReceipt = await restoreNative(active[0], active.slice(1));
+        if (!projectNativeContext || !sha256)
+          throw Error(
+            'Claude native restoration requires a trusted projection',
+          );
+        const expected = projectNativeContext(active[0], active.slice(1));
+        if (
+          typeof expected.payload !== 'string' ||
+          sha256(expected.payload) !== expected.prefixSha256
+        )
+          throw Error('Invalid Claude native restoration projection');
+        const actual = await restoreNative(active[0], active.slice(1));
+        if (
+          ['sessionId', 'leafUuid', 'prefixSha256'].some(
+            key => actual[key] !== expected[key],
+          )
+        )
+          throw Error('Claude native restoration differs from host projection');
+        restoredReceipt = expected;
       } else if (!restoreTranscript) {
         throw makeError(
           X`ClaudeClient(${q(sessionId)}): this session holds ${q(records.length)} records and this incarnation cannot write them into the CLI's store, so the conversation cannot be handed over.`,
@@ -567,7 +586,10 @@ export const makeClaudeClient = args => {
             /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value),
         ) ||
         typeof restoredReceipt.prefixSha256 !== 'string' ||
-        !/^[a-f0-9]{64}$/.test(restoredReceipt.prefixSha256)
+        !/^[a-f0-9]{64}$/.test(restoredReceipt.prefixSha256) ||
+        typeof restoredReceipt.payload !== 'string' ||
+        !sha256 ||
+        sha256(restoredReceipt.payload) !== restoredReceipt.prefixSha256
       )
         throw Error('Invalid Claude restoration receipt');
       resumeSessionId = restoredReceipt.sessionId;
@@ -575,9 +597,14 @@ export const makeClaudeClient = args => {
         sessionId: restoredReceipt.sessionId,
         beforeUuid: restoredReceipt.leafUuid,
         prefixSha256: restoredReceipt.prefixSha256,
+        beforePayload: restoredReceipt.payload,
       });
     } else if (sha256) {
-      recordCut({ beforeUuid: null, prefixSha256: sha256('') });
+      recordCut({
+        beforeUuid: null,
+        prefixSha256: sha256(''),
+        beforePayload: '',
+      });
     }
     if (resumeSessionId !== undefined) {
       argv.push('--resume', resumeSessionId);
@@ -623,7 +650,7 @@ export const makeClaudeClient = args => {
     let compactBoundary;
     /** @type {string | undefined} */
     let nativeSessionId;
-    /** @type {{sessionId?: string, beforeUuid: string|null, prefixSha256: string}|undefined} */
+    /** @type {{sessionId?: string, beforeUuid: string|null, prefixSha256: string, beforePayload: string}|undefined} */
     let contextCut;
     const coverage = sha256 ? makeClaudeContextCoverage({ sha256 }) : undefined;
     let coverageFailure;
@@ -851,8 +878,6 @@ export const makeClaudeClient = args => {
             return;
           }
         }
-        if (compactBoundary)
-          throw Error('Claude native coverage refuses current-turn compaction');
         if (nativeSessionId) {
           if (!coverage || !contextCut)
             throw Error(
@@ -880,6 +905,7 @@ export const makeClaudeClient = args => {
                 session_id: compactBoundary?.session_id ?? nativeSessionId,
                 // Keep argv bounded independently of retained history size.
                 expected_boundary_uuid: compactBoundary?.uuid,
+                coverage_before_uuid: contextCut.beforeUuid,
               }),
             ]),
             harden({
@@ -907,6 +933,7 @@ export const makeClaudeClient = args => {
             }
           };
           let captured;
+          let compactionWitness;
           for await (const event of parseStreamJsonLines(captureBytes())) {
             if (
               captured ||
@@ -925,6 +952,7 @@ export const makeClaudeClient = args => {
                 ...(event.retainedTail ?? []),
               ],
             });
+            compactionWitness = event.compactionWitness;
           }
           const captureStatus = await E(proc).wait();
           if (
@@ -942,6 +970,8 @@ export const makeClaudeClient = args => {
             sessionId: nativeSessionId,
             beforeUuid: contextCut.beforeUuid,
             prefixSha256: contextCut.prefixSha256,
+            beforePayload: contextCut.beforePayload,
+            compactionWitness,
             prompt: String(prompt),
             outcome: nativeReportedFailure ? 'failure' : 'success',
           });

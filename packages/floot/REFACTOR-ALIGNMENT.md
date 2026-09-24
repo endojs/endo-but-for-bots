@@ -640,9 +640,10 @@ The repository documentation gate passes; scoped lint has no errors (147 warning
 and formatting passes.
 
 This integration is not RA-02 completion or deployment approval.
-Current-turn compaction explicitly refuses checkpoint publication until its
-replacement-prefix coverage rule is established; cancelled capture remains
-disabled, and real signature/account/runtime/system/tool binding remains open.
+Current-turn compaction initially refused checkpoint publication; the subsequent
+single-boundary coverage implementation is described below.
+Cancelled capture remains disabled, and real signature/account/runtime/system/tool
+binding remains open.
 Verified terminal failure capture is now enabled as described below; an arbitrary
 failed exit or a partially written native file is not sufficient.
 The obsolete no-init standalone live-continuation branch is now removed.
@@ -692,8 +693,29 @@ No additional durable owner is needed.
 Retained UUIDs must resolve to that index or complete observed current-turn frames;
 the boundary, summary anchor, post-boundary order and permitted metadata rewrites
 need pinned-runtime conformance tests.
-This is a reviewed direction, not implemented support; multiple/interrupted
-compactions and omission of the admitted prompt require explicit evidence rules.
+The current implementation shares one deterministic native renderer between
+the importer and host controller, and verifies its receipt before admitting a prompt.
+An isolated pinned-runtime probe confirms that automatic compaction can discard
+the current prompt, which is not echoed on the live stream.
+The capture helper therefore offers a bounded, transient pre-boundary witness:
+the current prompt and native rows after the trusted pre-turn leaf.
+The observer must compare these against the admitted prompt and complete live
+frames, and authenticate retained older rows against the host-owned projection.
+The witness is not a second journal or part of the persisted checkpoint.
+This proves a native compaction transition, not semantic faithfulness of its summary
+or unchanged bytes in discarded history.
+Multiple/interrupted compactions, real provider signature acceptance and broader
+durable restart acceptance remain outside this narrow single-boundary work.
+The full Claude suite passes 415 tests, including missing/tampered witness,
+pre-admission receipt mutations and duplicate-tail prefix coverage.
+The full Floot suite passes 699 tests; source types and the repository
+documentation gate pass, and scoped lint has no errors.
+The isolated Tokyo helper probe restores identical historical request messages,
+preserves two synthetic thinking blocks, and executes its native tool once across
+continuations.
+No production daemon activation or new durable storage owner is involved.
+Post-compaction authentication covers the explicit model-message identity,
+grouping, content and known loader flags, not every arbitrary native JSON field.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
