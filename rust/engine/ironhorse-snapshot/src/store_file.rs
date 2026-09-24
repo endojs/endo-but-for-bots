@@ -73,8 +73,8 @@ pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 /// (`open` never reads them).
 /// Cross-process last-rename-wins remains bounded by the documented
 /// single-writer-per-path model plus the durable succession check —
-/// a lost lineage is detected at its next commit or resume via the
-/// seal chain, never silently merged.
+/// a lost lineage is detected at its next commit via the seal chain,
+/// never silently merged.
 static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

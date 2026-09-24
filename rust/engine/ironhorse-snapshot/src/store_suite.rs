@@ -55,6 +55,14 @@ fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
 /// on everything the other three fields see.
 type CrankResult = (bool, String, String, Option<String>);
 
+/// Every store the suite writes keeps the digests the build before the
+/// store-seam design's phase 13 verifies at open (the root, the seal, the
+/// row leaves and the section digests), since stage 1 still writes them
+/// for that build to read; see `check_stored_digests`.
+fn assert_digests(store: &dyn HeapStore) {
+    crate::store::check_stored_digests(store).expect("the store's digests describe its content");
+}
+
 fn crank_result(o: &ironhorse_vm::RunOutcome) -> CrankResult {
     (
         o.completed,
@@ -184,8 +192,8 @@ enum Resume {
     /// each checkpoint (rows the session itself just committed and
     /// cleaned). Any evict schedule must be observably irrelevant
     /// (see `designs/ironhorse-snapshot-store-seam.md`), including
-    /// commit-then-evict-then-refault: the fault must check the refreshed
-    /// leaves, not stale attach-time leaves. The arm asserts
+    /// commit-then-evict-then-refault: the fault must read at the
+    /// committed geometry, not the stale attach-time one. The arm asserts
     /// eviction genuinely happened, so a future guard change cannot
     /// silently degrade it into a prefetch duplicate.
     LazyAdversarialEvict,
@@ -220,6 +228,7 @@ fn run_store_scheduled<S: HeapStore + 'static>(
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
+    assert_digests(&*store.borrow());
 
     let mut evictions = 0u32;
     for (i, (bytecode, names)) in compiled.iter().enumerate().skip(1) {
@@ -276,15 +285,13 @@ fn run_store_scheduled<S: HeapStore + 'static>(
         results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+        assert_digests(&*store.borrow());
         if let Resume::LazyAdversarialEvict = mode {
             // Evict AFTER the session's own checkpoint too: the rows
             // this commit rewrote are clean again — evictable — and
-            // their re-faults must verify against the leaves the
-            // commit refreshed (frozen attach-time leaves would
-            // misdiagnose exactly this healthy re-fault as a corrupt
-            // store). The final
-            // `write_snapshot` below re-faults everything evicted
-            // here.
+            // their re-faults must read the rows the commit wrote, at
+            // the committed geometry. The final `write_snapshot` below
+            // re-faults everything evicted here.
             let manifest = store.borrow().manifest().unwrap();
             for page in 0..slot_page_count(manifest.slot_count) {
                 evictions += session.machine().slots().evict_page(page) as u32;
@@ -300,6 +307,8 @@ fn run_store_scheduled<S: HeapStore + 'static>(
             "the adversarial-evict arm must actually evict"
         );
     }
+    crate::store::validate_store_content(&*store.borrow(), &sig())
+        .expect("a store the suite wrote passes the full validator");
     (
         results,
         computrons,
@@ -329,6 +338,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
+    assert_digests(&*store.borrow());
 
     for (bytecode, names) in compiled.iter().skip(1) {
         let code = session
@@ -339,6 +349,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
         results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+        assert_digests(&*store.borrow());
     }
     drop(session);
     let resumed = resume_from_store_lazy(store.clone(), &sig()).expect("final lazy resume");
@@ -430,6 +441,7 @@ fn halting_crank_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) 
         let mut session = begin_store_session(worker, &sig(), &mut *store.borrow_mut())
             .map_err(|(_, error)| error)
             .unwrap();
+        assert_digests(&*store.borrow());
         let manifest = store.borrow().manifest().unwrap();
         if resume_before {
             drop(session);
@@ -460,6 +472,7 @@ fn halting_crank_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) 
         assert_eq!(crank_result(&actual), crank_result(&expected));
         assert_eq!(actual.computrons, expected.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).unwrap();
+        assert_digests(&*store.borrow());
         assert_eq!(
             export_to_container(&*store.borrow()).unwrap(),
             baseline.write_snapshot(&sig()).unwrap()
@@ -757,6 +770,7 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
                 .map_err(|(_, e)| e)
                 .unwrap_or_else(|e| panic!("{name}: begin: {e:?}")),
         );
+        assert_digests(&*store.borrow());
         let mut resumed = resume_from_store(&*store.borrow(), &sig())
             .unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
         let twin = resumed.machine_mut();
@@ -813,6 +827,7 @@ pub fn lazy_working_set_bound<S: HeapStore + 'static>(fresh: impl FnOnce() -> S)
             .map_err(|(_, e)| e)
             .unwrap(),
     );
+    assert_digests(&*store.borrow());
     let total_pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
     assert!(total_pages > 12, "fixture must be genuinely wide");
 
@@ -841,6 +856,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
         .map_err(|(_, e)| panic!("begin: {e:?}"))
         .unwrap();
     assert_eq!(session.epoch(), 1);
+    assert_digests(store);
     assert_eq!(
         store_to_image(store).unwrap(),
         session
@@ -860,6 +876,9 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     assert!(session.machine_mut().run(&progs[1].0).completed);
     let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("incremental");
     assert_eq!(epoch, 2);
+    assert_digests(store);
+    crate::store::validate_store_content(store, &sig())
+        .expect("a store the suite wrote passes the full validator");
     assert_eq!(
         store_to_image(store).unwrap(),
         session
@@ -922,6 +941,7 @@ pub fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
     let s1 = begin_store_session(m1, &sig(), store)
         .map_err(|(_, e)| panic!("begin: {e:?}"))
         .unwrap();
+    assert_digests(store);
     let epoch = s1.epoch();
     drop(s1); // the suspended worker's machine is gone
 
@@ -956,6 +976,7 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
     store.commit(&genesis).expect("genesis commits");
     store = reopen(store);
     assert_eq!(store.manifest().unwrap(), genesis.manifest);
+    assert_digests(&store);
     let before = export_to_container(&store).unwrap();
     assert_eq!(before, crate::image::write_machine(&proof).unwrap());
 
@@ -989,6 +1010,7 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
         .expect("valid successor after refusals");
     store = reopen(store);
     assert_eq!(store.manifest().unwrap(), successor.manifest);
+    assert_digests(&store);
     assert_eq!(
         export_to_container(&store).unwrap(),
         crate::image::write_machine(&grown).unwrap()
@@ -1040,11 +1062,13 @@ pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
         Err(crate::store::StoreError::Empty)
     ));
     store.commit(&reverse).unwrap();
+    assert_digests(&store);
     assert_eq!(&store_to_image(&store).unwrap(), populated.image());
 
     // Full -> unchanged sparse -> explicit empty table -> full again.
     let mut store = fresh();
     store.commit(&first).unwrap();
+    assert_digests(&store);
     let mut unchanged = image_to_batch(&populated, 2, &first.manifest.seal);
     unchanged.small.clear();
     unchanged.small_updates = Some(Vec::new());
@@ -1054,6 +1078,7 @@ pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
     unchanged.page_edges.clear();
     reseal_batch(&mut unchanged);
     store.commit(&unchanged).unwrap();
+    assert_digests(&store);
     assert_eq!(&store_to_image(&store).unwrap(), populated.image());
     let prior = store.manifest().unwrap();
     let next = image_to_batch(&populated, 3, &prior.seal);
@@ -1101,10 +1126,12 @@ pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
     clear.manifest.root = ledger.apply_checkpoint(&clear).unwrap();
     reseal_batch(&mut clear);
     store.commit(&clear).unwrap();
+    assert_digests(&store);
     assert_eq!(&store_to_image(&store).unwrap(), empty.image());
     let restored = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(restored.machine().snapshot_image(&sig()).unwrap(), empty);
     let full = image_to_batch(&populated, 4, &clear.manifest.seal);
     store.commit(&full).unwrap();
+    assert_digests(&store);
     assert_eq!(&store_to_image(&store).unwrap(), populated.image());
 }

@@ -164,7 +164,7 @@ macro_rules! snapshot_payloads {
                     // alias a symbol id onto a string key at restore — see
                     // `Interp::restore_symbol_key_table`). Checked here where names
                     // and symbols are both in hand; `validate_store` mirrors it for
-                    // the store path.
+                    // the store path, whose resume the restore itself guards.
                     if (symbols.next_id as usize) <= small.names.len() {
                         return Err(SnapshotError::Corrupt(
                             "symbol-key table: counter inside the name table",
@@ -2770,7 +2770,8 @@ macro_rules! define_payloads {
                 $($($init_field: small.$init_field,)?) *
             };
             // The retired small-state free-list payload is not authoritative:
-            // the store's independently validated arena segments supply it.
+            // the store's free-list segment rows supply it (the slot arena
+            // checks the entries as it is built).
             image.slot_free = slot_free;
             image
         }

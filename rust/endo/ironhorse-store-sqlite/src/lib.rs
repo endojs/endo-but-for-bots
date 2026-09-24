@@ -9,12 +9,11 @@
 //! reference [`ironhorse_snapshot::store_file::FileStore`] rewrites its
 //! whole file per commit. The semantics are pinned by the shared
 //! contract, not re-invented here: succession discipline via
-//! [`ironhorse_snapshot::store::check_succession`] (the seal chain
-//! plus the recomputed batch seal — strictly stronger than a bare
-//! epoch check), the shared [`ironhorse_snapshot::store::apply_batch`]
-//! verification, rows beyond the new geometry dropped on commit, raw
-//! row bytes in the crate's canonical encodings, and the same
-//! fail-closed gate taxonomy.
+//! [`ironhorse_snapshot::store::check_succession`] (the epoch plus the
+//! seal chain, which pairs each batch with the stored state it was
+//! built on), the shared batch admission checks, rows beyond the new
+//! geometry dropped on commit, raw row bytes in the crate's canonical
+//! encodings, and the same fail-closed gate taxonomy.
 //!
 //! Operational discipline follows the daemon's SQLite designs
 //! (`designs/daemon-endo-rust-sqlite.md`,
@@ -41,13 +40,25 @@ use ironhorse_snapshot::store::{
 use ironhorse_snapshot::store_sections::{
     frame_small_state, split_small_state, SectionLeaves, SectionUpdate, SMALL_SECTION_COUNT,
 };
+use ironhorse_snapshot::SnapshotError;
 use rusqlite::{params, Connection, OptionalExtension};
 
-/// Map a rusqlite failure into the store vocabulary. SQLite errors
-/// after a successful open are I/O-class faults (a crashed crank at
-/// the machine surface), never silently absorbed.
+/// Map a rusqlite failure into the store vocabulary. SQLite errors are
+/// I/O-class faults (a crashed crank at the machine surface), never
+/// silently absorbed, except the two that describe the file itself: one
+/// that is not a SQLite database, or whose pages SQLite finds malformed,
+/// reads the same on every retry, so it is a corrupt store, like the
+/// foreign-database refusal at open.
 fn sql_err(e: rusqlite::Error) -> StoreError {
-    StoreError::Io(format!("sqlite: {e}"))
+    match e.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::NotADatabase) => {
+            StoreError::Snapshot(SnapshotError::Corrupt("sqlite: not a database"))
+        }
+        Some(rusqlite::ErrorCode::DatabaseCorrupt) => StoreError::Snapshot(SnapshotError::Corrupt(
+            "sqlite: database disk image is malformed",
+        )),
+        _ => StoreError::Io(format!("sqlite: {e}")),
+    }
 }
 
 /// A page/target column read back from the database, range-checked
@@ -194,14 +205,17 @@ fn write_section_updates(conn: &Connection, updates: &[SectionUpdate]) -> Result
     Ok(())
 }
 
+/// Read the small state back from its section rows. The stored section
+/// digests are not re-derived here: under the store-seam design's trust
+/// model the rows are the state, and the digests are change detection
+/// only (`validate_store_content` re-derives them).
 fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
     let mut stmt = conn
-        .prepare("SELECT id, bytes, hash FROM small_sections ORDER BY id")
+        .prepare("SELECT id, bytes FROM small_sections ORDER BY id")
         .map_err(sql_err)?;
     let mut rows = stmt.query([]).map_err(sql_err)?;
     let mut payloads: [Vec<u8>; SMALL_SECTION_COUNT] = std::array::from_fn(|_| Vec::new());
-    let mut hashes = [[0u8; 32]; SMALL_SECTION_COUNT];
-    for id in 0..SMALL_SECTION_COUNT {
+    for (id, payload) in payloads.iter_mut().enumerate() {
         let row = rows
             .next()
             .map_err(sql_err)?
@@ -210,20 +224,12 @@ fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
         if found != id as i64 {
             return Err(StoreError::MissingRow("small section", id as u32));
         }
-        payloads[id] = row.get(1).map_err(sql_err)?;
-        let hash: Vec<u8> = row.get(2).map_err(sql_err)?;
-        hashes[id] = hash
-            .try_into()
-            .map_err(|_| StoreError::Io("sqlite: small section hash length".into()))?;
+        *payload = row.get(1).map_err(sql_err)?;
     }
     if rows.next().map_err(sql_err)?.is_some() {
         return Err(StoreError::Io("sqlite: extra small sections".into()));
     }
-    let refs = std::array::from_fn(|id| payloads[id].as_slice());
-    if SectionLeaves::from_payloads(&refs).hashes() != &hashes {
-        return Err(StoreError::Io("sqlite: small section hash mismatch".into()));
-    }
-    frame_small_state(&refs)
+    frame_small_state(&std::array::from_fn(|id| payloads[id].as_slice()))
 }
 
 /// A SQLite-backed [`HeapStore`]. One store per database file; the
@@ -238,23 +244,12 @@ pub struct SqliteHeapStore {
     /// re-hashes untouched leaves — O(dirty · log n) root
     /// maintenance. `None` after open and after any failed commit
     /// (drop-on-failure; the next commit's slow path re-reads the
-    /// rows, re-verifies the recombination, and rebuilds it). The
-    /// fast path stops re-hashing untouched stored leaves each
-    /// commit; on this backend that trades away nothing — while the
-    /// store is warm, `locking_mode=EXCLUSIVE` shuts the file to any
-    /// other SQLite-mediated writer, so the at-rest-edit window the
-    /// scan patrolled cannot open, and an edit landing between opens
-    /// dies at the open-time validator (both directions locked in
-    /// `tests/root_cache.rs`).
-    ///
-    /// Precisely: EXCLUSIVE excludes SQLite writers, not a raw-file
-    /// writer that ignores the locking protocol (review wave 4, P3a).
-    /// Such an edit is not laundered — it is detected at the next open
-    /// or fault rather than at the next commit — so this is a change in
-    /// WHEN tamper is evident, not whether. Tamper-EVIDENCE at row
-    /// scale is the stated integrity scope until the store-seam design's
-    /// 2026-09-24 trust model retires it; its phase 13 removes this
-    /// cache.
+    /// stored leaves and rebuilds it). While the store is open,
+    /// `locking_mode=EXCLUSIVE` shuts the file to any other
+    /// SQLite-mediated writer, so the stored leaves cannot move under
+    /// the cache. Nothing checks them against the rows: the store is
+    /// trusted (the store-seam design's 2026-09-24 trust model), and
+    /// its phase 13 removes the leaves, the root and this cache.
     root_cache: Option<ironhorse_snapshot::store::RootLedger>,
 }
 
@@ -282,6 +277,22 @@ impl SqliteHeapStore {
     const APPLICATION_ID: i32 = i32::from_be_bytes(*b"IRON");
 
     fn init(conn: Connection, in_memory: bool) -> Result<SqliteHeapStore, StoreError> {
+        // A read-only database (a write-protected file, or a `mode=ro`
+        // URI) cannot take the exclusive lock below: SQLite runs BEGIN
+        // IMMEDIATE there as a plain read transaction, with no lock and no
+        // error. Such a store could never commit either, so refuse it here,
+        // before the fresh-store stamp below tries to write, rather than at
+        // its first checkpoint. The refusal is a capability the medium
+        // lacks, not a transient I/O fault, so a supervisor does not retry
+        // it.
+        if conn
+            .is_readonly(rusqlite::DatabaseName::Main)
+            .map_err(sql_err)?
+        {
+            return Err(StoreError::Unsupported(
+                "open a read-only sqlite database (open locks it for writing)",
+            ));
+        }
         // Foreign-database gate before anything else touches the file.
         let app_id: i32 = conn
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -298,15 +309,17 @@ impl SqliteHeapStore {
                 )
                 .map_err(sql_err)?;
             if tables != 0 {
-                return Err(StoreError::Io(
-                    "sqlite: refusing foreign database (populated, unstamped)".to_string(),
-                ));
+                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "sqlite: foreign database (populated, unstamped)",
+                )));
             }
             conn.execute_batch(&format!("PRAGMA application_id = {}", Self::APPLICATION_ID))
                 .map_err(sql_err)?;
         } else if app_id != Self::APPLICATION_ID {
-            return Err(StoreError::Io(format!(
-                "sqlite: refusing foreign database (application_id {app_id})"
+            // Not a heap store, which a retry cannot change: the file
+            // store's foreign-magic refusal, in the same vocabulary.
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "sqlite: foreign database (application_id)",
             )));
         }
 
@@ -355,21 +368,8 @@ impl SqliteHeapStore {
         // writing a page, and EXCLUSIVE keeps it until close. The
         // per-open edge rebuild used to take it as a side effect; with
         // neither, a second connection could open, read, and write a
-        // store this one had just opened.
-        //
-        // A read-only database (a write-protected file, or a `mode=ro`
-        // URI) cannot take it: SQLite runs BEGIN IMMEDIATE there as a
-        // plain read transaction, with no lock and no error. Such a store
-        // could never commit either, so refuse it here, as the rebuild's
-        // write used to, rather than at its first checkpoint.
-        if conn
-            .is_readonly(rusqlite::DatabaseName::Main)
-            .map_err(sql_err)?
-        {
-            return Err(StoreError::Io(
-                "sqlite: refusing read-only database (open must lock it for writing)".to_string(),
-            ));
-        }
+        // store this one had just opened. (A read-only database, where
+        // this takes no lock, was refused at the top.)
         conn.execute_batch("BEGIN IMMEDIATE; COMMIT;")
             .map_err(sql_err)?;
         conn.execute_batch("PRAGMA wal_autocheckpoint = 1000")
@@ -510,7 +510,7 @@ impl SqliteHeapStore {
     /// The rebuild leaves the marker alone. Only a commit, the store's
     /// authorized write, records the marker, so open leaves a store it may
     /// yet refuse (an incompatible boot layout or signature is found only
-    /// later, by the caller's `migrate_store` or `validate_store`) exactly
+    /// later, by the caller's `migrate_store` or resume) exactly
     /// as every open used to: rebuilding an index that already mirrors
     /// its summaries rewrites the same rows. A stale store therefore
     /// rebuilds at each open until its first commit under this build
@@ -875,6 +875,56 @@ impl HeapStore for SqliteHeapStore {
         Ok(out)
     }
 
+    /// `edge_pairs` is derived from `page_edges`: one row per distinct
+    /// (target, page) edge, no more. Open trusts it while its marker names
+    /// the committed epoch, so the full validator is where an index that
+    /// commit-time maintenance got wrong, or an offline edit left stale,
+    /// shows up.
+    fn check_derived_indexes(&self) -> Result<(), StoreError> {
+        const DISAGREES: StoreError = StoreError::Snapshot(SnapshotError::Corrupt(
+            "sqlite: edge_pairs disagrees with page_edges",
+        ));
+        let mut expected: Vec<(i64, i64)> = self
+            .page_edges()?
+            .iter()
+            .enumerate()
+            .flat_map(|(page, targets)| targets.iter().map(move |&t| (i64::from(t), page as i64)))
+            .collect();
+        expected.sort_unstable();
+        expected.dedup();
+        // Both sides are sorted, so compare as the rows stream in and stop
+        // at the first difference; a value no summary could hold (out of
+        // range, or not an integer at all) is a difference like any other.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT target, page FROM edge_pairs ORDER BY target, page")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, rusqlite::types::Value>(0)?,
+                    r.get::<_, rusqlite::types::Value>(1)?,
+                ))
+            })
+            .map_err(sql_err)?;
+        let mut expected = expected.into_iter();
+        for row in rows {
+            let pair = match row.map_err(sql_err)? {
+                (rusqlite::types::Value::Integer(t), rusqlite::types::Value::Integer(p)) => {
+                    Some((t, p))
+                }
+                _ => None,
+            };
+            if pair.is_none() || pair != expected.next() {
+                return Err(DISAGREES);
+            }
+        }
+        if expected.next().is_some() {
+            return Err(DISAGREES);
+        }
+        Ok(())
+    }
+
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
         let manifest = Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)?;
         if manifest.store_schema >= 28 {
@@ -936,14 +986,13 @@ impl HeapStore for SqliteHeapStore {
 
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
         // Metadata-only: `length(bytes)` never materializes the BLOBs,
-        // so open-time validation (and lazy resume) reads no row
-        // contents.
+        // so the metadata-scale validator reads no row contents.
         let _ = self.manifest()?;
         // Built from the rows actually present (ORDER BY page), never
-        // pre-sized from the manifest's untrusted geometry — a forged
-        // slot_count must fail validation, not force an allocation
-        // (the malformed-count discipline). Contiguity is enforced
-        // here; the count-vs-geometry comparison is validate_store's.
+        // pre-sized from the manifest's geometry — a garbled slot_count
+        // must fail validation, not force an allocation (the
+        // malformed-count discipline). Contiguity is enforced here; the
+        // count-vs-geometry comparison is validate_store's.
         let mut pages: Vec<usize> = Vec::new();
         let mut stmt = self
             .conn
@@ -2216,15 +2265,54 @@ mod tests {
         );
     }
 
-    /// A file that is not a SQLite database fails closed at open.
+    /// A file that is not a SQLite database fails closed at open, as a
+    /// corrupt store a retry cannot change.
     #[test]
     fn foreign_file_fails_closed() {
         let dir = tmp_dir("foreign");
         let path = dir.join("not-a-db.sqlite");
         std::fs::write(&path, b"IHSTORE1 this is the wrong kind of store").unwrap();
-        match SqliteHeapStore::open(&path) {
-            Err(StoreError::Io(msg)) => assert!(msg.contains("sqlite"), "named failure: {msg}"),
-            other => panic!("expected fail-closed open, got {other:?}"),
+        let error = SqliteHeapStore::open(&path).unwrap_err();
+        assert_eq!(
+            error,
+            StoreError::Snapshot(SnapshotError::Corrupt("sqlite: not a database"))
+        );
+        assert_eq!(
+            error.classify(),
+            ironhorse_snapshot::store::StoreFailure::Poisoned
+        );
+    }
+
+    /// A SQLite database that is not a heap store (another application's
+    /// id, or tables without our stamp) is refused at open as a foreign
+    /// store, the file store's foreign-magic refusal in the same
+    /// vocabulary, which a retry cannot change.
+    #[test]
+    fn foreign_sqlite_database_is_refused_as_foreign() {
+        let dir = tmp_dir("foreign-sqlite");
+        for (name, setup, refusal) in [
+            (
+                "stamped.sqlite",
+                "PRAGMA application_id = 7; CREATE TABLE t (x);",
+                "sqlite: foreign database (application_id)",
+            ),
+            (
+                "unstamped.sqlite",
+                "CREATE TABLE t (x);",
+                "sqlite: foreign database (populated, unstamped)",
+            ),
+        ] {
+            let path = dir.join(name);
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(setup).unwrap();
+            conn.close().unwrap();
+            let error = SqliteHeapStore::open(&path).unwrap_err();
+            assert_eq!(error, StoreError::Snapshot(SnapshotError::Corrupt(refusal)));
+            assert_ne!(
+                error.classify(),
+                ironhorse_snapshot::store::StoreFailure::Transient,
+                "a foreign database is not worth retrying"
+            );
         }
     }
 
@@ -2242,7 +2330,7 @@ mod tests {
         let dir = tmp_dir("unsupported-schema");
         let path = dir.join("worker-heap.sqlite");
 
-        // A valid current-schema store to tamper with.
+        // A valid current-schema store to edit.
         let mut store = SqliteHeapStore::open(&path).unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);

@@ -64,6 +64,8 @@ fn mixed_live_state_survives_alternating_collectors_and_lazy_resume() {
         "#;
         assert_same_crank(session.machine_mut(), &mut baseline, churn);
         checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
+        ironhorse_snapshot::store::check_stored_digests(&*store.borrow())
+            .expect("digests stay consistent");
         if round % 2 == 0 {
             partial_freed += partial_collect(&mut session, &*store.borrow()).unwrap();
         } else {
@@ -74,6 +76,8 @@ fn mixed_live_state_survives_alternating_collectors_and_lazy_resume() {
                 .slots_reclaimed;
         }
         checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
+        ironhorse_snapshot::store::check_stored_digests(&*store.borrow())
+            .expect("digests stay consistent");
         for p in 0..session
             .machine()
             .slots()
@@ -160,6 +164,8 @@ fn lazy_collection_relocates_suspended_async_generator_handlers() {
     assert_same_crank(session.machine_mut(), &mut baseline, "iterator = null; 0");
     session.machine_mut().collect_garbage().unwrap();
     checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
+    ironhorse_snapshot::store::check_stored_digests(&*store.borrow())
+        .expect("digests stay consistent");
     let mut restored = resume_from_store_lazy(store, &sig).unwrap();
     assert_same_crank(restored.machine_mut(), &mut baseline, "trace");
     assert_eq!(

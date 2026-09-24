@@ -1,13 +1,15 @@
 //! The **store-seam decoder** fuzz arm over `ironhorse-snapshot`'s keyed
 //! checkpoint store (store-seam design § Fuzzability).
 //!
-//! The store is the newest adversarially-reachable decoder in the tree: a
-//! daemon opens a database file it did not write, and every row in it —
-//! manifest, small state, slot pages, chunk extents, free segments — is
-//! attacker-influenced bytes. Until this arm existed the seam's hardening
-//! rested on hand-written crafted-row tests, which are *cases* rather than a
-//! search, while the design's own phase-1 acceptance bar claimed fuzz targets
-//! that did not exist.
+//! The store is the newest decoder in the tree. The store-seam design's
+//! trust model trusts the resident store, which is the machine it holds, but
+//! its decoders must still be total: an engine bug, a medium that tears a
+//! write, or bit rot can leave any row — manifest, small state, slot pages,
+//! chunk extents, free segments — holding bytes no writer produced, and those
+//! must be refused by name or read, never crash the opener. Until this arm
+//! existed the seam's hardening rested on hand-written crafted-row tests,
+//! which are *cases* rather than a search, while the design's own phase-1
+//! acceptance bar claimed fuzz targets that did not exist.
 //!
 //! Three invariants cover the three entry points the design names:
 //!
@@ -17,9 +19,10 @@
 //!   accepted payload must re-encode to the bytes it was decoded from — the
 //!   same "one encoding" bar the container arm holds
 //!   ([`crate::snapshot::decoder_is_error_free`]).
-//! - **[`validate_store`] is total**: a store whose rows have been rewritten
-//!   underneath it must be refused by name rather than crash the opener, and
-//!   must never report a state it cannot substantiate.
+//! - **The validators and the eager read are total**: over a store whose
+//!   rows have been rewritten underneath it, [`validate_store`],
+//!   [`validate_store_content`] and [`store_to_image`] each refuse by name or
+//!   succeed, never panic.
 //! - **The adoption path is total**: [`import_from_container`] over mutated
 //!   export bytes runs the whole admission gauntlet (container gates, id-space
 //!   audit, succession, batch check, Merkle root) and must fail closed.
@@ -31,7 +34,8 @@
 
 use ironhorse_snapshot::store::{
     export_to_container, image_to_batch_unchecked, import_from_container, store_to_image,
-    validate_store, HeapStore, HeapStoreCommit, MemoryStore, SmallState, StoreManifest,
+    validate_store, validate_store_content, HeapStore, HeapStoreCommit, MemoryStore, SmallState,
+    StoreManifest,
 };
 
 use crate::snapshot::{fuzz_snapshot_sig, gen_machine_image, mutate_bytes, Cursor};
@@ -64,7 +68,7 @@ pub struct ArmsReached {
     pub seeded: bool,
     /// The manifest row decoded after mutation.
     pub manifest_decoded: bool,
-    /// `validate_store` ran over a tampered store.
+    /// The validators ran over a store rewritten underneath them.
     pub validated: bool,
     /// `import_from_container` ran the whole admission gauntlet.
     pub adopted: bool,
@@ -120,10 +124,10 @@ pub fn store_decoder_is_error_free(data: &[u8]) -> ArmsReached {
         );
     }
 
-    // Arm 4 — the validator over a store whose manifest and small state have
+    // Arm 4 — the validators over a store whose manifest and small state have
     // been rewritten underneath it. `replace_manifest_and_small_for_migration`
     // is the only seam that writes rows without the commit gauntlet, which is
-    // exactly the shape of a store that was tampered with on disk.
+    // exactly the shape of a store whose rows changed outside the engine.
     if let Ok(tampered_manifest) = StoreManifest::decode(&mutated_manifest) {
         let mut tampered = store;
         if tampered
@@ -132,6 +136,7 @@ pub fn store_decoder_is_error_free(data: &[u8]) -> ArmsReached {
         {
             reached.validated = true;
             let _ = validate_store(&tampered, &sig);
+            let _ = validate_store_content(&tampered, &sig);
             let _ = store_to_image(&tampered);
         }
     }
