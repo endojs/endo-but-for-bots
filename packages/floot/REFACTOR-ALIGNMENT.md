@@ -126,6 +126,13 @@ Concrete candidates:
   declared mounts, live incarnation forwarding and cleanup retries. It is not
   proven to be a duplicate durable owner. Its string-matched
   `unsettled Endo tool call` retry at `3024` is a concrete cross-layer coupling.
+  Further tracing confirms that the shared supervisor wraps this refusal in
+  `AggregateError('Codex native cleanup pending')`, so Floot's top-level message
+  matcher misses it. The mount test's fake admin throws the unwrapped error and
+  does not cover this production composition. Prefer draining admitted calls in
+  the existing native owner and awaiting ordinary termination, rather than
+  expanding text matching. This cleanup remains open; independent fencing must
+  continue even when an admitted tool never settles.
 
 ### RA-02 — Finish the bounded-context requirement
 
@@ -238,6 +245,19 @@ interrupt tests remain; this is not an exhaustive cross-backend lifecycle matrix
 Not deployed. Persistence drain is not claimed to have a deadline, interrupt
 completion alone is not proof of native quiescence, and this does not solve
 process loss.
+
+A further held-intent regression reproduced an Endo tool executing after shutdown:
+the client checked admission before its asynchronous intent audit, but not at the
+actual tool dispatch. The local fix checks closing/terminated in the dispatch
+microtask, with no await before the effect. The test uses the real shared
+supervisor and proves independent fencing, pending stop during the held write,
+and zero tool calls after release. No storage schema or durable owner changes;
+an intent alone is still not evidence of execution or success. This does not yet
+change the separate termination/refusal contract described under RA-01.
+The full Codex package passes 324 tests and the client suite passes 98;
+production-source types and scoped lint pass (15 warnings, no errors).
+The regression failed before the fix with an observed `lookup` execution.
+Not deployed; Tokyo's prepared `63aa1a8c4` candidate predates this fix.
 
 ### RA-05 — Rebaseline and accept the actual candidate
 

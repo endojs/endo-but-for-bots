@@ -830,9 +830,16 @@ export const makeCodexClient = ({
         timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
       }
     });
-    const operation = Promise.resolve().then(() =>
-      callTool(params.tool, params.arguments),
-    );
+    const operation = Promise.resolve().then(() => {
+      // The intent write may have yielded to shutdown. Check at the actual
+      // effect boundary, without another await before calling the tool.
+      if (closing || terminated) {
+        throw Error(
+          'Codex session is closing; no new Endo tool calls are admitted',
+        );
+      }
+      return callTool(params.tool, params.arguments);
+    });
     pendingToolOperations.add(operation);
     operation.then(
       () => pendingToolOperations.delete(operation),

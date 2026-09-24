@@ -810,6 +810,72 @@ test('supervisor fences promptly but drains an admitted Codex send checkpoint wr
   t.true(stopped);
 });
 
+test('shutdown during a held tool intent does not dispatch the tool after release', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let writing = false;
+  const calls = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'Test tool.',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: async (...args) => {
+        calls.push(args);
+        return 'ok';
+      },
+      auditEvent: async kind => {
+        if (kind === 'tool-intent') {
+          writing = true;
+          await held;
+        }
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  t.teardown(async () => {
+    release();
+    await owner.stop();
+  });
+  await owner.controller.send('hello');
+  fixture.push({
+    id: 91,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'call-held',
+      tool: 'lookup',
+      arguments: {},
+    },
+  });
+  while (!writing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  const stopping = owner.stop();
+  void stopping.catch(() => {});
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.false((await owner.controller.status()).stopped);
+  t.deepEqual(calls, []);
+  release();
+  await stopping;
+  t.deepEqual(
+    calls,
+    [],
+    'the intent write must not admit execution after shutdown',
+  );
+});
+
 for (const event of ['turn-terminal', 'server-request-denied', 'tool-intent']) {
   test(`Codex shutdown drains and retains failed ${event} writes`, async t => {
     t.timeout(5000);
