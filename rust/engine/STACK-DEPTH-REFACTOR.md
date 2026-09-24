@@ -107,13 +107,15 @@ The prototype patches were measured in a scratch copy of the engine.
   default).
 - **Different things bind on different hosts.**
   - On native and every V8 tier in Node, a light walker binds (`JSON.stringify`).
-  - On Wasmtime, among the 25 cases, it is Proxy `[[Call]]` forwarding plus the heavy families,
-    because Cranelift gives `dispatch_at_inner` a 10,832 B frame.
-    Beyond them, `JSON.stringify` of nested objects costs 1,088 B per unit and traps even at
-    2,097,152 B.
+  - On Wasmtime, among the 25 cases, light walkers still bind: Proxy `[[Call]]` forwarding needs
+    1,855 KiB and `JSON.stringify` 1,811 KiB.
+    The heavy families cost far more there than on V8 (async-10k needs 1,403 KiB), because
+    Cranelift gives `dispatch_at_inner` a 10,832 B frame.
+    Beyond the 25 cases, `JSON.stringify` of nested objects costs 1,088 B per unit and traps even
+    at 2,097,152 B.
     Every heavy re-entry ceiling bisected there needs more than 800 KB, except the
     iterator-helper chains.
-  - At V8's default 984 KB, the compiler binds too.
+  - At V8's default 984 KiB, the compiler binds too.
     The Chromium main thread traps the accepted pins `callchain`-2044 and `elseif`-2044 and the
     `eval-callchain`-2044 composition.
     workerd with TurboFan pinned traps the same three, plus 7 of the 25 family cases, including
@@ -137,8 +139,9 @@ The prototype patches were measured in a scratch copy of the engine.
   4. The runtime compile (`eval`, the `Function` constructor and `Compartment.evaluate`, which
      share one seam) runs uncharged on top of whatever depth the VM has reached.
 
-  Items 2 and 3 add 160-264 KiB on top of a full budget, and item 4 adds a whole compile (at
-  least 2.26 MB on WT and 1,284 KiB under Node's TurboFan, for the tagged-template chain).
+  Items 2 and 3 add 88-264 KiB on top of a full budget, depending on the host (§3), and item 4
+  adds a whole compile (at least 2.26 MB on WT and 1,284 KiB under Node's TurboFan, for the
+  tagged-template chain).
   All three turn accepted programs into traps on wasm.
   Together with a deep VM nest they also push the shadow stack past 2 MiB: 2,611,856 B measured
   for one accepted program.
@@ -242,9 +245,9 @@ Wasm has two stacks, and either one can bind
 
 | Host | Limit | Source | Configurable by the embedder? |
 |---|---|---|---|
-| V8 / Node, workerd | 984 KB; 864 KB on 32-bit ARM and IA32 builds | `V8_DEFAULT_STACK_SIZE_KB`, V8 14.1 `src/common/globals.h:196`; `:175-178` and `:179-185` set 864 for `V8_TARGET_ARCH_ARM` and `V8_TARGET_ARCH_IA32` (copy at `$S/stack/review2/globals-14.1.h`) | Node: `--stack-size`, or `worker_threads` `resourceLimits.stackSizeMb` (default 4). workerd: `v8Flags`, self-hosted only (`workerd.capnp:70-77`, "Use at your own risk"). **Cloudflare production: no documented knob** (`$S/stack/prior-art/cf-wrangler-config.md`, `cf-compat-flags.md`) |
+| V8 / Node, workerd | 984 KiB; 864 KiB on 32-bit ARM and IA32 builds | `V8_DEFAULT_STACK_SIZE_KB`, V8 14.1 `src/common/globals.h:196`; `:175-178` and `:179-185` set 864 for `V8_TARGET_ARCH_ARM` and `V8_TARGET_ARCH_IA32` (copy at `$S/stack/review2/globals-14.1.h`) | Node: `--stack-size`, or `worker_threads` `resourceLimits.stackSizeMb` (default 4). workerd: `v8Flags`, self-hosted only (`workerd.capnp:70-77`, "Use at your own risk"). **Cloudflare production: no documented knob** (`$S/stack/prior-art/cf-wrangler-config.md`, `cf-compat-flags.md`) |
 | Chromium dedicated Worker, worklets | 500 KiB (492 KiB on 32-bit Windows) | Blink `v8_initializer.cc:1009-1012` `static const int kWorkerMaxStackSize = 500 * 1024;`, applied at `:1024` as `SetStackLimit(GetCurrentStackPosition() - kWorkerMaxStackSize)` | No; a page cannot pass V8 flags |
-| Chromium main thread | 984 KB (V8 default); 864 KB in 32-bit builds, such as 32-bit Windows | as above | No |
+| Chromium main thread | 984 KiB (V8 default); 864 KiB in 32-bit builds, such as 32-bit Windows | as above | No |
 | Firefox and WebKit Workers | not measured or sourced | – | – |
 | Wasmtime | 512 KiB | Wasmtime v49.0.0 `crates/wasmtime/src/config.rs:295` `max_wasm_stack: 512 * 1024` | Yes, but it cannot exceed `async_stack_size` (default `2 << 20` at `:301`; `bail!("max_wasm_stack size cannot exceed the async_stack_size")` at `:2632-2633`). The calling thread must also hold it: "Exhausting the thread stack typically leads to an **abort** of the process" (`:825-826`) |
 
@@ -310,7 +313,7 @@ At the limits hosts actually ship with:
   (`$S/web/chromium.json`, `worker` sections).
   The browser section of WASM-BLOCKERS.md makes the same point: the Worker is where long cranks
   belong, and it has the smallest stack.
-- **V8's default 984 KB.**
+- **V8's default 984 KiB.**
   - The Chromium main thread traps `json-stringify-10k` in three of four recorded runs: both
     builds in `$S/web/chromium.json` and `r2.json`.
     In `r3.json` it returned the native `halt=ReentryLimit { depth: 2049, limit: 2048 }
@@ -457,7 +460,7 @@ At the limits hosts actually ship with:
   - The Chromium Worker traps 6 of 19: `function`-512, `cond`-1011, `binary`-2045,
     `member`-2045, `callchain`-2044 and `elseif`-2044.
     It also traps all four `eval-*` compositions.
-  - The Chromium main thread, at V8's default 984 KB, traps `callchain`-2044, `elseif`-2044 and
+  - The Chromium main thread, at V8's default 984 KiB, traps `callchain`-2044, `elseif`-2044 and
     `eval-callchain`-2044 (`compiler/web/chromium.json`, `main` section:
     `callchain-2044 TRAP RangeError: Maximum call stack size exceeded`).
   - workerd traps the same three with `--no-liftoff`, `elseif`-2044 and `eval-callchain`-2044
@@ -621,7 +624,10 @@ V8 tiers wasm code lazily, and the frame sizes depend on the tier:
   It does not cover the getter, `valueOf`, `eval` or other heavy chains, the scoper, the coder,
   or any compiler pin except parentheses, blocks and `?:`.
   Where it was checked against a compiler chain it is unreliable: for `parse-parens@90` it
-  gives TurboFan 1,920 B per level against a measured 456 B, 4.2× too high.
+  gives TurboFan 1,920 B per level against a measured slope of 2,372 B (§2.4), about 19% too
+  low.
+  (The 456 B that `measure/wcycles.txt` reports for that trace is a 3-frame fragment the cycle
+  finder matched 180 times, not a level.)
 - A 2,016-layer Proxy `[[Call]]` chain completes on Node's default stack when cold.
   It traps after 10,000 warm-up calls in the same instance (`$S/stack/mop-proxy`,
   `call-2016-warm10k`).
@@ -673,7 +679,7 @@ The target has to fit the smallest limit that a deployment cannot change.
   **unassessed**, and this target does not cover them.
 - Next is Wasmtime's 512 KiB default.
   Many embedders will not change it.
-- Cloudflare's 984 KB has no knob, and TurboFan tiering eats about 20% of it (§1.5).
+- Cloudflare's 984 KiB has no knob, and TurboFan tiering eats about 20% of it (§1.5).
 
 The shadow stack is linked into the image and counts toward Cloudflare's 128 MB isolate limit,
 which covers memory "including the JavaScript heap and WebAssembly allocations"
@@ -687,10 +693,9 @@ The Target 1 set is:
 
 - every case in `families.json`;
 - the 19 `recursion_bounds.rs` pins at pin and pin+1, plus the proposed tagged-template pin at
-  pin and pin+1
-  (`f` followed by 2,043 empty template literals compiles; 2,044 is refused, measured with the
-  compile harness in `$S/stack/revise3/tagged_pin_native.txt`), and the 2,038-template
-  wrapper of §1.3;
+  pin and pin+1 (`f` followed by 2,043 empty template literals compiles; 2,044 is refused,
+  measured with the compile harness in `$S/stack/revise3/tagged_pin_native.txt`), and the
+  2,038-template wrapper of §1.3;
 - the other chain kinds of §1.3 (`&&`, `||`, `??`, `<`, computed member, `else if` with
   blocks, `?.`) at their ceilings and +1, and whatever a systematic sweep of the grammar's
   left-folded and right-nested productions adds (Phase 0);
@@ -724,7 +729,7 @@ Each must produce native-identical `Halt`, result and computrons under each of:
 The 12% covers the worst per-function mix modelled in §1.5 *(est.)*.
 For the compiler pins, the tagged-template chain and the unmodelled heavy families that margin
 is **unsupported**: §1.5's model does not cover them, and where it was checked on a compiler
-chain it was 4.2× off.
+chain it was about 19% too low.
 Lane B's eager tier-up runs must include the parser, scoper and coder functions of those
 chains before the margin is relied on for them.
 
@@ -763,7 +768,7 @@ The last two are from the `mop-proxy` and `walkers` prototypes.
 Target 2 is therefore reachable for the measured families.
 Two known exceptions remain, handled in §4 and §6:
 
-- trapped Proxy nesting, at 432 B per unit on WT;
+- trapped Proxy nesting, at 432 B per unit on WT (512 B on the B1 prototype, §4.4);
 - the runtime compile seam.
 
 ## 2. Inventory of recursion families
@@ -1061,8 +1066,8 @@ time (`$S/stack/regexp`):
 - a 1,984-layer Proxy getter compiling a 512-deep pattern, on WT 1 MiB;
 - a 1,500-level JSON nest with a `toJSON` that compiles one, on Node's default stack: 6 of 6
   runs trap;
-- a 1,982-level JSON nest at `--stack-size=1300`, WASM-BLOCKERS' proposed minimum: 3 of 3 runs
-  trap;
+- a 1,982-level JSON nest at `--stack-size=1300`, the minimum WASM-BLOCKERS proposed before
+  §1.6 corrected it: 3 of 3 runs trap;
 - a 600-level JSON nest in a Chromium Worker.
 
 **U4. The runtime compile seam: `eval`, the `Function` constructor and `Compartment.evaluate`.**
@@ -1239,7 +1244,7 @@ the Chromium Worker or on workerd.
 | 3 | B3: explicit-stack `JSON.parse` | b | S-M | 855,159 → 17,836 B at the ceiling (WT) | `json-parse-arr/obj-10k` and the `jparse-*` ceilings; with B6, `JSON.parse` with a reviver over deep text (`jrevive-*`). B3 alone clears `jrevive-*` only under Liftoff; under TurboFan (the Worker and workerd after tier-up, lane B's `--no-liftoff` runs) the internalize walk still binds. Not `json-reviver-10k`, whose depth is in the holder the reviver builds (B6) | no |
 | 4 | B4: iterative fast and generic `flat` | b | S | 244,479 → 16,868 B at 1,022 levels (WT, fast path); generic 0 *(est.)* | `flat-self` and `flat-generic`-2015 *(est.; both run in the unprototyped generic path)*; fixes the U2 composition | no |
 | 5 | A1: thin native dispatchers (`call_native_method_inner`, `call_native_inner`) | a | S-M | forEach 13,950 → 6,762 B per level (N, measured); up to the 6,768 B monolith frame per activation on SH *(est.)*; WT small (1,136 B frame) | native and shadow margin | no |
-| 6 | D1: compiler batch (iterative `Drop`, worklists, outlined scoper and coder arms) | d | M (6 files, +348/−47) | WT, D1a-D1c together: callchain 1,952 → 962 KiB, elseif 1,569 → 834, member 1,441 → 707, function-512 1,060 → 747, cond 779 → 413 KiB, tagged-2043 2,205 → 1,249 KiB; a `1+1+…` chain becomes constant (18 KiB); Node TurboFan callchain-2044 1,123 → 741 KiB | `parse-cond-chain`, `parse-512-blocks` *(est.; D1a measured)*, likely `eval-deep` *(est.)*; the five pin+1 refusal traps, including tagged-2044 (D1c); `callchain`-2044 and `elseif`-2044 at 984 KB | no |
+| 6 | D1: compiler batch (iterative `Drop`, worklists, outlined scoper and coder arms) | d | M (6 files, +348/−47) | WT, D1a-D1c together: callchain 1,952 → 962 KiB, elseif 1,569 → 834, member 1,441 → 707, function-512 1,060 → 747, cond 779 → 413 KiB, tagged-2043 2,205 → 1,249 KiB; a `1+1+…` chain becomes constant (18 KiB); Node TurboFan callchain-2044 1,123 → 741 KiB | `parse-cond-chain`, `parse-512-blocks` *(est.; D1a measured)*, likely `eval-deep` *(est.)*; the five pin+1 refusal traps, including tagged-2044 (D1c); `callchain`-2044 and `elseif`-2044 at 984 KiB | no |
 | 7 | A2: split the arms of `dispatch_at_inner` into handlers | a | L (the group split as prototyped is M; per-opcode handlers are L) | per level on WT: async 11,200 → 910 B, forEach 13,527 → 2,850 B, getter 13,104 → 3,138 B | `foreach-63/10k`, `async-64/10k`, and the 12 heavy ceilings measured on the prototype (§4.3); the other ceilings of §1.3 *(est.)* | no (perf-gated) |
 | 8 | B5: explicit-stack `JSON.stringify` | b | M | 0.9-1.1 KB → ≈0 per level *(est., by analogy with B3)* | `json-stringify-10k`, the binding case on native and every V8 tier, and a trap on workerd under every tier; the `jstr-arr`, `jstr-obj` and `jstr-replacer` ceilings, which also trap on workerd under every tier *(est.)* | no |
 | 9 | B6: explicit-stack reviver plus a flat `JsonSource` arena | b | M | 496 B → ≈0 per level (WT) *(est.)*; also removes U6's O(n·d) clone | `json-reviver-10k` (WT, Worker, workerd TurboFan); with B3, `jrevive-arr`-2000 and `jrevive-obj`-1999 under TurboFan, which trap on workerd with `--no-liftoff` even on the B3 prototype | no |
@@ -1270,9 +1275,9 @@ What must land for each host's Target 1 run, from the trap lists of §1.3 and
 
 | Host and limit | Traps today (measured) | Must land | Phase |
 |---|---|---|---|
-| Cloudflare workerd, 984 KB, tier not controllable | Default tiering: `json-stringify-10k` and the accepted `JSON.stringify` ceilings (`jstr-arr`-2014, `jstr-obj`-2014, `jstr-replacer`-1999); `elseif`-2044 and `eval-callchain`-2044; the unpinned `or`-2043, `nullish`-2043 and `ifelse-block`-2041 chains. Liftoff pinned: `json-stringify-10k`, the same three `JSON.stringify` ceilings, the tagged-template chain. TurboFan pinned: `proxy-get-10k`, the accepted `proxy-get-2016`, `proxy-define-10k`, `proxy-call-10k`, `json-reviver-10k`, `json-stringify-10k`, `flat-self`; the three `JSON.stringify` ceilings, `jrevive-arr`-2000, `jrevive-obj`-1999 and `flat-generic`-2015; `callchain`-2044, `elseif`-2044, `eval-callchain`-2044; `and`-2043, `or`-2043, `nullish`-2043 and `ifelse-block`-2041; the tagged-template chain; the trapped-Proxy ceilings. All 37 heavy ceilings pass under every tier | B5, B6 (with B3 for `jrevive-*` under TurboFan), B1 (`[[Get]]`, `[[DefineOwnProperty]]`, `[[Call]]`), B4 (generic path), D1; B3 also as margin, since Node's TurboFan needs 1,015 KiB for `json-parse-*-10k`. D2's logical-operator, `if`/`else if` and tagged-template spines: after D1 the tagged chain still needs 1,042 KiB (LO) and 1,058 KiB (TF) on Node, of which parse plus scope is 580 and 772 KiB, and `\|\|`-2043 still needs 516 KiB (LO) and 500 KiB (TF), `??`-2043 580 and 675 KiB. B10 for the trapped-Proxy ceilings, which stay expected traps until then | 1, 2 and 4 |
+| Cloudflare workerd, 984 KiB, tier not controllable | Default tiering: `json-stringify-10k` and the accepted `JSON.stringify` ceilings (`jstr-arr`-2014, `jstr-obj`-2014, `jstr-replacer`-1999); `elseif`-2044 and `eval-callchain`-2044; the unpinned `or`-2043, `nullish`-2043 and `ifelse-block`-2041 chains. Liftoff pinned: `json-stringify-10k`, the same three `JSON.stringify` ceilings, the tagged-template chain. TurboFan pinned: `proxy-get-10k`, the accepted `proxy-get-2016`, `proxy-define-10k`, `proxy-call-10k`, `json-reviver-10k`, `json-stringify-10k`, `flat-self`; the three `JSON.stringify` ceilings, `jrevive-arr`-2000, `jrevive-obj`-1999 and `flat-generic`-2015; `callchain`-2044, `elseif`-2044, `eval-callchain`-2044; `and`-2043, `or`-2043, `nullish`-2043 and `ifelse-block`-2041; the tagged-template chain; the trapped-Proxy ceilings. All 37 heavy ceilings pass under every tier | B5, B6 (with B3 for `jrevive-*` under TurboFan), B1 (`[[Get]]`, `[[DefineOwnProperty]]`, `[[Call]]`), B4 (generic path), D1; B3 also as margin, since Node's TurboFan needs 1,015 KiB for `json-parse-*-10k`. D2's logical-operator, `if`/`else if` and tagged-template spines: after D1 the tagged chain still needs 1,042 KiB (LO) and 1,058 KiB (TF) on Node, of which parse plus scope is 580 and 772 KiB, and `\|\|`-2043 still needs 516 KiB (LO) and 500 KiB (TF), `??`-2043 580 and 675 KiB. B10 for the trapped-Proxy ceilings, which stay expected traps until then | 1, 2 and 4 |
 | Chromium dedicated Worker, 500 KiB | 11 family cases (`$S/web/chromium.json`); 6 of 19 pins and all 4 `eval-*` compositions; the walker ceilings `jstr-*`, `jparse-*`, `jrevive-*` and `flat-generic` (§1.3); the stand-in (`node --stack-size=500`) also traps the renderer ceiling under TurboFan, `jrevive-arr`-2000 under both tiers (`revise4/jrevive_node500.txt`) and the trapped-Proxy ceilings under both tiers | B1, B3, B4, B5, B6 (with B3 for `jrevive-*` under TurboFan), B8, D1, D2 (after D1, Node TurboFan still needs 601 KiB for `function`-512, 741 KiB for `callchain`-2044, 516 KiB for `elseif`-2044, 500 KiB for `\|\|`-2043 and 675 KiB for `??`-2043; the tagged chain needs 1,058 KiB); B10 for the trapped-Proxy ceilings | 1, 2 and 4 |
-| Wasmtime, 512 KiB | 18 family cases; 10 of 19 pins and 5 pin+1 refusals (4 in the probe, tagged-2044 in the compile harness); every heavy ceiling bisected in §1.3 except the iterator helpers; every walker ceiling except `flat-fast`-1022 (`walkers/max_wt.jsonl`: from 726,339 B for `flat-generic`-2015 to a trap at 2 MiB for `jstr-obj`-2014); the renderer and trapped-Proxy ceilings; the tagged-template chain | B1, B3, B4, B5, B6, B8, A2, D1 (D1c for the pin+1 refusals), D2; B10 for the trapped-Proxy ceilings | 1, 2 and 4 |
+| Wasmtime, 512 KiB | 18 family cases; 10 of 19 pins and 5 pin+1 refusals (4 in the probe, tagged-2044 in the compile harness); every heavy ceiling bisected in §1.3 except the iterator helpers; every walker ceiling except `flat-fast`-1022 (`walkers/max_wt.jsonl`: from 726,339 B for `flat-generic`-2015 to a trap at 2,000,000 B for `jstr-obj`-2014); the renderer and trapped-Proxy ceilings; the tagged-template chain | B1, B3, B4, B5, B6, B8, A2, D1 (D1c for the pin+1 refusals), D2; B10 for the trapped-Proxy ceilings | 1, 2 and 4 |
 
 The workerd and Chromium sets are listed in §1.3 and Appendix B; the "after D1" figures are from
 `compiler/exp/v8_e3.jsonl`, for the tagged chain from `revise3/tagged_stages.jsonl`, and for
@@ -1284,14 +1289,14 @@ D1 does not clear the tagged-template chain on any V8 tier: on Node it moves Lif
 to 1,042 KiB and TurboFan from 1,283 to 1,058 KiB.
 The stages run one after another, so the compile peak is the largest stage.
 After D1, the tagged chain's parse plus scope needs 580 KiB (LO) and 772 KiB (TF), under
-984 KB, so for that chain the coder spine is the critical piece *(est.)*.
+984 KiB, so for that chain the coder spine is the critical piece *(est.)*.
 On workerd as a whole, the critical compiler pieces are D2's logical-operator, `if`/`else if`
 and tagged-template spines.
 The `||`, `??` and `else if`-with-blocks chains trap on workerd today under default tiering,
 and D1 was not measured on workerd.
 After D1 the logical chains need 500-675 KiB on Node, but Node's minima do not predict
 workerd's traps (§1.3): `||`-2043 needs 868 KiB under Node's TurboFan on the repository crate,
-under 984 KB, and still traps on workerd.
+under 984 KiB, and still traps on workerd.
 The `else if`-with-blocks chain has no after-D1 V8 figure.
 The compile harness's `ifelseblock` shape at 2,041 has no `var a=1;` prefix and ends in
 `err stack overflow` (`review3/logical_chain_node.jsonl`), so it does not measure the accepted
@@ -1369,8 +1374,9 @@ stacks as well.
   | eval | – | 24,651 → 4,594 | – |
 
   Despite its name, `exp12.wasm` is the table-routing build: it was built at 16:29, after the
-  table version of `dispatch.rs` was saved at 16:27 (`ls --time-style=full-iso` in
-  `dispatch-reentry/`).
+  table version of `dispatch.rs` was saved at 16:27:37.7 in `dispatch-reentry/eng/`, 0.4 s after
+  the sequential version was copied to `dispatch-reentry/dispatch.rs.exp12`
+  (`ls --time-style=full-iso`).
   The native `probe-exp12`, which `chains_exp.py` uses for `chains_exp12.json`, was built at
   16:22 from the sequential-routing version (`dispatch.rs.exp12` chains
   `if let Flow::NotMine = flow`), so its native frame sums are not the table build's.
@@ -1485,11 +1491,18 @@ The common recipe is a `Vec<Frame>` loop in which:
   The minimum stack stays flat from 500 to 1,500 layers: 32 KiB N, 46 KiB Node, 33,008 B WT.
   At WT 512 KiB, proxy-get-2016, call-2016, define-2015 and set-1015 went from trap to pass.
   The 10k cases went from trap to `ReentryLimit`.
+  The prototype makes trap-present layers costlier: 512 B instead of 432 B per layer on WT and
+  1,024 B instead of 897 B natively (`mop-proxy/modwt.jsonl` and `mod2.jsonl`, against
+  `tr-wt.jsonl` and `tr-nat.jsonl`).
+  The accepted `get`-trapped 2,016-layer chain then traps on WT at 1 MiB, where the repository
+  build returns; the prototype returns at 1,100,000 B (re-run for this revision with the kept
+  `probe.cwasm` and `probe-mod.cwasm`, `$S/review-r2/stack/verify_get2016.py`).
 - **Meter and ReentryLimit:** 570 differential cases were identical, covering every family
   around its ceiling, `families.json`, trap order, revocation mid-chain, invariant
   violations and array-iterator metering.
   get-2032 completes, and get-2033 halts at depth 2,049 with the same computrons.
-  13 VM test binaries (194 tests) pass.
+  13 VM test binaries (193 tests) passed on an earlier state of the patch
+  (`mop-proxy/tt-mod.log`); the kept patch passes all 1,117 `ironhorse-vm` tests.
 
   Three subtleties must be kept:
   1. `invoke_value` must restore the "fresh argument list" state per hop.
@@ -1534,9 +1547,9 @@ The common recipe is a `Vec<Frame>` loop in which:
 
   In the Chromium Worker (`walkers/web/chromium_proto.json`), the `JSON.parse` maximum rises
   from about 1,827 arrays / 1,316 objects (two runs) to the full 2,016 / 2,015.
-  `JSON.parse` with a reviver over deep *text* (`jrevive-arr`, `jrevive-obj`) rises from about
-  1,083 to the full 2,000 there, because under Liftoff parse with source tracking was its
-  binding frame.
+  `JSON.parse` with a reviver over deep *text* rises there from about 1,083 to the full 2,000 for
+  `jrevive-arr`, because under Liftoff parse with source tracking was its binding frame;
+  `jrevive-obj` was not run on the prototype build.
 - **Clears `jrevive-*` only under Liftoff.**
   Under TurboFan the internalize walk binds *(inferred from its TF slope of 584 B per level,
   §2.3, about 1.1 MiB at 2,000 levels)*, so B3 alone still traps these accepted programs.
@@ -1679,10 +1692,11 @@ Before each post-check, release units down to `held_at_push`, then run the remai
 original order.
 Effort L, across 13 trap-present bodies.
 It is needed for Target 2, because trapped nesting costs 432 B per unit on WT, about 864 KB at
-the 1,999 ceiling *(est.)*.
+the 1,999 ceiling *(est.)*, and 512 B per unit once B1 lands (§4.4).
 It is also the only option that clears the trapped-Proxy ceilings of Target 1 (§1.7), which
 trap on WT at 512 KiB, under `node --stack-size=500` on both tiers and on workerd with
-`--no-liftoff`; the `get`-trapped 2,016-layer chain returns on WT at 1 MiB.
+`--no-liftoff`; the `get`-trapped 2,016-layer chain returns on WT at 1 MiB today, but traps
+there on the B1 prototype.
 Charging trapped layers more than one unit would be a versioned release instead.
 
 ### 4.5 Class (c): making native → JS re-entry non-recursive
@@ -1982,9 +1996,9 @@ The earlier `$S/stack/prior-art/wdchain/wd.log` is empty and recorded no result 
   - add compiler hop points keyed to the parser's `self.depth` against
     `PARSER_STACK_BUDGET`, the tree depth at node construction (`parser.rs:567`), and the
     RegExp compiler's nesting counter.
-    The scoper and coder recurse over a finished tree without a counter of their own
-    (`scoper.rs:1137`, `coder.rs:1431` are backstops), so they would need a depth parameter
-    first *(not evaluated)*.
+    The scoper and coder already count their depth (`self.depth`, raised in `Scoper::descend`
+    at `scoper.rs:1140` and in `code_node` at `coder.rs:1434`), so hop points could key on
+    those counters, except in the coder helpers that bypass `code_node` (U5) *(not evaluated)*.
 - **Trait:** the engine calls an embedder trait `StackHop::hop(&mut dyn FnMut())`.
   Natively it is a direct call.
   On wasm the glue stashes the closure, calls the import and re-enters through an exported
@@ -2084,9 +2098,10 @@ Checks:
   - the walker ceilings of `walkers/fams.py` at ceiling and ceiling+1: `jparse-arr` 2,016,
     `jparse-obj` 2,015, `jrevive-arr` 2,000, `jrevive-obj` 1,999, `jstr-arr` 2,014, `jstr-obj`
     2,014, `jstr-replacer` 1,999, `flat-generic` 2,015 and `flat-fast` 1,022.
-    `jstr-obj` at 2,014 and 2,015 start as expected traps, since 2,014 traps at 2,097,152 B
-    (`walkers/max_wt.jsonl`); the other ceilings needed at most 1,854,230 B there, and their
-    +1 cases were not measured on WT;
+    `jstr-obj` at 2,014 and 2,015 start as expected traps: 2,014 traps at 2,000,000 B, where
+    `walkers/max_wt.jsonl`'s bisection stops, and both trap at 2,097,152 B (re-run for this
+    revision); the other ceilings needed at most 1,854,230 B there, and their +1 cases were not
+    measured on WT;
   - mixed value-stack and heavy re-entry cases for invariant 8 (§4.1): a plain-call recursion
     run to the value-stack `StackOverflow` below K levels of each heavy family, for example the
     forEach program of invariant 8 at K = 0, 30 and 60 (`revise4/mixed_value_stack.txt`);
@@ -2125,9 +2140,12 @@ Checks:
   Default tiering is timing-dependent, and a per-function mix needs more stack than either pure
   tier (§1.5), so the two pinned extremes alone do not bound it.
   The initial expected traps are what Phase 1 leaves *(est.)*:
-  - under TurboFan at 440-500 KiB until D2 lands, `function`-512, `callchain`-2044 and
-    `elseif`-2044 (601, 741 and 516 KiB after D1; 510, 803 and about 549 KiB under default
-    tiering, `compiler/exp/v8_e3.jsonl`);
+  - on the Node lanes until D2 lands, `function`-512, `callchain`-2044 and `elseif`-2044 at
+    440 KiB under both tiers, `callchain`-2044 and `elseif`-2044 at 500 KiB, and `function`-512
+    at 500 KiB when a function on its chain is tiered up; after D1 they need 601, 741 and
+    516 KiB under TurboFan and 510, 803 and about 549 KiB under default tiering
+    (`compiler/exp/v8_e3.jsonl`), and 462, 787 and 533 KiB under `--liftoff-only` (the
+    `revise3/cstl_e3.wasm` compile harness, `$S/review-r2/stack/lane_b_lo_after_d1.jsonl`);
   - the tagged-template chain on every tier and host of lane B, including workerd with either
     tier pinned, until D2 lands (1,042 KiB LO and 1,058 KiB TF on Node after D1);
   - on the Node lanes, `||`-2043 and `&&`-2043 (500 KiB TF and 516 KiB LO after D1) and
@@ -2137,6 +2155,8 @@ Checks:
   - on workerd with `--no-liftoff`, `&&`-2043, `||`-2043, `??`-2043 and
     `else if`-with-blocks-2041, which trap today (§1.3; all but `&&` also trap under default
     tiering), until D2's spines land or a post-D1 workerd run clears them;
+  - on workerd with `--no-liftoff`, `callchain`-2044 and `elseif`-2044, which trap today (§1.3),
+    until a post-D1 workerd run clears them;
   - the renderer ceiling under TurboFan at 440-500 KiB until B8, if B8 slips from Phase 1;
   - the trapped-Proxy ceilings on the Node lanes and on workerd with `--no-liftoff`, until B10.
 
@@ -2151,7 +2171,7 @@ Checks:
   max(Liftoff, TurboFan) frames, against each pure tier; today the excess is 0-12% for the
   chains modelled (`$S/stack/revise2/worst_mix.txt`).
   Extend the model to the scoper, coder and parser chains and to every heavy family, and check
-  it against measurement: for `parse-parens` it is 4.2× off today (§1.5).
+  it against measurement: for `parse-parens` it is about 19% too low today (§1.5).
   If the excess grows past lane B's 12% margin, widen the margin.
   Post the top-N diff on PRs.
   The per-unit slope is the direct measure of Target 2 (≤ 200 B).
@@ -2185,7 +2205,8 @@ the wall-clock figures of §4.3 are not the benchmark gate.
 Expected afterwards *(est.; B1, B3, B4's fast path and D1 measured; B4's generic path, B5 and
 B6 estimated)*:
 
-- **workerd, either tier pinned:** all 25 family cases and the 19 pins pass.
+- **workerd, either tier pinned:** all 25 family cases pass, and the 19 pins probably do
+  *(est.; D1 was measured on Node only, and Node's minima do not predict workerd's, §1.3)*.
   The walker ceilings pass once B5, B6 with B3, and B4's generic path land.
   `eval-callchain`-2044 probably passes too, since D1 cuts `callchain`-2044 to 741 KiB under
   Node's TurboFan.
@@ -2255,7 +2276,7 @@ These need either L effort or a release:
    Is Target 1 (the pinned families and ceilings) enough to ship on Cloudflare?
    Or is Target 2 (any accepted program) required?
    The known Target 2 gaps after Phase 3 are:
-   - trapped Proxy nesting, 432 B per unit on WT;
+   - trapped Proxy nesting, 432 B per unit on WT today and 512 B on the B1 prototype;
    - the runtime compile seam, VM corner plus compile.
 2. **The runtime compile seam.**
    Should a compile reserve be charged against `native_depth` at each `eval_source` entry
@@ -2437,7 +2458,7 @@ at every host's all-25 minimum (`measure/verify.jsonl`).
 | `parse-cond-chain` | 604 | 763 | 369 | 439 | ok | ok | ok |
 
 **Heavy re-entry ceilings on Wasmtime** are in the table of §1.3.
-**Compiler pins** at V8's default 984 KB: the Chromium main thread traps `callchain`-2044,
+**Compiler pins** at V8's default 984 KiB: the Chromium main thread traps `callchain`-2044,
 `elseif`-2044 and `eval-callchain`-2044; workerd traps the same three with `--no-liftoff`, and
 the last two with default tiering (`revise2/wdtf/res-*-compiler.json`).
 The unpinned tagged-template chain traps workerd with `--liftoff-only` and `--no-liftoff` and

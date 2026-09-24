@@ -26,7 +26,8 @@ That review is not published on its own:
 [Addendum A: findings by section](#addendum-a-findings-by-section) summarizes each finding where
 it is cited.
 All of it was re-checked against [WASM-BLOCKERS.md](../rust/engine/WASM-BLOCKERS.md) and
-[STACK-DEPTH-REFACTOR.md](../rust/engine/STACK-DEPTH-REFACTOR.md) at `d152375e`.
+[STACK-DEPTH-REFACTOR.md](../rust/engine/STACK-DEPTH-REFACTOR.md) at `d152375e`, and later
+revisions of this review follow those reports' own corrections.
 *(inferred)* marks inference.
 **local-workerd** marks results measured only in local workerd, which enforces no CPU or memory
 limit and caps a value at 4 MiB where the documentation says 2 MB.
@@ -34,8 +35,9 @@ limit and caps a value at 4 MiB where the documentation says 2 MB.
 
 ## Verdict
 
-The platform half of the base report holds: the SQL authorizer audit, the Hibernation API rules,
-output gating, the synchronous crank and the limits table are accurate.
+The platform half of the base report mostly holds: the SQL authorizer audit, the Hibernation API
+rules, output gating, the synchronous crank and the limits table are accurate apart from
+corrections 6, 13 and 14.
 Ironhorse compiled to wasm runs in a SQLite-backed Durable Object: on fresh instances 24 of 25
 recursion families match native, and every mismatch is a trap, never a wrong answer
 (local-workerd).
@@ -54,19 +56,19 @@ relies on does not exist.
 Rows 1–3 can each rule the design out, rows 4–5 are prerequisite engineering for Phase 0, and
 rows 6–11 block Phase 2.
 "U" and "C" are the completeness critic's items.
-U1–U7 are the unstated blockers it found: U1, the compiler runs on every delivery; U2, the
-platform fixes the stack; U3, the instance must be dropped after any exception; U4, the memory
-budget; U5, lazy resume; U6, exactly-once delivery and host state; U7, engine identity and
-upgrades.
+U1–U7 are the seven of its twelve unstated blockers that the table cites: U1, the compiler runs
+on every delivery; U2, the platform fixes the stack; U3, the instance must be dropped after any
+exception; U4, the memory budget; U5, lazy resume; U6, exactly-once delivery and host state;
+U7, engine identity and upgrades.
 C1–C10 are its contradictions with WASM-BLOCKERS
 ([below](#contradictions-with-the-engine-reports)).
 
 | # | Blocker | Affects | Evidence (short) | Blocks |
 |---|---|---|---|---|
-| 1 | The host call stack is fixed by the platform and too small: programs the engine accepts natively trap, at a depth that moves with V8 tier-up | Base §1, §8, §9 (not mentioned); Add. §6.4 | `JSON.stringify` of nested arrays traps from depth 1,343–1,529 where native accepts 2,000; only self-hosted `v8Flags` raise the stack (local-workerd; WASM-BLOCKERS B3 and Cloudflare section; STACK-DEPTH-REFACTOR §1.5). U2, C3 | Phase 0 go/no-go; Phase 2 until STACK-DEPTH-REFACTOR Phases 1–2 land |
+| 1 | The host call stack is fixed by the platform and too small: programs the engine accepts natively trap, at a depth that moves with V8 tier-up | Base §1, §8, §9 (not mentioned); Add. §6.4 | `JSON.stringify` of nested arrays traps from depth 1,343–1,529 where native accepts 2,000; only self-hosted `v8Flags` raise the stack (local-workerd; WASM-BLOCKERS B3 and Cloudflare section; STACK-DEPTH-REFACTOR §1.5). U2, C3 | Phase 0 go/no-go; Phase 2 until STACK-DEPTH-REFACTOR Phases 1–2 land, with the trapped-Proxy ceilings still trapping until its Phase 4 (B10) |
 | 2 | 128 MB is per isolate and shared by co-resident objects; the default ceilings let a string heap reach 0.56–1.2 GB of linear memory, array items and side tables are bounded by no ceiling, and linear memory never shrinks | Base §1, §9, §10; Add. §1 | 11,468,800 B per instance before any heap; demo counter vat 42.13 MiB lazy, 60.31 MiB eager at wake, 59.56 / 77.75 MiB after one chunk-allocating crank *(Node)*; string push loops halt at the default chunk ceiling at 556,335,104 B *(Node)* and 599,392,256 B (local-workerd), and string doubling reaches 1.21 GB (Wasmtime); an overrun replaces the isolate (WASM-BLOCKERS B7, B8). U4, C4, finding 10 | Phase 0 (ceiling profile and admission); Phase 2 |
-| 3 | Lazy resume does not make a wake cost the pages a message touches | Base §5.2, §8 Phase 0, §9 | 977 of 1006 slot pages resident right after opening the counter vat; wake 260–340 ms lazy against 279–497 ms eager on the real SQLite backend *(native)*; an allocating checkpoint re-reads every non-resident page (`value.rs:899-919`). U5 | Phase 0 go/no-go (latency) |
-| 4 | Reusing the cached instance after a trap or rollback commits state that SQL rolled back | Base §5.3 `this.vat ??=`, §6.1 `tx`; Add. §4.2, §6.4 | SQL count 3 while the vat held 4, then the next crank committed 5 (local-workerd); each trap leaks about 4.1 MiB of linear memory and some shadow stack, and every call fails after about ten traps; guests can trigger traps (B3, B7). Merges U3, finding 5 and WASM-BLOCKERS "A trap poisons the instance" | Phase 0 (host contract) |
+| 3 | Lazy resume does not make a wake cost the pages a message touches | Base §5.2, §8 Phase 0, §9 | 977 of 1006 slot pages resident right after opening the counter vat; wake 314–340 ms lazy against 321–397 ms eager on the real SQLite backend *(native)*; an allocating checkpoint re-reads every non-resident page (`value.rs:899-919`). U5 | Phase 0 go/no-go (latency) |
+| 4 | Reusing the cached instance after a trap or rollback commits state that SQL rolled back | Base §5.3 `this.vat ??=`, §6.1 `tx`; Add. §4.2, §6.4 | with a JS stand-in for the vat, SQL count 3 while the stand-in held 4, then the next crank committed 5 (local-workerd); each trap leaks about 4.1 MiB of linear memory and some shadow stack, and every call fails after about ten traps; guests can trigger traps (B3, B7). Merges U3, finding 5 and WASM-BLOCKERS "A trap poisons the instance" | Phase 0 (host contract) |
 | 5 | The engine the worker needs does not build on stable Rust, and the compiler runs on every delivery | Base §1, §2, §6.1 | `ironhorse-compile` refuses `panic=abort` (`lib.rs:30-31`); the worker compiles every eval (`main.rs:121-128`); two source-text evals per inbound frame (`ironhorse-engine.js:286, 297`); the working build needs `RUSTC_BOOTSTRAP=1 -Zbuild-std` (WASM-BLOCKERS B1). U1, C1 | Phase 0 (build) |
 | 6 | Heaps cannot move between native and wasm32 or between engine versions: the profile pins one executable, the two targets still diverge, and a Worker cannot load another engine at run time | Base §1, §8 Phases 2–3 | The profile hashes the worker executable (`ironhorse-runtime.js:117-129`) and resume requires exact equality (`format.rs:437-438`); an audit found 27 native-versus-wasm32 divergence sites (WASM-BLOCKERS B7); workerd refuses runtime wasm compilation (`jsg/setup.c++:623-627`). U7, C5 | Phase 2: the first engine deploy orphans every hibernated heap; Phase 3 |
 | 7 | Host state lives outside the heap: routing tables (base report) and the host endpoint (both documents) | Base §1, §5.1–§5.4; Add. §9 | C-lists and sessions are `hub.js` state (`hub.js:17-20`); host resources and pending host answers live in a live endpoint (`daemon.js:46-53`) and reject on restart (`ocapn.js:683-686`); the in-heap client has no `crypto` for handshake keys (`cryptography.js:195`). U6 | Phases 1–2 |
@@ -84,11 +86,11 @@ Each quote is copied from the current text, for use as an inline correction note
 | 1 | "All live object state, including CapTP session tables, lives in pages of the Ironhorse heap" | Base §1 | Only the guest object graph and the worker's half of its pipe session to the host are in the heap. C-lists, answer routes, publications, gifts and session identities are host hub state, written as one JSON document after every mutating frame. | `hub.js:17-20, 51-55`; `worker-peer.js:88-101` |
 | 2 | "Nothing live is left in the JS isolate, so the failure mode in" | Base §1 | The host endpoint holds live objects by design: system resources, the worker controller and pending host-owed answers, which reject at-most-once after a restart. A DO wake after hibernation is such a restart *(inferred)*. | `daemon.js:46-53`; `ocapn.js:683-686` |
 | 3 | "A worker costs something only while it processes a message." | Base §1 | Duration is billed only while running or unable to hibernate, but SQL storage ($0.20/GB-month beyond 5 GB) accrues while hibernated, and requests and rows written are billed separately. | DO pricing |
-| 4 | "Cloudflare provides storage, compute and connection hosting, and heap images stay portable to" | Base §1 | Not with today's runtime profile: it hashes the worker executable and resume requires an exact match, so the native worker refuses a wasm-written heap and vice versa. Native and wasm32 also still diverge (B7), and in-DO export and import add about 3.5× (export) to 4.3× (import) the container size in linear memory. | `ironhorse-runtime.js:117-129`; `format.rs:437-438`; WASM-BLOCKERS B7; 17,273,470 B container: export 11.00→68.81 MiB, import 11.31→82.56 MiB *(Node)* |
+| 4 | "Cloudflare provides storage, compute and connection hosting, and heap images stay portable to" | Base §1 | Not with today's runtime profile: it hashes the worker executable and resume requires an exact match, so the native worker refuses a wasm-written heap and vice versa. Native and wasm32 also still diverge (B7), and in-DO export and import each add about 3–3.5× the container size in linear memory (the import run measured 4.3× because it also kept every imported row in an in-instance `MemoryStore`). | `ironhorse-runtime.js:117-129`; `format.rs:437-438`; WASM-BLOCKERS B7; 17,273,470 B container: export 11.00→68.81 MiB, import 11.31→82.56 MiB *(Node)* |
 | 5 | "The one real port is a new `HeapStore` backend over the DO SQL API." | Base §1 | The worker also needs `ironhorse-compile`, on every delivery, which refuses `panic=abort`; `ironhorse-vm` refusals abort under `panic=abort`; and the port needs stack work (B3), heap ceilings (B8), a new worker loop and host ABI (B5), and adoption of lazy resume, which the worker does not use. | `ironhorse-compile/src/lib.rs:30-31`; `main.rs:121-128, 247`; WASM-BLOCKERS B1, B3, B5, B8 |
 | 6 | "Never call `ws.accept()` or `addEventListener`, because registered listeners keep the isolate" | Base §5.1 | Only `ws.accept()` makes a socket non-hibernatable. On a socket passed to `acceptWebSocket`, `addEventListener` "does nothing" and does not pin the object. | `actor-state.h:666-671`; a DO with a listener registered was evicted after 13 s idle (local-workerd) |
 | 7 | "slot pages and chunk extents are faulted in on demand." | Base §5.2 | Restore validation faults every page that holds a side-table owner or a directly referenced value, and the lazy chunk arena allocates the full chunk length at attach. | `persist.rs:69, 118`; `value.rs:1850`; 977 of 1006 slot pages resident after opening the counter vat |
-| 8 | "A wake costs roughly the metadata plus the pages the message touches." | Base §5.2 | A wake also reads the whole small state twice and every page-edge row, restores every side table eagerly and faults the pages they reference; a crank that allocates then makes its checkpoint re-read every non-resident page. | `machine.rs:1332-1333, 1412-1415`; `value.rs:899-919`; wake 260–340 ms lazy against 279–497 ms eager *(native)* |
+| 8 | "A wake costs roughly the metadata plus the pages the message touches." | Base §5.2 | A wake also reads the whole small state twice and every page-edge row, restores every side table eagerly and faults the pages they reference; a crank that allocates then makes its checkpoint re-read every non-resident page. | `machine.rs:1332-1333, 1412-1415`; `value.rs:899-919`; wake 314–340 ms lazy against 321–397 ms eager *(native)* |
 | 9 | "export class ThixotropeWorker extends DurableObject {" | Base §5.3 | `DurableObject` is not a global: import it from `cloudflare:workers`, and declare the class under `new_sqlite_classes`, or `transactionSync` throws "Durable Object is not backed by SQL." | `src/cloudflare/workers.ts:13`; `actor-state.c++:781`; `typeof DurableObject` is "undefined" (local-workerd) |
 | 10 | "// crank + drain queue + commit dirty pages" | Base §5.3 | Inside `transactionSync` the store's commit only releases a savepoint; durability comes from the output-gated implicit commit after the callback returns, and a later throw in the callback rolls the "commit" back. | `actor-state.c++:751-776` |
 | 11 | "Session identity is re-established from the attachment, and CapTP tables are rebuilt as heap" | Base §5.4 | Map, WeakMap and Array tables are small-state side tables restored eagerly on every wake, and the hub's tables are host state. A durable session is keyed by the resume token in the first `hello`, which arrives after `acceptWebSocket`, so the attachment must be rewritten after the handshake. | `machine.rs:1412-1415`; `durable-netlayer.js:387-397` |
@@ -270,8 +272,9 @@ Corrections 12–14 apply here.
   `sql.exec` binds blobs, strings, doubles and null (`api/sql.h:29`) and returns integers as
   doubles (`sql.c++:376-380`); only the last statement of a batch may take parameters
   (`sqlite.c++:896-898`).
-  A JS exception from an import unwinds Rust frames without destructors and escapes
-  `catch_unwind`, leaving a `RefCell` borrowed (local-workerd; WASM-BLOCKERS Cloudflare section).
+  A JS exception from an import escapes `catch_unwind`; through an `extern "C"` import it also
+  skips Rust destructors and leaves a `RefCell` borrowed (local-workerd), while through
+  `extern "C-unwind"` the destructors run (WASM-BLOCKERS Cloudflare section).
   Direction: one statement per call, integers as f64 within u32, error codes instead of throws,
   and, if any call re-enters wasm, `extern "C-unwind"` on the re-entered export and on the import
   that calls back.
@@ -505,8 +508,10 @@ Corrections 18–25 apply here.
   `Map` (`packages/ocapn/src/captp/finalize.js:56-58`), so `onSlotCollected` never runs
   (`pairwise.js:80-91`), and it is the only source of `op:gc-exports` and `op:gc-answers`
   (`ocapn.js:1168-1215`).
-  Between Ironhorse vats export counts only grow, so all garbage waits for the cycle backstop
-  *(inferred)*.
+  Between Ironhorse vats export counts only grow, so the local signal never fires *(inferred)*.
+  The cycle backstop cannot make up for it: it marks through `importsFrom`, which the same
+  unreleased imports fill, so a hub that any live hub ever imported from stays marked, and that
+  garbage leaks *(inferred)*.
   Direction: a deterministic release protocol or deterministic engine finalization; until then,
   drop "Collection is mostly local".
 - **Session GC drops unacked frames, and reused IDs meet late duplicates (finding 14).**
@@ -565,7 +570,7 @@ Rechecked against WASM-BLOCKERS.md at `d152375e`, with line numbers from that te
 |---|---|---|---|
 | C1 | §1: builds "as-is"; "one real port" | B1 hard; `ironhorse-compile` and `ironhorse-runtime` fail on both targets; `vm` and `regexp` refusals abort under `panic=abort` | WASM-BLOCKERS. The base report is wrong (correction 5). |
 | C2 | §5.3 caches `this.vat` across events | "A trap poisons the instance, cumulatively": discard after any trap | WASM-BLOCKERS, since `e487f62e` corrected the "does not poison" heading. The base report is wrong. |
-| C3 | Silent on the stack; picks workerd as host | B3 "hard in browsers and workerd"; the stack refactors are required | WASM-BLOCKERS; the base report must add the stack. WASM-BLOCKERS was imprecise at line 725: "in a Durable Object, 23" is one run after a request pass had tiered V8 up, and a fresh-instance DO run matched 24 of 25 (only `json-stringify-10k` trapped). With TurboFan pinned (`--no-liftoff`), 7 of the 25 trap (STACK-DEPTH-REFACTOR §1.3), so it should say 18–24 of 25 in either context, depending on tier state. |
+| C3 | Silent on the stack; picks workerd as host | B3 "hard in browsers and workerd"; the stack refactors are required | WASM-BLOCKERS; the base report must add the stack. WASM-BLOCKERS was imprecise at line 725: "in a Durable Object, 23" is one run after a request pass had tiered V8 up, and a fresh-instance DO run matched 24 of 25 (only `json-stringify-10k` trapped). With TurboFan pinned (`--no-liftoff`), 7 of the 25 trap in a request handler (STACK-DEPTH-REFACTOR §1.3), so it should say 18–24 of 25, depending on tier state. |
 | C4 | §9: 128 MB mitigated by lazy paging, eviction and sharding | B8 "the ceilings do not bound memory", "hard under a 128 MB cap"; recycle the instance | WASM-BLOCKERS. The base report is wrong (correction 15). Two fixes to WASM-BLOCKERS: B8's "4–5× the chunk ceiling for string heaps" is the string-doubling worst case, since string push loops halted at 2.1–2.2× (556,335,104 B in Node, 599,392,256 B in workerd), so "up to 4–5×" is exact; and the Cloudflare "Memory" bullet (line 756) still asks only for lower ceilings, though B8 now says no ceiling bounds array items or side tables, so it must also require admitting them (B7). |
 | C5 | §1, §8: heaps portable and "can move both ways" | Not investigated; a Thixotrope profile check refuses it first | Both incomplete. WASM-BLOCKERS is out of date: the verification restored two natively written Thixotrope heaps in a wasm32 instance *(Node)*, the SES boot heap (7,651,170 B container) and the counter vat (17,273,470 B), by passing the native profile string; each ran `1+1` and the outbound drain, lazily and eagerly. wasm32 → native was not run. The base report stays wrong until the profile is platform-neutral (correction 4). |
 | C6 | §9: "Ironhorse is already an interpreter" | "Speed": 1.5–2.7× slower than native; "Not investigated" still lists performance (line 794) | WASM-BLOCKERS' measurement is right, and its "Not investigated" entry is stale. The base report understates the cost. |
@@ -622,7 +627,8 @@ Work items, from the completeness critic, with Addendum A's additions:
    list).
 8. For a "go", the lazy-resume fixes (deferred side-table validation, checkpoint checks of reused
    or grown slots only, a sparse chunk arena, free-list dirty bits, a persisted ledger), and
-   STACK-DEPTH-REFACTOR Phases 1–2 before production traffic.
+   STACK-DEPTH-REFACTOR Phases 1–2 before production traffic, plus its Phase 4 decision (B10) for
+   the trapped-Proxy ceilings, which still trap after Phase 2.
 9. For Addendum A, a two-hub prototype of the deliver path (outbox, watermark and ack, with the
    §4.3 fixes).
 
@@ -686,8 +692,8 @@ Acceptance gates, beyond Addendum A §12's six tests:
   `transactionSync` → wasm re-entry works (local-workerd); items 1, 2 and 4 hold as far as they
   go; `export_to_container` is backend-generic (item 6).
 - **The engine:** both exception-handling encodings load in workerd with zero imports;
-  `HeapExhausted` and early `SyntaxError`s are contained there; the boot fingerprint is identical
-  on native and wasm32 builds.
+  `HeapExhausted` and the compiler-budget `SyntaxError`s of `eval-deep` are contained there; the
+  boot fingerprint is identical on native and wasm32 builds.
 - **Addendum A:** DO RPC does not identify the caller, so a token must separate control from
   data; a synchronous crank stays atomic while other events interleave during an awaited RPC
   (e3); `deleteAll()` empties the database, and a stub can then re-instantiate the ID empty (e1 at
@@ -703,8 +709,8 @@ Repository `file:line` citations refer to commit `d152375e`; the code is unchang
 `5663b155`, where the verification ran.
 Quotes from the two design documents match their text at `075c0118`, which `d067226a` changed
 only by adding metadata, markers and `## Prompt` sections.
-WASM-BLOCKERS.md citations use its text at `d152375e`, and STACK-DEPTH-REFACTOR.md citations use
-its text at `11781239`, which is current at `d152375e`.
+WASM-BLOCKERS.md and STACK-DEPTH-REFACTOR.md are cited by section, as of this revision; the line
+numbers in the contradictions table refer to WASM-BLOCKERS.md at `d152375e`.
 workerd citations (`src/workerd/…`, `src/cloudflare/…`) refer to commit
 `62935d76771b2361e507c7f18f064c5bab43c314` (2026-09-23).
 Cloudflare documentation was fetched from developers.cloudflare.com on 2026-09-23 and 2026-09-24.

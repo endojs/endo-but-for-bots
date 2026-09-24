@@ -56,6 +56,6 @@ line `self.json_reserve_output(state, size)?;`.
 Everything else in B7 remains, including:
 
 - the RegExp compiler's `size_of::<Node>()` and `Vec<u32>` header charges
-  (`ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1717`);
+  (`ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1366-1375`, `:1717`);
 - the unadmitted array items, Map, Set and Intl side tables, and guest-amplified host copies;
 - the snapshot and store findings.
