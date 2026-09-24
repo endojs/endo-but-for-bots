@@ -6,9 +6,9 @@ import { Fail, makeError, q, X } from '@endo/errors';
  * The machine-checkable outer sandbox contract a hosted agent runs under.
  *
  * Every adapter attests the same controls, namespaces, and limit ceilings;
- * what differs between them is only the mount table's fixed roles, which each
- * adapter declares and `makeHostedAgentPolicyVerifier` binds into its own
- * verifier.
+ * adapters declare fixed mount roles and a trusted one- or two-operation
+ * budget within the same aggregate ceilings. `makeHostedAgentPolicyVerifier`
+ * binds those choices into each verifier.
  */
 export const HOSTED_AGENT_POLICY_V1 = harden({
   version: 'HostedAgentPolicyV1',
@@ -50,10 +50,11 @@ const MiB = 1024n ** 2n;
 /**
  * The slice resource profile every hosted adapter runs under.
  *
- * One policy anchor and one admitted operation have independent cgroups, so
+ * The default policy anchor and one admitted operation have independent cgroups, so
  * each reserves half the aggregate memory, PID and CPU budget — which is why
  * the attested `limits` are these doubled, and why an adapter cannot pick its
- * own numbers without the hosted contract noticing.
+ * own numbers without the hosted contract noticing. The fixed two-operation
+ * variant below divides the same aggregate ceilings across three containers.
  *
  * `writableBytes` is deliberately absent: it is not a profile constant but a
  * sum over the mount table, and `sliceWritableBytes` computes it.
@@ -68,6 +69,28 @@ export const HOSTED_SLICE_RESOURCES = harden({
   maxConcurrentOperations: 1,
 });
 harden(HOSTED_SLICE_RESOURCES);
+
+/**
+ * Fixed trusted runner budgets; never a session/model option.
+ * @param {1 | 2} [operations]
+ */
+export const hostedSliceResources = (operations = 1) => {
+  operations === 1 ||
+    operations === 2 ||
+    Fail`Unsupported hosted operation budget`;
+  if (operations === 1) return HOSTED_SLICE_RESOURCES;
+  const containers = operations + 1;
+  return harden({
+    ...HOSTED_SLICE_RESOURCES,
+    memoryBytes:
+      BigInt(HOSTED_AGENT_POLICY_V1.limits.memoryBytes) / BigInt(containers),
+    pids: Math.floor(HOSTED_AGENT_POLICY_V1.limits.pids / containers),
+    cpuCores: Math.floor(HOSTED_AGENT_POLICY_V1.limits.cpuCores / containers),
+    shmBytes: (HOSTED_SLICE_RESOURCES.shmBytes * 2n) / BigInt(containers),
+    maxConcurrentOperations: operations,
+  });
+};
+harden(hostedSliceResources);
 
 /**
  * The argv every hosted slice's policy anchor runs.
@@ -109,7 +132,7 @@ harden(HOSTED_ANCHOR_ARGV);
 /**
  * What a slice can actually write, summed over what it was given.
  *
- * A tmpfs counts twice because the anchor and an admitted operation each get
+ * A tmpfs counts once per container because the anchor and each operation get
  * one; shm likewise. A volume counts once — it is shared. An `attach` or a
  * `bind` counts for nothing: those bytes belong to a capability or to the
  * host, which bounds them where they live, and attesting a ceiling here would
@@ -120,15 +143,19 @@ harden(HOSTED_ANCHOR_ARGV);
  *
  * @param {readonly {kind: string, sizeBytes?: bigint}[]} mounts
  * @param {bigint} [shmBytes]
+ * @param {1 | 2} [operations]
  */
 export const sliceWritableBytes = (
   mounts,
   shmBytes = HOSTED_SLICE_RESOURCES.shmBytes,
+  operations = 1,
 ) =>
   mounts.reduce(
     (sum, mount) =>
-      sum + (mount.sizeBytes ?? 0n) * (mount.kind === 'tmpfs' ? 2n : 1n),
-    2n * shmBytes,
+      sum +
+      (mount.sizeBytes ?? 0n) *
+        (mount.kind === 'tmpfs' ? BigInt(operations + 1) : 1n),
+    BigInt(operations + 1) * shmBytes,
   );
 harden(sliceWritableBytes);
 
@@ -324,10 +351,12 @@ harden(assertAttaches);
  * network policy calls for it, and exactly the runtime attaches the session
  * declared — nothing else.
  *
- * @param {{ fixedMounts: unknown }} profile
+ * @param {{ fixedMounts: unknown, maxConcurrentOperations?: 1 | 2 }} profile
  */
 export const makeHostedAgentPolicyVerifier = profile => {
   const fixedMounts = assertFixedMounts(profile?.fixedMounts);
+  const resources = hostedSliceResources(profile.maxConcurrentOperations);
+  const containers = resources.maxConcurrentOperations + 1;
 
   /**
    * Validate the runtime attaches a session declared, against this profile's
@@ -353,7 +382,15 @@ export const makeHostedAgentPolicyVerifier = profile => {
    * @param {{ imageDigest?: string, sessionId?: string, containerMounts?: unknown, networkPolicy?: string }} [requirements]
    */
   const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
-    const expected = HOSTED_AGENT_POLICY_V1;
+    const expected = {
+      ...HOSTED_AGENT_POLICY_V1,
+      limits: {
+        ...HOSTED_AGENT_POLICY_V1.limits,
+        memoryBytes: Number(resources.memoryBytes * BigInt(containers)),
+        pids: resources.pids * containers,
+        cpuCores: resources.cpuCores * containers,
+      },
+    };
     const publicNetwork = requirements.networkPolicy === 'public-internet';
     !publicNetwork ||
       policy?.networkPolicy === 'public-internet' ||
@@ -542,9 +579,8 @@ export const makeHostedAgentPolicyVerifier = profile => {
    *
    * The slice proves its confinement to the runtime. This proves the same
    * slice is the one this session was promised: the same controls, this
-   * session's roles, and limits that are the per-cgroup halves the runtime
-   * reported, doubled — one cgroup for the policy anchor and one for an
-   * admitted operation.
+   * session's roles, and aggregate limits from the exact trusted operation
+   * profile — one cgroup for the anchor plus each admitted operation.
    *
    * Sources are renamed by role rather than carried across. A durable role
    * becomes `<role>:<sessionId>` and an attach becomes `attach:<key>`, so the
@@ -568,6 +604,8 @@ export const makeHostedAgentPolicyVerifier = profile => {
     networkPolicy,
   }) => {
     const { limits, mounts } = attestation;
+    limits.maxConcurrentOperations === resources.maxConcurrentOperations ||
+      Fail`Hosted operation budget differs from the runner profile`;
     const controls = Object.fromEntries(
       Object.entries(attestation).filter(
         ([key]) => !['version', 'profile', 'limits', 'mounts'].includes(key),
@@ -587,9 +625,9 @@ export const makeHostedAgentPolicyVerifier = profile => {
       brokerTransport,
       executionDomain,
       limits: {
-        memoryBytes: Number(limits.memoryBytes * 2n),
-        pids: limits.pids * 2,
-        cpuCores: limits.cpuCores * 2,
+        memoryBytes: Number(limits.memoryBytes * BigInt(containers)),
+        pids: limits.pids * containers,
+        cpuCores: limits.cpuCores * containers,
         openFiles: limits.openFiles,
         coreBytes: Number(limits.coreBytes),
         writableBytes: Number(limits.writableBytes),

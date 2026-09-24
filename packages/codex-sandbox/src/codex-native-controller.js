@@ -76,6 +76,8 @@ export const makeCodexNativeController = ({
     start: async (plan, resolver, owner) => {
       const envelope = await activateExecutionEnvelope(plan, resolver, owner, {
         label: 'Codex',
+        // Persistent app-server plus one serialized native-context helper.
+        maxConcurrentOperations: 2,
         env,
         makeMounter,
         ...(makeFilesystem ? { makeFilesystem } : {}),

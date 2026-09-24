@@ -2,7 +2,7 @@
 
 import { makeHostedAgentPolicyVerifier } from '@endo/hosted-agent/hosted-agent-policy.js';
 
-/** Codex contributes only its mount table to the shared hosted contract. */
+/** Codex fixes its mounts and budgets a server plus one context helper. */
 export const CODEX_FIXED_MOUNTS = harden([
   { role: 'workspace', kind: 'session', destination: '/workspace', mode: 'rw' },
   {
@@ -17,6 +17,7 @@ export const CODEX_FIXED_MOUNTS = harden([
 
 const codexPolicy = makeHostedAgentPolicyVerifier({
   fixedMounts: CODEX_FIXED_MOUNTS,
+  maxConcurrentOperations: 2,
 });
 
 export const assertContainerMounts = codexPolicy.assertContainerMounts;

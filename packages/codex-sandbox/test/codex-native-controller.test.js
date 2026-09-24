@@ -254,11 +254,15 @@ test('Codex supervisor binds only CLI state and hands host checkpoint recovery t
       .filter(mount => mount.kind === 'tmpfs')
       .map(({ destination, sizeBytes }) => ({ destination, sizeBytes })),
     [
-      { destination: '/tmp', sizeBytes: 1024n ** 3n },
-      { destination: '/run', sizeBytes: 256n * 1024n ** 2n },
+      { destination: '/tmp', sizeBytes: (2n * 1024n ** 3n) / 3n },
+      { destination: '/run', sizeBytes: (512n * 1024n ** 2n) / 3n },
     ],
-    'temporary mounts match the other hosted runners; no extra scratch mount',
+    'same aggregate temporary budget split across anchor, server and helper',
   );
+  t.is(options.policy.resources.maxConcurrentOperations, 2);
+  t.is(options.policy.resources.memoryBytes * 3n, 4n * 1024n ** 3n - 1n);
+  t.is(options.policy.resources.pids * 3, 510);
+  t.is(options.policy.resources.cpuCores * 3, 3);
   const home = options.policy.mounts.find(
     mount => mount.role === 'codex-state',
   );
@@ -375,3 +379,19 @@ test('raw attestation refuses omitted resource controls', async t => {
   await f.controller.terminate(f.text, f.resolver);
   t.false(f.events.includes('probe'));
 });
+
+for (const operations of [1, 3]) {
+  test(`Codex refuses substituted operation budget ${operations}`, async t => {
+    const f = await fixture(t, {
+      mutatePolicy: policy => ({
+        ...policy,
+        limits: { ...policy.limits, maxConcurrentOperations: operations },
+      }),
+    });
+    await t.throwsAsync(f.controller.activate(f.text, f.resolver), {
+      message: /raw slice attestation/,
+    });
+    await f.controller.terminate(f.text, f.resolver);
+    t.false(f.events.includes('client'));
+  });
+}
