@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-23 |
-| **Updated** | 2026-09-23 |
+| **Updated** | 2026-09-24 |
 | **Author** | Aaron Davis (prompted) |
 | **Status** | Proposed |
 
@@ -12,6 +12,9 @@ hibernating Durable Objects, with OCapN over WebSockets.*
 
 *[Addendum A, Single-Vat Hubs](thixotrope-on-cloudflare-addendum-single-vat-hub.md) supersedes
 §4 (Architecture) and §7 (Transport topology) and adds lifecycle and collection.*
+
+*The [verification review](thixotrope-on-cloudflare-review.md) ranks the blockers found in both
+documents; statements it found factually wrong are marked inline with a link to its correction.*
 
 ---
 
@@ -23,19 +26,24 @@ Ironhorse compiled to WASM**, with the heap store moved onto the DO's built-in S
 - **Hibernation works.**
   All live object state, including CapTP session tables, lives in pages of the Ironhorse heap that
   are committed after every crank.
+  *[Review correction 1](thixotrope-on-cloudflare-review.md#factual-corrections).*
   The WebSocket is a byte pipe owned by Cloudflare's WebSocket Hibernation API.
   Nothing live is left in the JS isolate, so the failure mode in
   [workerd#6087](https://github.com/cloudflare/workerd/issues/6087) doesn't apply.
+  *[Review correction 2](thixotrope-on-cloudflare-review.md#factual-corrections).*
 - **Cost scales with use.**
   Hibernated DOs accrue no billable duration.
   A worker costs something only while it processes a message.
+  *[Review correction 3](thixotrope-on-cloudflare-review.md#factual-corrections).*
 - **Lock-in stays low.**
   OCapN remains the only protocol.
   Cloudflare provides storage, compute and connection hosting, and heap images stay portable to
   local Thixotrope.
+  *[Review correction 4](thixotrope-on-cloudflare-review.md#factual-corrections).*
 - **The engine builds for `wasm32-unknown-unknown` as-is** (`ironhorse-snapshot` and
   `ironhorse-vm`, verified).
   The one real port is a new `HeapStore` backend over the DO SQL API.
+  *[Review correction 5](thixotrope-on-cloudflare-review.md#factual-corrections).*
   The data model maps directly; the connection setup and a few query patterns need changes (§6).
 
 The two numbers that decide viability, to measure first: **cold-wake latency** (instantiate plus
@@ -141,6 +149,7 @@ Guests run as SES compartments inside Ironhorse, not as isolates Cloudflare mana
    `webSocketError`.
    Never call `ws.accept()` or `addEventListener`, because registered listeners keep the isolate
    from hibernating.
+   *[Review correction 6](thixotrope-on-cloudflare-review.md#factual-corrections).*
 2. **Commit at the end of every delivery.**
    There is no hook that runs just before hibernation, and memory is discarded when it happens.
    Each inbound frame runs as restore (if cold), deliver, drain queue, commit, send.
@@ -169,7 +178,9 @@ Guests run as SES compartments inside Ironhorse, not as isolates Cloudflare mana
 - Use Ironhorse's **lazy resume**.
   Validation at open reads the manifest, small state, free-list segments and the leaf and inventory
   metadata; slot pages and chunk extents are faulted in on demand.
+  *[Review correction 7](thixotrope-on-cloudflare-review.md#factual-corrections).*
   A wake costs roughly the metadata plus the pages the message touches.
+  *[Review correction 8](thixotrope-on-cloudflare-review.md#factual-corrections).*
 - Take `rebuild_edge_pairs`-on-every-open off this path (see §6.3).
 
 ### 5.3 Sketch
@@ -205,6 +216,9 @@ export class ThixotropeWorker extends DurableObject {
 }
 ```
 
+*Review corrections [9](thixotrope-on-cloudflare-review.md#factual-corrections) and
+[10](thixotrope-on-cloudflare-review.md#factual-corrections) apply to this sketch.*
+
 ### 5.4 Why this avoids workerd#6087
 
 #6087 exists because Cap'n Web (a) registers listeners on the socket, which pins the isolate, and
@@ -215,6 +229,7 @@ Thixotrope on Cloudflare has neither problem:
 - The object graph lives in the **Ironhorse heap**, and every crank commits it to DO SQLite.
   Session identity is re-established from the attachment, and CapTP tables are rebuilt as heap
   pages fault in.
+  *[Review correction 11](thixotrope-on-cloudflare-review.md#factual-corrections).*
 
 The fix #6087 is waiting for, a runtime-level way to persist objects across hibernation, is what
 Thixotrope's heap store already provides.
@@ -235,6 +250,7 @@ Thixotrope's heap store already provides.
   - `tx(fn_id)`: host calls `ctx.storage.transactionSync(() => wasm.tx_body(fn_id))`.
     This is a reentrant call into the guest, so hold no `RefCell` borrows (e.g. `root_cache`)
     across it.
+    *[Review correction 12](thixotrope-on-cloudflare-review.md#factual-corrections).*
   - blob copy in and out between `ArrayBuffer` and linear memory.
 - Gate the new backend with the existing `store-suite` acceptance suite (metamorphic determinism,
   checkpoint locks), run under local workerd.
@@ -251,10 +267,10 @@ Checked against the SQL authorizer in workerd (`src/workerd/util/sqlite.c++`) an
 | Reading `sqlite_master` | ✅ | Only names starting with `_cf_` are blocked |
 | Blob sizes: slot page 5 KB (256 × 20 B), chunk extent 64 KB, free-list segment 16 KB, leaf hash 32 B | ✅ | Well under the 2 MB row cap |
 | Bound parameters (≤ 3 per statement) | ✅ | Limit is 100 |
-| `PRAGMA application_id / locking_mode / journal_mode / wal_autocheckpoint / synchronous`, `busy_timeout` | ❌ | Not allowlisted; the backend currently **refuses to open** when these fail |
+| `PRAGMA application_id / locking_mode / journal_mode / wal_autocheckpoint / synchronous`, `busy_timeout` | ❌ | Not allowlisted; the backend currently **refuses to open** when these fail *[Review correction 13](thixotrope-on-cloudflare-review.md#factual-corrections).* |
 | `BEGIN IMMEDIATE`, `unchecked_transaction`, migration transactions | ❌ | Transaction statements are rejected; use `transactionSync` |
 | `CREATE TEMP TABLE` in reachability and generational-GC queries | ❌ | All TEMP objects are denied |
-| Small-state section payloads (u32 length, include bulk side tables) | ⚠️ | Can exceed the 2 MB row cap on large heaps |
+| Small-state section payloads (u32 length, include bulk side tables) | ⚠️ | Can exceed the 2 MB row cap on large heaps *[Review correction 14](thixotrope-on-cloudflare-review.md#factual-corrections).* |
 | `rebuild_edge_pairs` on every open | ⚠️ | Legal, but rewrites all edge rows on each wake |
 | `close()` WAL fold | n/a | No file handoff on DO |
 | `TEMP TRIGGER` fault injection in tests | ❌ (tests only) | Replace with host-level fault injection |
@@ -348,10 +364,10 @@ than relying on sever alone.
 | Risk | Mitigation / question |
 |---|---|
 | **Cold-wake latency** grows with metadata size (leaf hashes, inventory, small state) | Measure in Phase 0. Consider caching validated metadata, or trusting DO storage more than an arbitrary file |
-| **128 MB isolate memory** includes WASM linear memory | Lazy paging, evicting cold pages, sharding across DOs, Containers for outliers |
-| **Rows written per crank** (billing) | O(dirty) commits already. Batch small frames; skip commits for read-only cranks |
+| **128 MB isolate memory** includes WASM linear memory | Lazy paging, evicting cold pages, sharding across DOs, Containers for outliers *[Review correction 15](thixotrope-on-cloudflare-review.md#factual-corrections).* |
+| **Rows written per crank** (billing) | O(dirty) commits already. Batch small frames; skip commits for read-only cranks *[Review correction 16](thixotrope-on-cloudflare-review.md#factual-corrections).* |
 | **Interpreter in WASM** has no JIT | Ironhorse is already an interpreter; benchmark compute-heavy vats and send outliers to Containers |
-| **CPU limit per event** (30 s default, up to 5 min) | Computron budgets already exist; split long work across alarm cranks |
+| **CPU limit per event** (30 s default, up to 5 min) | Computron budgets already exist; split long work across alarm cranks *[Review correction 17](thixotrope-on-cloudflare-review.md#factual-corrections).* |
 | **Transaction reentrancy** (host → guest callback) | Keep the guest ABI reentrant-safe; no borrows held across `tx` |
 | **DO placement** is pinned near the first caller | Location hints and jurisdictions; accept extra latency for travelling users, or migrate the worker |
 | **Guest-facing security** of host imports | Host imports are the trusted supervisor boundary; guests only ever see SES-mediated capabilities |
@@ -388,3 +404,11 @@ than relying on sever alone.
   [`rust/engine/ironhorse-snapshot/src/store.rs`](https://github.com/endojs/endo-but-for-bots/blob/llm/rust/engine/ironhorse-snapshot/src/store.rs)
   · [`rust/endo/ironhorse-store-sqlite/src/lib.rs`](https://github.com/endojs/endo-but-for-bots/blob/llm/rust/endo/ironhorse-store-sqlite/src/lib.rs)
   · [`rust/thixotrope-ironhorse-worker/README.md`](https://github.com/endojs/endo-but-for-bots/blob/llm/rust/thixotrope-ironhorse-worker/README.md)
+
+## Prompt
+
+This report was written outside the repository and added as supplied.
+The prompt that produced it was not recorded.
+It was added with:
+
+> add this report as well. its the primary goal, wasm compat work is a prerequisite

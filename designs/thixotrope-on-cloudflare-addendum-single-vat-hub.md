@@ -13,6 +13,9 @@ lifecycle and collection.
 The crank lifecycle and hibernation rules (§5) and the heap store port (§6) still apply
 unchanged.*
 
+*The [verification review](thixotrope-on-cloudflare-review.md) ranks the blockers found in both
+documents; statements it found factually wrong are marked inline with a link to its correction.*
+
 ---
 
 ## 1. Summary
@@ -119,6 +122,8 @@ for hubs, `ws.send` for sockets.
 
 ### 4.3 Hub-to-hub delivery (exactly once)
 
+*[Review correction 18](thixotrope-on-cloudflare-review.md#factual-corrections).*
+
 - The sender keeps each frame in its outbox until the receiver acknowledges it.
   The acknowledgement is the RPC return value, carrying the receiver's new watermark.
 - The receiver deduplicates on `(session, seq)` against a watermark committed in the same
@@ -131,6 +136,7 @@ for hubs, `ws.send` for sockets.
 ### 4.4 External peers
 
 - External nodes dial in through the edge router, which calls `acceptWebSocket` on the hub.
+  *[Review correction 19](thixotrope-on-cloudflare-review.md#factual-corrections).*
   The attachment holds `{sessionId}` and nothing else.
 - Hubs **never dial out** WebSockets, because outbound sockets don't hibernate.
   To reach an external node, use a relay the node connects to.
@@ -158,6 +164,7 @@ data path.
 ## 5. Addressing, capabilities, handoff
 
 - **Hub ID** = `newUniqueId({ locationHint })`.
+  *[Review correction 20](thixotrope-on-cloudflare-review.md#factual-corrections).*
   It is a routing address only; only the tenant's own Worker code can turn it into a stub.
 - **Sturdyref** = `(hub ID, swissnum)`.
   The swissnum is the capability.
@@ -166,6 +173,7 @@ data path.
   - a **lifecycle capability** (`retire`, `getId`), exported by control.
 
   Control can end a hub but has no path to the vat's objects.
+  *[Review correction 21](thixotrope-on-cloudflare-review.md#factual-corrections).*
 - **Handoff:** the gift table lives in the receiving hub's SQLite.
   The recipient presents a certificate signed with the gifter's session key, the receiving hub
   opens a session through `openSession`, and the recipient withdraws the gift.
@@ -263,6 +271,7 @@ gift withdrawal.
 With none of those, and no pending work of its own that could act, the hub can never be reached
 or have visible effects again.
 **The condition, once true, stays true**, so there's no race between reporting and retiring.
+*[Review correction 22](thixotrope-on-cloudflare-review.md#factual-corrections).*
 
 **Mechanics:**
 
@@ -287,6 +296,7 @@ or have visible effects again.
    Exports drop only after the peer's guest GC reports the release.
    Hubs run Ironhorse GC at idle, for example on an alarm after a period of quiet, so the
    release messages actually go out.
+   *[Review correction 23](thixotrope-on-cloudflare-review.md#factual-corrections).*
 
 ### 7.3 Cycle backstop
 
@@ -300,6 +310,7 @@ Control occasionally runs mark and sweep:
    The hub confirms no roots newer than `epoch` and sets `fenced`, refusing new sessions and
    gift withdrawals.
 4. **Verify:** every importer of a fenced hub must itself be fenced or retired.
+   *[Review correction 24](thixotrope-on-cloudflare-review.md#factual-corrections).*
    Retire the verified hubs and unfence the rest.
 
 Gifts in flight count as roots in the receiving hub, so a reference that's partway through a
@@ -359,6 +370,7 @@ on an alarm, so it's idempotent across control evictions.
 - computron budgets
 - fatal-halt quarantine
 - the handoff and gift machinery
+  *[Review correction 25](thixotrope-on-cloudflare-review.md#factual-corrections).*
 
 ---
 
@@ -411,3 +423,11 @@ on an alarm, so it's idempotent across control evictions.
   - a two-hub cycle collected by the backstop
   - a handoff in flight surviving a cycle pass
   - control-eviction resumability for create, retire and migrate
+
+## Prompt
+
+This addendum was written outside the repository and added as supplied.
+The prompt that produced it was not recorded.
+It was added with:
+
+> heres an addition Thixotrope-on-Cloudflare design doc
