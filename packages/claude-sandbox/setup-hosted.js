@@ -495,6 +495,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     providerId: 'anthropic',
     flootDir,
     backendId: 'claude',
+    accountAuthority,
     ...(pool
       ? { subscriptionIds: pool.set.members.map(member => member.id) }
       : {}),

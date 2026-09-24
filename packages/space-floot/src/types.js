@@ -184,7 +184,7 @@ export {};
  * @property {() => void} [refreshDiscovery] Read what the backends list now, for the picker.
  * @property {(id: string, title: string) => void} renameSession
  * @property {() => void} [refreshAccounts] Ask each account's provider for its figures now.
- * @property {(key: string, confirm: string, action?: 'redeem' | 'replay' | 'abandon') => void} [redeemAccountReset] Spend one banked rate-limit reset of that account, ask again about an unconfirmed redeem, or give it up, after the person confirms.
+ * @property {(key: string, confirm: string, action?: 'redeem' | 'replay' | 'abandon') => void} [redeemAccountReset] Use the account view's exact resetKey, never its accountId or display label, to spend one reset, retry, or give up after confirmation.
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
  * @property {() => void} toggleTts

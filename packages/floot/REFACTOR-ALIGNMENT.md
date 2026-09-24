@@ -1009,7 +1009,7 @@ Expose account-authority/member identity and status capabilities explicitly from
 discovery, without creating another credential owner. Runtime-specific model
 admission remains separate. This extends FA-07's current ontology work.
 
-Proposed implementation boundary (2026-09-24; not landed): each trusted setup
+Implemented boundary (2026-09-24): each trusted setup
 producer atomically publishes one complete source record in the existing profile's
 `account-bindings` directory. Records carry the existing oracle identity and
 capability, provider metadata, explicit runtime/member uses, and an optional
@@ -1021,16 +1021,28 @@ both account and admin identity so a stale UI cannot target a replacement admin.
 The direct provider uses the same publication contract; backend descriptions
 remain capability-free model/runtime metadata.
 
-Permission review paused the production identity/reset-authority rewrite pending
-explicit operator approval. Preparatory publication/discovery code and a daemon
-restart regression are uncommitted drafts, not deployed or certified. Keep this
-slice separate from independently authorized cancellation conformance work.
-The draft is preserved in local Git stash
-`5e3145554e77402d23f8dc9debeafe881b4e241c`, named
-`RA03 account binding draft awaiting explicit approval`, not in the candidate
-working tree. Its incomplete setup conversion caused one full-suite setup test
-failure before isolation; do not treat that draft as validated or apply it without
-the pending approval.
+The operator approved completing this slice on 2026-09-24 and explicitly put
+direct-Fae compaction on hold.
+Logical account IDs use the declared provider, account authority and optional pool
+member, not the observer formula ID: separate runtimes can have separate observers
+of one account.
+Setup withdraws discovery authority before rebinding observers or administrators;
+failed setup leaves an unavailable source, not old reset controls.
+Consumers merge explicit runtime uses and select one read-only observer, while
+conflicting administrators refuse discovery rather than guessing ownership.
+The UI uses account identity for cards and an exact account/admin pair for actions.
+Independent adversarial reviews approved the publishers, discovery/watch/reset
+boundary, UI and tests.
+Validation passes: 745 hosted-agent tests (one skipped), 708 Floot tests, 54 UI
+tests, 61 chat component tests, hosted-agent and UI types, scoped lint and root docs.
+The changed Floot source and tests have no type errors; the whole Floot type suite
+still reports unrelated existing test errors.
+A real daemon restart regression with GC enabled preserves exact published
+capabilities after their old pet names are replaced or removed.
+This proves publication durability, not provider credential validity or live Tokyo
+acceptance; deployment is still pending.
+Direct-Fae oracle setup now requires `FLOOT_ACCOUNT_AUTHORITY` when an oracle is
+configured, and old inferred discovery names are no longer consumed.
 
 ### RA-04 — Verify common turn-admission behavior
 

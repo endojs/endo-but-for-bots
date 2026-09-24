@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { iterateReader as iterateRemoteReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeAccountOracleKit } from '@endo/hosted-agent/account-oracle.js';
 import { makeAccountReadingSource } from '@endo/hosted-agent/account-source.js';
 
@@ -45,8 +45,22 @@ test('a view is told every account now and when any of them changes', async t =>
   const watch = makeAccountsWatch({
     listOracles: async () => ({
       entries: [
-        { backendId: 'codex', title: 'Codex', oracle: codex.oracle },
-        { backendId: 'claude', title: 'Claude Code', oracle: claude.oracle },
+        {
+          accountId: 'codex',
+          providerId: 'codex',
+          uses: [{ backendId: 'codex' }],
+          sources: ['codex'],
+          title: 'Codex',
+          oracle: codex.oracle,
+        },
+        {
+          accountId: 'claude',
+          providerId: 'claude',
+          uses: [{ backendId: 'claude' }],
+          sources: ['claude'],
+          title: 'Claude Code',
+          oracle: claude.oracle,
+        },
       ],
       unknown: [],
     }),
@@ -63,7 +77,7 @@ test('a view is told every account now and when any of them changes', async t =>
   const first = await seen(event => event.accounts.length === 2);
   t.is(first.type, 'accounts');
   t.deepEqual(
-    first.accounts.map(account => [account.backendId, account.source]),
+    first.accounts.map(account => [account.accountId, account.source]),
     [
       ['claude', 'unavailable'],
       ['codex', 'unavailable'],
@@ -73,10 +87,10 @@ test('a view is told every account now and when any of them changes', async t =>
   codex.account.accept(weekly(62.5));
   const next = await seen(
     event =>
-      event.accounts.find(account => account.backendId === 'codex')?.source ===
+      event.accounts.find(account => account.accountId === 'codex')?.source ===
       'observed',
   );
-  const account = next.accounts.find(entry => entry.backendId === 'codex');
+  const account = next.accounts.find(entry => entry.accountId === 'codex');
   t.deepEqual(account.windows, [
     {
       windowId: 'secondary',
@@ -100,7 +114,16 @@ test('an oracle bound after the first view subscribed is found by the next', asy
   const watch = makeAccountsWatch({
     listOracles: async () => ({
       entries: bound
-        ? [{ backendId: 'codex', title: 'Codex', oracle: codex.oracle }]
+        ? [
+            {
+              accountId: 'codex',
+              providerId: 'codex',
+              uses: [{ backendId: 'codex' }],
+              sources: ['codex'],
+              title: 'Codex',
+              oracle: codex.oracle,
+            },
+          ]
         : [],
       unknown: [],
     }),
@@ -114,20 +137,25 @@ test('an oracle bound after the first view subscribed is found by the next', asy
     // eslint-disable-next-line no-await-in-loop
     event = (await late.next()).value;
   }
-  t.is(event.accounts[0].backendId, 'codex');
+  t.is(event.accounts[0].accountId, 'codex');
   // The early view hears of it too.
   let heard = (await early.next()).value;
   while (heard.accounts.length === 0) {
     // eslint-disable-next-line no-await-in-loop
     heard = (await early.next()).value;
   }
-  t.is(heard.accounts[0].backendId, 'codex');
+  t.is(heard.accounts[0].accountId, 'codex');
   await watch.close();
 });
 
 test('counts become text and nothing but data reaches a view', t => {
   const view = projectAccount(
-    { backendId: 'opencode', title: 'OpenCode' },
+    {
+      accountId: 'opencode',
+      providerId: 'opencode',
+      uses: [{ backendId: 'opencode' }],
+      title: 'OpenCode',
+    },
     {
       plan: {
         planId: 'pay-as-you-go',
@@ -159,7 +187,7 @@ test('counts become text and nothing but data reaches a view', t => {
   t.is(view.windows[0].limit, '1000');
   t.is(view.windows[0].remaining, '963');
   t.is(view.windows[0].usedPercent, 3.7);
-  t.is(view.credits.balance, '20.8000');
+  t.is(view.credits?.balance, '20.8000');
   t.notThrows(() => JSON.stringify(view));
 });
 
@@ -176,7 +204,16 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
   });
   const watch = makeAccountsWatch({
     listOracles: async () => ({
-      entries: [{ backendId: 'codex', title: 'Codex', oracle: old }],
+      entries: [
+        {
+          accountId: 'codex',
+          providerId: 'codex',
+          uses: [{ backendId: 'codex' }],
+          sources: ['codex'],
+          title: 'Codex',
+          oracle: old,
+        },
+      ],
       unknown: [],
     }),
     setTimer: (callback, ms) => timers.push({ callback, ms }),
@@ -212,7 +249,8 @@ test('an oracle that cannot stream costs one line and a growing pause', async t 
   await watch.close();
 });
 
-test('a backend that could not be looked up keeps the account it had', async t => {
+test('an unavailable source keeps readonly display but retires its follower', async t => {
+  t.timeout(5000);
   const codex = pushedOracle(t, 'codex');
   let failing = false;
   const watch = makeAccountsWatch({
@@ -221,7 +259,14 @@ test('a backend that could not be looked up keeps the account it had', async t =
         ? { entries: [], unknown: ['codex'] }
         : {
             entries: [
-              { backendId: 'codex', title: 'Codex', oracle: codex.oracle },
+              {
+                accountId: 'codex',
+                providerId: 'codex',
+                uses: [{ backendId: 'codex' }],
+                sources: ['codex'],
+                title: 'Codex',
+                oracle: codex.oracle,
+              },
             ],
             unknown: [],
           },
@@ -233,17 +278,17 @@ test('a backend that could not be looked up keeps the account it had', async t =
     event = (await reader.next()).value;
   }
   failing = true;
-  // Another view subscribes while the lookup fails: the account stays, and
-  // still follows its oracle.
+  // The account display stays, but unvalidated bindings do not keep calling
+  // the old capabilities (including refresh).
+  await watch.refresh();
   const other = iterateReader(watch.watch());
-  t.is((await other.next()).value.accounts.length, 1);
+  const stale = (await other.next()).value.accounts[0];
+  t.is(stale.accountId, 'codex');
+  t.is(stale.resetKey, undefined);
   codex.account.accept(weekly(71));
-  let heard = (await reader.next()).value;
-  while (heard.accounts[0]?.windows[0]?.usedPercent !== 71) {
-    // eslint-disable-next-line no-await-in-loop
-    heard = (await reader.next()).value;
-  }
-  t.pass();
+  await watch.refresh();
+  const current = iterateReader(watch.watch());
+  t.deepEqual((await current.next()).value.accounts[0].windows, []);
   await watch.close();
 });
 
@@ -254,17 +299,19 @@ test('a backend with several subscriptions is one account each, told apart by ke
     listOracles: async () => ({
       entries: [
         {
-          backendId: 'codex',
-          key: 'codex:work',
-          subscriptionId: 'work',
+          providerId: 'codex',
+          sources: ['codex'],
+          accountId: 'codex:work',
+          uses: [{ backendId: 'codex', subscriptionId: 'work' }],
           label: 'Work Pro',
           title: 'Codex',
           oracle: work.oracle,
         },
         {
-          backendId: 'codex',
-          key: 'codex:home',
-          subscriptionId: 'home',
+          providerId: 'codex',
+          sources: ['codex'],
+          accountId: 'codex:home',
+          uses: [{ backendId: 'codex', subscriptionId: 'home' }],
           label: 'Home Plus',
           title: 'Codex',
           oracle: home.oracle,
@@ -281,9 +328,9 @@ test('a backend with several subscriptions is one account each, told apart by ke
   }
   t.deepEqual(
     event.accounts.map(account => [
-      account.key,
-      account.backendId,
-      account.subscriptionId,
+      account.accountId,
+      account.uses[0].backendId,
+      account.uses[0].subscriptionId,
       account.label,
     ]),
     [
@@ -295,14 +342,14 @@ test('a backend with several subscriptions is one account each, told apart by ke
   home.account.accept(weekly(88));
   let heard = (await reader.next()).value;
   while (
-    heard.accounts.find(account => account.key === 'codex:home')?.windows[0]
-      ?.usedPercent !== 88
+    heard.accounts.find(account => account.accountId === 'codex:home')
+      ?.windows[0]?.usedPercent !== 88
   ) {
     // eslint-disable-next-line no-await-in-loop
     heard = (await reader.next()).value;
   }
   t.deepEqual(
-    heard.accounts.find(account => account.key === 'codex:work').windows,
+    heard.accounts.find(account => account.accountId === 'codex:work').windows,
     [],
   );
   await reader.return(undefined);
@@ -347,8 +394,24 @@ test('an account with an admin shows where its redeems stand, and a redeem goes 
   const watch = makeAccountsWatch({
     listOracles: async () => ({
       entries: [
-        { backendId: 'codex', title: 'Codex', oracle: codex.oracle, admin },
-        { backendId: 'claude', title: 'Claude Code', oracle: claude.oracle },
+        {
+          accountId: 'codex',
+          providerId: 'codex',
+          uses: [{ backendId: 'codex' }],
+          sources: ['codex'],
+          title: 'Codex',
+          oracle: codex.oracle,
+          admin,
+          adminId: 'admin-1',
+        },
+        {
+          accountId: 'claude',
+          providerId: 'claude',
+          uses: [{ backendId: 'claude' }],
+          sources: ['claude'],
+          title: 'Claude Code',
+          oracle: claude.oracle,
+        },
       ],
       unknown: [],
     }),
@@ -363,7 +426,7 @@ test('an account with an admin shows where its redeems stand, and a redeem goes 
     }
   };
   const of = (event, backendId) =>
-    event.accounts.find(account => account.backendId === backendId);
+    event.accounts.find(account => account.accountId === backendId);
   const first = await seen(
     event => of(event, 'codex')?.reset && of(event, 'claude') !== undefined,
   );
@@ -375,18 +438,26 @@ test('an account with an admin shows where its redeems stand, and a redeem goes 
   });
 
   fail = true;
-  await t.throwsAsync(() => watch.redeemReset('codex'), {
-    message: /unconfirmed/,
-  });
+  await t.throwsAsync(
+    () => watch.redeemReset(JSON.stringify(['codex', 'admin-1'])),
+    {
+      message: /unconfirmed/,
+    },
+  );
   const pending = await seen(event => of(event, 'codex')?.reset?.pending);
   t.is(of(pending, 'codex').reset.pending.creditId, 'credit-1');
 
   fail = false;
-  t.deepEqual(await watch.redeemReset('codex', { creditId: 'credit-1' }), {
-    outcome: 'reset',
-    creditId: 'credit-1',
-    replayed: false,
-  });
+  t.deepEqual(
+    await watch.redeemReset(JSON.stringify(['codex', 'admin-1']), {
+      creditId: 'credit-1',
+    }),
+    {
+      outcome: 'reset',
+      creditId: 'credit-1',
+      replayed: false,
+    },
+  );
   t.deepEqual(consumed, [{}, { creditId: 'credit-1' }]);
   await t.throwsAsync(() => watch.abandonReset('claude'));
   const settled = await seen(event => of(event, 'codex')?.reset?.last);
@@ -398,7 +469,12 @@ test('an account with an admin shows where its redeems stand, and a redeem goes 
 
 test('a reset state is plain data whatever the admin answered', t => {
   const view = projectAccount(
-    { backendId: 'codex', title: 'Codex' },
+    {
+      accountId: 'codex',
+      providerId: 'codex',
+      uses: [{ backendId: 'codex' }],
+      title: 'Codex',
+    },
     {},
     { pending: { creditId: null, attempts: 'x' }, last: { outcome: 7 } },
   );
@@ -412,5 +488,22 @@ test('a reset state is plain data whatever the admin answered', t => {
     },
     last: { outcome: '7', creditId: null, at: '' },
   });
-  t.is(projectAccount({ backendId: 'codex', title: 'Codex' }, {}).reset, null);
+  t.is(
+    projectAccount(
+      {
+        accountId: 'codex',
+        providerId: 'codex',
+        uses: [{ backendId: 'codex' }],
+        title: 'Codex',
+      },
+      {},
+    ).reset,
+    null,
+  );
 });
+/** Test streams carry the AccountView records asserted below.
+ * @param {any} reader
+ * @returns {AsyncGenerator<any, any, any>}
+ */
+const iterateReader = reader =>
+  /** @type {any} */ (iterateRemoteReader(reader));

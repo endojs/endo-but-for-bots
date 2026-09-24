@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { Far } from '@endo/far';
 import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
+import { makeAccountId } from '../src/account-bindings.js';
 
 import {
   assertNoRuntimeLeftovers,
@@ -356,17 +357,37 @@ test('slice image references are checked without Podman and pinned through it', 
 
 /**
  * A host agent that records names as a flat map of joined paths.
- * @param initial
+ * @param {Record<string, any>} initial
  */
 const makeNamingHost = initial => {
   const names = new Map(Object.entries(initial));
   const guests = new Map();
   const made = [];
+  const identities = new WeakMap();
   const joined = namePath =>
     (Array.isArray(namePath) ? namePath : [namePath]).join('/');
+  const identity = value =>
+    typeof value === 'string' ? value : identities.get(value);
+  for (const name of [...names.keys()].filter(entry =>
+    entry.endsWith('/controller-profile'),
+  )) {
+    const profile = Far('profile', {
+      has: async (...parts) => names.has(`${name}/${joined(parts.flat())}`),
+      makeDirectory: async parts => {
+        names.set(`${name}/${joined(parts)}`, Far('directory', {}));
+      },
+      storeValue: async (value, parts) => {
+        names.set(`${name}/${joined(parts)}`, value);
+      },
+    });
+    identities.set(profile, `profile:${name}`);
+    names.set(name, profile);
+  }
   const host = Far('host', {
     has: async (...namePath) => names.has(joined(namePath)),
-    locate: async (...namePath) => `locator:${names.get(joined(namePath))}`,
+    identify: async (...namePath) => identity(names.get(joined(namePath))),
+    locate: async (...namePath) =>
+      `locator:${identity(names.get(joined(namePath)))}`,
     remove: async (...namePath) => {
       names.delete(joined(namePath));
     },
@@ -382,6 +403,7 @@ const makeNamingHost = initial => {
         has: async name => stored.has(name),
         lookup: async name => stored.get(name),
       });
+      identities.set(guest, `guest:${agentName}`);
       guests.set(agentName, stored);
       names.set(handleName, `handle:${agentName}`);
       names.set(agentName, guest);
@@ -400,7 +422,9 @@ const makeNamingHost = initial => {
         ...options,
         powers: names.get(joined(options.powersName)),
       });
-      names.set(joined(options.resultName), `formula-${made.length}`);
+      const formula = Far(`formula-${made.length}`, {});
+      identities.set(formula, `formula-${made.length}`);
+      names.set(joined(options.resultName), formula);
     },
     move: async (from, to) => {
       names.set(joined(to), names.get(joined(from)));
@@ -410,7 +434,14 @@ const makeNamingHost = initial => {
       names.set(joined(to), names.get(joined(from)));
     },
   });
-  return { host, names, guests, made };
+  return {
+    host,
+    names,
+    guests,
+    made,
+    publication: source =>
+      names.get(`floot/controller-profile/account-bindings/${source}`),
+  };
 };
 
 test('an account oracle is made once, keeps its identity, and follows a re-minted broker', async t => {
@@ -422,6 +453,7 @@ test('an account oracle is made once, keeps its identity, and follows a re-minte
     label: 'Codex',
     dir: 'codex-sandbox',
     providerId: 'codex',
+    accountAuthority: 'shared-account',
     flootDir: 'floot',
     backendId: 'codex',
   };
@@ -447,11 +479,14 @@ test('an account oracle is made once, keeps its identity, and follows a re-minte
   t.false(world.names.has('codex-sandbox.account-oracle-powers'));
   t.false(world.names.has('codex-sandbox.account-source-powers'));
   t.true(world.names.has('codex-sandbox/account-oracle-powers'));
-  // Floot finds it under the backend's id.
+  const original = world.publication('codex-sandbox').accounts[0];
+  t.is(original.oracle, world.names.get('codex-sandbox/account-oracle'));
   t.is(
-    world.names.get('floot/controller-profile/codex-account'),
-    world.names.get('codex-sandbox/account-oracle'),
+    original.accountId,
+    makeAccountId({ providerId: 'codex', accountAuthority: 'shared-account' }),
   );
+  t.deepEqual(original.uses, [{ backendId: 'codex' }]);
+  t.false(world.names.has('floot/controller-profile/codex-account'));
 
   // A deploy re-mints the broker. The oracle is not made again; the source
   // is, over the new broker, and the name inside the namespace moves to it.
@@ -462,6 +497,11 @@ test('an account oracle is made once, keeps its identity, and follows a re-minte
   t.is(sources().length, 2);
   t.is(sources()[1].powers, 'broker-2');
   t.not(powers.get('account-source'), before);
+  t.is(
+    world.publication('codex-sandbox').accounts[0].accountId,
+    original.accountId,
+  );
+  t.is(world.publication('codex-sandbox').accounts[0].oracle, original.oracle);
 });
 
 test('an oracle that cannot be provided is reported and does not fail setup', async t => {
@@ -471,6 +511,7 @@ test('an oracle that cannot be provided is reported and does not fail setup', as
       label: 'Codex',
       dir: 'codex-sandbox',
       providerId: 'codex',
+      accountAuthority: 'shared-account',
       flootDir: 'floot',
       backendId: 'codex',
     }),
@@ -478,43 +519,155 @@ test('an oracle that cannot be provided is reported and does not fail setup', as
   t.is(world.made.length, 0);
 });
 
-test('a broker over several subscriptions gets an oracle each, and one failing does not cost the others theirs', async t => {
+test('explicit account authority and member identity survive different runtime observers', async t => {
+  const world = makeNamingHost({
+    'runtime-one/broker-service': 'broker-one',
+    'runtime-two/broker-service': 'broker-two',
+    'floot/controller-profile': 'profile',
+  });
+  const common = {
+    label: 'Shared provider account',
+    providerId: 'anthropic',
+    accountAuthority: 'declared-pool',
+    flootDir: 'floot',
+    subscriptionIds: ['primary', 'secondary'],
+  };
+  await publishAccountOracle(world.host, {
+    ...common,
+    dir: 'runtime-one',
+    backendId: 'claude',
+  });
+  await publishAccountOracle(world.host, {
+    ...common,
+    dir: 'runtime-two',
+    backendId: 'opencode',
+  });
+  const first = world.publication('runtime-one').accounts;
+  const second = world.publication('runtime-two').accounts;
+  for (const [index, subscriptionId] of common.subscriptionIds.entries()) {
+    t.is(
+      first[index].accountId,
+      makeAccountId({
+        providerId: common.providerId,
+        accountAuthority: common.accountAuthority,
+        subscriptionId,
+      }),
+    );
+    t.is(first[index].accountId, second[index].accountId);
+    t.not(first[index].oracle, second[index].oracle);
+    t.deepEqual(first[index].uses, [{ backendId: 'claude', subscriptionId }]);
+    t.deepEqual(second[index].uses, [
+      { backendId: 'opencode', subscriptionId },
+    ]);
+  }
+  t.not(first[0].accountId, first[1].accountId);
+  await publishAccountOracle(world.host, {
+    ...common,
+    dir: 'runtime-two',
+    backendId: 'opencode',
+    accountAuthority: 'other-declared-pool',
+  });
+  t.not(
+    first[0].accountId,
+    world.publication('runtime-two').accounts[0].accountId,
+  );
+});
+
+test('a failed pool member preparation leaves discovery unavailable, never partially republished', async t => {
   const world = makeNamingHost({
     'codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
-  // The second member's oracle cannot be made.
-  const failing = harden({
-    ...world.host,
-    makeUnconfined: async (worker, specifier, options) => {
-      if (`${options.resultName}`.includes('account-source-home')) {
-        throw Error('worker unavailable');
-      }
-      return world.host.makeUnconfined(worker, specifier, options);
-    },
-  });
-  await publishAccountOracle(failing, {
+  const options = {
     label: 'Codex',
     dir: 'codex-sandbox',
     providerId: 'codex',
+    accountAuthority: 'shared-account',
     flootDir: 'floot',
     backendId: 'codex',
     subscriptionIds: ['work', 'home', 'spare'],
-  });
-  // Bound under the backend's id and the subscription's, which is the name
-  // Floot looks for.
-  t.true(world.names.has('floot/controller-profile/codex-account-work'));
-  t.false(world.names.has('floot/controller-profile/codex-account-home'));
-  t.true(world.names.has('floot/controller-profile/codex-account-spare'));
-  // Each source formula is told which subscription it is.
-  const sources = world.made.filter(made =>
-    made.specifier.endsWith('/account-source-module.js'),
+    resetCredits: true,
+  };
+  await publishAccountOracle(world.host, options);
+  const original = world.publication('codex-sandbox');
+  t.true(original.accounts.every(account => account.admin !== undefined));
+  t.deepEqual(
+    original.accounts.map(account => account.uses),
+    [
+      [{ backendId: 'codex', subscriptionId: 'work' }],
+      [{ backendId: 'codex', subscriptionId: 'home' }],
+      [{ backendId: 'codex', subscriptionId: 'spare' }],
+    ],
   );
   t.deepEqual(
+    original.accounts.map(account => account.label),
+    ['work', 'home', 'spare'],
+  );
+  const preparedBefore = world.made.length;
+  // The second member's oracle cannot be made.
+  const failing = harden({
+    ...world.host,
+    makeUnconfined: async (worker, specifier, mintOptions) => {
+      t.deepEqual(world.publication('codex-sandbox'), {
+        version: 1,
+        accounts: [],
+        unavailable: true,
+      });
+      if (`${mintOptions.resultName}`.includes('account-source-home')) {
+        throw Error('worker unavailable');
+      }
+      return world.host.makeUnconfined(worker, specifier, mintOptions);
+    },
+  });
+  await publishAccountOracle(failing, options);
+  t.deepEqual(world.publication('codex-sandbox'), {
+    version: 1,
+    accounts: [],
+    unavailable: true,
+  });
+  // Preparation can update existing owners, but cannot publish a partial list.
+  const sources = world.made
+    .slice(preparedBefore)
+    .filter(made => made.specifier.endsWith('/account-source-module.js'));
+  t.deepEqual(
     sources.map(made => made.env),
-    [{ ACCOUNT_SUBSCRIPTION_ID: 'work' }, { ACCOUNT_SUBSCRIPTION_ID: 'spare' }],
+    [{ ACCOUNT_SUBSCRIPTION_ID: 'work' }],
   );
   t.true(world.names.has('codex-sandbox/account-oracle-work'));
+});
+
+test('failed discovery invalidation prevents account owner rebinding', async t => {
+  const world = makeNamingHost({
+    'codex-sandbox/broker-service': 'broker-1',
+    'floot/controller-profile': 'profile',
+  });
+  const options = {
+    label: 'Codex',
+    dir: 'codex-sandbox',
+    providerId: 'codex',
+    accountAuthority: 'shared-account',
+    flootDir: 'floot',
+    backendId: 'codex',
+    resetCredits: true,
+  };
+  await publishAccountOracle(world.host, options);
+  const original = world.publication('codex-sandbox');
+  const minted = world.made.length;
+  const source = world.names.get('codex-sandbox/account-source');
+  const profile = world.names.get('floot/controller-profile');
+  world.names.set(
+    'floot/controller-profile',
+    Far('unwritable profile', {
+      ...profile,
+      storeValue: async () => {
+        throw Error('Cannot publish invalidation');
+      },
+    }),
+  );
+  await publishAccountOracle(world.host, options);
+  t.is(world.publication('codex-sandbox'), original);
+  t.is(world.made.length, minted);
+  t.is(world.names.get('codex-sandbox/account-source'), source);
 });
 
 test('a subscription admin is made once, holds only the redeemer and the source, and keeps its store across a re-minted broker', async t => {
@@ -526,6 +679,7 @@ test('a subscription admin is made once, holds only the redeemer and the source,
     label: 'Codex',
     dir: 'codex-sandbox',
     providerId: 'codex',
+    accountAuthority: 'shared-account',
     flootDir: 'floot',
     backendId: 'codex',
     resetCredits: true,
@@ -553,15 +707,13 @@ test('a subscription admin is made once, holds only the redeemer and the source,
   t.false(world.names.has('codex-sandbox.subscription-admin-powers'));
   t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
   t.true(world.names.has('codex-sandbox/subscription-admin-powers'));
-  // Bound for the operator's Floot, and nowhere else.
+  const original = world.publication('codex-sandbox').accounts[0];
+  t.is(original.admin, world.names.get('codex-sandbox/subscription-admin'));
   t.is(
-    world.names.get('floot/controller-profile/codex-admin'),
-    world.names.get('codex-sandbox/subscription-admin'),
+    original.adminId,
+    await world.host.identify('codex-sandbox', 'subscription-admin'),
   );
-  t.deepEqual(
-    [...world.names.keys()].filter(name => name.endsWith('codex-admin')),
-    ['floot/controller-profile/codex-admin'],
-  );
+  t.false(world.names.has('floot/controller-profile/codex-admin'));
 
   // A deploy re-mints the broker: the admin, and so its stored intent, stays;
   // the redeemer is minted again and the names inside the namespace move.
@@ -572,6 +724,11 @@ test('a subscription admin is made once, holds only the redeemer and the source,
   t.is(of('/reset-redeemer-module.js').length, 2);
   t.is(of('/reset-redeemer-module.js')[1].powers, 'broker-2');
   t.not(powers.get('reset-redeemer'), before);
+  t.is(
+    world.publication('codex-sandbox').accounts[0].adminId,
+    original.adminId,
+  );
+  t.is(world.publication('codex-sandbox').accounts[0].admin, original.admin);
 });
 
 test('no admin is provided unless asked, nor for a broker with no redeemer; several subscriptions get one each', async t => {
@@ -583,10 +740,13 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
     label: 'Claude',
     dir: 'claude-sandbox',
     providerId: 'anthropic',
+    accountAuthority: 'shared-account',
     flootDir: 'floot',
     backendId: 'claude',
   });
-  t.false(plain.names.has('floot/controller-profile/claude-admin'));
+  t.false(
+    Object.hasOwn(plain.publication('claude-sandbox').accounts[0], 'admin'),
+  );
   t.false(
     plain.made.some(made =>
       made.specifier.endsWith('/reset-redeemer-module.js'),
@@ -597,31 +757,38 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
     'codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
   });
-  // This broker's resetRedeemer() answers undefined.
-  none.names.set('floot/controller-profile/codex-admin', 'an-older-admin');
-  const without = harden({
-    ...none.host,
-    makeUnconfined: async (worker, specifier, options) => {
-      await none.host.makeUnconfined(worker, specifier, options);
-      if (specifier.endsWith('/reset-redeemer-module.js')) {
-        none.names.set(options.resultName.join('/'), undefined);
-      }
-    },
-  });
-  await publishAccountOracle(without, {
+  const options = {
     label: 'Codex',
     dir: 'codex-sandbox',
     providerId: 'codex',
+    accountAuthority: 'shared-account',
     flootDir: 'floot',
     backendId: 'codex',
     resetCredits: true,
+  };
+  await publishAccountOracle(none.host, options);
+  const original = none.publication('codex-sandbox');
+  t.truthy(original.accounts[0].admin);
+  // The replacement broker's resetRedeemer() now answers undefined.
+  const without = harden({
+    ...none.host,
+    makeUnconfined: async (worker, specifier, mintOptions) => {
+      await none.host.makeUnconfined(worker, specifier, mintOptions);
+      if (specifier.endsWith('/reset-redeemer-module.js')) {
+        none.names.set(mintOptions.resultName.join('/'), undefined);
+      }
+    },
   });
-  t.true(none.names.has('floot/controller-profile/codex-account'));
+  await publishAccountOracle(without, options);
+  const replacement = none.publication('codex-sandbox');
+  t.not(replacement, original);
+  t.is(replacement.accounts[0].oracle, original.accounts[0].oracle);
   // A binding from when this broker did redeem is withdrawn: Floot must not
   // offer a button over an admin whose redeemer is gone.
-  t.false(none.names.has('floot/controller-profile/codex-admin'));
+  t.false(Object.hasOwn(replacement.accounts[0], 'admin'));
+  t.false(Object.hasOwn(replacement.accounts[0], 'adminId'));
   t.false(none.names.has('codex-sandbox/reset-redeemer'));
-  t.false(none.names.has('codex-sandbox/subscription-admin'));
+  t.true(none.names.has('codex-sandbox/subscription-admin'));
 
   const pooled = makeNamingHost({
     'codex-sandbox/broker-service': 'broker-1',
@@ -631,13 +798,23 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
     label: 'Codex',
     dir: 'codex-sandbox',
     providerId: 'codex',
+    accountAuthority: 'shared-account',
     flootDir: 'floot',
     backendId: 'codex',
     subscriptionIds: ['work', 'home'],
     resetCredits: true,
   });
-  t.true(pooled.names.has('floot/controller-profile/codex-admin-work'));
-  t.true(pooled.names.has('floot/controller-profile/codex-admin-home'));
+  const published = pooled.publication('codex-sandbox').accounts;
+  t.is(published.length, 2);
+  for (const [index, member] of ['work', 'home'].entries()) {
+    t.is(
+      published[index].admin,
+      pooled.names.get(`codex-sandbox/subscription-admin-${member}`),
+    );
+    t.deepEqual(published[index].uses, [
+      { backendId: 'codex', subscriptionId: member },
+    ]);
+  }
   t.deepEqual(
     pooled.made
       .filter(made => made.specifier.endsWith('/reset-redeemer-module.js'))
@@ -646,7 +823,7 @@ test('no admin is provided unless asked, nor for a broker with no redeemer; seve
   );
 });
 
-test('a broker whose worker predates the redeemer leaves no name behind, and the oracle is still provided', async t => {
+test('a rejected redeemer leaves no name and refuses a partial discovery publication', async t => {
   const world = makeNamingHost({
     'codex-sandbox/broker-service': 'broker-1',
     'floot/controller-profile': 'profile',
@@ -667,12 +844,18 @@ test('a broker whose worker predates the redeemer leaves no name behind, and the
       label: 'Codex',
       dir: 'codex-sandbox',
       providerId: 'codex',
+      accountAuthority: 'shared-account',
       flootDir: 'floot',
       backendId: 'codex',
       resetCredits: true,
     }),
   );
-  t.true(world.names.has('floot/controller-profile/codex-account'));
+  t.deepEqual(world.publication('codex-sandbox'), {
+    version: 1,
+    accounts: [],
+    unavailable: true,
+  });
+  t.true(world.names.has('codex-sandbox/account-oracle'));
   t.false(world.names.has('codex-sandbox/reset-redeemer'));
   t.false(world.names.has('codex-sandbox.reset-redeemer-powers'));
   t.false(world.names.has('codex-sandbox/subscription-admin'));

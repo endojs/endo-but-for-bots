@@ -260,9 +260,15 @@ a tool set projected before the session agent exists.
 Every figure carries `observedAt` and a source of `observed`, `declared`,
 `remembered`, or `unavailable`, so a declared figure is never mistaken for a
 measured one.
-Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile when running
-setup; without one, `getAccount()` reports that no oracle is available and the
-tool is absent.
+Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile and setting
+`FLOOT_ACCOUNT_AUTHORITY` to the operator's explicit account identifier when running
+setup; without a profile, `getAccount()` reports that no oracle is available and
+the tool is absent.
+Account discovery identifies accounts by provider, declared authority and optional
+pool member, separately from runtime names and read-only observer formulas.
+Multiple runtimes sharing that declared identity share one capacity card.
+Setup publishes these bindings in the controller profile, without another
+credential or renewal owner.
 See [@endo/hosted-agent's ACCOUNT-ORACLE.md](../hosted-agent/ACCOUNT-ORACLE.md).
 
 ## Design → implementation → review

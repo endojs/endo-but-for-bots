@@ -48,6 +48,11 @@ import {
   provideAuthSecret,
 } from '@endo/fae/src/credentials.js';
 import { coerceDeclaredProfile } from '@endo/hosted-agent/account.js';
+import {
+  invalidateAccountBindings,
+  makeAccountId,
+  publishAccountBindings,
+} from '@endo/hosted-agent/account-bindings.js';
 
 import {
   isNamePersisted,
@@ -88,6 +93,28 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
   const oraclePath = [dir, 'account-oracle'];
   const powersPath = [dir, 'account-oracle-powers'];
   const profileNamePath = [dir, 'account-profile'];
+  await invalidateAccountBindings(factoryHost, { source: dir });
+  // Publish references to the existing oracle, not another account owner.
+  // The profile may still have its temporary top-level name on a fresh setup.
+  const publish = async () => {
+    const accountId = makeAccountId({
+      providerId: provider,
+      accountAuthority: env('FLOOT_ACCOUNT_AUTHORITY'),
+    });
+    const oracle = await E(agent).lookup(oraclePath);
+    await publishAccountBindings(factoryHost, {
+      source: dir,
+      accounts: [
+        {
+          accountId,
+          providerId: provider,
+          title: 'Fae',
+          oracle,
+          uses: [{ backendId: 'provider' }],
+        },
+      ],
+    });
+  };
 
   const existing = await E(agent).has(...oraclePath);
   if (!profilePath && !existing) {
@@ -96,8 +123,14 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
     console.log(
       'Floot: no FLOOT_ACCOUNT_PROFILE; skipping the account oracle (getAccount() will report it is unavailable).',
     );
+    await publishAccountBindings(factoryHost, { source: dir, accounts: [] });
     return;
   }
+
+  makeAccountId({
+    providerId: provider,
+    accountAuthority: env('FLOOT_ACCOUNT_AUTHORITY'),
+  });
 
   if (profilePath) {
     if (!existsSync(profilePath)) {
@@ -159,6 +192,7 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
         profilePath ? ' with the updated profile' : ''
       }.`,
     );
+    await publish();
     return;
   }
 
@@ -197,6 +231,7 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
     await E(agent).locate(...oraclePath),
   );
   console.log(`Floot account oracle created at "${dir}/account-oracle".`);
+  await publish();
 };
 
 // Absolute host path to the Endo codebase, mounted read-only into full-control

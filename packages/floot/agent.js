@@ -53,6 +53,7 @@ import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
+import { discoverAccounts } from './src/account-discovery.js';
 import { assertRuntimeConfig } from './src/runtime-config.js';
 import {
   assertSessionIdentity,
@@ -2610,111 +2611,10 @@ export const make = async (
     }
     return accountOracleP;
   };
-
-  // What the accounts behind the backends have left, for a view to subscribe
-  // to. Floot's own oracle describes its provider credential; each hosted
-  // adapter binds its subscription's oracle beside its backend, as
-  // `<backend id>-account`. They are looked up when a view subscribes, not
-  // captured: the adapters bind theirs after this factory has started.
-  const listAccountOracles = async () => {
-    /** @type {Array<{ backendId: string, key: string, title: string, subscriptionId?: string, label?: string, oracle: any }>} */
-    const entries = [];
-    /** @type {string[]} */
-    const unknown = [];
-    try {
-      const own = await getAccountOracle();
-      if (own) {
-        entries.push({
-          backendId: 'provider',
-          key: 'provider',
-          title: 'Fae',
-          oracle: own,
-        });
-      }
-    } catch {
-      unknown.push('provider');
-    }
-    // By pet name and one at a time, not through `getHostedBackends()`, which
-    // fails as a whole when any one backend cannot describe itself. A backend
-    // bound as `<id>-backend` has its account bound as `<id>-account`, or,
-    // when it holds several subscriptions, one each as
-    // `<id>-account-<subscription>`.
-    for (const backendName of [...new Set(configuredBackendNames)]) {
-      const backendId = backendName.replace(/-backend$/, '');
-      try {
-        if (await E(powers).has(backendName)) {
-          let title = backendId;
-          /** @type {Array<{ id: string, label: string }>} */
-          let subscriptions = [];
-          try {
-            const described = assertHostedBackendDescriptor(
-              await E(await E(powers).lookup(backendName)).describe(),
-            );
-            title = described.title;
-            subscriptions = described.subscriptions || [];
-          } catch {
-            // Without a description there is no telling which subscriptions
-            // it has: whatever is followed for this backend stays, and the
-            // one-credential binding is still tried.
-            unknown.push(backendId);
-          }
-          const accounts =
-            subscriptions.length > 0
-              ? subscriptions.map(subscription => ({
-                  name: `${backendId}-account-${subscription.id}`,
-                  adminName: `${backendId}-admin-${subscription.id}`,
-                  key: `${backendId}:${subscription.id}`,
-                  subscriptionId: subscription.id,
-                  label: subscription.label,
-                }))
-              : [
-                  {
-                    name: `${backendId}-account`,
-                    adminName: `${backendId}-admin`,
-                    key: backendId,
-                    subscriptionId: undefined,
-                    label: undefined,
-                  },
-                ];
-          for (const account of accounts) {
-            if (await E(powers).has(account.name)) {
-              // Where the provider banks rate-limit resets, setup binds the
-              // subscription's admin beside its account: `-admin` for
-              // `-account`.
-              /** @type {any} */
-              let admin;
-              try {
-                if (await E(powers).has(account.adminName)) {
-                  admin = await E(powers).lookup(account.adminName);
-                }
-              } catch {
-                // Status does not wait on it; there is then no redeem button.
-              }
-              entries.push({
-                backendId,
-                key: account.key,
-                title,
-                ...(account.subscriptionId === undefined
-                  ? {}
-                  : {
-                      subscriptionId: account.subscriptionId,
-                      label: account.label,
-                    }),
-
-                ...(admin === undefined ? {} : { admin }),
-                oracle: await E(powers).lookup(account.name),
-              });
-            }
-          }
-        }
-      } catch {
-        // Not resolvable this time; whatever is followed for it stays.
-        unknown.push(backendId);
-      }
-    }
-    return { entries, unknown };
-  };
-  const accountsWatch = makeAccountsWatch({ listOracles: listAccountOracles });
+  // Setup publishes exact oracle/admin identities independently of adapters.
+  const accountsWatch = makeAccountsWatch({
+    listOracles: () => discoverAccounts(powers),
+  });
 
   // The shared static asset server, an operator-endowed capability the hosted
   // setup binds into this factory's profile so a new-project session can
