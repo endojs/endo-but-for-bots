@@ -797,6 +797,14 @@ and each adapter's declared successor disposition. Codex additionally holds its
 write-ahead save and attempts a successor in the interrupt-completion microtask.
 No new durable owner or schema is introduced. Existing native post-admission
 interrupt tests remain; this is not an exhaustive cross-backend lifecycle matrix.
+The follow-up held OpenCode command-writer test now covers both reader closure
+and explicit interruption, with a successor queued immediately after cancellation.
+Neither the canceled prompt nor its successor can bypass the held writer; after
+release only the first and successor prompts execute.
+The implementation already satisfies this case, so this is additional conformance
+evidence, not a production bug fix.
+All three focused client suites pass: Claude 98, Codex 99 and OpenCode 36.
+Scoped lint and formatting pass; no durable owner or storage format changes.
 Not deployed. Persistence drain is not claimed to have a deadline, interrupt
 completion alone is not proof of native quiescence, and this does not solve
 process loss.
