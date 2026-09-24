@@ -190,8 +190,17 @@ summary-only capture would therefore lose context. Stream and file metadata use
 different field spelling. See endo-host's
 `ops/claude-compaction-probe-20260924.md` and companion reproduction script.
 Both containers were removed; no daemon deployment or session mutation occurred.
-Automatic compaction, retained tool pairs, repeated/interrupted capture and
-durable replay remain implementation/acceptance gates, not proved by this probe.
+A subsequent seeded synthetic auto-compaction probe retained a native Bash
+tool-use/result pair plus a runtime token-reminder attachment; the next request
+consumed the intact pair with the reminder folded into the result. Native JSONL
+can repeat retained UUIDs with identical context payloads but changed metadata.
+Production projection must account for attachments and distinguish such repeats
+from conflicting payloads. One automatic native-tool fixture is not proof of
+Endo-effect reconciliation, repeated/interrupted capture or durable replay.
+The existing host-side `makeTranscriptResume` helper is not a symlink-race-safe
+reader of guest-writable content; do not extend it to ingest checkpoints.
+An in-sandbox data-only capture using the existing process transport is the
+bounded direction under review, not a new durable storage/lifecycle owner.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
