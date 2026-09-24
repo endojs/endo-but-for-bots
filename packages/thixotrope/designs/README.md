@@ -233,8 +233,9 @@ Direction matters:
   subscription and release of that callback when the UI closes.
 - A durable object can initiate and manage an ephemeral resource, such as a child process or listening
   web server.
-  Directory-installed native resources now exercise this direction: a workspace manager retains
+  Directory-installed native resources now exercise this direction: a dedicated manager vat retains
   desired state, and a separate disposable process owns the platform resources.
+  The workspace retains installation bookkeeping and the registration capability in its inventory.
 
 The adapter keeper serializes creation and replacement and restores the manager's desired state.
 An incarnation's references break permanently when its process exits.

@@ -21,6 +21,8 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * @typedef {object} WorkerMeta
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
+ * @property {string} [allocationKey] host-generated key for retrying an
+ *   interrupted allocation while this worker exists
  * @property {string} [startNotify] publication secret the host calls
  *   `started()` on at every daemon startup. The delivery is the wake — nothing
  *   else is needed, because waking a vat runs none of its code anyway, and the

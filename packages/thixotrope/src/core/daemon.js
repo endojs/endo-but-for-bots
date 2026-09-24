@@ -83,7 +83,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   evaluate in a fresh implicitly-created worker and return the
  *   result; the worker persists like any other (find it via
  *   `listWorkerIds`, retire it via `getWorker(id).retire()`)
- * @property {(options?: { debugLabel?: string, ephemeral?: boolean }) => Promise<ThixotropeWorkerFacade>} createWorker
+ * @property {(options?: { debugLabel?: string, ephemeral?: boolean, allocationKey?: string }) => Promise<ThixotropeWorkerFacade>} createWorker
  * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
  * @property {() => Array<string>} listWorkerIds
  * @property {(name: string, description?: unknown) => object} makeResource
@@ -1262,18 +1262,41 @@ const buildDaemon = async (
       provideWorkerSession(workerId);
       return makeAdminFacade(workerId).evaluate(source, endowments);
     },
-    createWorker: async ({ debugLabel, ephemeral = false } = {}) => {
+    createWorker: async ({
+      debugLabel,
+      ephemeral = false,
+      allocationKey,
+    } = {}) => {
       debugLabel === undefined ||
         typeof debugLabel === 'string' ||
         Fail`debugLabel must be a string`;
       typeof ephemeral === 'boolean' || Fail`ephemeral must be a boolean`;
+      if (allocationKey !== undefined) {
+        (typeof allocationKey === 'string' &&
+          /^[0-9a-f]{32}$/.test(allocationKey)) ||
+          Fail`Expected a host-generated allocation key`;
+        for (const [id] of workers) {
+          const meta = store.provideWorkerStore(id).getMeta();
+          if (meta.allocationKey === allocationKey) {
+            (meta.debugLabel === debugLabel &&
+              Boolean(meta.ephemeral) === ephemeral) ||
+              Fail`Worker allocation options changed`;
+            return makeAdminFacade(id);
+          }
+        }
+      }
       const workerId = randomHex128();
-      if (debugLabel !== undefined || ephemeral) {
+      if (
+        debugLabel !== undefined ||
+        ephemeral ||
+        allocationKey !== undefined
+      ) {
         const workerStore = store.provideWorkerStore(workerId);
         workerStore.setMeta({
           ...workerStore.getMeta(),
           ...(debugLabel === undefined ? {} : { debugLabel }),
           ...(ephemeral ? { ephemeral: true } : {}),
+          ...(allocationKey === undefined ? {} : { allocationKey }),
         });
       }
       provideWorkerSession(workerId);

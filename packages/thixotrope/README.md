@@ -233,13 +233,17 @@ curl http://127.0.0.1:8080/read
 ```
 
 A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
-The durable module runs in the selected workspace; the ephemeral module runs in a separate Node
-process with native platform APIs.
+Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
+The ephemeral module runs in a separate Node process with native platform APIs.
+The workspace retains installation bookkeeping and the public registration reference.
+Each manager receives its own daemon startup notification, independently of workspace execution.
 The primary daemon only loads directory metadata and bundles the durable module, launches and
 connects the native process, and manages its lifetime.
 It contains no HTTP listener implementation or HTTP-specific installation commands.
 
 Installation stores only the public registration facet in the requested inventory slot.
+An interrupted installation resumes when the same directory and name are installed again.
+The retry reuses the manager vat; it does not rerun a completed durable factory attempt.
 The HTTP facet provides `register(port, handler, policy?)`; the returned handle provides
 `status()` and `close()`.
 An unavailable port still returns a handle; `status()` retries binding and reports an error
@@ -306,9 +310,10 @@ The host checks wall-clock time before firing, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 3 is required for the acknowledgement protocol.
-Older workspaces require migration or a fresh state directory because their persisted clock code
-cannot acknowledge outcomes; startup rejects them before restoring workers.
+Workspace metadata version 4 is required for dedicated native manager vats and includes the alarm
+acknowledgement protocol introduced in version 3.
+Older workspaces require migration or a fresh state directory because persisted registry and clock
+closures cannot be updated by loading new source; startup rejects them before restoring workers.
 See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
 
 ## Local introductions and capability mail
@@ -565,7 +570,7 @@ Host factories take their platform powers explicitly as their first argument.
 The Node composition entry creates filesystem, socket, subprocess, timer, entropy, and diagnostic
 capabilities; the core never imports that entry or acquires platform authority by default.
 The alarm host primitive receives a `SyncStringAtom` for metadata.
-Installed native-resource managers keep their durable state in the workspace heap.
+Each installed native-resource manager keeps its durable state in its own vat heap.
 
 ```js
 // The daemon runs under Hardened JavaScript: lock down first.
