@@ -101,6 +101,64 @@ const callEffect = () =>
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
 
+test('first native-required failure stays readable but cannot resume portably after revival', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  let sends = 0;
+  const client = harden({
+    async send() {
+      sends += 1;
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'thinking-delta',
+        text: 'private native reasoning',
+      });
+      channel.push({ type: 'text-delta', text: 'partial answer' });
+      channel.push({ type: 'abort', reason: 'capture unavailable' });
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    nativeContextFormat: 'claude-code-jsonl-v1',
+  });
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('first', makeReplyChannel().writer), {
+    message: /capture unavailable/,
+  });
+  t.is(
+    f.events().find(event => event.type === 'dispatch').nativeContextFormat,
+    'claude-code-jsonl-v1',
+  );
+  t.true(
+    (await agent.getTranscript()).some(
+      record =>
+        record.kind === 'message' && record.content === 'partial answer',
+    ),
+  );
+  await t.throwsAsync(agent.converse('retry', makeReplyChannel().writer), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+  await agent.shutdown();
+  // The old dispatch carries the requirement even if a later descriptor no
+  // longer advertises it. No volatile client flag may enable a lossy fallback.
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    runtime,
+    'Test',
+  );
+  t.teardown(() => revived.shutdown());
+  await t.throwsAsync(
+    revived.converse('after restart', makeReplyChannel().writer),
+    { message: /cannot conceal unresolved or recovered tool evidence/ },
+  );
+  t.is(sends, 1);
+});
+
 for (const fault of ['beforeStore', 'afterStore']) {
   test(`mail dispatch publication ${fault} failure prevents inference and preserves committed receipt`, async t => {
     const f = fixture();
@@ -1125,6 +1183,121 @@ test('recorded compaction survives reconstruction into direct-provider context',
     (await revived.getTranscript()).slice(0, transcript.length),
     transcript,
   );
+});
+
+test('end-of-turn compaction restores retained tools and final answer exactly once', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  let nativeExecutions = 0;
+  let replayExecutions = 0;
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'tool-call',
+        id: 'native-call',
+        name: 'effect',
+        args: '{}',
+      });
+      nativeExecutions += 1;
+      channel.push({
+        type: 'tool-result',
+        id: 'native-call',
+        name: 'effect',
+        result: 'Changed once',
+      });
+      channel.push({ type: 'text-delta', text: 'Final native answer' });
+      // Models the completed-turn capture cut, not the earlier native boundary.
+      channel.push({
+        type: 'compaction',
+        summary: 'Earlier context summary',
+        retainedTail: [
+          { kind: 'tool-call', id: 'native-call', name: 'effect', args: '{}' },
+          { kind: 'tool-result', id: 'native-call', content: 'Changed once' },
+          {
+            kind: 'message',
+            role: 'assistant',
+            content: 'Final native answer',
+          },
+        ],
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const tools = {
+    extraTools: new Map([
+      [
+        'effect',
+        effectTool(async () => {
+          replayExecutions += 1;
+          return 'Unexpected replay';
+        }),
+      ],
+    ]),
+  };
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => hostedClient },
+    'Test',
+    tools,
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Change it', makeReplyChannel().writer);
+  const transcript = await agent.getTranscript();
+  const history = await agent.getHistory();
+  t.is(history.filter(row => row.content === 'Final native answer').length, 1);
+  t.is(nativeExecutions, 1);
+  t.is(replayExecutions, 0);
+  await agent.shutdown();
+  const contexts = [];
+  const revived = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      kind: 'provider',
+      provideProvider: () =>
+        harden({
+          async chatStream(context) {
+            contexts.push(context);
+            return completed();
+          },
+        }),
+    },
+    'Test',
+    tools,
+  );
+  t.teardown(() => revived.shutdown());
+  t.deepEqual(await revived.getTranscript(), transcript);
+  t.deepEqual(await revived.getHistory(), history);
+  await revived.converse('Continue', makeReplyChannel().writer);
+  t.deepEqual(
+    contexts[0].filter(message => message.role !== 'system'),
+    [
+      { role: 'assistant', content: 'Earlier context summary' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'floot-history-1',
+            type: 'function',
+            function: { name: 'effect', arguments: '{}' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'floot-history-1',
+        content: 'Changed once',
+      },
+      { role: 'assistant', content: 'Final native answer' },
+      { role: 'user', content: 'Continue' },
+    ],
+  );
+  t.is(nativeExecutions, 1);
+  t.is(replayExecutions, 0);
 });
 
 for (const failure of ['empty', 'HTTP 503']) {

@@ -603,6 +603,49 @@ historical API messages and executed the tool once across restoration.
 It used only synthetic credentials/signatures, left no containers behind, and did
 not change the deployed daemon or existing sessions.
 
+Latest integration status (2026-09-24): ordinary Claude checkpoint publication is
+now wired through the trusted restoration receipt and stream-coverage checker.
+Portable restoration returns the same exact-byte receipt as native restoration;
+the controller supplies SHA-256, and the client retains the cut before admitting
+the next prompt.
+Publication requires a confirmed zero exit without a signal, successful helper
+completion, matching session identity, unchanged historical bytes, the admitted
+prompt, and every observed mainline frame without unmatched partial output.
+Unobserved post-cut loader summary/visibility/meta flags are refused.
+Missing receipts, unknown process status, stale files and unsupported framing
+cannot publish a replacement checkpoint.
+
+Review also found a first-turn durability gap: a failed native capture left only
+portable dialogue, which could silently lose reasoning on restoration.
+Claude now declares its required native context format in its backend descriptor;
+delegation preserves that requirement and Floot records it in dispatch before
+calling the backend.
+Model-context selection requires a complete matching native checkpoint and safe
+effect evidence, including after journal reconstruction and archival.
+History remains readable even when restoration refuses.
+Pre-send failures conservatively retain this requirement; there is not yet a
+separate durable proof that no native context was admitted.
+These tests exercise reconstruction from stored journal data, not a real daemon
+restart or current-release Tokyo acceptance.
+
+Independent reviewers approved the shared schema/selection, client verification,
+durable dispatch requirement, forensic recovery and terminal checkpoint sealing.
+The full Claude suite passes 360 tests, Floot passes 698, and shared hosted-agent passes 740
+(one skipped); OpenCode transcript conformance passes 18 tests.
+Source-only checks pass for Claude, hosted-agent and Floot; this is not a claim
+that the existing test-inclusive typecheck errors have been eliminated.
+Stale ignored declarations were moved to recoverable temporary backups so these
+checks inspect current source rather than outdated generated contracts.
+The repository documentation gate passes; scoped lint has no errors (147 warnings)
+and formatting passes.
+
+This integration is not RA-02 completion or deployment approval.
+Current-turn compaction explicitly refuses checkpoint publication until its
+replacement-prefix coverage rule is established; failed/cancelled capture remains
+disabled, and real signature/account/runtime/system/tool binding remains open.
+The old no-init standalone live-continuation branch cannot publish checkpoints
+without a trusted cut; remove that obsolete path next rather than expanding it.
+
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
 settled-turn window. The module header's earlier unconditional bounded-memory

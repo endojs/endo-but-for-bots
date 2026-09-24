@@ -11,6 +11,175 @@ import {
 } from '../src/hosted-turn.js';
 import { usageCounts } from './helpers/usage.js';
 
+for (const mode of [
+  'abort',
+  'text',
+  'tool',
+  'thinking',
+  'compaction',
+  'reader failure',
+  'cancel',
+  'seal failure',
+]) {
+  test(`failed native snapshot completeness: ${mode}`, async t => {
+    t.timeout(10_000);
+    const checkpoint = harden({
+      kind: 'native-context',
+      format: 'claude-code-jsonl-v1',
+      payload: 'signed bytes',
+      context: [],
+    });
+    const controller = new AbortController();
+    const records = [];
+    let seals = 0;
+    const client = harden({
+      send: async () =>
+        readerFromIterator(
+          (async function* () {
+            yield { type: 'native-context', checkpoint };
+            if (mode === 'text') yield { type: 'text-delta', text: 'later' };
+            if (mode === 'thinking')
+              yield { type: 'thinking-delta', text: 'later' };
+            if (mode === 'tool') {
+              yield {
+                type: 'tool-call',
+                id: 'later',
+                name: 'effect',
+                args: '{}',
+              };
+              yield { type: 'tool-result', id: 'later', result: 'done' };
+            }
+            if (mode === 'compaction')
+              yield { type: 'compaction', summary: 'later' };
+            if (mode === 'reader failure') throw Error('reader failed');
+            if (mode === 'cancel') controller.abort();
+            yield { type: 'usage', inputTokens: 1 };
+            yield { type: 'abort', reason: 'producer stopped' };
+          })(),
+        ),
+      interrupt: async () => {},
+    });
+    const result = runHostedTurn({
+      client,
+      text: 'go',
+      signal: controller.signal,
+      writer: harden({
+        setPhase() {},
+        delta() {},
+        thinking() {},
+        toolCall() {},
+        toolResult() {},
+      }),
+      recordTranscript: async (_ordinal, record) => {
+        records.push(record);
+      },
+      completeTranscript: async count => {
+        seals += 1;
+        t.is(count, `${records.length}`);
+        if (mode === 'seal failure') throw Error('seal failed');
+      },
+    });
+    if (mode === 'cancel') await result;
+    else
+      await t.throwsAsync(result, {
+        message:
+          mode === 'seal failure'
+            ? /seal failed/
+            : mode === 'reader failure'
+              ? /reader failed/
+              : /producer stopped/,
+      });
+    t.is(seals, ['abort', 'seal failure'].includes(mode) ? 1 : 0);
+    t.deepEqual(records[0], checkpoint);
+  });
+}
+
+test('native context is journaled atomically without becoming tool execution or presentation', async t => {
+  const checkpoint = harden({
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'opaque signed native context',
+    context: [
+      { kind: 'tool-call', id: 'retained', name: 'Bash', args: '{}' },
+      { kind: 'tool-result', id: 'retained', content: 'already done' },
+    ],
+  });
+  const writes = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'native-context', checkpoint };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({ setPhase() {} }),
+    recordTranscript: async (ordinal, record) => {
+      writes.push({ ordinal, record });
+    },
+    completeTranscript: async count => {
+      t.is(count, '1');
+      t.deepEqual(writes, [{ ordinal: '0', record: checkpoint }]);
+    },
+  });
+  t.deepEqual(result.toolCalls, []);
+  t.false(JSON.stringify(result.segments).includes(checkpoint.payload));
+});
+
+for (const mode of ['missing recorder', 'failed write']) {
+  test(`native context refuses ${mode} without reporting completion`, async t => {
+    let sealed = false;
+    let interrupted = false;
+    const checkpoint = harden({
+      kind: 'native-context',
+      format: 'claude-code-jsonl-v1',
+      payload: 'signed native payload',
+      context: [],
+    });
+    const client = harden({
+      send: async () =>
+        readerFromIterator(
+          (async function* () {
+            yield { type: 'native-context', checkpoint };
+            yield { type: 'end' };
+          })(),
+        ),
+      interrupt: async () => {
+        interrupted = true;
+      },
+    });
+    await t.throwsAsync(
+      runHostedTurn({
+        client,
+        text: 'go',
+        writer: harden({ setPhase() {} }),
+        ...(mode === 'failed write'
+          ? {
+              recordTranscript: async () => {
+                throw Error('storage unavailable');
+              },
+            }
+          : {}),
+        completeTranscript: async () => {
+          sealed = true;
+        },
+      }),
+      {
+        message:
+          mode === 'failed write'
+            ? /storage unavailable/
+            : /requires durable transcript/,
+      },
+    );
+    t.false(sealed);
+    t.true(interrupted);
+  });
+}
+
 test('failed hosted turns preserve retained context without emitting tool activity', async t => {
   const retainedTail = harden([
     { kind: 'message', role: 'user', content: 'retained request' },
@@ -66,7 +235,7 @@ test('compaction retained context is validated and charged to the turn bound', a
     );
     t.regex(
       error.message,
-      /must not contain compactions|retained transcript bound|settled tool calls|answers no call/,
+      /must not contain context replacements|retained transcript bound|settled tool calls|answers no call/,
     );
     t.true(interrupted);
     t.deepEqual(hostedTurnPartialOf(error)?.segments, []);

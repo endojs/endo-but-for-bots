@@ -184,6 +184,7 @@ test('describe() and modelCatalog() present Claude Code as a hosted backend', as
     title: 'Claude Code',
     kind: 'hosted',
     continuity: 'transcript',
+    nativeContextFormat: 'claude-code-jsonl-v1',
     toolOwnership: 'endo',
     providerId: 'anthropic',
     supportedNetworkPolicies: ['off', 'public-internet'],

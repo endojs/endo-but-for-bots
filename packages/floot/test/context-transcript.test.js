@@ -8,6 +8,7 @@ import {
 } from '../src/context-transcript.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
 import { encodeJournalTranscript } from '../src/journal-transcript.js';
+import { transcriptToProviderMessages } from '../src/transcript-projection.js';
 
 const message = content => ({ kind: 'message', role: 'assistant', content });
 const checkpoint = summary => ({
@@ -35,6 +36,128 @@ const turn = (turnId, records, extra = {}) => ({
 const noRead = async () => {
   throw Error('Unexpected content hydration');
 };
+
+const nativeCheckpoint = () => ({
+  kind: 'native-context',
+  format: 'claude-code-jsonl-v1',
+  payload: 'opaque signed native payload',
+  context: [
+    { kind: 'compaction', summary: 'portable summary' },
+    call('native', 'effect'),
+    result('native', 'done'),
+  ],
+});
+
+test('native-required dispatch cannot fall back to portable history before its first checkpoint', async t => {
+  for (const extra of [
+    { state: 'failed', transcriptComplete: false },
+    { state: 'cancelled', transcriptComplete: false },
+    { state: 'completed', transcriptComplete: true },
+  ]) {
+    const attempted = turn(1, [message('partial answer')], {
+      ...extra,
+      nativeContextFormat: 'claude-code-jsonl-v1',
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(projectContextTranscript([attempted], noRead), {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    });
+  }
+  const native = nativeCheckpoint();
+  t.deepEqual(
+    await projectContextTranscript(
+      [
+        turn(1, [native], {
+          nativeContextFormat: native.format,
+        }),
+      ],
+      noRead,
+    ),
+    [native],
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [
+        turn(1, [native], {
+          nativeContextFormat: 'different-native-format',
+        }),
+      ],
+      noRead,
+    ),
+  );
+});
+
+test('native context remains atomic with its suffix and refuses direct-provider conversion', async t => {
+  const native = nativeCheckpoint();
+  const selected = await projectContextTranscript(
+    [
+      turn(1, [message('superseded')]),
+      turn(10, [message('before'), native, message('after')]),
+    ],
+    noRead,
+  );
+  t.deepEqual(selected, [native, message('after')]);
+  t.throws(() => transcriptToProviderMessages(selected), {
+    message: /cannot restore backend-native/,
+  });
+});
+
+test('native context refuses unresolved later turns without hiding their evidence', async t => {
+  const native = turn(10, [nativeCheckpoint()]);
+  for (const later of [
+    turn(20, [call('late', 'effect')]),
+    turn(20, [message('partial')], {
+      state: 'failed',
+      transcriptComplete: false,
+    }),
+    turn(20, [message('reported')], {
+      tools: [
+        {
+          callId: 'host-only',
+          name: 'effect',
+          args: '{}',
+          settled: false,
+          sequence: '21',
+        },
+      ],
+    }),
+  ]) {
+    // The refusal does not modify the journal or manufacture a tool result.
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(projectContextTranscript([native, later], noRead), {
+      message: /cannot conceal unresolved or recovered tool evidence/,
+    });
+  }
+});
+
+test('native context refuses unresolved prior and same-turn evidence rather than rewriting signed IDs', async t => {
+  const native = nativeCheckpoint();
+  const unresolved = turn(1, [call('native', 'effect')]);
+  await t.throwsAsync(
+    projectContextTranscript([unresolved, turn(10, [native])], noRead),
+    {
+      message: /cannot conceal unresolved/,
+    },
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [turn(10, [call('native', 'effect'), native])],
+      noRead,
+    ),
+    {
+      message: /cannot conceal unresolved/,
+    },
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [turn(10, [native], { transcriptComplete: false })],
+      noRead,
+    ),
+    {
+      message: /cannot conceal unresolved/,
+    },
+  );
+});
 
 test('context skips superseded prose and boundary input, expanding retained tail exactly once', async t => {
   const old = turn(1, [message('old')], { inputRef: 'old-input' });

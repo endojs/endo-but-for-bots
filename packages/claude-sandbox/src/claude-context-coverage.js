@@ -284,6 +284,15 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         before < 0 ? '' : `${lines.slice(0, before + 1).join('\n')}\n`;
       requireValue(sha256(prefix) === prefixSha256);
       const active = rows.slice(before + 1);
+      // The ordinary-turn stream does not attest loader-only visibility or
+      // summary roles. Matching message content cannot certify those changes.
+      requireValue(
+        active.every(row =>
+          ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
+            key => row[key] === undefined || row[key] === false,
+          ),
+        ),
+      );
       const admitted = active.shift();
       requireValue(
         admitted?.type === 'user' &&

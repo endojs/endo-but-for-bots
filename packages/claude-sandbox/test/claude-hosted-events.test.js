@@ -17,6 +17,39 @@ const drain = async reader => {
   return events;
 };
 
+test('completed-turn capture follows native result and precedes terminal delivery', async t => {
+  const raw = makeBufferedReader();
+  const retainedTail = [
+    { kind: 'tool-call', id: 't', name: 'Bash', args: '{}' },
+    { kind: 'tool-result', id: 't', content: 'ok' },
+    { kind: 'message', role: 'assistant', content: 'Done.' },
+  ];
+  const checkpoint = {
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'synthetic native payload',
+    context: [{ kind: 'compaction', summary: 'Earlier work' }, ...retainedTail],
+  };
+  raw.push({ type: 'result', subtype: 'success', result: 'Done.' });
+  raw.push({ type: 'endo_native_context', checkpoint });
+  raw.push({ type: 'end' });
+  const events = await drain(translateClaudeTurn(raw.reader));
+  t.deepEqual(events.slice(-2), [
+    { type: 'native-context', checkpoint },
+    { type: 'end' },
+  ]);
+  t.false(events.some(event => event.type === 'tool-call'));
+});
+
+test('malformed capture fails translation without publishing a checkpoint', async t => {
+  const raw = makeBufferedReader();
+  raw.push({ type: 'endo_native_context', checkpoint: 42 });
+  raw.push({ type: 'end' });
+  const events = await drain(translateClaudeTurn(raw.reader));
+  t.false(events.some(event => event.type === 'native-context'));
+  t.is(events.at(-1).type, 'abort');
+});
+
 test('translated delivery backpressures bursts and drains in order', async t => {
   t.timeout(10_000);
   const raw = makeBufferedReader();

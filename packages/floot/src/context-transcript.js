@@ -1,6 +1,6 @@
 // @ts-check
 import { Fail } from '@endo/errors';
-import { splitAtLastCompaction } from '@endo/hosted-agent/transcript-records.js';
+import { selectActiveTranscript } from '@endo/hosted-agent/transcript-records.js';
 
 import { recoverTurnTranscript } from './transcript-projection.js';
 import { assertContextEvidence } from './context-evidence.js';
@@ -32,7 +32,7 @@ const projectContext = async (
     const transcript = turn.transcript ?? [];
     for (const [ordinal, entry] of transcript.entries()) {
       if (
-        entry.kind === 'compaction' &&
+        (entry.kind === 'compaction' || entry.kind === 'native-context') &&
         (!boundary ||
           BigInt(turn.turnId) > BigInt(boundary.turnId) ||
           (turn.turnId === boundary.turnId && ordinal > boundary.ordinal))
@@ -43,12 +43,14 @@ const projectContext = async (
   });
   const activeGroups = [];
   const exceptionGroups = [];
+  let activeEvidenceUnsafe = false;
+  let nativeContextRequired = false;
   let foundBoundary = boundary === undefined;
   await visitTurns(async (turn, archived = false) => {
     if (!eligible(turn)) return;
     if (boundary && turn.turnId === boundary.turnId) {
       const entry = turn.transcript?.[boundary.ordinal];
-      (entry?.kind === 'compaction' &&
+      ((entry?.kind === 'compaction' || entry?.kind === 'native-context') &&
         entry.sequence === boundary.sequence &&
         entry.ordinal === `${boundary.ordinal}`) ||
         Fail`Context checkpoint changed across captured view`;
@@ -77,7 +79,15 @@ const projectContext = async (
           : turn.turnId === boundary.turnId
             ? { startOrdinal: boundary.ordinal }
             : {};
-    const recovered = await recoverTurnTranscript(turn, readContent, selection);
+    if (!before && turn.nativeContextFormat !== undefined) {
+      nativeContextRequired = true;
+    }
+    const recovered = await recoverTurnTranscript(turn, readContent, {
+      ...selection,
+      reportNativeSafety: safe => {
+        if (!before && !safe) activeEvidenceUnsafe = true;
+      },
+    });
     if (recovered.length) {
       const groups = before ? exceptionGroups : activeGroups;
       groups.push({ turnId: turn.turnId, records: recovered });
@@ -96,7 +106,13 @@ const projectContext = async (
       .flatMap(group => group.records);
   const records = ordered(activeGroups);
   const exceptions = ordered(exceptionGroups);
-  const active = splitAtLastCompaction(records).active;
+  const active = selectActiveTranscript(records).active;
+  if (
+    (nativeContextRequired ||
+      active.some(record => record.kind === 'native-context')) &&
+    (exceptions.length || activeEvidenceUnsafe)
+  )
+    Fail`Native context cannot conceal unresolved or recovered tool evidence`;
   const ids = new Set(
     active
       .filter(record => record.kind === 'tool-call')

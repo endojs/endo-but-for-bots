@@ -625,6 +625,9 @@ export const makeDelegatedRunner = ({
           kind: beneath.kind,
           continuity: beneath.continuity,
           toolOwnership: beneath.toolOwnership,
+          ...(beneath.nativeContextFormat === undefined
+            ? {}
+            : { nativeContextFormat: beneath.nativeContextFormat }),
           supportedNetworkPolicies: (
             beneath.supportedNetworkPolicies ?? ['off']
           ).filter((/** @type {string} */ policy) =>

@@ -3,6 +3,9 @@
 import '@endo/init';
 
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 import { HOSTED_SLICE_RESOURCES } from '@endo/hosted-agent/hosted-agent-policy.js';
 import test from 'ava';
@@ -96,7 +99,14 @@ const planFor = (id, overrides = {}) =>
     ...overrides,
   });
 
-const fixture = (t, { realClient = false } = {}) => {
+/**
+ * @param {any} t
+ * @param {{realClient?: boolean, stateDirectory?: string}} [options]
+ */
+const fixture = (
+  t,
+  { realClient = false, stateDirectory = undefined } = {},
+) => {
   /** @type {any[]} */
   const events = [];
   const scopes = new Map();
@@ -256,7 +266,7 @@ const fixture = (t, { realClient = false } = {}) => {
   const stateProvider = Far('State', {
     async prepareSessionDirectory(id) {
       events.push(`state ${id}`);
-      return harden({ directory: `/state/${id}` });
+      return harden({ directory: stateDirectory ?? `/state/${id}` });
     },
   });
   const roles = { sandboxService, brokerService, stateProvider, tools };
@@ -420,6 +430,44 @@ const sliceOptions = f => {
     f.events.find(event => Array.isArray(event) && event[0] === 'slice') ?? [];
   return options;
 };
+
+test('portable restoration returns the exact pre-turn projection receipt', async t => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), 'claude-restore-receipt-'),
+  );
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const f = fixture(t, { stateDirectory: directory });
+  const controller = f.makeController();
+  const plan = JSON.stringify(planFor('a'));
+  t.teardown(() => E(controller).terminate(plan, f.resolver));
+  await E(controller).activate(plan, f.resolver);
+  const { restoreTranscript, sha256 } = f.clients[0];
+  t.is(await restoreTranscript([]), undefined);
+  const receipt = await restoreTranscript([
+    { kind: 'message', role: 'user', content: 'Remember the blue cat 🐈' },
+    { kind: 'message', role: 'assistant', content: 'Remembered.' },
+  ]);
+  const published = await readFile(
+    path.join(
+      directory,
+      'projects',
+      '-workspace',
+      `${receipt.sessionId}.jsonl`,
+    ),
+    'utf8',
+  );
+  const rows = published
+    .trimEnd()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  t.deepEqual(receipt, {
+    sessionId: rows[0].sessionId,
+    leafUuid: rows.at(-1).uuid,
+    prefixSha256: createHash('sha256').update(published).digest('hex'),
+  });
+  t.is(sha256(published), receipt.prefixSha256);
+  t.not(sha256(`${published} `), receipt.prefixSha256);
+});
 
 test('activation acquires the scope, the broker grant, state, workspace mount, and tool bridge before the slice and client', async t => {
   const f = fixture(t);

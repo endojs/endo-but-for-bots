@@ -28,7 +28,7 @@
 import { Fail } from '@endo/errors';
 import {
   pairToolCalls,
-  splitAtLastCompaction,
+  selectActiveTranscript,
 } from '@endo/hosted-agent/transcript-records.js';
 
 /** What Claude Code records for a turn the user typed. */
@@ -113,7 +113,9 @@ export const writeClaudeTranscript = (
   // carries. Claude Code has no compaction record of its own, so the summary
   // is written as the conversation's opening exchange and the superseded span
   // is not replayed — which is what the boundary means.
-  const { active } = splitAtLastCompaction(records);
+  const { active } = selectActiveTranscript(records);
+  active.every(record => record.kind !== 'native-context') ||
+    Fail`Native Claude context requires the sandbox-native importer`;
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
 

@@ -489,6 +489,7 @@ const provisionPresetObjects = async (
  * @param {string} [options.modelId] - The model this session runs, used to
  *   price its usage.
  * @param {string} [options.backendId] - Durable backend selection.
+ * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
  * @param {any} [options.journalPowers] - Factory-private journal storage. Standalone callers that omit this retain cooperative guest storage.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
@@ -535,6 +536,7 @@ export const makeStreamingAgent = async (
     accountOracle,
     modelId,
     backendId,
+    nativeContextFormat,
     reasoningEffort,
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
@@ -1231,6 +1233,7 @@ export const makeStreamingAgent = async (
       input: text,
       backendId: backendId || runtimeKind,
       modelId: modelId || '',
+      ...(nativeContextFormat === undefined ? {} : { nativeContextFormat }),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
     });
@@ -3939,6 +3942,7 @@ export const make = async (
         // unpinned session follows the factory's configured default.
         /** @type {import('./src/runtime-config.js').RuntimeConfig} */
         let agentConfig;
+        let nativeContextFormat;
         if (suspended) {
           // Construct a records-only observer, never a backend or inbox.
           agentConfig = { kind: 'records-only' };
@@ -3947,6 +3951,7 @@ export const make = async (
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
           }
+          nativeContextFormat = backend.descriptor.nativeContextFormat;
           // Runtime container-mount tools (designs/runtime-container-fs-mount.md):
           // let the session bind capabilities it holds into its sandbox
           // under /mnt/. Built before the tool catalog is pinned, so the
@@ -4066,6 +4071,7 @@ export const make = async (
             maxToolRounds,
             journalPowers,
             backendId: entry.backendId,
+            nativeContextFormat,
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
             onChange: (kind, detail) => {

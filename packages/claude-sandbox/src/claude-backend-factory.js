@@ -90,6 +90,7 @@ export const makeClaudeBackendFactory = ({
       id: CLAUDE_BACKEND_ID,
       title: 'Claude Code',
       continuity: 'transcript',
+      nativeContextFormat: 'claude-code-jsonl-v1',
       providerId: 'anthropic',
       // What a system prompt must know about this place. Claude Code lists
       // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its

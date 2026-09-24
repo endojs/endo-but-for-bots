@@ -428,6 +428,32 @@ test('unmatched stop and mutated complete block refuse', t => {
   }
 });
 
+for (const flag of [
+  'isCompactSummary',
+  'isVisibleInTranscriptOnly',
+  'isMeta',
+]) {
+  for (const rowIndex of [0, 1]) {
+    test(`unobserved loader role ${flag} on current row ${rowIndex} refuses`, t => {
+      const f = fixture();
+      f.text();
+      f.rows[rowIndex][flag] = true;
+      t.throws(() => f.assert(), { message: /coverage unavailable/ });
+    });
+  }
+}
+
+test('explicit false loader flags preserve ordinary-turn coverage', t => {
+  const f = fixture();
+  f.text();
+  for (const row of f.rows) {
+    row.isCompactSummary = false;
+    row.isVisibleInTranscriptOnly = false;
+    row.isMeta = false;
+  }
+  t.notThrows(() => f.assert());
+});
+
 test('16Mi observation bound refuses instead of truncating', t => {
   const f = fixture();
   t.throws(() =>

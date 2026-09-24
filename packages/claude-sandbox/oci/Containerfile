@@ -8,4 +8,7 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.233 \
   && claude --version | grep -q '^2.1.233 ' \
   && rm -rf /root/.npm /root/.claude /tmp/node-compile-cache
 
+COPY capture-compaction.mjs /opt/endo/capture-compaction.mjs
+COPY restore-context.mjs /opt/endo/restore-context.mjs
+
 WORKDIR /workspace

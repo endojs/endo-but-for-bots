@@ -16,7 +16,7 @@ import { Fail, q } from '@endo/errors';
 import {
   assertTranscriptRecord,
   pairToolCalls,
-  splitAtLastCompaction,
+  selectActiveTranscript,
 } from '@endo/hosted-agent/transcript-records.js';
 
 /** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
@@ -45,7 +45,9 @@ import {
  * @returns {ImportedTurn[]}
  */
 export const importedTurnsFor = records => {
-  const { active } = splitAtLastCompaction(records);
+  const { active } = selectActiveTranscript(records);
+  active.every(record => record.kind !== 'native-context') ||
+    Fail`OpenCode cannot restore this backend-specific native context`;
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
   /** @type {ImportedTurn[]} */

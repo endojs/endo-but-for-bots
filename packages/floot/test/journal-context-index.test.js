@@ -1,7 +1,10 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { selectActiveTranscript } from '@endo/hosted-agent/transcript-records.js';
+
 import { makeTurnJournal } from '../src/turn-journal.js';
+import { readContextTranscript } from '../src/context-transcript.js';
 
 /* eslint-disable no-await-in-loop */
 const options = harden({ input: 'input', backendId: 'codex', modelId: 'sol' });
@@ -38,9 +41,10 @@ const fixture = () => {
     },
   };
 };
-const finishMore = async (journal, count) => {
+const finishMore = async (journal, count, sealTranscript = false) => {
   for (let index = 0; index < Number(count); index += 1) {
     const id = await journal.begin(options);
+    if (sealTranscript) await journal.completeTranscript(id, '0');
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
 };
@@ -49,6 +53,71 @@ const latestSnapshot = f =>
     .filter(name => name.startsWith('floot-turn-snapshot-'))
     .sort()
     .at(-1);
+
+test('native context requirement survives replay and archive without hiding forensic records', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin({
+    ...options,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+  });
+  await journal.append(id, {
+    type: 'finish',
+    state: 'failed',
+    error: 'capture unavailable',
+  });
+  await t.throwsAsync(readContextTranscript(makeTurnJournal(f.powers)), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+  await finishMore(journal, 290, true);
+  const revived = makeTurnJournal(f.powers);
+  await t.throwsAsync(readContextTranscript(revived), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+  const view = await revived.readView();
+  const page = await revived.listArchivedPage(view.archiveCursor);
+  t.like(
+    page.records.find(record => record.turnId === id),
+    {
+      nativeContextFormat: 'claude-code-jsonl-v1',
+      state: 'failed',
+      error: 'capture unavailable',
+    },
+  );
+});
+
+test('native checkpoint payload survives immutable publication, archive index and reconstruction', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const native = harden({
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'signed bytes'.repeat(2000),
+    context: [{ kind: 'compaction', summary: 'summary' }],
+  });
+  const suffix = harden({
+    kind: 'message',
+    role: 'assistant',
+    content: 'suffix',
+  });
+  const id = await journal.begin(options);
+  await journal.recordTranscript(id, '0', native);
+  await journal.recordTranscript(id, '0', native);
+  await journal.recordTranscript(id, '1', suffix);
+  await journal.completeTranscript(id, '2');
+  await journal.append(id, { type: 'finish', state: 'completed' });
+  t.deepEqual(await readContextTranscript(journal), [native, suffix]);
+  await finishMore(journal, 290, true);
+  const revived = makeTurnJournal(f.powers);
+  t.like((await revived.readView()).archivedCheckpoint, {
+    turnId: id,
+    ordinal: '0',
+  });
+  const restored = await readContextTranscript(revived);
+  t.deepEqual(restored.slice(0, 2), [native, suffix]);
+  t.deepEqual(selectActiveTranscript(restored).active, restored);
+  t.deepEqual(await readContextTranscript(makeTurnJournal(f.powers)), restored);
+});
 
 test('archive index chooses numeric dispatch and last ordinal, not late publication', async t => {
   const f = fixture();

@@ -10,6 +10,20 @@ const descriptor = harden({
   toolOwnership: 'endo',
 });
 
+test('native context requirement is explicit and validated', t => {
+  t.is(
+    assertHostedBackendDescriptor({
+      ...descriptor,
+      nativeContextFormat: 'claude-code-jsonl-v1',
+    }).nativeContextFormat,
+    'claude-code-jsonl-v1',
+  );
+  for (const nativeContextFormat of ['', null, {}, 42, 'x'.repeat(129)])
+    t.throws(() =>
+      assertHostedBackendDescriptor({ ...descriptor, nativeContextFormat }),
+    );
+});
+
 test('network enforcement support is explicit and closed to known policies', t => {
   t.false(
     Object.hasOwn(

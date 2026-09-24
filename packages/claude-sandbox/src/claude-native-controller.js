@@ -249,6 +249,7 @@ export const makeClaudeNativeController = ({
         detectPriorConversation: resume.detectPriorConversation,
         resolveResumeSessionId: resume.resolveResumeSessionId,
         describeTranscripts: resume.describeTranscripts,
+        sha256: text => createHash('sha256').update(text).digest('hex'),
         // A new incarnation restores what the stack holds, even when the CLI
         // store survived. Claude Code names a conversation's file for its session id
         // and its directory for the cwd it ran in, so both are derived rather
@@ -277,7 +278,14 @@ export const makeClaudeNativeController = ({
             restored,
             { mode: 0o600 },
           );
-          return sessionUuid;
+          // Retain identity of exactly the projection we wrote before prompt
+          // admission, never derive expected history from a later guest file.
+          const leafStart = restored.lastIndexOf('\n', restored.length - 2) + 1;
+          return harden({
+            sessionId: sessionUuid,
+            leafUuid: JSON.parse(restored.slice(leafStart)).uuid,
+            prefixSha256: createHash('sha256').update(restored).digest('hex'),
+          });
         },
       });
     },
