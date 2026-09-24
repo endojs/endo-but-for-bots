@@ -119,9 +119,20 @@ Concrete candidates:
   External callers/retained formulas must be retired before activation; no live
   inventory or deployment is claimed.
 - Codex creates its private audit journal/anchors in
-  `codex-sandbox/src/codex-native-controller.js:109`. Phase 4 expressly gates
-  removal on replacement runtime evidence. State precisely what remains unique;
-  do not confuse provider/native observations with Floot's mediated effects.
+  `codex-sandbox/src/codex-native-controller.js`. The current consumer audit is
+  recorded in [Codex's design](../codex-sandbox/DESIGN.md#journal-and-checkpoint-responsibilities).
+  Only the writer is wired into production; event semantics do not drive
+  recovery, but chain/head verification gates appends and required write failure
+  fences the session. Raw native identifiers, approval/denial observations and
+  late-result diagnostics are not interchangeable with Floot's mediated effects.
+  The separate thread checkpoint does drive reconciliation and must not be
+  mistaken for duplicate history. Retain unique evidence pending a replacement
+  diagnostic contract; the hash-chain/reader surface is not thereby justified
+  as minimal. Entries and anchors share host filesystem authority, so separate
+  capabilities do not defend against a host writer controlling both. The audit
+  head and the runtime policy anchor are different mechanisms. No deletion,
+  bounded-memory, live recovery or process-loss guarantee follows from this
+  source-level ownership inventory.
 - Attachment-driven recreation in `floot/agent.js:2930` onward coordinates
   declared mounts, live incarnation forwarding and cleanup retries. It is not
   proven to be a duplicate durable owner. Its string-matched
