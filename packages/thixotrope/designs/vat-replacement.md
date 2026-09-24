@@ -167,10 +167,11 @@ The [SQLite backend](../../../rust/endo/ironhorse-store-sqlite/src/lib.rs) store
 | --- | --- |
 | `slot_pages` | BLOBs containing fixed-width heap slot records, not named application objects. |
 | `chunk_exts` | BLOB extents of the chunk arena, including variable-sized payloads. |
-| `small_state` | Encoded sections for names and keys, collections, function metadata and code segments, private elements, generators, promises, and suspended async activations. |
-| `meta` | Encoded manifest with geometry, versions, expected runtime signature, epoch, content root, and commit seal. |
-| `leaf_hashes`, `page_edges`, `free_segs` | Integrity, reachability, and allocation metadata that must agree with the edited state. |
-| `edge_pairs` | Derived page-level adjacency index, rebuilt from `page_edges` at open. |
+| `small_state` | Before schema 28: the encoded small state as one row (names and keys, collections, function metadata and code segments, private elements, generators, promises, and suspended async activations). |
+| `small_sections` | From schema 28: the same state as 32 section payloads, each beside its digest (change detection that must follow an edited payload). |
+| `meta` | Encoded manifest with geometry, versions, expected runtime signature, epoch and commit token; before store schema 36 (the store seam's [trust model](../../../designs/ironhorse-snapshot-store-seam.md)), a content root and commit seal in place of the token. |
+| `page_edges`, `free_segs` | Reachability and allocation metadata that must agree with the edited state. The `leaf_hashes` integrity table went with the trust model, whose migration drops it. |
+| `edge_pairs` | Derived page-level adjacency index, maintained from `page_edges` by each commit; open rebuilds it only when `meta.edge_pairs_epoch` does not name the committed epoch. |
 | `side_tables` | A declared table in the schema; it is not currently a relational function/property interface. The tested heap had no rows here. |
 
 The [slot codec](../../../rust/engine/ironhorse-snapshot/src/slot_codec.rs) uses 20-byte big-endian
@@ -205,8 +206,12 @@ No user heap was edited.
 | Decode slot pages to locate the captured integer | Found one matching integer-payload slot; the original row hash also matched the engine's documented hash formula. |
 | SQL `UPDATE slot_pages` replacing that integer with `40414250`, without changing row length | SQLite integrity check passed; worker restore refused: `store slot page fails its leaf hash`. |
 | Update the edited page's leaf hash as well | SQLite integrity check passed; worker restore refused with `BaselineMismatch` when the recomputed content root differed. |
-| Delete all `edge_pairs` rows on a separate copy | Restore succeeded with the original value; open rebuilt all nine derived edges. This is index repair, not an application upgrade. |
+| Delete all `edge_pairs` rows on a separate copy | Restore succeeded with the original value; open rebuilt all nine derived edges. This is index repair, not an application upgrade. Since [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330) a current build performs this repair only when the `edge_pairs_epoch` marker is missing or stale; on a heap it last checkpointed, the copy would keep its empty index, which the partial and generational collectors would trust, unless the marker were deleted too. |
 
+The two refusals came from the row hashes and content root that the store seam's trust model
+(2026-09-24) removes: the resident store is trusted as the canonical machine, so since its phase 13
+the same compatible edit is no longer refused, and the store resumes as the machine it now
+describes.
 The probe also confirmed that inspection connections must be closed before the worker takes its
 exclusive SQLite lock.
 These checks demonstrate representation access and existing integrity gates.
@@ -224,11 +229,13 @@ SQL could select and join those views, while an engine-aware writer applies a va
 No such views or SQL functions exist yet.
 
 A staged writer must update all affected representations: slot and chunk geometry, allocation data,
-property ids, side-state sections, reachability summaries, row hashes, the content root, and commit
-lineage.
-Recomputing a hash only establishes byte consistency; it does not prove that the edited program is
-well formed or correct.
-The hashes and seals are integrity/succession mechanisms, not authentication of the owner's intent.
+property ids, side-state sections and their change-detection digests, reachability summaries, and
+the indexes derived from them; since the store seam's trust model there are no row hashes, content
+root or commit seal to reseal.
+Passing the store validator's full level (`validate_store_content`, a trust-model addition that
+decodes every slot page and chunk extent) would establish that the edited state is well formed and
+self-consistent, not that the edited program is correct.
+The store authenticates nothing, the owner's intent included.
 The editor needs explicit host authority and a separate migration audit record.
 
 There are existing building blocks to investigate: `store_to_image`, `write_machine`,
@@ -382,9 +389,10 @@ edit a different object after the baseline changes.
 
 ### Make edits transactional and derivations explicit
 
-The patch API should accept a group of logical edits, validate the candidate graph, derive integrity
-and GC metadata, and publish a new immutable snapshot as one operation.
-Do not require users to update leaf hashes, reachability summaries, and commit seals by hand.
+The patch API should accept a group of logical edits, validate the candidate graph, derive GC
+metadata, derived indexes and section digests, and publish a new immutable snapshot as one
+operation.
+Do not require users to update reachability summaries, derived indexes, and section digests by hand.
 Changes to those derived structures should normally be produced by the engine-aware writer.
 If a physical index is rebuildable, identify its authoritative source and rebuild/verify rules,
 as the current `edge_pairs` table already does.

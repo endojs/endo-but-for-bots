@@ -3,10 +3,12 @@
 //! `SmallState::decode`, `validate_store`, and the adoption path
 //! `import_from_container`.
 //!
-//! A daemon opens a database file it did not write, so every store row is
-//! attacker-influenced bytes. Arbitrary and mutated-valid rows must yield a
-//! structured `StoreError` — never a panic, a hang, or an unbounded
-//! reservation — and an accepted row must have exactly one encoding.
+//! The resident store is trusted as the machine it holds, but its decoders
+//! must still be total: an engine bug, a torn write or bit rot can leave a
+//! row holding bytes no writer produced. Arbitrary and mutated-valid rows
+//! must yield a structured `StoreError` — never a panic, a hang, or an
+//! unbounded reservation — and an accepted current-schema row must have
+//! exactly one encoding.
 //! The mutation arms are seeded from a real exported store so the corpus
 //! starts inside the well-framed region.
 #![no_main]

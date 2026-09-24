@@ -30,10 +30,11 @@ use crate::sha256::{hex, Sha256};
 #[cfg(test)]
 use crate::store::image_to_batch_unchecked as image_to_batch;
 use crate::store::{
-    chunk_extent_count, derive_page_edges, leaf_hash, slot_page_count, store_to_image,
-    validate_store, CheckpointBatch, HeapStore, SmallState, StoreError, StoreLeaves, StoreManifest,
-    LEAF_EXT, LEAF_PAGE, STORE_SCHEMA_VERSION,
+    chunk_extent_count, derive_page_edges, encode_free_seg, free_seg_count, mint_token,
+    slot_page_count, CheckpointBatch, CommitToken, CommitTokenSource, HeapStore, RandomTokens,
+    SmallState, StoreError, StoreManifest, FREE_SEG_ENTRIES, STORE_SCHEMA_VERSION,
 };
+use crate::store_sections::SMALL_SECTION_COUNT;
 use ironhorse_vm::{Interp, RestoreSession};
 
 /// An error from the file/CAS snapshot surface: either an I/O failure or a
@@ -439,7 +440,7 @@ pub fn image_to_interp(
 ) -> Result<Interp, crate::format::SnapshotError> {
     let image = snapshot.into_image();
     let meter = image.meter.to_state();
-    let (slots, chunks) = image.to_arenas();
+    let (slots, chunks) = image.try_to_arenas()?;
     let mut interp = Interp::begin_restore();
     interp
         .restore_snapshot_state(slots, chunks, image.stack, image.names, meter)
@@ -538,14 +539,82 @@ pub fn resume_from_cas(
 // contract as the blob path: a checkpoint is taken at machine
 // quiescence between cranks, never mid-dispatch.
 
+/// Which store a lazily resumed machine's page source reads from, so the
+/// session can tell whether a commit advanced the machine's own backing.
+/// Under the store-seam design's trust model a store has one writer (the
+/// SQLite backend's exclusive lock, the file store's single-writer rule),
+/// so a fault reads its row without re-checking the store's epoch or commit
+/// token; a session whose store moved is refused by the checkpoint's
+/// pairing.
+struct LazyPin {
+    /// Address of the pinned store's data (the `S` inside the
+    /// `Rc<RefCell<S>>` the page source reads through). The session
+    /// advances the machine's backing after a commit only when the
+    /// committed store IS the pinned store: a commit into a
+    /// byte-identical twin store passes succession, but advancing the
+    /// backing would let the machine evict pages the pinned store does
+    /// not hold. Compared by address rather than by re-reading the
+    /// manifest because during a same-store commit the caller
+    /// necessarily holds the `RefCell`'s mutable borrow to pass
+    /// `&mut dyn HeapStore`, so any probe through the `RefCell` would
+    /// re-enter it. The `Rc` held by the page source keeps the
+    /// allocation alive for the pin's whole lifetime, so the address
+    /// cannot be recycled. A caller that commits through a forwarding
+    /// wrapper around the pinned store fails the comparison, so the
+    /// commit is acknowledged conservatively: the pages it wrote stay
+    /// resident and unevictable instead of being re-faulted from a
+    /// backing that does not hold them.
+    store_addr: *const (),
+}
+
+/// The panic payload a store-backed page source unwinds with when a row
+/// read fails (a missing row, an I/O error, or a fault while the caller
+/// holds the store for a commit, an engine defect reported as
+/// [`StoreError::EngineInvariant`]): the store's own error, so the resume
+/// paths and the host can report it as a [`StoreError`] rather than a
+/// crashed crank. Raised with [`std::panic::resume_unwind`], which skips
+/// the panic hook, and caught with [`catch_store_fault`] or
+/// [`store_fault_of`]; every catch site between the fault and the host
+/// re-raises a payload it does not recognize. A host catches it around
+/// whatever runs the machine, because one that escapes ends its thread
+/// without the panic hook's message. A machine a fault unwound out of is
+/// mid-crank and must be rewound, like any other crashed crank;
+/// [`begin_store_session`] lets the fault unwind and drops the machine.
+#[derive(Debug)]
+pub struct StoreFault(pub StoreError);
+
+/// The [`StoreError`] a caught panic payload carries, if it is a
+/// [`StoreFault`]; any other payload comes back unchanged for the caller
+/// to re-raise.
+pub fn store_fault_of(
+    payload: Box<dyn std::any::Any + Send>,
+) -> Result<StoreError, Box<dyn std::any::Any + Send>> {
+    payload.downcast::<StoreFault>().map(|fault| fault.0)
+}
+
+/// Run `f`, turning a [`StoreFault`] unwind into its error and re-raising
+/// every other panic.
+pub fn catch_store_fault<T>(f: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => match store_fault_of(payload) {
+            Ok(error) => Err(error),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    }
+}
+
 /// A machine's binding to one store: the session **owns the machine**,
 /// so a dirty set can only ever be committed by the session that
 /// watched it accumulate. A second session cannot consume the same
 /// machine's dirty bits while another store still needs them. The session also
-/// records the store's commit seal, and every checkpoint verifies the
-/// stored (epoch, seal) pair before committing: an equal-epoch fork,
-/// copy, or foreign store fails closed with
-/// [`StoreError::BaselineMismatch`].
+/// records the store's [`CommitToken`], and every checkpoint and
+/// collection compares the stored (epoch, token) pair with its own first.
+/// A store at another epoch (a copy that has since taken a commit of its
+/// own, say) fails a checkpoint with [`StoreError::EpochMismatch`]; one at
+/// the session's epoch but with another token (an equal-epoch fork, a
+/// diverged copy, a foreign store) fails it with
+/// [`StoreError::BaselineMismatch`], as either fails a collection.
 ///
 /// Obtained from [`begin_store_session`] (full first write into an
 /// empty store) or [`resume_from_store`]/[`resume_from_store_lazy`]
@@ -553,43 +622,6 @@ pub fn resume_from_cas(
 /// unbinds — after which the machine's dirty bits no longer describe
 /// any store baseline, and the only safe re-binding is a fresh full
 /// write or a resume.
-/// The live (epoch, seal) pin a lazily resumed machine's page source
-/// checks on every fault. Shared between the session (which advances
-/// it on its own successful checkpoints) and the [`StorePageSource`]
-/// (which refuses to fault once the store no longer matches it — a
-/// store advanced by anyone ELSE means torn reads, and the machine
-/// must die deterministically rather than mix epochs).
-struct LazyPin {
-    epoch: std::cell::Cell<u64>,
-    seal: std::cell::RefCell<String>,
-    /// The verified row-leaf hashes every fault checks its row
-    /// against. Seeded from `validate_store` at attach and REFRESHED
-    /// by the session's own successful checkpoints (alongside the
-    /// epoch/seal advance): a checkpoint rewrites dirty rows in the
-    /// store, and eviction means a rewritten-then-clean row
-    /// CAN fault again — against the committed bytes, which only the
-    /// refreshed leaves match. Frozen attach-time leaves would
-    /// misdiagnose that healthy re-fault as a corrupt store. See
-    /// `tests/store_checkpoint.rs::evict_after_own_checkpoint_refaults_cleanly`.
-    leaves: std::cell::RefCell<StoreLeaves>,
-    /// Address of the pinned store's data (the `S` inside the
-    /// `Rc<RefCell<S>>` the page source reads through). The session
-    /// advances the pin after a commit only when the committed store
-    /// IS the pinned store — a commit into a byte-identical twin store
-    /// passes succession, but advancing the pin would wedge the next
-    /// fault. Compared by address rather than
-    /// by re-reading the manifest because during a same-store commit
-    /// the caller necessarily holds the `RefCell`'s mutable borrow to
-    /// pass `&mut dyn HeapStore`, so any probe through the `RefCell`
-    /// would re-enter it. The `Rc` held by the page source keeps the
-    /// allocation alive for the pin's whole lifetime, so the address
-    /// cannot be recycled. A caller that commits through a forwarding
-    /// wrapper around the pinned store fails the comparison and the
-    /// pin stays put; the next fault then fails closed (deterministic
-    /// named panic) rather than reading across epochs.
-    store_addr: *const (),
-}
-
 pub struct StoreSession {
     interp: Interp,
     tracking: StoreTracking,
@@ -599,11 +631,14 @@ struct StoreTracking {
     backing_authority: Option<ironhorse_vm::BackingCommitAuthority>,
     snapshot_baseline: ironhorse_vm::SnapshotBaseline,
     epoch: u64,
-    seal: String,
-    /// Present on lazily resumed sessions: advancing it on checkpoint
-    /// is what lets the machine keep faulting after its own commits
-    /// (its non-dirty rows are unchanged by its own checkpoint).
-    pin: Option<std::rc::Rc<LazyPin>>,
+    /// The token of the commit this session last made or adopted.
+    token: CommitToken,
+    /// Where this session's commit tokens come from.
+    tokens: Box<dyn CommitTokenSource>,
+    /// Present on lazily resumed sessions: a checkpoint that lands in
+    /// the pinned store advances the machine's backing to the committed
+    /// geometry, so the rows it wrote become evictable and re-faultable.
+    pin: Option<LazyPin>,
     /// Slot pages dirtied (or grown) since the last collection this
     /// session ran — the generational collector's candidate set,
     /// accumulated from each checkpoint's traveling page rows and
@@ -611,15 +646,19 @@ struct StoreTracking {
     /// empty (a generational pass right after resume frees nothing —
     /// retention-only, sound).
     gen_dirty: std::collections::BTreeSet<u32>,
-    /// The session's live copy of the store's root metadata:
-    /// seeded from verified state at begin/resume and advanced by
-    /// each successful checkpoint, so the steady-state commit reads
-    /// NO stored metadata and re-hashes only the dirty leaves' root
-    /// paths. `None` after a failed commit (the owner-drops-on-failure
-    /// discipline [`RootLedger`] documents); the next checkpoint takes
-    /// the slow path — stored-metadata read, laundering pre-verify,
-    /// full recombination — and rebuilds it.
-    root_ledger: Option<crate::store::RootLedger>,
+    /// The store's small-state section digests as of this session's last
+    /// commit or adoption: computed at begin, read from the store by the
+    /// first checkpoint after a resume, and advanced by each successful
+    /// checkpoint. A checkpoint sends only the sections whose digests
+    /// changed. The pairing check keeps them exact: a checkpoint proceeds
+    /// only while the store holds the state this session last committed,
+    /// so a commit that failed, landed or not, leaves nothing to rebuild.
+    section_digests: Option<[[u8; 32]; SMALL_SECTION_COUNT]>,
+    /// The machine's acknowledgement of the free list as the store holds
+    /// it, `free_len` entries long: the arena's low-water mark since then
+    /// names the segments a checkpoint ships.
+    free_ack: ironhorse_vm::FreeListAck,
+    free_len: u32,
     /// Total COMPLETED cranks the STORE has absorbed — the durable
     /// counter the cadence schedule is derived from (store schema 8).
     /// Seeded from the manifest at begin/resume and written back by
@@ -638,7 +677,7 @@ impl std::fmt::Debug for StoreSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoreSession")
             .field("epoch", &self.tracking.epoch)
-            .field("seal", &self.tracking.seal)
+            .field("token", &self.tracking.token)
             .finish_non_exhaustive()
     }
 }
@@ -647,6 +686,22 @@ impl StoreSession {
     /// The store epoch this session last committed or adopted.
     pub fn epoch(&self) -> u64 {
         self.tracking.epoch
+    }
+
+    /// The commit token of the store state this session last committed or
+    /// adopted.
+    pub fn token(&self) -> CommitToken {
+        self.tracking.token
+    }
+
+    /// Draw this session's later commit tokens from `source` instead of
+    /// [`RandomTokens`], for tests that need reproducible manifests. A
+    /// reproducible source gives up the distinctness the pairing relies on
+    /// ([`CommitTokenSource`]), so this exists only in tests and under the
+    /// `unchecked-tooling` feature.
+    #[cfg(any(test, feature = "unchecked-tooling"))]
+    pub fn set_token_source(&mut self, source: Box<dyn CommitTokenSource>) {
+        self.tracking.tokens = source;
     }
 
     /// Total COMPLETED cranks this store has absorbed — the durable
@@ -716,9 +771,8 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
         cranks,
         collect_every: 0,
         collections: 0,
-        parent_seal: String::new(),
-        root: String::new(),
-        seal: String::new(),
+        // Minted by the checkpoint that builds the batch.
+        token: CommitToken::ZERO,
     }
 }
 
@@ -726,6 +780,10 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
 /// return the session for later incremental checkpoints. A store that
 /// already holds an epoch is refused ([`StoreError::NotEmpty`]) —
 /// adopting existing content is [`resume_from_store`]'s job.
+///
+/// A machine unbound from an earlier lazy session is read in full from
+/// that session's store first; a row read that fails there unwinds as a
+/// [`StoreFault`] rather than returning, and the machine goes with it.
 pub fn begin_store_session(
     interp: Interp,
     signature: &Signature,
@@ -769,6 +827,13 @@ fn begin_store_core(
     // latch; the managed lifecycle rewinds halted cranks),
     // unsupported live state refused by row name, and
     // the stored-key-id audit of the image itself.
+    //
+    // A machine unbound from an earlier lazy session faults its remaining
+    // pages in from that session's store here. A read that fails unwinds
+    // as a [`StoreFault`] and takes the machine with it: the fault can
+    // interrupt the image mid-walk (a property-index synchronization,
+    // say), so the machine cannot travel back as a usable one beside an
+    // error, and the error is the old store's, not this one's.
     let image = match interp.snapshot_image(signature) {
         Ok(image) => image,
         Err(MachineSnapshotError::NotQuiescent) => {
@@ -782,33 +847,30 @@ fn begin_store_core(
         // so the match stays exhaustive if the error type grows an arm.
         Err(MachineSnapshotError::Io(e)) => return Err(StoreError::Io(e.to_string())),
     };
-    let batch = crate::store::image_to_batch_with_cadence(&image, 1, "", collect_every);
+    // A machine unbound from an earlier session may still carry that
+    // session's lazy backing. The image above faulted every page in, so
+    // stop relying on the backing now: nothing is evicted and nothing
+    // faults from the old store again, which the page source's epoch
+    // pin used to fence.
+    interp.abandon_backing();
+    let mut tokens: Box<dyn CommitTokenSource> = Box::new(RandomTokens);
+    let batch = crate::store::image_to_batch_with_cadence(
+        &image,
+        1,
+        CommitToken::ZERO,
+        collect_every,
+        &mut *tokens,
+    );
     // A failed commit hands the machine back with its dirt intact.
     store.commit(&batch)?;
     // Only a successful commit clears the bitmaps: a failed commit
     // forgets nothing and the next attempt re-offers the same dirt.
     interp.acknowledge_arena_commit();
-    // Seed the session's root ledger from the epoch-1 batch — it
-    // carries EVERY row, so an empty ledger advanced by it is the
-    // store's exact state (`root_ledger_tracks_real_batches`).
-    let root_ledger = {
-        let mut ledger =
-            crate::store::RootLedger::build(&batch.small, Vec::new(), Vec::new(), Vec::new(), &[]);
-        ledger
-            .apply(
-                &batch.manifest,
-                &batch.small,
-                &batch.slot_pages,
-                &batch.chunk_extents,
-                &batch.free_segs,
-                &batch.page_edges,
-            )
-            .ok()
-            .filter(|root| *root == batch.manifest.root)
-            .map(|_| ledger)
-    };
-    debug_assert!(root_ledger.is_some(), "epoch-1 ledger seed cannot diverge");
-    let seal = batch.manifest.seal;
+    // The epoch-1 batch carries the whole small state, so the stored
+    // section digests are the ones it derives.
+    let section_digests = crate::store_sections::split_small_state(&batch.small)
+        .ok()
+        .map(|sections| *crate::store_sections::SectionLeaves::from_payloads(&sections).hashes());
     // The full write dirtied EVERY page: the first generational pass
     // after a begin degenerates to a full partial collect, which is
     // exactly right for a fresh store.
@@ -819,10 +881,13 @@ fn begin_store_core(
         snapshot_baseline,
         gen_dirty,
         epoch: 1,
-        seal,
+        token: batch.manifest.token,
+        tokens,
         pin: None,
         backing_authority: None,
-        root_ledger,
+        section_digests,
+        free_ack: interp.acknowledge_free_list(),
+        free_len: batch.manifest.free_len,
         // A fresh store has absorbed no cranks; the first checkpoint
         // records however many the caller reports.
         cranks: 0,
@@ -836,8 +901,9 @@ fn begin_store_core(
 /// manifest and small state. Returns the new epoch.
 ///
 /// The session/store pairing is verified first — a store whose epoch
-/// is not the session's fails closed with
-/// [`StoreError::EpochMismatch`] rather than absorbing a dirty set
+/// is not the session's fails closed with [`StoreError::EpochMismatch`],
+/// and one at the session's epoch with another commit token with
+/// [`StoreError::BaselineMismatch`], rather than absorbing a dirty set
 /// computed against some other baseline (the missed-page corruption
 /// this seam must make unrepresentable).
 pub fn checkpoint_to_store(
@@ -865,9 +931,10 @@ fn checkpoint_to_store_core(
     // Runtime-interned property ids remain resumable: string keys live
     // in the NAME table (persisted every checkpoint via the small
     // state) and symbol keys travel in the SYMB table, so a live
-    // machine's stored ids are always resumable by construction, and
-    // `begin_store_session` / `resume_from_store` keep the full-image
-    // audit for adopted bytes.
+    // machine's stored ids are always resumable by construction.
+    // `begin_store_session`, `import_from_container` and publication
+    // (`snapshot_image`, `write_snapshot`) keep the full-image audit;
+    // resume trusts the store it adopts.
     //
     // The incremental path's gate. It cannot ride `snapshot_image`: a
     // checkpoint builds its batch from the DIRTY pages and the small
@@ -880,8 +947,8 @@ fn checkpoint_to_store_core(
     // dirty pages only (the clean pages were admitted by the checkpoint
     // that committed them). The stored-key-id audit is not repeated
     // here: a live machine's stored ids come only from minting, and the
-    // audit exists for adopted bytes, which begin/resume/import run it
-    // on.
+    // audit exists for bytes crossing into or out of a store, which
+    // begin, import and publication run it on.
     if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
@@ -895,88 +962,31 @@ fn checkpoint_to_store_core(
             found: stored.epoch,
         });
     }
-    if stored.seal != tracking.seal {
-        // Equal height, different lineage: a fork, copy, or foreign
-        // store — the case a bare epoch counter cannot see.
+    if stored.token != tracking.token {
+        // Equal height, different lineage: a fork, a diverged copy, or a
+        // foreign store — the case a bare epoch counter cannot see.
         return Err(StoreError::BaselineMismatch {
-            expected: tracking.seal.clone(),
-            found: stored.seal,
+            expected: tracking.token.to_hex(),
+            found: stored.token.to_hex(),
         });
-    }
-    if let Some(pin) = &tracking.pin {
-        // Read through the caller's existing store borrow: the lazy source
-        // owns the same RefCell and cannot be borrowed during checkpoint.
-        interp.slots().validate_backing_before_checkpoint(|page| {
-            let bytes = store.read_slot_page(page)?;
-            if pin.leaves.borrow().pages.get(page as usize).copied()
-                != Some(leaf_hash(LEAF_PAGE, page, &bytes))
-            {
-                return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-                    "checkpoint deferred slot page leaf mismatch",
-                )));
-            }
-            crate::slot_codec::decode_slots(&bytes).map_err(|_| {
-                StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-                    "checkpoint deferred slot page decode",
-                ))
-            })
-        })?;
     }
     let epoch = tracking.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
-    // Root maintenance takes one of two paths. FAST: the
-    // session holds a live [`RootLedger`] — verified at seed time and
-    // advanced in lockstep with this session's own commits, which the
-    // pairing guard above proves are the only ones — so this commit
-    // reuses the retained root metadata and re-hashes only the dirty leaves'
-    // root paths, O(dirty · log n). The ledger is TAKEN here: any
-    // error path FROM THIS POINT ON drops it and the next checkpoint
-    // rebuilds via the slow path (the drop-on-failure discipline).
-    //
-    // The guards ABOVE — quiescence, unsupported rows, epoch, seal,
-    // deferred backing validation, epoch overflow, and a failed manifest
-    // read — return before the take, so a refusal
-    // there leaves the ledger in place. Those guards
-    // refuse before anything is written, so the ledger still describes
-    // exactly the store state it was advanced against and stays
-    // coherent. What must drop the ledger is a failure that could have
-    // left the store somewhere else, and every one of those is below.
-    // SLOW (no
-    // ledger: first checkpoint after a failure): read the stored
-    // metadata and verify it recombines to the stored root before
-    // building on it — a leaf edited at rest leaves the manifest
-    // untouched, so the pairing guard above still passes, and without
-    // this check the edit would be laundered into THIS commit's
-    // validly sealed root. The fast
-    // path is immune to that laundering by construction — it never
-    // reads the edited bytes — and the edit stays detected by the
-    // backend's own recombination, every fault's row/leaf check, and
-    // the next open.
-    let mut ledger = match tracking.root_ledger.take() {
-        Some(ledger) => ledger,
+    // The stored section digests, read once after a resume and retained
+    // from then on (see `StoreTracking::section_digests`).
+    let prior_sections = match tracking.section_digests {
+        Some(digests) => digests,
         None => {
-            let (pages, exts) = store.leaf_hashes()?;
-            let frees = store.free_leaf_hashes()?;
-            let edges = store.page_edges()?;
-            let sections =
-                crate::store_sections::SectionLeaves::from_hashes(store.small_section_hashes()?);
-            let ledger =
-                crate::store::RootLedger::build_from_sections(sections, pages, exts, frees, &edges);
-            let root = ledger.root(&stored);
-            if root != stored.root {
-                return Err(StoreError::BaselineMismatch {
-                    expected: root,
-                    found: stored.root.clone(),
-                });
-            }
-            ledger
+            let digests = store.small_section_hashes()?;
+            tracking.section_digests = Some(digests);
+            digests
         }
     };
     let mut manifest = manifest_of(interp, signature, epoch, tracking.cranks);
-    manifest.parent_seal = tracking.seal.clone();
     manifest.collect_every = tracking.collect_every;
     manifest.collections = tracking.collections;
+    manifest.token = mint_token(&mut *tracking.tokens, tracking.token);
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -985,7 +995,7 @@ fn checkpoint_to_store_core(
     // filter mirrors the chunk side's — the slot bitmap cannot exceed
     // the geometry today (slot space never shrinks), so it is the
     // same belt-and-braces, an unindexable panic traded for a row the
-    // root check below would refuse.
+    // commit's row-index check would refuse.
     let page_count = slot_page_count(manifest.slot_count);
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = interp
@@ -1019,40 +1029,25 @@ fn checkpoint_to_store_core(
         .collect();
 
     // Select before extraction and encoding; hash only dirty candidates.
-    let prior_sections =
-        ledger
-            .section_leaves()
-            .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
-                "checkpoint ledger lacks section inventory",
-            )))?;
     let dirty = interp.snapshot_dirty_sections(&tracking.snapshot_baseline);
     let small = small_state_of(interp, dirty);
+    let mut next_sections = prior_sections;
     let small_updates = crate::store_sections::SmallSection::ALL
         .into_iter()
         .filter(|section| dirty.contains(section.vm_section()))
         .filter_map(|section| {
             let bytes = small.encode_section(section);
-            (crate::store_sections::section_hash(section, &bytes)
-                != prior_sections.hashes()[section.id() as usize])
-                .then_some(crate::store_sections::SectionUpdate { section, bytes })
+            let digest = crate::store_sections::section_hash(section, &bytes);
+            let id = section.id() as usize;
+            (digest != prior_sections[id]).then(|| {
+                next_sections[id] = digest;
+                crate::store_sections::SectionUpdate { section, bytes }
+            })
         })
         .collect();
-    // Free-list segments: diff against the prior segment
-    // leaves so only CHANGED segments travel — LIFO churn touches the
-    // tail segment, making per-commit free bytes O(1) in heap size.
-    // The ledger holds prior free leaves, either retained from the last
-    // successful checkpoint or rebuilt from the verified store inventory.
-    let prior_frees = ledger.free_leaves();
-    let free_all = crate::store::encode_all_free_segs(interp.slots().free_list());
-    let free_segs: Vec<(u32, Vec<u8>)> = free_all
-        .into_iter()
-        .filter(|(i, bytes)| {
-            prior_frees.get(*i as usize).copied()
-                != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
-        })
-        .collect();
-    let mut batch = CheckpointBatch {
-        prev_seal: tracking.seal.clone(),
+    let free_segs = changed_free_segs(interp.slots(), &tracking.free_ack, tracking.free_len);
+    let batch = CheckpointBatch {
+        prev_token: tracking.token,
         manifest,
         small: Vec::new(),
         small_updates: Some(small_updates),
@@ -1061,13 +1056,10 @@ fn checkpoint_to_store_core(
         free_segs,
         page_edges,
     };
-    batch.manifest.root = ledger.apply_checkpoint(&batch)?;
-    crate::store::reseal_batch(&mut batch);
-    let seal = batch.manifest.seal.clone();
     store.commit(&batch)?;
-    // Failed writes drop the advanced ledger; the next attempt validates the
-    // persisted inventory and reoffers every difference against that baseline.
-    tracking.root_ledger = Some(ledger);
+    tracking.section_digests = Some(next_sections);
+    tracking.free_ack = interp.acknowledge_free_list();
+    tracking.free_len = batch.manifest.free_len;
     // Accumulate the traveled slot pages into the generational
     // candidate set (dirtied ∪ grown — exactly what this commit
     // shipped); a collection consumes and clears it.
@@ -1095,131 +1087,104 @@ fn checkpoint_to_store_core(
     }
     tracking.snapshot_baseline = interp.acknowledge_snapshot();
     tracking.epoch = epoch;
-    tracking.seal = seal.clone();
-    if let Some(pin) = &tracking.pin {
-        if landed_in_backing {
-            pin.epoch.set(epoch);
-            *pin.seal.borrow_mut() = seal;
-            // The pinned store's rows just changed; the leaves every
-            // future fault verifies against must follow (a
-            // committed-then-clean row is evictable, so it CAN fault
-            // again — and must verify against the bytes this commit
-            // wrote, not the attach-time ones). Patched in place from
-            // the batch's own rows — O(dirty), like the root ledger.
-            {
-                let mut leaves = pin.leaves.borrow_mut();
-                leaves.pages.resize(page_count as usize, [0u8; 32]);
-                leaves.exts.resize(
-                    chunk_extent_count(batch.manifest.chunk_len) as usize,
-                    [0u8; 32],
-                );
-                leaves.frees.resize(
-                    crate::store::free_seg_count(batch.manifest.free_len) as usize,
-                    [0u8; 32],
-                );
-                for (i, bytes) in &batch.slot_pages {
-                    leaves.pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
-                }
-                for (i, bytes) in &batch.chunk_extents {
-                    leaves.exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
-                }
-                for (i, bytes) in &batch.free_segs {
-                    leaves.frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
-                }
-            }
-            // And the arenas' lazy backing advances to the committed
-            // geometry: rows appended past the attach-time range are
-            // now store-backed (evictable, re-faultable), and the
-            // tail row's expected fault length is the committed one.
-            interp
-                .acknowledge_backing_commit(
-                    tracking
-                        .backing_authority
-                        .as_mut()
-                        .expect("lazy session has backing authority"),
-                )
-                .map_err(|_| {
-                    StoreError::Snapshot(SnapshotError::Corrupt(
-                        "commit authority does not match the machine's backing",
-                    ))
-                })?;
-        }
+    tracking.token = batch.manifest.token;
+    if landed_in_backing {
+        // The arenas' lazy backing advances to the committed geometry:
+        // rows appended past the attach-time range are now store-backed
+        // (evictable, re-faultable), and the tail row's expected fault
+        // length is the committed one. A re-fault of a row this commit
+        // wrote reads the committed bytes, which is all it needs.
+        interp
+            .acknowledge_backing_commit(
+                tracking
+                    .backing_authority
+                    .as_mut()
+                    .expect("lazy session has backing authority"),
+            )
+            .map_err(|_| {
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "commit authority does not match the machine's backing",
+                ))
+            })?;
     }
     Ok(epoch)
+}
+
+/// The free-list segment rows a checkpoint ships: those from the arena's
+/// low-water mark on, where the list may differ from the one the store
+/// holds (`ack`, `stored_len` entries long). LIFO churn touches only the
+/// tail, so this is O(1) segments in heap size. An arena that does not
+/// honor `ack` (a replaced arena, or one acknowledged since) ships every
+/// segment.
+fn changed_free_segs(
+    slots: &ironhorse_vm::SlotArena,
+    ack: &ironhorse_vm::FreeListAck,
+    stored_len: u32,
+) -> Vec<(u32, Vec<u8>)> {
+    let free = slots.free_list();
+    let len = free.len() as u32;
+    // Past the stored length nothing can be unchanged, whatever the mark.
+    let first = match slots
+        .free_list_unchanged_prefix(ack)
+        .map(|unchanged| (unchanged as u32).min(stored_len))
+    {
+        // The list is the stored one.
+        Some(unchanged) if unchanged == len && len == stored_len => return Vec::new(),
+        Some(unchanged) => unchanged / FREE_SEG_ENTRIES,
+        None => 0,
+    };
+    (first..free_seg_count(len))
+        .map(|seg| {
+            let start = (seg * FREE_SEG_ENTRIES) as usize;
+            let end = free.len().min(start + FREE_SEG_ENTRIES as usize);
+            (seg, encode_free_seg(&free[start..end]))
+        })
+        .collect()
 }
 
 /// Rebuild a machine from a store (eager reification: every page and
 /// extent is read now; [`resume_from_store_lazy`] is the on-demand
 /// mode) and return it with the session bound at the store's epoch.
-/// Runs the full open-time validation — gates, accounting, row
-/// inventory — before touching any content, so a resumed machine can
-/// only be the machine that was checkpointed.
+///
+/// Open runs the compatibility gates (format readability, the store
+/// schema range, the signature with its boot fingerprint), then reads
+/// and decodes the whole store ([`crate::store::store_to_image`]),
+/// whose decoding and bounds checks guard the restore against engine
+/// bugs. It does not re-verify the store's content: under the
+/// store-seam design's trust model the store is the machine it holds,
+/// and [`crate::store::validate_store`] and
+/// [`crate::store::validate_store_content`] are the explicit checks.
 pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, _small, leaves) = validate_store(store, expected_sig)?.into_parts();
-    // Ledger seed material: validation just proved these
-    // leaves recombine to the stored root; the raw summaries and
-    // small bytes complete the picture. Read before the torn-read
-    // re-check below so the guard covers them too.
-    let edges = store.page_edges()?;
-    let small_bytes = store.read_small_state()?;
-    let image = store_to_image(store)?;
-    // The eager resume reads every row, so it can afford the FULL
-    // id-space audit and is the one resume path that does. It closes
-    // the adoption hole: a store whose bytes carry a property id
-    // outside both key tables (crafted, torn, or written by a
-    // pre-unification build that let one through) is refused here
-    // rather than laundered into this session's checkpoints.
-    // `resume_from_store_lazy` deliberately reads no heap rows
-    // at open — that is the whole point of lazy resume — so it cannot
-    // ask this question, and does not pretend to; what protects it is
-    // that every path that ADOPTS bytes audits (begin, import, eager
-    // resume), and the incremental checkpoint only ever writes ids a
-    // live machine minted, so no store this code produces can hold one.
-    if image.stored_unregistered_key_id().is_some() {
-        return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-            "stored property id outside the name and symbol-key tables",
-        )));
-    }
-    // Re-check the manifest after the row reads: the reads above are
-    // not one atomic snapshot on every backend, so a concurrent commit
-    // could otherwise hand us a chimera of two epochs. Same-seal after
-    // the reads proves the rows all belonged to one epoch.
-    let after = store.manifest()?;
-    if after.epoch != manifest.epoch || after.seal != manifest.seal {
-        return Err(StoreError::BaselineMismatch {
-            expected: manifest.seal,
-            found: after.seal,
-        });
-    }
-    let root_ledger = crate::store::RootLedger::build_sectioned(
-        &small_bytes,
-        leaves.pages,
-        leaves.exts,
-        leaves.frees,
-        &edges,
-    )?;
-    debug_assert_eq!(
-        root_ledger.root(&manifest),
-        manifest.root,
-        "seed from validated state"
-    );
+    let manifest = store.manifest()?;
+    crate::store::check_open_gates(&manifest, expected_sig)?;
+    let image = crate::store::store_to_image_at(store, &manifest)?;
     let interp = image_to_interp(ValidatedSnapshot::from_validated_image(image))
         .map_err(StoreError::Snapshot)?;
     // Restore can normalize older payloads; preserve that dirt until committed.
     let snapshot_baseline = interp.snapshot_baseline();
+    // The list was built from the stored one; keep what restore itself
+    // popped for the first checkpoint, as the snapshot baseline keeps
+    // restore's dirt. No restore pops today, so only the VM's
+    // `a_free_list_baseline_keeps_the_build_time_mark` pins the difference
+    // from acknowledging here.
+    let free_ack = interp.free_list_baseline();
     Ok(StoreSession {
         interp,
         tracking: StoreTracking {
             snapshot_baseline,
             gen_dirty: std::collections::BTreeSet::new(),
             epoch: manifest.epoch,
-            seal: manifest.seal,
+            token: manifest.token,
+            tokens: Box::new(RandomTokens),
             pin: None,
             backing_authority: None,
-            root_ledger: Some(root_ledger),
+            // The first checkpoint reads them from the store.
+            section_digests: None,
+            free_ack,
+            free_len: manifest.free_len,
             cranks: manifest.cranks,
             collect_every: manifest.collect_every,
             collections: manifest.collections,
@@ -1233,92 +1198,68 @@ pub fn resume_from_store(
 /// via `borrow_mut`); faults happen only mid-crank and commits only
 /// between cranks, so the borrows never overlap.
 ///
-/// The store was validated exhaustively before this adapter is
-/// constructed, so a read failure here is genuine I/O trouble; per the
-/// [`ironhorse_vm::PageSource`] contract it panics with a named
-/// message — the deterministic crashed-crank path.
+/// A fault reads the committed row and hands it to the arena, which
+/// checks its length and references before installing it. Nothing
+/// re-checks the store's epoch or commit token: the store is trusted (the
+/// store-seam design's trust model). A failed read
+/// unwinds with a [`StoreFault`] carrying the store's error; a row that
+/// does not decode panics with a named message, the crashed-crank path
+/// the [`ironhorse_vm::PageSource`] contract describes.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
-    /// The (epoch, seal, row leaves) the machine's session currently
-    /// stands at. Every fault re-verifies the pin, so a store
-    /// advanced by anyone else turns torn reads into a deterministic
-    /// named crashed crank instead of a chimera heap, and checks its row
-    /// against the pinned leaves, so a length-preserving flip at rest dies as a
-    /// named crashed crank, never a different machine. The session
-    /// advances all three on its own commits — see
-    /// [`LazyPin::leaves`] for why the leaves must advance too.
-    pin: std::rc::Rc<LazyPin>,
+}
+
+/// Unwind out of a fault with the store's own error; see [`StoreFault`].
+fn raise_store_fault(error: StoreError) -> ! {
+    std::panic::resume_unwind(Box::new(StoreFault(error)))
 }
 
 impl<S: HeapStore> StorePageSource<S> {
-    fn check_pin(&self, what: &str) {
-        let m = self
-            .store
-            .borrow()
-            .manifest()
-            .unwrap_or_else(|e| panic!("lazy heap fault: manifest re-read ({what}): {e:?}"));
-        if m.epoch != self.pin.epoch.get() || m.seal != *self.pin.seal.borrow() {
-            panic!(
-                "lazy heap fault: store advanced under this machine \
-                 (pinned epoch {}, store epoch {}) — torn read refused",
-                self.pin.epoch.get(),
-                m.epoch,
-            );
-        }
+    /// The store, for one read. A fault while the caller holds the store
+    /// mutably for a commit (a checkpoint that walks a page it never
+    /// faulted) is an engine defect; it is reported as a store fault
+    /// rather than as an anonymous borrow panic.
+    fn store(&self) -> std::cell::Ref<'_, S> {
+        self.store.try_borrow().unwrap_or_else(|_| {
+            raise_store_fault(StoreError::EngineInvariant(
+                "lazy fault while the store is borrowed for a commit".to_string(),
+            ))
+        })
     }
 }
 
 impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
     fn slot_page(&self, page: u32) -> Vec<ironhorse_vm::Slot> {
-        self.check_pin("slot page");
-        let bytes = self
-            .store
-            .borrow()
-            .read_slot_page(page)
-            .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
-        if self.pin.leaves.borrow().pages.get(page as usize).copied()
-            != Some(leaf_hash(LEAF_PAGE, page, &bytes))
-        {
-            panic!("lazy heap fault: slot page {page} fails its leaf hash (corrupt store)");
-        }
-        // The pin check and the row read are separate store operations,
-        // so on a shared backend a foreign commit can land between them
-        // and the read return a NEW-epoch row the pre-check could not
-        // see. Epochs only advance, so a matching pin AFTER the read
-        // proves the row belonged to the pinned commit.
-        self.check_pin("slot page post-read");
+        let bytes = match self.store().read_slot_page(page) {
+            Ok(bytes) => bytes,
+            Err(error) => raise_store_fault(error),
+        };
         crate::slot_codec::decode_slots(&bytes)
             .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page} decode: {e:?}"))
     }
 
     fn chunk_extent(&self, ext: u32) -> Vec<u8> {
-        self.check_pin("chunk extent");
-        let bytes = self
-            .store
-            .borrow()
-            .read_chunk_extent(ext)
-            .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"));
-        if self.pin.leaves.borrow().exts.get(ext as usize).copied()
-            != Some(leaf_hash(LEAF_EXT, ext, &bytes))
-        {
-            panic!("lazy heap fault: chunk extent {ext} fails its leaf hash (corrupt store)");
+        match self.store().read_chunk_extent(ext) {
+            Ok(bytes) => bytes,
+            Err(error) => raise_store_fault(error),
         }
-        // Same post-read verification as `slot_page` — see there.
-        self.check_pin("chunk extent post-read");
-        bytes
     }
 }
 
-/// Rebuild a machine from a store with **lazy reification**: validate
-/// the manifest, small state, inventory, and leaf metadata up front.
-/// The arenas are attached over a
-/// [`ironhorse_vm::PageSource`] and fault slot pages / chunk extents
-/// in on first touch. Row reification follows the wake crank's working
-/// set; total wake-up work also includes the upfront metadata validation.
+/// Rebuild a machine from a store with **lazy reification**. Open reads
+/// the manifest, the small state and the free list, runs the
+/// compatibility gates and the small state's bounds gate, and attaches
+/// the arenas over a [`ironhorse_vm::PageSource`] that faults slot pages
+/// and chunk extents in on first touch, so row reads follow the wake
+/// crank's working set.
 ///
-/// Each fault verifies its row against the pinned store's leaf hashes;
-/// clean backed rows can be evicted and verified again on re-fault
-/// (`tests/store_checkpoint.rs`). The store rides in
+/// A fault reads the committed row, and the arena checks its length and
+/// references before installing it; clean backed rows can be evicted
+/// and fault again (`tests/store_checkpoint.rs`). A row read that fails
+/// while the machine is restored (the restore walks the global object,
+/// faulting the pages it touches) comes back as this function's error;
+/// one that fails in a later crank unwinds as a [`StoreFault`], which
+/// the host catches and rewinds on. The store rides in
 /// an `Rc<RefCell<…>>` so the returned machine's fault path and the
 /// caller's later [`checkpoint_to_store`] (`&mut *store.borrow_mut()`)
 /// share it.
@@ -1326,111 +1267,110 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?.into_parts();
-    // Ledger seed material, read before the torn-read re-check
-    // below so the guard covers it too.
-    let edges = store.borrow().page_edges()?;
-    let small_bytes = store.borrow().read_small_state()?;
-    // Re-check the manifest after validation's separate reads, exactly
-    // as eager resume does after its row reads: the manifest / small /
-    // inventory reads are not one atomic snapshot on every backend, so
-    // a concurrent commit (a second SQLite connection) could otherwise
-    // seed the session and its pin from mixed epochs. Epochs only
-    // advance, so same (epoch, seal) after the reads proves every read
-    // saw the one pinned commit.
-    {
-        let after = store.borrow().manifest()?;
-        if after.epoch != manifest.epoch || after.seal != manifest.seal {
-            return Err(StoreError::BaselineMismatch {
-                expected: manifest.seal,
-                found: after.seal,
-            });
-        }
-    }
-    let root_ledger = crate::store::RootLedger::build_sectioned(
-        &small_bytes,
-        leaves.pages.clone(),
-        leaves.exts.clone(),
-        leaves.frees.clone(),
-        &edges,
-    )?;
-    debug_assert_eq!(
-        root_ledger.root(&manifest),
-        manifest.root,
-        "seed from validated state"
-    );
-    let pin = std::rc::Rc::new(LazyPin {
-        epoch: std::cell::Cell::new(manifest.epoch),
-        seal: std::cell::RefCell::new(manifest.seal.clone()),
-        leaves: std::cell::RefCell::new(leaves),
+    let crate::store::OpenedStore { manifest, small } =
+        crate::store::open_store(&*store.borrow(), expected_sig)?;
+    // The small state's semantic bounds against the manifest's geometry,
+    // the gate the eager path runs inside `store_to_image`: a side-table
+    // reference out of range, or owned by a free slot, is refused before
+    // anything is restored. Heap records are checked as they fault.
+    crate::image::check_small_state_bounds(
+        &small,
+        manifest.slot_count,
+        manifest.chunk_len as usize,
+    )
+    .map_err(StoreError::Snapshot)?;
+    let pin = LazyPin {
         // `RefCell::as_ptr` addresses the `S` itself — the same address
         // a later `&mut *store.borrow_mut()` coerced to
         // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
         store_addr: store.as_ptr().cast::<()>().cast_const(),
-    });
-    let source = std::rc::Rc::new(StorePageSource {
-        store: store.clone(),
-        pin: pin.clone(),
-    });
-    let (slots, chunks, backing_authority) = ironhorse_vm::BackingCommitAuthority::lazy_arenas(
-        manifest.slot_count,
-        small.slot_free.clone(),
-        manifest.slot_live,
-        manifest.chunk_len as usize,
-        source,
-    )
-    .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("invalid lazy arena metadata")))?;
-    let mut interp = Interp::begin_restore();
-    interp
-        .restore_snapshot_state(
-            slots,
-            chunks,
-            small.stack.clone(),
-            small.names.clone(),
-            small.meter.to_state(),
+    };
+    let source = std::rc::Rc::new(StorePageSource { store });
+    let (interp, backing_authority) = catch_store_fault(|| {
+        let (slots, chunks, backing_authority) = ironhorse_vm::BackingCommitAuthority::lazy_arenas(
+            manifest.slot_count,
+            small.slot_free.clone(),
+            manifest.slot_live,
+            manifest.chunk_len as usize,
+            source,
         )
-        .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("arena restore failed")))?;
-    // The installed-names floor, exactly as the container
-    // path adopts it; bounds were validated by `SmallState::decode`.
-    if let Some(floor) = small.name_floor {
-        if interp.restore_installed_names_floor(floor).is_err() {
+        .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("invalid lazy arena metadata")))?;
+        let mut interp = Interp::begin_restore();
+        interp
+            .restore_snapshot_state(
+                slots,
+                chunks,
+                small.stack.clone(),
+                small.names.clone(),
+                small.meter.to_state(),
+            )
+            .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("arena restore failed")))?;
+        // The installed-names floor, exactly as the container
+        // path adopts it; bounds were validated by `SmallState::decode`.
+        if let Some(floor) = small.name_floor {
+            if interp.restore_installed_names_floor(floor).is_err() {
+                return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                    "installed-names floor does not restore",
+                )));
+            }
+        }
+        // The symbol-key id table rides the small state too, restored
+        // before anything can mint.
+        if !interp
+            .restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs)
+            .is_ok()
+        {
             return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-                "installed-names floor does not restore",
+                "symbol-key table does not restore",
             )));
         }
-    }
-    // The symbol-key id table rides the small state too, restored
-    // before anything can mint.
-    if !interp
-        .restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs)
-        .is_ok()
-    {
-        return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-            "symbol-key table does not restore",
-        )));
-    }
-    // The ledger side tables ride the small state, so a LAZY resume
-    // restores them eagerly like everything else small — only arena
-    // rows fault on demand.
-    restore_side_tables(&mut interp, side_tables_from!(small)).map_err(StoreError::Snapshot)?;
-    let interp = finish_restore(interp).map_err(StoreError::Snapshot)?;
+        // The ledger side tables ride the small state, so a LAZY resume
+        // restores them eagerly like everything else small — only arena
+        // rows fault on demand.
+        restore_side_tables(&mut interp, side_tables_from!(small)).map_err(StoreError::Snapshot)?;
+        let interp = finish_restore(interp).map_err(StoreError::Snapshot)?;
+        Ok((interp, backing_authority))
+    })?;
     // Restore can normalize older payloads; preserve that dirt until committed.
     let snapshot_baseline = interp.snapshot_baseline();
+    // The list was built from the stored one; keep what restore itself
+    // popped for the first checkpoint, as the snapshot baseline keeps
+    // restore's dirt. No restore pops today, so only the VM's
+    // `a_free_list_baseline_keeps_the_build_time_mark` pins the difference
+    // from acknowledging here.
+    let free_ack = interp.free_list_baseline();
     Ok(StoreSession {
         interp,
         tracking: StoreTracking {
             snapshot_baseline,
             gen_dirty: std::collections::BTreeSet::new(),
             epoch: manifest.epoch,
-            seal: manifest.seal,
+            token: manifest.token,
+            tokens: Box::new(RandomTokens),
             pin: Some(pin),
             backing_authority: Some(backing_authority),
-            root_ledger: Some(root_ledger),
+            // The first checkpoint reads them from the store.
+            section_digests: None,
+            free_ack,
+            free_len: manifest.free_len,
             cranks: manifest.cranks,
             collect_every: manifest.collect_every,
             collections: manifest.collections,
         },
     })
+}
+
+/// The collectors' pairing: the store must hold the state this session last
+/// committed or adopted, or the summaries they decide from describe some
+/// other heap.
+fn check_pairing(tracking: &StoreTracking, manifest: &StoreManifest) -> Result<(), StoreError> {
+    if manifest.epoch != tracking.epoch || manifest.token != tracking.token {
+        return Err(StoreError::BaselineMismatch {
+            expected: tracking.token.to_hex(),
+            found: manifest.token.to_hex(),
+        });
+    }
+    Ok(())
 }
 
 /// Exact whole-machine collection at a clean, current checkpoint boundary.
@@ -1461,12 +1401,7 @@ fn full_collect_core(
         "full collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
-    if manifest.epoch != tracking.epoch || manifest.seal != tracking.seal {
-        return Err(StoreError::BaselineMismatch {
-            expected: tracking.seal.clone(),
-            found: manifest.seal,
-        });
-    }
+    check_pairing(tracking, &manifest)?;
     let stats = interp
         .collect_garbage()
         .map_err(|_| StoreError::MachineNotQuiescent)?;
@@ -1536,12 +1471,7 @@ fn partial_collect_core(
         "partial collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
-    if manifest.epoch != tracking.epoch || manifest.seal != tracking.seal {
-        return Err(StoreError::BaselineMismatch {
-            expected: tracking.seal.clone(),
-            found: manifest.seal,
-        });
-    }
+    check_pairing(tracking, &manifest)?;
     let total = slot_page_count(manifest.slot_count);
     // Refuse a summary count that disagrees with the geometry BEFORE
     // deciding anything from the summaries: reachability treats an
@@ -1651,12 +1581,7 @@ fn generational_collect_core(
         "generational collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
-    if manifest.epoch != tracking.epoch || manifest.seal != tracking.seal {
-        return Err(StoreError::BaselineMismatch {
-            expected: tracking.seal.clone(),
-            found: manifest.seal,
-        });
-    }
+    check_pairing(tracking, &manifest)?;
     let total = slot_page_count(manifest.slot_count);
     let found = store.summary_page_count()?;
     if found != total {
@@ -2061,9 +1986,14 @@ mod tests {
         );
     }
 
+    /// A checkpoint reads no page the machine never faulted, even after
+    /// the heap grew past its backing: under the store-seam design's trust
+    /// model the stored rows are the machine. A never-faulted row that no
+    /// longer decodes is carried forward by the commit, and it is the full
+    /// validator, or the row's own fault, that refuses it.
     #[test]
-    fn checkpoint_refuses_corrupt_deferred_pages_before_committing() {
-        use crate::store::{HeapStore, HeapStoreCommit};
+    fn checkpoint_commits_around_never_faulted_pages() {
+        use crate::store::{validate_store_content, HeapStore, HeapStoreCommit};
         use crate::store_file::FileStore;
         use ironhorse_vm::{Opcode, Slot, SLOTS_PER_PAGE};
         let mut image = Interp::new().snapshot_image_for_testing(&sig()).unwrap();
@@ -2073,113 +2003,318 @@ mod tests {
         image.slot_free.clear();
         image.slot_live = count;
         let page = count / SLOTS_PER_PAGE - 1;
-        for authenticated in [false, true] {
-            let dir = crate::test_dir::TempDir::new("deferred-checkpoint-refusal");
-            let path = dir.join("heap.ihstore");
-            let mut store = FileStore::open(&path).unwrap();
-            store.commit(&image_to_batch(&image, 1, "")).unwrap();
-            let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
-            let mut session = resume_from_store_lazy(shared.clone(), &sig()).unwrap();
-            assert!(!session.machine().slots().is_fully_resident());
-            assert!(
-                session
-                    .machine_mut()
-                    .run(&[
-                        Opcode::XS_CODE_OBJECT as u8,
-                        Opcode::XS_CODE_POP as u8,
-                        Opcode::XS_CODE_RETURN as u8,
-                    ])
-                    .completed
-            );
-            assert!(session.machine().slots().capacity() > count);
-            let original = std::fs::read(&path).unwrap();
-            let read_len =
-                |at: usize| u32::from_be_bytes(original[at..at + 4].try_into().unwrap()) as usize;
-            let small_header = 12 + read_len(8);
-            let directory = small_header + 4 + read_len(small_header) + 8;
-            let entry = directory + page as usize * 12;
-            let offset =
-                u64::from_be_bytes(original[entry..entry + 8].try_into().unwrap()) as usize;
-            let mut corrupt = original.clone();
-            corrupt[offset] = 255; // invalid Kind in an otherwise complete page
-            std::fs::write(&path, &corrupt).unwrap();
-            if authenticated {
-                // Isolate the codec backstop by supplying the expected leaf
-                // for malformed bytes through the private test-visible pin.
-                // This is not a claim that valid admission can forge its pin.
-                let bytes = shared.borrow().read_slot_page(page).unwrap();
-                session
-                    .tracking
-                    .pin
-                    .as_ref()
-                    .unwrap()
-                    .leaves
-                    .borrow_mut()
-                    .pages[page as usize] = leaf_hash(LEAF_PAGE, page, &bytes);
-            }
-            let result = checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut());
-            if authenticated {
-                assert_eq!(
-                    result,
-                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                        "checkpoint deferred slot page decode"
-                    )))
-                );
-            } else {
-                assert_eq!(
-                    result,
-                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                        "checkpoint deferred slot page leaf mismatch"
-                    )))
-                );
-            }
-            assert_eq!(shared.borrow().manifest().unwrap().epoch, 1);
-            assert_eq!(std::fs::read(&path).unwrap(), corrupt);
-            std::fs::write(&path, &original).unwrap();
-            let bytes = shared.borrow().read_slot_page(page).unwrap();
+        let dir = crate::test_dir::TempDir::new("deferred-checkpoint-trust");
+        let path = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&path).unwrap();
+        store
+            .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
+        let mut session = resume_from_store_lazy(shared.clone(), &sig()).unwrap();
+        assert!(!session.machine().slots().is_fully_resident());
+        assert!(
             session
-                .tracking
-                .pin
-                .as_ref()
-                .unwrap()
-                .leaves
-                .borrow_mut()
-                .pages[page as usize] = leaf_hash(LEAF_PAGE, page, &bytes);
-            checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut()).unwrap();
-            assert_eq!(shared.borrow().manifest().unwrap().epoch, 2);
+                .machine_mut()
+                .run(&[
+                    Opcode::XS_CODE_OBJECT as u8,
+                    Opcode::XS_CODE_POP as u8,
+                    Opcode::XS_CODE_RETURN as u8,
+                ])
+                .completed
+        );
+        assert!(session.machine().slots().capacity() > count);
+        let original = std::fs::read(&path).unwrap();
+        let read_len =
+            |at: usize| u32::from_be_bytes(original[at..at + 4].try_into().unwrap()) as usize;
+        let small_header = 12 + read_len(8);
+        let directory = small_header + 4 + read_len(small_header) + 8;
+        let entry = directory + page as usize * 12;
+        let offset = u64::from_be_bytes(original[entry..entry + 8].try_into().unwrap()) as usize;
+        let mut corrupt = original.clone();
+        corrupt[offset] = 255; // invalid Kind in an otherwise complete page
+        std::fs::write(&path, &corrupt).unwrap();
+        checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut()).unwrap();
+        assert_eq!(shared.borrow().manifest().unwrap().epoch, 2);
+        assert_eq!(
+            validate_store_content(&*shared.borrow(), &sig()).err(),
+            Some(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store slot page record"
+            )))
+        );
+        let fault = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.machine().slots().touch_page(page)
+        }))
+        .expect_err("the undecodable row dies at its fault");
+        let message = fault.downcast_ref::<String>().expect("named fault");
+        assert!(message.contains("decode"), "{message}");
+    }
+
+    /// A row read that fails under a lazy fault unwinds as a typed
+    /// [`StoreFault`] carrying the store's own error, which the host turns
+    /// back into that error; restore faults come back from resume itself.
+    #[test]
+    fn a_failed_row_read_unwinds_as_the_stores_error() {
+        use crate::store::{HeapStore, HeapStoreCommit};
+        use crate::store_file::FileStore;
+        use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
+        let mut image = Interp::new().snapshot_image_for_testing(&sig()).unwrap();
+        let count =
+            (image.slots.len() as u32).div_ceil(SLOTS_PER_PAGE) * SLOTS_PER_PAGE + SLOTS_PER_PAGE;
+        image.slots.resize(count as usize, Slot::undefined());
+        image.slot_free.clear();
+        image.slot_live = count;
+        let page = count / SLOTS_PER_PAGE - 1;
+        let dir = crate::test_dir::TempDir::new("store-fault");
+        let path = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&path).unwrap();
+        store
+            .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
+        let session = resume_from_store_lazy(shared.clone(), &sig()).unwrap();
+        // Truncate the file below the row: its read now fails as I/O.
+        let original = std::fs::read(&path).unwrap();
+        std::fs::write(
+            &path,
+            &original[..file_store_slot_row_offset(&original, page)],
+        )
+        .unwrap();
+        let expected = shared.borrow().read_slot_page(page).unwrap_err();
+        let caught = catch_store_fault(|| {
+            session.machine().slots().touch_page(page);
+            Ok(())
+        });
+        assert_eq!(caught, Err(expected));
+        // Any other panic passes through the catch untouched.
+        let other =
+            std::panic::catch_unwind(|| catch_store_fault::<()>(|| panic!("not a store fault")))
+                .expect_err("re-raised");
+        assert_eq!(other.downcast_ref::<&str>(), Some(&"not a store fault"));
+    }
+
+    /// Where a file store keeps slot page `page`'s row: the offset its
+    /// directory entry records.
+    fn file_store_slot_row_offset(file: &[u8], page: u32) -> usize {
+        let read_len =
+            |at: usize| u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+        let small_header = 12 + read_len(8);
+        let directory = small_header + 4 + read_len(small_header) + 8;
+        let entry = directory + page as usize * 12;
+        u64::from_be_bytes(file[entry..entry + 8].try_into().unwrap()) as usize
+    }
+
+    /// A store whose reads of one slot page fail with an injected I/O error;
+    /// every other read is the inner store's.
+    struct FailingPage {
+        inner: crate::store::MemoryStore,
+        page: u32,
+    }
+
+    impl HeapStore for FailingPage {
+        fn manifest(&self) -> Result<StoreManifest, StoreError> {
+            self.inner.manifest()
+        }
+        fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_small_state()
+        }
+        fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+            if page == self.page {
+                return Err(StoreError::Io("injected read failure".to_string()));
+            }
+            self.inner.read_slot_page(page)
+        }
+        fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_chunk_extent(ext)
+        }
+        fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+            self.inner.inventory()
+        }
+        fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_free_seg(seg)
+        }
+        fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+            self.inner.page_edges()
+        }
+        fn commit_verified(
+            &mut self,
+            verify: &mut crate::store::CommitVerifier<'_>,
+        ) -> Result<(), StoreError> {
+            self.inner.commit_verified(verify)
         }
     }
 
+    /// A row read that fails while resume restores the machine is resume's
+    /// own error: eager resume reads every row, and the lazy restore faults
+    /// the rows it walks under [`catch_store_fault`]. Only page 0 fails, so
+    /// lazy open's own read of the tail page passes and the restore's fault
+    /// is what meets the failure.
     #[test]
-    fn checkpoint_refuses_a_legacy_ledger_then_rebuilds_without_losing_state() {
-        use crate::store::{HeapStore, MemoryStore, RootLedger};
+    fn a_row_read_that_fails_during_restore_is_the_resumes_error() {
+        use crate::store::HeapStoreCommit;
+        use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
+        let mut image = Interp::new().snapshot_image_for_testing(&sig()).unwrap();
+        let count =
+            (image.slots.len() as u32).div_ceil(SLOTS_PER_PAGE) * SLOTS_PER_PAGE + SLOTS_PER_PAGE;
+        image.slots.resize(count as usize, Slot::undefined());
+        image.slot_free.clear();
+        image.slot_live = count;
+        let mut inner = crate::store::MemoryStore::new();
+        inner
+            .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let store = FailingPage { inner, page: 0 };
+        let injected = || Some(StoreError::Io("injected read failure".to_string()));
+        assert_eq!(resume_from_store(&store, &sig()).err(), injected());
+        let lazy = resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig());
+        assert_eq!(lazy.err(), injected());
+    }
+
+    fn ran_one() -> Interp {
         let (code, symbols) = ironhorse_compile::compile_atoms("1").unwrap();
         let mut machine = Interp::new();
         machine.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
         assert!(machine.run(&code).completed);
-        let mut store = MemoryStore::new();
-        let mut session = begin_store_session(machine, &sig(), &mut store)
+        machine
+    }
+
+    /// Checkpoints and collections pair a session with its store on the
+    /// commit token: another store at the session's epoch, with the same
+    /// content but its own commit, is refused before anything is read or
+    /// written, while a byte-identical copy pairs.
+    #[test]
+    fn checkpoints_and_collections_pair_on_the_commit_token() {
+        use crate::store::{HeapStore, MemoryStore};
+        let mut ours = MemoryStore::new();
+        let mut theirs = MemoryStore::new();
+        let mut session = begin_store_session(ran_one(), &sig(), &mut ours)
             .map_err(|(_, error)| error)
             .unwrap();
-        let prior = store.manifest().unwrap();
-        let (pages, extents) = store.leaf_hashes().unwrap();
-        session.tracking.root_ledger = Some(RootLedger::build(
-            &store.read_small_state().unwrap(),
-            pages,
-            extents,
-            store.free_leaf_hashes().unwrap(),
-            &store.page_edges().unwrap(),
-        ));
-        assert!(matches!(
-            checkpoint_to_store(&mut session, &sig(), &mut store),
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "checkpoint ledger lacks section inventory"
-            )))
-        ));
-        assert_eq!(store.manifest().unwrap(), prior);
-        assert!(session.tracking.root_ledger.is_none());
+        begin_store_session(ran_one(), &sig(), &mut theirs)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let (mine, other) = (ours.manifest().unwrap(), theirs.manifest().unwrap());
+        assert_eq!((mine.epoch, session.token()), (other.epoch, mine.token));
+        assert_ne!(mine.token, other.token);
+        let refused = Some(StoreError::BaselineMismatch {
+            expected: mine.token.to_hex(),
+            found: other.token.to_hex(),
+        });
+        assert_eq!(full_collect(&mut session, &theirs).err(), refused);
+        assert_eq!(partial_collect(&mut session, &theirs).err(), refused);
+        assert_eq!(generational_collect(&mut session, &theirs).err(), refused);
+        assert_eq!(
+            checkpoint_to_store(&mut session, &sig(), &mut theirs).err(),
+            refused
+        );
+        assert_eq!(theirs.manifest().unwrap(), other);
+        assert_eq!(
+            checkpoint_to_store(&mut session, &sig(), &mut ours).unwrap(),
+            2
+        );
+        let next = ours.manifest().unwrap().token;
+        assert_eq!(session.token(), next);
+        assert!(!next.is_zero() && next != mine.token);
+
+        let dir = crate::test_dir::TempDir::new("ironhorse-token-pairing");
+        let (path, copy) = (dir.join("a.ihstore"), dir.join("b.ihstore"));
+        let mut store = crate::store_file::FileStore::open(&path).unwrap();
+        let mut session = begin_store_session(ran_one(), &sig(), &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        std::fs::copy(&path, &copy).unwrap();
+        let mut twin = crate::store_file::FileStore::open(&copy).unwrap();
+        assert_eq!(
+            checkpoint_to_store(&mut session, &sig(), &mut twin).unwrap(),
+            2
+        );
+    }
+
+    /// A session draws its later tokens from an injected source, and a
+    /// draw that repeats the predecessor or is zero is drawn again.
+    #[test]
+    fn a_session_mints_tokens_from_its_source() {
+        use crate::store::{CommitTokenSource, HeapStore, MemoryStore};
+        struct Script(Vec<CommitToken>);
+        impl CommitTokenSource for Script {
+            fn next_token(&mut self) -> CommitToken {
+                self.0.remove(0)
+            }
+        }
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(ran_one(), &sig(), &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let first = session.token();
+        let chosen = CommitToken([7; 16]);
+        session.set_token_source(Box::new(Script(vec![CommitToken::ZERO, first, chosen])));
         checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
-        assert_eq!(store.manifest().unwrap().epoch, prior.epoch + 1);
+        assert_eq!(store.manifest().unwrap().token, chosen);
+        assert_eq!(session.token(), chosen);
+    }
+
+    /// The free-list rows a checkpoint ships, across segment boundaries:
+    /// none while the list is the stored one or has only shrunk to a
+    /// boundary (the shorter `free_len` drops the rest), the rows from the
+    /// mark's segment on once it dips into an earlier one, every row for an
+    /// arena that does not honor the acknowledgement, and never fewer than
+    /// the stored length requires, whatever the mark says.
+    #[test]
+    fn the_free_segment_diff_ships_from_the_marks_segment() {
+        use ironhorse_vm::{FreeListAck, Slot, SlotArena};
+        fn shipped(arena: &SlotArena, ack: &FreeListAck, stored: usize) -> Vec<u32> {
+            changed_free_segs(arena, ack, stored as u32)
+                .into_iter()
+                .map(|(seg, rows)| {
+                    let start = seg as usize * FREE_SEG_ENTRIES as usize;
+                    let end = arena
+                        .free_list()
+                        .len()
+                        .min(start + FREE_SEG_ENTRIES as usize);
+                    assert_eq!(rows, encode_free_seg(&arena.free_list()[start..end]));
+                    seg
+                })
+                .collect()
+        }
+        let per = FREE_SEG_ENTRIES as usize;
+        let mut arena = SlotArena::new();
+        let spare: Vec<_> = (0..20).map(|i| arena.alloc(Slot::integer(i))).collect();
+        let listed: Vec<_> = (0..2 * per + 10)
+            .map(|i| arena.alloc(Slot::integer(i as i32)))
+            .collect();
+        for &slot in &listed {
+            arena.free(slot);
+        }
+        let stored = arena.free_list().len();
+        let ack = arena.acknowledge_free_list();
+        assert_eq!(shipped(&arena, &ack, stored), Vec::<u32>::new());
+
+        for _ in 0..10 {
+            arena.alloc(Slot::integer(0));
+        }
+        assert_eq!(arena.free_list().len(), 2 * per);
+        assert_eq!(shipped(&arena, &ack, stored), Vec::<u32>::new());
+
+        let taken: Vec<_> = (0..per + 5)
+            .map(|_| arena.alloc(Slot::integer(0)))
+            .collect();
+        for &slot in taken.iter().chain(&spare) {
+            arena.free(slot);
+        }
+        assert_eq!(arena.free_list().len(), 2 * per + 20);
+        assert_eq!(shipped(&arena, &ack, stored), vec![0, 1, 2]);
+
+        let twin = SlotArena::from_image(
+            arena.records(),
+            arena.free_list().to_vec(),
+            arena.live_count(),
+        );
+        assert_eq!(shipped(&twin, &ack, stored), vec![0, 1, 2]);
+
+        // A mark past the stored length (an acknowledgement taken while the
+        // store held a shorter list) still ships from the stored tail on.
+        let ahead = arena.acknowledge_free_list();
+        assert_eq!(shipped(&arena, &ahead, per - 1), vec![0, 1, 2]);
+        assert_eq!(shipped(&arena, &ahead, per + 1), vec![1, 2]);
     }
 
     #[test]
@@ -2190,7 +2325,7 @@ mod tests {
         machine.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
         assert!(machine.run(&code).completed);
         let image = machine.snapshot_image(&sig()).unwrap();
-        let mut batch = image_to_batch(&image, 1, "");
+        let mut batch = image_to_batch(&image, 1, CommitToken::ZERO);
         batch.manifest.store_schema = STORE_SCHEMA_VERSION - 1;
         let mut store = MemoryStore::new();
         assert!(matches!(
@@ -2202,12 +2337,11 @@ mod tests {
         assert!(matches!(store.manifest(), Err(StoreError::Empty)));
     }
 
-    /// A store whose hashes are CONSISTENT over hostile
-    /// content (the tampered-at-rest / crafted-store class) must be
-    /// refused at resume exactly as the container path refuses the same
-    /// bytes - leaf hashes prove authentic-to-commit, not in-arena.
+    /// A store holding an out-of-arena reference (an engine bug, or a
+    /// crafted store) is refused by eager resume's decoding bounds checks,
+    /// exactly as the container path refuses the same bytes.
     #[test]
-    fn a_consistently_sealed_store_with_out_of_arena_refs_refuses_eager_resume() {
+    fn a_committed_store_with_out_of_arena_refs_refuses_eager_resume() {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".into()]);
@@ -2224,21 +2358,32 @@ mod tests {
                 .is_err(),
             "the container gate refuses the poisoned image"
         );
-        // Forge the store: image_to_batch computes CONSISTENT leaf
-        // hashes / root / seal over the poisoned rows - the honest
-        // sealing machinery run over hostile content.
+        // Craft the store: the commit admits the poisoned rows, whose
+        // geometry is right; it does not decode their records.
         let mut store = crate::store::MemoryStore::new();
-        let batch = image_to_batch(&image, 1, "");
+        let batch = image_to_batch(&image, 1, CommitToken::ZERO);
         crate::store::HeapStoreCommit::commit(&mut store, &batch)
-            .expect("the forged batch seals consistently");
+            .expect("the commit admits the crafted rows");
         assert!(
-            resume_from_store(&store, &sig()).is_err(),
+            matches!(
+                resume_from_store(&store, &sig()),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "slot index out of arena bounds"
+                )))
+            ),
             "the store path must refuse what the container path refuses"
         );
     }
 
+    /// A live record referencing a free slot is refused by eager resume,
+    /// by the full validator and, while the slot is still free, at the
+    /// fault of its page. Once a crank reuses the slot, the stored
+    /// reference names a live record again and nothing can tell: the
+    /// store-seam design's trust model gives that case up, because an
+    /// honest store never holds such a reference.
     #[test]
-    fn live_to_free_to_poison_is_refused_by_container_and_store_paths() {
+    fn a_live_record_referencing_a_free_slot_is_refused_while_the_slot_is_free() {
+        use crate::store::validate_store_content;
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".into()]);
@@ -2254,47 +2399,28 @@ mod tests {
         ));
         image.slot_free.push(free);
         image.slot_live = image.slots.len() as u32 - image.slot_free.len() as u32;
-        assert!(
+        assert_eq!(
             crate::image::read_machine(&crate::image::write_machine_unchecked(&image), &sig())
-                .is_err()
+                .err(),
+            Some(SnapshotError::Corrupt("slot index out of arena bounds"))
         );
-        for checkpoint in [false, true] {
-            let mut store = crate::store::MemoryStore::new();
-            let batch = image_to_batch(&image, 1, "");
-            crate::store::HeapStoreCommit::commit(&mut store, &batch)
-                .expect("consistently sealed hostile store");
-            assert!(resume_from_store(&store, &sig()).is_err());
-            let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
-            let mut resumed = resume_from_store_lazy(shared.clone(), &sig()).expect("lazy attach");
-            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if checkpoint {
-                    assert!(
-                        resumed
-                            .machine_mut()
-                            .run(&[
-                                ironhorse_vm::Opcode::XS_CODE_OBJECT as u8,
-                                ironhorse_vm::Opcode::XS_CODE_POP as u8,
-                                ironhorse_vm::Opcode::XS_CODE_RETURN as u8,
-                            ])
-                            .completed
-                    );
-                    assert!(!resumed.machine().slots().is_free_index(SlotIndex(free)));
-                    checkpoint_to_store(&mut resumed, &sig(), &mut *shared.borrow_mut()).unwrap();
-                } else {
-                    resumed.machine().slots().ensure_all_resident();
-                }
-            }))
-            .expect_err("the live-to-free edge must fail before fault or commit can follow poison");
-            let message = panic.downcast_ref::<String>().expect("named fault");
-            assert!(message.contains("references a free slot"), "{message}");
-            assert_eq!(
-                crate::store::HeapStore::manifest(&*shared.borrow())
-                    .unwrap()
-                    .epoch,
-                1,
-                "refusal must precede the durable commit"
-            );
-        }
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, CommitToken::ZERO);
+        crate::store::HeapStoreCommit::commit(&mut store, &batch).expect("commits");
+        // The bounds gates name a reference to a free slot as out of
+        // bounds; the free slot's own stale record is opaque to them.
+        const REFUSED: StoreError =
+            StoreError::Snapshot(SnapshotError::Corrupt("slot index out of arena bounds"));
+        assert_eq!(resume_from_store(&store, &sig()).err(), Some(REFUSED));
+        assert_eq!(validate_store_content(&store, &sig()).err(), Some(REFUSED));
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
+        let resumed = resume_from_store_lazy(shared.clone(), &sig()).expect("lazy attach");
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            resumed.machine().slots().ensure_all_resident();
+        }))
+        .expect_err("the live-to-free edge dies at its fault");
+        let message = panic.downcast_ref::<String>().expect("named fault");
+        assert!(message.contains("references a free slot"), "{message}");
     }
 
     /// The lazy twin: the poisoned page dies AT THE FAULT with a named
@@ -2314,9 +2440,9 @@ mod tests {
         let poison = image.slots.len() as u32 + 100;
         image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
         let mut store = crate::store::MemoryStore::new();
-        let batch = image_to_batch(&image, 1, "");
+        let batch = image_to_batch(&image, 1, CommitToken::ZERO);
         crate::store::HeapStoreCommit::commit(&mut store, &batch)
-            .expect("the forged batch seals consistently");
+            .expect("the commit admits the crafted rows");
         let mut resumed =
             resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
                 .expect("lazy attach");
@@ -2349,9 +2475,9 @@ mod tests {
             "the container gate refuses the poisoned chunk offset"
         );
         let mut store = crate::store::MemoryStore::new();
-        let batch = image_to_batch(&image, 1, "");
+        let batch = image_to_batch(&image, 1, CommitToken::ZERO);
         crate::store::HeapStoreCommit::commit(&mut store, &batch)
-            .expect("the forged batch seals consistently");
+            .expect("the commit admits the crafted rows");
         let mut resumed =
             resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
                 .expect("lazy attach");
@@ -2758,8 +2884,9 @@ pub fn resume_shared_from_store(
     adopt_shared_session(resume_from_store(store, signature)?, policy)
 }
 
-/// Restore shared environments over the same authenticated lazy page source used
-/// by standalone sessions, with identical commit-authority and pin advancement.
+/// Restore shared environments over the same lazy page source used by
+/// standalone sessions, with identical commit authority and backing
+/// advancement.
 pub fn resume_shared_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     signature: &Signature,
@@ -2768,16 +2895,19 @@ pub fn resume_shared_from_store_lazy<S: HeapStore + 'static>(
     adopt_shared_session(resume_from_store_lazy(store, signature)?, policy)
 }
 
+/// Adopt a resumed session's machine as a shared machine under `policy`.
+/// Adoption can fault pages in on a lazily resumed machine; a failed row
+/// read there comes back as the store's error (see [`StoreFault`]).
 pub fn adopt_shared_session(
     session: StoreSession,
     policy: ironhorse_vm::MachineRestorePolicy,
 ) -> Result<SharedStoreSession, StoreError> {
-    let machine = ironhorse_vm::Machine::from_restored_interpreter(session.interp, policy)
-        .map_err(shared_access_error)?;
-    Ok(SharedStoreSession {
-        machine,
-        tracking: session.tracking,
-    })
+    let StoreSession { interp, tracking } = session;
+    let machine = catch_store_fault(|| {
+        ironhorse_vm::Machine::from_restored_interpreter(interp, policy)
+            .map_err(shared_access_error)
+    })?;
+    Ok(SharedStoreSession { machine, tracking })
 }
 
 impl MachineSnapshot for ironhorse_vm::Machine {
@@ -2811,12 +2941,17 @@ pub fn resume_shared_from_store_lazy_with<S: HeapStore + 'static>(
     ) -> Result<ironhorse_vm::MachineRestorePolicy, StoreError>,
 ) -> Result<SharedStoreSession, StoreError> {
     let session = resume_from_store_lazy(store, signature)?;
-    let ids: Vec<_> = session
-        .interp
-        .shared_environment_ids()
-        .into_iter()
-        .map(ironhorse_vm::EnvironmentId)
-        .collect();
-    let policy = policy(&ids, session.interp.meter_state())?;
+    // The caller's policy runs outside the catch, so a fault it raises
+    // itself stays its own.
+    let (ids, meter) = catch_store_fault(|| {
+        let ids: Vec<_> = session
+            .interp
+            .shared_environment_ids()
+            .into_iter()
+            .map(ironhorse_vm::EnvironmentId)
+            .collect();
+        Ok((ids, session.interp.meter_state()))
+    })?;
+    let policy = policy(&ids, meter)?;
     adopt_shared_session(session, policy)
 }

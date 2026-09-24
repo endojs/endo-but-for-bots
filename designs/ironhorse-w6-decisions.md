@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-09 |
-| **Updated** | 2026-09-13 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active |
 | **Source** | Architecture review workstream W6 (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`) |
@@ -433,6 +433,11 @@ These are existing persistence constraints, not evidence that the engine release
 owns scheduling.
 Schema-27/28 validation, legacy root verification, and the two manifest hashes
 remain carried costs.
+*Amended 2026-09-24 by the store seam's trust model (its phase 13,
+[#1331](https://github.com/endojs/endo-but-for-bots/pull/1331)):
+`cranks` and the cadence are plain manifest fields bound into no root or seal,
+succession still refuses a cadence change or a counter regression, and the manifest
+hashes and legacy root verification are no longer carried costs.*
 
 ### Contract for Phase 2B
 
@@ -503,12 +508,14 @@ Run the applicable tests on Linux and macOS, including release mode.
 - For consumers promising replica-identical execution, pin independent expected
   collection sequences and compare results, computrons and canonical heap state
   under the same coordinated schedule across continuous execution and resume.
-  Compare roots/seals only when persistence histories are also identical.
+  Compare manifests (commit token aside) only when persistence histories are also identical;
+  the canonical export's hash compares the heaps themselves.
   Different schedules do not carry an unconditional heap-byte equality promise.
 - Fault-inject collection/checkpoint failures and verify documented heap integrity,
   counters, delivery durability, and the consumer's chosen recovery behavior.
-- Preserve legacy root/seal and cadence-mismatch refusal tests; if policy transitions
-  are added, test their explicit compatibility and migration rules.
+- Preserve the cadence-mismatch refusal tests (the root/seal ones went with the store
+  seam's phase 13); if policy transitions are added, test their explicit compatibility
+  and migration rules.
 
 F010, F076 and F090 remain implementation work: choosing consumer policy does not
 itself reclaim chunks or implement weak collections.

@@ -39,9 +39,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
     use ironhorse_snapshot::atom::{AtomReader, AtomWriter};
     use ironhorse_snapshot::format::{Version, NAME, VERS};
     use ironhorse_snapshot::machine::checkpoint_to_store;
-    use ironhorse_snapshot::store::{
-        compute_root, leaf_hash, migrate_store, seal_commit, HeapStore, LEAF_SMALL,
-    };
+    use ironhorse_snapshot::store::{migrate_store, HeapStore, StoreManifest};
 
     let signature = Signature::new("surrogate-migration");
     let mut machine = Interp::new();
@@ -73,74 +71,25 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
             .unwrap(),
     );
     let small = replace_name_section(&store.read_small_state().unwrap(), &old_names);
-    let mut manifest = store.manifest().unwrap();
-    manifest.store_schema = 25;
+    let current = store.manifest().unwrap();
+    let mut manifest = StoreManifest {
+        store_schema: 25,
+        ..current.clone()
+    };
     manifest.version.format_version = 14;
-    let (pages, extents) = store.leaf_hashes().unwrap();
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &extents,
-        &store.free_leaf_hashes().unwrap(),
-        &store.page_edges().unwrap(),
-    );
     store
-        .replace_manifest_and_small_for_migration(&manifest, &small)
+        .replace_for_migration(&current, &manifest, &small)
         .unwrap();
     assert!(migrate_store(&mut store, &signature).unwrap());
     let migrated = store.manifest().unwrap();
     assert_eq!(
-        migrated.store_schema,
-        ironhorse_snapshot::store::STORE_SCHEMA_VERSION
+        migrated,
+        StoreManifest {
+            store_schema: ironhorse_snapshot::store::STORE_SCHEMA_VERSION,
+            ..manifest.clone()
+        },
+        "migration keeps the epoch, the counters and the token"
     );
-    assert_eq!(migrated.epoch, manifest.epoch);
-    // Migration stamps schemas27 through31. Reconstruct the authenticated
-    // intermediate seals so the final parent must be the schema30 seal.
-    let mut intermediate = migrated.clone();
-    intermediate.store_schema = 27;
-    intermediate.parent_seal = manifest.seal.clone();
-    intermediate.root = compute_root(
-        &intermediate,
-        &leaf_hash(LEAF_SMALL, 0, &store.read_small_state().unwrap()),
-        &pages,
-        &extents,
-        &store.free_leaf_hashes().unwrap(),
-        &store.page_edges().unwrap(),
-    );
-    let mut intermediate_seal = seal_commit(
-        &intermediate.parent_seal,
-        &intermediate,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    );
-    for schema in [28, 29, 30, 31, 32, 33, 34] {
-        intermediate.store_schema = schema;
-        intermediate.parent_seal = intermediate_seal;
-        intermediate.root = compute_root(
-            &intermediate,
-            &ironhorse_snapshot::store_sections::framed_root(&store.read_small_state().unwrap())
-                .unwrap(),
-            &pages,
-            &extents,
-            &store.free_leaf_hashes().unwrap(),
-            &store.page_edges().unwrap(),
-        );
-        intermediate_seal = seal_commit(
-            &intermediate.parent_seal,
-            &intermediate,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-    }
-    assert_eq!(migrated.parent_seal, intermediate_seal);
-    assert_ne!(migrated.seal, manifest.seal);
     assert!(!migrate_store(&mut store, &signature).unwrap());
     let mut resumed = resume_from_store(&store, &signature).unwrap();
     assert_eq!(resumed.machine().program_symbol_names(), names);

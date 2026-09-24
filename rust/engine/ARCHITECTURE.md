@@ -222,11 +222,21 @@ On a failed persistent operation the machine restores the previous checkpoint.
 Host diagnostic rendering is separate from guest dispatch completion.
 This distinction matters for cyclic or unrenderable completion values.
 
-Store validation checks canonical encoding, live references, authenticated manifests
-and compatibility before state adoption, including cold lazy restore.
+A resident store is trusted as the machine it holds (the store-seam design's
+2026-09-24 trust model).
+Open checks compatibility (format, schema, signature and boot fingerprint, cost table)
+and decodes what the restore needs, whose bounds checks guard against engine bugs,
+including on a cold lazy restore; it does not re-verify stored digests.
+A lazy open, which sizes its arenas from the manifest's geometry, first checks the live/free
+accounting and reads the last slot page and chunk extent.
+A row read that fails under a lazy fault unwinds as a typed store fault that resume and the
+persistent machine report as the store's error.
+`validate_store` and `validate_store_content` check a store's correctness on request,
+and a migration runs the first's checks on its migrated result before its one write.
+Containers can come from elsewhere, so they are still validated completely before adoption.
 CAS reads validate keys and content hashes.
-Manifest roots/seals bind collection policy and counters as well as stored content.
-This authenticates the selected policy; it does not choose a fleet-wide GC schedule.
+The manifest records the collection policy and counters; it does not choose a fleet-wide
+GC schedule.
 
 Checkpoint performance carries deliberate derived state:
 section-level hashes/inventories, dirty-state tracking and cached aggregate hashes
@@ -370,9 +380,9 @@ The table covers the review identifiers and the capture/restore row contract.
 |---|---|---|
 | `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
-| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 22 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
-| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 33 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
-| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 3 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. Release 3 adds host-function recipes in format 22/store 33; format-20 and format-21 bytes remain pinned. |
+| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 24 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
+| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 36 | Change paged-store/manifest/small-state representation with a schema bump and a migration step or explicit refusal. `migrate_store` advances monotonically through an in-memory ladder over the manifest and small state, checks the result against the stored rows with the metadata-scale `validate_store` checks, and writes it once with `HeapStore::replace_for_migration`, which refuses a store that moved since the migration read it; it does not translate old meter semantics. |
+| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 5 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. Release 3 added host-function recipes in format 22/store 33; format-20 and format-21 bytes remain pinned. |
 | `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.

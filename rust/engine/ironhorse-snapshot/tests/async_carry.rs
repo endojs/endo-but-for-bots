@@ -8,6 +8,7 @@ use ironhorse_snapshot::machine::{
 };
 use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::{validate_store, MemoryStore};
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
@@ -142,7 +143,7 @@ fn crafted_async_anchors_capabilities_and_resume_cursors_are_refused() {
         );
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         assert!(
             validate_store(&store, &signature).is_err(),
@@ -325,7 +326,7 @@ fn malformed_suspended_assignment_targets_are_refused() {
         );
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         assert!(
             resume_from_store(&store, &signature).is_err(),

@@ -166,6 +166,7 @@ fn partial_collect_is_conservative_and_exact() {
     assert!(o.completed);
     assert_eq!(o.result, "8");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
         resumed
@@ -254,6 +255,7 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
     assert!(o.completed, "halt: {:?}", o.halt);
     assert_eq!(o.result, "1999", "0 + 1999 read back from live elements");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
         resumed
@@ -334,6 +336,7 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     assert!(o.completed, "halt: {:?}", o.halt);
     assert_eq!(o.result, "8");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
         resumed
@@ -351,7 +354,7 @@ fn partial_collect_reclaims_page_isolated_garbage() {
 
 /// Phase 9 bar: small state is O(1) in heap size — a machine with a
 /// large free list (post-GC) stores a SMALL small-state row, with the
-/// list riding in leafed segment rows instead.
+/// list riding in segment rows instead.
 #[test]
 fn small_state_stays_small_with_a_large_free_list() {
     use ironhorse_snapshot::store::{free_seg_count, HeapStore};
@@ -394,8 +397,8 @@ fn small_state_stays_small_with_a_large_free_list() {
          {} free entries",
         manifest.free_len
     );
-    // The list itself rides in segment rows, leafed and verifiable —
-    // and it genuinely spans MULTIPLE segments, so the split and the
+    // The list itself rides in segment rows, and it genuinely spans
+    // MULTIPLE segments, so the split and the
     // reassembly are exercised, not just the single-segment case.
     let segs = free_seg_count(manifest.free_len);
     assert!(
@@ -456,6 +459,7 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
     let o = session.machine_mut().run(&compiled[1].0);
     assert!(o.completed, "halt: {:?}", o.halt);
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
 
     let segs_after = free_seg_count(store.manifest().unwrap().free_len);
     assert_eq!(
@@ -466,6 +470,83 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
         store.last_commit_stats().free_segs_written,
         1,
         "LIFO churn ships exactly the tail segment"
+    );
+}
+
+/// The free list's low-water mark across segment boundaries (store seam
+/// phase 13): a checkpoint ships the rows from the segment the list
+/// shrank into on, none when nothing moved, and after pops through a
+/// boundary and a collection's pushes, the store still resumes to the
+/// machine it checkpointed.
+#[test]
+fn free_list_rows_follow_the_mark_across_segment_boundaries() {
+    use ironhorse_snapshot::machine::{checkpoint_to_store, full_collect};
+    use ironhorse_snapshot::store::{
+        free_seg_count, validate_store_content, HeapStore, FREE_SEG_ENTRIES,
+    };
+
+    // Later cranks mirror crank 1's symbol order (keep, g, i).
+    let cranks = [
+        "var keep = 0; var g = 0; var i = 0; \
+         for (i = 0; i < 6000; i = i + 1) { g = { v: i }; } g = 0; 0",
+        "var keep; var g; var i; keep = []; \
+         for (i = 0; i < 2500; i = i + 1) { keep[i] = { v: i }; } 1",
+        "var keep; var g; var i; keep = 0; 2",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    m.collect_garbage().unwrap();
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let free_len = |store: &MemoryStore| store.manifest().unwrap().free_len;
+    let start = free_len(&store);
+    assert!(free_seg_count(start) >= 3, "multi-segment premise: {start}");
+
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    assert_eq!(store.last_commit_stats().free_segs_written, 0);
+
+    // Pops only, through a boundary: the mark is the shorter list's length.
+    let o = run_crank(session.machine_mut(), &compiled[1]);
+    assert!(o.completed, "halt: {:?}", o.halt);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let popped = free_len(&store);
+    assert!(popped / FREE_SEG_ENTRIES < start / FREE_SEG_ENTRIES);
+    assert_eq!(
+        store.last_commit_stats().free_segs_written as u32,
+        free_seg_count(popped) - popped / FREE_SEG_ENTRIES
+    );
+
+    // A collection's pushes leave the mark where the last commit left it,
+    // and the rows from its segment on travel.
+    let o = run_crank(session.machine_mut(), &compiled[2]);
+    assert!(o.completed, "halt: {:?}", o.halt);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let low = free_len(&store);
+    full_collect(&mut session, &store).expect("collects");
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let pushed = free_len(&store);
+    assert!(
+        pushed > popped,
+        "the collection pushed the dropped slots back"
+    );
+    assert!(free_seg_count(pushed) - low / FREE_SEG_ENTRIES >= 2);
+    assert_eq!(
+        store.last_commit_stats().free_segs_written as u32,
+        free_seg_count(pushed) - low / FREE_SEG_ENTRIES
+    );
+    validate_store_content(&store, &sig()).expect("the store validates");
+    assert_eq!(
+        resume_from_store(&store, &sig())
+            .expect("resumes")
+            .machine()
+            .snapshot_image(&sig())
+            .unwrap(),
+        session.machine().snapshot_image(&sig()).unwrap()
     );
 }
 
@@ -696,11 +777,13 @@ fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
     let freed_1 = partial_collect(&mut session, &store).expect("collect after build");
     assert!(freed_1 > 0, "the dropped chain reclaims: {freed_1}");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
 
     let o2 = session.machine_mut().run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
     assert_eq!(o2.result, "1010", "post-churn dynamic read");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).expect("the store validates");
     let _freed_2 = partial_collect(&mut session, &store).expect("collect after churn");
 
     let o3 = session.machine_mut().run(&compiled[2].0);
@@ -796,10 +879,14 @@ fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
         // Draw the generation boundary: everything to here is OLD.
         let _ = partial_collect(&mut session, &store).expect("boundary collect");
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::validate_store_content(&store, &sig())
+            .expect("the store validates");
 
         let o = session.machine_mut().run(&compiled[1].0);
         assert!(o.completed, "halt: {:?}", o.halt);
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::validate_store_content(&store, &sig())
+            .expect("the store validates");
 
         let freed = if generational {
             generational_collect(&mut session, &store).expect("generational")
@@ -885,5 +972,7 @@ fn relocated_native_names_survive_repeated_collection_and_restore() {
         );
         session = resumed;
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::validate_store_content(&store, &sig())
+            .expect("the store validates");
     }
 }

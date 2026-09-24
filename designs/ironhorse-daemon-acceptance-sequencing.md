@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-14 |
-| **Updated** | 2026-09-14 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
 | **Source** | Architecture review (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`), read against the scope fence in `rust/engine/PR-1263-TODO.md` |
@@ -1228,7 +1228,7 @@ and a reader working from it alone will re-do them.
       That work was picked up and finished; the decision record is the last
       place in `designs/` still carrying the 47 figure.
       Not gated on any phase here — it is false now, not false later.
-- [ ] **Split `StoreError::BaselineMismatch` (Phase 0).** Roughly eleven of
+- [x] **Split `StoreError::BaselineMismatch` (Phase 0).** Roughly eleven of
       its construction sites compare content recomputed at rest against the
       root its own manifest seals — tamper or bit-rot, which should tear a
       session down — while the other eight are lineage and session-drift
@@ -1238,6 +1238,14 @@ and a reader working from it alone will re-do them.
       Splitting needs a per-site judgement across `store.rs` and `machine.rs`;
       it was left out of the first Phase 0 increment rather than done in
       haste, because miscategorising a site is worse than the overload.
+      *Closed as moot by the store seam's phase 13 (its 2026-09-24 trust
+      model, [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331)):
+      the at-rest root comparisons, the corruption half, are gone (stage 1
+      took them off the run-time path, and stage 2 removed the root along
+      with the migration steps' checks).
+      Every remaining construction site is a pairing, succession or
+      migration-baseline guard, which stays a refusal, pairing on a
+      random commit token instead of the seal.*
 - [ ] **Carry `std::io::ErrorKind` on `StoreError::Io` (Phase 0).** The kind
       is destroyed at construction, so `PermissionDenied` and `NotFound`
       classify `Transient` alongside a genuinely retryable write.

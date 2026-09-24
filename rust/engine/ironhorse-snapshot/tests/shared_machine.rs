@@ -227,6 +227,117 @@ fn empty_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
     }
 }
 
+/// A store whose `fail_at`-th slot-page read (counting from zero) fails
+/// with an injected I/O error; every other read is the inner store's.
+struct FailingNthRead {
+    inner: ironhorse_snapshot::store::MemoryStore,
+    reads: std::cell::Cell<u32>,
+    fail_at: u32,
+}
+
+impl ironhorse_snapshot::store::HeapStore for FailingNthRead {
+    fn manifest(
+        &self,
+    ) -> Result<ironhorse_snapshot::store::StoreManifest, ironhorse_snapshot::store::StoreError>
+    {
+        self.inner.manifest()
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        self.inner.read_small_state()
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        let n = self.reads.get();
+        self.reads.set(n + 1);
+        if n == self.fail_at {
+            return Err(ironhorse_snapshot::store::StoreError::Io(
+                "injected read failure".to_string(),
+            ));
+        }
+        self.inner.read_slot_page(page)
+    }
+    fn read_chunk_extent(
+        &self,
+        ext: u32,
+    ) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        self.inner.read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), ironhorse_snapshot::store::StoreError> {
+        self.inner.inventory()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        self.inner.read_free_seg(seg)
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, ironhorse_snapshot::store::StoreError> {
+        self.inner.page_edges()
+    }
+    fn commit_verified(
+        &mut self,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), ironhorse_snapshot::store::StoreError> {
+        self.inner.commit_verified(verify)
+    }
+}
+
+/// A row read that fails in any step of a shared lazy resume (the
+/// restore, reading the environment ids and the meter, adopting the
+/// machine under its policy) comes back as the resume's own error: every
+/// slot-page read the resume makes is failed in turn, and none may escape
+/// as a panic or leave the resume succeeding. Today every read lands in
+/// open or the restore itself; a change that makes a later step fault
+/// without its catch fails here.
+#[test]
+fn a_failed_row_read_in_any_step_of_a_shared_resume_is_its_error() {
+    use ironhorse_snapshot::machine::{
+        begin_shared_store_session, resume_shared_from_store_lazy_with,
+    };
+    use ironhorse_snapshot::store::{export_to_container, import_from_container, MemoryStore};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+    let signature = Signature::new("shared-store");
+    let container = {
+        let m = Machine::new();
+        let a = m.new_compartment();
+        eval(&a, "var answer = 42; var log = []; var f = () => answer; 0");
+        let mut store = MemoryStore::new();
+        drop(
+            begin_shared_store_session(m, &signature, &mut store, 0)
+                .ok()
+                .unwrap(),
+        );
+        export_to_container(&store).unwrap()
+    };
+    let attempt = |fail_at: u32| {
+        let mut inner = MemoryStore::new();
+        import_from_container(&container, &signature, &mut inner).unwrap();
+        let store = Rc::new(RefCell::new(FailingNthRead {
+            inner,
+            reads: Cell::new(0),
+            fail_at,
+        }));
+        let result = resume_shared_from_store_lazy_with(store.clone(), &signature, |ids, _| {
+            Ok(empty_policy(ids))
+        })
+        .map(drop);
+        let reads = store.borrow().reads.get();
+        (result, reads)
+    };
+    let (clean, total) = attempt(u32::MAX);
+    clean.expect("the resume succeeds when no read fails");
+    assert!(total > 1, "the resume reads slot pages: {total}");
+    for fail_at in 0..total {
+        let (result, _) = attempt(fail_at);
+        assert_eq!(
+            result.err(),
+            Some(ironhorse_snapshot::store::StoreError::Io(
+                "injected read failure".to_string()
+            )),
+            "slot-page read {fail_at} of {total}"
+        );
+    }
+}
+
 #[test]
 fn eager_lazy_checkpoint_and_rewind_keep_one_owner_graph_per_resume() {
     use ironhorse_snapshot::machine::{

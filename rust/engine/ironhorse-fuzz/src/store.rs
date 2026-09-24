@@ -1,28 +1,34 @@
 //! The **store-seam decoder** fuzz arm over `ironhorse-snapshot`'s keyed
 //! checkpoint store (store-seam design § Fuzzability).
 //!
-//! The store is the newest adversarially-reachable decoder in the tree: a
-//! daemon opens a database file it did not write, and every row in it —
-//! manifest, small state, slot pages, chunk extents, free segments — is
-//! attacker-influenced bytes. Until this arm existed the seam's hardening
-//! rested on hand-written crafted-row tests, which are *cases* rather than a
-//! search, while the design's own phase-1 acceptance bar claimed fuzz targets
-//! that did not exist.
+//! The store is the newest decoder in the tree. The store-seam design's
+//! trust model trusts the resident store, which is the machine it holds, but
+//! its decoders must still be total: an engine bug, a medium that tears a
+//! write, or bit rot can leave any row — manifest, small state, slot pages,
+//! chunk extents, free segments — holding bytes no writer produced, and those
+//! must be refused by name or read, never crash the opener. Until this arm
+//! existed the seam's hardening rested on hand-written crafted-row tests,
+//! which are *cases* rather than a search, while the design's own phase-1
+//! acceptance bar claimed fuzz targets that did not exist.
 //!
 //! Three invariants cover the three entry points the design names:
 //!
 //! - **[`StoreManifest::decode`] and [`SmallState::decode`] are total**: any
 //!   byte string yields a structured [`StoreError`] or a value, never a panic
-//!   and never an unbounded reservation. Both decoders are *canonical*, so an
-//!   accepted payload must re-encode to the bytes it was decoded from — the
-//!   same "one encoding" bar the container arm holds
-//!   ([`crate::snapshot::decoder_is_error_free`]).
-//! - **[`validate_store`] is total**: a store whose rows have been rewritten
-//!   underneath it must be refused by name rather than crash the opener, and
-//!   must never report a state it cannot substantiate.
+//!   and never an unbounded reservation. Both decoders are *canonical* for
+//!   the current schema, so an accepted payload must re-encode to the bytes
+//!   it was decoded from — the same "one encoding" bar the container arm
+//!   holds ([`crate::snapshot::decoder_is_error_free`]). A manifest in an
+//!   older schema's layout decodes for migration only, dropping the root and
+//!   parent seal it no longer needs and keeping the seal's first half as its
+//!   token, so what it decodes to must re-encode to itself instead.
+//! - **The validators and the eager read are total**: over a store whose
+//!   rows have been rewritten underneath it, [`validate_store`],
+//!   [`validate_store_content`] and [`store_to_image`] each refuse by name or
+//!   succeed, never panic.
 //! - **The adoption path is total**: [`import_from_container`] over mutated
 //!   export bytes runs the whole admission gauntlet (container gates, id-space
-//!   audit, succession, batch check, Merkle root) and must fail closed.
+//!   audit, succession, batch check) and must fail closed.
 //!
 //! The mutation arms are seeded from a *real exported store* rather than from
 //! arbitrary bytes, so the corpus starts inside the well-framed region and
@@ -31,7 +37,8 @@
 
 use ironhorse_snapshot::store::{
     export_to_container, image_to_batch_unchecked, import_from_container, store_to_image,
-    validate_store, HeapStore, HeapStoreCommit, MemoryStore, SmallState, StoreManifest,
+    validate_store, validate_store_content, CommitToken, HeapStore, HeapStoreCommit, MemoryStore,
+    SmallState, StoreManifest, STORE_SCHEMA_VERSION,
 };
 
 use crate::snapshot::{fuzz_snapshot_sig, gen_machine_image, mutate_bytes, Cursor};
@@ -42,10 +49,30 @@ use crate::snapshot::{fuzz_snapshot_sig, gen_machine_image, mutate_bytes, Cursor
 fn seed_store(data: &[u8]) -> Option<MemoryStore> {
     let image = gen_machine_image(data);
     let mut store = MemoryStore::new();
-    store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
-        .ok()?;
+    let mut batch = image_to_batch_unchecked(&image, 1, CommitToken::ZERO);
+    // A fixed token keeps the manifest's bytes, and so a crash that depends
+    // on them, reproducible from the input alone.
+    batch.manifest.token = CommitToken([0x5e; 16]);
+    store.commit(&batch).ok()?;
     Some(store)
+}
+
+/// The manifest decoder's encoding bar (see the module docs): one encoding
+/// for the current schema, and a stable re-encoding for an older layout.
+fn assert_manifest_encoding(decoded: &StoreManifest, bytes: &[u8]) {
+    if decoded.store_schema == STORE_SCHEMA_VERSION {
+        assert_eq!(
+            decoded.encode(),
+            bytes,
+            "an accepted manifest must have one encoding"
+        );
+    } else {
+        assert_eq!(
+            StoreManifest::decode(&decoded.encode()).as_ref(),
+            Ok(decoded),
+            "an older-layout manifest must decode to what it re-encodes"
+        );
+    }
 }
 
 /// Which arms an input actually reached.
@@ -64,7 +91,7 @@ pub struct ArmsReached {
     pub seeded: bool,
     /// The manifest row decoded after mutation.
     pub manifest_decoded: bool,
-    /// `validate_store` ran over a tampered store.
+    /// The validators ran over a store rewritten underneath them.
     pub validated: bool,
     /// `import_from_container` ran the whole admission gauntlet.
     pub adopted: bool,
@@ -82,8 +109,11 @@ pub fn store_decoder_is_error_free(data: &[u8]) -> ArmsReached {
 
     // Arm 1 — arbitrary bytes straight at the two row decoders. Almost all
     // of these die at the `VERS` gate or on truncation, but every one must
-    // return rather than panic.
-    let _ = StoreManifest::decode(data);
+    // return rather than panic; the seed corpus's manifests, older layouts
+    // among them, decode here and must meet the encoding bar.
+    if let Ok(decoded) = StoreManifest::decode(data) {
+        assert_manifest_encoding(&decoded, data);
+    }
     let _ = SmallState::decode(data);
 
     let Some(store) = seed_store(data) else {
@@ -93,17 +123,14 @@ pub fn store_decoder_is_error_free(data: &[u8]) -> ArmsReached {
 
     // Arm 2 — the productive corpus for the manifest row: a valid manifest
     // with the fuzzer's bytes mutated in, so the decoder passes the version
-    // gate and reaches the length-bearing signature, root, seal and
-    // parent-seal fields.
+    // gate and reaches the length-bearing signature, the fixed-width fields
+    // through the commit token, and, under an older schema stamp, the legacy
+    // layout's root, seal and parent-seal fields.
     let manifest = store.manifest().expect("a committed store has a manifest");
     let mutated_manifest = mutate_bytes(&manifest.encode(), data);
     if let Ok(decoded) = StoreManifest::decode(&mutated_manifest) {
         reached.manifest_decoded = true;
-        assert_eq!(
-            decoded.encode(),
-            mutated_manifest,
-            "an accepted manifest must have one encoding"
-        );
+        assert_manifest_encoding(&decoded, &mutated_manifest);
     }
 
     // Arm 3 — the same for the small-state row, whose 32 section payloads
@@ -120,18 +147,19 @@ pub fn store_decoder_is_error_free(data: &[u8]) -> ArmsReached {
         );
     }
 
-    // Arm 4 — the validator over a store whose manifest and small state have
-    // been rewritten underneath it. `replace_manifest_and_small_for_migration`
-    // is the only seam that writes rows without the commit gauntlet, which is
-    // exactly the shape of a store that was tampered with on disk.
+    // Arm 4 — the validators over a store whose manifest and small state have
+    // been rewritten underneath it. `replace_for_migration` is the only seam
+    // that writes them without the commit gauntlet, which is exactly the
+    // shape of a store whose rows changed outside the engine.
     if let Ok(tampered_manifest) = StoreManifest::decode(&mutated_manifest) {
         let mut tampered = store;
         if tampered
-            .replace_manifest_and_small_for_migration(&tampered_manifest, &mutated_small)
+            .replace_for_migration(&manifest, &tampered_manifest, &mutated_small)
             .is_ok()
         {
             reached.validated = true;
             let _ = validate_store(&tampered, &sig);
+            let _ = validate_store_content(&tampered, &sig);
             let _ = store_to_image(&tampered);
         }
     }
@@ -188,7 +216,7 @@ pub fn export_adopt_is_identity(data: &[u8]) -> Result<bool, String> {
 }
 
 /// Fold fuzzer bytes into a *sequence* of commits against one store, so the
-/// search reaches the succession, epoch and baseline-seal gates that a
+/// search reaches the succession, epoch and commit-token gates that a
 /// single commit never exercises. Every rejection must be by name.
 pub fn store_succession_is_total(data: &[u8]) -> usize {
     let mut c = Cursor::new(data);
@@ -208,12 +236,18 @@ pub fn store_succession_is_total(data: &[u8]) -> usize {
             2 => epoch.saturating_sub(1),
             _ => epoch + 1,
         };
-        let prev_seal = store.manifest().map(|m| m.seal).unwrap_or_default();
-        let seal = match c.choice(2) {
-            0 => prev_seal,
-            _ => String::from_utf8_lossy(&[c.byte(), c.byte()]).to_string(),
+        // The predecessor: the stored token, or one the store never held.
+        let prev = match c.choice(2) {
+            0 => store.manifest().map_or(CommitToken::ZERO, |m| m.token),
+            _ => CommitToken([c.byte(); 16]),
         };
-        let batch = image_to_batch_unchecked(&image, epoch, &seal);
+        let mut batch = image_to_batch_unchecked(&image, epoch, prev);
+        // The batch's own token: fresh, zero, or its predecessor's.
+        match c.choice(3) {
+            0 => batch.manifest.token = CommitToken::ZERO,
+            1 => batch.manifest.token = batch.prev_token,
+            _ => {}
+        }
         if store.commit(&batch).is_ok() {
             accepted += 1;
         }
@@ -272,12 +306,11 @@ mod tests {
         // Floors set from measurement, not optimism. A mutated manifest
         // usually does NOT decode — that is the arm working — so the
         // interesting quantity is how often one still does, which is where
-        // the length-bearing signature, root, seal and parent-seal fields
-        // are actually reached. Measured at the time of writing:
-        // 275 of 600 decoded, 216 reached `validate_store`, 290 reached the
-        // adoption gauntlet. The floors sit well below those so ordinary
-        // drift does not fail the suite, and well above zero so a collapse
-        // does.
+        // the length-bearing signature and the fields after it are actually
+        // reached. Measured at store schema 36: 334 of 600 decoded, 250
+        // reached `validate_store`, 290 reached the adoption gauntlet. The
+        // floors sit well below those so ordinary drift does not fail the
+        // suite, and well above zero so a collapse does.
         assert!(
             decoded * 4 > SEEDS,
             "too few mutated manifests still decode, so arm 2 is testing the \
@@ -299,6 +332,26 @@ mod tests {
             adopted * 5 > SEEDS,
             "too few inputs reach the adoption gauntlet: {adopted} of {SEEDS}"
         );
+    }
+
+    /// The checked-in seeds go through the arms the libFuzzer target runs,
+    /// so the encoding bar's older-layout branch runs in ordinary CI too,
+    /// not only under the nightly fuzzer.
+    #[test]
+    fn the_seed_corpus_passes_the_store_arms() {
+        let seeds = crate::seeds::seed_corpus("store_decoder");
+        let older = seeds
+            .iter()
+            .filter(|seed| {
+                StoreManifest::decode(seed).is_ok_and(|m| m.store_schema < STORE_SCHEMA_VERSION)
+            })
+            .count();
+        assert_eq!(older, 3, "the seeds carry three older-layout manifests");
+        for seed in &seeds {
+            store_decoder_is_error_free(seed);
+            store_succession_is_total(seed);
+            export_adopt_is_identity(seed).unwrap();
+        }
     }
 
     #[test]

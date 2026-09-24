@@ -52,12 +52,14 @@ use std::rc::Rc;
 /// the vm (the snapshot crate adapts its `HeapStore` to this), keeping
 /// the dependency direction snapshot → vm.
 ///
-/// Reads are infallible by signature: the store was validated
-/// exhaustively at open (every promised row present at its exact
-/// length), so a failure here is genuine I/O trouble mid-crank, and an
-/// implementation reports it by panicking with a named message — the
-/// deterministic crashed-crank path, exactly how a stale index or a
-/// corrupted invariant already dies (design decision 7).
+/// Reads are infallible by signature. Open does not re-check the rows
+/// (the store-seam design's trust model trusts the store), so a read can
+/// still fail mid-crank on a missing row or an I/O error, and an
+/// implementation reports that by unwinding: the crashed-crank path,
+/// exactly how a stale index or a corrupted invariant already dies
+/// (design decision 7). The snapshot crate's adapter unwinds with a typed
+/// payload carrying the store's error, so its host can report that error
+/// and rewind; a row that does not decode dies with a named message.
 pub trait PageSource {
     /// The records of slot page `page`, exactly the page's snapshot
     /// length (a partial last page returns its remainder).
@@ -115,6 +117,16 @@ impl BackingCommitAuthority {
     }
 }
 
+/// A store session's acknowledgement of a [`SlotArena`]'s free list, from
+/// [`SlotArena::acknowledge_free_list`]: the list as it stood then is the
+/// list the store holds. Only the arena that issued it honors it, and only
+/// until its next acknowledgement, so neither a replaced arena nor a stray
+/// acknowledgement can make a checkpoint believe the list did not change.
+#[derive(Clone, Debug)]
+pub struct FreeListAck {
+    identity: Rc<()>,
+}
+
 /// The lazy backing of a [`SlotArena`]: the page source plus one
 /// residency bit per attach-time page. `Cell` residency bits let the
 /// by-value read path fault through `&self`; pages past the
@@ -123,19 +135,18 @@ struct SlotBacking {
     source: Rc<dyn PageSource>,
     commit_identity: Option<Rc<()>>,
     resident: Vec<Cell<bool>>,
-    /// The attach-time record count — what the source's geometry can
+    /// The committed record count (the attach-time count, advanced by
+    /// each commit into this backing) — what the source's geometry can
     /// serve, and the exact-length bound every fault is checked
     /// against (a short row must die loudly, not install placeholder
     /// records beside real ones).
     snapshot_count: u32,
-    /// Free records in the backing generation, independent of allocations
-    /// and collections since attach. Persisted edges must not alias reuse.
-    snapshot_free: Vec<bool>,
-    /// The attach-time chunk-arena byte length, so a fault can bound a
-    /// slot's String/BigInt chunk offset without seeing the chunk
-    /// arena itself: a
-    /// consistently-resealed hostile row must die named AT THE FAULT,
-    /// not anonymously in a later chunk read or the compactor.
+    /// The committed chunk-arena byte length (the attach-time length,
+    /// advanced by each commit into this backing), so a fault can bound
+    /// a slot's String/BigInt chunk offset without seeing the chunk
+    /// arena itself: a row holding an out-of-arena offset must die
+    /// named AT THE FAULT, not anonymously in a later chunk read or the
+    /// compactor.
     chunk_bound: u64,
     /// SPARSE record storage (store seam H1): a lazily attached
     /// arena's records live here, page-by-page, materialized on
@@ -160,7 +171,18 @@ struct SlotBacking {
 }
 
 impl SlotBacking {
-    fn validate_records(&self, page: u32, records: &[Slot]) {
+    /// Check a faulted row against the arena before installing it: its
+    /// exact length, and every live record's references against the
+    /// committed geometry and the LIVE free map (`free_marks`). This is a
+    /// guard against engine bugs, not a check on the store, which the
+    /// store-seam design's trust model trusts: in a correct engine no
+    /// live record references a free slot, so a stored row that does
+    /// dies here, named, instead of aliasing whatever later reuses the
+    /// slot. Two references pass that an honest store never holds: one
+    /// to a slot free in the store that a crank has reused since, and one
+    /// out of range when its row was committed that a later commit's
+    /// growth has brought into range.
+    fn validate_records(&self, page: u32, records: &[Slot], free_marks: &[bool]) {
         let start = page as usize * SLOTS_PER_PAGE as usize;
         // Exact length, both directions: a short row would silently
         // leave placeholder records marked resident; a long row would overrun.
@@ -172,15 +194,12 @@ impl SlotBacking {
             "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
             records.len(),
         );
-        // Leaf hashes prove the row's bytes
-        // are authentic-to-commit, not that its indices are in-arena —
-        // a consistently-resealed hostile store faulted rows whose
-        // references sent the collector out of range (an anonymous
-        // release panic). Refuse AT THE FAULT, named, like the leaf
-        // check above. The chunk-offset bound rides the backing
-        // (`chunk_bound`, the attach-time chunk length), mirroring the
-        // eager gate's rule: a payload offset sits above its 4-byte
-        // header and inside the arena.
+        // A reference out of range would send the collector out of the
+        // arena (an anonymous release panic), so it is refused AT THE
+        // FAULT, named. The chunk-offset bound rides the backing
+        // (`chunk_bound`, the committed chunk length), mirroring the eager
+        // gate's rule: a payload offset sits above its 4-byte header and
+        // inside the arena.
         let capacity = self.snapshot_count;
         for (k, s) in records.iter().enumerate() {
             // A record on the free list is OPAQUE dead bytes: the sweep
@@ -191,7 +210,7 @@ impl SlotBacking {
             // them before `alloc` overwrites (and re-faults) the page,
             // so validating them here refuses honest stores. The eager
             // gate in snapshot's `check_stored_bounds` skips the same records.
-            if self.snapshot_free[start + k] {
+            if free_marks[start + k] {
                 continue;
             }
             s.each_ref_slot(|r| {
@@ -201,7 +220,7 @@ impl SlotBacking {
                     r.0,
                 );
                 assert!(
-                    r.is_null() || !self.snapshot_free[r.0 as usize],
+                    r.is_null() || !free_marks[r.0 as usize],
                     "lazy heap fault: slot page {page} references a free slot ({}) — corrupt store",
                     r.0,
                 );
@@ -629,6 +648,17 @@ pub struct SlotArena {
     /// branched on, so eager machines keep their exact pre-H1 path.
     slots: Vec<Cell<Slot>>,
     free: Vec<u32>,
+    /// The free list's low-water mark: the shortest the list has been
+    /// since the last [`SlotArena::acknowledge_free_list`], or since the
+    /// arena was built, when it starts at the list's length. The list
+    /// changes only at its end — the LIFO pop in [`SlotArena::alloc`] and
+    /// the pushes in [`SlotArena::free`] and the sweep — so every entry
+    /// below the mark is as it was then, and a checkpoint ships only the
+    /// segments from the mark on.
+    free_low: usize,
+    /// The identity the current [`FreeListAck`] carries, replaced by each
+    /// acknowledgement. A new arena's is carried by none.
+    free_ack: Rc<()>,
     /// Twin of `free` as one bit per record, kept in exact sync by
     /// every free-list writer: `free` keeps the LIFO reuse order the
     /// snapshot serializes; this bitmap answers "is `i` free?" in O(1).
@@ -651,8 +681,8 @@ pub struct SlotArena {
     /// Host bookkeeping only — nothing observable reads it, the same
     /// determinism firewall as the cost recorder. `free`/`sweep`/`mark`
     /// do not set bits: they never change record bytes (the free list
-    /// travels in the checkpoint's small state, and mark bits are
-    /// transient).
+    /// travels in its own segment rows, tracked by the low-water mark,
+    /// and mark bits are transient).
     dirty: Vec<bool>,
     /// One bit per page: does this arena's lazy backing NOT hold the
     /// page's current content?
@@ -727,6 +757,8 @@ impl SlotArena {
             property_index: RefCell::default(),
             slots: Vec::new(),
             free: Vec::new(),
+            free_low: 0,
+            free_ack: Rc::default(),
             free_marks: Vec::new(),
             marks: Vec::new(),
             live: 0,
@@ -769,8 +801,10 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
+            free_low: free.len(),
             free,
-            free_marks: free_marks.clone(),
+            free_ack: Rc::default(),
+            free_marks,
             marks: vec![false; slot_count as usize],
             live,
             dirty: vec![false; pages],
@@ -782,7 +816,6 @@ impl SlotArena {
                 commit_identity: None,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
                 snapshot_count: slot_count,
-                snapshot_free: free_marks,
                 chunk_bound,
                 pages: RefCell::new((0..pages).map(|_| None).collect()),
                 count: Cell::new(slot_count),
@@ -814,7 +847,7 @@ impl SlotArena {
             return;
         }
         let records = backing.source.slot_page(page);
-        backing.validate_records(page, &records);
+        backing.validate_records(page, &records, &self.free_marks);
         let start = page as usize * SLOTS_PER_PAGE as usize;
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);
@@ -890,34 +923,6 @@ impl SlotArena {
         self.ensure_page_resident(page);
     }
 
-    /// Validate deferred rows before committing a geometry or free-set
-    /// change that could make a corrupt persisted edge appear valid.
-    /// The caller supplies authenticated rows through its existing store borrow.
-    /// Ordinary checkpoints keep their lazy working set. Reuse or growth
-    /// must validate remaining rows against the OLD backing generation,
-    /// before the durable commit can launder an invalid destination.
-    pub fn validate_backing_before_checkpoint<E>(
-        &self,
-        mut read_page: impl FnMut(u32) -> Result<Vec<Slot>, E>,
-    ) -> Result<(), E> {
-        if let Some(backing) = &self.lazy {
-            if self.capacity() > backing.snapshot_count
-                || backing
-                    .snapshot_free
-                    .iter()
-                    .zip(&self.free_marks)
-                    .any(|(&was_free, &is_free)| was_free && !is_free)
-            {
-                for (page, resident) in backing.resident.iter().enumerate() {
-                    if !resident.get() {
-                        backing.validate_records(page as u32, &read_page(page as u32)?);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Advance the lazy backing to the CURRENT geometry — called by
     /// the store session after ITS OWN successful checkpoint.
     /// Records appended since attach are committed rows
@@ -927,7 +932,7 @@ impl SlotArena {
     /// rather than the attach-time one. No-op on a detached arena.
     ///
     /// `chunk_bound` is the committed chunk-arena length, and moves for
-    /// the same reason the leaves do: a crank that allocates a string
+    /// the same reason the geometry does: a crank that allocates a string
     /// grows the chunk arena, the checkpoint commits slot rows
     /// referencing the new bytes, and those rows are clean — so they
     /// are evictable and CAN fault again. Verified against the
@@ -938,7 +943,6 @@ impl SlotArena {
         let pages = count.div_ceil(SLOTS_PER_PAGE) as usize;
         if let Some(backing) = &mut self.lazy {
             backing.snapshot_count = count;
-            backing.snapshot_free.clone_from(&self.free_marks);
             backing.chunk_bound = chunk_bound;
             while backing.resident.len() < pages {
                 backing.resident.push(Cell::new(true));
@@ -960,6 +964,19 @@ impl SlotArena {
             for page in 0..backing.resident.len() as u32 {
                 self.ensure_page_resident(page);
             }
+        }
+    }
+
+    /// Stop relying on the lazy backing: fault every attach-time page in
+    /// and mark every page unbacked, so no page is evicted and none
+    /// faults from the backing again. No-op on a detached arena.
+    pub fn abandon_backing(&mut self) {
+        if self.lazy.is_some() {
+            self.ensure_all_resident();
+            let pages =
+                (self.capacity().div_ceil(SLOTS_PER_PAGE) as usize).max(self.unbacked.len());
+            self.unbacked.clear();
+            self.unbacked.resize(pages, true);
         }
     }
 
@@ -1025,6 +1042,7 @@ impl SlotArena {
         self.snapshot_dirt.liveness();
         self.live += 1;
         if let Some(i) = self.free.pop() {
+            self.free_low = self.free_low.min(self.free.len());
             self.property_index.get_mut().free(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
@@ -1281,7 +1299,6 @@ impl SlotArena {
                     // The backing's own per-slot bookkeeping, the same kind
                     // of vector the detached arena's bitmaps are.
                     + backing.resident.capacity()
-                    + backing.snapshot_free.capacity()
             }
         };
         records
@@ -1354,6 +1371,39 @@ impl SlotArena {
         &self.free
     }
 
+    /// Acknowledge the free list as the store now holds it, after a
+    /// successful commit, and restart the low-water mark at the list's
+    /// length. Earlier acknowledgements stop being honored. An arena just
+    /// restored from the store is adopted with
+    /// [`SlotArena::free_list_baseline`] instead.
+    pub fn acknowledge_free_list(&mut self) -> FreeListAck {
+        self.free_low = self.free.len();
+        self.free_ack = Rc::new(());
+        FreeListAck {
+            identity: self.free_ack.clone(),
+        }
+    }
+
+    /// An acknowledgement of the list as the arena was built, for a session
+    /// adopting an arena just restored from the store: unlike
+    /// [`SlotArena::acknowledge_free_list`], it keeps the low-water mark, so
+    /// whatever restore itself popped (a layout migration that allocates)
+    /// still reaches the next checkpoint. Only sound on an arena whose list
+    /// was built from the stored one and has not been acknowledged since.
+    pub fn free_list_baseline(&self) -> FreeListAck {
+        FreeListAck {
+            identity: self.free_ack.clone(),
+        }
+    }
+
+    /// How many leading free-list entries are unchanged since `ack`: the
+    /// low-water mark. `None` when this arena did not issue `ack`, or has
+    /// acknowledged again since, and the caller must treat the whole list
+    /// as changed.
+    pub fn free_list_unchanged_prefix(&self, ack: &FreeListAck) -> Option<usize> {
+        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.free_low)
+    }
+
     /// Rebuild an arena from a serialized image: the flat record array, the
     /// free list, and the live count. Marks are reset (a snapshot is taken
     /// on a quiescent machine, outside any collection — design § Snapshots
@@ -1380,7 +1430,9 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
+            free_low: free.len(),
             free,
+            free_ack: Rc::default(),
             free_marks,
             marks,
             live,
@@ -2002,6 +2054,21 @@ impl ChunkArena {
         }
     }
 
+    /// The extent-space twin of [`SlotArena::abandon_backing`]: fault
+    /// every attach-time extent in and mark every extent unbacked. No-op
+    /// on a detached arena.
+    pub fn abandon_backing(&mut self) {
+        if matches!(self.bytes, ChunkBytes::Lazy { .. }) {
+            self.ensure_all_resident();
+            let exts = self
+                .len()
+                .div_ceil(CHUNK_EXTENT_BYTES as usize)
+                .max(self.unbacked.len());
+            self.unbacked.clear();
+            self.unbacked.resize(exts, true);
+        }
+    }
+
     /// Whether every attach-time extent is resident (trivially true
     /// when detached).
     pub fn is_fully_resident(&self) -> bool {
@@ -2433,7 +2500,7 @@ impl ChunkArena {
         }
         let shortened_tail = (new_len < total && new_len % per != 0).then_some(new_len / per);
         if let Some(ext) = shortened_tail {
-            // Even unchanged prefix bytes need a shorter authenticated row.
+            // Even unchanged prefix bytes need a shorter committed row.
             // Read before truncation so a failed fault cannot lose the tail.
             prepared.entry(ext).or_insert_with(|| {
                 let start = ext * per;
@@ -2760,8 +2827,14 @@ mod dirty_tests {
 
     use super::*;
 
+    /// A fault checks a row's references against the LIVE free map. While
+    /// the target is free, a live record referencing it is refused; once a
+    /// crank reuses the slot, the stored reference names a live record
+    /// again and passes. The store-seam design's trust model gives that
+    /// second case up: an honest store never holds a reference to a free
+    /// slot, and the explicit validator checks the stored bytes.
     #[test]
-    fn lazy_fault_cannot_hide_a_free_target_by_reusing_it_first() {
+    fn lazy_fault_checks_references_against_the_live_free_map() {
         struct CrossPage;
         impl PageSource for CrossPage {
             fn slot_page(&self, page: u32) -> Vec<Slot> {
@@ -2783,19 +2856,27 @@ mod dirty_tests {
                 unreachable!()
             }
         }
-        let mut arena = SlotArena::lazy_from_parts(
-            SLOTS_PER_PAGE + 1,
-            vec![SLOTS_PER_PAGE],
-            SLOTS_PER_PAGE,
-            Rc::new(CrossPage),
-            64,
-        );
-        assert_eq!(arena.alloc(Slot::undefined()), SlotIndex(SLOTS_PER_PAGE));
+        let arena = || {
+            SlotArena::lazy_from_parts(
+                SLOTS_PER_PAGE + 1,
+                vec![SLOTS_PER_PAGE],
+                SLOTS_PER_PAGE,
+                Rc::new(CrossPage),
+                64,
+            )
+        };
+        let free = arena();
         let panic =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arena.get(SlotIndex(1))))
-                .expect_err("reuse must not launder a persisted live-to-free edge");
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| free.get(SlotIndex(1))))
+                .expect_err("a live-to-free edge dies at its fault");
         let message = panic.downcast_ref::<String>().expect("named fault");
         assert!(message.contains("references a free slot"), "{message}");
+        let mut reused = arena();
+        assert_eq!(reused.alloc(Slot::undefined()), SlotIndex(SLOTS_PER_PAGE));
+        assert_eq!(
+            reused.get(SlotIndex(1)).value,
+            Payload::Reference(SlotIndex(SLOTS_PER_PAGE))
+        );
     }
 
     #[test]
@@ -2891,6 +2972,71 @@ mod dirty_tests {
         assert_eq!(arena.resident_extent_count(), 0);
         assert!(arena.dirty_extents().is_empty());
         assert!(arena.unbacked.iter().all(|flag| !flag));
+    }
+
+    /// The free-list low-water mark: pops lower it, pushes (a free, a
+    /// sweep) leave it, and an acknowledgement restarts it at the list's
+    /// length. The acknowledgement is honored only by the arena that issued
+    /// it and only until the next one.
+    #[test]
+    fn free_list_low_water_mark_tracks_the_unchanged_prefix() {
+        let mut a = SlotArena::new();
+        let slots: Vec<SlotIndex> = (0..6).map(|i| a.alloc(Slot::integer(i))).collect();
+        for &slot in &slots[..4] {
+            a.free(slot);
+        }
+        let ack = a.acknowledge_free_list();
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(4));
+
+        // Pushes leave the prefix alone.
+        a.free(slots[4]);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(4));
+        // Pops lower it, even when a push restores the length.
+        a.alloc(Slot::integer(7));
+        a.alloc(Slot::integer(8));
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+        a.free(slots[5]);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+        assert_eq!(a.free_list().len(), 4);
+        // A sweep's pushes leave it too.
+        a.clear_marks();
+        assert!(a.sweep() > 0);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+
+        // A second acknowledgement restarts the mark and retires the first.
+        let next = a.acknowledge_free_list();
+        assert_eq!(a.free_list_unchanged_prefix(&ack), None);
+        assert_eq!(
+            a.free_list_unchanged_prefix(&next),
+            Some(a.free_list().len())
+        );
+
+        // Another arena, even one with the same list, honors neither.
+        let twin = SlotArena::from_image(a.records(), a.free_list().to_vec(), a.live_count());
+        assert_eq!(twin.free_list_unchanged_prefix(&next), None);
+        assert_eq!(twin.free_list_unchanged_prefix(&ack), None);
+    }
+
+    /// An arena adopted as restored keeps the mark it was built with, so
+    /// what restore itself pops still counts as changed even when a push
+    /// restores the length; an acknowledgement would restart the mark.
+    #[test]
+    fn a_free_list_baseline_keeps_the_build_time_mark() {
+        let mut a = SlotArena::new();
+        let slots: Vec<SlotIndex> = (0..5).map(|i| a.alloc(Slot::integer(i))).collect();
+        for &slot in &slots[..3] {
+            a.free(slot);
+        }
+        let mut restored =
+            SlotArena::from_image(a.records(), a.free_list().to_vec(), a.live_count());
+        restored.alloc(Slot::integer(9));
+        restored.free(slots[3]);
+        assert_eq!(restored.free_list().len(), 3);
+        let baseline = restored.free_list_baseline();
+        assert_eq!(restored.free_list_unchanged_prefix(&baseline), Some(2));
+        let ack = restored.acknowledge_free_list();
+        assert_eq!(restored.free_list_unchanged_prefix(&ack), Some(3));
+        assert_eq!(restored.free_list_unchanged_prefix(&baseline), None);
     }
 
     #[test]

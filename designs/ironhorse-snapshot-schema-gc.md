@@ -3,7 +3,7 @@
 |             |                                                                             |
 | ----------- | --------------------------------------------------------------------------- |
 | **Created** | 2026-09-08                                                                  |
-| **Updated** | 2026-09-08                                                                  |
+| **Updated** | 2026-09-24                                                                  |
 | **Author**  | kumavis (prompted)                                                          |
 | **Status**  | Proposed                                                                    |
 | **Source**  | Relocated from `rust/endo/ironhorse-store-sqlite/GC_SCHEMA_REQUIREMENTS.md` |
@@ -12,6 +12,10 @@ Part of the [snapshot schema design](ironhorse-snapshot-schema.md).
 
 Status: proposed requirements and research directions, not a selected physical schema.
 Written 2026-09-08 against experiment branch revision `58d42d961` and its `llm` base.
+The generational and SQLite graph-query rows and GC-8 were revised on 2026-09-23, the last two
+for [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330).
+The maintained-state row, GC-2, GC-8 and the source map were revised again on 2026-09-24 for the
+store seam's trust model.
 This is a separate perspective from [snapshot surgery](ironhorse-snapshot-schema-surgery.md).
 For inspection and debugger interoperability, see
 [the debugging perspective](ironhorse-snapshot-schema-debugging.md).
@@ -42,9 +46,9 @@ Backend vacuuming and retained-artifact policy require their own measurements an
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Full GC                  | Slot mark/sweep, owner-associated side-state edges, ephemeron fixpoint, chunk compaction and reference rewriting.                           | Content traversal and chunk relocation can defeat cold-heap residency; there are scans over slot capacity.                                                 |
 | Partial GC               | At a clean checkpoint boundary, traces persisted page summaries from VM roots and side-state reference pages, then frees unreachable pages. | A reachable page retains co-resident garbage. Treating side-state references as roots also retains values of dead owners until a more precise pass.        |
-| Generational summary GC  | Reverse-edge seeds plus reachability restricted to pages changed since the session's last collection.                                       | `gen_dirty` is session-local and resets on resume. The code explicitly says it is test-only and must not replace scheduled partial GC until this is fixed. |
-| SQLite graph queries     | `edge_pairs(target,page)` plus a forward index support indexed reachability and incoming-edge queries.                                      | Reduced result transfer does not bound internal query work. The derived index is rebuilt at open.                                                          |
-| Integrity and allocation | Sealed page summaries, row hashes, Merkle-root maintenance, segmented free-list state, epoch/seal checks.                                   | Collection must keep all these consistent; free-list order affects future allocation and canonical state.                                                  |
+| Generational summary GC  | Reverse-edge seeds plus reachability restricted to pages changed since the session's last collection.                                       | `gen_dirty` is session-local and resets on resume. The code explicitly says it is test-only and must not replace scheduled collection until this is fixed. |
+| SQLite graph queries     | `edge_pairs(target,page)` plus a forward index support indexed reachability and incoming-edge queries.                                      | Reduced result transfer does not bound internal query work. Open trusts the index on its epoch marker without re-deriving it (GC-8).                       |
+| Maintained state         | Page summaries, free-list segments, `free_len`, the epoch and commit token (the store seam's phase 13 dropped row hashes, root and seals).| Collection must keep these consistent; free-list order affects future allocation and canonical state.                                                      |
 | Side-state storage       | Arrays, collections, functions, promises and continuations are represented in decoded VM tables and encoded small-state sections.           | The store does not offer independently keyed persistence/query operations for each of these semantic rows.                                                 |
 
 These statements follow the implementation, not every historical aspiration in the large
@@ -103,7 +107,7 @@ Current `derive_page_edges` visits all encoded slot records without an allocatio
 Because freeing a slot leaves its bytes unchanged, stale edges in free records on a reachable page
 can also retain other pages.
 An occupancy-aware summary would need allocation-state changes, not just payload writes, to trigger
-recomputation and integrity updates.
+recomputation.
 
 ### GC-3: Make incremental collection state survive suspension
 
@@ -190,20 +194,37 @@ The [unedited restore/GC regression](ironhorse-snapshot-schema-surgery.md#indepe
 shows why repeated compact/restore/collect cycles belong in acceptance tests.
 Its suspected cause is not yet a proven schema defect or an argument for a particular chunk layout.
 
-### GC-8: Distinguish authoritative state, verified summaries and disposable indexes
+### GC-8: Distinguish authoritative state, maintained summaries and disposable indexes
 
-For each derived structure, name its source, schema version, integrity coverage, invalidation rule,
-and rebuild/verification procedure.
-The current `page_edges` summaries are integrity-covered; SQLite `edge_pairs` is rebuilt from them
-and protected from competing writers while the store is in use.
-A new index cannot become trusted for freeing data simply because its row count matches.
-Hashes establish consistency of encoded evidence, not completeness of a forgotten tracing rule.
+For each derived structure, name its source, schema version, maintenance and invalidation rule,
+rebuild procedure, and the validator check that re-derives it from its source.
+The resident store is trusted (the
+[store seam's trust model](ironhorse-snapshot-store-seam.md), decided 2026-09-24 and
+implemented by its phase 13).
+Open verifies no derived state and re-derives only the SQLite edge index, when its marker is
+stale, so a derived structure is correct only if it is maintained in the same transaction as its
+source.
+The `page_edges` summaries are derived from slot pages at checkpoint and travel in the commit that
+writes those pages; SQLite `edge_pairs` is derived from the summaries in each commit transaction and
+protected from competing writers while the store is in use.
+A new index cannot become authoritative for freeing data simply because its row count matches: it
+needs a maintenance rule that keeps it complete, and a validator check that re-derives it.
+Agreement between encoded structures does not establish the completeness of a forgotten tracing
+rule.
 
 Measure open-time rebuilds and validation separately from steady-state collection.
-The current SQLite rebuild is a metadata read-and-write pass, not just index lookup latency.
-If faster warm opens are needed, consider transactionally maintained, verifiable index generations
-or authenticated summaries; preserving detection of stale/corrupted data is a requirement.
-Bulk side-state normalization must bring corresponding ownership, mutation and integrity rules.
+SQLite `edge_pairs` carries a transactionally maintained index generation
+([#1330](https://github.com/endojs/endo-but-for-bots/issues/1330)): each commit records its epoch
+in `meta.edge_pairs_epoch` beside the pairs it maintained.
+Open trusts an index whose marker names the committed epoch, and runs the rebuild (a metadata
+read-and-write pass) only when the marker is missing or stale, as it is for a store last committed
+by a build that does not keep the marker.
+The marker says which epoch the index was maintained for, not that its rows are right, so a bug in
+commit-time maintenance persists across reopens.
+Deleting the marker from a closed store forces the next open to rebuild it, and the validator's
+full level compares the index with the summaries.
+An offline edit of a source row must likewise rebuild or invalidate what derives from it.
+Bulk side-state normalization must bring corresponding ownership, mutation and consistency rules.
 
 ### GC-9: Bound transient residency and metadata growth, not only payload reads
 
@@ -280,7 +301,7 @@ Full relational normalization remains a candidate implementation, not the requir
 - [Store collectors](../rust/engine/ironhorse-snapshot/src/machine.rs): `partial_collect`,
   `generational_collect` and the documented resume restriction.
 - [Logical store](../rust/engine/ironhorse-snapshot/src/store.rs): `HeapStore`, `CheckpointBatch`,
-  `derive_page_edges`, integrity roots and free-segment records.
+  `derive_page_edges`, free-segment records and the commit token.
 - [SQLite implementation](../rust/endo/ironhorse-store-sqlite/src/lib.rs): graph indexes, atomic batches and derived-index rebuilding.
 
 ## Prompt

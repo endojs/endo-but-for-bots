@@ -27,6 +27,7 @@
 #[path = "common/compile.rs"]
 mod guest_compile;
 use guest_compile::compile;
+use ironhorse_snapshot::CommitToken;
 
 use ironhorse_snapshot::machine::MachineSnapshotError;
 use ironhorse_snapshot::machine::{
@@ -976,15 +977,18 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
 }
 
 /// An external caller can no longer poison a runnable machine's property
-/// records. Malformed keys supplied in an offline image must be refused by
-/// eager adoption. Lazy adoption defers heap validation, so publication must
-/// still refuse if attachment itself does not.
+/// records. A container holding a malformed key is refused at decode. A
+/// store is trusted (the store-seam design's trust model), so neither resume
+/// path audits one for a malformed key; the full validator refuses it, and a
+/// machine resumed from it still cannot publish it, so the key cannot
+/// travel on.
 #[test]
 fn a_stored_unregistered_key_id_refuses_adoption_or_publication() {
     use ironhorse_snapshot::{
         image::write_machine_unchecked,
-        machine::{from_snapshot_bytes, resume_from_store, resume_from_store_lazy},
-        store::{image_to_batch_unchecked, HeapStoreCommit},
+        machine::{from_snapshot_bytes, resume_from_store, resume_from_store_lazy, StoreSession},
+        store::{image_to_batch_unchecked, validate_store_content, HeapStoreCommit},
+        SnapshotError,
     };
     use std::{cell::RefCell, rc::Rc};
     let (b, n) = compile("var x = 0; x = 41; x");
@@ -1004,34 +1008,44 @@ fn a_stored_unregistered_key_id_refuses_adoption_or_publication() {
     assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_err());
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
-    assert!(resume_from_store(&store, &sig()).is_err());
-    if let Ok(lazy) = resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig()) {
-        use ironhorse_snapshot::SnapshotError;
-        const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
+    const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
+    assert_eq!(
+        validate_store_content(&store, &sig()).err(),
+        Some(StoreError::Snapshot(SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables"
+        )))
+    );
+    let publication_refuses = |session: StoreSession| {
         assert!(matches!(
-            lazy.machine().snapshot_image(&sig()),
+            session.machine().snapshot_image(&sig()),
             Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
                 REFUSAL
             )))
         ));
         assert!(matches!(
-            lazy.machine().write_snapshot(&sig()),
+            session.machine().write_snapshot(&sig()),
             Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
                 REFUSAL
             )))
         ));
         let mut destination = MemoryStore::new();
         assert!(matches!(
-            begin_store_session(lazy.into_machine(), &sig(), &mut destination),
+            begin_store_session(session.into_machine(), &sig(), &mut destination),
             Err((_, StoreError::Snapshot(SnapshotError::Corrupt(REFUSAL))))
         ));
         assert!(
             destination.manifest().is_err(),
             "refused publication writes nothing"
         );
-    }
+    };
+    // Resume trusts the stored ids; publication is where they are audited.
+    publication_refuses(resume_from_store(&store, &sig()).expect("eager resume adopts the store"));
+    publication_refuses(
+        resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig())
+            .expect("lazy resume adopts the store"),
+    );
 }
 
 /// A metered crank the host refuses at a TOP-LEVEL loop-closing check:
