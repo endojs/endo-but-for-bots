@@ -202,6 +202,298 @@ reader of guest-writable content; do not extend it to ingest checkpoints.
 An in-sandbox data-only capture using the existing process transport is the
 bounded direction under review, not a new durable storage/lifecycle owner.
 
+Implementation in progress: an image-baked helper reads the native JSONL inside
+the sandbox after the CLI exits and returns a complete summary/retained-tail
+projection through the existing process transport.
+The client validates the whole capture before emitting a canonical checkpoint;
+failure or cancellation publishes none.
+Independent review found that failed capture could otherwise leave unrecorded
+native compaction resumable on the next turn.
+The implementation now invalidates live resume after every observed boundary,
+including successful capture: the next turn restores host-selected records,
+because reader delivery alone does not acknowledge durable journal storage.
+Success/failure-to-next-turn regressions pass and independent review approves
+this live-resume invalidation.
+The first helper draft omitted token-budget reminders and refused signed thinking.
+Following the operator decision below, the helper now also emits selected raw
+native JSONL, retaining signed/redacted thinking, grouping and token attachments.
+Only the portable projection omits these backend-specific blocks.
+Duplicate comparison includes native content/signatures, not just projected text.
+Twenty-four helper tests pass; targeted types and lint pass (one warning).
+This native envelope is not yet threaded through the client, journal or writer;
+the worktree must not be deployed as if native preservation were complete.
+This work is uncommitted and undeployed; production acceptance remains outstanding.
+
+Operator decision (2026-09-24): preserve backend-specific signed/opaque context;
+do not deliberately omit reasoning to fit the current portable transcript.
+The existing Claude writer splits message blocks into separate envelopes and
+reconstructs tool adjacency, while `splitAtLastCompaction` expands the portable
+tail and discards its original grouping.
+Adding a thinking-text field would not preserve native continuation semantics.
+Anthropic's [preserved-thinking documentation](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)
+and [compaction binding rules](https://platform.claude.com/docs/en/build-with-claude/compaction-thinking-blocks)
+also distinguish preserving bytes from preserving the prefix to which they bind.
+The API rules are research evidence, not proof that our pinned CLI uses that
+particular API compaction mechanism.
+
+Next implementation contract to review:
+
+- Keep one durable owner: store a data-only native context envelope in the
+  existing Floot transcript journal, alongside the portable context projection.
+  No filesystem path, executable operation, credential, or capability belongs
+  in that envelope; backend context must never settle host effect evidence.
+- Identify the format and producing runtime explicitly, and preserve native
+  message grouping, signed/redacted blocks, ordered attachments, and the exact
+  context cut represented by the envelope.
+  Native restoration replaces only that covered context span; subsequent host
+  records and unresolved effect evidence still have to be included exactly once.
+  Repeated projection must preserve this coverage rather than expanding it twice.
+- A matching adapter validates the envelope and restores it without rewriting
+  its signed payloads.
+  An incompatible adapter/format must report the incompatibility explicitly;
+  silently falling back to a reasoning-free projection is not this decision.
+- Determine which pinned-CLI envelope metadata and request-prefix inputs must
+  survive restoration before selecting the serialized schema.
+  System/tool changes can invalidate signed blocks even if their bytes survive;
+  do not claim fidelity from a JSON round trip or a synthetic signature alone.
+- Cover ordinary completed turns as well as compaction, cancellation and
+  restart: preserving native context only at compaction leaves the same loss
+  on a restart before the first checkpoint.
+  Test journal reconstruction and actual pinned-CLI subsequent requests, then
+  provider acceptance of real signed context where applicable.
+
+The original helper's reasoning refusal and token-reminder omission were
+temporary implementation limitations, not the selected final contract.
+Independent review additionally found unchecked suffix ancestry.
+The helper now validates a strict boundary/summary/suffix parent chain, rejects
+divergent or missing ancestors and conflicting duplicate ancestry, and preserves
+benign pre-boundary native metadata rewrites.
+Independent review and 21 helper tests approve this limited supported shape.
+An added generic hosted-turn test proves retained tool/answer context survives
+same-journal reconstruction exactly once, without re-executing the tool.
+It does not establish native signed-context fidelity or an actual daemon restart.
+The full Claude suite passed 262 tests before the additional ancestry cases;
+production types and root documentation gate pass, scoped lint has no errors.
+
+Host probe commit `0417193` adds synthetic signed-thinking restoration evidence.
+An isolated pinned-CLI run copied the full native JSONL into a fresh configuration
+and resumed both copies with distinct prompts.
+Assertions required fresh requests with those prompts and identical historical
+message prefixes; two synthetic signed-thinking blocks and a retained tool pair
+survived restoration.
+This is evidence for preserving native grouping, not cryptographic validity:
+the loopback fake API does not check signatures, the comparison excludes system
+and tool headers, and the restored file still includes superseded history.
+Host probe commit `be2e8ee` then exercised a pruned native copy: 60 rows became
+11 retained-UUID/boundary/suffix rows, with identical historical request messages
+and both synthetic thinking blocks preserved.
+The experimental selector is not the production ancestry/duplicate validator.
+The production journal/restore path and real signature acceptance remain untested.
+The capture helper now preserves a native JSONL envelope alongside the portable
+projection rather than dropping signed/opaque blocks.
+Keep the envelope paired with its covered host context as one journal unit;
+do not use a bare count of following flattened records as its coverage contract.
+Ordinary-turn capture and incompatible-runtime refusal remain required work.
+Further review excluded operational queue/progress/file-history/last-prompt
+records from the native payload; last-prompt leaf metadata is validated but not
+imported.
+The helper suite now passes 25 cases, including metadata canaries.
+A context-only pinned-CLI rerun reduced 58 rows to 8 while preserving the same
+historical request messages and two synthetic thinking blocks.
+An isolated on-disk counter verified one native Bash execution across both
+original and restored runs, not a replay of the retained tool call.
+This does not establish Endo-effect reconciliation or real signature acceptance.
+
+Native-context wiring WIP (2026-09-24, uncommitted): the shared record now pairs
+`format`, `payload` and a flat portable `context` in one immutable journal value.
+`selectActiveTranscript` replaces the compaction-only selector and preserves an
+atomic native snapshot plus its suffix across repeated selection.
+The Claude client and translator pass the native capture through to hosted-turn
+journaling; the native payload is not copied into UI segments or treated as a
+tool execution.
+Archive checkpoint indexing and context selection recognize this record.
+Generic Responses, direct-provider and OpenCode restoration refuse unsupported
+native context explicitly.
+The Claude portable writer also refuses it until the sandbox-native importer is
+implemented; this is intentionally not a deployable candidate yet.
+
+Recovery now refuses ambiguous native restoration when prior, same-turn or later
+selected turns contain unresolved/recovered effects or incomplete transcripts.
+It preserves the journal evidence rather than rewriting signed tool IDs.
+New regressions cover later-turn ambiguity and atomic hosted-turn journaling.
+The initial combined schema/client/translation/index suite passed 123 tests;
+the expanded suite passes 150 tests.
+Shared declaration regeneration encountered TS5055 stale generated declaration
+inputs; downstream type validation remains outstanding until those artifacts
+are regenerated safely.
+Independent review agents stopped on usage limits during this slice, so none of
+these schema/storage/wiring changes has received final review or been committed.
+Remaining implementation includes the sandbox-native importer, ordinary-turn
+capture, runtime/account/prefix binding validation and actual journal-to-CLI
+restoration acceptance.
+
+Follow-up verification: regenerated the shared transcript declaration into a
+temporary output directory and replaced only its ignored generated declaration;
+the Claude downstream production typecheck now passes.
+Hosted-turn now refuses native-context events when no durable transcript recorder
+is supplied, instead of silently consuming and discarding their native payload.
+Regressions verify both missing-recording and failed-write paths never seal a
+completed transcript and interrupt the producer.
+The full Floot runtime suite passes 685 tests; scoped wiring lint reports zero
+errors and 48 warnings.
+Floot's full TypeScript configuration still reports 99 errors in test files;
+this is not a green full-package type gate, and no baseline attribution is
+claimed here.
+The separate source-only check attempted from a temporary config could not resolve
+the Node type library, so it is not counted as successful verification.
+The application work remains uncommitted, unreviewed as a whole and undeployed.
+
+Sandbox importer WIP: `claude-sandbox/oci/restore-context.mjs` accepts one bounded
+native-context value on stdin, checks the pinned version, session and current
+workspace, and stages its bytes in an invocation-private sandbox directory.
+It reruns the existing capture validator there and requires exact native-byte
+and portable-context agreement before publishing to the sandbox configuration.
+This reuses ancestry/block validation instead of introducing a second parser.
+Operational queue/progress/file-history rows are refused, not imported.
+Publication uses an exclusive temporary file and atomic rename; a leaf symlink
+is replaced rather than followed.
+No transcript-provided path determines an I/O destination.
+The journal remains the durable owner; this output is a native projection.
+The helper initially accepted only the observed compacted format; ordinary-turn
+support was subsequently added as described below.
+Appended portable suffix restoration remains unsupported.
+
+Capture/import suites pass 34 tests, including exact-byte import, mismatched
+format/projection/version/workspace, torn or divergent ancestry, queued-action
+refusal, and an unchanged symlink target.
+Claude production typechecking passes with the helper included.
+The importer is now wired into the session client's non-live restoration path:
+it runs in the existing slice, receives the atomic checkpoint only on stdin,
+and must exit successfully with a validated session UUID before the client can
+spawn Claude with the new prompt.
+Its process is registered with the current turn's cancellation/termination
+tracking; admission checks follow slice acquisition, helper acquisition, stdin
+acquisition and helper completion.
+Turn cleanup now runs even when preparation fails, not only after inference.
+The portable host writer remains unused for native snapshots.
+Native snapshots with subsequent records are explicitly refused pending suffix
+restoration, rather than silently dropping those records.
+Client tests cover ordering, failed import and cancellation during stdin
+acquisition; combined client/importer tests pass 67 cases.
+Claude production types pass; client scoped lint has zero errors (18 warnings).
+The integration and importer safety/lifecycle changes still need independent
+review and real sandbox acceptance before deployment.
+Account/system/tool-prefix binding and real-signature acceptance remain separate
+requirements; these local tests do not prove them.
+
+Ordinary-turn capture WIP: the client records the main session's validated native
+UUID from its init event and captures context after each successful native turn,
+not only after a compaction notification.
+The helper's generic capture mode scans boundary metadata with bounded frames,
+then validates the selected native context on a separate pass.
+When no compaction exists, it requires a complete parent chain rooted at null,
+preserves signed/redacted native blocks, and emits portable dialogue without an
+invented summary.
+When a prior boundary exists, it resolves that boundary's retained IDs and suffix.
+The importer uses the same generic validator, so ordinary context is importable.
+Every observed native turn invalidates live resume at completion or failure;
+the following turn selects host-journal context rather than trusting an
+unacknowledged native store.
+
+The combined client/capture/import suite passed 96 tests before the additional
+ordinary-import round-trip case; Claude production typechecking passes.
+Tests cover ordinary signed-block retention, boundary rediscovery, refusal of
+an orphan suffix, and capture without a compaction event.
+These fixtures do not replace actual pinned-runtime acceptance of the helpers.
+Native suffix handling, prefix/account bindings, independent review and deployment
+remain outstanding.
+
+Actual helper acceptance (2026-09-24): isolated Tokyo runs used the candidate
+capture/import sources with the pinned Claude image and a loopback fake API.
+Automatic compaction selected 8 of 58 native rows, preserved two synthetic signed
+thinking blocks, and produced identical historical request messages after import.
+The native Bash counter remained one across original and restored continuations.
+An ordinary first-turn round-trip selected 4 of 7 rows, preserved one synthetic
+thinking block, and also produced identical historical messages.
+Both disposable containers were removed; no production deployment occurred.
+This validates helper transport, not real signature acceptance, account/prefix
+compatibility, or complete journal-to-client recovery.
+See `endo-host/ops/claude-compaction-probe-20260924.md` for the reproducible probe.
+
+Independent review resumed and identified explicit deployment blockers:
+
+- Failed/cancelled turns after a native snapshot currently prevent continuation,
+  even without tool effects. Safe suffix/recovery handling is not implemented.
+- Portable restoration writes `version: 'endo-restored'`, but native import
+  requires the pinned CLI version. A newly portable-restored history must not
+  publish a checkpoint that its next turn cannot consume.
+- Runtime/model/system/tool/account binding compatibility remains unproved.
+
+Review fixes in the working tree now reject missing journal context on subsequent
+native sends instead of silently starting a new conversation, pass only bounded
+session/boundary identities to capture instead of large metadata in argv, and
+keep forensic transcript reads available after a failed checkpoint turn.
+Model-context selection still refuses unresolved/recovered evidence; the forensic
+fix does not authorize inference or settle any effect.
+These fixes require the final review/test pass before application commits.
+
+Scoped re-review approved those three corrective changes, not the whole candidate.
+The focused Claude client/capture/import suites pass 99 tests; the forensic/context
+selection suites pass 50 tests. Scoped ESLint reports zero errors and 26 warnings,
+and the repository documentation gate passes.
+The full Claude package typecheck reports 41 errors in test files (no baseline
+attribution claimed); it is not a green full-package gate.
+The reviewed helper probe is committed in endo-host as `a60b2ae`.
+Application changes remain uncommitted and undeployed pending the blockers above.
+
+Portable/native continuation follow-up: the importer now recognizes the current
+portable writer's `endo-restored` provenance for text/tool dialogue only.
+It does not relabel that data as CLI-authored, and signed/redacted blocks still
+require the pinned native version.
+A mixed-history test uses the actual portable writer, includes a settled tool
+pair, appends signed native context, and verifies exact-byte restoration and
+unchanged destination bytes after refusing forged portable provenance.
+The pinned-runtime probe initially failed despite the unit round-trip: resuming
+the portable seed appends a `mode` record after the context leaf.
+Capture now excludes that operational metadata rather than restoring it.
+The rerun selected 6 of 10 rows and preserved the identical historical messages
+and one synthetic thinking block across fresh import.
+Real signature acceptance remains untested.
+
+Failed-turn continuation design constraint, established by current-code review:
+the journal records host dispatch, terminal status and effects, but no durable
+backend prompt-admission receipt.
+The hosted runner's volatile `delivered` flag and absence of tool rows cannot
+prove that no signed context was produced.
+Do not fix retries by dropping failed turns or treating missing events as proof.
+The next implementation needs two distinct cases:
+
+- After confirmed producer exit, capture and journal a complete native checkpoint
+  even if the turn failed; context completeness is distinct from terminal success.
+  Require exact reconciled tool evidence, preserve the failure notice, and append
+  any synthetic suffix without rewriting the native prefix.
+- For a host-provable pre-send refusal, record non-admission/context-unchanged
+  evidence durably before reusing the prior checkpoint.
+
+Cancellation currently closes the reader before a final capture could be
+delivered. It therefore needs an explicit post-stop checkpoint result path;
+sending a checkpoint to the closed reader is not durability.
+Incomplete capture or unknown effects must remain explicit restoration failures.
+Required regressions include success/pre-send-failure/retry, signed-thinking
+failure/retry, cancellation/restart/retry, unchanged native prefix bytes, one
+failure notice, and continued refusal of unresolved tool effects.
+
+Standalone helper slice: independent adversarial review approves committing the
+two sandbox parser/importer helpers, their synthetic fixtures/tests, and OCI
+source typechecking separately from runtime wiring.
+The latest helper suites pass 41 tests, production Claude types pass, and scoped
+lint reports zero errors and three warnings.
+The final mixed-history Tokyo probe also asserts consumption of both portable
+seed messages before capture/import; containers were removed afterward.
+This slice does not add the helpers to an image or activate them in production.
+Containerfile/client/shared-record/journal wiring remains uncommitted work;
+the open continuation and signed-prefix gates above still block deployment.
+
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
 settled-turn window. The module header's earlier unconditional bounded-memory

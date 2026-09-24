@@ -1,0 +1,481 @@
+{
+  "provenance": "Synthetic offline Claude 2.1.233 probe, Tokyo 2026-09-24. Relevant native rows preserved verbatim; unrelated earlier rows omitted.",
+  "boundary": {
+    "type": "system",
+    "subtype": "compact_boundary",
+    "session_id": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+    "uuid": "395d32e8-f78b-4158-b878-22b5d3b9bf61",
+    "compact_metadata": {
+      "trigger": "auto",
+      "pre_tokens": 190046,
+      "post_tokens": 230,
+      "cumulative_dropped_tokens": 189816,
+      "duration_ms": 10,
+      "preserved_segment": {
+        "head_uuid": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+        "anchor_uuid": "a2b91e4d-1688-475b-b870-1dfce53d95ff",
+        "tail_uuid": "3fcf588a-eff8-4d61-9948-814069ce1d22"
+      },
+      "preserved_messages": {
+        "anchor_uuid": "a2b91e4d-1688-475b-b870-1dfce53d95ff",
+        "uuids": [
+          "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+          "b33d013d-1745-4edd-b606-ae473695c437",
+          "3fcf588a-eff8-4d61-9948-814069ce1d22"
+        ],
+        "all_uuids": [
+          "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+          "b33d013d-1745-4edd-b606-ae473695c437",
+          "3fcf588a-eff8-4d61-9948-814069ce1d22"
+        ]
+      }
+    },
+    "logical_parent_uuid": "3fcf588a-eff8-4d61-9948-814069ce1d22"
+  },
+  "rows": [
+    {
+      "parentUuid": "8ad685a4-8835-40d0-8bed-7ef7934cfdbb",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_probe_7",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "probe_tool_1",
+            "name": "Bash",
+            "input": {
+              "command": "printf \"PROBE_TOOL_RESULT\\n\"",
+              "description": "Print synthetic probe text"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 190000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 20,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "stop_details": null
+      },
+      "type": "assistant",
+      "uuid": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+      "timestamp": "2026-09-24T01:57:18.550Z",
+      "effort": "high",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD"
+    },
+    {
+      "parentUuid": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+      "isSidechain": false,
+      "promptId": "2b771ad4-5dd0-489e-8052-4d434fd4ccd8",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "probe_tool_1",
+            "type": "tool_result",
+            "content": "PROBE_TOOL_RESULT",
+            "is_error": false
+          }
+        ]
+      },
+      "uuid": "b33d013d-1745-4edd-b606-ae473695c437",
+      "timestamp": "2026-09-24T01:57:18.598Z",
+      "toolUseResult": {
+        "stdout": "PROBE_TOOL_RESULT",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      },
+      "sourceToolAssistantUUID": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD"
+    },
+    {
+      "parentUuid": "b33d013d-1745-4edd-b606-ae473695c437",
+      "isSidechain": false,
+      "attachment": {
+        "type": "total_tokens_reminder",
+        "text": "<total_tokens>14811500 tokens left</total_tokens>"
+      },
+      "type": "attachment",
+      "uuid": "3fcf588a-eff8-4d61-9948-814069ce1d22",
+      "timestamp": "2026-09-24T01:57:18.599Z",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD"
+    },
+    {
+      "parentUuid": "8ad685a4-8835-40d0-8bed-7ef7934cfdbb",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_probe_7",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "probe_tool_1",
+            "name": "Bash",
+            "input": {
+              "command": "printf \"PROBE_TOOL_RESULT\\n\"",
+              "description": "Print synthetic probe text"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 190000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 20,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "stop_details": null
+      },
+      "type": "assistant",
+      "uuid": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+      "timestamp": "2026-09-24T01:57:18.550Z",
+      "effort": "high",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+      "isSidechain": false,
+      "promptId": "2b771ad4-5dd0-489e-8052-4d434fd4ccd8",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "probe_tool_1",
+            "type": "tool_result",
+            "content": "PROBE_TOOL_RESULT",
+            "is_error": false
+          }
+        ]
+      },
+      "uuid": "b33d013d-1745-4edd-b606-ae473695c437",
+      "timestamp": "2026-09-24T01:57:18.598Z",
+      "toolUseResult": {
+        "stdout": "PROBE_TOOL_RESULT",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      },
+      "sourceToolAssistantUUID": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": "b33d013d-1745-4edd-b606-ae473695c437",
+      "isSidechain": false,
+      "attachment": {
+        "type": "total_tokens_reminder",
+        "text": "<total_tokens>14811500 tokens left</total_tokens>"
+      },
+      "type": "attachment",
+      "uuid": "3fcf588a-eff8-4d61-9948-814069ce1d22",
+      "timestamp": "2026-09-24T01:57:18.599Z",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": null,
+      "logicalParentUuid": "3fcf588a-eff8-4d61-9948-814069ce1d22",
+      "isSidechain": false,
+      "type": "system",
+      "subtype": "compact_boundary",
+      "content": "Conversation compacted",
+      "isMeta": false,
+      "timestamp": "2026-09-24T01:57:18.611Z",
+      "uuid": "395d32e8-f78b-4158-b878-22b5d3b9bf61",
+      "level": "info",
+      "compactMetadata": {
+        "trigger": "auto",
+        "preTokens": 190046,
+        "durationMs": 10,
+        "preservedSegment": {
+          "headUuid": "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+          "anchorUuid": "a2b91e4d-1688-475b-b870-1dfce53d95ff",
+          "tailUuid": "3fcf588a-eff8-4d61-9948-814069ce1d22"
+        },
+        "preservedMessages": {
+          "anchorUuid": "a2b91e4d-1688-475b-b870-1dfce53d95ff",
+          "uuids": [
+            "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+            "b33d013d-1745-4edd-b606-ae473695c437",
+            "3fcf588a-eff8-4d61-9948-814069ce1d22"
+          ],
+          "allUuids": [
+            "04e000b3-34cb-4afb-a82b-2e9a9b764336",
+            "b33d013d-1745-4edd-b606-ae473695c437",
+            "3fcf588a-eff8-4d61-9948-814069ce1d22"
+          ]
+        },
+        "postTokens": 230,
+        "cumulativeDroppedTokens": 189816
+      },
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": "395d32e8-f78b-4158-b878-22b5d3b9bf61",
+      "isSidechain": false,
+      "promptId": "2b771ad4-5dd0-489e-8052-4d434fd4ccd8",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nPROBE SUMMARY: Keep the blue cat and red ship.\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /tmp/claude-compact-15gFLo/config/projects/-tmp/f45564a1-3058-45a3-b18e-f4f9eb7b04f3.jsonl\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with \"I'll continue\" or similar. Pick up the last task as if the break never happened."
+      },
+      "isVisibleInTranscriptOnly": true,
+      "isCompactSummary": true,
+      "uuid": "a2b91e4d-1688-475b-b870-1dfce53d95ff",
+      "timestamp": "2026-09-24T01:57:18.610Z",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": "a2b91e4d-1688-475b-b870-1dfce53d95ff",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_probe_9",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "text",
+            "text": "PROBE SUMMARY: Keep the blue cat and red ship."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1500,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 20,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "stop_details": null
+      },
+      "type": "assistant",
+      "uuid": "fa0a1b97-607b-4fc6-9829-21f8abd12d94",
+      "timestamp": "2026-09-24T01:57:18.621Z",
+      "effort": "high",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "type": "last-prompt",
+      "lastPrompt": "Run the synthetic print tool, then continue.",
+      "leafUuid": "fa0a1b97-607b-4fc6-9829-21f8abd12d94",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3"
+    },
+    {
+      "type": "queue-operation",
+      "operation": "enqueue",
+      "timestamp": "2026-09-24T01:57:19.039Z",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "content": "After compaction, what facts remain?"
+    },
+    {
+      "type": "queue-operation",
+      "operation": "dequeue",
+      "timestamp": "2026-09-24T01:57:19.039Z",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3"
+    },
+    {
+      "parentUuid": "fa0a1b97-607b-4fc6-9829-21f8abd12d94",
+      "isSidechain": false,
+      "promptId": "d5da1be4-e39d-431d-9091-03519848b690",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "After compaction, what facts remain?"
+      },
+      "uuid": "7f040fbb-0034-4e20-954f-3a93c1453d60",
+      "timestamp": "2026-09-24T01:57:19.058Z",
+      "permissionMode": "bypassPermissions",
+      "promptSource": "sdk",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": "7f040fbb-0034-4e20-954f-3a93c1453d60",
+      "isSidechain": false,
+      "attachment": {
+        "type": "total_tokens_reminder",
+        "text": "<total_tokens>15000000 tokens left</total_tokens>"
+      },
+      "type": "attachment",
+      "uuid": "841a8c3a-27cc-46b0-91dd-1da1c51fe18d",
+      "timestamp": "2026-09-24T01:57:19.058Z",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "parentUuid": "841a8c3a-27cc-46b0-91dd-1da1c51fe18d",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_probe_10",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+          {
+            "type": "text",
+            "text": "PROBE SUMMARY: Keep the blue cat and red ship."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 1500,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 20,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "stop_details": null
+      },
+      "type": "assistant",
+      "uuid": "21bfdc5e-5f39-4dca-8c6b-b2e904a2040c",
+      "timestamp": "2026-09-24T01:57:19.081Z",
+      "effort": "high",
+      "userType": "external",
+      "entrypoint": "sdk-cli",
+      "cwd": "/tmp",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3",
+      "version": "2.1.233",
+      "gitBranch": "HEAD",
+      "slug": "fluttering-sparking-teacup"
+    },
+    {
+      "type": "last-prompt",
+      "lastPrompt": "After compaction, what facts remain?",
+      "leafUuid": "21bfdc5e-5f39-4dca-8c6b-b2e904a2040c",
+      "sessionId": "f45564a1-3058-45a3-b18e-f4f9eb7b04f3"
+    }
+  ]
+}
