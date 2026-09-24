@@ -50,19 +50,6 @@ test('prepare creates an owned 0700 directory and is idempotent', async t => {
   t.deepEqual(second, first);
 });
 
-test('locate answers without creating anything', async t => {
-  // Codex reads a thread checkpoint before it provisions, and preparing to
-  // answer that would leave state behind for a session that never started.
-  const root = path.join(await makeTmp(t), 'state');
-  const provider = makeCodexStateProvider({ stateRoot: root });
-  t.deepEqual(await provider.locateSessionDirectory('codex-abc'), {});
-  await t.throwsAsync(stat(root));
-  const prepared = await provider.prepareSessionDirectory('codex-abc');
-  t.deepEqual(await provider.locateSessionDirectory('codex-abc'), {
-    directory: prepared.directory,
-  });
-});
-
 test('CLI home is separate from host records and both are removed together', async t => {
   const root = path.join(await makeTmp(t), 'state');
   const provider = makeCodexStateProvider({ stateRoot: root });
@@ -158,7 +145,9 @@ test('the formula entry point takes null powers and a configured root', async t 
   const provider = await makeStateProviderModule(null, undefined, {
     env: { ENDO_CODEX_STATE_DIR: root },
   });
-  t.deepEqual(await provider.locateSessionDirectory('codex-abc'), {});
+  const prepared = await provider.prepareSessionDirectory('codex-abc');
+  t.is(typeof prepared.directory, 'string');
+  await provider.removeSessionDirectory('codex-abc');
   await t.throwsAsync(
     makeStateProviderModule(/** @type {any} */ ({}), undefined, {
       env: { ENDO_CODEX_STATE_DIR: root },
