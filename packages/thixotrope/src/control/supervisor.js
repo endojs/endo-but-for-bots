@@ -137,8 +137,11 @@ export const serveThixotrope = async (
         storePath: paths.join(statePath, 'heaps'),
       },
     );
-  if (!rawEngine.acquireStore)
+  const acquireStore = rawEngine.acquireStore;
+  if (!acquireStore)
     throw Error('Supervisor requires exclusive store ownership support');
+  const configPath = paths.join(statePath, 'workspace.json');
+  let config;
   const metrics = {
     delivery: { count: 0n, milliseconds: 0 },
     snapshot: { count: 0n, milliseconds: 0 },
@@ -160,6 +163,26 @@ export const serveThixotrope = async (
   };
   const measured = harden({
     ...rawEngine,
+    acquireStore: async path => {
+      const release = await acquireStore(path);
+      try {
+        try {
+          config = JSON.parse(await files.readText(configPath));
+        } catch (error) {
+          if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
+            throw error;
+        }
+        if (config !== undefined && config.version !== 3) {
+          throw Error(
+            'Incompatible workspace metadata: alarm acknowledgements require version 3; migrate or use a fresh state directory',
+          );
+        }
+        return release;
+      } catch (error) {
+        await release();
+        throw error;
+      }
+    },
     start: async options => {
       const worker = await timed('wake', () => rawEngine.start(options));
       return harden({
@@ -184,8 +207,8 @@ export const serveThixotrope = async (
   const { promise: stopped } = stopKit;
   const requestStop = () => stopKit.resolve();
   let daemon;
-  // The host's whole involvement in alarms: a durable table of deadlines and
-  // one timer for the earliest. It calls nothing; settling a promise resource
+  // The host keeps deadlines and unacknowledged outcomes, with one timer for
+  // the earliest deadline. It calls nothing; settling a promise resource
   // wakes whichever vat was listening on it.
   const alarms = makeDurableAlarms(
     { timers },
@@ -273,14 +296,6 @@ export const serveThixotrope = async (
     // its listener must have somewhere to arrive.
     alarms.start();
 
-    const configPath = paths.join(statePath, 'workspace.json');
-    let config;
-    try {
-      config = JSON.parse(await files.readText(configPath));
-    } catch (error) {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
-        throw error;
-    }
     if (config === undefined) {
       // createWorker records the label with its id. Recover that allocation
       // if a crash occurred before workspace.json selected it.
@@ -294,7 +309,7 @@ export const serveThixotrope = async (
           ? candidates[0].workerId
           : (await daemon.createWorker({ debugLabel: 'workspace' })).workerId;
       config = {
-        version: 2,
+        version: 3,
         workerId,
         publication: `workspace-${workerId}`,
         // Unguessable, because a publication secret is a bearer capability and
@@ -305,7 +320,7 @@ export const serveThixotrope = async (
       await save(files, configPath, config);
     }
     if (
-      config?.version !== 2 ||
+      config?.version !== 3 ||
       !daemon.listWorkerIds().includes(config.workerId) ||
       config.publication !== `workspace-${config.workerId}` ||
       typeof config.resourceNotice !== 'string' ||
@@ -372,8 +387,8 @@ export const serveThixotrope = async (
       return opening;
     };
     /**
-     * The clock lives in the workspace vat, holding its own alarm map and
-     * resolvers. The host keeps only deadlines.
+     * The clock lives in the workspace vat, holding its own promises and
+     * cleanup acknowledgements. The host keeps deadlines and unacknowledged outcomes.
      *
      * One clock shared through the inventory, as before: a consumer that wants
      * its own can be granted the alarm facet directly, but the grant users know
