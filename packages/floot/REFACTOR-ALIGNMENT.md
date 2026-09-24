@@ -333,6 +333,16 @@ Next is helper transport and client integration with the existing catalog bindin
 operational reconciliation, cancellation fence and journal-before-terminal rule.
 No production deployment is claimed.
 
+Codex helper transport (2026-09-24): the OCI image now includes a one-shot,
+sandbox-only JSON command for capture/restore. Its controller-side transport
+uses the already-owned slice, fixed home/environment, bounded serialized I/O
+and sanitized diagnostics. Cancel/close retain late-spawn custody through
+kill/reap and every pending reader/writer settlement; cleanup failures remain
+retryable. Twenty focused helper tests pass, and independent review approves.
+The full Floot suite passes 700 tests; production Codex types and the root
+documentation gate pass after quarantining a stale ignored generated declaration.
+Client wiring remains a separate in-progress slice, not production acceptance.
+
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
 credentials or host mounts. Manual compaction emits a boundary with retained

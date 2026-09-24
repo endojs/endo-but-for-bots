@@ -62,6 +62,10 @@ portable summary. New pinned probes show that fresh restored identities may have
 a synthetic completed `rollout-1` baseline after compaction, so the integration
 must query that baseline rather than assume an empty turn list. Production
 helper/client wiring is in progress; see the alignment document for current scope.
+The reviewed helper transport/OCI slice now supplies bounded in-sandbox commands
+with cancellation that drains late acquisition and all I/O. Twenty focused tests
+pass; full Floot passes 700 tests. Client/journal integration and deployed
+acceptance remain outstanding.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
