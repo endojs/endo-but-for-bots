@@ -496,7 +496,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
 
   /**
    * @param {string} nativeTranscript Helper-validated native JSONL.
-   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, beforePayload?: string, compactionWitness?: string, prompt: string, outcome: 'success'|'failure'}} cut
+   * @param {{sessionId: string, beforeUuid: string|null, prefixSha256: string, beforePayload: string, compactionWitness?: string, prompt: string, outcome: 'success'|'failure'}} cut
    * Trusted pre-turn receipt; an empty initial store uses null plus SHA-256 of empty text.
    */
   const assertCaptured = (nativeTranscript, cut) =>
@@ -535,23 +535,12 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         assertCompacted(rows, cut);
         return;
       }
-      let before =
-        beforeUuid === null
-          ? -1
-          : rows.findLastIndex(row => row.uuid === beforeUuid);
-      requireValue(beforeUuid === null || before >= 0);
-      let prefix =
-        before < 0 ? '' : `${lines.slice(0, before + 1).join('\n')}\n`;
-      if (beforePayload !== undefined) {
-        const priorRows = parseRows(beforePayload, sessionId);
-        const prior = uniqueRows(priorRows);
-        requireValue(([...prior.keys()].at(-1) ?? null) === beforeUuid);
-        requireValue(nativeTranscript.startsWith(beforePayload));
-        prefix = beforePayload;
-        before = priorRows.length - 1;
-      }
-      requireValue(sha256(prefix) === prefixSha256);
-      const active = rows.slice(before + 1);
+      const priorRows = parseRows(beforePayload, sessionId);
+      const prior = uniqueRows(priorRows);
+      requireValue(([...prior.keys()].at(-1) ?? null) === beforeUuid);
+      requireValue(nativeTranscript.startsWith(beforePayload));
+      requireValue(sha256(beforePayload) === prefixSha256);
+      const active = rows.slice(priorRows.length);
       // The ordinary-turn stream does not attest loader-only visibility or
       // summary roles. Matching message content cannot certify those changes.
       requireValue(

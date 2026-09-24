@@ -752,6 +752,14 @@ continuations.
 No production daemon activation or new durable storage owner is involved.
 Post-compaction authentication covers the explicit model-message identity,
 grouping, content and known loader flags, not every arbitrary native JSON field.
+The obsolete digest-only ordinary-coverage fallback is now removed: every cut
+requires the exact host-projected `beforePayload`, including an empty string for
+a fresh turn. The one production caller already supplies it before admission.
+Missing payloads refuse rather than locating the cut in candidate guest rows;
+hash, unique-leaf, byte-prefix, prompt and frame checks remain.
+Independent review approves; 173 focused coverage/client tests pass, with source
+types and scoped lint passing. The full Claude suite passes 418 tests and the
+repository documentation gate passes. No new durable owner or format is introduced.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
